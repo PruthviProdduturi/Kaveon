@@ -8,6 +8,7 @@ use crate::{
         AggExpr, HashAggregate, aggregate_output_types, exchanged_group_key_type,
         grouped_aggregate_states_to_schema_batch,
     },
+    distinct::DistinctOperator,
     exchange::HashPartitioner,
     partitioned::{PartitionedHashAggregate, spill_from_environment},
     spill::SpillManager,
@@ -16,8 +17,11 @@ use arrow::{
     datatypes::{DataType, SchemaRef},
     record_batch::RecordBatch,
 };
-use kaveon_core::{BatchOperator, KaveonError, MemoryReservation, QueryMemoryPool, Result};
+use kaveon_core::{
+    BatchOperator, KaveonError, MemoryReservation, OperatorMemoryAccount, QueryMemoryPool, Result,
+};
 use std::{
+    collections::VecDeque,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -81,25 +85,67 @@ impl BatchOperator for ChannelInput {
 }
 
 /// Produces typed partials for the same final merger used by distributed execution.
-/// The source stays on its calling thread; only Arrow batches cross thread boundaries.
+/// What one thread runs over its share of the rows. The operator's
+/// output batches are forwarded as they come.
+pub type ThreadOperator = Arc<
+    dyn Fn(
+            Box<dyn BatchOperator>,
+            &QueryMemoryPool,
+            &ThreadContext,
+        ) -> Result<Box<dyn BatchOperator>>
+        + Send
+        + Sync,
+>;
+
+/// What every thread of one parallel operator shares.
+pub struct ThreadContext {
+    /// Threads running side by side on the query budget.
+    pub workers: usize,
+    /// The query's spill budget and partition count when spilling is on.
+    pub spill: Option<(SpillManager, usize)>,
+}
+
+/// One operator run on several threads within a task: rows go to the
+/// thread their key hashes to, so the threads hold disjoint keys and their
+/// outputs union without a merge. The source stays on its calling thread;
+/// only Arrow batches cross thread boundaries. Grouped partial aggregates
+/// and DISTINCT run this way.
 pub struct ParallelPartials {
     source: Option<Box<dyn BatchOperator>>,
     schema: SchemaRef,
-    groups: Vec<String>,
-    aggregates: Vec<AggExpr>,
+    keys: Vec<String>,
+    /// Keys that are all dictionary-encoded hold a handful of values:
+    /// cheaper to fold on every thread than to hash-partition every row.
+    /// Only an operator whose outputs merge (a partial aggregate) may take
+    /// that; DISTINCT must partition.
+    fold_low_cardinality: bool,
+    operator: ThreadOperator,
     pool: QueryMemoryPool,
     workers: usize,
-    /// Each thread's aggregate spills through this when set: the query's
+    /// Each thread's operator spills through this when set: the query's
     /// shared spill budget and its partition count, decided once here so
     /// every thread takes the same path.
     spill: Option<(SpillManager, usize)>,
     stopped: Arc<AtomicBool>,
     handles: Vec<JoinHandle<()>>,
+    /// One input channel per thread; empty once the source is drained.
+    senders: Vec<SyncSender<QueuedBatch>>,
+    partitioner: Option<HashPartitioner>,
+    input_account: Option<OperatorMemoryAccount>,
+    round_robin: usize,
+    /// Parts of the current source batch not yet handed to their thread.
+    pending: VecDeque<(usize, QueuedBatch)>,
+    /// Outputs taken while a thread's input was full: an operator that
+    /// streams (DISTINCT) fills the output queue before its input is
+    /// drained, so the pump must take from one to push to the other.
+    ready: VecDeque<QueuedBatch>,
     output: Option<Receiver<Result<QueuedBatch>>>,
     current: Option<Arc<MemoryReservation>>,
     failed: bool,
 }
 impl ParallelPartials {
+    /// Grouped partial aggregation: every thread produces the typed partial
+    /// batch the final merger takes.
     pub fn new(
         source: Box<dyn BatchOperator>,
         groups: Vec<String>,
@@ -107,11 +153,8 @@ impl ParallelPartials {
         pool: QueryMemoryPool,
         workers: usize,
     ) -> Result<Self> {
-        if !(1..=MAX_WORKERS).contains(&workers) {
-            return Err(error("parallel worker count must be between 1 and 16"));
-        }
         let types = aggregate_output_types(&aggregates, source.schema())?;
-        let keys = groups
+        let key_types = groups
             .iter()
             .map(|name| {
                 source
@@ -121,30 +164,89 @@ impl ParallelPartials {
                     .map_err(KaveonError::from)
             })
             .collect::<Result<Vec<_>>>()?;
-        let schema = grouped_aggregate_states_to_schema_batch(&[], &keys, &types)?.schema();
+        let schema = grouped_aggregate_states_to_schema_batch(&[], &key_types, &types)?.schema();
         // Validate source bindings before any threads are started.
         HashAggregate::new(
             Box::new(EmptyInput(source.schema().clone())),
             groups.clone(),
             aggregates.clone(),
         )?;
+        let thread_groups = groups.clone();
+        let operator: ThreadOperator = Arc::new(move |source, pool, context| {
+            partial_aggregate_operator(
+                source,
+                thread_groups.clone(),
+                aggregates.clone(),
+                pool,
+                context,
+            )
+        });
+        Self::over(source, schema, groups, true, operator, pool, workers)
+    }
+
+    /// DISTINCT over `columns`: every thread deduplicates the rows whose
+    /// values hash to it, so the union of the threads' outputs is distinct.
+    pub fn distinct(
+        source: Box<dyn BatchOperator>,
+        columns: Vec<String>,
+        pool: QueryMemoryPool,
+        workers: usize,
+    ) -> Result<Self> {
+        if columns.is_empty() {
+            return Err(error("parallel DISTINCT needs at least one column"));
+        }
+        for column in &columns {
+            source
+                .schema()
+                .field_with_name(column)
+                .map_err(|_| error(&format!("DISTINCT column '{column}' is not in the input")))?;
+        }
+        let schema = source.schema().clone();
+        let operator: ThreadOperator = Arc::new(move |source, pool, _| {
+            Ok(Box::new(
+                DistinctOperator::new(source).with_memory(pool.operator("parallel-distinct")?),
+            ) as Box<dyn BatchOperator>)
+        });
+        Self::over(source, schema, columns, false, operator, pool, workers)
+    }
+
+    fn over(
+        source: Box<dyn BatchOperator>,
+        schema: SchemaRef,
+        keys: Vec<String>,
+        fold_low_cardinality: bool,
+        operator: ThreadOperator,
+        pool: QueryMemoryPool,
+        workers: usize,
+    ) -> Result<Self> {
+        if !(1..=MAX_WORKERS).contains(&workers) {
+            return Err(error("parallel worker count must be between 1 and 16"));
+        }
         let spill = spill_from_environment(&pool)?;
         Ok(Self {
             source: Some(source),
             schema,
-            groups,
-            aggregates,
+            keys,
+            fold_low_cardinality,
+            operator,
             pool,
             workers,
             spill,
             stopped: Arc::new(AtomicBool::new(false)),
             handles: vec![],
+            senders: Vec::new(),
+            partitioner: None,
+            input_account: None,
+            round_robin: 0,
+            pending: VecDeque::new(),
+            ready: VecDeque::new(),
             output: None,
             current: None,
             failed: false,
         })
     }
-    /// Every thread's partial spills through `spill` with `partitions`
+
+    /// Every thread's operator spills through `spill` with `partitions`
     /// hash partitions, whatever the environment says.
     pub fn with_spill(mut self, spill: SpillManager, partitions: usize) -> Self {
         self.spill = Some((spill, partitions));
@@ -152,27 +254,28 @@ impl ParallelPartials {
     }
 
     fn start(&mut self) -> Result<()> {
-        let mut source = self
+        let source = self
             .source
-            .take()
+            .as_ref()
             .ok_or_else(|| error("parallel source already consumed"))?;
         let (output_tx, output_rx) = mpsc::sync_channel(self.workers * 2);
         self.output = Some(output_rx);
         let mut senders = Vec::with_capacity(self.workers);
-        let workers = self.workers;
         for index in 0..self.workers {
             let (sender, receiver) = mpsc::sync_channel(2);
             senders.push(sender);
             let schema = source.schema().clone();
-            let groups = self.groups.clone();
-            let aggregates = self.aggregates.clone();
+            let operator = self.operator.clone();
             let pool = self.pool.clone();
-            let spill = self.spill.clone();
+            let context = ThreadContext {
+                workers: self.workers,
+                spill: self.spill.clone(),
+            };
             let stopped = self.stopped.clone();
             let output = output_tx.clone();
             self.handles.push(
                 thread::Builder::new()
-                    .name(format!("kaveon-aggregate-{index}"))
+                    .name(format!("kaveon-parallel-{index}"))
                     .spawn(move || {
                         let result = catch_worker_failure(|| {
                             let source = Box::new(ChannelInput {
@@ -181,10 +284,7 @@ impl ParallelPartials {
                                 stopped: stopped.clone(),
                                 current: None,
                             });
-                            run_worker(
-                                source, groups, aggregates, &pool, spill, workers, &stopped,
-                                &output,
-                            )
+                            run_worker(source, &operator, &pool, &context, &stopped, &output)
                         });
                         if let Err(err) = result {
                             let _ = output.send(Err(err));
@@ -195,36 +295,57 @@ impl ParallelPartials {
             );
         }
         drop(output_tx);
-        let account = self.pool.operator("parallel-input-queue")?;
-        // Grouped: rows go to the thread their key hashes to, so the threads
-        // hold disjoint groups. Ungrouped, or keyed only by dictionary
-        // columns (a handful of groups, cheaper to fold N times than to
-        // hash-partition every row): slices round-robin.
-        let low_cardinality_keys = self.groups.iter().all(|name| {
-            source
-                .schema()
-                .field_with_name(name)
-                .is_ok_and(|field| matches!(field.data_type(), DataType::Dictionary(_, _)))
-        });
-        let partitioner = if self.groups.is_empty() || self.workers == 1 || low_cardinality_keys {
+        self.senders = senders;
+        self.input_account = Some(self.pool.operator("parallel-input-queue")?);
+        // Keyed: rows go to the thread their key hashes to, so the threads
+        // hold disjoint keys. Unkeyed, or keyed only by dictionary columns
+        // where folding is allowed (a handful of groups, cheaper to fold N
+        // times than to hash-partition every row): slices round-robin.
+        let low_cardinality_keys = self.fold_low_cardinality
+            && self.keys.iter().all(|name| {
+                source
+                    .schema()
+                    .field_with_name(name)
+                    .is_ok_and(|field| matches!(field.data_type(), DataType::Dictionary(_, _)))
+            });
+        self.partitioner = if self.keys.is_empty() || self.workers == 1 || low_cardinality_keys {
             None
         } else {
             Some(HashPartitioner::try_new_salted(
                 source.schema(),
-                &self.groups,
+                &self.keys,
                 self.workers,
                 crate::exchange::THREAD_PARTITION_SALT,
             )?)
         };
-        let mut index = 0;
-        while let Some(batch) = source.next_batch()? {
+        Ok(())
+    }
+
+    /// Move one source batch to the threads. Returns false once the source
+    /// is drained and the threads' inputs are closed. A full input queue is
+    /// never waited on blindly: outputs are taken meanwhile, so a thread
+    /// blocked on a full output queue is unblocked by the same loop.
+    fn pump(&mut self) -> Result<bool> {
+        let account = self
+            .input_account
+            .clone()
+            .ok_or_else(|| error("parallel operator not started"))?;
+        if self.pending.is_empty() {
+            let Some(source) = self.source.as_mut() else {
+                return Ok(false);
+            };
+            let Some(batch) = source.next_batch()? else {
+                self.source = None;
+                self.senders.clear();
+                return Ok(false);
+            };
             if batch.schema() != *source.schema() {
                 return Err(error(
                     "parallel source batch does not match declared schema",
                 ));
             }
             account.check_cancelled()?;
-            match &partitioner {
+            match &self.partitioner {
                 Some(partitioner) => {
                     for (worker, part) in partitioner.partition(&batch)?.into_iter().enumerate() {
                         if part.num_rows() == 0 {
@@ -232,40 +353,77 @@ impl ParallelPartials {
                         }
                         let memory =
                             Arc::new(account.reserve(part.get_array_memory_size() as u64)?);
-                        send_bounded(
-                            &senders[worker],
+                        self.pending.push_back((
+                            worker,
                             QueuedBatch {
                                 batch: part,
                                 _memory: memory,
                             },
-                            &self.stopped,
-                            &self.pool,
-                        )?;
+                        ));
                     }
                 }
                 None => {
                     let memory = Arc::new(account.reserve(batch.get_array_memory_size() as u64)?);
                     for offset in (0..batch.num_rows()).step_by(8192) {
                         let slice = batch.slice(offset, 8192.min(batch.num_rows() - offset));
-                        send_bounded(
-                            &senders[index % self.workers],
+                        self.pending.push_back((
+                            self.round_robin % self.workers,
                             QueuedBatch {
                                 batch: slice,
                                 _memory: memory.clone(),
                             },
-                            &self.stopped,
-                            &self.pool,
-                        )?;
-                        index += 1;
+                        ));
+                        self.round_robin += 1;
                     }
                 }
             }
         }
-        drop(senders);
-        Ok(())
+        while let Some((worker, queued)) = self.pending.pop_front() {
+            account.check_cancelled()?;
+            if self.stopped.load(Ordering::Acquire) {
+                return Err(error("parallel operator stopped"));
+            }
+            match self.senders[worker].try_send(queued) {
+                Ok(()) => {}
+                Err(TrySendError::Disconnected(_)) => {
+                    return Err(error("parallel operator channel disconnected"));
+                }
+                Err(TrySendError::Full(returned)) => {
+                    self.pending.push_front((worker, returned));
+                    if !self.take_ready()? {
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                }
+            }
+        }
+        Ok(true)
     }
+
+    /// Everything the threads have produced so far, without waiting.
+    fn take_ready(&mut self) -> Result<bool> {
+        let Some(output) = &self.output else {
+            return Ok(false);
+        };
+        let mut taken = false;
+        loop {
+            match output.try_recv() {
+                Ok(Ok(queued)) => {
+                    self.ready.push_back(queued);
+                    taken = true;
+                }
+                Ok(Err(err)) => return Err(err),
+                Err(mpsc::TryRecvError::Empty | mpsc::TryRecvError::Disconnected) => {
+                    return Ok(taken);
+                }
+            }
+        }
+    }
+
     fn stop(&mut self) {
         self.stopped.store(true, Ordering::Release);
+        self.senders.clear();
+        self.pending.clear();
+        self.ready.clear();
         self.output = None;
         for handle in self.handles.drain(..) {
             let _ = handle.join();
@@ -283,12 +441,23 @@ impl BatchOperator for ParallelPartials {
         }
         self.current = None;
         let result = (|| {
-            if self.source.is_some() {
+            if self.source.is_some() && self.output.is_none() {
                 self.start()?;
             }
             let account = self.pool.operator("parallel-output-queue")?;
             loop {
                 account.check_cancelled()?;
+                if let Some(queued) = self.ready.pop_front() {
+                    self.current = Some(queued._memory);
+                    return Ok(Some(queued.batch));
+                }
+                // Feed the threads while the source lasts; outputs taken
+                // along the way come back through `ready`.
+                if self.source.is_some() {
+                    self.pump()?;
+                    self.take_ready()?;
+                    continue;
+                }
                 let Some(output) = &self.output else {
                     return Ok(None);
                 };
@@ -352,60 +521,19 @@ fn catch_worker_failure(work: impl FnOnce() -> Result<()>) -> Result<()> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
         .unwrap_or_else(|_| Err(error("parallel aggregate worker panicked")))
 }
-#[allow(clippy::too_many_arguments)]
 fn run_worker(
     source: Box<dyn BatchOperator>,
-    groups: Vec<String>,
-    aggregates: Vec<AggExpr>,
+    operator: &ThreadOperator,
     pool: &QueryMemoryPool,
-    spill: Option<(SpillManager, usize)>,
-    workers: usize,
+    context: &ThreadContext,
     stopped: &AtomicBool,
     output: &SyncSender<Result<QueuedBatch>>,
 ) -> Result<()> {
-    let account = pool.operator("parallel-partial-aggregate")?;
-    if let Some((spill, count)) = spill {
-        // The threads together buffer what one serial aggregate would.
-        let mut operator = PartitionedHashAggregate::new_partial(
-            source,
-            groups,
-            aggregates,
-            account.clone(),
-            spill,
-            count,
-        )?
-        .with_reserved_input()
-        .with_budget_share(workers)?;
-        while let Some(batch) = operator.next_batch()? {
-            let memory = Arc::new(account.reserve(batch.get_array_memory_size() as u64)?);
-            send_bounded(
-                output,
-                Ok(QueuedBatch {
-                    batch,
-                    _memory: memory,
-                }),
-                stopped,
-                pool,
-            )?;
-        }
-    } else {
-        let types = aggregate_output_types(&aggregates, source.schema())?;
-        let keys = groups
-            .iter()
-            .map(|name| {
-                source
-                    .schema()
-                    .field_with_name(name)
-                    .map(|f| exchanged_group_key_type(f.data_type()))
-                    .map_err(KaveonError::from)
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let operator = HashAggregate::new_with_memory(source, groups, aggregates, account.clone())?
-            .with_reserved_input();
-        let (batch, guards) = operator.into_partial_batch(&keys, &types)?;
-        // The batch is held by the queue; the states it came from are not.
+    let account = pool.operator("parallel-output")?;
+    let mut operator = operator(source, pool, context)?;
+    while let Some(batch) = operator.next_batch()? {
+        // The batch is held by the queue; whatever it came from is not.
         let memory = Arc::new(account.reserve(batch.get_array_memory_size() as u64 + 8192)?);
-        drop(guards);
         send_bounded(
             output,
             Ok(QueuedBatch {
@@ -417,6 +545,74 @@ fn run_worker(
         )?;
     }
     Ok(())
+}
+
+/// One thread's partial aggregate: spill-capable with its share of the
+/// adaptive buffer when the query spills, the in-memory columnar partial
+/// otherwise.
+fn partial_aggregate_operator(
+    source: Box<dyn BatchOperator>,
+    groups: Vec<String>,
+    aggregates: Vec<AggExpr>,
+    pool: &QueryMemoryPool,
+    context: &ThreadContext,
+) -> Result<Box<dyn BatchOperator>> {
+    let account = pool.operator("parallel-partial-aggregate")?;
+    if let Some((spill, count)) = context.spill.clone() {
+        // The threads together buffer what one serial aggregate would.
+        return Ok(Box::new(
+            PartitionedHashAggregate::new_partial(
+                source,
+                groups,
+                aggregates,
+                account.clone(),
+                spill,
+                count,
+            )?
+            .with_reserved_input()
+            .with_budget_share(context.workers)?,
+        ));
+    }
+    Ok(Box::new(PartialBatch::new(
+        HashAggregate::new_with_memory(source, groups, aggregates, account)?.with_reserved_input(),
+    )?))
+}
+
+/// A grouped aggregate as the one partial batch it encodes.
+struct PartialBatch {
+    aggregate: Option<HashAggregate>,
+    schema: SchemaRef,
+    keys: Vec<DataType>,
+    types: Vec<DataType>,
+    _memory: Vec<MemoryReservation>,
+}
+impl PartialBatch {
+    fn new(aggregate: HashAggregate) -> Result<Self> {
+        let types = aggregate.output_types()?;
+        let keys = aggregate.exchanged_key_types()?;
+        let schema = grouped_aggregate_states_to_schema_batch(&[], &keys, &types)?.schema();
+        Ok(Self {
+            aggregate: Some(aggregate),
+            schema,
+            keys,
+            types,
+            _memory: Vec::new(),
+        })
+    }
+}
+impl BatchOperator for PartialBatch {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+    fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        let Some(aggregate) = self.aggregate.take() else {
+            self._memory.clear();
+            return Ok(None);
+        };
+        let (batch, memory) = aggregate.into_partial_batch(&self.keys, &self.types)?;
+        self._memory = memory;
+        Ok(Some(batch))
+    }
 }
 
 pub type Finalizer = Box<dyn FnOnce(Box<dyn BatchOperator>) -> Result<Box<dyn BatchOperator>>>;
@@ -500,8 +696,11 @@ mod tests {
         grouped_aggregate_states_from_batches, merge_grouped_aggregate_states,
     };
     use arrow::{
-        array::{ArrayRef, Decimal128Array, Float64Array, Int32Array, Int64Array, UInt64Array},
-        datatypes::{DataType, Field, Schema},
+        array::{
+            Array, ArrayRef, Decimal128Array, Float64Array, Int32Array, Int64Array, StringArray,
+            UInt64Array,
+        },
+        datatypes::{DataType, Field, Int32Type, Schema},
     };
     use std::collections::VecDeque;
     struct Input {
@@ -633,6 +832,112 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn parallel_distinct_matches_the_serial_operator_and_never_folds() {
+        // Text, dictionary and integer columns with nulls across many more
+        // batches than the queues hold — DISTINCT streams, so the threads
+        // fill the output queue long before their input is drained and the
+        // pump must take from one side to push the other. The threads'
+        // outputs union to exactly the serial DISTINCT — including when
+        // every column is dictionary-encoded, where a partial aggregate
+        // would fold but DISTINCT must partition.
+        let dictionary = |values: Vec<Option<&str>>| -> ArrayRef {
+            let mut builder = arrow::array::StringDictionaryBuilder::<Int32Type>::new();
+            for value in values {
+                builder.append_option(value);
+            }
+            Arc::new(builder.finish())
+        };
+        let rows = 200_000usize;
+        let make = |chunk: usize, dictionary_only: bool| {
+            let range = chunk * 5000..(chunk + 1) * 5000;
+            let country = range
+                .clone()
+                .map(|n| (n % 13 != 0).then(|| ["us", "de", "jp", "br"][n % 4]))
+                .collect::<Vec<_>>();
+            let surface = range
+                .clone()
+                .map(|n| (n % 7 != 0).then(|| ["a", "b", "c"][n % 3]))
+                .collect::<Vec<_>>();
+            let mut columns: Vec<(&str, ArrayRef)> = vec![
+                ("country", dictionary(country)),
+                ("surface", dictionary(surface)),
+            ];
+            if !dictionary_only {
+                columns.push((
+                    "bucket",
+                    Arc::new(Int64Array::from_iter(
+                        range.map(|n| (n % 11 != 0).then_some((n % 97) as i64)),
+                    )),
+                ));
+            }
+            RecordBatch::try_from_iter(columns).unwrap()
+        };
+        for dictionary_only in [false, true] {
+            let batches = (0..rows / 5000)
+                .map(|chunk| make(chunk, dictionary_only))
+                .collect::<VecDeque<_>>();
+            let schema = batches[0].schema();
+            let columns = schema
+                .fields()
+                .iter()
+                .map(|f| f.name().clone())
+                .collect::<Vec<_>>();
+            let collect = |mut operator: Box<dyn BatchOperator>| {
+                let mut rows = Vec::new();
+                while let Some(batch) = operator.next_batch().unwrap() {
+                    let batch = RecordBatch::try_new(
+                        Arc::new(Schema::new(
+                            batch
+                                .schema()
+                                .fields()
+                                .iter()
+                                .map(|f| Field::new(f.name(), DataType::Utf8, true))
+                                .collect::<Vec<_>>(),
+                        )),
+                        batch
+                            .columns()
+                            .iter()
+                            .map(|c| arrow::compute::cast(c, &DataType::Utf8).unwrap())
+                            .collect(),
+                    )
+                    .unwrap();
+                    for row in 0..batch.num_rows() {
+                        rows.push(
+                            batch
+                                .columns()
+                                .iter()
+                                .map(|c| {
+                                    let c = c.as_any().downcast_ref::<StringArray>().unwrap();
+                                    (!c.is_null(row)).then(|| c.value(row).to_owned())
+                                })
+                                .collect::<Vec<_>>(),
+                        );
+                    }
+                }
+                rows.sort();
+                rows
+            };
+            let serial = collect(Box::new(DistinctOperator::new(Box::new(Input {
+                schema: schema.clone(),
+                batches: batches.clone(),
+            }))));
+            let pool = QueryMemoryPool::new("parallel-distinct", 64 * 1024 * 1024).unwrap();
+            let parallel = collect(Box::new(
+                ParallelPartials::distinct(
+                    Box::new(Input { schema, batches }),
+                    columns,
+                    pool.clone(),
+                    4,
+                )
+                .unwrap(),
+            ));
+            assert_eq!(parallel, serial);
+            assert!(serial.len() > 10);
+            assert_eq!(pool.snapshot().current_bytes, 0);
+        }
+    }
+
     #[test]
     fn parallel_partials_spill_per_thread_under_a_tight_budget() {
         // Unique keys defeat the streaming partial and each thread's share

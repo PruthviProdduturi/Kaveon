@@ -2116,6 +2116,16 @@ impl HashAggregate {
         ))
     }
 
+    /// The finished aggregates' output types, from the source schema.
+    pub fn output_types(&self) -> Result<Vec<DataType>> {
+        aggregate_output_types(&self.aggregates, self.source.schema())
+    }
+
+    /// The group keys' types as the exchange carries them.
+    pub fn exchanged_key_types(&self) -> Result<Vec<DataType>> {
+        columnar_aggregate::exchanged_key_types(self.source.schema(), &self.group_by)
+    }
+
     /// The partial stage's output — the grouped-state batch — with the
     /// memory it holds. Columnar for every shape the columnar aggregate
     /// carries, so the groups go from the columns to the wire without a row
