@@ -137,10 +137,16 @@ fn query_to_plan(
         }
     }
 
-    let plan = set_expr_to_plan(query.body.as_ref(), &ctes)?;
+    // A single SELECT hands back the bindings its aggregate lowering made,
+    // so an ORDER BY that repeats a lowered expression (`ORDER BY a - a % 60`
+    // beside `GROUP BY a - a % 60`) resolves to the same column.
+    let (plan, bindings) = match query.body.as_ref() {
+        ast::SetExpr::Select(select) => select_to_plan_with_bindings(select, &ctes)?,
+        body => (set_expr_to_plan(body, &ctes)?, Vec::new()),
+    };
 
     let (plan, visible) = match &query.order_by {
-        Some(ob) => build_order_by(plan, &ob.exprs)?,
+        Some(ob) => build_order_by(plan, &ob.exprs, &bindings)?,
         None => (plan, None),
     };
     let plan = build_limit_offset(plan, &query.limit, &query.offset)?;
@@ -226,6 +232,13 @@ fn set_expr_to_plan(
 }
 
 fn select_to_plan(select: &ast::Select, ctes: &HashMap<String, ast::Query>) -> Result<LogicalPlan> {
+    Ok(select_to_plan_with_bindings(select, ctes)?.0)
+}
+
+fn select_to_plan_with_bindings(
+    select: &ast::Select,
+    ctes: &HashMap<String, ast::Query>,
+) -> Result<(LogicalPlan, ExpressionBindings)> {
     let plan = build_from_clause(select, ctes)?;
     let plan = build_where(plan, select, ctes)?;
 
@@ -260,7 +273,7 @@ fn select_to_plan(select: &ast::Select, ctes: &HashMap<String, ast::Query>) -> R
         plan
     };
 
-    Ok(lower_aggregate_expressions(plan)?.0)
+    lower_aggregate_expressions(plan)
 }
 
 fn build_from_clause(
@@ -846,13 +859,14 @@ fn build_projection(
 fn build_order_by(
     plan: LogicalPlan,
     order_by: &[ast::OrderByExpr],
+    bindings: &ExpressionBindings,
 ) -> Result<(LogicalPlan, Option<Vec<Expr>>)> {
     if order_by.is_empty() {
         return Ok((plan, None));
     }
     let mut items = Vec::new();
     for ob in order_by {
-        let expr = ast_expr_to_expr(&ob.expr)?;
+        let expr = replace_bound_expression(ast_expr_to_expr(&ob.expr)?, bindings);
         let asc = ob.asc.unwrap_or(true);
         items.push((expr, asc));
     }
@@ -1816,6 +1830,31 @@ mod tests {
                 (Expr::Column("total".into()), true),
                 (Expr::Column("k".into()), true)
             ]
+        );
+    }
+
+    #[test]
+    fn order_by_a_lowered_group_expression_resolves_to_its_column() {
+        let plan = sql_to_logical_plan(
+            "SELECT t - t % 60 AS m, COUNT(*) AS n FROM h GROUP BY t - t % 60 ORDER BY t - t % 60 LIMIT 10",
+        )
+        .unwrap();
+        let LogicalPlan::Project { input, columns } = plan else {
+            panic!("visible projection");
+        };
+        assert_eq!(
+            columns,
+            vec![Expr::Column("m".into()), Expr::Column("n".into())]
+        );
+        let LogicalPlan::Limit { input, .. } = *input else {
+            panic!("limit");
+        };
+        let LogicalPlan::Sort { order_by, .. } = *input else {
+            panic!("sort");
+        };
+        assert_eq!(
+            order_by,
+            vec![(Expr::Column("__kaveon_group_0".into()), true)]
         );
     }
 
