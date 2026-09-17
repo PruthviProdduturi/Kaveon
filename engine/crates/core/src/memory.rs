@@ -331,6 +331,7 @@ impl QueryMemoryPool {
             operator_id: operator_id.into(),
             current_bytes: Arc::new(AtomicU64::new(0)),
             peak_bytes: Arc::new(AtomicU64::new(0)),
+            prepaid: None,
         })
     }
 
@@ -394,9 +395,72 @@ pub struct OperatorMemoryAccount {
     operator_id: Arc<str>,
     current_bytes: Arc<AtomicU64>,
     peak_bytes: Arc<AtomicU64>,
+    /// Bytes taken from the query once and served from here first: an
+    /// account with a balance cannot be starved of it by the query's
+    /// other operators.
+    prepaid: Option<Arc<Prepaid>>,
+}
+
+#[derive(Debug)]
+struct Prepaid {
+    _guard: MemoryReservation,
+    available: AtomicU64,
+}
+
+impl Prepaid {
+    /// Take up to `bytes` from the balance.
+    fn take(&self, bytes: u64) -> u64 {
+        let mut available = self.available.load(Ordering::Acquire);
+        loop {
+            let taken = available.min(bytes);
+            match self.available.compare_exchange_weak(
+                available,
+                available - taken,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return taken,
+                Err(observed) => available = observed,
+            }
+        }
+    }
+
+    fn give_back(&self, bytes: u64) {
+        self.available.fetch_add(bytes, Ordering::AcqRel);
+    }
 }
 
 impl OperatorMemoryAccount {
+    /// An account of this operator with `bytes` prepaid: taken from the
+    /// query now, held for the account's life, and served first to its
+    /// reservations — what a reservation needs beyond the balance comes
+    /// from the query as usual, and what is released goes back to the
+    /// balance first. An operator that must make progress while others
+    /// on the query hold what they can — a thread that has just spilled
+    /// its table and needs room for its next batch — reserves through
+    /// this.
+    pub fn prepaid(&self, bytes: u64) -> Result<Self> {
+        let guard = self.reserve(bytes)?;
+        Ok(Self {
+            query: self.query.clone(),
+            operator_id: Arc::clone(&self.operator_id),
+            current_bytes: Arc::new(AtomicU64::new(0)),
+            peak_bytes: Arc::new(AtomicU64::new(0)),
+            prepaid: Some(Arc::new(Prepaid {
+                _guard: guard,
+                available: AtomicU64::new(bytes),
+            })),
+        })
+    }
+
+    /// The prepaid balance not in use, when the account has one.
+    #[must_use]
+    pub fn prepaid_available(&self) -> u64 {
+        self.prepaid
+            .as_ref()
+            .map_or(0, |prepaid| prepaid.available.load(Ordering::Acquire))
+    }
+
     pub fn check_cancelled(&self) -> Result<()> {
         self.query.check_cancelled()
     }
@@ -422,7 +486,20 @@ impl OperatorMemoryAccount {
     }
 
     pub fn reserve(&self, bytes: u64) -> Result<MemoryReservation> {
-        self.query.try_reserve(bytes, self.operator_id())?;
+        self.query.check_cancelled()?;
+        let prepaid_bytes = self
+            .prepaid
+            .as_ref()
+            .map_or(0, |prepaid| prepaid.take(bytes));
+        let from_query = bytes - prepaid_bytes;
+        if from_query > 0
+            && let Err(error) = self.query.try_reserve(from_query, self.operator_id())
+        {
+            if let Some(prepaid) = &self.prepaid {
+                prepaid.give_back(prepaid_bytes);
+            }
+            return Err(error);
+        }
         self.query
             .inner
             .reservation_calls
@@ -437,13 +514,17 @@ impl OperatorMemoryAccount {
         Ok(MemoryReservation {
             account: self.clone(),
             bytes,
+            prepaid_bytes,
         })
     }
 
-    fn release(&self, bytes: u64) {
+    fn release(&self, bytes: u64, prepaid_bytes: u64) {
         let previous = self.current_bytes.fetch_sub(bytes, Ordering::AcqRel);
         debug_assert!(previous >= bytes, "operator memory accounting underflow");
-        self.query.release(bytes);
+        if let Some(prepaid) = &self.prepaid {
+            prepaid.give_back(prepaid_bytes);
+        }
+        self.query.release(bytes - prepaid_bytes);
     }
 }
 
@@ -505,6 +586,8 @@ impl ReservationSlab {
 pub struct MemoryReservation {
     account: OperatorMemoryAccount,
     bytes: u64,
+    /// The part served from the account's prepaid balance.
+    prepaid_bytes: u64,
 }
 
 impl MemoryReservation {
@@ -520,7 +603,7 @@ impl MemoryReservation {
 
 impl Drop for MemoryReservation {
     fn drop(&mut self) {
-        self.account.release(self.bytes);
+        self.account.release(self.bytes, self.prepaid_bytes);
     }
 }
 
@@ -531,6 +614,49 @@ mod tests {
     use super::*;
 
     const QUERY_LIMIT: u64 = 1_024;
+
+    #[test]
+    fn prepaid_account_serves_its_balance_first_and_answers_to_the_query_for_the_rest() {
+        let pool = QueryMemoryPool::new("query", QUERY_LIMIT).unwrap();
+        let sibling = pool.operator("sibling").unwrap();
+        let account = pool.operator("merge").unwrap().prepaid(256).unwrap();
+        assert_eq!(pool.snapshot().current_bytes, 256);
+        assert_eq!(account.prepaid_available(), 256);
+
+        // Within the balance: nothing more from the query.
+        let first = account.reserve(200).unwrap();
+        assert_eq!(pool.snapshot().current_bytes, 256);
+        assert_eq!(account.prepaid_available(), 56);
+        assert_eq!(account.snapshot().current_bytes, 200);
+
+        // Beyond it: the rest from the query, and back to the balance
+        // first when released.
+        let second = account.reserve(100).unwrap();
+        assert_eq!(pool.snapshot().current_bytes, 300);
+        assert_eq!(account.prepaid_available(), 0);
+        drop(second);
+        assert_eq!(pool.snapshot().current_bytes, 256);
+        assert_eq!(account.prepaid_available(), 56);
+
+        // The sibling takes what the query has left; the balance is still
+        // the account's, and a reservation the query refuses beyond it
+        // gives the balance back.
+        let held = sibling.reserve(QUERY_LIMIT - 256).unwrap();
+        assert!(sibling.reserve(1).is_err());
+        let within = account.reserve(56).unwrap();
+        assert_eq!(account.prepaid_available(), 0);
+        drop(within);
+        let error = account.reserve(57).unwrap_err();
+        assert!(matches!(error, KaveonError::MemoryLimit(_)), "{error}");
+        assert_eq!(account.prepaid_available(), 56);
+
+        drop(first);
+        assert_eq!(account.prepaid_available(), 256);
+        drop(held);
+        assert_eq!(pool.snapshot().current_bytes, 256);
+        drop(account);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
 
     #[test]
     fn validates_pool_and_operator_identity() {
