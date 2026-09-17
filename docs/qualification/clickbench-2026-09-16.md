@@ -113,22 +113,22 @@ The 14 statements Trino won by the widest margin (`q13`–`q19`, `q31`–`q36`,
 procedure (medians of three, records under `clickbench/runs/kaveon-targets-*`).
 Trino's column is the 3 GB pass above.
 
-| Query | Trino s | `b0be459` s | `bf80ab7` s | `64ba6ce` s | `c4d7750` s | `8d15fd3` s |
-|---|---:|---:|---:|---:|---:|---:|
-| `q13` | 10.8 | 27.8 | 21.3 | 19.6 | 10.5 | 10.5 |
-| `q14` | 17.9 | 56.6 | 49.1 | 88.4 | 26.6 | 27.4 |
-| `q15` | 11.2 | 35.5 | 25.3 | 24.5 | 11.9 | 12.2 |
-| `q16` | 7.4 | 41.1 | 24.2 | 28.4 | 13.9 | 13.3 |
-| `q17` | 21.8 | 108.2 | 74.5 | 78.5 | 28.7 | 29.1 |
-| `q18` | 19.6 | 83.5 | 68.0 | 64.0 | 27.9 | 28.2 |
-| `q19` | 36.4 | 236.4 | 166.7 | 166.0 | 58.1 | 94.7 |
-| `q31` | 9.3 | 28.3 | 21.0 | 22.5 | 9.1 | 9.4 |
-| `q32` | 14.6 | 56.7 | 37.6 | 39.4 | 16.6 | 17.2 |
-| `q33` | 49.7 | rejected | rejected | rejected | 198.0 | 210.3 |
-| `q34` | 41.1 | 268.6 | 239.1 | 211.8 | out of memory after the merge | 92.5 |
-| `q35` | 45.4 | 309.3 | not run | 231.3 | out of memory after the merge | 97.9 |
-| `q36` | 13.0 | 56.8 | not run | 51.7 | 18.9 | 19.3 |
-| `q40` | 5.3 | 20.4 | not run | 19.6 | out of memory after the merge | rejected before the sort |
+| Query | Trino s | `b0be459` s | `bf80ab7` s | `64ba6ce` s | `c4d7750` s | `8d15fd3` s | `6eed629` s |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `q13` | 10.8 | 27.8 | 21.3 | 19.6 | 10.5 | 10.5 | 10.6 |
+| `q14` | 17.9 | 56.6 | 49.1 | 88.4 | 26.6 | 27.4 | 24.5 |
+| `q15` | 11.2 | 35.5 | 25.3 | 24.5 | 11.9 | 12.2 | 11.2 |
+| `q16` | 7.4 | 41.1 | 24.2 | 28.4 | 13.9 | 13.3 | 11.4 |
+| `q17` | 21.8 | 108.2 | 74.5 | 78.5 | 28.7 | 29.1 | 26.4 |
+| `q18` | 19.6 | 83.5 | 68.0 | 64.0 | 27.9 | 28.2 | 26.4 |
+| `q19` | 36.4 | 236.4 | 166.7 | 166.0 | 58.1 | 94.7 | 81.9 |
+| `q31` | 9.3 | 28.3 | 21.0 | 22.5 | 9.1 | 9.4 | 12.9 |
+| `q32` | 14.6 | 56.7 | 37.6 | 39.4 | 16.6 | 17.2 | 17.1 |
+| `q33` | 49.7 | rejected | rejected | rejected | 198.0 | 210.3 | 172.4 |
+| `q34` | 41.1 | 268.6 | 239.1 | 211.8 | out of memory after the merge | 92.5 | 87.1 |
+| `q35` | 45.4 | 309.3 | not run | 231.3 | out of memory after the merge | 97.9 | 93.1 |
+| `q36` | 13.0 | 56.8 | not run | 51.7 | 18.9 | 19.3 | 17.2 |
+| `q40` | 5.3 | 20.4 | not run | 19.6 | out of memory after the merge | rejected before the sort | 2.4 |
 
 - `bf80ab7` is the columnar aggregate alone (the AKS workers still ran the
   partial on one thread through the spill path): 10–40 % faster across the
@@ -170,6 +170,19 @@ Trino's column is the 3 GB pass above.
   offset form of a top-N was not recognised, so the merge-thread TopN did
   not apply. `17a33e6` plans it as a top-N that keeps the skipped rows
   (1,010 a partition) and drops them once after the merge.
+- `6eed629` adds the final merge's slot index (`836f673`: open-addressed
+  tag+slot buckets, prefetched, states folded from bytes — 417 → 140 ns per
+  partial row on a workstation) and the offset top-N. Targets rerun
+  (`clickbench/runs/kaveon-targets-6eed629-2026-09-17.json`): `q40` runs,
+  2.4 s against Trino's 5.3; the near-unique shapes move 5–18 % (`q19`
+  95 → 82, `q33` 210 → 172, `q34` 92 → 87, `q35` 98 → 93) — less than
+  the index alone would give, and the task metrics say why: the final
+  stage's in-memory merge reaches the 3 GiB budget near the end of its
+  input, is discarded, and the input is replayed through the sixteen-
+  partition disk path (peak 3.16 GB, 3.9 GB of runs, 400 compactions per
+  worker), with the stage at ~1.1 of 3 threads busy. The merge is done
+  twice and mostly serially; a hybrid merge that spills a thread's merged
+  groups as a run instead of restarting is the next item.
 
 Against the same Trino column, the `8d15fd3` full pass comes to: both ran
 42 of 43, Kaveon faster on 22, Trino faster on 20, geometric mean of
