@@ -1,6 +1,6 @@
 # Local cluster — the AKS topology as native processes
 
-> For development when the qualification cluster is down (it is deleted at weekends) or when Docker is unavailable on the machine. Same environment contract as `docker-compose.yml` and the Helm charts; what runs here is what runs on AKS **minus** TLS, workload identity, ADLS and network policies. Never publish a number measured here.
+> For development when the qualification cluster is down (it is paused at weekends, see [suspend and resume](aks-suspend-resume.md)) or when Docker is unavailable on the machine. Same environment contract as `docker-compose.yml` and the Helm charts; what runs here is what runs on AKS **minus** TLS, workload identity, ADLS and network policies. Never publish a number measured here.
 
 This default profile intentionally keeps PostgreSQL so developers can exercise
 source capture, outbox replay, reconciliation and rollback. The checked-in

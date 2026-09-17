@@ -47,7 +47,8 @@ For the existing test environment:
 ```powershell
 az login --tenant 72f988bf-86f1-41af-91ab-2d7cd011db47
 az account set --subscription eaa4a83d-8511-497c-b0bc-40aa5f0deae1
-az aks get-credentials --resource-group test-prproddu-test --name kaveon-test-aks --overwrite-existing
+# westus2 since 2026-09-14; the eastus resource group test-prproddu-test is retired
+az aks get-credentials --resource-group test-prproddu-test-westus2 --name kaveon-test-aks --overwrite-existing
 kubelogin convert-kubeconfig -l azurecli
 kubectl config current-context
 kubectl get nodes

@@ -1,6 +1,6 @@
 # AKS deployment plan
 
-Status: planning only, 2026-09-08. No Azure resources, contexts, or deployments were changed for this plan. Local qualification is not AKS production qualification.
+Status: the 2026-09-08 plan, kept as the design record. The chart it asked for exists as `infra/helm/kaveon-test` (Engine), `infra/helm/kaveon-portal-test` (Studio, API, PostgreSQL) and `infra/helm/kaveon-trino-benchmark` (the comparison harness), the Bicep as `infra/bicep/environments/aks-test.bicep`, and the deployment ran on 2026-09-08 (eastus, [record](aks-test-deployment.md)) and again on 2026-09-14 in westus2, where the qualification cluster lives now. Statements below in the present tense ("no Helm chart currently exists") describe 2026-09-08. AKS test qualification is not production qualification.
 
 ## Decision and inventory
 

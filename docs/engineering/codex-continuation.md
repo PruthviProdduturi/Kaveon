@@ -1,10 +1,11 @@
 # Codex continuation brief
 
-**Updated:** 2026-09-04 America/Los_Angeles  
+**Written:** 2026-09-04 America/Los_Angeles (the "latest delivered state", Azure and validation sections below are that day's record)  
+**Gate status revised:** 2026-09-17, see "Honest open gates"  
 **Branch:** `dev`  
 **Repository:** `PruthviProdduturi/Kaveon`
 
-This is the durable Engineer 2 continuation record. Read `HANDSHAKE.md` first on every machine, then this file. Never store credentials, tokens, connection strings, or user data here.
+This is the durable Engineer 2 continuation record. Read `HANDSHAKE.md` first on every machine, then this file; the HANDSHAKE Log rows of 2026-09-15 to 2026-09-17 and `engine/DISTRIBUTED_EXECUTION_STATUS.md` describe what landed on the Engine while Codex was away. Never store credentials, tokens, connection strings, or user data here.
 
 ## Product boundary
 
@@ -55,7 +56,7 @@ Windows may warn that Cargo incremental hard links are unavailable and copy file
 - Server settings:
   - `KAVEON_QUERY_MEMORY_LIMIT_BYTES`, default 512 MiB.
   - `KAVEON_MEMORY_ADMISSION_LIMIT_BYTES`, default 4 GiB.
-- Coordinator statement submission returns HTTP 429 with `MEMORY_ADMISSION_REJECTED` when the process ceiling cannot admit another query.
+- Coordinator statement submission queued a statement whose budget does not fit on arrival since 2026-09-17 (`KAVEON_MEMORY_ADMISSION_QUEUE`, default 64, `KAVEON_MEMORY_ADMISSION_WAIT_SECONDS`, default 60; per request `settings.admission_wait_seconds`); HTTP 429 `MEMORY_ADMISSION_REJECTED` is returned only when the queue is full on arrival, the request asked not to wait, or the wait expired, and carries `admission_wait_ms`. Before that date the coordinator refused on arrival. Workers queue tasks the same way. Every node also answers to its cgroup limit through the process memory guard (`KAVEON_PROCESS_MEMORY_LIMIT_BYTES` overrides; headroom max(256 MiB, 15 %)).
 - Coordinator-local physical plans propagate a `QueryMemoryPool` into hash aggregate and hash join.
 - Worker fragments create bounded task pools and propagate accounts into partial/single hash aggregate and hash join.
 - Aggregate group/distinct state and join input/index/output growth are accounted and fail closed at the limit.
@@ -69,13 +70,13 @@ Windows may warn that Cargo incremental hard links are unavailable and copy file
 - Strict projection, predicate validation, row-group pruning, deterministic `ScanPartition`, and scan metrics reuse the local Parquet contracts.
 - A bounded-channel synchronous adapter implements `BatchSource` for the existing execution pipeline without unsafe code.
 - Coordinator-local planning and worker fragment execution select the ADLS reader for Parquet `abfss://` sources.
-- Cloud Delta-log replay is not implemented. Delta over `abfss://` fails explicitly. S3 and Iceberg remain pending.
+- As of 2026-09-04 cloud Delta-log replay was not implemented; since then Delta (JSON commits and v1 checkpoints) and Iceberg read from ADLS Gen2 through the shared object-store snapshot code (`storage/src/delta_snapshot.rs`, `iceberg_reader.rs`), and S3 goes through the same reader without a qualification run.
 
 ### SQL reconciliation
 
 - Decimal128 reference/type mismatches and strict Clippy issues were corrected.
 - Local semi/anti joins use `SemiJoinOperator` for IN/NOT IN/EXISTS/NOT EXISTS planning.
-- Distributed semi/anti joins remain explicitly unsupported.
+- Distributed semi/anti joins were explicitly unsupported on 2026-09-04; since `b1f190f` (2026-09-16) the subquery side broadcasts into the probe stage.
 - Distributed `SUM(DISTINCT)` and `AVG(DISTINCT)` fall back locally because the fragment aggregate contract does not encode those distinct states. Never remove this guard until the wire contract preserves semantics.
 
 ## Documentation and UI completed
@@ -131,20 +132,24 @@ The obsolete `kaveon-migrate` Container Apps job and `kaveon-migrate` ACR reposi
 
 ## Honest open gates
 
-1. Partitioned hash-aggregate spill.
-2. Partitioned/grace hash-join spill, skew handling, and broadcast thresholds.
-3. Cloud Delta transaction-log/checkpoint replay over ADLS Gen2.
-4. Real ADLS correctness and throughput tests using a managed/workload identity.
-5. Admission queues/resource groups; current overload policy rejects with 429.
-6. Streaming exchange flow control and paged/streamed root results.
-7. Distributed semi/anti join and distributed SUM/AVG DISTINCT state contracts.
-8. Five-worker AKS fault, concurrency, skew, memory-pressure, and comparative performance qualification.
-9. Platform PostgreSQL source registry to Engine catalog synchronization bridge.
-10. Replace the monolithic setup-schema replay with versioned production metadata migrations; legacy table drift still prevents a complete replay even though Catalog Sources is repaired.
+Status on 2026-09-17 of the ten gates listed on 2026-09-04 (evidence in the HANDSHAKE Log and under `docs/qualification/`):
 
-Do not call Kaveon Trino-class or production-ready until the relevant gates have measured evidence. Current wording is distributed alpha.
+1. Partitioned hash-aggregate spill: done (`PartitionedHashAggregate`, 2026-09-08); grouped partials now flush to the exchange on pressure (`c087ff9`) and the final stage is a hybrid merge that spills sub-partitions (`3411cf7`); skew qualification open.
+2. Partitioned hash-join spill and exact-statistics broadcast choice: done (`PartitionedHashJoin`, `optim/src/statistics.rs`); skew handling open.
+3. Cloud Delta log and checkpoint replay over ADLS Gen2: done (v1 checkpoints; protocol v2 features refused by name).
+4. ADLS correctness and throughput with workload identity: done on the AKS cluster (2026-09-08 onward; ClickBench and the scale suite read ADLS objects).
+5. Admission queues and resource groups: done (resource groups with the early-September security work; the FIFO memory admission queue 2026-09-17, not yet measured on the cluster).
+6. Streaming exchange output: done (`aaaffdd`, `427b166`); paged root results: done (`result_delivery: "paged"`); the consumer still downloads a whole payload before decoding, which is open.
+7. Distributed semi/anti joins: done (`b1f190f`); distributed SUM/AVG DISTINCT still fall back locally, open.
+8. AKS fault, concurrency and pressure qualification: done on three workers (2026-09-10 gate); five workers, skew and a sustained soak open; comparative performance: three tiers running, no tier has completed its declared rounds (`docs/qualification/benchmark-program.md`).
+9. Source registry to Engine catalog bridge: done (`POST /api/v1/catalog-sources/{id}/engine-sync`).
+10. Versioned production metadata migrations: superseded by the PostgreSQL retirement program (`postgresql-retirement.md`); PostgreSQL remains the live authority.
 
-## Next execution order
+Do not call Kaveon Trino-class or production-ready until the relevant gates have measured evidence. Current wording is distributed alpha, measured against Trino on a matched three-worker cluster.
+
+## Next execution order (2026-09-04, kept as written)
+
+The list below is the 2026-09-04 order; items 3 to 5 are done as recorded above, and the current order is the "Continuation point" in `engine/DISTRIBUTED_EXECUTION_STATUS.md`.
 
 1. Rotate or revoke the exposed legacy Neon database credential in Neon.
 2. Implement versioned production metadata migrations instead of replaying the monolithic setup schema.

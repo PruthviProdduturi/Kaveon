@@ -1,5 +1,15 @@
 # Proposed Kaveon–Trino 1.90× benchmark
 
+> **Status, 2026-09-17.** This page defined the single-node Docker
+> publication contract and the 1.90× objective in early September. The
+> cluster program that supersedes it for every published number is
+> [`docs/qualification/benchmark-program.md`](../qualification/benchmark-program.md)
+> (three tiers, rounds, the throughput tier, result cache off). The AKS
+> harness described in "AKS boundary" has since run: five of six rounds on
+> 2026-09-15 at 1.45× ([record](../qualification/kaveon-trino-aks-2026-09-15.md));
+> the 1.90× gate is not met and the sentence below saying the harness has not
+> been executed describes the page's date.
+
 The proposed primary metric is **successful exact-result queries per second**
 for an equal-weight, concurrent analytical workload. A 1.90 ratio means Kaveon
 completes 90% more correct queries per second than Trino in the declared test.

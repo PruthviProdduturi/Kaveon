@@ -1,5 +1,17 @@
 # AKS test deployment — September 8, 2026
 
+> **Historical record.** This page records the eastus deployment
+> (`test-prproddu-test`, storage and registry `kvtestegmf6oweugsno`) from
+> September 8 to 14, 2026 and the gates it passed. That cluster was deleted; the
+> qualification cluster has run in **westus2** since 2026-09-14 (resource group
+> `test-prproddu-test-westus2`, cluster `kaveon-test-aks`, storage and registry
+> `kvtesticmwwliihpppo`, the lake copied across). The chart, secrets, fixture
+> and verifier procedures below still apply to it; the resource names, image
+> digests and the stop command do not. Current operations:
+> [suspend and resume](aks-suspend-resume.md),
+> [deploy and connect](azure-deployment-guide.md),
+> [restore the catalog](../guides/register-engine-catalog.md).
+
 The user authorized provisioning in Microsoft tenant `72f988bf-86f1-41af-91ab-2d7cd011db47`, subscription `L1R_DSEng` (`eaa4a83d-8511-497c-b0bc-40aa5f0deae1`), resource group `test-prproddu-test`. This resumes AKS deployment only; the engine performance goal remains paused. No subscription policies, exemptions, or subscription-level role assignments were changed.
 
 ## Provisioned resources

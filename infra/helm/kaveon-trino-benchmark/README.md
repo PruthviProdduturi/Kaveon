@@ -33,14 +33,19 @@ The runner registers the pre-existing Delta tables with Trino's opt-in
 ## One-time tools and variables
 
 Use the recorded test coordinates. Do not change Azure policy, firewall rules,
-node counts, or SKUs for this run.
+node counts, or SKUs for this run. The cluster has been in westus2 since
+2026-09-14 (the values below); the eastus lineage was resource group
+`test-prproddu-test` with registry and account `kvtestegmf6oweugsno`. The two
+digests are examples from the `run-20260910-a1` invocation on that lineage;
+take the current ones from the last run record under
+`docs/qualification/clickbench/runs/` or `kubectl get sts -o yaml`.
 
 ```powershell
 $subscription = "eaa4a83d-8511-497c-b0bc-40aa5f0deae1"
-$resourceGroup = "test-prproddu-test"
+$resourceGroup = "test-prproddu-test-westus2"
 $cluster = "kaveon-test-aks"
-$registry = "kvtestegmf6oweugsno"
-$account = "kvtestegmf6oweugsno"
+$registry = "kvtesticmwwliihpppo"
+$account = "kvtesticmwwliihpppo"
 $namespace = "kaveon"
 $release = "kaveon-benchmark"
 $runId = "run-20260910-a1" # lowercase DNS label; choose a new value every run

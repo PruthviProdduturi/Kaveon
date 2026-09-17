@@ -35,11 +35,16 @@ Engine's admission and exchange settings are in the chart
 `kubectl set image` roll keeps the digest recorded in the last run record
 under `docs/qualification/clickbench/runs/`.
 
-## Delete and recreate (the earlier procedure)
+## Delete and recreate (the earlier procedure, eastus, historical)
 
-This runbook removes only the `kaveon-test-aks` resource. It does not delete
-the resource group, PostgreSQL, ADLS Gen2, ACR, managed identities, VNet, or
-network security groups.
+This is the procedure used on the eastus cluster (resource group
+`test-prproddu-test`, storage account `kvtestegmf6oweugsno`) before 2026-09-14;
+the names below are that cluster's and the snapshot named is that cluster's.
+It is kept because it is the recovery path if a stopped cluster ever has to be
+rebuilt: `az aks stop` is the weekend procedure now. The runbook removes only
+the `kaveon-test-aks` resource. It does not delete the resource group,
+PostgreSQL, ADLS Gen2, ACR, managed identities, VNet, or network security
+groups.
 
 ## Before suspension
 
@@ -75,9 +80,9 @@ Wait for the resource to disappear, then verify that the storage account,
 PostgreSQL pod PVC resources, ACR, identities, and VNet still exist. Do not use
 `az group delete`.
 
-## Resume on Monday
+## Resume on Monday (after a delete)
 
-The AKS control plane is not a stop/start resource. Recreate it from the
+Recreate the cluster from the
 checked-in Bicep/Helm deployment using the same subscription, resource group,
 network, identity, storage, and image digests. Reapply the saved values and
 verify the PostgreSQL PVC and ADLS catalog before starting Engine workers.
