@@ -124,11 +124,16 @@ fn prune_columns(plan: LogicalPlan, required: Option<HashSet<String>>) -> Logica
                 columns: projected,
             }
         }
+        // A node asked for everything (`required` None) asks its input
+        // for everything; only a named set of columns grows by what the
+        // node itself reads.
         LogicalPlan::Filter { input, predicate } => {
-            let mut columns = required.unwrap_or_default();
-            collect_columns(&predicate, &mut columns);
+            let required = required.map(|mut columns| {
+                collect_columns(&predicate, &mut columns);
+                columns
+            });
             LogicalPlan::Filter {
-                input: Box::new(prune_columns(*input, Some(columns))),
+                input: Box::new(prune_columns(*input, required)),
                 predicate,
             }
         }
@@ -168,12 +173,14 @@ fn prune_columns(plan: LogicalPlan, required: Option<HashSet<String>>) -> Logica
             }
         }
         LogicalPlan::Sort { input, order_by } => {
-            let mut columns = required.unwrap_or_default();
-            for (expression, _) in &order_by {
-                collect_columns(expression, &mut columns);
-            }
+            let required = required.map(|mut columns| {
+                for (expression, _) in &order_by {
+                    collect_columns(expression, &mut columns);
+                }
+                columns
+            });
             LogicalPlan::Sort {
-                input: Box::new(prune_columns(*input, Some(columns))),
+                input: Box::new(prune_columns(*input, required)),
                 order_by,
             }
         }
@@ -192,12 +199,14 @@ fn prune_columns(plan: LogicalPlan, required: Option<HashSet<String>>) -> Logica
             input,
             window_exprs,
         } => {
-            let mut columns = required.unwrap_or_default();
-            for expr in &window_exprs {
-                collect_columns(expr, &mut columns);
-            }
+            let required = required.map(|mut columns| {
+                for expr in &window_exprs {
+                    collect_columns(expr, &mut columns);
+                }
+                columns
+            });
             LogicalPlan::Window {
-                input: Box::new(prune_columns(*input, Some(columns))),
+                input: Box::new(prune_columns(*input, required)),
                 window_exprs,
             }
         }
@@ -1235,9 +1244,9 @@ mod tests {
     fn scan_columns<'a>(plan: &'a LogicalPlan, scans: &mut Vec<&'a Option<Vec<String>>>) {
         match plan {
             LogicalPlan::Scan { columns, .. } => scans.push(columns),
-            LogicalPlan::Project { input, .. } | LogicalPlan::Filter { input, .. } => {
-                scan_columns(input, scans)
-            }
+            LogicalPlan::Project { input, .. }
+            | LogicalPlan::Filter { input, .. }
+            | LogicalPlan::Sort { input, .. } => scan_columns(input, scans),
             LogicalPlan::Join { left, right, .. } => {
                 scan_columns(left, scans);
                 scan_columns(right, scans);
@@ -1458,15 +1467,39 @@ mod tests {
             ]
         );
         // Nothing above narrows the output: no scan is pruned, the join
-        // keys notwithstanding.
-        let whole = push_projection_down(outer(compare(
-            column("o.o_orderkey"),
-            BinaryOp::Eq,
-            column("l.l_orderkey"),
-        )));
+        // keys notwithstanding, and neither does a filtered scan under
+        // such a join lose everything but its predicate's columns.
+        let whole = push_projection_down(LogicalPlan::Filter {
+            input: Box::new(outer(compare(
+                column("o.o_orderkey"),
+                BinaryOp::Eq,
+                column("l.l_orderkey"),
+            ))),
+            predicate: compare(column("l.l_quantity"), BinaryOp::Gt, int(1)),
+        });
         let mut scans = Vec::new();
         scan_columns(&whole, &mut scans);
         assert_eq!(scans, vec![&None, &None, &None]);
+        let filtered_side = push_projection_down(LogicalPlan::Sort {
+            input: Box::new(LogicalPlan::Join {
+                left: Box::new(LogicalPlan::Filter {
+                    input: Box::new(aliased("customer", "c")),
+                    predicate: compare(column("c_nationkey"), BinaryOp::Eq, int(1)),
+                }),
+                right: Box::new(aliased("orders", "o")),
+                join_type: JoinType::Inner,
+                condition: Some(compare(
+                    column("c.c_custkey"),
+                    BinaryOp::Eq,
+                    column("o.o_custkey"),
+                )),
+                distribution: kaveon_sql::logical_plan::JoinDistribution::Partitioned,
+            }),
+            order_by: vec![(column("o.o_orderdate"), true)],
+        });
+        let mut scans = Vec::new();
+        scan_columns(&filtered_side, &mut scans);
+        assert_eq!(scans, vec![&None, &None]);
         // A bare column the relation names do not describe keeps both
         // sides of that join whole.
         let bare = push_projection_down(LogicalPlan::Project {
