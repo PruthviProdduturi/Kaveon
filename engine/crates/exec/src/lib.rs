@@ -4,6 +4,7 @@ pub mod distinct;
 pub mod exchange;
 pub mod expr_eval;
 pub mod filter;
+pub mod final_merge;
 pub mod incremental_aggregate;
 pub mod join;
 pub mod limit;
