@@ -1,5 +1,5 @@
-# TPC-H generation: Trino's tpch connector writes the eight tables as Parquet
-# under benchmarks/tpch/sf<N>/ in the opensource container (Tier 3 of
+# TPC-H generation: Trino's tpch connector writes the eight tables as Delta
+# tables under TPCH_ROOT in the opensource container (Tier 3 of
 # docs/qualification/benchmark-program.md). Runs only inside a Trino window
 # with the chart upgraded to trino.tpch.enabled=true. Before applying:
 #
@@ -45,6 +45,10 @@ spec:
             - {name: TRINO_URL, value: "https://kaveon-benchmark-trino.kaveon.svc.cluster.local:8443"}
             - {name: TRINO_ACCOUNT, value: kvtesticmwwliihpppo}
             - {name: TPCH_SCALE, value: "100"}
+            # Delta tables (see scripts/generate-tpch-trino.py); the plain
+            # Parquet layout from the first generation stays under
+            # benchmarks/tpch/sf100/ until it is removed.
+            - {name: TPCH_ROOT, value: benchmarks/tpch/delta/sf100}
             - {name: TPCH_OUTPUT, value: /results/tpch-tables.json}
           resources:
             requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 128Mi}

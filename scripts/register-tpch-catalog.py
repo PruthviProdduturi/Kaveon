@@ -58,6 +58,10 @@ def register(collection, path, body):
 
 def main() -> int:
     manifest = json.loads(Path(sys.argv[1] if len(sys.argv) > 1 else '/scripts/tables.json').read_text(encoding='utf-8'))
+    # The generation Job prints {"scale": N, "tables": [...]} (kept as
+    # docs/qualification/tpch/tables.json); its TPCH_OUTPUT file is the bare list.
+    if isinstance(manifest, dict):
+        manifest = manifest['tables']
     register('/v1/catalog/definitions', '/v1/catalog/definitions/' + CATALOG_ID,
              {'id': CATALOG_ID, 'name': CATALOG, 'adapter': 'Native', 'storage': {'AdlsGen2': ADLS},
               'credential': {'kind': 'WorkloadIdentity', 'reference': 'kaveon-test-reader'}})
@@ -75,7 +79,8 @@ def main() -> int:
         register('/v1/catalog/schemas/' + quote(schema_id, safe='') + '/tables',
                  '/v1/catalog/tables/' + quote(table_id, safe=''),
                  {'id': table_id, 'schema_id': schema_id, 'name': table['name'], 'location': location,
-                  'access': 'Shortcut', 'format': 'Parquet', 'columns': columns})
+                  'access': 'Shortcut', 'format': 'Delta' if table.get('format') == 'delta' else 'Parquet',
+                  'columns': columns})
         response = client.post('/v1/statement', headers={
             'Authorization': 'Bearer ' + os.environ['KAVEON_ENGINE_BRIDGE_TOKEN'],
             'x-kaveon-principal': 'benchmark-curation', 'x-kaveon-role': 'admin',

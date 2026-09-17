@@ -36,7 +36,8 @@ def validated_next_uri(base_url, candidate):
 
 
 class Trino:
-    def __init__(self, schema):
+    def __init__(self, schema, catalog="opensource"):
+        self.catalog = catalog
         self.url = os.environ["TRINO_URL"].rstrip("/")
         self.schema = schema
         self.ssl = ssl.create_default_context(cafile="/trino-tls/ca.crt")
@@ -44,7 +45,7 @@ class Trino:
         self.auth = "Basic " + base64.b64encode(("qualification:" + password).encode()).decode()
 
     def _fetch(self, method, url, body=None):
-        headers = {"X-Trino-User": "qualification", "X-Trino-Catalog": "opensource",
+        headers = {"X-Trino-User": "qualification", "X-Trino-Catalog": self.catalog,
                    "X-Trino-Schema": self.schema, "Content-Type": "text/plain; charset=utf-8",
                    "Authorization": self.auth}
         request = urllib.request.Request(url, data=body, method=method, headers=headers)
@@ -95,6 +96,18 @@ def wait_ready(trino, timeout=300):
 def declare_tables(trino, tables, account):
     root = f"abfs://opensource@{account}.dfs.core.windows.net"
     for table in tables:
+        if table.get("format") == "delta":
+            # A Delta table is registered by its log through the `lake`
+            # Delta catalog (delta.register-table-procedure.enabled).
+            trino.query(f"CREATE SCHEMA IF NOT EXISTS lake.{table['schema']}")
+            existing, _ = trino.query(
+                f"SELECT count(*) FROM lake.information_schema.tables "
+                f"WHERE table_schema = '{table['schema']}' AND table_name = '{table['name']}'")
+            if existing[0][0] == 0:
+                trino.query(f"CALL lake.system.register_table(schema_name => '{table['schema']}', "
+                            f"table_name => '{table['name']}', "
+                            f"table_location => '{root}/{table['directory'].rstrip('/')}')")
+            continue
         trino.query(f"CREATE SCHEMA IF NOT EXISTS opensource.{table['schema']} "
                     f"WITH (location = '{root}/{table['directory']}')")
         columns = ", ".join(f"{name} {kind}" for name, kind in table["columns"])
@@ -105,7 +118,7 @@ def declare_tables(trino, tables, account):
 def main():
     suite = json.load(open(os.environ["SUITE"], encoding="utf-8"))
     tables = json.load(open(os.environ["TRINO_TABLES"], encoding="utf-8"))
-    trino = Trino(suite["schema"])
+    trino = Trino(suite["schema"], suite.get("trino_catalog", "opensource"))
     wait_ready(trino)
     declare_tables(trino, tables, os.environ["TRINO_ACCOUNT"])
     records = []
