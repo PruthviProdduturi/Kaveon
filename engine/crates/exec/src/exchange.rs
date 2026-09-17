@@ -61,7 +61,7 @@ impl HashPartitioner {
         let key_indices = columns
             .iter()
             .map(|column| {
-                schema.index_of(column).map_err(|_| {
+                crate::expr_eval::resolve_column_index(schema, column).map_err(|_| {
                     KaveonError::Execution(format!(
                         "hash partition key '{column}' is not in the input schema"
                     ))
@@ -265,6 +265,35 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use std::sync::Arc;
+
+    #[test]
+    fn a_qualified_key_reaches_a_bare_column_and_partitions_like_the_bare_key() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("customer_id", DataType::Int64, false),
+            Field::new("amount", DataType::Int64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8])),
+                Arc::new(Int64Array::from(vec![10, 20, 30, 40, 50, 60, 70, 80])),
+            ],
+        )
+        .unwrap();
+        let bare = HashPartitioner::try_new(&schema, &["customer_id".into()], 3).unwrap();
+        let qualified = HashPartitioner::try_new(&schema, &["o.customer_id".into()], 3).unwrap();
+        let rows = |partitions: Vec<RecordBatch>| {
+            partitions
+                .iter()
+                .map(|batch| batch.num_rows())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            rows(qualified.partition(&batch).unwrap()),
+            rows(bare.partition(&batch).unwrap())
+        );
+        assert!(HashPartitioner::try_new(&schema, &["o.missing".into()], 3).is_err());
+    }
 
     #[test]
     fn sql_equal_floats_share_hash_partitions() {

@@ -198,40 +198,42 @@ pub fn evaluate_predicate(expr: &Expr, batch: &RecordBatch) -> Result<BooleanArr
     as_boolean(&arr).cloned()
 }
 
+/// The index of `name` in `schema`: the field named exactly `name`, else
+/// the one field whose bare name is `name`'s bare name. A join qualifies
+/// its output as `relation.column`, so a bare `c_name` reaches
+/// `customer.c_name` and a qualified `t.x` reaches a scan's bare `x`.
+pub fn resolve_column_index(schema: &arrow::datatypes::Schema, name: &str) -> Result<usize> {
+    if let Ok(index) = schema.index_of(name) {
+        return Ok(index);
+    }
+    let unqualified = name.rsplit('.').next().unwrap_or(name);
+    let matches = schema
+        .fields()
+        .iter()
+        .enumerate()
+        .filter(|(_, field)| {
+            field.name() == unqualified
+                || field
+                    .name()
+                    .strip_suffix(unqualified)
+                    .is_some_and(|prefix| prefix.ends_with('.'))
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [index] => Ok(*index),
+        [] => Err(KaveonError::Execution(format!(
+            "column '{name}' not found in batch"
+        ))),
+        _ => Err(KaveonError::Execution(format!(
+            "column '{name}' is ambiguous in batch"
+        ))),
+    }
+}
+
 fn resolve_column(name: &str, batch: &RecordBatch) -> Result<ArrayRef> {
     let schema = batch.schema();
-    let idx = match schema.index_of(name) {
-        Ok(index) => index,
-        Err(_) => {
-            let unqualified = name.rsplit('.').next().unwrap_or(name);
-            let matches = schema
-                .fields()
-                .iter()
-                .enumerate()
-                .filter(|(_, field)| {
-                    field.name() == unqualified
-                        || field
-                            .name()
-                            .strip_suffix(unqualified)
-                            .is_some_and(|prefix| prefix.ends_with('.'))
-                })
-                .map(|(index, _)| index)
-                .collect::<Vec<_>>();
-            match matches.as_slice() {
-                [index] => *index,
-                [] => {
-                    return Err(KaveonError::Execution(format!(
-                        "column '{name}' not found in batch"
-                    )));
-                }
-                _ => {
-                    return Err(KaveonError::Execution(format!(
-                        "column '{name}' is ambiguous in batch"
-                    )));
-                }
-            }
-        }
-    };
+    let idx = resolve_column_index(&schema, name)?;
     Ok(Arc::clone(batch.column(idx)))
 }
 
