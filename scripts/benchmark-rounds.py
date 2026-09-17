@@ -30,10 +30,21 @@ import sys
 import time
 
 NAMESPACE = "kaveon"
-RUNNER_IMAGE = os.environ.get(
-    "KAVEON_RUNNER_IMAGE",
-    "kvtesticmwwliihpppo.azurecr.io/kaveon-api@sha256:a946aa322715db61d14568ab2e987ad23ef4ea982e0dba29645733ab4ea1ba14",
-)
+
+
+def runner_image():
+    """The image the Kaveon-side Jobs run: the API image the cluster is
+    serving, so the mounted scripts and the Engine bridge they import are
+    the same build; KAVEON_RUNNER_IMAGE overrides it."""
+    if image := os.environ.get("KAVEON_RUNNER_IMAGE"):
+        return image
+    image = kubectl("get", "deploy/kaveon-api", "-o",
+                    "jsonpath={.spec.template.spec.containers[?(@.name==\"api\")].image}", capture=True).strip()
+    if not image:
+        raise SystemExit("kaveon-api Deployment has no api container image; set KAVEON_RUNNER_IMAGE")
+    return image
+
+
 KAVEON_STS = ["kaveon-coordinator", "kaveon-worker"]
 TRINO_STS = ["kaveon-benchmark-trino-coordinator", "kaveon-benchmark-trino-worker"]
 
@@ -138,7 +149,7 @@ def launch_kaveon_job(name, script, extra_env=(), node_pool=None):
     running one mounted script from kaveon-clickbench-input."""
     kubectl("delete", "job", name, "--ignore-not-found")
     env = dict(os.environ, MSYS_NO_PATHCONV="1")
-    command = [sys.executable, "scripts/aks-scale-suite-job.py", "--image", RUNNER_IMAGE, "--name", name,
+    command = [sys.executable, "scripts/aks-scale-suite-job.py", "--image", runner_image(), "--name", name,
                "--input", "kaveon-clickbench-input", "--suite", "/input/suite.json", "--script", script]
     for item in extra_env:
         command += ["--env", item]
