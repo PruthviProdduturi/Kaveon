@@ -190,7 +190,7 @@ fn elapsed_us(started: Instant) -> u64 {
 }
 
 /// SplitMix64 finaliser: every input bit reaches every output bit.
-fn mix(mut value: u64) -> u64 {
+pub(crate) fn mix(mut value: u64) -> u64 {
     value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     value ^ (value >> 31)

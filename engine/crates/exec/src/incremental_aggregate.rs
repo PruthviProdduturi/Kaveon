@@ -29,6 +29,11 @@ pub struct IncrementalAggregateMerger {
     columnar: Columnar,
     memory: Option<OperatorMemoryAccount>,
     reservations: ReservationSlab,
+    /// Rows of the last pushed batch that reached the groups before it
+    /// returned: every row on success; on a budget refusal, the rows
+    /// merged before the refusal — none on the columnar path, whose batch
+    /// is covered before it is applied.
+    applied: usize,
 }
 
 /// Decided on the first row: the layout is the same for every row after.
@@ -49,6 +54,46 @@ enum Columnar {
 pub enum MergedGroups {
     Rows(Vec<GroupedAggregateState>),
     Columnar(Box<ColumnarGroups>),
+}
+
+impl MergedGroups {
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Rows(groups) => groups.len(),
+            Self::Columnar(groups) => groups.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Bytes the groups take as encoded partial rows, estimated: the
+    /// columns know theirs; rows are sized from what they hold.
+    pub(crate) fn encoded_bytes(&self, reservations: &[MemoryReservation]) -> u64 {
+        match self {
+            Self::Rows(groups) => {
+                crate::aggregate::partial_encoding_bytes(reservations, groups.len())
+            }
+            Self::Columnar(groups) => groups.encoded_bytes(),
+        }
+    }
+
+    /// Encode the groups in `range` as partial rows, each into the sink
+    /// `partition_of` names for its encoded key bytes.
+    pub(crate) fn encode_partitioned(
+        &self,
+        range: std::ops::Range<usize>,
+        partition_of: &dyn Fn(&[u8]) -> usize,
+        sinks: &mut [(arrow::array::BinaryBuilder, arrow::array::BinaryBuilder)],
+    ) -> Result<()> {
+        match self {
+            Self::Rows(groups) => {
+                crate::aggregate::encode_groups_partitioned(&groups[range], partition_of, sinks)
+            }
+            Self::Columnar(groups) => groups.encode_partitioned(range, partition_of, sinks),
+        }
+    }
 }
 
 const MERGE_RESERVATION_SLAB_BYTES: u64 = 64 * 1024;
@@ -110,6 +155,31 @@ impl IncrementalAggregateMerger {
             columnar: Columnar::Undecided,
             memory,
             reservations: ReservationSlab::default(),
+            applied: 0,
+        }
+    }
+
+    /// Groups held so far.
+    pub fn group_count(&self) -> usize {
+        match &self.columnar {
+            Columnar::Groups { groups, .. } => groups.len(),
+            _ => self.states.len(),
+        }
+    }
+
+    /// Rows of the last `push_batch` that are in the groups. After a
+    /// budget refusal the rest of that batch — from this row on — is
+    /// still owed.
+    pub fn rows_applied(&self) -> usize {
+        self.applied
+    }
+
+    /// The table will not grow again: release the doubling it holds in
+    /// reserve, so what follows — encoding the groups for the disk — has
+    /// the budget it needs.
+    pub fn release_growth(&mut self) {
+        if let Columnar::Groups { growth, .. } = &mut self.columnar {
+            drop(growth.take());
         }
     }
 
@@ -166,6 +236,7 @@ impl IncrementalAggregateMerger {
             None
         };
         let (created, new_bytes) = groups.merge_encoded_batch(keys, states, rows)?;
+        self.applied = rows;
         if let Some(memory) = &self.memory {
             let bytes = (created as u64)
                 .saturating_mul(*slot_bytes)
@@ -178,6 +249,7 @@ impl IncrementalAggregateMerger {
     }
 
     pub fn push_batch(&mut self, batch: &RecordBatch) -> Result<()> {
+        self.applied = 0;
         let _batch_guard = self
             .memory
             .as_ref()
@@ -228,6 +300,7 @@ impl IncrementalAggregateMerger {
             .transpose()?;
         let mut incoming = Vec::new();
         for row in 0..batch.num_rows() {
+            self.applied = row;
             if row % 1024 == 0
                 && let Some(memory) = &self.memory
             {
@@ -312,6 +385,7 @@ impl IncrementalAggregateMerger {
                 }
             }
         }
+        self.applied = batch.num_rows();
         Ok(())
     }
 

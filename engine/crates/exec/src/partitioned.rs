@@ -319,14 +319,14 @@ fn validate_partitions(count: usize) -> Result<()> {
 
 /// Reads runs sequentially, keeping only one file open. Dropping the source
 /// removes all remaining runs, including after operator failure/cancellation.
-struct RunSource {
+pub(crate) struct RunSource {
     schema: SchemaRef,
     runs: VecDeque<SpillRun>,
     reader: Option<SpillRunReader>,
 }
 
 impl RunSource {
-    fn new(schema: SchemaRef, runs: Vec<SpillRun>) -> Self {
+    pub(crate) fn new(schema: SchemaRef, runs: Vec<SpillRun>) -> Self {
         Self {
             schema,
             runs: runs.into(),

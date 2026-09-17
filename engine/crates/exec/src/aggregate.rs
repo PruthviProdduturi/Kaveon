@@ -860,6 +860,30 @@ pub fn grouped_aggregate_states_to_typed_batch(
     grouped_state_batch(key_values, state_values, group_types)
 }
 
+/// Encode `groups` the way the typed batch does, each into the sink
+/// `partition_of` names for its encoded key bytes.
+pub(crate) fn encode_groups_partitioned(
+    groups: &[GroupedAggregateState],
+    partition_of: &dyn Fn(&[u8]) -> usize,
+    sinks: &mut [(BinaryBuilder, BinaryBuilder)],
+) -> Result<()> {
+    let mut key_scratch = Vec::new();
+    let mut state_scratch = Vec::new();
+    for (index, group) in groups.iter().enumerate() {
+        if index % 1024 == 0 {
+            crate::expr_eval::check_expression_cancelled()?;
+        }
+        key_scratch.clear();
+        encode_group_keys_into(&group.group_keys, &mut key_scratch)?;
+        state_scratch.clear();
+        compact_state::encode_into(&group.states, &mut state_scratch)?;
+        let (key_values, state_values) = &mut sinks[partition_of(&key_scratch)];
+        key_values.append_value(&key_scratch);
+        state_values.append_value(&state_scratch);
+    }
+    Ok(())
+}
+
 /// The grouped-state batch from its two encoded columns, the group key
 /// types carried as schema metadata.
 fn grouped_state_batch(
