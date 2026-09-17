@@ -22,7 +22,7 @@ flowchart LR
   W2[Worker 2\nArrow operators]
   WN[Worker N\nArrow operators]
   Exchange{{Authenticated Arrow\nshuffle / broadcast / merge}}
-  Lake[(Customer ADLS Gen2\nParquet · Delta · Iceberg target)]
+  Lake[(Customer ADLS Gen2\nParquet · Delta · Iceberg)]
   Context[(Immutable DLM artifact\nanswers · value index · routing)]
   Product[(Product records\nKaveonDB revisions)]
   Outbox[(Pre-cutover migration outbox)]
@@ -162,9 +162,9 @@ evidence artifact is a failed gate, never an implicit pass.
 | Capability | Current position | Target acceptance evidence |
 |---|---|---|
 | DLM context | Retirement mode compiles bounded state from Engine scans, publishes one immutable ADLS artifact, and serves its verified routing, values and answers without PostgreSQL fallback | Freshness, ambiguity, and answer parity corpus on every release and live AKS artifact qualification |
-| Distributed SQL | Coordinator/workers, Arrow exchange, joins, aggregates, retry and bounded pressure foundations | Publication-scale throughput, spill, adaptive planning and worker-loss recovery |
+| Distributed SQL | Coordinator/workers, binder, streamed Arrow exchange, columnar aggregates with spill, joins, retry with forced-worker-loss evidence, admission queue, result cache; three benchmark tiers running (`../qualification/benchmark-program.md`) | Completed benchmark rounds, spill under skew, adaptive planning, sustained soak |
 | Transactions | Typed product-record protocol with revisions and checkpointed migration tooling | General row DML, isolation, durable WAL-equivalent recovery and crash testing |
-| Lake storage | Parquet and Delta paths with workload identity; Iceberg/S3 remain bounded targets | Multi-format snapshot qualification and object-store performance evidence |
+| Lake storage | Parquet, Delta (v1 checkpoints) and Iceberg on ADLS Gen2 with workload identity; S3 implemented and unqualified; plain Parquet directories not yet tables | Multi-format snapshot qualification and object-store performance evidence |
 | PostgreSQL replacement | Direct reads/mutations, 16-family replay and reconciliation, durable ADLS checkpoints, write fencing and strict evidence runners are implemented; live retirement is not yet qualified | One fresh immutable AKS run passes every gate, then PostgreSQL is scaled to zero while its PVC/snapshot remain through the rollback window |
 | Operations | Bicep/Helm deployment materials, immutable image references and bounded rehearsal tooling | Recreate-from-zero on a clean subscription and verified live backup/restore |
 

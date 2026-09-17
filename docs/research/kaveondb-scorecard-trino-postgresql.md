@@ -1,6 +1,21 @@
 # Where KaveonDB stands: a rated comparison with Trino and PostgreSQL
 
-> Assessed September 12, 2026 against `dev` at `432a05d`, Engine digest `4a165e94…` on `kaveon-test-aks`, Trino 483 and PostgreSQL 18 documentation. Every number in this paper is either a measurement recorded in `HANDSHAKE.md` with a query ID, or a documented behaviour of the compared system. Nothing here is a marketing claim; the last section says what may be claimed.
+> Assessed September 12, 2026 against `dev` at `432a05d`, Engine digest `4a165e94…` on `kaveon-test-aks`, Trino 483 and PostgreSQL 18 documentation, with a 2026-09-15 update in sections 1.1 and 1.2. Every number in this paper is either a measurement recorded in `HANDSHAKE.md` or `docs/qualification/` with a query ID or a run record, or a documented behaviour of the compared system. Nothing here is a marketing claim; the last section says what may be claimed.
+>
+> **Since this assessment (2026-09-16/17, not re-scored here):** the scale
+> suite on the 504 M-row table has Kaveon ahead of Trino on 9 of 13 compared
+> statements and meeting 17 of 20 targets (`scale-suite-2026-09-16.md`), which
+> reverses the 1.2 diagnosis; ClickBench runs every statement with a 1.39×
+> geometric mean over 42 on one pass (`clickbench-2026-09-16.md`), the
+> losses being the final merge over near-unique keys; TPC-H 21 of 22
+> statements plan and execute through the new binder (`tpch/coverage.md`),
+> which closes most of the correlated-subquery gap named in 1.3; the Engine
+> has a FIFO admission queue, a cgroup process guard, flushing partials and a
+> hybrid final merge (1.6, 1.7); Delta checkpoints were already read on the
+> assessment date (1.4 says "no checkpoints": v1 checkpoints are read,
+> protocol v2 features are refused). The per-dimension scores stand as the
+> September 12 author's until a campaign record under
+> `benchmark-program.md` completes its rounds.
 
 ## How to read the scores
 

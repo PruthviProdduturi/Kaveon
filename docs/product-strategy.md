@@ -30,13 +30,13 @@ Think: **Microsoft Fabric** — but open-source, with a Data Language Model inst
 
 | Pillar | Identity | What it does |
 |--------|----------|-------------|
-| **Kaveon Engine** | The analytical database | Columnar query engine built in Rust. Current: local Parquet and vectorized execution. Target: Delta and Iceberg over ADLS Gen2/S3 through the Live Lake Path. Zero external engine dependencies. |
+| **Kaveon Engine** | The analytical database | Distributed columnar query engine built in Rust. Current (alpha): Parquet, Delta and Iceberg on local disk and ADLS Gen2, a coordinator with workers, measured against Trino on a matched cluster (`qualification/benchmark-program.md`). Target: S3 qualification, plain Parquet directory tables, Delta protocol v2, optimized ingest. Zero external engine dependencies. |
 | **Kaveon Studio** | The intelligence layer | Dashboards (37 chart types, drag-drop canvas, cross-filtering), SQL Lab (Monaco editor), dataset management, data source registration. One surface for all analytics. |
 | **Kaveon DLM** | The Data Language Model | Deterministic NL→SQL for supported question classes. Compiles per-dataset context and runs inside the shipping API; standalone API extraction is planned. Patent work is tracked privately. |
 
 ### Data model
 
-- **Live Lake Path** (target default): Kaveon Engine reads data where it lives. Local Parquet works today; ADLS Gen2, S3, Delta Lake, and Iceberg are planned. GCS is outside the current roadmap.
+- **Live Lake Path** (default): Kaveon Engine reads data where it lives. Parquet, Delta Lake and Iceberg on local disk and ADLS Gen2 run today (alpha); S3 is implemented through the same reader and not qualified. GCS is outside the current roadmap.
 - **Optimized ingest** (post-launch target): Engine reads source data and rewrites it in a sorted, partitioned, compressed layout in the same customer-controlled storage.
 - **Legacy passthrough**: Current PostgreSQL / Fabric SQL / Azure SQL direct query. Migration path. Eventually deprecated.
 
@@ -49,7 +49,7 @@ Think: **Microsoft Fabric** — but open-source, with a Data Language Model inst
 | NL→SQL | DLM — deterministic resolution for compiled, supported question classes; no model call on that path | Generative approaches can cover broader language but add model latency, cost, and nondeterminism |
 | Query engine | Own engine (Rust, Parquet-native, vectorized) | Wraps DuckDB, embeds Trino, or sends SQL to external DBs |
 | Architecture | Unified monorepo — Engine + Studio + DLM as one product | Glue: Superset + Trino + LangChain + 3 deploy targets |
-| Data access | Live Lake Path — direct reads without mandatory import (local Parquet now; cloud target) | ETL pipelines, import jobs, data movement |
+| Data access | Live Lake Path — direct reads without mandatory import (Parquet, Delta and Iceberg on local disk and ADLS Gen2 today; S3 unqualified) | ETL pipelines, import jobs, data movement |
 | IP | Patent in process, trademark planned, full ownership | OSS with no IP moat |
 
 ---

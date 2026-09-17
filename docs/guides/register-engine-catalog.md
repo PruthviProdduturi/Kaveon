@@ -29,7 +29,7 @@ example, a new catalog source would use its own name and storage location:
   "engine_catalog": "ExampleLake",
   "storage_type": "adls_gen2",
   "storage_config": {
-    "account": "kvtestegmf6oweugsno",
+    "account": "kvtesticmwwliihpppo",
     "container": "opensource",
     "root_path": ""
   },
