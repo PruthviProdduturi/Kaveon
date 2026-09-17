@@ -297,6 +297,27 @@ impl QueryMemoryPool {
         Ok(resource)
     }
 
+    /// A shared resource already registered under `key`, if any.
+    pub fn shared_resource_if_present<T: Any + Send + Sync>(
+        &self,
+        key: &'static str,
+    ) -> Result<Option<Arc<T>>> {
+        let resources =
+            self.inner.resources.0.lock().map_err(|_| {
+                KaveonError::Execution("query resource registry lock poisoned".into())
+            })?;
+        resources
+            .get(key)
+            .map(|resource| {
+                Arc::clone(resource).downcast::<T>().map_err(|_| {
+                    KaveonError::Execution(format!(
+                        "query resource '{key}' has an incompatible type"
+                    ))
+                })
+            })
+            .transpose()
+    }
+
     pub fn operator(&self, operator_id: impl Into<String>) -> Result<OperatorMemoryAccount> {
         let operator_id = operator_id.into();
         if operator_id.trim().is_empty() {
