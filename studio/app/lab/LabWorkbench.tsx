@@ -56,6 +56,8 @@ interface QueryResult {
   rows: unknown[][];
   executionTime?: number;
   rowCount?: number;
+  /** Where KaveonDB answered from, when the query ran on it: `cache` is a served result, anything else a live query. */
+  execution?: { mode: string; detail?: string } | null;
 }
 
 interface QueryTab {
@@ -1100,6 +1102,7 @@ return;
         rows: limitedRows,
         executionTime: data.executionTime,
         rowCount: data.rowCount,
+        execution: data.execution ?? null,
       });
       setColumnWidths([]);
       setCurrentPage(0);
@@ -1174,6 +1177,7 @@ return;
                 rows: rowLimit > 0 ? rows.slice(0, rowLimit) : rows,
                 executionTime: data.executionTime,
                 rowCount: data.rowCount,
+                execution: data.execution ?? null,
               },
             });
           }
@@ -1767,6 +1771,12 @@ return;
   };
 
   const executionTime = results?.executionTime ?? 0;
+  // A KaveonDB result says where it came from; the label mirrors the DLM's
+  // "From context" / "Live query" pair so a served result is never mistaken
+  // for a measurement.
+  const executionLabel = results?.execution
+    ? (results.execution.mode === "cache" ? "From cache" : "Live query") + " · "
+    : "";
   const sortedRows = getSortedRows();
   const filteredRows = resultFilter.trim()
     ? sortedRows.filter((row) =>
@@ -2447,7 +2457,7 @@ return;
                     {isExecuting && (
                       <><i className="fas fa-spinner fa-spin" style={{ marginRight: "0.4rem" }} />{`Running • ${formatExecutionTime((liveElapsedMs ?? 0) / 1000)}`}</>
                     )}
-                    {!isExecuting && rowCount > 0 && `${rowCount.toLocaleString()} rows • ${formatExecutionTime(executionTime)}`}
+                    {!isExecuting && rowCount > 0 && `${rowCount.toLocaleString()} rows • ${executionLabel}${formatExecutionTime(executionTime)}`}
                   </span>
 
                   {results && !isExecuting && (

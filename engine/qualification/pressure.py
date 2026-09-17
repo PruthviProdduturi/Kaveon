@@ -147,7 +147,8 @@ class Engine:
 
     def submit(self, sql, timeout=90):
         response = requests.post(self.base + "/v1/statement", headers=self.headers,
-                                 json={"query": sql, "result_delivery": "paged"}, timeout=timeout)
+                                 json={"query": sql, "result_delivery": "paged",
+                                       "settings": {"result_cache": False}}, timeout=timeout)
         result = response.json()
         rows = result.get("data") or []
         next_uri = result.get("next_uri")

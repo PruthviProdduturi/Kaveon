@@ -404,6 +404,10 @@ mod tests {
         let state = Arc::new(crate::AppState {
             disk_exchange_store: None,
             results: crate::results::ResultStore::default(),
+            result_cache: crate::result_cache::ResultCache::new(
+                1 << 20,
+                std::time::Duration::from_secs(60),
+            ),
             principal_admission: PrincipalAdmission::default(),
             cluster: tokio::sync::RwLock::new(crate::cluster::ClusterState::new(&config)),
             catalog: tokio::sync::RwLock::new(Arc::new(crate::PublishedCatalog {

@@ -107,6 +107,26 @@ replay reads at most 64 MiB of commit JSON; Iceberg metadata is capped at
 | `KAVEON_STUDIO_URL` | `security.studio_url` | none | URL | The Studio origin allowed to use the Engine UI's sign-in. | coordinator | chart value `studioUrl` |
 | `KAVEON_PRINCIPAL_QUERY_LIMIT` | none | 4 | statements | Concurrent statements one principal may have running on the coordinator. Must be positive. | coordinator | not set |
 
+## Result cache
+
+| Name | Config key | Default | Unit | What it bounds | Applies to | AKS qualification value |
+|---|---|---|---|---|---|---|
+| `KAVEON_RESULT_CACHE_BYTES` | `result_cache.bytes` | 268435456 (256 MiB); `0` disables the cache | bytes | The coordinator's budget for complete results of finished statements, evicted least-recently-used by bytes. A result larger than an eighth of the budget is never kept. Workers keep nothing whatever the value. | coordinator | not set (default) |
+| `KAVEON_RESULT_CACHE_TTL_SECONDS` | `result_cache.ttl_seconds` | 600 | seconds | How long a cached result may be served. Must be positive when the cache is enabled. | coordinator | not set (default) |
+
+A result is keyed by the statement text (trimmed, whitespace collapsed and
+letters lowercased outside string literals and quoted identifiers), the
+catalog and schema, the published catalog snapshot identity, the Delta
+versions the planner pinned, and the request's time zone. A catalog publish
+clears every entry; so does a committed product transaction and
+`DELETE /v1/cache` (admin). Hits are query records with
+`execution: {mode: "cache", detail: "hit"}` and `cached_from` naming the
+original query; counters (`hits`, `misses`, `bytes`, `entries`,
+`evictions`, `expirations`, `refused`) are on `/v1/node` and on the
+coordinator entry of `/v1/cluster`. Per-request bypass:
+`settings.result_cache = false`; every benchmark and qualification script
+in this repository sends it.
+
 ## Per-request settings
 
 A statement may lower three of the bounds above for itself, through the

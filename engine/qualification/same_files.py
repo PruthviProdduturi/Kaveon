@@ -250,7 +250,7 @@ def main():
                         if engine == "trino":
                             actual = [list(row) for row in cursor.execute(sql).fetchall()]
                         else:
-                            response = requests.post(base + "/v1/statement", headers=headers, json={"query": sql, "result_delivery": "paged"}, timeout=120)
+                            response = requests.post(base + "/v1/statement", headers=headers, json={"query": sql, "result_delivery": "paged", "settings": {"result_cache": False}}, timeout=120)
                             result = response.json()
                             if not response.ok:
                                 raise AssertionError(f"HTTP {response.status_code}: {result}")
@@ -320,7 +320,7 @@ def main():
                             conn.close()
                     else:
                         with requests.Session() as session:
-                            response = session.post(base + "/v1/statement", headers=headers, json={"query": sql, "result_delivery": "paged"}, timeout=120)
+                            response = session.post(base + "/v1/statement", headers=headers, json={"query": sql, "result_delivery": "paged", "settings": {"result_cache": False}}, timeout=120)
                             if not response.ok:
                                 raise AssertionError(f"HTTP {response.status_code}: {response.text[:2000]}")
                             result = response.json()
