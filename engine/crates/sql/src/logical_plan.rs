@@ -1045,6 +1045,9 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
         }
         ast::Expr::Value(v) => ast_value_to_expr(v),
         ast::Expr::BinaryOp { left, op, right } => {
+            if let Some(expr) = interval_arithmetic(left, op, right)? {
+                return Ok(expr);
+            }
             let l = ast_expr_to_expr(left)?;
             let r = ast_expr_to_expr(right)?;
             match ast_binop_to_binop(op) {
@@ -1206,7 +1209,116 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
         )),
         ast::Expr::Subquery(_) => Err(sql_err("scalar subqueries are not yet supported")),
 
+        ast::Expr::Interval(_) => Err(sql_err(
+            "an INTERVAL is only supported added to or subtracted from a date",
+        )),
+
         _ => Err(sql_err(format!("unsupported expression: {expr}"))),
+    }
+}
+
+/// `date + INTERVAL 'n' DAY` and `date - INTERVAL 'n' DAY` lower to
+/// arithmetic on the day number, so any date expression takes a day
+/// interval. Month and year intervals shift the calendar, which the Engine
+/// evaluates at lowering time against a DATE literal (`DATE '1993-07-01' +
+/// INTERVAL '3' MONTH` is the day number of 1993-10-01); a day past the end
+/// of the target month clamps to that month's last day, as Trino does.
+/// Returns None when neither operand is an interval.
+fn interval_arithmetic(
+    left: &ast::Expr,
+    op: &ast::BinaryOperator,
+    right: &ast::Expr,
+) -> Result<Option<Expr>> {
+    let (date, interval, negate) = match (left, op, right) {
+        (_, ast::BinaryOperator::Plus, ast::Expr::Interval(interval)) => (left, interval, false),
+        (_, ast::BinaryOperator::Minus, ast::Expr::Interval(interval)) => (left, interval, true),
+        (ast::Expr::Interval(interval), ast::BinaryOperator::Plus, _) => (right, interval, false),
+        (ast::Expr::Interval(_), _, _) | (_, _, ast::Expr::Interval(_)) => {
+            return Err(sql_err(format!(
+                "unsupported INTERVAL arithmetic: {left} {op} {right}"
+            )));
+        }
+        _ => return Ok(None),
+    };
+    let text = match interval.value.as_ref() {
+        ast::Expr::Value(ast::Value::SingleQuotedString(text)) => text.trim(),
+        ast::Expr::Value(ast::Value::Number(text, _)) => text.as_str(),
+        other => return Err(sql_err(format!("unsupported INTERVAL value: {other}"))),
+    };
+    let count: i64 = text
+        .parse()
+        .map_err(|_| sql_err(format!("invalid INTERVAL value: '{text}'")))?;
+    let count = if negate { -count } else { count };
+    if interval.last_field.is_some() {
+        return Err(sql_err(format!(
+            "unsupported INTERVAL field range: {interval}"
+        )));
+    }
+    let date = ast_expr_to_expr(date)?;
+    match &interval.leading_field {
+        Some(ast::DateTimeField::Day) | None => Ok(Some(Expr::BinaryOp {
+            left: Box::new(date),
+            op: BinaryOp::Plus,
+            right: Box::new(Expr::Literal(ScalarValue::Int64(count))),
+        })),
+        Some(ast::DateTimeField::Month) | Some(ast::DateTimeField::Year) => {
+            let months = if matches!(interval.leading_field, Some(ast::DateTimeField::Year)) {
+                count * 12
+            } else {
+                count
+            };
+            let Expr::Literal(ScalarValue::Int64(days)) = date else {
+                return Err(sql_err(format!(
+                    "INTERVAL {} arithmetic needs a DATE literal operand",
+                    interval.leading_field.as_ref().expect("month or year")
+                )));
+            };
+            Ok(Some(Expr::Literal(ScalarValue::Int64(add_months(
+                days, months,
+            )))))
+        }
+        Some(other) => Err(sql_err(format!("unsupported INTERVAL field: {other}"))),
+    }
+}
+
+/// The day number `months` calendar months after the day number `days`;
+/// a day past the end of the target month clamps to that month's last day.
+fn add_months(days: i64, months: i64) -> i64 {
+    let (year, month, day) = civil_from_days(days);
+    let total = year * 12 + (month - 1) + months;
+    let year = total.div_euclid(12);
+    let month = total.rem_euclid(12) + 1;
+    let day = day.min(days_in_month(year, month));
+    parse_date_days(&format!("{year:04}-{month:02}-{day:02}"))
+        .expect("a calendar day within its month is a valid date")
+}
+
+/// (year, month, day) for a day number since 1970-01-01, proleptic
+/// Gregorian; the inverse of `date_literal_days`.
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if month <= 2 { year + 1 } else { year }, month, day)
+}
+
+fn days_in_month(year: i64, month: i64) -> i64 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        _ => {
+            if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
+                29
+            } else {
+                28
+            }
+        }
     }
 }
 
@@ -1963,6 +2075,119 @@ mod tests {
                 right: Box::new(Expr::Literal(ScalarValue::Int64(15887))),
             }
         );
+    }
+
+    #[test]
+    fn interval_arithmetic_on_dates_lowers_to_day_numbers() {
+        // A day interval is day-number arithmetic, on a literal or a column.
+        let filter = |sql: &str| {
+            let plan = sql_to_logical_plan(sql).unwrap();
+            let LogicalPlan::Project { input, .. } = plan else {
+                panic!("projection");
+            };
+            let LogicalPlan::Filter { predicate, .. } = *input else {
+                panic!("filter");
+            };
+            predicate
+        };
+        let day = |days: i64| Box::new(Expr::Literal(ScalarValue::Int64(days)));
+        assert_eq!(
+            filter("SELECT x FROM t WHERE d <= DATE '1998-12-01' - INTERVAL '90' DAY"),
+            Expr::BinaryOp {
+                left: Box::new(Expr::Column("d".into())),
+                op: BinaryOp::Le,
+                right: Box::new(Expr::BinaryOp {
+                    left: day(parse_date_days("1998-12-01").unwrap()),
+                    op: BinaryOp::Plus,
+                    right: day(-90),
+                }),
+            }
+        );
+        assert_eq!(
+            filter("SELECT x FROM t WHERE d + INTERVAL '7' DAY < e"),
+            Expr::BinaryOp {
+                left: Box::new(Expr::BinaryOp {
+                    left: Box::new(Expr::Column("d".into())),
+                    op: BinaryOp::Plus,
+                    right: day(7),
+                }),
+                op: BinaryOp::Lt,
+                right: Box::new(Expr::Column("e".into())),
+            }
+        );
+        // Month and year intervals shift the calendar of a DATE literal.
+        let shifted = |sql: &str, expected: &str| {
+            assert_eq!(
+                filter(sql),
+                Expr::BinaryOp {
+                    left: Box::new(Expr::Column("d".into())),
+                    op: BinaryOp::Lt,
+                    right: day(parse_date_days(expected).unwrap()),
+                },
+                "{sql}"
+            );
+        };
+        shifted(
+            "SELECT x FROM t WHERE d < DATE '1993-07-01' + INTERVAL '3' MONTH",
+            "1993-10-01",
+        );
+        shifted(
+            "SELECT x FROM t WHERE d < DATE '1994-01-01' + INTERVAL '1' YEAR",
+            "1995-01-01",
+        );
+        shifted(
+            "SELECT x FROM t WHERE d < DATE '1995-11-15' + INTERVAL '3' MONTH",
+            "1996-02-15",
+        );
+        shifted(
+            "SELECT x FROM t WHERE d < DATE '1998-01-31' + INTERVAL '1' MONTH",
+            "1998-02-28",
+        );
+        shifted(
+            "SELECT x FROM t WHERE d < DATE '1996-01-31' + INTERVAL '1' MONTH",
+            "1996-02-29",
+        );
+        shifted(
+            "SELECT x FROM t WHERE d < DATE '1996-03-31' - INTERVAL '1' MONTH",
+            "1996-02-29",
+        );
+        shifted(
+            "SELECT x FROM t WHERE d < DATE '2000-02-29' - INTERVAL '1' YEAR",
+            "1999-02-28",
+        );
+        shifted(
+            "SELECT x FROM t WHERE d < DATE '1993-01-01' - INTERVAL '13' MONTH",
+            "1991-12-01",
+        );
+        // A calendar shift of a column has no day-number form.
+        let error = sql_to_logical_plan("SELECT x FROM t WHERE d + INTERVAL '1' MONTH < e")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("needs a DATE literal operand"), "{error}");
+        assert!(sql_to_logical_plan("SELECT INTERVAL '1' DAY FROM t").is_err());
+        assert!(
+            sql_to_logical_plan("SELECT x FROM t WHERE d < DATE '1993-07-01' + INTERVAL '1' HOUR")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn civil_dates_round_trip_through_day_numbers() {
+        for date in [
+            "1970-01-01",
+            "1969-12-31",
+            "1992-01-01",
+            "1996-02-29",
+            "1998-12-31",
+            "2000-02-29",
+            "2026-09-16",
+            "1900-03-01",
+            "2100-02-28",
+        ] {
+            let days = parse_date_days(date).unwrap();
+            let (year, month, day) = civil_from_days(days);
+            assert_eq!(format!("{year:04}-{month:02}-{day:02}"), date);
+        }
     }
 
     #[test]
