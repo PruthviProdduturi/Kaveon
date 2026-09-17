@@ -28,6 +28,11 @@ pub struct QuerySettings {
     /// no lookup and no insertion.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_cache: Option<bool>,
+    /// How long this statement waits for memory admission on the
+    /// coordinator, at most the configured wait; `0` refuses at once when
+    /// the budget does not fit on arrival.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission_wait_seconds: Option<u64>,
 }
 
 impl QuerySettings {
@@ -48,6 +53,21 @@ impl QuerySettings {
     /// Whether the result cache may serve or keep this statement.
     pub fn result_cache_enabled(&self) -> bool {
         self.result_cache.unwrap_or(true)
+    }
+
+    /// How long the statement waits for memory admission: its own bound
+    /// when it set one, else the node's, and never more than the node's.
+    /// Zero when the node has no queue.
+    pub fn admission_wait(&self, config: &ServerConfig) -> std::time::Duration {
+        let ceiling = if config.memory_admission_queue == 0 {
+            0
+        } else {
+            config.memory_admission_wait_seconds
+        };
+        std::time::Duration::from_secs(
+            self.admission_wait_seconds
+                .map_or(ceiling, |seconds| seconds.min(ceiling)),
+        )
     }
 
     /// Validates the keys a request gave. Unknown keys and out-of-range
@@ -82,6 +102,16 @@ impl QuerySettings {
                 }
                 "result_cache" => {
                     validated.result_cache = Some(boolean(key, value)?);
+                }
+                "admission_wait_seconds" => {
+                    let seconds = unsigned(key, value)?;
+                    let ceiling = config.memory_admission_wait_seconds;
+                    if seconds > ceiling {
+                        return Err(SettingsError(format!(
+                            "setting '{key}' must be between 0 and {ceiling}, the configured admission wait"
+                        )));
+                    }
+                    validated.admission_wait_seconds = Some(seconds);
                 }
                 "time_zone" => {
                     return Err(SettingsError(
@@ -365,6 +395,48 @@ mod tests {
         assert!(
             QuerySettings::from_request(&map(json!({"local_parallelism": "two"})), &config)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn the_admission_wait_is_bounded_by_the_node_and_zero_means_no_wait() {
+        let config = ServerConfig {
+            memory_admission_queue: 8,
+            memory_admission_wait_seconds: 30,
+            ..config()
+        };
+        assert_eq!(
+            QuerySettings::default().admission_wait(&config),
+            std::time::Duration::from_secs(30)
+        );
+        let settings =
+            QuerySettings::from_request(&map(json!({"admission_wait_seconds": 5})), &config)
+                .unwrap();
+        assert_eq!(
+            settings.admission_wait(&config),
+            std::time::Duration::from_secs(5)
+        );
+        let none =
+            QuerySettings::from_request(&map(json!({"admission_wait_seconds": "0"})), &config)
+                .unwrap();
+        assert_eq!(none.admission_wait(&config), std::time::Duration::ZERO);
+        let error =
+            QuerySettings::from_request(&map(json!({"admission_wait_seconds": 31})), &config)
+                .unwrap_err();
+        assert!(error.0.contains("admission_wait_seconds"), "{error}");
+        assert!(error.0.contains("30"), "{error}");
+        assert!(
+            QuerySettings::from_request(&map(json!({"admission_wait_seconds": -1})), &config)
+                .is_err()
+        );
+        // No queue on the node: nothing waits, whatever the request asked.
+        let unqueued = ServerConfig {
+            memory_admission_queue: 0,
+            ..config
+        };
+        assert_eq!(
+            settings.admission_wait(&unqueued),
+            std::time::Duration::ZERO
         );
     }
 

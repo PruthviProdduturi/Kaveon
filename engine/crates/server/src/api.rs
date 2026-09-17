@@ -106,6 +106,10 @@ struct QueryRecord {
     cached_from: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cached_elapsed_ms: Option<u64>,
+    /// How long the statement waited for memory admission before it ran;
+    /// zero when it was admitted on arrival. Not part of `elapsed_ms`,
+    /// which starts at admission.
+    admission_wait_ms: u64,
     id: String,
     sql: String,
     state: QueryState,
@@ -283,6 +287,8 @@ const QUERY_HISTORY_LIMIT: usize = 100;
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 enum QueryState {
+    /// Waiting for memory admission on the coordinator.
+    Queued,
     Running,
     Finished,
     Failed,
@@ -736,27 +742,26 @@ async fn execute_owned_task(
 /// Admission pressure is backpressure, not a task failure. A worker can have all
 /// of its memory budget in use while another stage of the same distributed query
 /// becomes ready. Returning 429 made the coordinator burn through its bounded
-/// fault retries before any running task released memory. Keep the request queued
-/// at the worker and remain cancellation-responsive instead.
+/// fault retries before any running task released memory. The task waits in
+/// the worker's admission queue, in arrival order, until a running task
+/// releases its budget or the query is cancelled; the coordinator's task
+/// timeout bounds the wait. Only a full queue refuses.
 async fn await_task_memory(
     admission: &MemoryAdmissionController,
     task_id: String,
     limit_bytes: u64,
     cancellation: &CancellationToken,
 ) -> Result<AdmittedQueryMemory, String> {
-    const RETRY_INTERVAL: Duration = Duration::from_millis(10);
-    loop {
-        match admission.admit(task_id.clone(), limit_bytes) {
-            Ok(admitted) => return Ok(admitted),
-            Err(error) if cancellation.is_cancelled() => return Err(error.to_string()),
-            Err(_) => {
-                tokio::select! {
-                    () = cancellation.cancelled() => {
-                        return Err("query canceled while waiting for memory admission".into());
-                    }
-                    () = tokio::time::sleep(RETRY_INTERVAL) => {}
-                }
-            }
+    if cancellation.is_cancelled() {
+        return Err("query canceled while waiting for memory admission".into());
+    }
+    let wait = admission
+        .admit_queued(task_id, limit_bytes)
+        .map_err(|error| error.to_string())?;
+    tokio::select! {
+        admitted = wait => Ok(admitted),
+        () = cancellation.cancelled() => {
+            Err("query canceled while waiting for memory admission".into())
         }
     }
 }
@@ -1545,6 +1550,66 @@ impl Drop for StatementLifecycleGuard {
     }
 }
 
+/// The refusal of a statement that could not be admitted: on arrival, from
+/// a full queue, or after its wait expired. `admission_wait_ms` is how long
+/// it waited before the refusal.
+fn admission_rejected_response(error: String, admission_wait_ms: u64) -> Response {
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        Json(serde_json::json!({
+            "error": error,
+            "code": "MEMORY_ADMISSION_REJECTED",
+            "admission_wait_ms": admission_wait_ms
+        })),
+    )
+        .into_response()
+}
+
+/// A statement's record before it has produced anything: queued for
+/// admission, or admitted and running.
+fn pending_query_record(
+    query_id: &str,
+    sql: &str,
+    settings: &QuerySettings,
+    submitted_at_ms: u64,
+    context: &QueryContext,
+    state: QueryState,
+    admission_wait_ms: u64,
+) -> QueryRecord {
+    QueryRecord {
+        rows_are_preview: true,
+        scan_metrics_complete: false,
+        execution: ExecutionPlacement::pending(),
+        settings: settings.clone(),
+        cached_from: None,
+        cached_elapsed_ms: None,
+        admission_wait_ms,
+        id: query_id.to_owned(),
+        sql: sql.to_owned(),
+        state,
+        columns: vec![],
+        rows: vec![],
+        error: None,
+        elapsed_ms: 0,
+        submitted_at_ms,
+        completed_at_ms: 0,
+        timings: QueryTimings {
+            analysis_us: None,
+            planning_us: None,
+            execution_us: None,
+            result_serialization_us: None,
+        },
+        plan: QueryPlan {
+            logical: None,
+            optimized: None,
+            physical: None,
+        },
+        scans: vec![],
+        stages: vec![],
+        context: context.clone(),
+    }
+}
+
 async fn submit_statement(
     State(state): State<Arc<AppState>>,
     Extension(identity): Extension<Identity>,
@@ -1604,22 +1669,6 @@ async fn submit_statement(
         Err(status) => return status.into_response(),
     };
     let query_id = Uuid::new_v4().to_string();
-    let query_memory = match state.memory_admission.admit(
-        query_id.clone(),
-        settings.query_memory_limit_bytes(&state.config),
-    ) {
-        Ok(memory) => memory,
-        Err(error) => {
-            return (
-                StatusCode::TOO_MANY_REQUESTS,
-                Json(serde_json::json!({
-                    "error": error.to_string(),
-                    "code": "MEMORY_ADMISSION_REJECTED"
-                })),
-            )
-                .into_response();
-        }
-    };
     if let Some((status, body)) =
         transaction_api_guidance(&sql, state.product_transactions.catalog().is_some())
     {
@@ -1629,7 +1678,6 @@ async fn submit_statement(
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64;
-    let start = Instant::now();
     // Pin one immutable catalog manager for validation, optimization and
     // physical planning. Publishing a newer manager swaps the outer Arc and
     // cannot change the definitions observed by this query.
@@ -1710,6 +1758,80 @@ async fn submit_statement(
         state: Arc::clone(&state),
         query_id: query_id.clone(),
     };
+
+    // Memory admission: on arrival when the budget fits, else queued until
+    // it does, the statement asked not to wait, the wait expired, or the
+    // statement was cancelled. A queued statement is in the history as
+    // QUEUED so that it can be seen and cancelled by ID.
+    let admission_started = Instant::now();
+    let admission_wait = settings.admission_wait(&state.config);
+    let query_limit_bytes = settings.query_memory_limit_bytes(&state.config);
+    let query_memory = if admission_wait.is_zero() {
+        match state
+            .memory_admission
+            .admit(query_id.clone(), query_limit_bytes)
+        {
+            Ok(memory) => memory,
+            Err(error) => return admission_rejected_response(error.to_string(), 0),
+        }
+    } else {
+        let mut wait = match state
+            .memory_admission
+            .admit_queued(query_id.clone(), query_limit_bytes)
+        {
+            Ok(wait) => wait,
+            Err(error) => return admission_rejected_response(error.to_string(), 0),
+        };
+        if !wait.admitted_immediately() {
+            QUERY_STORE.write().await.queries.insert(
+                query_id.clone(),
+                pending_query_record(
+                    &query_id,
+                    &sql,
+                    &settings,
+                    submitted_at_ms,
+                    &context,
+                    QueryState::Queued,
+                    0,
+                ),
+            );
+        }
+        tokio::select! {
+            memory = &mut wait => memory,
+            () = cancellation.cancelled() => {
+                // `cancel_query` has already marked the record.
+                drop(wait);
+                return canceled_task_response();
+            }
+            () = tokio::time::sleep(admission_wait) => {
+                match wait.expire() {
+                    Some(memory) => memory,
+                    None => {
+                        let waited_ms = elapsed_ms(admission_started);
+                        let stats = state.memory_admission.stats();
+                        let message = format!(
+                            "memory admission wait of {} s expired: {} of {} bytes admitted, {} statements waiting",
+                            admission_wait.as_secs(),
+                            stats.admitted_bytes,
+                            stats.limit_bytes,
+                            stats.queue_depth
+                        );
+                        if let Some(record) = QUERY_STORE.write().await.queries.get_mut(&query_id)
+                            && matches!(record.state, QueryState::Queued)
+                        {
+                            record.state = QueryState::Failed;
+                            record.error = Some(message.clone());
+                            record.admission_wait_ms = waited_ms;
+                            record.completed_at_ms = unix_time_ms();
+                        }
+                        return admission_rejected_response(message, waited_ms);
+                    }
+                }
+            }
+        }
+    };
+    let admission_wait_ms = elapsed_ms(admission_started);
+    let start = Instant::now();
     let memory_cancellation = cancellation.clone();
     if let Err(error) = query_memory
         .pool()
@@ -1724,40 +1846,33 @@ async fn submit_statement(
         return lifecycle_error_response(error.to_string());
     }
 
-    QUERY_STORE.write().await.queries.insert(
-        query_id.clone(),
-        QueryRecord {
-            rows_are_preview: true,
-            scan_metrics_complete: false,
-            execution: ExecutionPlacement::pending(),
-            settings: settings.clone(),
-            cached_from: None,
-            cached_elapsed_ms: None,
-            id: query_id.clone(),
-            sql: sql.clone(),
-            state: QueryState::Running,
-            columns: vec![],
-            rows: vec![],
-            error: None,
-            elapsed_ms: 0,
-            submitted_at_ms,
-            completed_at_ms: 0,
-            timings: QueryTimings {
-                analysis_us: None,
-                planning_us: None,
-                execution_us: None,
-                result_serialization_us: None,
-            },
-            plan: QueryPlan {
-                logical: None,
-                optimized: None,
-                physical: None,
-            },
-            scans: vec![],
-            stages: vec![],
-            context: context.clone(),
-        },
-    );
+    {
+        // A cancellation that landed while the statement was queued keeps
+        // its record; the same lock `cancel_query` takes, so neither side
+        // overwrites the other.
+        let mut store = QUERY_STORE.write().await;
+        if cancellation.is_cancelled()
+            || store
+                .queries
+                .get(&query_id)
+                .is_some_and(|record| matches!(record.state, QueryState::Canceled))
+        {
+            drop(store);
+            return canceled_task_response();
+        }
+        store.queries.insert(
+            query_id.clone(),
+            pending_query_record(
+                &query_id,
+                &sql,
+                &settings,
+                submitted_at_ms,
+                &context,
+                QueryState::Running,
+                admission_wait_ms,
+            ),
+        );
+    }
 
     if let Some(table) = parse_analyze_table(&sql) {
         return execute_analyze(&state, &identity, &query_id, &context, table, start).await;
@@ -1858,6 +1973,7 @@ async fn submit_statement(
             settings: settings.clone(),
             cached_from: Some(hit.query_id.clone()),
             cached_elapsed_ms: Some(hit.elapsed_ms),
+            admission_wait_ms,
             id: query_id.clone(),
             sql,
             state: QueryState::Finished,
@@ -1949,6 +2065,7 @@ async fn submit_statement(
                     settings: settings.clone(),
                     cached_from: None,
                     cached_elapsed_ms: None,
+                    admission_wait_ms,
                     id: query_id.clone(),
                     sql,
                     state: QueryState::Finished,
@@ -2061,6 +2178,7 @@ async fn submit_statement(
                     settings: settings.clone(),
                     cached_from: None,
                     cached_elapsed_ms: None,
+                    admission_wait_ms,
                     id: query_id.clone(),
                     sql,
                     state: QueryState::Finished,
@@ -2166,6 +2284,7 @@ async fn submit_statement(
                     settings: settings.clone(),
                     cached_from: None,
                     cached_elapsed_ms: None,
+                    admission_wait_ms,
                     id: query_id.clone(),
                     sql,
                     state: QueryState::Finished,
@@ -2344,6 +2463,7 @@ async fn submit_statement(
                 settings: settings.clone(),
                 cached_from: None,
                 cached_elapsed_ms: None,
+                admission_wait_ms,
                 id: query_id.clone(),
                 sql: sql.clone(),
                 state: QueryState::Failed,
@@ -2444,6 +2564,7 @@ async fn submit_statement(
         settings: settings.clone(),
         cached_from: None,
         cached_elapsed_ms: None,
+        admission_wait_ms,
         id: query_id.clone(),
         sql,
         state: QueryState::Finished,
@@ -3121,7 +3242,7 @@ async fn prune_query_history() {
     let mut terminal: Vec<_> = store
         .queries
         .values()
-        .filter(|record| !matches!(record.state, QueryState::Running))
+        .filter(|record| !matches!(record.state, QueryState::Queued | QueryState::Running))
         .map(|record| (record.submitted_at_ms, record.id.clone()))
         .collect();
     terminal.sort_unstable();
@@ -3250,7 +3371,7 @@ async fn cancel_query(
     if !identity.can_view(record.context.principal.as_deref()) {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let was_running = matches!(record.state, QueryState::Running);
+    let was_running = matches!(record.state, QueryState::Queued | QueryState::Running);
     if was_running {
         record.state = QueryState::Canceled;
         record.error = Some("query canceled by client".into());
@@ -3312,6 +3433,7 @@ async fn get_cluster(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         .unwrap_or_else(|| cluster.this_node.clone());
     if state.config.coordinator {
         coordinator.result_cache = Some(state.result_cache.stats());
+        coordinator.admission = Some(state.memory_admission.stats());
     }
 
     let workers: Vec<NodeInfo> = nodes
@@ -3345,6 +3467,7 @@ async fn get_node(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     if state.config.coordinator {
         node.result_cache = Some(state.result_cache.stats());
     }
+    node.admission = Some(state.memory_admission.stats());
     Json(node)
 }
 
@@ -5548,6 +5671,10 @@ fn batches_to_json(batches: &[arrow::record_batch::RecordBatch]) -> Vec<Vec<serd
     rows
 }
 
+fn elapsed_ms(start: Instant) -> u64 {
+    start.elapsed().as_millis().try_into().unwrap_or(u64::MAX)
+}
+
 fn elapsed_us(start: Instant) -> u64 {
     start.elapsed().as_micros().try_into().unwrap_or(u64::MAX)
 }
@@ -5829,6 +5956,7 @@ mod tests {
             query_memory_limit_bytes: Some(1 << 20),
             local_parallelism: Some(1),
             result_cache: None,
+            admission_wait_seconds: None,
         };
         let request = super::TaskRequest {
             query_id: "query-settings".into(),
@@ -6006,7 +6134,9 @@ mod tests {
 
     #[tokio::test]
     async fn memory_pressure_queues_tasks_without_consuming_fault_retries() {
-        let admission = kaveon_core::MemoryAdmissionController::new(1_024).unwrap();
+        let admission = kaveon_core::MemoryAdmissionController::new(1_024)
+            .unwrap()
+            .with_queue_limit(4);
         let occupied = admission.admit("running", 1_024).unwrap();
         let lifecycle = crate::lifecycle::WorkerLifecycle::<()>::default();
         let cancellation = lifecycle.cancellations.token("waiting-query").unwrap();
@@ -6033,7 +6163,9 @@ mod tests {
 
     #[tokio::test]
     async fn memory_admission_wait_stops_when_query_is_canceled() {
-        let admission = kaveon_core::MemoryAdmissionController::new(1_024).unwrap();
+        let admission = kaveon_core::MemoryAdmissionController::new(1_024)
+            .unwrap()
+            .with_queue_limit(4);
         let _occupied = admission.admit("running", 1_024).unwrap();
         let lifecycle = std::sync::Arc::new(crate::lifecycle::WorkerLifecycle::<()>::default());
         let cancellation = lifecycle.cancellations.token("waiting-query").unwrap();
@@ -6050,6 +6182,276 @@ mod tests {
             .unwrap()
             .unwrap_err();
         assert!(error.contains("canceled"));
+    }
+
+    #[tokio::test]
+    async fn a_worker_task_is_refused_only_by_a_full_queue() {
+        let admission = kaveon_core::MemoryAdmissionController::new(1_024)
+            .unwrap()
+            .with_queue_limit(1);
+        let _occupied = admission.admit("running", 1_024).unwrap();
+        let lifecycle = crate::lifecycle::WorkerLifecycle::<()>::default();
+        let cancellation = lifecycle.cancellations.token("waiting-query").unwrap();
+        let controller = admission.clone();
+        let waiting = cancellation.clone();
+        let _first = tokio::spawn(async move {
+            await_task_memory(&controller, "first".into(), 1_024, &waiting).await
+        });
+        tokio::task::yield_now().await;
+        let error = await_task_memory(&admission, "second".into(), 1_024, &cancellation)
+            .await
+            .unwrap_err();
+        assert!(error.contains("queue is full"), "{error}");
+        assert_eq!(admission.stats().rejected, 1);
+    }
+
+    /// One statement's budget fills the coordinator; the next arrivals
+    /// queue, run once it is released, and record the wait.
+    #[tokio::test]
+    async fn a_statement_waits_for_admission_then_runs_and_records_the_wait() {
+        let (state, _commit, directory) = admission_test_state(2).await;
+        let occupied = state
+            .memory_admission
+            .admit("occupying", state.config.query_memory_limit_bytes)
+            .unwrap();
+        let analyst = crate::security::Identity {
+            principal: "analyst".into(),
+            display_identity: None,
+            role: Role::Analyst,
+        };
+        let sql = "SELECT id FROM orders WHERE id > 1 ORDER BY id";
+        let state = Arc::new(state);
+        let submitting = {
+            let state = state.clone();
+            let analyst = analyst.clone();
+            tokio::spawn(async move {
+                submit(
+                    &state,
+                    &analyst,
+                    sql,
+                    serde_json::json!({"result_cache": false}),
+                )
+                .await
+            })
+        };
+        // Queued: visible, not yet running, and not immediately refused.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(!submitting.is_finished());
+        let queued = {
+            let store = super::QUERY_STORE.read().await;
+            store
+                .queries
+                .values()
+                .find(|record| {
+                    record.sql == sql && matches!(record.state, super::QueryState::Queued)
+                })
+                .map(|record| record.id.clone())
+        }
+        .expect("a queued statement is in the history");
+        let stats = state.memory_admission.stats();
+        assert_eq!((stats.queue_depth, stats.queued), (1, 1));
+        let node = json_body(
+            super::get_node(axum::extract::State(state.clone()))
+                .await
+                .into_response(),
+        )
+        .await;
+        assert_eq!(node["admission"]["queue_depth"], 1);
+        assert_eq!(node["admission"]["queue_limit"], 2);
+
+        drop(occupied);
+        let (status, body) = submitting.await.unwrap();
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(body["data"], serde_json::json!([[2], [3]]));
+        assert_eq!(body["id"], queued);
+        let record = record(&queued, &analyst).await;
+        assert_eq!(record["state"], "FINISHED");
+        let waited = record["admission_wait_ms"].as_u64().unwrap();
+        assert!((150..5_000).contains(&waited), "waited {waited} ms");
+        let stats = state.memory_admission.stats();
+        assert_eq!(
+            (stats.queue_depth, stats.admitted, stats.rejected),
+            (0, 2, 0)
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// The wait expires: HTTP 429 with the wait recorded, the record failed;
+    /// a statement that asked not to wait is refused on arrival; a full
+    /// queue is refused on arrival.
+    #[tokio::test]
+    async fn an_expired_admission_wait_is_a_429_with_the_wait_recorded() {
+        let (state, _commit, directory) = admission_test_state(1).await;
+        let _occupied = state
+            .memory_admission
+            .admit("occupying", state.config.query_memory_limit_bytes)
+            .unwrap();
+        let analyst = crate::security::Identity {
+            principal: "analyst".into(),
+            display_identity: None,
+            role: Role::Analyst,
+        };
+        let sql = "SELECT id FROM orders WHERE id > 0 ORDER BY id";
+        let state = Arc::new(state);
+
+        let started = std::time::Instant::now();
+        let (status, body) = submit(
+            &state,
+            &analyst,
+            sql,
+            serde_json::json!({"admission_wait_seconds": 1}),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::TOO_MANY_REQUESTS, "{body}");
+        assert_eq!(body["code"], "MEMORY_ADMISSION_REJECTED");
+        assert!(started.elapsed() >= std::time::Duration::from_secs(1));
+        let waited = body["admission_wait_ms"].as_u64().unwrap();
+        assert!(waited >= 1_000, "{body}");
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("admission wait of 1 s expired"),
+            "{body}"
+        );
+        let failed = {
+            let store = super::QUERY_STORE.read().await;
+            store
+                .queries
+                .values()
+                .find(|record| {
+                    record.sql == sql && matches!(record.state, super::QueryState::Failed)
+                })
+                .cloned()
+        }
+        .expect("the expired statement stays in the history as failed");
+        assert_eq!(failed.admission_wait_ms, waited);
+        assert!(failed.completed_at_ms > 0);
+
+        // No wait asked: refused at once, nothing queued, no record.
+        let (status, body) = submit(
+            &state,
+            &analyst,
+            sql,
+            serde_json::json!({"admission_wait_seconds": 0}),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::TOO_MANY_REQUESTS, "{body}");
+        assert_eq!(body["admission_wait_ms"], 0);
+        let stats = state.memory_admission.stats();
+        assert_eq!((stats.queue_depth, stats.rejected), (0, 2));
+
+        // The queue holds one: the second arrival is refused on arrival
+        // while the first waits.
+        let waiting = {
+            let state = state.clone();
+            let analyst = analyst.clone();
+            tokio::spawn(async move {
+                submit(
+                    &state,
+                    &analyst,
+                    sql,
+                    serde_json::json!({"admission_wait_seconds": 1}),
+                )
+                .await
+            })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let (status, body) = submit(
+            &state,
+            &analyst,
+            sql,
+            serde_json::json!({"admission_wait_seconds": 1}),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::TOO_MANY_REQUESTS, "{body}");
+        assert!(
+            body["error"].as_str().unwrap().contains("queue is full"),
+            "{body}"
+        );
+        assert_eq!(body["admission_wait_ms"], 0);
+        let (status, _) = waiting.await.unwrap();
+        assert_eq!(status, axum::http::StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(state.memory_admission.stats().rejected, 4);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// Cancelling a queued statement by ID leaves the queue at once and
+    /// answers the submitter with the cancellation.
+    #[tokio::test]
+    async fn a_queued_statement_can_be_cancelled_by_id() {
+        let (state, _commit, directory) = admission_test_state(2).await;
+        let occupied = state
+            .memory_admission
+            .admit("occupying", state.config.query_memory_limit_bytes)
+            .unwrap();
+        let analyst = crate::security::Identity {
+            principal: "analyst".into(),
+            display_identity: None,
+            role: Role::Analyst,
+        };
+        let sql = "SELECT id FROM orders WHERE id > 2 ORDER BY id";
+        let state = Arc::new(state);
+        let submitting = {
+            let state = state.clone();
+            let analyst = analyst.clone();
+            tokio::spawn(
+                async move { submit(&state, &analyst, sql, serde_json::Value::Null).await },
+            )
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let queued = {
+            let store = super::QUERY_STORE.read().await;
+            store
+                .queries
+                .values()
+                .find(|record| {
+                    record.sql == sql && matches!(record.state, super::QueryState::Queued)
+                })
+                .map(|record| record.id.clone())
+        }
+        .expect("a queued statement is in the history");
+
+        let cancelled = super::cancel_query(
+            axum::extract::State(state.clone()),
+            axum::Extension(analyst.clone()),
+            axum::extract::Path(queued.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(cancelled.status(), axum::http::StatusCode::NO_CONTENT);
+        let (status, body) = submitting.await.unwrap();
+        assert_eq!(status, axum::http::StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["code"], "QUERY_CANCELED");
+        assert_eq!(record(&queued, &analyst).await["state"], "CANCELED");
+        let stats = state.memory_admission.stats();
+        assert_eq!(
+            (stats.queue_depth, stats.withdrawn, stats.rejected),
+            (0, 1, 0)
+        );
+        drop(occupied);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// The analyze test state with an admission limit of one statement's
+    /// budget, a queue of `queue` and a long configured wait.
+    async fn admission_test_state(
+        queue: usize,
+    ) -> (
+        crate::AppState,
+        kaveon_catalog::product_commit::ProductCatalogCommit,
+        std::path::PathBuf,
+    ) {
+        let (state, commit, directory) = analyze_test_state().await;
+        let mut state = Arc::try_unwrap(state).unwrap_or_else(|_| unreachable!());
+        state.config.query_memory_limit_bytes = 1 << 20;
+        state.config.memory_admission_limit_bytes = 1 << 20;
+        state.config.memory_admission_queue = queue;
+        state.config.memory_admission_wait_seconds = 60;
+        state.memory_admission = kaveon_core::MemoryAdmissionController::new(1 << 20)
+            .unwrap()
+            .with_queue_limit(queue);
+        (state, commit, directory)
     }
 
     async fn analyze_test_state() -> (
@@ -6559,7 +6961,8 @@ mod tests {
             memory_admission: kaveon_core::MemoryAdmissionController::new(
                 config.memory_admission_limit_bytes,
             )
-            .unwrap(),
+            .unwrap()
+            .with_queue_limit(config.memory_admission_queue),
             product_transactions: crate::transaction_api::TransactionRegistry::disabled(),
             config,
         }
