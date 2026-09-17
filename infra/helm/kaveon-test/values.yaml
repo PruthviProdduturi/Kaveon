@@ -51,7 +51,7 @@ workers:
     workload: kaveon-worker
   resources:
     requests: {cpu: "1", memory: 2Gi, ephemeral-storage: 4Gi}
-    limits: {cpu: "3", memory: 6Gi, ephemeral-storage: 20Gi}
+    limits: {cpu: "3", memory: 6Gi, ephemeral-storage: 24Gi}
   # Query memory on a worker, inside the 6 GiB container limit less the
   # Engine's headroom. KAVEON_PROCESS_MEMORY_LIMIT_BYTES is not set: the
   # Engine reads its cgroup limit.
@@ -72,7 +72,8 @@ workers:
     # KAVEON_EXCHANGE_QUERY_DISK_LIMIT_BYTES: 6 GiB, one query's share.
     queryDiskLimitBytes: "6442450944"
   # sizeLimit of the /state emptyDir: catalog, exchange spool and received
-  # payload spool. Counts toward the container's ephemeral-storage limit.
+  # payload spool. Counts toward the container's ephemeral-storage limit,
+  # which is sized so a full /state plus a full /tmp (6Gi) still fits.
   stateSizeLimit: 16Gi
 # KAVEON_HASH_SPILL_BYTES on every node: hash aggregate and join spill under
 # /tmp/spill (KAVEON_HASH_SPILL_ROOT), inside the 6 GiB /tmp emptyDir.
