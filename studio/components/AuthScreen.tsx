@@ -5,6 +5,20 @@ import { signIn } from "next-auth/react";
 import { KaveonMark } from "./KaveonMark";
 import { preparePublicEntra } from "../auth/publicEntra";
 
+/** The app home. Middleware sends a signed-out visitor here with the page they asked for in ?callbackUrl. */
+export const APP_HOME = "/home";
+
+/**
+ * Where to land after sign-in: the same-origin path carried in ?callbackUrl
+ * (a path only — protocol-relative and absolute URLs are refused), else the
+ * app home.
+ */
+export function signInDestination(search: string = typeof window === "undefined" ? "" : window.location.search): string {
+	const target = new URLSearchParams(search).get("callbackUrl");
+	if (target && /^\/(?![/\\])/.test(target) && !target.startsWith("/login")) return target;
+	return APP_HOME;
+}
+
 const PROMPTS = [
 	"What happened to revenue last quarter?",
 	"Show me customer churn by region.",
@@ -59,7 +73,7 @@ export function AuthScreen() {
 	}, [toast, dismissToast]);
 
 	const start = (provider: string) => {
-		signIn(provider, { callbackUrl: "/" });
+		signIn(provider, { callbackUrl: signInDestination() });
 	};
 	const startMicrosoft = async () => {
 		if (!microsoftAction) return;
@@ -68,7 +82,7 @@ export function AuthScreen() {
 		try {
 			if (!microsoftAction.token) return start("microsoft-entra-id");
 			const token = await microsoftAction.token();
-			await signIn("entra-public", { token, callbackUrl: "/" });
+			await signIn("entra-public", { token, callbackUrl: signInDestination() });
 		} catch (error) {
 			const code = error && typeof error === "object" && "errorCode" in error && typeof error.errorCode === "string" && /^[a-z_]{1,80}$/.test(error.errorCode) ? error.errorCode : "sign_in_failed";
 			setSignInError(code === "popup_window_error" || code === "empty_window_error"

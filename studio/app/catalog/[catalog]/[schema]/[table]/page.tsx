@@ -111,7 +111,7 @@ export default function CatalogTablePage() {
           </div>
         </div>
         <div className={s.heroActions}>
-          {askDataset != null && <Link href={`/?dataset=${askDataset}`} className={s.ghost}><i className="fas fa-comment" aria-hidden="true" /> Ask</Link>}
+          {askDataset != null && <Link href={`/home?dataset=${askDataset}`} className={s.ghost}><i className="fas fa-comment" aria-hidden="true" /> Ask</Link>}
           {isAnalyst && !usage?.datasets.length && <Link href="/datasets/new" className={s.ghost}><i className="fas fa-plus" aria-hidden="true" /> Create dataset</Link>}
           <Link href={labHref(def.catalog, def.schema, def.name)} className={`${s.ghost} ${s.primary}`}><i className="fas fa-code" aria-hidden="true" /> Query in SQL Lab</Link>
         </div>

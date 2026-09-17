@@ -10,6 +10,7 @@
 
 import React, { createContext, useCallback, useContext } from "react";
 import { SessionProvider as NextAuthSessionProvider, useSession, signIn, signOut } from "next-auth/react";
+import { signInDestination } from "../components/AuthScreen";
 
 export type AuthProvider = "github" | "google" | "microsoft-entra-id";
 export type UserRole = "Viewer" | "Analyst" | "Editor" | "Admin";
@@ -43,7 +44,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 	const { data: session, status } = useSession();
 
 	const login = useCallback(async (provider?: AuthProvider) => {
-		await signIn(provider, { callbackUrl: "/" });
+		await signIn(provider, { callbackUrl: signInDestination() });
 	}, []);
 
 	const logout = useCallback(async () => {
