@@ -130,15 +130,37 @@ def test_digest_mismatch_is_a_failed_execution_against_the_first_seen_digest():
     q02 = ledger.statements["q02"]
     assert (q02["executions"], q02["failures"]) == (2, 1)
     assert q02["errors"][0]["kind"] == "mismatch"
-    assert ledger.reference["q02"] == module.result_hash(RESULTS["q02"], False)
-    assert ledger.clients[0] == {"executions": 11, "failures": 1, "rejections": 0}
+    assert ledger.reference["q02"] == module.result_hash(RESULTS["q02"])
+    assert ledger.clients[0] == {"executions": 11, "failures": 1, "rejections": 0, "ties": 0}
 
 
-def test_unordered_results_digest_the_same_in_any_row_order_and_ordered_ones_do_not():
+def test_results_digest_the_same_in_any_row_order_and_floats_to_nine_digits():
     rows = [["x", 3], ["y", 7]]
-    assert module.result_hash(rows, False) == module.result_hash(list(reversed(rows)), False)
-    assert module.result_hash(rows, True) != module.result_hash(list(reversed(rows)), True)
-    assert module.result_hash([[2.0], [1.5]], False) == module.result_hash([[2], [1.5]], False)
+    assert module.result_hash(rows) == module.result_hash(list(reversed(rows)))
+    assert module.result_hash([[2.0], [1.5]]) == module.result_hash([[2], [1.5]])
+    # A double summed in another order differs in its last digits — the
+    # same answer; nine significant digits are compared, whether the value
+    # arrives as a float or as the engine's rendering of one.
+    assert module.result_hash([[2.5289530297897155e18]]) == module.result_hash([["2.528953029789712e+18"]])
+    assert module.result_hash([[1408.0122473974282]]) == module.result_hash([["1408.01224739"]])
+    assert module.result_hash([[1408.0122473974282]]) != module.result_hash([[1408.0123]])
+    # Integer text stays exact.
+    assert module.result_hash([["1138507705"]]) != module.result_hash([["1138507706"]])
+    assert module.result_hash([[3]]) != module.result_hash([[4]])
+
+
+def test_a_different_row_set_of_the_same_size_from_an_ordered_window_is_a_tie_not_a_failure():
+    clock = FakeClock()
+    executor = Executor(clock, RESULTS)
+    executor.scripted["q03"] = [RESULTS["q03"], [["a"], ["b"], ["d"]], [["a"], ["b"]]]
+    ledger = module.Ledger(IDS, clients=1)
+    module.run_client(0, STATEMENTS, "kaveon", executor, ledger, rounds_stop(3), "measured",
+                      clock=clock, sleep=clock.sleep)
+    q03 = ledger.statements["q03"]
+    # Same size, different set: a tie at the cut. A shorter result is wrong.
+    assert (q03["executions"], q03["ties"], q03["failures"]) == (2, 1, 1)
+    assert q03["errors"][0]["kind"] == "mismatch"
+    assert ledger.clients[0]["ties"] == 1
 
 
 def test_rejections_are_retried_with_backoff_and_counted_apart():
@@ -182,7 +204,7 @@ def test_errors_fail_the_execution_and_a_statement_failing_everywhere_is_listed(
     assert record["failures"] == 4
     assert record["successful"] == 12
     assert record["executions_per_second"] == pytest.approx(12 / 32.0)
-    assert record["per_client"] == [{"executions": 6, "failures": 2, "rejections": 0}] * 2
+    assert record["per_client"] == [{"executions": 6, "failures": 2, "rejections": 0, "ties": 0}] * 2
     q04 = next(s for s in record["statements"] if s["id"] == "q04")
     assert q04["p50_seconds"] is None and q04["executions"] == 0 and len(q04["errors"]) == 3
 
@@ -192,7 +214,7 @@ def test_warmup_establishes_the_reference_but_is_not_counted():
     executor = Executor(clock, RESULTS)
     ledger = module.Ledger(IDS, clients=1)
     module.run_client(0, STATEMENTS, "kaveon", executor, ledger, rounds_stop(1), "warmup", clock=clock, sleep=clock.sleep)
-    assert ledger.warmup == {"executions": 4, "failures": 0, "rejections": 0}
+    assert ledger.warmup == {"executions": 4, "failures": 0, "rejections": 0, "ties": 0}
     assert ledger.clients[0]["executions"] == 0
     assert set(ledger.reference) == set(IDS)
     executor.scripted["q01"] = [[[101]]]
@@ -229,7 +251,7 @@ def test_concurrent_clients_share_one_ledger_safely():
         t.start()
     for t in threads:
         t.join()
-    assert ledger.totals() == {"executions": 8 * 25 * 4, "failures": 0, "rejections": 0}
+    assert ledger.totals() == {"executions": 8 * 25 * 4, "failures": 0, "rejections": 0, "ties": 0}
     assert len(ledger.reference) == 4
 
 
