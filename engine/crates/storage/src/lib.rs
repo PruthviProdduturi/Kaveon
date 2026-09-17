@@ -9,6 +9,7 @@ pub mod immutable_data_writer;
 pub mod metrics;
 pub mod object_delta;
 pub mod object_reader;
+pub mod parquet_directory;
 pub mod parquet_reader;
 pub mod source_statistics;
 
@@ -25,6 +26,10 @@ pub use immutable_data_writer::{
 pub use metrics::{ScanMetrics, ScanMetricsSnapshot};
 pub use object_delta::{ObjectDeltaReader, ObjectDeltaSource};
 pub use object_reader::{ObjectBatchSource, ObjectLocation, ObjectParquetReader};
+pub use parquet_directory::{
+    DirectoryFile, DirectoryListing, FileAssignment, ObjectDirectoryReader, ObjectDirectorySource,
+    ParquetLocation, assign_files, list_parquet_directory,
+};
 pub use parquet_reader::{ParquetBatchIterator, ParquetFileMetadata, ParquetReader};
 pub use source_statistics::{SourceStatistics, analyze_source};
 

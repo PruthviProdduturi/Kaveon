@@ -206,15 +206,22 @@ impl ObjectParquetReader {
                     }
                 };
                 runtime.block_on(async move {
+                    let meta = match self.location.store.head(&self.location.path).await {
+                        Ok(meta) => meta,
+                        Err(object_store::Error::NotFound { .. }) => {
+                            // No object at the location: a directory of
+                            // Parquet files is a table too.
+                            self.directory_reader().run(initial_tx, tx).await;
+                            return;
+                        }
+                        Err(failure) => {
+                            let _ = initial_tx.send(Err(storage_error(failure)));
+                            return;
+                        }
+                    };
                     let built = async {
                         let started = std::time::Instant::now();
                         self.metrics.files_considered(1);
-                        let meta = self
-                            .location
-                            .store
-                            .head(&self.location.path)
-                            .await
-                            .map_err(storage_error)?;
                         let reader = ParquetObjectReader::new(self.location.store, meta);
                         let mut builder = ParquetRecordBatchStreamBuilder::new(reader)
                             .await
@@ -320,6 +327,32 @@ impl ObjectParquetReader {
             metrics,
             exhausted: false,
         })
+    }
+}
+
+impl ObjectParquetReader {
+    /// The same location read as a directory table, with this reader's
+    /// projection, predicate, partition and metrics. The per-file caches are
+    /// namespaced by the store's own description.
+    fn directory_reader(&self) -> crate::ObjectDirectoryReader {
+        let mut reader = crate::ObjectDirectoryReader::new(
+            Arc::clone(&self.location.store),
+            "object",
+            self.location.store.to_string(),
+            self.location.path.clone(),
+        )
+        .with_batch_size(self.batch_size)
+        .with_metrics(self.metrics.clone());
+        if let Some(columns) = &self.columns {
+            reader = reader.with_columns(columns.clone());
+        }
+        if let Some(predicate) = &self.predicate {
+            reader = reader.with_predicate(predicate.clone());
+        }
+        if let Some(partition) = self.partition {
+            reader = reader.with_partition(partition);
+        }
+        reader
     }
 }
 
