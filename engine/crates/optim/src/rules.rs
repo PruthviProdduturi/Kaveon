@@ -1250,7 +1250,9 @@ mod tests {
             LogicalPlan::Scan { columns, .. } => scans.push(columns),
             LogicalPlan::Project { input, .. }
             | LogicalPlan::Filter { input, .. }
-            | LogicalPlan::Sort { input, .. } => scan_columns(input, scans),
+            | LogicalPlan::Sort { input, .. }
+            | LogicalPlan::Limit { input, .. }
+            | LogicalPlan::Offset { input, .. } => scan_columns(input, scans),
             LogicalPlan::Join { left, right, .. } | LogicalPlan::SemiJoin { left, right, .. } => {
                 scan_columns(left, scans);
                 scan_columns(right, scans);
@@ -1428,6 +1430,21 @@ mod tests {
         };
         assert!(matches!(*left, LogicalPlan::Scan { .. }));
         assert!(matches!(*right, LogicalPlan::Scan { .. }));
+    }
+
+    #[test]
+    fn select_star_under_a_filtered_top_n_keeps_every_scan_column() {
+        // ClickBench q24: `SELECT * FROM hits WHERE URL LIKE '%google%'
+        // ORDER BY EventTime LIMIT 10`. The scan must stay unpruned — the
+        // filter's and the sort's columns are not the answer's columns.
+        let plan = kaveon_sql::logical_plan::sql_to_logical_plan(
+            "SELECT * FROM hits WHERE url LIKE '%google%' ORDER BY event_time LIMIT 10",
+        )
+        .unwrap();
+        let pruned = push_projection_down(push_filter_down(plan));
+        let mut scans = Vec::new();
+        scan_columns(&pruned, &mut scans);
+        assert_eq!(scans, vec![&None]);
     }
 
     #[test]
