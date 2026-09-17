@@ -2,6 +2,7 @@
  "name": "TPC-H SF100 on KaveonDB",
  "catalog": "Benchmarks",
  "schema": "tpch_sf100",
+ "trino_catalog": "lake",
  "source": "docs/qualification/tpch/trino-queries.sql (TPC-H v3.0.1 validation parameters, Trino dialect)",
  "statements": [
   {
