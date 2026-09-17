@@ -15,9 +15,9 @@ export function PublicHeader({ active, onBrandClick }: PublicHeaderProps) {
   return (
     <header className={`${styles.header} ${styles.aboutHeader} ${isAbout ? "" : styles.docsHeader}`}>
       <Link
-        href="/about"
+        href="/"
         className={styles.brand}
-        aria-label={isAbout ? "Kaveon about, back to top" : "Kaveon home"}
+        aria-label={isAbout ? "Kaveon, back to top" : "Kaveon home"}
         onClick={onBrandClick}
       >
         <KaveonWordmark height={30} />
@@ -26,11 +26,11 @@ export function PublicHeader({ active, onBrandClick }: PublicHeaderProps) {
         {isAbout ? (
           <a href="#features" className={`${styles.link} ${styles.aboutSectionLink}`}>Features</a>
         ) : (
-          <Link href="/about" className={styles.link}>About</Link>
+          <Link href="/" className={styles.link}>About</Link>
         )}
         <Link href="/docs" className={`${styles.link} ${active === "docs" ? styles.active : ""}`} aria-current={active === "docs" ? "page" : undefined}>Docs</Link>
         <a href="https://github.com/PruthviProdduturi/Kaveon" target="_blank" rel="noopener noreferrer" className={`${styles.link} ${styles.github}`}>GitHub</a>
-        <Link href="/" className={styles.launch}>Launch App</Link>
+        <Link href="/home" className={styles.launch}>Launch App</Link>
       </nav>
     </header>
   );

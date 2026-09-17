@@ -15,12 +15,19 @@ const STORAGE_KEY = "kaveon-recents";
 const SYNC_EVENT = "kaveon-recents-updated";
 const MAX_RECENTS = 20;
 
+// The chat workbench moved from / to /home; recents persisted before the
+// move still carry the old deep link.
+function normalizeHref(href: string): string {
+  return href === "/" || href.startsWith("/?") ? `/home${href.slice(1)}` : href;
+}
+
 // Local storage as fast cache — API as persistent source of truth
 function loadLocal(): RecentItem[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const items: RecentItem[] = raw ? JSON.parse(raw) : [];
+    return items.map((item) => ({ ...item, href: normalizeHref(item.href) }));
   } catch {
     return [];
   }
@@ -49,7 +56,7 @@ export function useRecents() {
         const apiItems: RecentItem[] = data.map((d: any) => ({
           id: d.item_id,
           label: d.label,
-          href: d.href,
+          href: normalizeHref(d.href),
           type: d.type,
           timestamp: new Date(d.created_at).getTime(),
         }));

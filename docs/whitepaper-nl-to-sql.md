@@ -411,7 +411,7 @@ The deterministic NL-to-SQL path spans the Studio template parser and the API DL
 |---|---|
 | `studio/utils/nlToSql.ts` | Pattern matching, fuzzy resolution, SQL generation, chart type selection |
 | `studio/components/chat/InlineChart.tsx` | Chart rendering, KPI display, table display, SQL footer |
-| `studio/app/page.tsx` | DLM requests, dataset detection, schema caching, and chat orchestration |
+| `studio/app/home/page.tsx` | DLM requests, dataset detection, schema caching, and chat orchestration |
 | `api/dlm/` | Compilation, routing, profiling, validity, HLL, and answer serving |
 
 The client template parser has no NLP or ML dependency. The API DLM runtime is pure Python and uses a hand-written synonym lexicon and lightweight suffix stemmer. `page.tsx` orchestrates DLM context routing, adaptive freshness checks, and the template fallback.

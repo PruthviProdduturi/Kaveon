@@ -228,7 +228,7 @@ function UserMenu({
           }}
         >
           {/* About */}
-          {menuItem("About Kaveon", () => window.open("/about", "_blank"),
+          {menuItem("About Kaveon", () => window.open("/", "_blank"),
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
           )}
 
@@ -395,7 +395,7 @@ export function Sidebar({ children }: SidebarProps) {
   const navItems: NavItem[] = [
     {
       label: "New Chat",
-      href: "/",
+      href: "/home",
       icon: <span style={{ display: "flex", alignItems: "center" }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></span>,
       exact: true,
     },
@@ -526,7 +526,7 @@ export function Sidebar({ children }: SidebarProps) {
             </button>
           ) : (
             <>
-              <Link href="/" onClick={() => { if (pathname === "/") window.dispatchEvent(new CustomEvent("kaveon-new-chat")); }} style={{ display: "flex", alignItems: "center", textDecoration: "none" }}>
+              <Link href="/home" onClick={() => { if (pathname === "/home") window.dispatchEvent(new CustomEvent("kaveon-new-chat")); }} style={{ display: "flex", alignItems: "center", textDecoration: "none" }}>
                 <KaveonWordmark height={24} />
               </Link>
               <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -558,7 +558,7 @@ export function Sidebar({ children }: SidebarProps) {
                 key={item.href}
                 href={item.href}
                 onClick={() => {
-                  if (item.href === "/" && pathname === "/") {
+                  if (item.href === "/home" && pathname === "/home") {
                     window.dispatchEvent(new CustomEvent("kaveon-new-chat"));
                   }
                 }}
@@ -728,7 +728,7 @@ export function Sidebar({ children }: SidebarProps) {
                               const newName = prompt("Rename:", item.label);
                               if (newName) { removeRecent(item.id); addRecent({ ...item, id: item.id, label: newName, href: item.href, type: item.type }); }
                             }}] : []),
-                            { label: item.type === "chat" ? "Delete" : "Close", svg: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>', action: () => { removeRecent(item.id); if (pathname === item.href) router.push("/"); } },
+                            { label: item.type === "chat" ? "Delete" : "Close", svg: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>', action: () => { removeRecent(item.id); if (pathname === item.href) router.push("/home"); } },
                           ];
                           options.forEach(opt => {
                             const btn = document.createElement("button");
@@ -820,7 +820,7 @@ interface SearchResult {
 }
 
 const PAGES: SearchResult[] = [
-  { id: "p-chat",    label: "New Chat",     href: "/",                  type: "page", icon: "fa-plus" },
+  { id: "p-chat",    label: "New Chat",     href: "/home",              type: "page", icon: "fa-plus" },
   { id: "p-library", label: "Library",      href: "/workspace",         type: "page", icon: "fa-grid-2" },
   { id: "p-catalog", label: "Catalog",      href: "/catalog",           type: "page", icon: "fa-database" },
   { id: "p-sql",     label: "SQL Lab",      href: "/lab",               type: "page", icon: "fa-code" },
@@ -828,7 +828,7 @@ const PAGES: SearchResult[] = [
   { id: "p-ds",      label: "Data Sources", href: "/data-sources",      type: "page", icon: "fa-database" },
   { id: "p-engine",  label: "KaveonDB",     href: "/engine",            type: "page", icon: "fa-bolt" },
   { id: "p-settings",label: "Settings",     href: "/settings/connections", type: "page", icon: "fa-sliders" },
-  { id: "p-about",   label: "About Kaveon", href: "/about",             type: "page", icon: "fa-info-circle" },
+  { id: "p-about",   label: "About Kaveon", href: "/",                  type: "page", icon: "fa-info-circle" },
 ];
 
 const TYPE_ICONS: Record<string, string> = {
