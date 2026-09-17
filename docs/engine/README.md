@@ -1,6 +1,8 @@
 # Kaveon Engine manual
 
-Kaveon Engine is Kaveon's standalone distributed, vectorized analytical SQL query engine. Studio and the deterministic DLM are separate product pillars that consume Engine through governed interfaces.
+Kaveon Engine is Kaveon's standalone distributed, vectorized analytical SQL
+query engine. Studio and the deterministic DLM are separate product pillars
+that reach the Engine through the API's authenticated bridge.
 
 ## Evidence levels
 
@@ -9,10 +11,12 @@ Kaveon Engine is Kaveon's standalone distributed, vectorized analytical SQL quer
 | Contract | A validated shared type or protocol exists; execution is not implied |
 | Local | The operator executes in one process with focused tests |
 | Distributed | Coordinator fragments and workers execute the path |
-| Docker-verified | Multiple containers completed representative queries |
+| Cluster-verified | The three-worker AKS test cluster completed representative statements, with a record under `docs/qualification/` or a HANDSHAKE Log row naming the image digest |
 | Production-qualified | Scale, concurrency, failure, security, and operations meet release gates |
 
-“Implemented” does not mean production-qualified unless evidence explicitly says so.
+"Implemented" does not mean production-qualified unless evidence explicitly
+says so. The Engine is alpha throughout: every path below is implemented and
+tested, most are cluster-verified, none is production-qualified.
 
 ## Manual
 
@@ -22,7 +26,11 @@ Kaveon Engine is Kaveon's standalone distributed, vectorized analytical SQL quer
 - [Storage and catalogs](storage-and-catalogs.md)
 - [Memory management](../reference/engine-memory-management.md)
 - [Settings reference](settings.md)
+- [HTTP API](../reference/api.md)
+- [SQL compatibility](../reference/engine-sql-compatibility.md)
 - [Operations and roadmap](operations-and-roadmap.md)
 
-`HANDSHAKE.md` is the live coordination record, `STATUS.md` is the product ledger, and `engine/DISTRIBUTED_EXECUTION_STATUS.md` records distributed verification.
-
+`HANDSHAKE.md` is the live coordination record, `STATUS.md` is the product
+ledger, `engine/DISTRIBUTED_EXECUTION_STATUS.md` records distributed
+verification commit by commit, and `docs/qualification/` holds the measured
+records.

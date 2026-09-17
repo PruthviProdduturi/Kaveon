@@ -6,11 +6,13 @@ This file is the durable handoff for Kaveon's path from the current alpha execut
 
 - Branch: `dev`
 - Execution unit: Arrow `RecordBatch`
-- Storage partitioning: deterministic Parquet row-group and Delta active-file partitions
-- Coordinator/worker transport: HTTP task submission and Arrow IPC task results
-- Shipped distributed query shapes: scan/filter/project, partial/final grouped and global aggregates, Sort/TopN/limit, repartitioned or broadcast hash joins, window functions, INTERSECT/EXCEPT set operations
-- Shipped local query shapes: filters, projections, aggregates (including DISTINCT on SUM/AVG), sort/TopN, hash joins, window functions (ROW_NUMBER/RANK/DENSE_RANK/LAG/LEAD/SUM/AVG/COUNT/MIN/MAX OVER with ROWS/RANGE/GROUPS frame specs), INTERSECT/EXCEPT, EXTRACT, DATE_TRUNC/DATE_PART/TO_CHAR/NOW/CURRENT_DATE/CURRENT_TIMESTAMP, Decimal128 type and literals, IN/NOT IN/EXISTS/NOT EXISTS subqueries via semi/anti join
-- Existing exchange primitives: deterministic multi-column hash partitioning and a byte-bounded in-process exchange buffer
+- Storage partitioning: deterministic Parquet row-group and Delta active-file partitions; Parquet, Delta (JSON commits and v1 checkpoints, pinned version) and Iceberg on local disk and ADLS Gen2 (decoder lanes, pinned object identity); S3 through the same reader, unqualified; a plain Parquet directory is not yet a table (in progress)
+- Coordinator/worker transport: HTTPS task submission, streamed Arrow IPC exchange partitions to the consuming node (worker spools on AKS), Arrow IPC task results
+- Shipped distributed query shapes: scan/filter/project, partial/final grouped and global aggregates (columnar table, flushing partials, hybrid final merge), DISTINCT and exact COUNT(DISTINCT) over hash-partitioned rows, Sort/TopN/limit/offset, repartitioned or broadcast hash joins, semi/anti joins, window functions, UNION/INTERSECT/EXCEPT
+- Shipped local query shapes: everything above plus outer joins, CTEs, derived tables, uncorrelated scalar subqueries, decorrelated EXISTS/NOT EXISTS and correlated scalar aggregates (the binder, `kaveon_optim::binder`), window functions with ROWS/RANGE/GROUPS frames, EXTRACT and the date/time functions, `date ± INTERVAL`, Decimal128 arithmetic, LIKE/REGEXP_REPLACE, dictionary columns end to end; TPC-H 21 of 22 (`docs/qualification/tpch/coverage.md`)
+- Exchange primitives: deterministic multi-column hash partitioning with salted nested partitioners, streamed output (4 MiB chunks, four uploads in flight, 8 GiB per partition), disk stores with node and per-query limits, a byte-bounded in-process buffer when no node spools
+- Process memory (2026-09-16): a counting allocator, the cgroup limit, `ProcessMemory` with headroom max(256 MiB, 15 %); every reservation answers to live bytes before the query budget; `/v1/node` and heartbeats carry `memory_allocated_bytes`/`memory_limit_bytes`
+- Per-request settings and result cache (2026-09-17): `settings` on `/v1/statement` and `SET SESSION` prefixes (`query_memory_limit_bytes`, `local_parallelism`, `result_cache`, `admission_wait_seconds`); coordinator result cache (`KAVEON_RESULT_CACHE_BYTES` 256 MiB, TTL 600 s, `DELETE /v1/cache`); every benchmark submitter sends `result_cache: false`
 - Memory admission (2026-09-17): a FIFO queue on both roles instead of an immediate refusal. A statement whose budget does not fit waits in the coordinator's queue (`KAVEON_MEMORY_ADMISSION_QUEUE`, default 64; `KAVEON_MEMORY_ADMISSION_WAIT_SECONDS`, default 60; per request `settings.admission_wait_seconds`), visible as `QUEUED` and cancellable by ID; the head is admitted first and only when its whole budget fits. Workers queue tasks the same way, bounded by cancellation and the task timeout. HTTP 429 `MEMORY_ADMISSION_REJECTED` remains for a full queue or an expired wait and carries `admission_wait_ms`; query records carry `admission_wait_ms`; `/v1/node` and `/v1/cluster` report the queue depth and the admitted/queued/rejected/withdrawn counters. Verified by 12 focused tests on a 684-test workspace; not yet measured on AKS
 
 This is a functioning distributed slice, not yet a Trino-class distributed runtime. The missing capabilities below remain explicit release gates.
@@ -19,14 +21,14 @@ This is a functioning distributed slice, not yet a Trino-class distributed runti
 
 | # | Workstream | State | Verified scope | Remaining release gate |
 |---|---|---|---|---|
-| 1 | Network hash exchange | Implemented locally | Exchange-ID-safe Arrow IPC v2; authenticated idempotent endpoints; fragment producer/consumer wiring; 512 MiB process payload bound; cleanup | Streaming flow control and Docker/AKS end-to-end pressure evidence |
-| 2 | Stage and fragment planner | Implemented locally | Validated DAG/runtime; deterministic executable fragments; authenticated coordinator/worker dispatch | Docker worker-loss and multi-query stress evidence |
-| 3 | Multi-stage aggregation | Implemented locally | Partial/final COUNT/SUM/MIN/MAX/weighted AVG/exact DISTINCT; typed/null keys; empty-global semantics | Docker equivalence and performance evidence; aggregate spill |
-| 4 | Distributed TopN | Implemented locally | General fragment scheduler; multi-column direction/null ordering; partial/final TopN; fixed-fan-in spill merge | Docker correctness/performance evidence |
-| 5 | Distributed hash joins | Implemented locally | Hash repartition for equi-joins; broadcast cross-join build; local inner/outer/cross semantics | Distributed outer-join equivalence, broadcast threshold, skew handling, and join spill |
-| 6 | Memory accounting and spill | In progress | Hard reservations; bounded exchange storage; fixed-fan-in multi-pass lazy Sort/TopN spill merge; per-task compute, exchange partition/copy, IPC, memory, and spill telemetry | Aggregate/join spill, admission/revocation, and full operator-level telemetry |
-| 7 | Failure, retry, cancellation | Implemented locally | Idempotent replay, authenticated dispatch/control, retry rotation, cancellation, failed-attempt and consumed-exchange cleanup | Docker worker-loss and concurrent cancellation stress evidence |
-| 8 | Scheduler maturity | In progress | Deterministic Parquet row-group and Delta-file splits; exact-attempt lease/requeue/steal; stale-attempt protection | Connect enumerated splits to coordinator task assignments, admission/resource groups, and broader skew mitigation |
+| 1 | Network hash exchange | Cluster-verified | Exchange-ID-safe Arrow IPC with checksums; authenticated idempotent endpoints; output streamed while the task runs; worker-side spools; 8 GiB per partition, 12 GiB consumer spool per process; cleanup and orphan cancellation | Streaming decode on the consumer (a whole payload is downloaded before decoding); pressure evidence on the streamed path beyond the ClickBench targets |
+| 2 | Stage and fragment planner | Cluster-verified | Validated DAG/runtime; deterministic executable fragments with pinned Delta versions; authenticated dispatch; the binder ahead of it; `execution: {mode, detail}` on every record | Residual join filters (TPC-H Q21); multi-query stress evidence |
+| 3 | Multi-stage aggregation | Cluster-verified | Columnar partial/final COUNT/SUM/MIN/MAX/weighted AVG/exact DISTINCT; typed/null/dictionary keys; partials on several threads that flush on pressure; hybrid final merge with sub-partition spill (on `dev`, measured locally) | Hybrid merge measured on the cluster; skew qualification |
+| 4 | Distributed TopN | Cluster-verified | Multi-column direction/null ordering; partial/final TopN; OFFSET as top-N; TopN inside each merge thread; fixed-fan-in spill merge | — |
+| 5 | Distributed hash joins | Cluster-verified | Hash repartition for equi-joins; broadcast build from exact statistics; semi/anti joins broadcast; forced worker loss retried with the exact result (2026-09-10) | Distributed outer-join equivalence beyond the differential sweep, skew handling, join spill qualification |
+| 6 | Memory accounting and spill | Implemented, qualification open | Process guard, admission queue, hard reservations, partitioned spill for aggregate/join/Sort/TopN, per-task compute, exchange, IPC, memory, spill and admission telemetry | Skew and disk-exhaustion qualification; final-merge spill on the task metrics |
+| 7 | Failure, retry, cancellation | Cluster-verified | Idempotent replay, authenticated dispatch/control, retry rotation, cancellation of queued and running statements, orphan-task cancellation, timeouts not retried, cleanup | Concurrent cancellation stress; sustained soak on the current image |
+| 8 | Scheduler maturity | In progress | Deterministic Parquet row-group and Delta-file splits; exact-attempt lease/requeue/steal; stale-attempt protection; FIFO admission queue; resource groups | Connect enumerated splits to coordinator task assignments; broader skew mitigation |
 
 ## Correctness and performance gates
 
@@ -97,16 +99,15 @@ per-query network validation.
 
 ## Continuation point
 
-Complete the current round in this order:
+Items 1, 2, 4 (spill), 5 (streamed output), 6 (admission queue, resource groups) and 8 (ADLS reads) of the original round are done and recorded below and in the HANDSHAKE Log; what remains, in order:
 
-1. Run local-vs-distributed correctness for aggregate, TopN, equi-join, and cross-join through the two-worker Docker stack.
-2. Exercise worker loss, retry, cancellation, stale attempts, and exchange cleanup under Docker.
+1. Measure the hybrid final merge and the exchange changes on the cluster; complete the five-round ClickBench campaign and the TPC-H SF100 record (`docs/qualification/benchmark-program.md`).
+2. Stream exchange decode on the consumer.
 3. Connect deterministic storage split enumeration to fragment task assignments instead of worker-count partitions.
-4. Add aggregate and join memory reservations, spill, and revocation.
-5. Add exchange streaming flow control and bounded consumer-side fetching.
-6. Add admission queues/resource groups and concurrency/skew stress tests.
+4. Qualify aggregate and join spill under skew and disk exhaustion; put final-merge spill on the task metrics.
+5. Residual semi joins (TPC-H Q21); plain Parquet directory tables (in progress).
+6. Sustained soak, backup/restore and upgrade rehearsal on the current image; five-worker evidence.
 7. Record repeatable release-build performance and memory evidence; do not publish single-run claims.
-8. Add ADLS Gen2 range reads, then repeat the suite on a minimum five-worker AKS cluster.
 
 ### Distributed changes on `dev`, 2026-09-16 (Claude, while Codex is away)
 
