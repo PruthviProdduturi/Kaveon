@@ -54,7 +54,8 @@ The Rust server exposes these routes:
 | `GET` | `/v1/query/{query_id}` | Return retained lifecycle, context, structured logical plan, result, and scan telemetry |
 | `DELETE` | `/v1/query/{query_id}` | Cancel the query and propagate cancellation to active worker tasks |
 | `GET` | `/v1/cluster` | Coordinator and discovered-worker state |
-| `GET` | `/v1/node` | Current node information |
+| `GET` | `/v1/node` | Current node information, with the result cache counters on a coordinator |
+| `DELETE` | `/v1/cache` | Drop every cached result (admin role) |
 | `POST` | `/v1/node/heartbeat` | Register a worker heartbeat on a coordinator |
 | `GET` | `/v1/catalog` | List catalogs |
 | `GET`, `POST` | `/v1/catalog/definitions` | List or create durable catalog definitions |
@@ -74,3 +75,58 @@ The statement JSON body requires `query`. Clients may also provide `source`,
 submitting application and session; they are not trusted user identity. Principal
 and client address remain unavailable until authenticated request plumbing is
 implemented.
+
+### Per-request settings
+
+A statement may carry a `settings` object. Each key is validated against the
+coordinator's configuration and can only lower a bound, never raise one; an
+unknown key, or a value outside its bound, is refused with HTTP 400 and code
+`INVALID_SETTING`, the key named in the message.
+
+| Key | Type | Bound | Effect |
+|---|---|---|---|
+| `query_memory_limit_bytes` | unsigned integer | 1 to `KAVEON_QUERY_MEMORY_LIMIT_BYTES` on the coordinator | The statement's query memory pool on the coordinator, and the limit every task of the statement is admitted with on the workers (each worker also caps it at its own configured limit). |
+| `local_parallelism` | unsigned integer | 1 to the coordinator's configured parallelism (`KAVEON_LOCAL_PARALLELISM`) | Aggregator threads per task for the statement's partial aggregates, DISTINCT and final merges, on every node. Carried in the task request; each worker caps it at its own configured value. |
+| `result_cache` | boolean | — | `false` bypasses the coordinator's result cache for this statement: no lookup, no insertion. See the settings reference. |
+
+`time_zone` is not a settings key: it is the request's own `time_zone` field.
+
+The same settings may lead the statement text as `SET SESSION <key> =
+<value>;` statements in the same request, for clients that only send SQL:
+
+```sql
+SET SESSION result_cache = false;
+SET SESSION local_parallelism = 2;
+SELECT country, SUM(actions) FROM kaveon_events_enriched GROUP BY country
+```
+
+`SET SESSION time_zone = 'UTC'` sets the request's `time_zone`. A key given
+both in the object and in the prefix must agree. HTTP is stateless and the
+Engine keeps no server-side session: a `SET SESSION` statement applies only to
+the statement submitted with it, and a request that is only `SET SESSION`
+statements is refused with HTTP 400. The query record carries the effective
+settings in its `settings` field, present only when the statement set
+something; Studio shows them on the query page under Execution.
+
+### Result cache
+
+The coordinator keeps complete results of finished statements
+(`KAVEON_RESULT_CACHE_BYTES`, default 256 MiB, `0` disables;
+`KAVEON_RESULT_CACHE_TTL_SECONDS`, default 600). A statement whose key
+matches a kept result is answered from it without any worker or coordinator
+execution. The key is the normalised statement text (trimmed, whitespace
+collapsed, letters lowercased outside string literals and quoted
+identifiers), the catalog, the schema, the catalog snapshot identity, the
+Delta versions the planner pinned, and the request's `time_zone`. A catalog
+publish, a committed product transaction and `DELETE /v1/cache` clear every
+entry. Paged results of statements the coordinator ran itself are streamed
+to disk and never held whole, so they are not kept.
+
+A hit's query record carries `execution: {"mode": "cache", "detail": "hit"}`,
+`cached_from` (the query whose result was served) and `cached_elapsed_ms`
+(what that query took); its own `elapsed_ms` is the time to serve. The
+statement response is otherwise the same as a live one. Studio shows "Cache"
+in the query page's "Ran on" row and labels a SQL Lab result "From cache" or
+"Live query". `settings.result_cache = false` bypasses the cache for one
+statement: no lookup and no insertion. Every benchmark and qualification
+script in this repository sends that bypass.

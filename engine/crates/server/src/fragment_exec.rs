@@ -396,7 +396,7 @@ fn compile_node(
                     // thread's aggregate is the spill-capable one when a
                     // spill root is configured, so parallelism and the disk
                     // bound compose instead of excluding each other.
-                    let parallelism = kaveon_exec::local_parallel::configured_parallelism()?;
+                    let parallelism = kaveon_exec::local_parallel::query_parallelism(memory)?;
                     if parallelism > 1
                         && let Some(memory) = memory
                     {
@@ -826,7 +826,7 @@ pub(crate) fn distinct_operator(
     input: Box<dyn BatchOperator>,
     memory: Option<&QueryMemoryPool>,
 ) -> Result<Box<dyn BatchOperator>> {
-    let parallelism = kaveon_exec::local_parallel::configured_parallelism()?;
+    let parallelism = kaveon_exec::local_parallel::query_parallelism(memory)?;
     if parallelism > 1
         && let Some(memory) = memory
         && !input.schema().fields().is_empty()
@@ -986,7 +986,7 @@ pub(crate) fn compile_final_aggregate_replayable(
             memory,
         );
     }
-    let parallelism = kaveon_exec::local_parallel::configured_parallelism()?;
+    let parallelism = kaveon_exec::local_parallel::query_parallelism(memory)?;
     let attempt = if parallelism > 1 {
         let final_schema = final_schema(input.schema(), &group_by, &aggregates)?;
         // The per-thread output schema is the tail's, found on an empty

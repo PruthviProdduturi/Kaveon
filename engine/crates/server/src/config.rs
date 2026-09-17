@@ -11,6 +11,8 @@ use std::sync::Arc;
 
 const DEFAULT_QUERY_MEMORY_LIMIT_BYTES: u64 = 512 * 1_024 * 1_024;
 const DEFAULT_MEMORY_ADMISSION_LIMIT_BYTES: u64 = 4 * 1_024 * 1_024 * 1_024;
+const DEFAULT_RESULT_CACHE_BYTES: u64 = 256 * 1_024 * 1_024;
+const DEFAULT_RESULT_CACHE_TTL_SECONDS: u64 = 600;
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -46,6 +48,10 @@ pub struct ServerConfig {
     /// `KAVEON_PROCESS_MEMORY_LIMIT_BYTES` says otherwise; None when the
     /// process is not limited.
     pub process_memory_limit_bytes: Option<u64>,
+    /// The coordinator's result cache budget; zero disables it.
+    pub result_cache_bytes: u64,
+    /// How long a cached result may be served.
+    pub result_cache_ttl_seconds: u64,
     pub product_transactions: ProductTransactionsConfig,
 }
 
@@ -118,6 +124,8 @@ impl Default for ServerConfig {
             query_memory_limit_bytes: DEFAULT_QUERY_MEMORY_LIMIT_BYTES,
             memory_admission_limit_bytes: DEFAULT_MEMORY_ADMISSION_LIMIT_BYTES,
             process_memory_limit_bytes: None,
+            result_cache_bytes: DEFAULT_RESULT_CACHE_BYTES,
+            result_cache_ttl_seconds: DEFAULT_RESULT_CACHE_TTL_SECONDS,
             product_transactions: ProductTransactionsConfig::default(),
         }
     }
@@ -150,6 +158,7 @@ struct RawConfig {
     storage: Option<StorageConfig>,
     exchange: Option<ExchangeConfig>,
     memory: Option<MemoryConfig>,
+    result_cache: Option<ResultCacheConfig>,
     catalog: Option<NativeCatalogConfig>,
     product_transactions: Option<ProductTransactionsConfig>,
 }
@@ -188,6 +197,12 @@ struct ExchangeConfig {
 struct MemoryConfig {
     query_limit_bytes: Option<u64>,
     admission_limit_bytes: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct ResultCacheConfig {
+    bytes: Option<u64>,
+    ttl_seconds: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -251,6 +266,14 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
             if let Some(limit) = memory.admission_limit_bytes {
                 config.memory_admission_limit_bytes = limit;
                 config_sets_admission = true;
+            }
+        }
+        if let Some(cache) = raw.result_cache {
+            if let Some(bytes) = cache.bytes {
+                config.result_cache_bytes = bytes;
+            }
+            if let Some(seconds) = cache.ttl_seconds {
+                config.result_cache_ttl_seconds = seconds;
             }
         }
         if let Some(catalog) = raw.catalog {
@@ -449,6 +472,20 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     anyhow::ensure!(
         config.exchange_disk_limit_bytes > 0 && config.exchange_query_disk_limit_bytes > 0,
         "exchange disk limits must be positive"
+    );
+    if let Ok(value) = std::env::var("KAVEON_RESULT_CACHE_BYTES") {
+        config.result_cache_bytes = value.parse().map_err(|_| {
+            anyhow::anyhow!("KAVEON_RESULT_CACHE_BYTES must be an unsigned integer")
+        })?;
+    }
+    if let Ok(value) = std::env::var("KAVEON_RESULT_CACHE_TTL_SECONDS") {
+        config.result_cache_ttl_seconds = value.parse().map_err(|_| {
+            anyhow::anyhow!("KAVEON_RESULT_CACHE_TTL_SECONDS must be an unsigned integer")
+        })?;
+    }
+    anyhow::ensure!(
+        config.result_cache_bytes == 0 || config.result_cache_ttl_seconds > 0,
+        "an enabled result cache needs a positive KAVEON_RESULT_CACHE_TTL_SECONDS"
     );
     config.security.validate()?;
     validate_product_transactions(&config)?;
@@ -929,6 +966,48 @@ mod tests {
             std::path::PathBuf::from("state/catalog.db")
         );
         assert_eq!(config.catalog_admin_token.as_deref(), Some("test-token"));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn result_cache_configuration_defaults_and_loads_from_the_file() {
+        let directory = temporary_directory();
+        let config_path = directory.join("config.toml");
+        let defaults = load_server_config(&directory.join("missing.toml")).unwrap();
+        assert_eq!(defaults.result_cache_bytes, 256 * 1024 * 1024);
+        assert_eq!(defaults.result_cache_ttl_seconds, 600);
+        std::fs::write(
+            &config_path,
+            "[result_cache]
+bytes = 1048576
+ttl_seconds = 30
+",
+        )
+        .unwrap();
+        let config = load_server_config(&config_path).unwrap();
+        assert_eq!(config.result_cache_bytes, 1_048_576);
+        assert_eq!(config.result_cache_ttl_seconds, 30);
+        std::fs::write(
+            &config_path,
+            "[result_cache]
+bytes = 1
+ttl_seconds = 0
+",
+        )
+        .unwrap();
+        assert!(load_server_config(&config_path).is_err());
+        std::fs::write(
+            &config_path,
+            "[result_cache]
+bytes = 0
+ttl_seconds = 0
+",
+        )
+        .unwrap();
+        assert_eq!(
+            load_server_config(&config_path).unwrap().result_cache_bytes,
+            0
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 

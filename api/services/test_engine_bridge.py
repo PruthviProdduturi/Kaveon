@@ -66,6 +66,14 @@ class EngineBridgeTests(unittest.TestCase):
             self.assertEqual(request.call_args.args[3], "alice")
             self.assertEqual(request.call_args.kwargs["role"], "analyst")
 
+    def test_settings_are_sent_only_when_given(self):
+        with patch.object(bridge, "_request", return_value={"id": "query"}) as request:
+            bridge.execute("SELECT 1", "warehouse", "alice", "Analyst")
+            self.assertNotIn("settings", request.call_args_list[0].kwargs["payload"])
+        with patch.object(bridge, "_request", return_value={"id": "query"}) as request:
+            bridge.execute("SELECT 1", "warehouse", "alice", "Analyst", settings={"result_cache": False})
+            self.assertEqual(request.call_args_list[0].kwargs["payload"]["settings"], {"result_cache": False})
+
     def test_successful_statement_is_enriched_with_its_query_record(self):
         details = {"id": "query-1", "timings": {"planning_us": 12}, "stages": []}
         with patch.object(bridge, "_request", side_effect=[{"id": "query-1", "data": []}, details]) as request:

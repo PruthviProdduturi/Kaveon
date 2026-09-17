@@ -125,7 +125,7 @@ class Cluster:
         outcome = {"name": name, "principal": principal, "started_s": round(started-self.started, 3), "passed": False}
         query_id = None
         try:
-            response = requests.post(self.base + "/v1/statement", headers=self.headers(principal), json={"query": SQL[name], "result_delivery": "paged", "user": "forged-observer"}, timeout=90)
+            response = requests.post(self.base + "/v1/statement", headers=self.headers(principal), json={"query": SQL[name], "result_delivery": "paged", "user": "forged-observer", "settings": {"result_cache": False}}, timeout=90)
             payload = response.json()
             outcome["status"] = response.status_code
             query_id = payload.get("id")
@@ -173,7 +173,7 @@ class Cluster:
     def cancel_and_queue(self, executor, expected):
         outcome = {"name": "active_cancel_and_queue", "passed": False}
         started = time.monotonic()
-        future = executor.submit(requests.post, self.base + "/v1/statement", headers=self.headers("alice"), json={"query": CANCEL_SQL, "result_delivery": "paged"}, timeout=60)
+        future = executor.submit(requests.post, self.base + "/v1/statement", headers=self.headers("alice"), json={"query": CANCEL_SQL, "result_delivery": "paged", "settings": {"result_cache": False}}, timeout=60)
         try:
             query_id = None
             deadline = time.monotonic() + 10

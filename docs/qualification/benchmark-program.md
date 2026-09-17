@@ -19,8 +19,9 @@
   a wrong result is a failed execution, not a fast one.
 - **Rounds, not runs.** At least five rounds, alternating engine order, five
   warm-ups per activation, medians and p95 per query, throughput as
-  successful exact executions per second. Cold and warm are reported
-  separately when the tier defines them.
+  successful exact executions per second (the throughput tier under Tier 2's
+  mechanics). Cold and warm are reported separately when the tier defines
+  them.
 - **Co-tenants recorded.** The runner snapshots every non-DaemonSet pod on the
   worker nodes in each engine phase and fails the run if the set changes.
 - **Coverage is scored.** A query an engine cannot run is a loss for that
@@ -28,6 +29,14 @@
   make a table look better.
 - **No production Trino.** The Trino chart exists only for this comparison; it
   is never part of a Kaveon deployment.
+- **No result cache.** The coordinator keeps complete results of finished
+  statements (`KAVEON_RESULT_CACHE_BYTES`, on by default). Every benchmark
+  and qualification submission in this repository passes
+  `settings.result_cache = false` (`scripts/scale-suite.py`,
+  `scripts/differential-cases.py`, `scripts/benchmark-rounds.py` through the
+  suite, `engine/qualification/aks_distributed_compare.py` and the
+  qualification scripts), so a measured execution is always the Engine's.
+  A record whose query records show `execution.mode = "cache"` is invalid.
 
 ## Tier 1 — matched harness on the Kaveon telemetry shapes (running)
 
@@ -79,6 +88,52 @@ Mechanics:
 - Coverage: Kaveon does not run every ClickBench query today (URL and regexp
   functions, some casts). Every unsupported query is listed and counted as a
   loss until it runs.
+
+### Throughput
+
+The latency suite measures one statement at a time; the throughput tier
+measures the engine under load. The metric is **successful exact executions
+per second**: N concurrent clients, each running the suite's statements in a
+fixed permutation seeded by its client index and looping until the window
+ends; every execution is timed and its result digest checked; the figure is
+successful executions divided by the measured wall seconds. Nothing else is
+subtracted or weighted.
+
+- What is counted. An execution succeeds when it returns and its digest
+  (the engine-independent rendering `scripts/scale-suite.py` uses) equals the
+  first digest seen for that statement on that engine in the run; a different
+  digest or an error is a failure. An admission refusal — Kaveon answers
+  `429 MEMORY_ADMISSION_REJECTED` (the API bridge surfaces it as HTTP 429),
+  Trino `QUERY_QUEUE_FULL` — is neither: it is counted as a rejection, the
+  client retries the same statement after a short backoff (0.5 s doubling to
+  5 s), and the time lost counts against the engine's rate. A statement that
+  fails in every attempt is listed by name in the record, as in the latency
+  tiers. Per statement the record carries count, failures, rejections and
+  p50/p95/max seconds; per client its counts; the warm-up is reported apart.
+- Fairness. Same client count, same duration, same warm-up, same suite and
+  object, one engine at a time in the same alternating windows as the latency
+  suite, the client running on the system node so it is never a co-tenant of
+  the workers. The same script (`scripts/benchmark-throughput.py`) drives both
+  engines; only the transport differs (the API's Engine bridge for Kaveon,
+  Trino's HTTP statement API for Trino). Client counts are published side by
+  side (4 and 8 today), never one count for one engine against another for the
+  other. The rate is reported with the failure and rejection counts beside it:
+  a high rate with rejections is a scheduler refusing work, not a faster
+  engine.
+- How it is run. `scripts/benchmark-rounds.py --throughput 4,8` adds the tier
+  to every window after the latency suite (`--throughput-duration`, default
+  300 s; `--throughput-warmup`, default 30 s) and stores
+  `kaveon-throughput-<clients>-round<N>.json` and `trino-…` beside the round
+  records; `scripts/benchmark-rounds-report.py` then reports executions per
+  second per engine and client count as the median over rounds with the
+  fastest and slowest round, the summed failures and rejections, and the
+  coverage list. By hand, the Kaveon side is a Job from the live API pod
+  contract (`scripts/aks-scale-suite-job.py --script /input/benchmark-throughput.py
+  --env ENGINE=kaveon --env CLIENTS=4 --env DURATION_SECONDS=300 --env
+  WARMUP_SECONDS=30 --node-pool system`) and the Trino side is
+  `infra/aks/kaveon-trino-throughput-job.yaml`, both reading the suite from
+  the same ConfigMaps as the latency Jobs and ending their log with a
+  `THROUGHPUT=` line. One window is a measurement; five rounds are a claim.
 
 ## Tier 3 — TPC-H SF100 (joins and subqueries)
 

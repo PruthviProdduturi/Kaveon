@@ -31,6 +31,10 @@ An admitted query owns its budget until its admission guard is dropped. The quer
 
 The coordinator admits each submitted query against `KAVEON_MEMORY_ADMISSION_LIMIT_BYTES` and assigns `KAVEON_QUERY_MEMORY_LIMIT_BYTES`. Local plans and worker fragments propagate query pools to hash aggregate and hash join. Compatibility constructors remain available for embedded callers, so this is server-runtime enforcement—not a claim that every library embedding is bounded.
 
+Every node also answers to its process limit: the container's cgroup limit, read by the Engine itself, or `KAVEON_PROCESS_MEMORY_LIMIT_BYTES` when set (0 disables). A headroom of the larger of 256 MiB and 15 % is kept free. A node not told its admission limit takes the process limit less the headroom; an admission limit above the process limit is refused at startup. Deployments should let the Engine read the cgroup limit rather than set the override.
+
+On the AKS qualification cluster (`infra/helm/kaveon-test`, values `<role>.memory.*`) workers run 3 GiB per query and 4 GiB admission inside a 6 GiB container, and the coordinator 512 MiB per query and 2 GiB admission inside 4 GiB.
+
 ## Required production evidence
 
 - concurrent admission never exceeds the configured process ceiling;

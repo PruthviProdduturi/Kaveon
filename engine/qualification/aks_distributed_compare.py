@@ -274,8 +274,10 @@ class Engines:
         return http(method, url, headers, body, self.kaveon_ssl)[2]
 
     def kaveon_query(self, sql, evidence=False):
+        # The result cache is bypassed: a measured execution is always the Engine's.
         result = self.krequest("POST", "/v1/statement", {"query": sql, "catalog": self.catalog,
-                               "schema": self.schema, "result_delivery": "paged"})
+                               "schema": self.schema, "result_delivery": "paged",
+                               "settings": {"result_cache": False}})
         if result.get("error") or result.get("state") != "FINISHED":
             raise RuntimeError(str(result))
         rows = result.get("data") or []

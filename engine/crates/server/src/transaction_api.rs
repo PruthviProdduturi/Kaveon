@@ -1471,7 +1471,17 @@ async fn execute_sql(
     Extension(identity): Extension<Identity>,
     Json(request): Json<SqlTransactionRequest>,
 ) -> Response {
-    execute_sql_request(&state.product_transactions, &identity.principal, request).await
+    let commits = matches!(
+        kaveon_sql::parser::parse_native_transactional(&request.sql),
+        Ok(kaveon_sql::parser::NativeTransactionalStatement::Commit)
+    );
+    let response =
+        execute_sql_request(&state.product_transactions, &identity.principal, request).await;
+    if commits && response.status().is_success() {
+        // Committed product data may be what a cached result read.
+        state.result_cache.clear();
+    }
+    response
 }
 
 async fn execute_sql_request(
@@ -1590,7 +1600,12 @@ async fn commit(
     if let Err(error) = transaction.bind_request_digest(identity.principal.as_bytes()) {
         return error_response(RegistryError::Invalid(error.to_string()));
     }
-    commit_outcome_response(transaction.commit().await, &id)
+    let outcome = transaction.commit().await;
+    if matches!(outcome, Ok(CommitOutcome::Committed(_))) {
+        // Committed product data may be what a cached result read.
+        state.result_cache.clear();
+    }
+    commit_outcome_response(outcome, &id)
 }
 
 fn commit_outcome_response(
