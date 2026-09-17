@@ -23,7 +23,7 @@ use kaveon_core::{
 use std::{
     collections::VecDeque,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, SyncSender, TrySendError},
     },
@@ -90,13 +90,112 @@ pub fn query_parallelism(pool: Option<&QueryMemoryPool>) -> Result<usize> {
 }
 struct QueuedBatch {
     batch: RecordBatch,
-    _memory: Arc<MemoryReservation>,
+    _memory: Held,
 }
+
+/// What a queued batch holds until it is consumed.
+enum Held {
+    Reserved { _guard: Arc<MemoryReservation> },
+    Charged { _charge: Arc<QueueCharge> },
+}
+
+/// Memory for the batches in the threads' input queues, kept once taken:
+/// what the queues can hold at once — `QUEUE_BATCHES` source batches'
+/// worth, up to a quarter of the query budget — is taken before the first
+/// batch is partitioned, and the pump charges each part against it, the
+/// part giving its bytes back when its thread is done with it. So the
+/// pump does not ask the budget for a queue slot once the threads have
+/// filled it: a thread that filled the budget spills or fails on its own
+/// account, and the queue that feeds it does not fail with it. Batches
+/// larger than the first, or than the quarter admits, reserve as they come.
+struct QueueBudget {
+    account: OperatorMemoryAccount,
+    state: Mutex<QueueState>,
+}
+
+struct QueueState {
+    guards: Vec<MemoryReservation>,
+    held: u64,
+    available: u64,
+}
+
+/// How many source batches the queues hold at once, at most: two queued
+/// and one in hand per thread, whose parts make three batches, plus the
+/// batch being partitioned — and one more, since a batch's parts are not
+/// equal and the threads may hold the larger ones.
+const QUEUE_BATCHES: u64 = 5;
+/// The share of the query budget the queues take up front, at most.
+const QUEUE_BUDGET_SHARE: u64 = 4;
+
+impl QueueBudget {
+    fn new(account: OperatorMemoryAccount) -> Self {
+        Self {
+            account,
+            state: Mutex::new(QueueState {
+                guards: Vec::new(),
+                held: 0,
+                available: 0,
+            }),
+        }
+    }
+
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, QueueState>> {
+        self.state
+            .lock()
+            .map_err(|_| error("parallel input queue budget poisoned"))
+    }
+
+    /// Hold the queues' worth of a batch of `batch_bytes`, within the
+    /// share of the budget the queues may take up front.
+    fn ensure_for(&self, batch_bytes: u64) -> Result<()> {
+        let share = self.account.query().snapshot().limit_bytes / QUEUE_BUDGET_SHARE;
+        let bytes = batch_bytes.saturating_mul(QUEUE_BATCHES).min(share);
+        let mut state = self.lock()?;
+        if bytes > state.held {
+            let guard = self.account.reserve(bytes - state.held)?;
+            state.held += guard.bytes();
+            state.available += guard.bytes();
+            state.guards.push(guard);
+        }
+        Ok(())
+    }
+
+    /// Charge `bytes` against what is held, growing it when short.
+    fn charge(self: &Arc<Self>, bytes: u64) -> Result<QueueCharge> {
+        let mut state = self.lock()?;
+        if bytes > state.available {
+            let guard = self.account.reserve(bytes - state.available)?;
+            state.held += guard.bytes();
+            state.available += guard.bytes();
+            state.guards.push(guard);
+        }
+        state.available -= bytes;
+        Ok(QueueCharge {
+            budget: Arc::clone(self),
+            bytes,
+        })
+    }
+}
+
+/// Bytes of the queue budget in use by one batch, given back on drop.
+struct QueueCharge {
+    budget: Arc<QueueBudget>,
+    bytes: u64,
+}
+
+impl Drop for QueueCharge {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.budget.state.lock() {
+            state.available += self.bytes;
+        }
+    }
+}
+
 struct ChannelInput {
     schema: SchemaRef,
     receiver: Receiver<QueuedBatch>,
     stopped: Arc<AtomicBool>,
-    current: Option<Arc<MemoryReservation>>,
+    current: Option<Held>,
 }
 impl BatchOperator for ChannelInput {
     fn schema(&self) -> &SchemaRef {
@@ -106,7 +205,7 @@ impl BatchOperator for ChannelInput {
         self.current = None;
         loop {
             if self.stopped.load(Ordering::Acquire) {
-                return Err(error("parallel aggregate stopped"));
+                return Err(stopped_error());
             }
             match self.receiver.recv_timeout(Duration::from_millis(20)) {
                 Ok(queued) => {
@@ -167,7 +266,7 @@ pub struct ParallelPartials {
     /// One input channel per thread; empty once the source is drained.
     senders: Vec<SyncSender<QueuedBatch>>,
     partitioner: Option<HashPartitioner>,
-    input_account: Option<OperatorMemoryAccount>,
+    input_queue: Option<Arc<QueueBudget>>,
     round_robin: usize,
     /// Parts of the current source batch not yet handed to their thread.
     pending: VecDeque<(usize, QueuedBatch)>,
@@ -176,7 +275,7 @@ pub struct ParallelPartials {
     /// drained, so the pump must take from one to push to the other.
     ready: VecDeque<QueuedBatch>,
     output: Option<Receiver<Result<QueuedBatch>>>,
-    current: Option<Arc<MemoryReservation>>,
+    current: Option<Held>,
     failed: bool,
 }
 impl ParallelPartials {
@@ -309,7 +408,7 @@ impl ParallelPartials {
             handles: vec![],
             senders: Vec::new(),
             partitioner: None,
-            input_account: None,
+            input_queue: None,
             round_robin: 0,
             pending: VecDeque::new(),
             ready: VecDeque::new(),
@@ -369,7 +468,9 @@ impl ParallelPartials {
         }
         drop(output_tx);
         self.senders = senders;
-        self.input_account = Some(self.pool.operator("parallel-input-queue")?);
+        self.input_queue = Some(Arc::new(QueueBudget::new(
+            self.pool.operator("parallel-input-queue")?,
+        )));
         // Keyed: rows go to the thread their key hashes to, so the threads
         // hold disjoint keys. Unkeyed, or keyed only by dictionary columns
         // where folding is allowed (a handful of groups, cheaper to fold N
@@ -399,10 +500,11 @@ impl ParallelPartials {
     /// never waited on blindly: outputs are taken meanwhile, so a thread
     /// blocked on a full output queue is unblocked by the same loop.
     fn pump(&mut self) -> Result<bool> {
-        let account = self
-            .input_account
+        let queue = self
+            .input_queue
             .clone()
             .ok_or_else(|| error("parallel operator not started"))?;
+        let account = queue.account.clone();
         if self.pending.is_empty() {
             let Some(source) = self.source.as_mut() else {
                 return Ok(false);
@@ -410,6 +512,9 @@ impl ParallelPartials {
             let Some(batch) = source.next_batch()? else {
                 self.source = None;
                 self.senders.clear();
+                // The queues' memory goes back with the last part the
+                // threads take from them.
+                self.input_queue = None;
                 return Ok(false);
             };
             if batch.schema() != *source.schema() {
@@ -418,32 +523,34 @@ impl ParallelPartials {
                 ));
             }
             account.check_cancelled()?;
+            queue.ensure_for(batch.get_array_memory_size() as u64)?;
             match &self.partitioner {
                 Some(partitioner) => {
                     for (worker, part) in partitioner.partition(&batch)?.into_iter().enumerate() {
                         if part.num_rows() == 0 {
                             continue;
                         }
-                        let memory =
-                            Arc::new(account.reserve(part.get_array_memory_size() as u64)?);
+                        let memory = Arc::new(queue.charge(part.get_array_memory_size() as u64)?);
                         self.pending.push_back((
                             worker,
                             QueuedBatch {
                                 batch: part,
-                                _memory: memory,
+                                _memory: Held::Charged { _charge: memory },
                             },
                         ));
                     }
                 }
                 None => {
-                    let memory = Arc::new(account.reserve(batch.get_array_memory_size() as u64)?);
+                    let memory = Arc::new(queue.charge(batch.get_array_memory_size() as u64)?);
                     for offset in (0..batch.num_rows()).step_by(8192) {
                         let slice = batch.slice(offset, 8192.min(batch.num_rows() - offset));
                         self.pending.push_back((
                             self.round_robin % self.workers,
                             QueuedBatch {
                                 batch: slice,
-                                _memory: memory.clone(),
+                                _memory: Held::Charged {
+                                    _charge: memory.clone(),
+                                },
                             },
                         ));
                         self.round_robin += 1;
@@ -454,7 +561,7 @@ impl ParallelPartials {
         while let Some((worker, queued)) = self.pending.pop_front() {
             account.check_cancelled()?;
             if self.stopped.load(Ordering::Acquire) {
-                return Err(error("parallel operator stopped"));
+                return Err(stopped_error());
             }
             match self.senders[worker].try_send(queued) {
                 Ok(()) => {}
@@ -548,17 +655,44 @@ impl BatchOperator for ParallelPartials {
                 }
             }
         })();
-        let result = result.map_err(|error| {
-            self.output
-                .as_ref()
-                .and_then(|output| output.try_iter().find_map(|message| message.err()))
-                .unwrap_or(error)
-        });
+        let result = result.map_err(|error| self.thread_failure(error));
         if result.is_err() {
             self.failed = true;
             self.stop();
         }
         result
+    }
+}
+impl ParallelPartials {
+    /// The error behind `error` when a thread failed: a thread reports
+    /// its error on the output channel after dropping its input, so the
+    /// pump can see the input disconnect first. Stop the threads, drain
+    /// the outputs while they finish — a thread reporting into a full
+    /// channel must not be waited on blindly — and take the first error
+    /// they reported, or `error` when there is none.
+    fn thread_failure(&mut self, error: KaveonError) -> KaveonError {
+        self.stopped.store(true, Ordering::Release);
+        self.senders.clear();
+        self.pending.clear();
+        // The first error that is not a thread stopped by this very
+        // stop: a failing thread drops its input before it reports, so
+        // its siblings can report the stop ahead of it.
+        let mut reported: Option<KaveonError> = None;
+        while let Some(output) = &self.output {
+            for message in output.try_iter() {
+                if let Err(failure) = message
+                    && reported.as_ref().is_none_or(is_stopped_error)
+                    && (reported.is_none() || !is_stopped_error(&failure))
+                {
+                    reported = Some(failure);
+                }
+            }
+            if self.handles.iter().all(JoinHandle::is_finished) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        reported.unwrap_or(error)
     }
 }
 impl Drop for ParallelPartials {
@@ -576,7 +710,7 @@ fn send_bounded<T>(
     loop {
         account.check_cancelled()?;
         if stopped.load(Ordering::Acquire) {
-            return Err(error("parallel aggregate stopped"));
+            return Err(stopped_error());
         }
         match sender.try_send(value) {
             Ok(()) => return Ok(()),
@@ -611,7 +745,7 @@ fn run_worker(
             output,
             Ok(QueuedBatch {
                 batch,
-                _memory: memory,
+                _memory: Held::Reserved { _guard: memory },
             }),
             stopped,
             pool,
@@ -651,6 +785,81 @@ fn partial_aggregate_operator(
             .with_reserved_input()
             .with_budget_share(context.workers),
     ))
+}
+
+/// A point every thread of one parallel operator reaches before any goes
+/// on: the final merge's threads emit only once all have finished
+/// merging, so no thread's output competes for the budget with another's
+/// growing table. A thread that fails or is dropped counts as arrived, so
+/// the others are never left waiting for it; a cancelled query leaves.
+pub struct Rendezvous {
+    parties: usize,
+    arrived: Mutex<usize>,
+    all_arrived: std::sync::Condvar,
+}
+
+impl Rendezvous {
+    pub fn new(parties: usize) -> Arc<Self> {
+        Arc::new(Self {
+            parties,
+            arrived: Mutex::new(0),
+            all_arrived: std::sync::Condvar::new(),
+        })
+    }
+
+    /// One party's place at the rendezvous.
+    pub fn ticket(self: &Arc<Self>) -> RendezvousTicket {
+        RendezvousTicket {
+            rendezvous: Arc::clone(self),
+            arrived: false,
+        }
+    }
+
+    fn arrive(&self) {
+        if let Ok(mut arrived) = self.arrived.lock() {
+            *arrived += 1;
+            if *arrived >= self.parties {
+                self.all_arrived.notify_all();
+            }
+        }
+    }
+}
+
+pub struct RendezvousTicket {
+    rendezvous: Arc<Rendezvous>,
+    arrived: bool,
+}
+
+impl RendezvousTicket {
+    /// Arrive, and wait for the others.
+    pub fn wait(mut self, memory: &OperatorMemoryAccount) -> Result<()> {
+        self.arrived = true;
+        self.rendezvous.arrive();
+        let mut arrived = self
+            .rendezvous
+            .arrived
+            .lock()
+            .map_err(|_| error("parallel rendezvous poisoned"))?;
+        while *arrived < self.rendezvous.parties {
+            memory.check_cancelled()?;
+            arrived = self
+                .rendezvous
+                .all_arrived
+                .wait_timeout(arrived, Duration::from_millis(20))
+                .map_err(|_| error("parallel rendezvous poisoned"))?
+                .0;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for RendezvousTicket {
+    fn drop(&mut self) {
+        if !self.arrived {
+            self.arrived = true;
+            self.rendezvous.arrive();
+        }
+    }
 }
 
 pub type Finalizer = Box<dyn FnOnce(Box<dyn BatchOperator>) -> Result<Box<dyn BatchOperator>>>;
@@ -724,6 +933,18 @@ impl BatchOperator for EmptyInput {
 }
 fn error(message: &str) -> KaveonError {
     KaveonError::Execution(message.into())
+}
+
+/// The error a thread fails with because the operator was stopped — a
+/// consequence of another failure, never the cause reported.
+const STOPPED: &str = "parallel operator stopped";
+
+fn stopped_error() -> KaveonError {
+    KaveonError::Execution(STOPPED.into())
+}
+
+fn is_stopped_error(error: &KaveonError) -> bool {
+    matches!(error, KaveonError::Execution(message) if message == STOPPED)
 }
 
 #[cfg(test)]
@@ -1183,5 +1404,46 @@ mod tests {
         assert!(set_query_parallelism(&raised, 0).is_err());
         assert!(set_query_parallelism(&raised, 1).is_err());
         set_query_parallelism(&raised, configured + 8).unwrap();
+    }
+
+    #[test]
+    fn rendezvous_releases_when_every_party_arrives_or_is_dropped_and_leaves_on_cancellation() {
+        let pool = QueryMemoryPool::new("rendezvous", 1 << 20).unwrap();
+        let account = pool.operator("party").unwrap();
+        // Three parties: two wait, the third's ticket is dropped unused.
+        let rendezvous = Rendezvous::new(3);
+        let tickets = (0..3).map(|_| rendezvous.ticket()).collect::<Vec<_>>();
+        let mut tickets = tickets.into_iter();
+        let first = tickets.next().unwrap();
+        let second = tickets.next().unwrap();
+        let dropped = tickets.next().unwrap();
+        let waiter = {
+            let account = account.clone();
+            thread::spawn(move || first.wait(&account))
+        };
+        thread::sleep(Duration::from_millis(30));
+        assert!(!waiter.is_finished(), "one party waits for the others");
+        drop(dropped);
+        thread::sleep(Duration::from_millis(30));
+        assert!(!waiter.is_finished(), "a dropped party is not the last");
+        second.wait(&account).unwrap();
+        waiter.join().unwrap().unwrap();
+
+        // A cancelled query leaves the rendezvous with the cancellation.
+        let cancelled = QueryMemoryPool::new("rendezvous-cancelled", 1 << 20).unwrap();
+        let flag = Arc::new(AtomicBool::new(false));
+        let probe = Arc::clone(&flag);
+        cancelled
+            .set_cancellation_probe(move || probe.load(Ordering::Acquire))
+            .unwrap();
+        let account = cancelled.operator("party").unwrap();
+        let alone = Rendezvous::new(2);
+        let ticket = alone.ticket();
+        let _other = alone.ticket();
+        let waiter = thread::spawn(move || ticket.wait(&account));
+        thread::sleep(Duration::from_millis(30));
+        assert!(!waiter.is_finished());
+        flag.store(true, Ordering::Release);
+        assert!(waiter.join().unwrap().is_err());
     }
 }
