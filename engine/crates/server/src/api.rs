@@ -615,6 +615,14 @@ async fn execute_owned_task(
         }
     };
     crate::planner::qualify_tables(&mut plan, &req.catalog, &req.schema);
+    let plan = match kaveon_optim::binder::bind(plan, &state.catalog.read().await.manager) {
+        Ok(plan) => plan,
+        Err(error) => {
+            let message = error.to_string();
+            let _ = owner.complete(TaskOutcome::Failed(Arc::from(message.clone())));
+            return task_failure_response(StatusCode::BAD_REQUEST, &message);
+        }
+    };
     let plan = kaveon_optim::rules::push_filter_down(plan);
     let plan = kaveon_optim::rules::push_projection_down(plan);
     let plan = {
@@ -1670,6 +1678,21 @@ async fn submit_statement(
         }
     };
     crate::planner::qualify_tables(&mut plan, &context.catalog, &context.schema);
+    let plan = match kaveon_optim::binder::bind(plan, &catalog_snapshot) {
+        Ok(plan) => plan,
+        Err(error) => {
+            let message = format!("SQL analysis error: {error}");
+            finish_failed_query(&query_id, message.clone(), start, None, None, None).await;
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": message,
+                    "code": "ANALYSIS_ERROR"
+                })),
+            )
+                .into_response();
+        }
+    };
     let analysis_us = elapsed_us(analysis_start);
     let logical_plan = crate::planner::logical_plan_tree(&plan);
     let plan = kaveon_optim::rules::push_filter_down(plan);

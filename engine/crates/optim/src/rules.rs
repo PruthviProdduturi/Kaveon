@@ -223,32 +223,43 @@ fn prune_columns(plan: LogicalPlan, required: Option<HashSet<String>>) -> Logica
             condition,
             distribution,
         } => {
-            let mut columns = required.unwrap_or_default();
+            // Everything above is needed: every input keeps every column.
+            let Some(mut columns) = required else {
+                return LogicalPlan::Join {
+                    left: Box::new(prune_columns(*left, None)),
+                    right: Box::new(prune_columns(*right, None)),
+                    join_type,
+                    condition,
+                    distribution,
+                };
+            };
             if let Some(condition) = &condition {
                 collect_columns(condition, &mut columns);
             }
-            let left_qualifier = plan_qualifier(&left);
-            let right_qualifier = plan_qualifier(&right);
-            let can_split = !columns.is_empty()
-                && columns.iter().all(|column| column.contains('.'))
-                && left_qualifier.is_some()
-                && right_qualifier.is_some();
-            let (left_required, right_required) = if can_split {
-                let left_qualifier = left_qualifier.expect("qualifier checked");
-                let right_qualifier = right_qualifier.expect("qualifier checked");
-                let left_columns = columns
-                    .iter()
-                    .filter(|column| column.starts_with(&format!("{left_qualifier}.")))
-                    .cloned()
-                    .collect();
-                let right_columns = columns
-                    .iter()
-                    .filter(|column| column.starts_with(&format!("{right_qualifier}.")))
-                    .cloned()
-                    .collect();
-                (Some(left_columns), Some(right_columns))
-            } else {
-                (None, None)
+            // A qualified column goes to the side whose relations carry
+            // its qualifier; a join of joins routes through every relation
+            // beneath it. A bare column, or a side whose output the
+            // relation names do not describe, keeps both sides whole.
+            let sides = scan_qualifiers(&left).zip(scan_qualifiers(&right));
+            let (left_required, right_required) = match sides {
+                Some((left_qualifiers, right_qualifiers))
+                    if !columns.is_empty()
+                        && columns.iter().all(|column| {
+                            column.rsplit_once('.').is_some_and(|(qualifier, _)| {
+                                left_qualifiers.contains(qualifier)
+                                    != right_qualifiers.contains(qualifier)
+                            })
+                        }) =>
+                {
+                    let (left_columns, right_columns): (HashSet<_>, HashSet<_>) =
+                        columns.into_iter().partition(|column| {
+                            column
+                                .rsplit_once('.')
+                                .is_some_and(|(qualifier, _)| left_qualifiers.contains(qualifier))
+                        });
+                    (Some(left_columns), Some(right_columns))
+                }
+                _ => (None, None),
             };
             LogicalPlan::Join {
                 left: Box::new(prune_columns(*left, left_required)),
@@ -369,6 +380,24 @@ fn collect_columns(expression: &Expr, columns: &mut HashSet<String>) {
         }
         Expr::Extract { expr, .. } => collect_columns(expr, columns),
         Expr::Literal(_) | Expr::Star => {}
+    }
+}
+
+/// The relations a join qualifies the columns of `plan` with: scans (and
+/// filtered scans) under their alias or table name, through nested joins.
+/// None when an input names its own output (a projection or aggregate),
+/// which the relation names do not describe.
+fn scan_qualifiers(plan: &LogicalPlan) -> Option<HashSet<String>> {
+    match plan {
+        LogicalPlan::Scan { .. } | LogicalPlan::Filter { .. } => {
+            plan_qualifier(plan).map(|qualifier| HashSet::from([qualifier]))
+        }
+        LogicalPlan::Join { left, right, .. } => {
+            let mut qualifiers = scan_qualifiers(left)?;
+            qualifiers.extend(scan_qualifiers(right)?);
+            Some(qualifiers)
+        }
+        _ => None,
     }
 }
 
@@ -1386,6 +1415,71 @@ mod tests {
         };
         assert!(matches!(*left, LogicalPlan::Scan { .. }));
         assert!(matches!(*right, LogicalPlan::Scan { .. }));
+    }
+
+    #[test]
+    fn pruning_routes_through_nested_joins_and_keeps_everything_when_everything_is_needed() {
+        let inner = |condition: Expr| LogicalPlan::Join {
+            left: Box::new(aliased("customer", "c")),
+            right: Box::new(aliased("orders", "o")),
+            join_type: JoinType::Inner,
+            condition: Some(condition),
+            distribution: kaveon_sql::logical_plan::JoinDistribution::Partitioned,
+        };
+        let outer = |condition: Expr| LogicalPlan::Join {
+            left: Box::new(inner(compare(
+                column("c.c_custkey"),
+                BinaryOp::Eq,
+                column("o.o_custkey"),
+            ))),
+            right: Box::new(aliased("lineitem", "l")),
+            join_type: JoinType::Inner,
+            condition: Some(condition),
+            distribution: kaveon_sql::logical_plan::JoinDistribution::Partitioned,
+        };
+        // The projection's columns reach the innermost scans, along with
+        // every join key on the way.
+        let pruned = push_projection_down(LogicalPlan::Project {
+            input: Box::new(outer(compare(
+                column("o.o_orderkey"),
+                BinaryOp::Eq,
+                column("l.l_orderkey"),
+            ))),
+            columns: vec![column("c.c_name"), column("l.l_quantity")],
+        });
+        let mut scans = Vec::new();
+        scan_columns(&pruned, &mut scans);
+        assert_eq!(
+            scans,
+            vec![
+                &Some(vec!["c_custkey".to_owned(), "c_name".to_owned()]),
+                &Some(vec!["o_custkey".to_owned(), "o_orderkey".to_owned()]),
+                &Some(vec!["l_orderkey".to_owned(), "l_quantity".to_owned()]),
+            ]
+        );
+        // Nothing above narrows the output: no scan is pruned, the join
+        // keys notwithstanding.
+        let whole = push_projection_down(outer(compare(
+            column("o.o_orderkey"),
+            BinaryOp::Eq,
+            column("l.l_orderkey"),
+        )));
+        let mut scans = Vec::new();
+        scan_columns(&whole, &mut scans);
+        assert_eq!(scans, vec![&None, &None, &None]);
+        // A bare column the relation names do not describe keeps both
+        // sides of that join whole.
+        let bare = push_projection_down(LogicalPlan::Project {
+            input: Box::new(outer(compare(
+                column("o_orderkey"),
+                BinaryOp::Eq,
+                column("l.l_orderkey"),
+            ))),
+            columns: vec![column("c.c_name")],
+        });
+        let mut scans = Vec::new();
+        scan_columns(&bare, &mut scans);
+        assert_eq!(scans, vec![&None, &None, &None]);
     }
 
     #[test]
