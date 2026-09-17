@@ -13,6 +13,11 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   compress: true,
 
+  // The product page moved from /about to the site root; keep old links alive.
+  async redirects() {
+    return [{ source: '/about', destination: '/', permanent: true }];
+  },
+
   // Tree-shake heavy packages — Next.js will only bundle the modules actually used.
   experimental: {
     optimizePackageImports: ['echarts', 'echarts-for-react', '@azure/msal-browser'],
