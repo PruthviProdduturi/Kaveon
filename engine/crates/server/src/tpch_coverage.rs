@@ -37,10 +37,6 @@ const KNOWN_UNSUPPORTED: &[(&str, &str)] = &[
         "plan: correlated EXISTS (l_orderkey = o_orderkey) is planned as an uncorrelated semi join; lineitem has no column o_orderkey",
     ),
     ("q11", "parse: scalar subqueries are not yet supported"),
-    (
-        "q13",
-        "plan: LEFT JOIN ON with a NOT LIKE conjunct; only equality join conditions are supported",
-    ),
     ("q15", "parse: scalar subqueries are not yet supported"),
     ("q17", "parse: scalar subqueries are not yet supported"),
     ("q20", "parse: scalar subqueries are not yet supported"),
