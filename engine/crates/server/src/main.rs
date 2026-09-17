@@ -14,6 +14,8 @@ pub mod results;
 pub mod runtime;
 pub mod scheduler;
 pub mod security;
+#[cfg(test)]
+mod tpch_coverage;
 mod transaction_api;
 pub mod transport;
 mod ui;
