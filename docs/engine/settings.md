@@ -27,7 +27,9 @@ settings read at execution time), `engine/crates/storage/src/adls_reader.rs`
 | Name | Config key | Default | Unit | What it bounds | Applies to | AKS qualification value |
 |---|---|---|---|---|---|---|
 | `KAVEON_QUERY_MEMORY_LIMIT_BYTES` | `memory.query_limit_bytes` | 536870912 (512 MiB); on a process with a memory limit, capped at the admission limit | bytes | One query memory pool: the statement on the coordinator, one task of the query on a worker. Every operator reservation answers to it. Must be greater than zero and at most the admission limit. | coordinator (per statement), worker (per task) | coordinator 536870912 (chart); workers 3221225472 (3 GiB, `kubectl set env` 2026-09-16, not yet in the chart) |
-| `KAVEON_MEMORY_ADMISSION_LIMIT_BYTES` | `memory.admission_limit_bytes` | 4294967296 (4 GiB) when the process is unlimited; on a limited process and neither the variable nor the key set: process limit minus the headroom (below) | bytes | The sum of admitted query pools on the node. A statement or task that cannot be admitted waits (workers) or is rejected with HTTP 429 (coordinator). Cannot exceed the process limit. | coordinator, worker | chart 2147483648 (2 GiB) for both roles; workers raised to 4294967296 (4 GiB) by `kubectl set env` 2026-09-16 |
+| `KAVEON_MEMORY_ADMISSION_LIMIT_BYTES` | `memory.admission_limit_bytes` | 4294967296 (4 GiB) when the process is unlimited; on a limited process and neither the variable nor the key set: process limit minus the headroom (below) | bytes | The sum of admitted query pools on the node. A statement or task whose pool does not fit on arrival waits in the admission queue (next two rows). Cannot exceed the process limit. | coordinator, worker | chart 2147483648 (2 GiB) for both roles; workers raised to 4294967296 (4 GiB) by `kubectl set env` 2026-09-16 |
+| `KAVEON_MEMORY_ADMISSION_QUEUE` | `memory.admission_queue` | 64 | statements (coordinator) or tasks (worker) | How many arrivals may wait for admission at once, in arrival order. The head of the queue is admitted first and only when its whole pool fits; nothing behind it is admitted ahead of it, and nothing arriving is admitted while anyone is queued. An arrival that finds the queue full is refused at once: HTTP 429 `MEMORY_ADMISSION_REJECTED` on the coordinator, a task failure the coordinator retries on a worker. `0` is the pre-2026-09-17 behaviour: whatever does not fit on arrival is refused on arrival. The default is the cap on open waiting requests, not on latency: the wait below bounds latency. | coordinator, worker | not set (default 64; not yet measured on the cluster) |
+| `KAVEON_MEMORY_ADMISSION_WAIT_SECONDS` | `memory.admission_wait_seconds` | 60 | seconds | How long a statement waits in the coordinator's admission queue before it is refused with HTTP 429 `MEMORY_ADMISSION_REJECTED` (the refusal carries `admission_wait_ms`; the statement stays in the history as `FAILED` with its wait). Must be positive when the queue is on. The ceiling of the per-request `admission_wait_seconds`. Workers do not apply it: a queued task waits until its query is cancelled or the coordinator's task timeout ends it. | coordinator | not set (default 60) |
 | `KAVEON_PROCESS_MEMORY_LIMIT_BYTES` | none | the container's cgroup limit (`/sys/fs/cgroup/memory.max`, then `memory/memory.limit_in_bytes`); `max` or the v1 unlimited sentinel means no limit; `0` disables the guard | bytes | The process guard: reservations fail closed when live allocated bytes plus the request would leave less than the headroom under this limit. Headroom is `max(15% of the limit, 256 MiB)`. | coordinator, worker | not set: cgroup limits apply, 4 GiB on the coordinator and 6 GiB on the workers (chart resource limits) |
 | `KAVEON_HASH_ADAPTIVE_BYTES` | none | `min(query limit / 16, 64 MiB)`, then capped at `query limit / 4` whatever is configured | bytes | How much a hash aggregate or join may grow in memory before the adaptive partitioned operator starts spilling its partitions. Read per operator at execution time. | worker (task operators), coordinator (node-local operators) | not set |
 
@@ -129,7 +131,7 @@ in this repository sends it.
 
 ## Per-request settings
 
-A statement may lower three of the bounds above for itself, through the
+A statement may lower four of the bounds above for itself, through the
 `settings` object of `POST /v1/statement` or leading `SET SESSION <key> =
 <value>;` statements in the same request. Nothing can be raised; an unknown
 key or an out-of-range value is HTTP 400 `INVALID_SETTING` with the key
@@ -144,6 +146,7 @@ shapes.
 | `query_memory_limit_bytes` | 1 to the coordinator's `KAVEON_QUERY_MEMORY_LIMIT_BYTES` | The statement's query memory pool on the coordinator and the admission limit of each of its tasks on the workers (each worker also caps it at its own limit). | coordinator, worker |
 | `local_parallelism` | 1 to the coordinator's configured `KAVEON_LOCAL_PARALLELISM` | Aggregator threads for the statement's partial aggregates, DISTINCT and final merges; carried in the task request and capped again by each worker's own value. | coordinator, worker |
 | `result_cache` | `true` or `false` | `false` bypasses the coordinator's result cache for the statement. | coordinator |
+| `admission_wait_seconds` | 0 to the coordinator's `KAVEON_MEMORY_ADMISSION_WAIT_SECONDS` | How long the statement waits for memory admission before HTTP 429; `0` refuses at once when its pool does not fit on arrival (the pre-2026-09-17 behaviour, for a client that prefers to retry itself). Ignored when the node has no queue. | coordinator |
 
 ## Timeouts and intervals
 
@@ -155,12 +158,11 @@ so that an operator knows what bounds a run. Changing one is a code change.
 | `REMOTE_TASK_TIMEOUT` | 600 s | `api.rs` | One task request from the coordinator to a worker. A task that times out is not retried; finishing the query cancels its orphaned tasks on the workers. |
 | `HEARTBEAT_INTERVAL` | 10 s | `cluster.rs` | How often a worker heartbeats to the coordinator. |
 | `NODE_EXPIRY` | 30 s | `cluster.rs` | A worker with no heartbeat for this long leaves the cluster view. |
-| Admission retry | 10 ms | `api.rs` | How often a worker re-checks memory admission for a queued task. |
 | Result store TTL | 900 s | `results.rs` | How long paged results stay readable. |
 | Disk exchange TTL | 900 s | `disk_exchange.rs` | How long an exchange partition stays on disk after its query. |
 | Cleanup loop | 30 s | `main.rs` | How often expired results and exchange partitions are removed. |
 | Entra JWKS cache | 3600 s, refreshed no more than every 60 s, fetched with a 5 s timeout | `entra.rs` | The signing keys used to validate Entra bearer tokens. |
-| Resource group `queue_timeout_ms` | per group, in `KAVEON_SECURITY_JSON` | `security.rs` | How long a statement waits in its resource group's queue before HTTP 429. |
+| Resource group `queue_timeout_ms` | per group, in `KAVEON_SECURITY_JSON` | `security.rs` | How long a statement waits in its resource group's queue before HTTP 429. A statement passes its resource group before it reaches memory admission, so the two waits add. |
 
 Other fixed limits: query history keeps 100 records; inline (unpaged)
 results are capped at 16 MiB; the paged result store holds 256 MiB per
