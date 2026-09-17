@@ -204,17 +204,19 @@ fn plan_with_predicate(
         }
 
         LogicalPlan::Limit { input, count } => {
-            if let LogicalPlan::Sort {
-                input: sort_input,
-                order_by,
-            } = input.as_ref()
-            {
-                let source = plan_to_operator(sort_input, catalog)?;
-                let ordering = order_by
+            if let Some(top_n) = plan.top_n() {
+                let source = plan_to_operator(top_n.input, catalog)?;
+                let ordering = top_n
+                    .order_by
                     .iter()
                     .map(|(expr, ascending)| SortExpr::new(expr.clone(), *ascending))
                     .collect();
-                return Ok(Box::new(TopNOperator::new(source, ordering, *count)?));
+                let retained = TopNOperator::new(source, ordering, top_n.retained())?;
+                return Ok(if top_n.skip > 0 {
+                    Box::new(OffsetOperator::new(Box::new(retained), top_n.skip))
+                } else {
+                    Box::new(retained)
+                });
             }
             let source = plan_to_operator(input, catalog)?;
             Ok(Box::new(LimitOperator::new(source, *count)))

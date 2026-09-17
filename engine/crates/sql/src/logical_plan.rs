@@ -104,6 +104,49 @@ pub enum LogicalPlan {
     },
 }
 
+/// A sort whose output is cut to a window: the sorted input, its keys, the
+/// rows to skip and the rows to keep.
+#[derive(Debug, Clone, Copy)]
+pub struct TopNShape<'a> {
+    pub input: &'a LogicalPlan,
+    pub order_by: &'a [(Expr, bool)],
+    pub skip: usize,
+    pub fetch: usize,
+}
+
+impl TopNShape<'_> {
+    /// The rows a top-N must retain to serve the window: the skipped rows
+    /// and the fetched ones.
+    pub fn retained(&self) -> usize {
+        self.skip.saturating_add(self.fetch)
+    }
+}
+
+impl LogicalPlan {
+    /// `LIMIT n` straight over a sort, with or without an `OFFSET` between
+    /// them: the shape a top-N serves without ever holding the whole
+    /// sorted input. `ORDER BY … OFFSET 1000 LIMIT 10` keeps 1010 rows,
+    /// not the eighteen million it sorts.
+    pub fn top_n(&self) -> Option<TopNShape<'_>> {
+        let LogicalPlan::Limit { input, count } = self else {
+            return None;
+        };
+        let (input, skip) = match input.as_ref() {
+            LogicalPlan::Offset { input, count } => (input.as_ref(), *count),
+            other => (other, 0),
+        };
+        let LogicalPlan::Sort { input, order_by } = input else {
+            return None;
+        };
+        Some(TopNShape {
+            input,
+            order_by,
+            skip,
+            fetch: *count,
+        })
+    }
+}
+
 pub fn sql_to_logical_plan(sql: &str) -> Result<LogicalPlan> {
     let stmts = parse_sql(sql)?;
     if stmts.is_empty() {
@@ -2304,6 +2347,28 @@ mod tests {
             },
             _ => panic!("expected Limit"),
         }
+    }
+
+    #[test]
+    fn a_limit_over_an_offset_over_a_sort_is_a_top_n() {
+        let plan = sql_to_logical_plan("SELECT a FROM t ORDER BY a OFFSET 5 LIMIT 10").unwrap();
+        let top_n = plan.top_n().expect("top-n shape");
+        assert_eq!((top_n.skip, top_n.fetch, top_n.retained()), (5, 10, 15));
+        assert!(matches!(top_n.input, LogicalPlan::Project { .. }));
+        let plain = sql_to_logical_plan("SELECT a FROM t ORDER BY a LIMIT 10").unwrap();
+        assert_eq!(plain.top_n().map(|t| (t.skip, t.fetch)), Some((0, 10)));
+        assert!(
+            sql_to_logical_plan("SELECT a FROM t LIMIT 10 OFFSET 5")
+                .unwrap()
+                .top_n()
+                .is_none()
+        );
+        assert!(
+            sql_to_logical_plan("SELECT a FROM t ORDER BY a OFFSET 5")
+                .unwrap()
+                .top_n()
+                .is_none()
+        );
     }
 
     #[test]

@@ -370,25 +370,21 @@ impl ExecutableFragmentBuilder<'_> {
                 );
                 Ok(self.add_fragment(target_draft))
             }
-            LogicalPlan::Limit { input, count }
-                if matches!(input.as_ref(), LogicalPlan::Sort { .. }) =>
-            {
-                let LogicalPlan::Sort {
-                    input: sort_input,
-                    order_by,
-                } = input.as_ref()
-                else {
-                    unreachable!()
-                };
-                let source = self.build(sort_input)?;
-                let keys = sort_specs(order_by);
+            LogicalPlan::Limit { .. } if plan.top_n().is_some() => {
+                // Every source partition keeps the rows the window can
+                // reach — the skipped ones included — and the target
+                // merges those and drops the skipped rows once.
+                let top_n = plan.top_n().expect("matched above");
+                let source = self.build(top_n.input)?;
+                let keys = sort_specs(top_n.order_by);
+                let limit = top_n.retained();
                 let target = StageId(self.next_stage);
                 let exchange = self.exchange(source, target)?.clone();
                 let mut draft = self.draft_mut(source)?;
                 draft.push(
                     FragmentOperator::TopN {
                         keys: keys.clone(),
-                        limit: *count,
+                        limit,
                     },
                     vec![draft.root],
                 );
@@ -404,12 +400,15 @@ impl ExecutableFragmentBuilder<'_> {
                         exchange_id: exchange.id,
                     }));
                 target_draft.push(
-                    FragmentOperator::TopN {
-                        keys,
-                        limit: *count,
-                    },
+                    FragmentOperator::TopN { keys, limit },
                     vec![target_draft.root],
                 );
+                if top_n.skip > 0 {
+                    target_draft.push(
+                        FragmentOperator::Offset { offset: top_n.skip },
+                        vec![target_draft.root],
+                    );
+                }
                 Ok(self.add_fragment(target_draft))
             }
             LogicalPlan::Sort { input, order_by } => self.build_single_exchange(
@@ -1041,16 +1040,9 @@ impl StageGraphBuilder {
                 self.add_exchange(source, target, partitioning);
                 Ok(target)
             }
-            LogicalPlan::Limit { input, .. }
-                if matches!(input.as_ref(), LogicalPlan::Sort { .. }) =>
-            {
-                let LogicalPlan::Sort {
-                    input: sort_input, ..
-                } = input.as_ref()
-                else {
-                    unreachable!()
-                };
-                let source = self.build(sort_input)?;
+            LogicalPlan::Limit { .. } if plan.top_n().is_some() => {
+                let shape = plan.top_n().expect("matched above");
+                let source = self.build(shape.input)?;
                 let top_n = physical_plan_tree(plan);
                 self.wrap_stage(source, "PartialTopN", top_n.attributes.clone());
                 let target = self.add_exchange_stage("FinalTopN", top_n.attributes, 1, 1);
@@ -1298,15 +1290,19 @@ fn build_plan_tree(
     let id = *next_id;
     *next_id = next_id.saturating_add(1);
     if phase == kaveon_core::PlanPhase::Physical
-        && let LogicalPlan::Limit { input, count } = plan
-        && let LogicalPlan::Sort { input, order_by } = input.as_ref()
+        && let Some(top_n) = plan.top_n()
     {
         let mut node = kaveon_core::PlanNode::new(id, phase, "TopN");
         node.attributes = BTreeMap::from([
-            ("rows".to_owned(), count.to_string()),
-            ("order_by".to_owned(), format!("{order_by:?}")),
+            ("rows".to_owned(), top_n.fetch.to_string()),
+            ("order_by".to_owned(), format!("{:?}", top_n.order_by)),
         ]);
-        node.children.push(build_plan_tree(input, next_id, phase));
+        if top_n.skip > 0 {
+            node.attributes
+                .insert("skip".to_owned(), top_n.skip.to_string());
+        }
+        node.children
+            .push(build_plan_tree(top_n.input, next_id, phase));
         return node;
     }
     let (operator, attributes, input) = match plan {
@@ -1754,23 +1750,25 @@ fn plan_query_with_predicate(
         }
 
         LogicalPlan::Limit { input, count } => {
-            if let LogicalPlan::Sort {
-                input: sort_input,
-                order_by,
-            } = input.as_ref()
-            {
-                let planned = plan_query_inner(sort_input, catalog, partition, memory)?;
-                let sort_exprs = order_by
+            if let Some(top_n) = plan.top_n() {
+                let planned = plan_query_inner(top_n.input, catalog, partition, memory)?;
+                let sort_exprs = top_n
+                    .order_by
                     .iter()
                     .map(|(expr, ascending)| SortExpr::new(expr.clone(), *ascending))
                     .collect();
+                let retained = kaveon_exec::partitioned::top_n_operator(
+                    planned.operator,
+                    sort_exprs,
+                    top_n.retained(),
+                    memory.map(|memory| memory.operator("topn")).transpose()?,
+                )?;
                 return Ok(PlannedQuery {
-                    operator: kaveon_exec::partitioned::top_n_operator(
-                        planned.operator,
-                        sort_exprs,
-                        *count,
-                        memory.map(|memory| memory.operator("topn")).transpose()?,
-                    )?,
+                    operator: if top_n.skip > 0 {
+                        Box::new(OffsetOperator::new(retained, top_n.skip))
+                    } else {
+                        retained
+                    },
                     scan_metrics: planned.scan_metrics,
                 });
             }
@@ -2531,6 +2529,34 @@ mod tests {
         assert!(matches!(
             fragments[&StageId(1)].nodes.last().unwrap().operator,
             FragmentOperator::TopN { limit: 3, .. }
+        ));
+    }
+
+    #[test]
+    fn translates_an_offset_window_into_a_top_n_that_retains_the_skipped_rows() {
+        let fragments =
+            executable_fragments("SELECT id FROM items ORDER BY id DESC OFFSET 1000 LIMIT 10");
+        assert_eq!(fragments.len(), 2);
+        assert!(
+            fragments[&StageId(0)]
+                .nodes
+                .iter()
+                .any(|node| matches!(node.operator, FragmentOperator::TopN { limit: 1010, .. }))
+        );
+        assert!(
+            fragments[&StageId(1)]
+                .nodes
+                .iter()
+                .all(|node| !matches!(node.operator, FragmentOperator::Sort { .. }))
+        );
+        let target = &fragments[&StageId(1)].nodes;
+        assert!(matches!(
+            target[target.len() - 2].operator,
+            FragmentOperator::TopN { limit: 1010, .. }
+        ));
+        assert!(matches!(
+            target.last().unwrap().operator,
+            FragmentOperator::Offset { offset: 1000 }
         ));
     }
 
