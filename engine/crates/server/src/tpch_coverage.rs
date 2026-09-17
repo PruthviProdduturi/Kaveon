@@ -33,7 +33,7 @@ const QUERIES: &str = include_str!("../../../../docs/qualification/tpch/trino-qu
 /// removed from the list.
 const KNOWN_UNSUPPORTED: &[(&str, &str)] = &[(
     "q21",
-    "parse: correlated subqueries are unsupported: l1.l_orderkey (the SQL layer refuses a qualified outer reference before the binder; behind it, l2.l_suppkey <> l1.l_suppkey is a correlated non-equality, which the single-key semi join cannot carry)",
+    "plan: bind: a correlated predicate must be an equality between a column of the subquery and a column of the enclosing query (l2.l_suppkey <> l1.l_suppkey is a correlated non-equality, which the binder does not yet hand to the semi join as a residual)",
 )];
 
 /// Statements without a distributed plan today, with the reason.
@@ -846,7 +846,7 @@ impl Fixture {
     /// Execute one statement through the node-local planner, rows as
     /// text.
     fn run(&self, statement: &str) -> kaveon_core::Result<Vec<String>> {
-        let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(statement)?;
+        let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan_for_binder(statement)?;
         crate::planner::qualify_tables(&mut plan, "tpch", "tiny");
         let plan = kaveon_optim::binder::bind(plan, &self.manager)?;
         let plan = kaveon_optim::rules::push_filter_down(plan);
@@ -1357,7 +1357,7 @@ fn cover(fixture: &Arc<Fixture>, id: &str, statement: &str) -> Coverage {
         id: id.to_owned(),
         ..Default::default()
     };
-    let mut plan = match kaveon_sql::logical_plan::sql_to_logical_plan(statement) {
+    let mut plan = match kaveon_sql::logical_plan::sql_to_logical_plan_for_binder(statement) {
         Ok(plan) => plan,
         Err(error) => {
             coverage.parsed = Some(error.to_string());

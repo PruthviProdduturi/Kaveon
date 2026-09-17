@@ -627,15 +627,18 @@ fn compile_node(
             Ok(Box::new(UnionOperator::new(operators)))
         }
         FragmentOperator::HashJoin(join) => {
-            if join.residual.is_some() {
-                return Err(exec_err(
-                    "residual fragment join filters are not implemented",
-                ));
-            }
-            if matches!(
+            // A residual is a semi or anti join's: evaluated over the pairs
+            // sharing a key. Inner and outer fragment joins carry none.
+            let semi = matches!(
                 join.join_type,
                 kaveon_core::JoinType::Semi | kaveon_core::JoinType::Anti
-            ) {
+            );
+            if join.residual.is_some() && !semi {
+                return Err(exec_err(
+                    "residual fragment join filters are only implemented for semi and anti joins",
+                ));
+            }
+            if semi {
                 let (Some(left_key), Some(right_key)) =
                     (join.left_keys.first(), join.right_keys.first())
                 else {
@@ -668,6 +671,9 @@ fn compile_node(
                     right_key.clone(),
                     join.join_type == kaveon_core::JoinType::Anti,
                 )?;
+                if let Some(residual) = &join.residual {
+                    operator = operator.with_residual(residual.clone())?;
+                }
                 if let Some(memory) = memory {
                     operator = operator.with_memory(memory.operator("fragment-semi-join")?);
                 }
@@ -2812,15 +2818,149 @@ mod tests {
     fn rejects_residual_and_unsupported_join_modes_explicitly() {
         let result = join_type(kaveon_core::JoinType::Semi);
         assert!(result.is_err());
-        let _ = JoinSpec {
-            left_qualifier: None,
-            right_qualifier: None,
-            join_type: kaveon_core::JoinType::Inner,
-            left_keys: vec![Expr::Column("key".into())],
-            right_keys: vec![Expr::Column("key".into())],
-            residual: None,
-            broadcast: false,
+        // An inner join carries no residual.
+        let fragment = ExecutableFragment {
+            version: EXECUTABLE_FRAGMENT_VERSION,
+            stage_id: StageId(1),
+            root: FragmentNodeId(2),
+            nodes: vec![
+                node(
+                    0,
+                    vec![],
+                    FragmentOperator::ExchangeInput(ExchangeInput {
+                        exchange_id: ExchangeId("input".into()),
+                    }),
+                ),
+                node(
+                    1,
+                    vec![],
+                    FragmentOperator::ExchangeInput(ExchangeInput {
+                        exchange_id: ExchangeId("input".into()),
+                    }),
+                ),
+                node(
+                    2,
+                    vec![0, 1],
+                    FragmentOperator::HashJoin(JoinSpec {
+                        left_qualifier: None,
+                        right_qualifier: None,
+                        join_type: kaveon_core::JoinType::Inner,
+                        left_keys: vec![Expr::Column("key".into())],
+                        right_keys: vec![Expr::Column("key".into())],
+                        residual: Some(Expr::Literal(ScalarValue::Bool(true))),
+                        broadcast: false,
+                    }),
+                ),
+            ],
         };
+        let error = execute_fragment(
+            &fragment,
+            &CatalogManager::new("test", "default"),
+            &inputs(),
+            first_partition(),
+        )
+        .err()
+        .expect("an inner join with a residual is refused")
+        .to_string();
+        assert!(
+            error.contains("only implemented for semi and anti joins"),
+            "{error}"
+        );
+    }
+
+    /// A semi join fragment whose residual compares a probe column with a
+    /// build column: the probe keeps a row when a build row sharing its
+    /// key satisfies the residual, and the anti join keeps the rest.
+    #[test]
+    fn semi_join_fragments_evaluate_a_residual_over_matching_pairs() {
+        let build_schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int64, false),
+            Field::new("__kaveon_corr_0", DataType::Int64, false),
+        ]));
+        let build = RecordBatch::try_new(
+            build_schema,
+            vec![
+                Arc::new(Int64Array::from(vec![1, 1, 2, 3])),
+                Arc::new(Int64Array::from(vec![10, 30, 40, 20])),
+            ],
+        )
+        .unwrap();
+        let fragment = |anti: bool| ExecutableFragment {
+            version: EXECUTABLE_FRAGMENT_VERSION,
+            stage_id: StageId(1),
+            root: FragmentNodeId(2),
+            nodes: vec![
+                node(
+                    0,
+                    vec![],
+                    FragmentOperator::ExchangeInput(ExchangeInput {
+                        exchange_id: ExchangeId("input".into()),
+                    }),
+                ),
+                node(
+                    1,
+                    vec![],
+                    FragmentOperator::ExchangeInput(ExchangeInput {
+                        exchange_id: ExchangeId("build".into()),
+                    }),
+                ),
+                node(
+                    2,
+                    vec![0, 1],
+                    FragmentOperator::HashJoin(JoinSpec {
+                        left_qualifier: None,
+                        right_qualifier: None,
+                        join_type: if anti {
+                            kaveon_core::JoinType::Anti
+                        } else {
+                            kaveon_core::JoinType::Semi
+                        },
+                        left_keys: vec![Expr::Column("key".into())],
+                        right_keys: vec![Expr::Column("key".into())],
+                        residual: Some(Expr::BinaryOp {
+                            left: Box::new(Expr::Column("__kaveon_corr_0".into())),
+                            op: BinaryOp::Ne,
+                            right: Box::new(Expr::Column("value".into())),
+                        }),
+                        broadcast: true,
+                    }),
+                ),
+            ],
+        };
+        let inputs = Inputs {
+            values: HashMap::from([
+                (ExchangeId("input".into()), input_batch()),
+                (ExchangeId("build".into()), build),
+            ]),
+        };
+        let values = |anti: bool| {
+            let execution = execute_fragment(
+                &fragment(anti),
+                &CatalogManager::new("test", "default"),
+                &inputs,
+                first_partition(),
+            )
+            .unwrap();
+            execution
+                .result_batches
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column(1)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap()
+                        .values()
+                        .to_vec()
+                })
+                .collect::<Vec<_>>()
+        };
+        // Probe rows (key, value): (1, 10) (2, 40) (1, 30) (3, 20). Key 1
+        // holds 10 and 30 on the build side, so each of its probe rows has
+        // a differing pair; keys 2 and 3 each pair only with their own
+        // value.
+        assert_eq!(values(false), vec![10, 30]);
+        assert_eq!(values(true), vec![40, 20]);
     }
 
     #[test]

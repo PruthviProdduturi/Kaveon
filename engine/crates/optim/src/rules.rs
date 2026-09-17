@@ -74,22 +74,26 @@ pub fn push_filter_down(plan: LogicalPlan) -> LogicalPlan {
             right,
             left_key,
             right_key,
+            residual,
         } => LogicalPlan::SemiJoin {
             left: Box::new(push_filter_down(*left)),
             right: Box::new(push_filter_down(*right)),
             left_key,
             right_key,
+            residual,
         },
         LogicalPlan::AntiJoin {
             left,
             right,
             left_key,
             right_key,
+            residual,
         } => LogicalPlan::AntiJoin {
             left: Box::new(push_filter_down(*left)),
             right: Box::new(push_filter_down(*right)),
             left_key,
             right_key,
+            residual,
         },
         scan @ LogicalPlan::Scan { .. } => scan,
     }
@@ -279,17 +283,20 @@ fn prune_columns(plan: LogicalPlan, required: Option<HashSet<String>>) -> Logica
             }
         }
         // A semi or anti join emits its left input's rows, which need what
-        // is required above plus the probe key; the subquery side names
-        // its own output (its projection prunes beneath it), and a bare
-        // scan there is an existence test that reads what it reads.
+        // is required above plus the probe key and the left columns the
+        // residual reads; the subquery side names its own output (its
+        // projection prunes beneath it), and a bare scan there is an
+        // existence test that reads what it reads.
         LogicalPlan::SemiJoin {
             left,
             right,
             left_key,
             right_key,
+            residual,
         } => {
             let left_required = required.map(|mut columns| {
                 collect_columns(&left_key, &mut columns);
+                collect_residual_left_columns(residual.as_ref(), &right, &mut columns);
                 columns
             });
             LogicalPlan::SemiJoin {
@@ -297,6 +304,7 @@ fn prune_columns(plan: LogicalPlan, required: Option<HashSet<String>>) -> Logica
                 right: Box::new(prune_columns(*right, None)),
                 left_key,
                 right_key,
+                residual,
             }
         }
         LogicalPlan::AntiJoin {
@@ -304,9 +312,11 @@ fn prune_columns(plan: LogicalPlan, required: Option<HashSet<String>>) -> Logica
             right,
             left_key,
             right_key,
+            residual,
         } => {
             let left_required = required.map(|mut columns| {
                 collect_columns(&left_key, &mut columns);
+                collect_residual_left_columns(residual.as_ref(), &right, &mut columns);
                 columns
             });
             LogicalPlan::AntiJoin {
@@ -314,9 +324,48 @@ fn prune_columns(plan: LogicalPlan, required: Option<HashSet<String>>) -> Logica
                 right: Box::new(prune_columns(*right, None)),
                 left_key,
                 right_key,
+                residual,
             }
         }
     }
+}
+
+/// The columns a semi join's residual reads from its left input: its
+/// references less the subquery side's output names. The subquery side
+/// is a projection whose output the residual reads by name; a bare name
+/// among the left's required set would keep a join beneath whole, so
+/// only the left's own references are asked for.
+fn collect_residual_left_columns(
+    residual: Option<&Expr>,
+    subquery: &LogicalPlan,
+    columns: &mut HashSet<String>,
+) {
+    let Some(residual) = residual else {
+        return;
+    };
+    let mut references = HashSet::new();
+    collect_columns(residual, &mut references);
+    let subquery_outputs = projected_names(subquery);
+    columns.extend(
+        references
+            .into_iter()
+            .filter(|reference| !subquery_outputs.contains(reference)),
+    );
+}
+
+/// The output names of a projection at the root of `plan`; empty for any
+/// other root, whose residual references then all count as the left's.
+fn projected_names(plan: &LogicalPlan) -> HashSet<String> {
+    let LogicalPlan::Project { columns, .. } = plan else {
+        return HashSet::new();
+    };
+    columns
+        .iter()
+        .filter_map(|column| match column {
+            Expr::Alias { name, .. } | Expr::Column(name) => Some(name.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 fn collect_columns(expression: &Expr, columns: &mut HashSet<String>) {
@@ -746,22 +795,26 @@ fn push_filter_into(predicate: Expr, input: LogicalPlan) -> LogicalPlan {
             right,
             left_key,
             right_key,
+            residual,
         } => LogicalPlan::SemiJoin {
             left: Box::new(push_filter_into(predicate, *left)),
             right,
             left_key,
             right_key,
+            residual,
         },
         LogicalPlan::AntiJoin {
             left,
             right,
             left_key,
             right_key,
+            residual,
         } => LogicalPlan::AntiJoin {
             left: Box::new(push_filter_into(predicate, *left)),
             right,
             left_key,
             right_key,
+            residual,
         },
         LogicalPlan::Scan {
             table,
@@ -1524,15 +1577,23 @@ mod tests {
         // A semi join asked for everything keeps its left whole; asked for
         // named columns it adds its probe key. The subquery side prunes by
         // its own projection.
-        let semi = |required: Option<Vec<&str>>| {
+        let semi = |required: Option<Vec<&str>>, residual: Option<Expr>| {
+            let mut subquery = vec![column("l_orderkey")];
+            if residual.is_some() {
+                subquery.push(Expr::Alias {
+                    expr: Box::new(column("l_suppkey")),
+                    name: "__kaveon_corr_0".into(),
+                });
+            }
             let plan = LogicalPlan::SemiJoin {
                 left: Box::new(aliased("orders", "o")),
                 right: Box::new(LogicalPlan::Project {
                     input: Box::new(aliased("lineitem", "l")),
-                    columns: vec![column("l_orderkey")],
+                    columns: subquery,
                 }),
                 left_key: column("o_orderkey"),
                 right_key: column("*"),
+                residual,
             };
             let plan = match required {
                 Some(columns) => LogicalPlan::Project {
@@ -1546,12 +1607,35 @@ mod tests {
             scan_columns(&pruned, &mut scans);
             scans.into_iter().cloned().collect::<Vec<_>>()
         };
-        assert_eq!(semi(None), vec![None, Some(vec!["l_orderkey".to_owned()])]);
         assert_eq!(
-            semi(Some(vec!["o_custkey"])),
+            semi(None, None),
+            vec![None, Some(vec!["l_orderkey".to_owned()])]
+        );
+        assert_eq!(
+            semi(Some(vec!["o_custkey"]), None),
             vec![
                 Some(vec!["o_custkey".to_owned(), "o_orderkey".to_owned()]),
                 Some(vec!["l_orderkey".to_owned()])
+            ]
+        );
+        // A residual adds the left columns it reads; the subquery's own
+        // output names are not asked of the left.
+        assert_eq!(
+            semi(
+                Some(vec!["o_custkey"]),
+                Some(compare(
+                    column("__kaveon_corr_0"),
+                    BinaryOp::Ne,
+                    column("o_clerk")
+                ))
+            ),
+            vec![
+                Some(vec![
+                    "o_clerk".to_owned(),
+                    "o_custkey".to_owned(),
+                    "o_orderkey".to_owned()
+                ]),
+                Some(vec!["l_orderkey".to_owned(), "l_suppkey".to_owned()])
             ]
         );
         // A bare column the relation names do not describe keeps both
@@ -1577,6 +1661,7 @@ mod tests {
                 right: Box::new(aliased("users", "u")),
                 left_key: column("country"),
                 right_key: column("country"),
+                residual: None,
             }),
             predicate: compare(column("day"), BinaryOp::Eq, int(7)),
         };

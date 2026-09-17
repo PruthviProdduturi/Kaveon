@@ -92,17 +92,27 @@ pub enum LogicalPlan {
         left: Box<LogicalPlan>,
         right: Box<LogicalPlan>,
     },
+    /// Rows of `left` with a match in `right` on the key. `residual`, when
+    /// present, is evaluated over each (left row, right row) pair sharing
+    /// a key, and a left row matches when any pair holds: the shape a
+    /// correlated `EXISTS` takes when its WHERE carries more than the
+    /// equality (`l2.l_orderkey = l1.l_orderkey AND l2.l_suppkey <>
+    /// l1.l_suppkey`). Only the binder sets it.
     SemiJoin {
         left: Box<LogicalPlan>,
         right: Box<LogicalPlan>,
         left_key: Expr,
         right_key: Expr,
+        residual: Option<Expr>,
     },
+    /// Rows of `left` without a match in `right`; `residual` as for
+    /// `SemiJoin` (a left row is kept when no pair holds).
     AntiJoin {
         left: Box<LogicalPlan>,
         right: Box<LogicalPlan>,
         left_key: Expr,
         right_key: Expr,
+        residual: Option<Expr>,
     },
 }
 
@@ -149,7 +159,25 @@ impl LogicalPlan {
     }
 }
 
+/// Lower `sql` to a plan that runs as lowered. A subquery may reference
+/// only its own relations: an executor that resolves columns by name would
+/// read `l1.l_orderkey` inside a subquery over `l2` as `l2`'s own
+/// `l_orderkey` and answer wrongly, so a reference to the enclosing query
+/// is refused here. The embedded CLI planner takes this path.
 pub fn sql_to_logical_plan(sql: &str) -> Result<LogicalPlan> {
+    lower(sql, false)
+}
+
+/// Lower `sql` for the binder (`kaveon_optim::binder::bind`), which runs
+/// before the plan does: a subquery may reference the enclosing query, and
+/// the binder turns each such reference into a key or a residual of the
+/// join that brings the subquery in, or refuses it by name. Both API
+/// pipelines take this path; a plan lowered this way must not run unbound.
+pub fn sql_to_logical_plan_for_binder(sql: &str) -> Result<LogicalPlan> {
+    lower(sql, true)
+}
+
+fn lower(sql: &str, outer_references: bool) -> Result<LogicalPlan> {
     let stmts = parse_sql(sql)?;
     if stmts.is_empty() {
         return Err(sql_err("empty query"));
@@ -157,22 +185,27 @@ pub fn sql_to_logical_plan(sql: &str) -> Result<LogicalPlan> {
     if stmts.len() > 1 {
         return Err(sql_err("only single statements are supported"));
     }
-    statement_to_plan(&stmts[0])
-}
-
-fn statement_to_plan(stmt: &ast::Statement) -> Result<LogicalPlan> {
-    match stmt {
-        ast::Statement::Query(query) => query_to_plan(query, &Lowering::default()),
+    match &stmts[0] {
+        ast::Statement::Query(query) => query_to_plan(
+            query,
+            &Lowering {
+                outer_references,
+                ..Lowering::default()
+            },
+        ),
         _ => Err(sql_err("only SELECT queries are supported")),
     }
 }
 
-/// What a query level lowers against: the CTEs in scope, and the
-/// statement-wide counter that names scalar subquery columns.
+/// What a query level lowers against: the CTEs in scope, the
+/// statement-wide counter that names scalar subquery columns, and whether
+/// a subquery may reference the enclosing query (only when the binder
+/// will resolve the reference).
 #[derive(Clone, Default)]
 struct Lowering {
     ctes: HashMap<String, ast::Query>,
     scalars: Rc<Cell<usize>>,
+    outer_references: bool,
 }
 
 impl Lowering {
@@ -180,6 +213,16 @@ impl Lowering {
         let ordinal = self.scalars.get();
         self.scalars.set(ordinal + 1);
         format!("__kaveon_scalar_{ordinal}")
+    }
+
+    /// A subquery's plan may reference the enclosing query only when the
+    /// binder will resolve the reference.
+    fn check_subquery(&self, plan: &LogicalPlan) -> Result<()> {
+        if self.outer_references {
+            Ok(())
+        } else {
+            validate_uncorrelated(plan)
+        }
     }
 }
 
@@ -581,7 +624,7 @@ fn extract_subquery_predicates(
         } => {
             let left_key = ast_expr_to_expr(lhs)?;
             let sub_plan = query_to_plan(subquery, ctes)?;
-            validate_uncorrelated(&sub_plan)?;
+            ctes.check_subquery(&sub_plan)?;
             // The physical operator binds the sole projected output by position.
             let right_key = Expr::Column("*".into());
             let current = std::mem::replace(
@@ -598,6 +641,7 @@ fn extract_subquery_predicates(
                     right: Box::new(sub_plan),
                     left_key,
                     right_key,
+                    residual: None,
                 };
             } else {
                 *plan = LogicalPlan::SemiJoin {
@@ -605,15 +649,17 @@ fn extract_subquery_predicates(
                     right: Box::new(sub_plan),
                     left_key,
                     right_key,
+                    residual: None,
                 };
             }
             Ok(())
         }
         ast::Expr::Exists { subquery, negated } => {
             let sub_plan = query_to_plan(subquery, ctes)?;
-            validate_uncorrelated(&sub_plan)?;
-            // Existence depends on row cardinality, including NULL-valued rows.
-            // The independently planned RHS cannot resolve correlated outer columns.
+            ctes.check_subquery(&sub_plan)?;
+            // Existence depends on row cardinality, including NULL-valued
+            // rows. A literal key marks the subquery as uncorrelated as
+            // lowered; the binder replaces it with the correlation's key.
             let right_key = Expr::Literal(ScalarValue::Int64(1));
             let left_key = right_key.clone();
             let current = std::mem::replace(
@@ -630,6 +676,7 @@ fn extract_subquery_predicates(
                     right: Box::new(sub_plan),
                     left_key,
                     right_key,
+                    residual: None,
                 };
             } else {
                 *plan = LogicalPlan::SemiJoin {
@@ -637,6 +684,7 @@ fn extract_subquery_predicates(
                     right: Box::new(sub_plan),
                     left_key,
                     right_key,
+                    residual: None,
                 };
             }
             Ok(())
@@ -681,7 +729,9 @@ fn replace_scalar_subqueries(
     Ok(match expr {
         ast::Expr::Subquery(query) => {
             let name = ctes.scalar_name();
-            sink(scalar_subquery_plan(query_to_plan(query, ctes)?, &name)?);
+            let plan = query_to_plan(query, ctes)?;
+            ctes.check_subquery(&plan)?;
+            sink(scalar_subquery_plan(plan, &name)?);
             ast::Expr::Identifier(ast::Ident::new(name))
         }
         ast::Expr::BinaryOp { left, op, right } => ast::Expr::BinaryOp {
@@ -716,7 +766,6 @@ fn replace_scalar_subqueries(
 /// expression. Anything else could yield several rows, which a scalar
 /// position cannot take.
 fn scalar_subquery_plan(plan: LogicalPlan, name: &str) -> Result<LogicalPlan> {
-    validate_uncorrelated(&plan)?;
     let LogicalPlan::Project { input, columns } = plan else {
         return Err(sql_err("a scalar subquery must select exactly one column"));
     };
@@ -2078,14 +2127,17 @@ fn validate_uncorrelated(plan: &LogicalPlan) -> Result<()> {
                 right,
                 left_key,
                 right_key,
+                residual,
             }
             | LogicalPlan::AntiJoin {
                 left,
                 right,
                 left_key,
                 right_key,
+                residual,
             } => {
                 expressions.extend([left_key, right_key]);
+                expressions.extend(residual);
                 visit(left, relations, expressions);
                 visit(right, relations, expressions);
             }
@@ -3229,6 +3281,7 @@ mod tests {
         for sql in [
             "SELECT * FROM orders WHERE EXISTS (SELECT 1 FROM users WHERE users.id = orders.user_id)",
             "SELECT * FROM orders o WHERE o.id IN (SELECT u.id FROM users u WHERE u.id = o.id)",
+            "SELECT * FROM orders o WHERE o.total > (SELECT avg(u.score) FROM users u WHERE u.id = o.id)",
         ] {
             assert!(
                 sql_to_logical_plan(sql)
@@ -3237,6 +3290,53 @@ mod tests {
                     .contains("correlated")
             );
         }
+    }
+
+    /// Lowered for the binder, the same statements keep the outer
+    /// reference in the subquery's own filter for the binder to lift; the
+    /// join carries no residual until the binder sets one.
+    #[test]
+    fn lowers_correlated_subqueries_for_the_binder_with_the_reference_in_place() {
+        let plan = sql_to_logical_plan_for_binder(
+            "SELECT user_id FROM orders WHERE EXISTS (SELECT 1 FROM users WHERE users.id = orders.user_id)",
+        )
+        .unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("projection")
+        };
+        let LogicalPlan::SemiJoin {
+            right, residual, ..
+        } = *input
+        else {
+            panic!("semi join")
+        };
+        assert!(residual.is_none());
+        let LogicalPlan::Project { input, .. } = *right else {
+            panic!("subquery projection")
+        };
+        let LogicalPlan::Filter { predicate, .. } = *input else {
+            panic!("the subquery keeps its filter")
+        };
+        assert_eq!(
+            predicate,
+            Expr::BinaryOp {
+                left: Box::new(Expr::Column("users.id".into())),
+                op: BinaryOp::Eq,
+                right: Box::new(Expr::Column("orders.user_id".into())),
+            }
+        );
+        assert!(matches!(
+            sql_to_logical_plan_for_binder(
+                "SELECT * FROM orders o WHERE o.id IN (SELECT u.id FROM users u WHERE u.id = o.id)"
+            ),
+            Ok(LogicalPlan::SemiJoin { .. })
+        ));
+        assert!(matches!(
+            sql_to_logical_plan_for_binder(
+                "SELECT * FROM orders o WHERE o.total > (SELECT avg(u.score) FROM users u WHERE u.id = o.id)"
+            ),
+            Ok(LogicalPlan::Filter { .. })
+        ));
     }
 
     #[test]

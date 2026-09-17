@@ -25,7 +25,7 @@ use kaveon_core::{
 };
 use kaveon_exec::sort::SortExpr;
 use kaveon_exec::topn::merge_top_n;
-use kaveon_sql::logical_plan::sql_to_logical_plan;
+use kaveon_sql::logical_plan::sql_to_logical_plan_for_binder;
 use kaveon_sql::logical_plan::{AggregateExpr, LogicalPlan};
 use kaveon_sql::parser::{
     NativeTransactionalStatement, adapt_product_dml, parse_native_transactional,
@@ -648,7 +648,7 @@ async fn execute_owned_task(
         }
         return complete_owned_task(owner, started, result);
     }
-    let mut plan = match sql_to_logical_plan(req.query.trim().trim_end_matches(';')) {
+    let mut plan = match sql_to_logical_plan_for_binder(req.query.trim().trim_end_matches(';')) {
         Ok(plan) => plan,
         Err(error) => {
             let message = error.to_string();
@@ -1880,7 +1880,7 @@ async fn submit_statement(
     }
 
     let analysis_start = Instant::now();
-    let mut plan = match sql_to_logical_plan(&sql) {
+    let mut plan = match sql_to_logical_plan_for_binder(&sql) {
         Ok(p) => p,
         Err(e) => {
             let message = format!("SQL parse error: {e}");

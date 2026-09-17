@@ -626,15 +626,18 @@ impl ExecutableFragmentBuilder<'_> {
                 right,
                 left_key,
                 right_key,
+                residual,
             }
             | LogicalPlan::AntiJoin {
                 left,
                 right,
                 left_key,
                 right_key,
+                residual,
             } => {
-                // The subquery side is one column of distinct-ish keys; it
-                // broadcasts into every probe task like a small build side.
+                // The subquery side is its keys, beside the columns a
+                // residual reads; it broadcasts into every probe task like
+                // a small build side, and the residual rides in the spec.
                 let left_stage = self.build(left)?;
                 let right_stage = self.build(right)?;
                 let join_type = if matches!(plan, LogicalPlan::SemiJoin { .. }) {
@@ -651,7 +654,7 @@ impl ExecutableFragmentBuilder<'_> {
                         right_qualifier: None,
                         left_keys: vec![left_key.clone()],
                         right_keys: vec![right_key.clone()],
-                        residual: None,
+                        residual: residual.clone(),
                         broadcast: true,
                     },
                 )
@@ -1332,6 +1335,21 @@ fn expression_column(expression: &Expr) -> Result<String> {
     }
 }
 
+fn semi_join_attributes(
+    left_key: &Expr,
+    right_key: &Expr,
+    residual: Option<&Expr>,
+) -> BTreeMap<String, String> {
+    let mut attributes = BTreeMap::from([
+        ("left_key".to_owned(), format!("{left_key:?}")),
+        ("right_key".to_owned(), format!("{right_key:?}")),
+    ]);
+    if let Some(residual) = residual {
+        attributes.insert("residual".to_owned(), format!("{residual:?}"));
+    }
+    attributes
+}
+
 fn build_plan_tree(
     plan: &LogicalPlan,
     next_id: &mut u32,
@@ -1417,8 +1435,26 @@ fn build_plan_tree(
         LogicalPlan::Union { .. } => ("Union", BTreeMap::new(), None),
         LogicalPlan::Intersect { .. } => ("Intersect", BTreeMap::new(), None),
         LogicalPlan::Except { .. } => ("Except", BTreeMap::new(), None),
-        LogicalPlan::SemiJoin { .. } => ("SemiJoin", BTreeMap::new(), None),
-        LogicalPlan::AntiJoin { .. } => ("AntiJoin", BTreeMap::new(), None),
+        LogicalPlan::SemiJoin {
+            left_key,
+            right_key,
+            residual,
+            ..
+        } => (
+            "SemiJoin",
+            semi_join_attributes(left_key, right_key, residual.as_ref()),
+            None,
+        ),
+        LogicalPlan::AntiJoin {
+            left_key,
+            right_key,
+            residual,
+            ..
+        } => (
+            "AntiJoin",
+            semi_join_attributes(left_key, right_key, residual.as_ref()),
+            None,
+        ),
     };
     let mut node = kaveon_core::PlanNode::new(id, phase, operator);
     node.attributes = attributes;
@@ -1956,12 +1992,14 @@ fn plan_query_with_predicate(
             right,
             left_key,
             right_key,
+            residual,
         }
         | LogicalPlan::AntiJoin {
             left,
             right,
             left_key,
             right_key,
+            residual,
         } => {
             let left_planned = plan_query_inner(left, catalog, partition, memory, pins)?;
             let right_planned = plan_query_inner(right, catalog, partition, memory, pins)?;
@@ -1974,6 +2012,9 @@ fn plan_query_with_predicate(
                 right_key.clone(),
                 matches!(plan, LogicalPlan::AntiJoin { .. }),
             )?;
+            if let Some(residual) = residual {
+                operator = operator.with_residual(residual.clone())?;
+            }
             if let Some(memory) = memory {
                 operator = operator.with_memory(memory.operator("semi-join")?);
             }
