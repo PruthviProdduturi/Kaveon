@@ -179,20 +179,32 @@ spec:
               value: {{ $.Values.productTransactions.prefix | quote }}
             {{- end }}
             {{- end }}
+            {{- if $isCoordinator }}
             - name: KAVEON_COORDINATOR_EXCHANGE_SPOOL
-              value: "true"
+              value: {{ $settings.exchange.spool | quote }}
+            {{- else }}
+            - name: KAVEON_WORKER_EXCHANGE_SPOOL
+              value: {{ $settings.exchange.spool | quote }}
+            {{- end }}
             - name: KAVEON_EXCHANGE_SPOOL_ROOT
               value: /state/exchange
             - name: KAVEON_EXCHANGE_DISK_LIMIT_BYTES
-              value: {{ $.Values.exchangeDiskLimitBytes | quote }}
+              value: {{ $settings.exchange.diskLimitBytes | quote }}
+            - name: KAVEON_EXCHANGE_QUERY_DISK_LIMIT_BYTES
+              value: {{ $settings.exchange.queryDiskLimitBytes | quote }}
+            {{- if not $isCoordinator }}
+            # Received exchange payloads spool here; the directory must exist.
+            - name: KAVEON_IPC_SPOOL_ROOT
+              value: /state
+            {{- end }}
             - name: KAVEON_HASH_SPILL_ROOT
               value: /tmp/spill
             - name: KAVEON_HASH_SPILL_BYTES
               value: {{ $.Values.spillDiskLimitBytes | quote }}
             - name: KAVEON_QUERY_MEMORY_LIMIT_BYTES
-              value: {{ $.Values.queryMemoryLimitBytes | quote }}
+              value: {{ $settings.memory.queryLimitBytes | quote }}
             - name: KAVEON_MEMORY_ADMISSION_LIMIT_BYTES
-              value: {{ $.Values.memoryAdmissionLimitBytes | quote }}
+              value: {{ $settings.memory.admissionLimitBytes | quote }}
           resources:
             {{- toYaml $settings.resources | nindent 12 }}
           startupProbe:
@@ -222,7 +234,7 @@ spec:
           emptyDir: {sizeLimit: 6Gi}
         {{- if not $isCoordinator }}
         - name: state
-          emptyDir: {sizeLimit: 12Gi}
+          emptyDir: {sizeLimit: {{ $.Values.workers.stateSizeLimit }}}
         {{- end }}
   {{- if $isCoordinator }}
   volumeClaimTemplates:

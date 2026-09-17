@@ -118,7 +118,7 @@ Every item is one commit with tests; the differential sweep (`scripts/differenti
 - `2608c42`, `c851f6c` — exchange payload ceiling 1 GiB (256 chunks of 4 MiB), receive limit matches it, process spool 4 GiB.
 - `8a4ff16` — partial-state encoding and final-merge memory estimates sized to the structures (were 4 KiB and ~5 KiB per group).
 - `b99aa22`, `cd2dabc` — partial states encode straight into the binary columns without per-group vectors or a key sort; the final merge indexes groups by encoded key bytes and merges in place. Canonical (sorted) key order in the grouped-state batch is gone: consumers merge by hash, and `decode_grouped_aggregate_states` checks uniqueness rather than order.
-- Not changed: no aggregate or join spill; the ceilings above are what bound a 100 M-row high-cardinality GROUP BY. Worker budget on AKS is now 3 GiB per query (`KAVEON_QUERY_MEMORY_LIMIT_BYTES`), admission 4 GiB, set with `kubectl set env` on the StatefulSet.
+- Not changed: no aggregate or join spill; the ceilings above are what bound a 100 M-row high-cardinality GROUP BY. Worker budget on AKS is now 3 GiB per query (`KAVEON_QUERY_MEMORY_LIMIT_BYTES`), admission 4 GiB, first set with `kubectl set env` on the StatefulSet and since folded into `infra/helm/kaveon-test` (`workers.memory.*`, `workers.exchange.*`, `coordinator.memory.*`, `coordinator.exchange.*`) so `helm upgrade` reproduces the running StatefulSets.
 
 Later the same day ("fix all gaps"), one commit each with tests, workspace green (612 tests):
 
