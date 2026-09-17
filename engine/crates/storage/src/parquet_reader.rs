@@ -29,34 +29,118 @@ pub struct ParquetFileMetadata {
 }
 
 /// Streaming adapter over parquet-rs that implements the shared execution
-/// contract while also remaining usable as a standard iterator.
+/// contract while also remaining usable as a standard iterator. One file, or
+/// the files of a directory table one after another.
 pub struct ParquetBatchIterator {
     schema: SchemaRef,
-    inner: ParquetRecordBatchReader,
+    inner: ParquetBatchInner,
     metrics: ScanMetrics,
     output_projection: Option<Vec<usize>>,
+}
+
+enum ParquetBatchInner {
+    File(ParquetRecordBatchReader),
+    Directory(Box<DirectoryFiles>),
+}
+
+/// The files of a local directory table this scan reads, opened lazily in
+/// listing order; each is checked against the first listed file's schema as
+/// it is opened.
+struct DirectoryFiles {
+    root: PathBuf,
+    first: String,
+    file_schema: SchemaRef,
+    /// (absolute path, listing-relative path, whether the partition applies
+    /// inside the file).
+    files: Vec<(PathBuf, String, bool)>,
+    next: usize,
+    current: Option<ParquetBatchIterator>,
+    batch_size: usize,
+    columns: Option<Vec<String>>,
+    predicate: Option<StoragePredicate>,
+    partition: Option<ScanPartition>,
+}
+
+impl DirectoryFiles {
+    fn open_next(&mut self, metrics: &ScanMetrics) -> Result<bool> {
+        let Some((path, relative, split)) = self.files.get(self.next) else {
+            return Ok(false);
+        };
+        self.next += 1;
+        let mut reader = ParquetReader::new(path)
+            .with_batch_size(self.batch_size)
+            .with_metrics(metrics.clone());
+        if let Some(columns) = &self.columns {
+            reader = reader.with_columns(columns.clone());
+        }
+        if let Some(predicate) = &self.predicate {
+            reader = reader.with_predicate(predicate.clone());
+        }
+        if *split && let Some(partition) = self.partition {
+            reader = reader.with_partition(partition);
+        }
+        let footer_started = Instant::now();
+        let builder = reader.open_builder()?;
+        metrics.footer_time(footer_started.elapsed());
+        crate::parquet_directory::check_file_schema(
+            &self.root.display().to_string(),
+            &self.first,
+            &self.file_schema,
+            relative,
+            builder.schema(),
+        )?;
+        metrics.file_opened();
+        self.current = Some(reader.finish(builder, metrics.clone())?);
+        Ok(true)
+    }
 }
 
 impl Iterator for ParquetBatchIterator {
     type Item = Result<RecordBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let started = Instant::now();
-        let result = self.inner.next();
-        self.metrics.read_time(started.elapsed());
-        result.map(|result| {
-            result
-                .inspect(|batch| {
-                    self.metrics.emitted(batch.num_rows());
+        match &mut self.inner {
+            ParquetBatchInner::File(inner) => {
+                let started = Instant::now();
+                let result = inner.next();
+                self.metrics.read_time(started.elapsed());
+                result.map(|result| {
+                    result
+                        .inspect(|batch| {
+                            self.metrics.emitted(batch.num_rows());
+                        })
+                        .map_err(|error| storage_error(error.to_string()))
+                        .and_then(|batch| match &self.output_projection {
+                            Some(indices) => batch
+                                .project(indices)
+                                .map_err(|e| storage_error(e.to_string())),
+                            None => Ok(batch),
+                        })
                 })
-                .map_err(|error| storage_error(error.to_string()))
-                .and_then(|batch| match &self.output_projection {
-                    Some(indices) => batch
-                        .project(indices)
-                        .map_err(|e| storage_error(e.to_string())),
-                    None => Ok(batch),
-                })
-        })
+            }
+            ParquetBatchInner::Directory(directory) => loop {
+                if let Some(current) = directory.current.as_mut() {
+                    match current.next() {
+                        Some(Ok(batch)) => {
+                            return Some(
+                                RecordBatch::try_new(
+                                    Arc::clone(&self.schema),
+                                    batch.columns().to_vec(),
+                                )
+                                .map_err(|error| storage_error(error.to_string())),
+                            );
+                        }
+                        Some(Err(error)) => return Some(Err(error)),
+                        None => directory.current = None,
+                    }
+                }
+                match directory.open_next(&self.metrics) {
+                    Ok(true) => {}
+                    Ok(false) => return None,
+                    Err(error) => return Some(Err(error)),
+                }
+            },
+        }
     }
 }
 
@@ -76,7 +160,8 @@ impl ParquetBatchIterator {
     }
 }
 
-/// Configuration for a synchronous local Parquet read.
+/// Configuration for a synchronous local Parquet read: one file, or a
+/// directory of files.
 pub struct ParquetReader {
     path: PathBuf,
     batch_size: usize,
@@ -84,6 +169,7 @@ pub struct ParquetReader {
     predicate: Option<StoragePredicate>,
     metrics: Option<ScanMetrics>,
     partition: Option<ScanPartition>,
+    listing: Option<Arc<crate::DirectoryListing>>,
 }
 
 impl ParquetReader {
@@ -95,6 +181,21 @@ impl ParquetReader {
             predicate: None,
             metrics: None,
             partition: None,
+            listing: None,
+        }
+    }
+
+    /// Read a directory table at a listing already taken for this query.
+    pub fn with_listing(mut self, listing: Arc<crate::DirectoryListing>) -> Self {
+        self.listing = Some(listing);
+        self
+    }
+
+    /// The pinned listing, or the directory listed now.
+    fn listing(&self) -> Result<Arc<crate::DirectoryListing>> {
+        match &self.listing {
+            Some(listing) => Ok(Arc::clone(listing)),
+            None => local_directory_listing(&self.path).map(Arc::new),
         }
     }
 
@@ -127,21 +228,89 @@ impl ParquetReader {
     }
 
     pub fn read(&self) -> Result<ParquetBatchIterator> {
+        if self.batch_size == 0 {
+            return Err(storage_error("batch size must be greater than zero"));
+        }
         let metrics = self.metrics.clone().unwrap_or_default();
+        if self.path.is_dir() {
+            return self.read_directory(metrics);
+        }
         metrics.files_considered(1);
         let footer_started = Instant::now();
         let builder = self.open_builder()?;
         metrics.footer_time(footer_started.elapsed());
         metrics.file_opened();
+        self.finish(builder, metrics)
+    }
+
+    /// The scan over an opened footer: projection, pruning, the partition's
+    /// row groups, and the caller's column order.
+    fn finish(
+        &self,
+        builder: ParquetRecordBatchReaderBuilder<File>,
+        metrics: ScanMetrics,
+    ) -> Result<ParquetBatchIterator> {
         let builder = self.configure_builder(builder, &metrics)?;
         let inner = builder.build().map_err(parquet_error)?;
         let (schema, output_projection) =
             ordered_projection(inner.schema(), self.columns.as_deref())?;
         Ok(ParquetBatchIterator {
             schema,
-            inner,
+            inner: ParquetBatchInner::File(inner),
             metrics,
             output_projection,
+        })
+    }
+
+    /// The path read as a directory table: the listing rule, the file
+    /// assignment and the schema check are those of the object-store path.
+    fn read_directory(&self, metrics: ScanMetrics) -> Result<ParquetBatchIterator> {
+        let listing_started = Instant::now();
+        let listing = self.listing()?;
+        metrics.snapshot_time(listing_started.elapsed());
+        let Some(first) = listing.files.first() else {
+            return Err(storage_error(format!(
+                "directory '{}' holds no Parquet data files",
+                self.path.display()
+            )));
+        };
+        let assignment = match self.partition {
+            Some(partition) => crate::parquet_directory::assign_files(&listing.sizes(), partition),
+            None => crate::FileAssignment {
+                whole: (0..listing.files.len()).collect(),
+                split: Vec::new(),
+            },
+        };
+        metrics.files_considered(assignment.len() as u64);
+        let file_schema = ParquetReader::new(self.path.join(first.path.as_ref()))
+            .metadata()?
+            .schema;
+        let schema =
+            crate::parquet_directory::advertised_schema(&file_schema, self.columns.as_deref())?;
+        let files = assignment
+            .files()
+            .into_iter()
+            .map(|(index, split)| {
+                let relative = listing.files[index].path.to_string();
+                (self.path.join(&relative), relative, split)
+            })
+            .collect();
+        Ok(ParquetBatchIterator {
+            schema,
+            inner: ParquetBatchInner::Directory(Box::new(DirectoryFiles {
+                root: self.path.clone(),
+                first: first.path.to_string(),
+                file_schema,
+                files,
+                next: 0,
+                current: None,
+                batch_size: self.batch_size,
+                columns: self.columns.clone(),
+                predicate: self.predicate.clone(),
+                partition: self.partition,
+            })),
+            metrics,
+            output_projection: None,
         })
     }
 
@@ -150,7 +319,12 @@ impl ParquetReader {
         self.read()?.collect()
     }
 
+    /// Exact metadata: one file's, or a directory table's summed over every
+    /// file with each checked against the first listed file's schema.
     pub fn metadata(&self) -> Result<ParquetFileMetadata> {
+        if self.path.is_dir() {
+            return self.directory_metadata();
+        }
         let builder = self.open_builder()?;
         let row_count = u64::try_from(builder.metadata().file_metadata().num_rows())
             .map_err(|_| storage_error("Parquet metadata contains a negative row count"))?;
@@ -159,6 +333,37 @@ impl ParquetReader {
             row_count,
             row_group_count: builder.metadata().num_row_groups(),
         })
+    }
+
+    fn directory_metadata(&self) -> Result<ParquetFileMetadata> {
+        let listing = self.listing()?;
+        let Some(first) = listing.files.first() else {
+            return Err(storage_error(format!(
+                "directory '{}' holds no Parquet data files",
+                self.path.display()
+            )));
+        };
+        let mut combined = ParquetReader::new(self.path.join(first.path.as_ref())).metadata()?;
+        for file in listing.files.iter().skip(1) {
+            let next = ParquetReader::new(self.path.join(file.path.as_ref())).metadata()?;
+            crate::parquet_directory::check_file_schema(
+                &self.path.display().to_string(),
+                first.path.as_ref(),
+                &combined.schema,
+                file.path.as_ref(),
+                &next.schema,
+            )?;
+            combined.row_count = combined
+                .row_count
+                .checked_add(next.row_count)
+                .ok_or_else(|| storage_error("Parquet directory row count overflow"))?;
+            combined.row_group_count =
+                combined
+                    .row_group_count
+                    .checked_add(next.row_group_count)
+                    .ok_or_else(|| storage_error("Parquet directory row-group count overflow"))?;
+        }
+        Ok(combined)
     }
 
     fn open_builder(&self) -> Result<ParquetRecordBatchReaderBuilder<File>> {
@@ -755,6 +960,24 @@ fn scalar_cmp(left: &ScalarValue, right: &ScalarValue) -> Option<Ordering> {
         (ScalarValue::Utf8(left), ScalarValue::Utf8(right)) => left.partial_cmp(right),
         _ => None,
     }
+}
+
+/// The data files under a local directory, through the same listing rule as
+/// an object store: paths are relative to the directory, sorted.
+pub(crate) fn local_directory_listing(
+    directory: &Path,
+) -> Result<crate::parquet_directory::DirectoryListing> {
+    let store = Arc::new(
+        object_store::local::LocalFileSystem::new_with_prefix(directory)
+            .map_err(|error| storage_error(error.to_string()))?,
+    );
+    crate::delta_snapshot::blocking(async move {
+        crate::parquet_directory::list_parquet_directory(
+            store.as_ref(),
+            &object_store::path::Path::default(),
+        )
+        .await
+    })
 }
 
 fn storage_error(message: impl Into<String>) -> KaveonError {
@@ -1373,5 +1596,160 @@ mod tests {
         assert_eq!(completed.batches_emitted, 1);
         assert!(completed.rows_per_second().is_finite());
         assert!(completed.compressed_bytes_per_second().is_finite());
+    }
+
+    struct TestDirectory(PathBuf);
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn write_file(path: &Path, schema: &SchemaRef, ids: Vec<i32>, row_group_size: usize) {
+        let labels = ids
+            .iter()
+            .map(|id| Some(format!("l{id}")))
+            .collect::<Vec<_>>();
+        let mut columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(ids))];
+        if schema.fields().len() > 1 {
+            columns.push(Arc::new(StringArray::from(labels)));
+        }
+        let batch = RecordBatch::try_new(Arc::clone(schema), columns).unwrap();
+        let properties = WriterProperties::builder()
+            .set_max_row_group_size(row_group_size)
+            .build();
+        let mut writer = ArrowWriter::try_new(
+            File::create(path).unwrap(),
+            Arc::clone(schema),
+            Some(properties),
+        )
+        .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+    }
+
+    /// A directory table: two small files, one large partitioned file, and
+    /// the hidden and marker files a writer leaves behind.
+    fn directory_fixture() -> (TestDirectory, SchemaRef) {
+        let id = NEXT_FILE_ID.fetch_add(1, AtomicOrdering::Relaxed);
+        let directory = TestDirectory(std::env::temp_dir().join(format!(
+            "kaveon-storage-directory-{}-{id}",
+            std::process::id()
+        )));
+        std::fs::create_dir_all(directory.0.join("year=2026")).unwrap();
+        std::fs::create_dir_all(directory.0.join("_delta_log")).unwrap();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("label", DataType::Utf8, true),
+        ]));
+        write_file(&directory.0.join("b.parquet"), &schema, vec![3, 4], 1);
+        write_file(&directory.0.join("a.parquet"), &schema, vec![1, 2], 1);
+        write_file(
+            &directory.0.join("year=2026").join("c.PARQUET"),
+            &schema,
+            (5..=104).collect(),
+            10,
+        );
+        write_file(&directory.0.join(".hidden.parquet"), &schema, vec![99], 1);
+        std::fs::write(directory.0.join("_SUCCESS"), b"").unwrap();
+        std::fs::write(directory.0.join("_delta_log").join("0.json"), b"{}").unwrap();
+        std::fs::write(directory.0.join("empty-marker"), b"").unwrap();
+        (directory, schema)
+    }
+
+    fn ids(iterator: ParquetBatchIterator) -> Vec<i32> {
+        let mut ids = Vec::new();
+        for batch in iterator {
+            let batch = batch.unwrap();
+            let column = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            ids.extend(column.values().iter().copied());
+        }
+        ids.sort_unstable();
+        ids
+    }
+
+    #[test]
+    fn a_directory_is_a_table_read_once_across_partitions() {
+        let (directory, schema) = directory_fixture();
+        let metadata = ParquetReader::new(&directory.0).metadata().unwrap();
+        assert_eq!(metadata.row_count, 104);
+        assert_eq!(metadata.row_group_count, 14);
+        assert_eq!(metadata.schema, schema);
+
+        let mut seen = Vec::new();
+        let mut considered = 0;
+        for index in 0..2 {
+            let metrics = ScanMetrics::default();
+            let iterator = ParquetReader::new(&directory.0)
+                .with_columns(vec!["label".into(), "id".into()])
+                .with_partition(ScanPartition::new(index, 2).unwrap())
+                .with_metrics(metrics.clone())
+                .read()
+                .unwrap();
+            assert_eq!(iterator.schema().field(0).name(), "label");
+            for batch in iterator {
+                let batch = batch.unwrap();
+                assert_eq!(batch.schema().field(1).name(), "id");
+                let column = batch
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap();
+                seen.extend(column.values().iter().copied());
+            }
+            let snapshot = metrics.snapshot();
+            assert_eq!(snapshot.files_opened, snapshot.files_considered);
+            considered += snapshot.files_considered;
+        }
+        seen.sort_unstable();
+        assert_eq!(seen, (1..=104).collect::<Vec<_>>());
+        // The large file is split by row group between the two partitions,
+        // the two small files are read whole by one each.
+        assert_eq!(considered, 4);
+
+        let metrics = ScanMetrics::default();
+        let pruned = ParquetReader::new(&directory.0)
+            .with_predicate(compare("id", CompareOp::Ge, ScalarValue::Int64(100)))
+            .with_metrics(metrics.clone())
+            .read()
+            .unwrap();
+        assert_eq!(ids(pruned), [100, 101, 102, 103, 104]);
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.files_considered, 3);
+        assert_eq!(snapshot.row_groups_considered, 14);
+        assert_eq!(snapshot.row_groups_selected, 1);
+    }
+
+    #[test]
+    fn a_directory_file_with_another_schema_is_named() {
+        let (directory, _) = directory_fixture();
+        let narrow = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        write_file(&directory.0.join("d.parquet"), &narrow, vec![7], 1);
+        let failure = ParquetReader::new(&directory.0)
+            .metadata()
+            .expect_err("a second schema is an error")
+            .to_string();
+        assert!(failure.contains("d.parquet"), "{failure}");
+        assert!(failure.contains("a.parquet"), "{failure}");
+        let failure = ParquetReader::new(&directory.0)
+            .read()
+            .unwrap()
+            .collect::<Result<Vec<_>>>()
+            .expect_err("a second schema is an error when read")
+            .to_string();
+        assert!(failure.contains("d.parquet"), "{failure}");
+
+        std::fs::write(directory.0.join("notes.txt"), b"x").unwrap();
+        let failure = ParquetReader::new(&directory.0)
+            .read()
+            .err()
+            .expect("a foreign file is an error")
+            .to_string();
+        assert!(failure.contains("notes.txt"), "{failure}");
     }
 }
