@@ -1685,7 +1685,7 @@ fn plan_query_with_predicate(
                 .map(|aggregate| logical_agg_to_exec(aggregate, planned.operator.schema()))
                 .collect::<Result<_>>()?;
 
-            let parallelism = kaveon_exec::local_parallel::configured_parallelism()?;
+            let parallelism = kaveon_exec::local_parallel::query_parallelism(memory)?;
             // Parallel partials account through the query pool; without one
             // (embedded and test plans) the aggregate runs serially.
             let operator = if let Some(pool) = memory.filter(|_| parallelism > 1) {
@@ -2253,6 +2253,49 @@ mod tests {
         );
         fs::write(delta.join("_delta_log/00000000000000000003.json"), r#"{"protocol":{"minReaderVersion":3,"minWriterVersion":7,"readerFeatures":["deletionVectors"]}}"#).unwrap();
         assert!(plan_sql("SELECT COUNT(*) FROM counts.default.delta").is_err());
+    }
+
+    #[test]
+    fn grouped_statement_honours_the_query_parallelism_ceiling() {
+        // The ceiling rides on the pool: the planner asks the pool, not the
+        // process, so a statement that lowered its parallelism runs the
+        // serial aggregate and produces the same groups.
+        let fixture = fixture();
+        let sql = "SELECT id, COUNT(*), SUM(id) FROM items GROUP BY id ORDER BY id";
+        let mut rows_by_ceiling = Vec::new();
+        for ceiling in [None, Some(1)] {
+            let pool = QueryMemoryPool::new("parallelism-ceiling", 64 * 1024 * 1024).unwrap();
+            if let Some(threads) = ceiling {
+                kaveon_exec::local_parallel::set_query_parallelism(&pool, threads).unwrap();
+                assert_eq!(
+                    kaveon_exec::local_parallel::query_parallelism(Some(&pool)).unwrap(),
+                    threads
+                );
+            }
+            let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(sql).unwrap();
+            qualify_tables(&mut plan, "test", "default");
+            let mut planned = plan_query_with_memory(&plan, &fixture.catalog, &pool).unwrap();
+            let batches = collect_batches(&mut *planned.operator).unwrap();
+            let rows = batches
+                .iter()
+                .flat_map(|batch| {
+                    (0..batch.num_rows()).map(move |row| {
+                        (0..batch.num_columns())
+                            .map(|column| {
+                                arrow::util::display::array_value_to_string(
+                                    batch.column(column),
+                                    row,
+                                )
+                                .unwrap()
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(rows.len(), 4, "{ceiling:?}");
+            rows_by_ceiling.push(rows);
+        }
+        assert_eq!(rows_by_ceiling[0], rows_by_ceiling[1]);
     }
 
     #[test]

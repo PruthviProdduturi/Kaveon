@@ -142,22 +142,26 @@ def cancel_tagged(tag, actor, role):
     return cancelled
 
 
-def execute(sql, catalog, actor, role, schema=None, timeout=60):
+def execute(sql, catalog, actor, role, schema=None, timeout=60, settings=None):
     """Run one statement. `timeout` is how long this caller waits for the
     response: 60 s suits an interactive request; a DLM build passes its own
     bound because a full-table aggregate legitimately runs for minutes. When
     the bound passes, the statement is cancelled on the Engine as well: a
     client that has given up must not leave a full-table scan running for
-    everyone else."""
+    everyone else. `settings` is the Engine's per-request settings object
+    (`query_memory_limit_bytes`, `local_parallelism`, `result_cache`); it is
+    sent only when given, so callers that do not pass it are unchanged."""
     roles = {"Analyst": "analyst", "Editor": "analyst", "Admin": "admin"}
     if role not in roles:
         raise HTTPException(403, "A recognized Kaveon role is required for Engine SQL")
     tag = "kaveon-api:" + uuid.uuid4().hex
+    payload = {"query": sql, "catalog": catalog, "schema": schema,
+               "source": "studio", "client": "kaveon-api", "client_tags": [tag]}
+    if settings is not None:
+        payload["settings"] = dict(settings)
     try:
         result = _request("POST", "/v1/statement", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
-                          payload={"query": sql, "catalog": catalog, "schema": schema,
-                                   "source": "studio", "client": "kaveon-api", "client_tags": [tag]},
-                          role=roles[role], timeout=timeout)
+                          payload=payload, role=roles[role], timeout=timeout)
     except HTTPException as error:
         if error.status_code == 504:
             cancel_tagged(tag, actor, roles[role])

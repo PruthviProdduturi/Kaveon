@@ -74,6 +74,13 @@ export interface ExecutionPlacement {
   detail?: string;
 }
 
+/** What the statement set for itself; the Engine serialises it only when something was set. */
+export interface QuerySettings {
+  query_memory_limit_bytes?: number;
+  local_parallelism?: number;
+  result_cache?: boolean;
+}
+
 export interface QueryRecord {
   id: string;
   sql: string;
@@ -83,6 +90,7 @@ export interface QueryRecord {
   rows_are_preview: boolean;
   scan_metrics_complete: boolean;
   execution?: ExecutionPlacement;
+  settings?: QuerySettings;
   error?: string | null;
   elapsed_ms: number;
   submitted_at_ms: number;

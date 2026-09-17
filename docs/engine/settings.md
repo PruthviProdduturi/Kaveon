@@ -107,6 +107,24 @@ replay reads at most 64 MiB of commit JSON; Iceberg metadata is capped at
 | `KAVEON_STUDIO_URL` | `security.studio_url` | none | URL | The Studio origin allowed to use the Engine UI's sign-in. | coordinator | chart value `studioUrl` |
 | `KAVEON_PRINCIPAL_QUERY_LIMIT` | none | 4 | statements | Concurrent statements one principal may have running on the coordinator. Must be positive. | coordinator | not set |
 
+## Per-request settings
+
+A statement may lower three of the bounds above for itself, through the
+`settings` object of `POST /v1/statement` or leading `SET SESSION <key> =
+<value>;` statements in the same request. Nothing can be raised; an unknown
+key or an out-of-range value is HTTP 400 `INVALID_SETTING` with the key
+named. HTTP is stateless and there is no server-side session: a setting
+lives as long as the statement it arrived with. The query record's
+`settings` field shows what a statement set. See the
+[API reference](../reference/api.md#per-request-settings) for the request
+shapes.
+
+| Key | Bound | What it lowers | Where it applies |
+|---|---|---|---|
+| `query_memory_limit_bytes` | 1 to the coordinator's `KAVEON_QUERY_MEMORY_LIMIT_BYTES` | The statement's query memory pool on the coordinator and the admission limit of each of its tasks on the workers (each worker also caps it at its own limit). | coordinator, worker |
+| `local_parallelism` | 1 to the coordinator's configured `KAVEON_LOCAL_PARALLELISM` | Aggregator threads for the statement's partial aggregates, DISTINCT and final merges; carried in the task request and capped again by each worker's own value. | coordinator, worker |
+| `result_cache` | `true` or `false` | `false` bypasses the coordinator's result cache for the statement. | coordinator |
+
 ## Timeouts and intervals
 
 None of these is a setting today; they are constants in the source, listed
