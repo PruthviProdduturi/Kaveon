@@ -164,49 +164,113 @@ impl SpillManager {
     where
         I: IntoIterator<Item = Result<RecordBatch>>,
     {
-        let started = Instant::now();
+        let mut writer = self.begin_run(schema)?;
+        for batch in batches {
+            writer.write(&batch?)?;
+        }
+        writer.finish()
+    }
+
+    /// Open a run to be written batch by batch — several runs can be open
+    /// at once, each taking its bytes from the shared limit as they are
+    /// written. The run exists once `finish` returns; a writer dropped
+    /// before that leaves nothing behind.
+    pub fn begin_run(&self, schema: &SchemaRef) -> Result<SpillRunWriter> {
         let run_id = NEXT_RUN.fetch_add(1, Ordering::Relaxed);
         let path = self.inner.directory.join(format!("run-{run_id}.arrow"));
         let file = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&path)?;
-        let mut output = BoundedSpillWriter::new(BufWriter::new(file), Arc::clone(&self.inner));
-
-        let result = (|| -> Result<()> {
-            let mut writer = StreamWriter::try_new(&mut output, schema)?;
-            for batch in batches {
-                let batch = batch?;
-                if batch.schema().as_ref() != schema.as_ref() {
-                    return Err(KaveonError::Execution(
-                        "spill batch schema does not match the run schema".into(),
-                    ));
-                }
-                writer.write(&batch)?;
+        let output = BoundedSpillWriter::new(BufWriter::new(file), Arc::clone(&self.inner));
+        let writer = match StreamWriter::try_new(output, schema) {
+            Ok(writer) => writer,
+            Err(error) => {
+                let _ = fs::remove_file(&path);
+                return Err(error.into());
             }
-            writer.finish()?;
-            drop(writer);
-            output.flush()?;
-            Ok(())
-        })();
+        };
+        Ok(SpillRunWriter {
+            writer: Some(writer),
+            schema: Arc::clone(schema),
+            inner: Arc::clone(&self.inner),
+            path,
+        })
+    }
+}
 
-        if let Err(error) = result {
-            drop(output);
-            let _ = fs::remove_file(&path);
-            return Err(error);
+/// A run being written: an Arrow IPC stream on the spill directory whose
+/// bytes are reserved against the shared limit as they land. The write
+/// time it records is the time inside its calls — several writers open
+/// side by side do not count each other's.
+pub struct SpillRunWriter {
+    writer: Option<StreamWriter<BoundedSpillWriter<BufWriter<File>>>>,
+    schema: SchemaRef,
+    inner: Arc<SpillInner>,
+    path: PathBuf,
+}
+
+impl SpillRunWriter {
+    pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
+        if batch.schema().as_ref() != self.schema.as_ref() {
+            return Err(KaveonError::Execution(
+                "spill batch schema does not match the run schema".into(),
+            ));
         }
-
-        let bytes = output.commit();
-        self.inner.bytes_written.fetch_add(bytes, Ordering::AcqRel);
-        self.inner.runs_written.fetch_add(1, Ordering::AcqRel);
+        let started = Instant::now();
+        let writer = self
+            .writer
+            .as_mut()
+            .ok_or_else(|| KaveonError::Execution("spill run already finished".into()))?;
+        let written = writer.write(batch);
         self.inner
             .write_us
             .fetch_add(elapsed_us(started), Ordering::AcqRel);
+        written?;
+        Ok(())
+    }
+
+    /// Close the stream; the run and its byte reservation are the
+    /// caller's from here.
+    pub fn finish(mut self) -> Result<SpillRun> {
+        let started = Instant::now();
+        let mut writer = self
+            .writer
+            .take()
+            .ok_or_else(|| KaveonError::Execution("spill run already finished".into()))?;
+        let finished = (|| -> Result<u64> {
+            writer.finish()?;
+            let mut output = writer.into_inner()?;
+            output.flush()?;
+            Ok(output.commit())
+        })();
+        self.inner
+            .write_us
+            .fetch_add(elapsed_us(started), Ordering::AcqRel);
+        let bytes = match finished {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                let _ = fs::remove_file(&self.path);
+                return Err(error);
+            }
+        };
+        self.inner.bytes_written.fetch_add(bytes, Ordering::AcqRel);
+        self.inner.runs_written.fetch_add(1, Ordering::AcqRel);
         Ok(SpillRun {
             inner: Arc::clone(&self.inner),
-            path,
+            path: std::mem::take(&mut self.path),
             bytes,
         })
+    }
+}
+
+impl Drop for SpillRunWriter {
+    fn drop(&mut self) {
+        // Unfinished: the bounded writer returns its bytes, the file goes.
+        if let Some(writer) = self.writer.take() {
+            drop(writer);
+            let _ = fs::remove_file(&self.path);
+        }
     }
 }
 
@@ -393,6 +457,55 @@ mod tests {
         drop(run);
 
         assert!(!path.exists());
+        assert_eq!(manager.snapshot().current_bytes, 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runs_open_side_by_side_take_their_bytes_as_written_and_leave_nothing_unfinished() {
+        let root = test_root("side-by-side");
+        let manager = SpillManager::new(&root, SPILL_LIMIT).unwrap();
+        let input = batch();
+        let mut first = manager.begin_run(&input.schema()).unwrap();
+        let mut second = manager.begin_run(&input.schema()).unwrap();
+        let mut abandoned = manager.begin_run(&input.schema()).unwrap();
+        for _ in 0..3 {
+            first.write(&input).unwrap();
+            second.write(&input).unwrap();
+            abandoned.write(&input).unwrap();
+        }
+        first.write(&input).unwrap();
+        let held = manager.snapshot().current_bytes;
+        assert!(held > 0, "open writers hold what they have written");
+        assert_eq!(manager.snapshot().runs_written, 0);
+        let abandoned_path = abandoned.path.clone();
+        drop(abandoned);
+        assert!(!abandoned_path.exists());
+        assert!(manager.snapshot().current_bytes < held);
+        let first = first.finish().unwrap();
+        let second = second.finish().unwrap();
+        assert_eq!(first.read().unwrap().len(), 4);
+        assert_eq!(second.read().unwrap().len(), 3);
+        let snapshot = manager.snapshot();
+        assert_eq!(snapshot.runs_written, 2);
+        assert_eq!(snapshot.current_bytes, first.bytes() + second.bytes());
+        assert_eq!(snapshot.bytes_written, first.bytes() + second.bytes());
+        assert!(snapshot.write_us > 0);
+        let error = second
+            .reader()
+            .map(|_| ())
+            .and_then(|()| {
+                let mut writer = manager.begin_run(&input.schema())?;
+                let other = RecordBatch::try_new(
+                    Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)])),
+                    vec![Arc::new(Int64Array::from(vec![1]))],
+                )
+                .unwrap();
+                writer.write(&other)
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("does not match the run schema"));
+        drop((first, second));
         assert_eq!(manager.snapshot().current_bytes, 0);
         let _ = fs::remove_dir_all(root);
     }
