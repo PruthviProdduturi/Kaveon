@@ -113,22 +113,22 @@ The 14 statements Trino won by the widest margin (`q13`–`q19`, `q31`–`q36`,
 procedure (medians of three, records under `clickbench/runs/kaveon-targets-*`).
 Trino's column is the 3 GB pass above.
 
-| Query | Trino s | `b0be459` s | `bf80ab7` s | `64ba6ce` s |
-|---|---:|---:|---:|---:|
-| `q13` | 10.8 | 27.8 | 21.3 | 19.6 |
-| `q14` | 17.9 | 56.6 | 49.1 | 88.4 |
-| `q15` | 11.2 | 35.5 | 25.3 | 24.5 |
-| `q16` | 7.4 | 41.1 | 24.2 | 28.4 |
-| `q17` | 21.8 | 108.2 | 74.5 | 78.5 |
-| `q18` | 19.6 | 83.5 | 68.0 | 64.0 |
-| `q19` | 36.4 | 236.4 | 166.7 | 166.0 |
-| `q31` | 9.3 | 28.3 | 21.0 | 22.5 |
-| `q32` | 14.6 | 56.7 | 37.6 | 39.4 |
-| `q33` | 49.7 | rejected | rejected | rejected |
-| `q34` | 41.1 | 268.6 | 239.1 | 211.8 |
-| `q35` | 45.4 | 309.3 | not run | 231.3 |
-| `q36` | 13.0 | 56.8 | not run | 51.7 |
-| `q40` | 5.3 | 20.4 | not run | 19.6 |
+| Query | Trino s | `b0be459` s | `bf80ab7` s | `64ba6ce` s | `c4d7750` s |
+|---|---:|---:|---:|---:|---:|
+| `q13` | 10.8 | 27.8 | 21.3 | 19.6 | 10.5 |
+| `q14` | 17.9 | 56.6 | 49.1 | 88.4 | 26.6 |
+| `q15` | 11.2 | 35.5 | 25.3 | 24.5 | 11.9 |
+| `q16` | 7.4 | 41.1 | 24.2 | 28.4 | 13.9 |
+| `q17` | 21.8 | 108.2 | 74.5 | 78.5 | 28.7 |
+| `q18` | 19.6 | 83.5 | 68.0 | 64.0 | 27.9 |
+| `q19` | 36.4 | 236.4 | 166.7 | 166.0 | 58.1 |
+| `q31` | 9.3 | 28.3 | 21.0 | 22.5 | 9.1 |
+| `q32` | 14.6 | 56.7 | 37.6 | 39.4 | 16.6 |
+| `q33` | 49.7 | rejected | rejected | rejected | 198.0 |
+| `q34` | 41.1 | 268.6 | 239.1 | 211.8 | out of memory after the merge |
+| `q35` | 45.4 | 309.3 | not run | 231.3 | out of memory after the merge |
+| `q36` | 13.0 | 56.8 | not run | 51.7 | 18.9 |
+| `q40` | 5.3 | 20.4 | not run | 19.6 | out of memory after the merge |
 
 - `bf80ab7` is the columnar aggregate alone (the AKS workers still ran the
   partial on one thread through the spill path): 10–40 % faster across the
@@ -144,12 +144,22 @@ Trino's column is the 3 GB pass above.
   high-cardinality partial through the disk (`c087ff9` replaces it with
   flush-on-pressure). The workers were killed again on `q35`, for the same
   unaccounted output; `aaaffdd` streams the output while the task runs.
-- What the stage timings on this build say about the remaining gap: on
-  `q16` (`GROUP BY UserID`) the scan+partial stage is 12–14 s of wall per
-  worker and the final merge 6 s; on `q19` the partial stage is 40 s of
-  compute and 40 s of output handling per worker, and the final 60 s over
-  100 M partial rows. The output handling is what streaming removes; the
-  merge rate (about 1.5 µs a row) is the next item.
+- What the stage timings on `64ba6ce` said: on `q16` (`GROUP BY UserID`)
+  the scan+partial stage was 12–14 s of wall per worker and the final merge
+  6 s; on `q19` the partial stage 40 s of compute and 40 s of output
+  handling per worker, and the final 60 s over 100 M partial rows.
+- `c4d7750` is what that pointed at: grouped partials flush on memory
+  pressure instead of replaying through the disk (`c087ff9`), the exchange
+  output streams while the task runs (`aaaffdd`), the final merges on every
+  thread in memory first (`1cbbcce`), workers spool exchanges on their own
+  disk so the coordinator relays nothing (`427b166`), and the store's disk
+  writes leave the async runtime (`c4d7750` — under streamed uploads the
+  coordinator's health probe stopped answering and the kubelet killed it
+  mid-pass). `q33` runs for the first time. The three failures are the
+  merged result of `GROUP BY URL` (eighteen million groups a worker) not
+  fitting beside its projection and sort workspace after the merge; the
+  next build runs the TopN inside each merge thread (`8d15fd3`) so the
+  merged groups never exist as a whole.
 
 ## Next
 
