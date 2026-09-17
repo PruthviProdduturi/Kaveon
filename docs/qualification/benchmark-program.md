@@ -29,6 +29,14 @@
   make a table look better.
 - **No production Trino.** The Trino chart exists only for this comparison; it
   is never part of a Kaveon deployment.
+- **No result cache.** The coordinator keeps complete results of finished
+  statements (`KAVEON_RESULT_CACHE_BYTES`, on by default). Every benchmark
+  and qualification submission in this repository passes
+  `settings.result_cache = false` (`scripts/scale-suite.py`,
+  `scripts/differential-cases.py`, `scripts/benchmark-rounds.py` through the
+  suite, `engine/qualification/aks_distributed_compare.py` and the
+  qualification scripts), so a measured execution is always the Engine's.
+  A record whose query records show `execution.mode = "cache"` is invalid.
 
 ## Tier 1 — matched harness on the Kaveon telemetry shapes (running)
 

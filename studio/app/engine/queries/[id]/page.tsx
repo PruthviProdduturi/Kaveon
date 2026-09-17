@@ -24,6 +24,15 @@ function placement(q: QueryRecord) {
   if (!p) return <span className={s.na}>Not recorded</span>;
   if (p.mode === "distributed") return <>Workers{p.detail ? <span className={s.na}> · {p.detail}</span> : null}</>;
   if (p.mode === "coordinator") return <><span className={`${s.pill} ${s.pillRunning}`}>Coordinator</span>{p.detail ? <span className={s.na}> {p.detail}</span> : null}</>;
+  if (p.mode === "cache") {
+    return (
+      <>
+        Cache
+        {q.cached_from ? <span className={s.na}> · from <Link href={`/engine/queries/${encodeURIComponent(q.cached_from)}`}>{q.cached_from}</Link></span> : null}
+        {q.cached_elapsed_ms != null ? <span className={s.na}> · originally {ms(q.cached_elapsed_ms)}</span> : null}
+      </>
+    );
+  }
   return <span className={s.na}>Pending</span>;
 }
 

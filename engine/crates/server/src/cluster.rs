@@ -34,6 +34,9 @@ pub struct NodeInfo {
     pub memory_limit_bytes: Option<u64>,
     #[serde(default)]
     pub catalog_snapshot_id: Option<String>,
+    /// The coordinator's result cache counters; workers carry none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_cache: Option<crate::result_cache::ResultCacheStats>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +85,7 @@ impl ClusterState {
                 memory_allocated_bytes: kaveon_core::process_memory::allocated_bytes(),
                 memory_limit_bytes: config.process_memory_limit_bytes,
                 catalog_snapshot_id: None,
+                result_cache: None,
             },
             workers: HashMap::new(),
             process_memory_limit_bytes: config.process_memory_limit_bytes,
