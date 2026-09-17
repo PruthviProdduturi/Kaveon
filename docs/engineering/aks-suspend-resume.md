@@ -1,5 +1,42 @@
 # Suspend and resume the test AKS cluster
 
+## Pause and resume (the weekend procedure since 2026-09-17)
+
+The westus2 cluster (`test-prproddu-test-westus2` / `kaveon-test-aks`) is
+paused over the weekend, not deleted: `az aks stop` deallocates the control
+plane and both node pools while the managed disks stay, so the coordinator's
+catalog PVC, the PostgreSQL PVC, the storage account with the benchmark
+objects (ClickBench `hits.parquet`, TPC-H SF100 as Delta under
+`opensource/benchmarks/tpch/delta/sf100/`) and the ACR images all come back
+as they were. Worker `emptyDir` state (exchange spools, spills) is lost,
+which is by design.
+
+```powershell
+az account set --subscription eaa4a83d-8511-497c-b0bc-40aa5f0deae1
+# Friday, after the last run's record is committed:
+kubectl -n kaveon get jobs            # nothing Running
+az aks stop  --resource-group test-prproddu-test-westus2 --name kaveon-test-aks
+# Monday:
+az aks start --resource-group test-prproddu-test-westus2 --name kaveon-test-aks
+az aks get-credentials --resource-group test-prproddu-test-westus2 --name kaveon-test-aks --overwrite-existing
+kubectl config use-context kaveon-test-aks
+kubectl -n kaveon rollout status sts/kaveon-coordinator && kubectl -n kaveon rollout status sts/kaveon-worker
+kubectl -n kaveon rollout status deploy/kaveon-api
+```
+
+After a start, verify before benchmarking: the Engine answers
+`SELECT COUNT(*) FROM clickbench.hits` on catalog `Benchmarks` (99,997,497)
+and `SELECT COUNT(*) FROM tpch_sf100.lineitem` (600,037,902) — both through
+`scripts/scale-suite.py` or the API pod; the Trino benchmark StatefulSets are
+at 0 replicas (a Trino window scales them up and registers the TPC-H Delta
+tables again by their logs, `scripts/benchmark-trino-suite.py`). The
+Engine's admission and exchange settings are in the chart
+(`infra/helm/kaveon-test/values.yaml`); a StatefulSet that lost a
+`kubectl set image` roll keeps the digest recorded in the last run record
+under `docs/qualification/clickbench/runs/`.
+
+## Delete and recreate (the earlier procedure)
+
 This runbook removes only the `kaveon-test-aks` resource. It does not delete
 the resource group, PostgreSQL, ADLS Gen2, ACR, managed identities, VNet, or
 network security groups.
