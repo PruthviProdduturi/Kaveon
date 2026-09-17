@@ -198,6 +198,78 @@ pub fn evaluate_predicate(expr: &Expr, batch: &RecordBatch) -> Result<BooleanArr
     as_boolean(&arr).cloned()
 }
 
+/// The columns `expr` reads, as written, in evaluation order; `*` is not
+/// a column.
+pub fn column_references(expr: &Expr, into: &mut Vec<String>) {
+    match expr {
+        Expr::Column(name) => {
+            if name != "*" {
+                into.push(name.clone());
+            }
+        }
+        Expr::Literal(_) | Expr::Star => {}
+        Expr::Alias { expr, .. }
+        | Expr::Not(expr)
+        | Expr::IsNull(expr)
+        | Expr::IsNotNull(expr)
+        | Expr::Cast { expr, .. }
+        | Expr::Extract { expr, .. } => column_references(expr, into),
+        Expr::BinaryOp { left, right, .. } | Expr::And(left, right) | Expr::Or(left, right) => {
+            column_references(left, into);
+            column_references(right, into);
+        }
+        Expr::Function { args, .. } => {
+            for arg in args {
+                column_references(arg, into);
+            }
+        }
+        Expr::WindowFunction {
+            args,
+            partition_by,
+            order_by,
+            ..
+        } => {
+            for expr in args
+                .iter()
+                .chain(partition_by)
+                .chain(order_by.iter().map(|(expr, _)| expr))
+            {
+                column_references(expr, into);
+            }
+        }
+        Expr::Case {
+            operand,
+            when_then,
+            else_expr,
+        } => {
+            for expr in operand.iter().chain(else_expr) {
+                column_references(expr, into);
+            }
+            for (when, then) in when_then {
+                column_references(when, into);
+                column_references(then, into);
+            }
+        }
+        Expr::Like { expr, pattern, .. } => {
+            column_references(expr, into);
+            column_references(pattern, into);
+        }
+        Expr::Between {
+            expr, low, high, ..
+        } => {
+            column_references(expr, into);
+            column_references(low, into);
+            column_references(high, into);
+        }
+        Expr::InList { expr, list, .. } => {
+            column_references(expr, into);
+            for item in list {
+                column_references(item, into);
+            }
+        }
+    }
+}
+
 /// The index of `name` in `schema`: the field named exactly `name`, else
 /// the one field whose bare name is `name`'s bare name. A join qualifies
 /// its output as `relation.column`, so a bare `c_name` reaches
