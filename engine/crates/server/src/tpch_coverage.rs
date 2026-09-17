@@ -34,27 +34,7 @@ const KNOWN_UNSUPPORTED: &[(&str, &str)] = &[
     ("q2", "parse: scalar subqueries are not yet supported"),
     (
         "q4",
-        "plan: correlated EXISTS (l_orderkey = o_orderkey) is planned as an uncorrelated semi join; lineitem has no column 'o_orderkey'",
-    ),
-    (
-        "q5",
-        "plan: comma join lands as a cross product; projection column 'n_name' not in input",
-    ),
-    (
-        "q7",
-        "execute: six-way comma join runs as a cross product; over budget",
-    ),
-    (
-        "q8",
-        "execute: eight-way comma join runs as a cross product; over budget",
-    ),
-    (
-        "q9",
-        "plan: comma join lands as a cross product; projection column 'n_name' not in input",
-    ),
-    (
-        "q10",
-        "plan: comma join lands as a cross product; projection column 'c_custkey' not in input",
+        "plan: correlated EXISTS (l_orderkey = o_orderkey) is planned as an uncorrelated semi join; lineitem has no column o_orderkey",
     ),
     ("q11", "parse: scalar subqueries are not yet supported"),
     (
@@ -65,7 +45,7 @@ const KNOWN_UNSUPPORTED: &[(&str, &str)] = &[
     ("q17", "parse: scalar subqueries are not yet supported"),
     (
         "q18",
-        "plan: comma join lands as a cross product; group-by column 'c_name' not in input",
+        "execute: the IN subquery's HAVING sum(l_quantity) > 300 is not collected into the aggregate, so GROUP BY l_orderkey lowers to DISTINCT and the HAVING finds no l_quantity",
     ),
     ("q20", "parse: scalar subqueries are not yet supported"),
     (
@@ -836,6 +816,14 @@ fn cover(fixture: &Arc<Fixture>, id: &str, statement: &str) -> Coverage {
         }
     };
     crate::planner::qualify_tables(&mut plan, "tpch", "tiny");
+    let plan = match kaveon_optim::binder::bind(plan, &fixture.manager) {
+        Ok(plan) => plan,
+        Err(error) => {
+            coverage.planned = Some(format!("bind: {error}"));
+            coverage.distributed = Some("not bound".to_owned());
+            return coverage;
+        }
+    };
     let plan = kaveon_optim::rules::push_filter_down(plan);
     let plan = kaveon_optim::rules::push_projection_down(plan);
 
