@@ -60,7 +60,7 @@
 | `q21` | 9.30 | 12.81 | 1.38× | same |
 | `q22` | 10.51 | 14.25 | 1.36× | same |
 | `q23` | 16.77 | 23.96 | 1.43× | same |
-| `q24` | 9.61 | 42.90 | 4.46× | rows 10/10 |
+| `q24` | ~~9.61~~ wrong result | 42.90 | — | 2 of 105 columns (see below) |
 | `q25` | 3.69 | 6.21 | 1.68× | rows 10/10 |
 | `q26` | 2.82 | 4.91 | 1.74× | same |
 | `q27` | 3.41 | 6.01 | 1.76× | same |
@@ -104,7 +104,7 @@ Trino is faster on 20 of the 42 statements both engines ran, and every one of th
 - **Exact COUNT(DISTINCT)** (`q05`, `q06`, `q09`, `q10`, `q12`, `q14`): the distinct step is single-threaded on both stages and re-hashes every row on the final; 0.5–0.9× Trino.
 - **`REGEXP_REPLACE` per row** (`q29`, 0.29×) and the ninety-term `SUM(ResolutionWidth + k)` projection (`q30`, 0.72×): per-row expression evaluation with an allocation per string.
 
-Kaveon is faster on the other 22: every scan, filter, TopN and low-cardinality aggregate (`q01`–`q04`, `q07`, `q08`, `q11`, `q20`–`q28`, `q37`–`q39`, `q41`, `q42`) by 1.4–6×, and the LIKE-heavy `q21`–`q24` by 1.4–4.5×.
+Kaveon is faster on the other 22 as recorded, **less `q24`, whose Kaveon figure on every image up to `6eed629` is invalid**: projection pruning read a `SELECT *` under a filtered `ORDER BY … LIMIT` as needing only the filter's and the sort's columns, so Kaveon returned two of the 105 columns in 9.6 s (the run records carry the two-column samples; the digest never matched Trino's, which the harness reported as `rows 10/10` and this page took for a tie order). Fixed in `6a5ec64` (the same defect lost join keys under filtered scans, found by the TPC-H gate); the regression test is `select_star_under_a_filtered_top_n_keeps_every_scan_column`. On `16df10b` the correct 105-column answer takes 52–57 s against Trino's 42.9 — a loss, recorded as one from the first campaign round on. Otherwise: every scan, filter, TopN and low-cardinality aggregate (`q01`–`q04`, `q07`, `q08`, `q11`, `q20`–`q28`, `q37`–`q39`, `q41`, `q42`) by 1.4–6×, and the LIKE-heavy `q21`–`q24` by 1.4–4.5×.
 
 ## The same evening: the high-cardinality targets, commit by commit
 
