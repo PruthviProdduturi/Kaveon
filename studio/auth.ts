@@ -105,7 +105,12 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       const isLoggedIn = !!session?.user;
       const isLoginPage = nextUrl.pathname === "/login";
       if (isLoginPage) return true;
-      if (!isLoggedIn) return Response.redirect(new URL("/login", nextUrl));
+      if (!isLoggedIn) {
+        // Carry the requested page so the sign-in screen can return to it.
+        const login = new URL("/login", nextUrl);
+        login.searchParams.set("callbackUrl", nextUrl.pathname + nextUrl.search);
+        return Response.redirect(login);
+      }
       return true;
     },
   },
