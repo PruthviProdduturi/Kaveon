@@ -6,7 +6,11 @@ use arrow::datatypes::{
     DataType, Date32Type, Int8Type, Int16Type, Int32Type, Int64Type, SchemaRef, UInt8Type,
     UInt16Type, UInt32Type, UInt64Type,
 };
-use kaveon_core::{BatchOperator, KaveonError, OperatorMemoryAccount, ReservationSlab, Result};
+use kaveon_core::{
+    BatchOperator, KaveonError, MemoryReservation, OperatorMemoryAccount, ReservationSlab, Result,
+};
+
+use crate::columnar_aggregate::ColumnarGroups;
 
 use crate::aggregate::AggregateValue;
 
@@ -24,11 +28,81 @@ pub struct DistinctOperator {
     /// compact key; dictionary codes resolve through it per batch, so equal
     /// text compares equal across batches whose dictionaries differ.
     interned: AHashMap<Box<str>, u64>,
+    /// The columnar table for every column set the columnar aggregate
+    /// carries (up to eight keys of integer, date, boolean, text or
+    /// dictionary type): DISTINCT is the grouped aggregate with nothing to
+    /// accumulate. `None` before the first batch; `Some(None)` once a
+    /// batch showed a shape it does not carry.
+    columnar: Option<Option<ColumnarGroups>>,
+    growth: Option<MemoryReservation>,
+    growth_reserved_at: usize,
     memory: Option<OperatorMemoryAccount>,
     reservations: ReservationSlab,
 }
 
 impl DistinctOperator {
+    /// The rows of `batch` that are new to this operator, through the
+    /// columnar table, or None when the batch has a shape it does not
+    /// carry.
+    fn keep_by_columnar(&mut self, batch: &RecordBatch) -> Result<Option<Vec<u32>>> {
+        if self.columnar.is_none() {
+            let types = batch
+                .schema()
+                .fields()
+                .iter()
+                .map(|field| field.data_type().clone())
+                .collect::<Vec<_>>();
+            let carried = !types.is_empty()
+                && types.len() <= crate::columnar_aggregate::MAX_KEYS
+                && types.iter().all(crate::columnar_aggregate::supports_key);
+            self.columnar = Some(if carried {
+                ColumnarGroups::new(&types, &[])
+            } else {
+                None
+            });
+        }
+        let Some(Some(groups)) = self.columnar.as_mut() else {
+            return Ok(None);
+        };
+        let rows = batch.num_rows();
+        let slot_bytes = groups.slot_bytes();
+        // The batch's worst case — every row a new key, plus its text — is
+        // held while it is applied; the actual cost is charged after.
+        let worst = if let Some(memory) = &self.memory {
+            let doubling = groups.growth_bytes(rows);
+            if doubling != 0 && groups.capacity() != self.growth_reserved_at {
+                drop(self.growth.take());
+                self.growth = Some(memory.reserve(doubling)?);
+                self.growth_reserved_at = groups.capacity();
+            }
+            let key_bytes = batch
+                .columns()
+                .iter()
+                .map(|array| array.get_array_memory_size() as u64)
+                .sum::<u64>();
+            Some(
+                memory.reserve(
+                    (rows as u64)
+                        .saturating_mul(slot_bytes)
+                        .saturating_add(key_bytes),
+                )?,
+            )
+        } else {
+            None
+        };
+        let (kept, new_bytes) = groups.push_batch_new_rows(batch.columns(), rows)?;
+        if let Some(memory) = &self.memory {
+            self.reservations.reserve(
+                memory,
+                (kept.len() as u64)
+                    .saturating_mul(slot_bytes)
+                    .saturating_add(new_bytes),
+            )?;
+        }
+        drop(worst);
+        Ok(Some(kept))
+    }
+
     pub fn new(source: Box<dyn BatchOperator>) -> Self {
         Self {
             source,
@@ -36,6 +110,9 @@ impl DistinctOperator {
             compact: AHashSet::new(),
             interned: AHashMap::new(),
             memory: None,
+            columnar: None,
+            growth: None,
+            growth_reserved_at: 0,
             reservations: ReservationSlab::default(),
         }
     }
@@ -185,6 +262,9 @@ impl BatchOperator for DistinctOperator {
                 self.seen = HashSet::new();
                 self.compact = AHashSet::new();
                 self.interned = AHashMap::new();
+                self.columnar = None;
+                self.growth = None;
+                self.growth_reserved_at = 0;
                 self.reservations.clear();
                 return Ok(None);
             };
@@ -202,11 +282,17 @@ impl BatchOperator for DistinctOperator {
             let num_cols = batch.num_columns();
             let num_rows = batch.num_rows();
 
-            // A batch of at most two packable columns deduplicates through
-            // compact keys; otherwise dictionary columns first collapse to
-            // one row per distinct key combination, so the value extraction
-            // below touches a handful of rows instead of every row.
-            let (mut keep, candidates) = match self.keep_by_compact_keys(&batch)? {
+            // Every column set the columnar table carries deduplicates
+            // there; a batch of at most two packable columns of other types
+            // through compact keys; otherwise dictionary columns first
+            // collapse to one row per distinct key combination, so the
+            // value extraction below touches a handful of rows instead of
+            // every row.
+            let kept = match self.keep_by_columnar(&batch)? {
+                Some(kept) => Some(kept),
+                None => self.keep_by_compact_keys(&batch)?,
+            };
+            let (mut keep, candidates) = match kept {
                 Some(keep) => (keep, Vec::new()),
                 None => (
                     Vec::new(),
@@ -453,6 +539,59 @@ mod tests {
                 vec![None, text("Mobile")],
                 vec![text("Asia"), text("Mobile")],
                 vec![text("Africa"), text("Web")],
+            ]
+        );
+    }
+
+    #[test]
+    fn three_columns_of_mixed_types_deduplicate_through_the_columnar_table() {
+        // Text, integer and date — more columns than the compact path
+        // packs — across batches whose duplicates straddle the boundary:
+        // one row per distinct triple, in first-seen order, nulls distinct
+        // from values; and a column type the table does not carry falls
+        // back to the compact path with the same answer.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("phone", DataType::Utf8, true),
+            Field::new("user", DataType::Int64, false),
+            Field::new("day", DataType::Date32, false),
+        ]));
+        let batch = |phones: Vec<Option<&str>>, users: Vec<i64>, days: Vec<i32>| {
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(StringArray::from(phones)),
+                    Arc::new(arrow::array::Int64Array::from(users)),
+                    Arc::new(arrow::array::Date32Array::from(days)),
+                ],
+            )
+            .unwrap()
+        };
+        let first = batch(
+            vec![Some("a"), Some("a"), None, Some("b")],
+            vec![1, 1, 1, 2],
+            vec![10, 10, 10, 11],
+        );
+        let second = batch(
+            vec![Some("a"), None, Some("b"), None],
+            vec![1, 1, 2, 1],
+            vec![10, 10, 12, 10],
+        );
+        let mut distinct = DistinctOperator::new(Box::new(Input {
+            schema: schema.clone(),
+            batches: VecDeque::from(vec![first, second]),
+        }));
+        let mut output = Vec::new();
+        while let Some(batch) = distinct.next_batch().unwrap() {
+            output.push(batch);
+        }
+        let text = |value: &str| Some(value.to_owned());
+        assert_eq!(
+            rows(&output),
+            vec![
+                vec![text("a"), text("1"), text("1970-01-11")],
+                vec![None, text("1"), text("1970-01-11")],
+                vec![text("b"), text("2"), text("1970-01-12")],
+                vec![text("b"), text("2"), text("1970-01-13")],
             ]
         );
     }
