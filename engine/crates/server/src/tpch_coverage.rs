@@ -31,15 +31,23 @@ const QUERIES: &str = include_str!("../../../../docs/qualification/tpch/trino-qu
 /// here must still fail at some stage; one that starts working must be
 /// removed from the list.
 const KNOWN_UNSUPPORTED: &[(&str, &str)] = &[
-    ("q1", "parse: INTERVAL '90' DAY"),
     ("q2", "parse: scalar subqueries are not yet supported"),
     (
         "q3",
         "plan: comma join lands as a cross product; projection column 'l_orderkey' not in input",
     ),
-    ("q4", "parse: INTERVAL '3' MONTH"),
-    ("q5", "parse: INTERVAL '1' YEAR"),
-    ("q6", "parse: INTERVAL '1' YEAR"),
+    (
+        "q4",
+        "plan: correlated EXISTS (l_orderkey = o_orderkey) is planned as an uncorrelated semi join; lineitem has no column 'o_orderkey'",
+    ),
+    (
+        "q5",
+        "plan: comma join lands as a cross product; projection column 'n_name' not in input",
+    ),
+    (
+        "q6",
+        "plan: storage predicate l_quantity < 24 is an integer literal against a double column",
+    ),
     (
         "q7",
         "execute: six-way comma join runs as a cross product; over budget",
@@ -52,15 +60,20 @@ const KNOWN_UNSUPPORTED: &[(&str, &str)] = &[
         "q9",
         "plan: comma join lands as a cross product; projection column 'n_name' not in input",
     ),
-    ("q10", "parse: INTERVAL '3' MONTH"),
+    (
+        "q10",
+        "plan: comma join lands as a cross product; projection column 'c_custkey' not in input",
+    ),
     ("q11", "parse: scalar subqueries are not yet supported"),
-    ("q12", "parse: INTERVAL '1' YEAR"),
+    (
+        "q12",
+        "plan: comma join lands as a cross product; projection column 'l_shipmode' not in input",
+    ),
     (
         "q13",
         "plan: LEFT JOIN ON with a NOT LIKE conjunct; only equality join conditions are supported",
     ),
-    ("q14", "parse: INTERVAL '1' MONTH"),
-    ("q15", "parse: INTERVAL '3' MONTH"),
+    ("q15", "parse: scalar subqueries are not yet supported"),
     (
         "q16",
         "plan: comma join lands as a cross product; projection column 'p_brand' not in input",
