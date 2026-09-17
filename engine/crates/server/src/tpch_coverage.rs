@@ -33,10 +33,6 @@ const QUERIES: &str = include_str!("../../../../docs/qualification/tpch/trino-qu
 const KNOWN_UNSUPPORTED: &[(&str, &str)] = &[
     ("q2", "parse: scalar subqueries are not yet supported"),
     (
-        "q3",
-        "plan: comma join lands as a cross product; projection column 'l_orderkey' not in input",
-    ),
-    (
         "q4",
         "plan: correlated EXISTS (l_orderkey = o_orderkey) is planned as an uncorrelated semi join; lineitem has no column 'o_orderkey'",
     ),
@@ -62,18 +58,10 @@ const KNOWN_UNSUPPORTED: &[(&str, &str)] = &[
     ),
     ("q11", "parse: scalar subqueries are not yet supported"),
     (
-        "q12",
-        "plan: comma join lands as a cross product; projection column 'l_shipmode' not in input",
-    ),
-    (
         "q13",
         "plan: LEFT JOIN ON with a NOT LIKE conjunct; only equality join conditions are supported",
     ),
     ("q15", "parse: scalar subqueries are not yet supported"),
-    (
-        "q16",
-        "plan: comma join lands as a cross product; projection column 'p_brand' not in input",
-    ),
     ("q17", "parse: scalar subqueries are not yet supported"),
     (
         "q18",

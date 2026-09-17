@@ -1927,31 +1927,18 @@ fn logical_agg_to_exec(
     })
 }
 
+/// The input field `name` denotes, by its own name: exact, else the one
+/// field whose bare name matches (`c_name` reaches a join's
+/// `customer.c_name`; `t.x` reaches a scan's `x`).
 fn resolve_column_name(schema: &arrow::datatypes::SchemaRef, name: &str) -> Result<String> {
-    if schema.index_of(name).is_ok() {
-        return Ok(name.to_owned());
-    }
-    let unqualified = name.rsplit('.').next().unwrap_or(name);
-    let count = schema
-        .fields()
-        .iter()
-        .filter(|field| {
-            field.name() == unqualified
-                || field
-                    .name()
-                    .strip_suffix(unqualified)
-                    .is_some_and(|prefix| prefix.ends_with('.'))
+    kaveon_exec::expr_eval::resolve_column_index(schema, name)
+        .map(|index| schema.field(index).name().clone())
+        .map_err(|error| match error {
+            KaveonError::Execution(message) if message.contains("ambiguous") => {
+                KaveonError::Execution(format!("column '{name}' is ambiguous in input"))
+            }
+            _ => KaveonError::Execution(format!("column '{name}' not found in input")),
         })
-        .count();
-    match count {
-        1 => Ok(unqualified.to_owned()),
-        0 => Err(KaveonError::Execution(format!(
-            "column '{name}' not found in input"
-        ))),
-        _ => Err(KaveonError::Execution(format!(
-            "column '{name}' is ambiguous in input"
-        ))),
-    }
 }
 
 fn physical_join_type(join_type: JoinType) -> PhysicalJoinType {
@@ -1972,9 +1959,10 @@ fn join_keys(condition: Option<&Expr>) -> Result<Vec<(String, String)>> {
             op: kaveon_core::BinaryOp::Eq,
             right,
         }) => match (left.as_ref(), right.as_ref()) {
-            (Expr::Column(left), Expr::Column(right)) => {
-                Ok(vec![(unqualify(left), unqualify(right))])
-            }
+            // Keys keep their qualifiers: `n1.n_nationkey` beside
+            // `n2.n_nationkey` is only unambiguous with them, and each side
+            // resolves its key exactly or by bare name.
+            (Expr::Column(left), Expr::Column(right)) => Ok(vec![(left.clone(), right.clone())]),
             _ => Err(KaveonError::Execution(
                 "join equality keys must be column references".into(),
             )),
@@ -2133,6 +2121,41 @@ mod tests {
         Fixture { directory, catalog }
     }
 
+    #[test]
+    fn column_names_resolve_to_the_field_they_denote() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("customer.c_name", DataType::Utf8, true),
+            Field::new("orders.o_custkey", DataType::Int64, true),
+            Field::new("flat", DataType::Int64, true),
+        ]));
+        // A bare name over a join output is that output's qualified field;
+        // a qualified name over a bare field is the bare field.
+        assert_eq!(
+            resolve_column_name(&schema, "c_name").unwrap(),
+            "customer.c_name"
+        );
+        assert_eq!(
+            resolve_column_name(&schema, "orders.o_custkey").unwrap(),
+            "orders.o_custkey"
+        );
+        assert_eq!(resolve_column_name(&schema, "t.flat").unwrap(), "flat");
+        assert!(
+            resolve_column_name(&schema, "missing")
+                .unwrap_err()
+                .to_string()
+                .contains("not found")
+        );
+        let twice = Arc::new(Schema::new(vec![
+            Field::new("n1.n_name", DataType::Utf8, true),
+            Field::new("n2.n_name", DataType::Utf8, true),
+        ]));
+        assert!(
+            resolve_column_name(&twice, "n_name")
+                .unwrap_err()
+                .to_string()
+                .contains("ambiguous")
+        );
+    }
     #[test]
     fn metadata_count_sql_is_exact_snapshot_pinned_and_filter_safe() {
         let mut fixture = fixture();
@@ -2916,17 +2939,20 @@ mod tests {
             graph.stages[graph.root_stage.0 as usize].plan.operator,
             "PartitionedHashJoin"
         );
+        // Each side hashes on its own key, named as the join names it; the
+        // partitioner resolves it against the fragment's output by bare
+        // name when the fragment is a scan.
         assert_eq!(
             graph.exchanges[0].partitioning,
             Partitioning::Hash {
-                columns: vec!["customer_id".into()],
+                columns: vec!["o.customer_id".into()],
                 partition_count: 4,
             }
         );
         assert_eq!(
             graph.exchanges[1].partitioning,
             Partitioning::Hash {
-                columns: vec!["customer_id".into()],
+                columns: vec!["c.customer_id".into()],
                 partition_count: 4,
             }
         );

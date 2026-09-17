@@ -88,14 +88,13 @@ fn resolve_field(expr: &Expr, schema: &SchemaRef) -> Result<(Field, Option<Strin
             let field = schema.field_with_name(&name)?.clone();
             Ok((field, None))
         }
+        // A column keeps the name it was written with: `c_name` over a join
+        // output holding `customer.c_name` is the field `c_name`.
         Expr::Column(name) => {
-            let field = schema
-                .field_with_name(name)
-                .map_err(|_| {
-                    KaveonError::Execution(format!("projection column '{name}' not in input"))
-                })?
-                .clone();
-            Ok((field, None))
+            let index = crate::expr_eval::resolve_column_index(schema, name).map_err(|_| {
+                KaveonError::Execution(format!("projection column '{name}' not in input"))
+            })?;
+            Ok((schema.field(index).clone().with_name(name), None))
         }
         Expr::Alias { expr, name } => {
             let (mut field, _) = resolve_field(expr, schema)?;
@@ -146,4 +145,93 @@ fn format_function_name(name: &str, args: &[Expr]) -> String {
         })
         .collect();
     format!("{}({})", name.to_lowercase(), arg_names.join(", "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{Int64Array, StringArray};
+    use arrow::datatypes::DataType;
+    use kaveon_core::collect_batches;
+
+    struct Once(Option<RecordBatch>, SchemaRef);
+
+    impl BatchOperator for Once {
+        fn schema(&self) -> &SchemaRef {
+            &self.1
+        }
+
+        fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+            Ok(self.0.take())
+        }
+    }
+
+    fn joined() -> Box<dyn BatchOperator> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("customer.c_custkey", DataType::Int64, true),
+            Field::new("customer.c_name", DataType::Utf8, true),
+            Field::new("orders.o_custkey", DataType::Int64, true),
+            Field::new("orders.o_comment", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2])),
+                Arc::new(StringArray::from(vec!["a", "b"])),
+                Arc::new(Int64Array::from(vec![1, 2])),
+                Arc::new(StringArray::from(vec!["x", "y"])),
+            ],
+        )
+        .unwrap();
+        Box::new(Once(Some(batch), schema))
+    }
+
+    #[test]
+    fn bare_columns_reach_qualified_join_outputs_and_keep_their_written_name() {
+        let mut project = ProjectOperator::new(
+            joined(),
+            vec![
+                Expr::Column("c_name".into()),
+                Expr::Column("orders.o_comment".into()),
+                Expr::Alias {
+                    expr: Box::new(Expr::Column("o_custkey".into())),
+                    name: "key".into(),
+                },
+            ],
+        )
+        .unwrap();
+        let names = project
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| field.name().clone())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["c_name", "orders.o_comment", "key"]);
+        let batches = collect_batches(&mut project).unwrap();
+        assert_eq!(batches[0].num_rows(), 2);
+        assert_eq!(
+            batches[0]
+                .column(2)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .value(1),
+            2
+        );
+    }
+
+    #[test]
+    fn an_ambiguous_bare_column_is_refused() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("n1.n_name", DataType::Utf8, true),
+            Field::new("n2.n_name", DataType::Utf8, true),
+        ]));
+        let error = ProjectOperator::new(
+            Box::new(Once(None, schema)),
+            vec![Expr::Column("n_name".into())],
+        )
+        .err()
+        .expect("ambiguous");
+        assert!(error.to_string().contains("n_name"), "{error}");
+    }
 }
