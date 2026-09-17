@@ -1,4 +1,6 @@
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::parser::parse_sql;
 use kaveon_core::predicate::ScalarValue;
@@ -117,32 +119,46 @@ pub fn sql_to_logical_plan(sql: &str) -> Result<LogicalPlan> {
 
 fn statement_to_plan(stmt: &ast::Statement) -> Result<LogicalPlan> {
     match stmt {
-        ast::Statement::Query(query) => query_to_plan(query, &HashMap::new()),
+        ast::Statement::Query(query) => query_to_plan(query, &Lowering::default()),
         _ => Err(sql_err("only SELECT queries are supported")),
     }
 }
 
-fn query_to_plan(
-    query: &ast::Query,
-    parent_ctes: &HashMap<String, ast::Query>,
-) -> Result<LogicalPlan> {
-    let mut ctes = parent_ctes.clone();
+/// What a query level lowers against: the CTEs in scope, and the
+/// statement-wide counter that names scalar subquery columns.
+#[derive(Clone, Default)]
+struct Lowering {
+    ctes: HashMap<String, ast::Query>,
+    scalars: Rc<Cell<usize>>,
+}
+
+impl Lowering {
+    fn scalar_name(&self) -> String {
+        let ordinal = self.scalars.get();
+        self.scalars.set(ordinal + 1);
+        format!("__kaveon_scalar_{ordinal}")
+    }
+}
+
+fn query_to_plan(query: &ast::Query, parent: &Lowering) -> Result<LogicalPlan> {
+    let mut context = parent.clone();
     if let Some(with) = &query.with {
         if with.recursive {
             return Err(sql_err("recursive CTEs are not supported"));
         }
         for cte in &with.cte_tables {
             let cte_name = cte.alias.name.value.to_lowercase();
-            ctes.insert(cte_name, *cte.query.clone());
+            context.ctes.insert(cte_name, *cte.query.clone());
         }
     }
+    let ctes = &context;
 
     // A single SELECT hands back the bindings its aggregate lowering made,
     // so an ORDER BY that repeats a lowered expression (`ORDER BY a - a % 60`
     // beside `GROUP BY a - a % 60`) resolves to the same column.
     let (plan, bindings) = match query.body.as_ref() {
-        ast::SetExpr::Select(select) => select_to_plan_with_bindings(select, &ctes)?,
-        body => (set_expr_to_plan(body, &ctes)?, Vec::new()),
+        ast::SetExpr::Select(select) => select_to_plan_with_bindings(select, ctes)?,
+        body => (set_expr_to_plan(body, ctes)?, Vec::new()),
     };
 
     let (plan, visible) = match &query.order_by {
@@ -163,10 +179,7 @@ fn query_to_plan(
     Ok(plan)
 }
 
-fn set_expr_to_plan(
-    body: &ast::SetExpr,
-    ctes: &HashMap<String, ast::Query>,
-) -> Result<LogicalPlan> {
+fn set_expr_to_plan(body: &ast::SetExpr, ctes: &Lowering) -> Result<LogicalPlan> {
     match body {
         ast::SetExpr::Select(select) => select_to_plan(select, ctes),
         ast::SetExpr::SetOperation {
@@ -231,13 +244,13 @@ fn set_expr_to_plan(
     }
 }
 
-fn select_to_plan(select: &ast::Select, ctes: &HashMap<String, ast::Query>) -> Result<LogicalPlan> {
+fn select_to_plan(select: &ast::Select, ctes: &Lowering) -> Result<LogicalPlan> {
     Ok(select_to_plan_with_bindings(select, ctes)?.0)
 }
 
 fn select_to_plan_with_bindings(
     select: &ast::Select,
-    ctes: &HashMap<String, ast::Query>,
+    ctes: &Lowering,
 ) -> Result<(LogicalPlan, ExpressionBindings)> {
     let plan = build_from_clause(select, ctes)?;
     let plan = build_where(plan, select, ctes)?;
@@ -252,7 +265,7 @@ fn select_to_plan_with_bindings(
         plan
     };
 
-    let plan = build_having(plan, select)?;
+    let (plan, having_scalars) = build_having(plan, select, ctes)?;
 
     let window_exprs = collect_window_exprs(select)?;
     let plan = if window_exprs.is_empty() {
@@ -274,13 +287,90 @@ fn select_to_plan_with_bindings(
         plan
     };
 
-    lower_aggregate_expressions(plan)
+    // A HAVING that compares with a scalar subquery references the
+    // aggregate's output columns across the join that carries the
+    // subquery's value, so every aggregate is lowered to a named column.
+    let (plan, bindings) = lower_aggregate_expressions(plan, !having_scalars.is_empty())?;
+    Ok((attach_having_scalars(plan, having_scalars), bindings))
 }
 
-fn build_from_clause(
-    select: &ast::Select,
-    ctes: &HashMap<String, ast::Query>,
-) -> Result<LogicalPlan> {
+/// The scalar subqueries of a HAVING join the aggregate's output: one
+/// single-row relation per subquery, cross-joined below the HAVING filter.
+fn attach_having_scalars(plan: LogicalPlan, scalars: Vec<LogicalPlan>) -> LogicalPlan {
+    if scalars.is_empty() {
+        return plan;
+    }
+    match plan {
+        // The first filter from the top is the HAVING: WHERE sits below
+        // the aggregate.
+        LogicalPlan::Filter { input, predicate } => {
+            let mut input = *input;
+            for scalar in scalars {
+                input = LogicalPlan::Join {
+                    left: Box::new(input),
+                    right: Box::new(scalar),
+                    join_type: JoinType::Cross,
+                    condition: None,
+                    distribution: JoinDistribution::Partitioned,
+                };
+            }
+            LogicalPlan::Filter {
+                input: Box::new(input),
+                predicate: bind_count_star(predicate),
+            }
+        }
+        LogicalPlan::Project { input, columns } => LogicalPlan::Project {
+            input: Box::new(attach_having_scalars(*input, scalars)),
+            columns,
+        },
+        LogicalPlan::Distinct { input } => LogicalPlan::Distinct {
+            input: Box::new(attach_having_scalars(*input, scalars)),
+        },
+        LogicalPlan::Window {
+            input,
+            window_exprs,
+        } => LogicalPlan::Window {
+            input: Box::new(attach_having_scalars(*input, scalars)),
+            window_exprs,
+        },
+        other => other,
+    }
+}
+
+/// `COUNT(*)` has no argument to lower, so a HAVING that carries it
+/// across the scalar join names its output column directly.
+fn bind_count_star(expr: Expr) -> Expr {
+    let bind = |expr: Box<Expr>| Box::new(bind_count_star(*expr));
+    match expr {
+        Expr::Function { name, args }
+            if name == "COUNT" && matches!(args.as_slice(), [Expr::Star]) =>
+        {
+            Expr::Column("count_*".into())
+        }
+        Expr::BinaryOp { left, op, right } => Expr::BinaryOp {
+            left: bind(left),
+            op,
+            right: bind(right),
+        },
+        Expr::And(left, right) => Expr::And(bind(left), bind(right)),
+        Expr::Or(left, right) => Expr::Or(bind(left), bind(right)),
+        Expr::Not(inner) => Expr::Not(bind(inner)),
+        Expr::Between {
+            expr,
+            low,
+            high,
+            negated,
+        } => Expr::Between {
+            expr: bind(expr),
+            low: bind(low),
+            high: bind(high),
+            negated,
+        },
+        other => other,
+    }
+}
+
+fn build_from_clause(select: &ast::Select, ctes: &Lowering) -> Result<LogicalPlan> {
     if select.from.is_empty() {
         return Err(sql_err("SELECT requires a FROM clause"));
     }
@@ -305,18 +395,16 @@ fn build_from_clause(
     Ok(plan)
 }
 
-fn table_factor_to_plan(
-    factor: &ast::TableFactor,
-    ctes: &HashMap<String, ast::Query>,
-) -> Result<LogicalPlan> {
+fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<LogicalPlan> {
     match factor {
         ast::TableFactor::Table { name, alias, .. } => {
             let table_name = name.to_string();
             let alias_name = alias.as_ref().map(|a| a.name.value.clone());
             let lookup = alias_name.as_deref().unwrap_or(&table_name).to_lowercase();
             if let Some(cte_query) = ctes
+                .ctes
                 .get(&table_name.to_lowercase())
-                .or_else(|| ctes.get(&lookup))
+                .or_else(|| ctes.ctes.get(&lookup))
             {
                 let mut plan = query_to_plan(
                     &ast::Query {
@@ -356,11 +444,7 @@ fn table_factor_to_plan(
     }
 }
 
-fn apply_joins(
-    mut left: LogicalPlan,
-    joins: &[ast::Join],
-    ctes: &HashMap<String, ast::Query>,
-) -> Result<LogicalPlan> {
+fn apply_joins(mut left: LogicalPlan, joins: &[ast::Join], ctes: &Lowering) -> Result<LogicalPlan> {
     for join in joins {
         let right = table_factor_to_plan(&join.relation, ctes)?;
         let (join_type, constraint) = match &join.join_operator {
@@ -390,11 +474,7 @@ fn apply_joins(
     Ok(left)
 }
 
-fn build_where(
-    plan: LogicalPlan,
-    select: &ast::Select,
-    ctes: &HashMap<String, ast::Query>,
-) -> Result<LogicalPlan> {
+fn build_where(plan: LogicalPlan, select: &ast::Select, ctes: &Lowering) -> Result<LogicalPlan> {
     match &select.selection {
         None => Ok(plan),
         Some(expr) => {
@@ -421,7 +501,7 @@ fn extract_subquery_predicates(
     expr: &ast::Expr,
     plan: &mut LogicalPlan,
     remaining: &mut Vec<Expr>,
-    ctes: &HashMap<String, ast::Query>,
+    ctes: &Lowering,
 ) -> Result<()> {
     match expr {
         ast::Expr::BinaryOp {
@@ -502,10 +582,112 @@ fn extract_subquery_predicates(
         }
         ast::Expr::Nested(inner) => extract_subquery_predicates(inner, plan, remaining, ctes),
         other => {
-            remaining.push(ast_expr_to_expr(other)?);
+            let rewritten = replace_scalar_subqueries(other, ctes, &mut |scalar| {
+                let current = std::mem::replace(
+                    plan,
+                    LogicalPlan::Scan {
+                        table: String::new(),
+                        alias: None,
+                        columns: None,
+                    },
+                );
+                *plan = LogicalPlan::Join {
+                    left: Box::new(current),
+                    right: Box::new(scalar),
+                    join_type: JoinType::Cross,
+                    condition: None,
+                    distribution: JoinDistribution::Partitioned,
+                };
+            })?;
+            remaining.push(ast_expr_to_expr(&rewritten)?);
             Ok(())
         }
     }
+}
+
+/// Each scalar subquery in `expr` becomes one column of a single-row
+/// relation, handed to `sink` to join into the query, and the expression
+/// refers to that column. `x < (SELECT avg(y) FROM t)` is `x <
+/// __kaveon_scalar_0` beside a cross join with the one-row aggregate; the
+/// binder later turns a subquery correlated with the query into a join on
+/// the correlation. Only subqueries in comparison positions are lowered;
+/// one nested deeper keeps its error.
+fn replace_scalar_subqueries(
+    expr: &ast::Expr,
+    ctes: &Lowering,
+    sink: &mut dyn FnMut(LogicalPlan),
+) -> Result<ast::Expr> {
+    Ok(match expr {
+        ast::Expr::Subquery(query) => {
+            let name = ctes.scalar_name();
+            sink(scalar_subquery_plan(query_to_plan(query, ctes)?, &name)?);
+            ast::Expr::Identifier(ast::Ident::new(name))
+        }
+        ast::Expr::BinaryOp { left, op, right } => ast::Expr::BinaryOp {
+            left: Box::new(replace_scalar_subqueries(left, ctes, sink)?),
+            op: op.clone(),
+            right: Box::new(replace_scalar_subqueries(right, ctes, sink)?),
+        },
+        ast::Expr::Nested(inner) => {
+            ast::Expr::Nested(Box::new(replace_scalar_subqueries(inner, ctes, sink)?))
+        }
+        ast::Expr::UnaryOp { op, expr } => ast::Expr::UnaryOp {
+            op: op.clone(),
+            expr: Box::new(replace_scalar_subqueries(expr, ctes, sink)?),
+        },
+        ast::Expr::Between {
+            expr,
+            negated,
+            low,
+            high,
+        } => ast::Expr::Between {
+            expr: Box::new(replace_scalar_subqueries(expr, ctes, sink)?),
+            negated: *negated,
+            low: Box::new(replace_scalar_subqueries(low, ctes, sink)?),
+            high: Box::new(replace_scalar_subqueries(high, ctes, sink)?),
+        },
+        other => other.clone(),
+    })
+}
+
+/// The subquery's plan as a single-row relation whose one column is
+/// `name`: an ungrouped aggregate (possibly under HAVING) selecting one
+/// expression. Anything else could yield several rows, which a scalar
+/// position cannot take.
+fn scalar_subquery_plan(plan: LogicalPlan, name: &str) -> Result<LogicalPlan> {
+    validate_uncorrelated(&plan)?;
+    let LogicalPlan::Project { input, columns } = plan else {
+        return Err(sql_err("a scalar subquery must select exactly one column"));
+    };
+    let [column] = columns.as_slice() else {
+        return Err(sql_err("a scalar subquery must select exactly one column"));
+    };
+    if matches!(column, Expr::Star) {
+        return Err(sql_err("a scalar subquery must select exactly one column"));
+    }
+    fn single_row(plan: &LogicalPlan) -> bool {
+        match plan {
+            LogicalPlan::Aggregate { group_by, .. } => group_by.is_empty(),
+            LogicalPlan::Filter { input, .. } => single_row(input),
+            _ => false,
+        }
+    }
+    if !single_row(&input) {
+        return Err(sql_err(
+            "a scalar subquery must be an ungrouped aggregate, so that it yields one row",
+        ));
+    }
+    let expr = match column {
+        Expr::Alias { expr, .. } => (**expr).clone(),
+        other => other.clone(),
+    };
+    Ok(LogicalPlan::Project {
+        input,
+        columns: vec![Expr::Alias {
+            expr: Box::new(expr),
+            name: name.to_owned(),
+        }],
+    })
 }
 
 fn build_aggregate(plan: LogicalPlan, select: &ast::Select) -> Result<LogicalPlan> {
@@ -587,15 +769,28 @@ fn build_aggregate(plan: LogicalPlan, select: &ast::Select) -> Result<LogicalPla
     })
 }
 
-fn build_having(plan: LogicalPlan, select: &ast::Select) -> Result<LogicalPlan> {
+/// The HAVING filter, and the single-row relations of its scalar
+/// subqueries, which join the aggregate's output once the aggregate is
+/// lowered (see `attach_having_scalars`).
+fn build_having(
+    plan: LogicalPlan,
+    select: &ast::Select,
+    ctes: &Lowering,
+) -> Result<(LogicalPlan, Vec<LogicalPlan>)> {
     match &select.having {
-        None => Ok(plan),
+        None => Ok((plan, Vec::new())),
         Some(expr) => {
-            let predicate = ast_expr_to_expr(expr)?;
-            Ok(LogicalPlan::Filter {
-                input: Box::new(plan),
-                predicate,
-            })
+            let mut scalars = Vec::new();
+            let rewritten =
+                replace_scalar_subqueries(expr, ctes, &mut |scalar| scalars.push(scalar))?;
+            let predicate = ast_expr_to_expr(&rewritten)?;
+            Ok((
+                LogicalPlan::Filter {
+                    input: Box::new(plan),
+                    predicate,
+                },
+                scalars,
+            ))
         }
     }
 }
@@ -605,10 +800,13 @@ type ExpressionBindings = Vec<(Expr, Expr)>;
 /// Compute aggregate/group expressions once below aggregation, then bind
 /// references above it to the resulting columns. Both execution paths receive
 /// column-only aggregate arguments while preserving the original SQL types.
-fn lower_aggregate_expressions(plan: LogicalPlan) -> Result<(LogicalPlan, ExpressionBindings)> {
+fn lower_aggregate_expressions(
+    plan: LogicalPlan,
+    force: bool,
+) -> Result<(LogicalPlan, ExpressionBindings)> {
     match plan {
         LogicalPlan::Project { input, columns } => {
-            let (input, bindings) = lower_aggregate_expressions(*input)?;
+            let (input, bindings) = lower_aggregate_expressions(*input, force)?;
             let columns = columns
                 .into_iter()
                 .map(|e| replace_bound_expression(e, &bindings))
@@ -622,7 +820,7 @@ fn lower_aggregate_expressions(plan: LogicalPlan) -> Result<(LogicalPlan, Expres
             ))
         }
         LogicalPlan::Filter { input, predicate } => {
-            let (input, bindings) = lower_aggregate_expressions(*input)?;
+            let (input, bindings) = lower_aggregate_expressions(*input, force)?;
             let predicate = replace_bound_expression(predicate, &bindings);
             Ok((
                 LogicalPlan::Filter {
@@ -633,7 +831,7 @@ fn lower_aggregate_expressions(plan: LogicalPlan) -> Result<(LogicalPlan, Expres
             ))
         }
         LogicalPlan::Distinct { input } => {
-            let (input, bindings) = lower_aggregate_expressions(*input)?;
+            let (input, bindings) = lower_aggregate_expressions(*input, force)?;
             Ok((
                 LogicalPlan::Distinct {
                     input: Box::new(input),
@@ -645,7 +843,7 @@ fn lower_aggregate_expressions(plan: LogicalPlan) -> Result<(LogicalPlan, Expres
             input,
             window_exprs,
         } => {
-            let (input, bindings) = lower_aggregate_expressions(*input)?;
+            let (input, bindings) = lower_aggregate_expressions(*input, force)?;
             let window_exprs = window_exprs
                 .into_iter()
                 .map(|e| replace_bound_expression(e, &bindings))
@@ -674,7 +872,7 @@ fn lower_aggregate_expressions(plan: LogicalPlan) -> Result<(LogicalPlan, Expres
                     };
                     !matches!(e, Expr::Column(_) | Expr::Star)
                 });
-            if !complex {
+            if !complex && !force {
                 return Ok((
                     LogicalPlan::Aggregate {
                         input,
@@ -2584,6 +2782,133 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn a_scalar_subquery_in_where_is_a_single_row_join() {
+        let plan =
+            sql_to_logical_plan("SELECT a FROM t WHERE b > (SELECT avg(b) FROM t WHERE c = 1)")
+                .unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("projection");
+        };
+        let LogicalPlan::Filter { input, predicate } = *input else {
+            panic!("filter");
+        };
+        assert_eq!(
+            predicate,
+            Expr::BinaryOp {
+                left: Box::new(Expr::Column("b".into())),
+                op: BinaryOp::Gt,
+                right: Box::new(Expr::Column("__kaveon_scalar_0".into())),
+            }
+        );
+        let LogicalPlan::Join {
+            left,
+            right,
+            join_type: JoinType::Cross,
+            condition: None,
+            ..
+        } = *input
+        else {
+            panic!("cross join with the one-row aggregate");
+        };
+        assert!(matches!(*left, LogicalPlan::Scan { .. }));
+        let LogicalPlan::Project { input, columns } = *right else {
+            panic!("the subquery projects its one column under the scalar's name");
+        };
+        assert_eq!(
+            columns,
+            vec![Expr::Alias {
+                expr: Box::new(Expr::Function {
+                    name: "AVG".into(),
+                    args: vec![Expr::Column("b".into())]
+                }),
+                name: "__kaveon_scalar_0".into()
+            }]
+        );
+        assert!(matches!(*input, LogicalPlan::Aggregate { .. }));
+        // Two scalars take distinct names.
+        let plan = sql_to_logical_plan(
+            "SELECT a FROM t WHERE b > (SELECT avg(b) FROM t) AND c < (SELECT max(c) FROM u)",
+        )
+        .unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("projection");
+        };
+        let LogicalPlan::Filter { predicate, .. } = *input else {
+            panic!("filter");
+        };
+        let Expr::And(_, second) = predicate else {
+            panic!("both conjuncts");
+        };
+        assert!(matches!(
+            *second,
+            Expr::BinaryOp { right, .. } if *right == Expr::Column("__kaveon_scalar_1".into())
+        ));
+        // A subquery that could yield several rows is refused.
+        for sql in [
+            "SELECT a FROM t WHERE b > (SELECT b FROM t)",
+            "SELECT a FROM t WHERE b > (SELECT max(b) FROM t GROUP BY c)",
+            "SELECT a FROM t WHERE b > (SELECT max(b), min(b) FROM t)",
+        ] {
+            assert!(sql_to_logical_plan(sql).is_err(), "{sql}");
+        }
+        assert!(sql_to_logical_plan("SELECT (SELECT max(b) FROM t) FROM t").is_err());
+    }
+
+    #[test]
+    fn a_scalar_subquery_in_having_joins_the_aggregate_output() {
+        let plan = sql_to_logical_plan(
+            "SELECT k, sum(v) AS total FROM t GROUP BY k HAVING sum(v) > (SELECT sum(v) * 0.5 FROM t) AND count(*) > 1 ORDER BY total DESC",
+        )
+        .unwrap();
+        let LogicalPlan::Sort { input, .. } = plan else {
+            panic!("sort");
+        };
+        let LogicalPlan::Project { input, columns } = *input else {
+            panic!("projection");
+        };
+        // Every aggregate is a named column above the join.
+        assert_eq!(
+            columns[1],
+            Expr::Alias {
+                expr: Box::new(Expr::Column("sum___kaveon_arg_0".into())),
+                name: "total".into()
+            }
+        );
+        let LogicalPlan::Filter { input, predicate } = *input else {
+            panic!("HAVING filter");
+        };
+        assert_eq!(
+            predicate,
+            Expr::And(
+                Box::new(Expr::BinaryOp {
+                    left: Box::new(Expr::Column("sum___kaveon_arg_0".into())),
+                    op: BinaryOp::Gt,
+                    right: Box::new(Expr::Column("__kaveon_scalar_0".into())),
+                }),
+                Box::new(Expr::BinaryOp {
+                    left: Box::new(Expr::Column("count_*".into())),
+                    op: BinaryOp::Gt,
+                    right: Box::new(Expr::Literal(ScalarValue::Int64(1))),
+                }),
+            )
+        );
+        let LogicalPlan::Join {
+            left,
+            right,
+            join_type: JoinType::Cross,
+            ..
+        } = *input
+        else {
+            panic!("the scalar joins the aggregate output");
+        };
+        assert!(matches!(*left, LogicalPlan::Aggregate { .. }));
+        let LogicalPlan::Project { columns, .. } = *right else {
+            panic!("scalar projection");
+        };
+        assert!(matches!(&columns[0], Expr::Alias { name, .. } if name == "__kaveon_scalar_0"));
     }
 
     #[test]
