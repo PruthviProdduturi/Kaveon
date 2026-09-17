@@ -29,7 +29,7 @@ Hash aggregate and hash join do not yet spill. Their bounded mode protects a pro
 
 An admitted query owns its budget until its admission guard is dropped. The query pool subdivides that budget among operator accounts; operator reservations do not change the admitted budget. Cancellation and error paths must destroy operators and their guards so both retained memory and admission capacity are released.
 
-The coordinator admits each submitted query against `KAVEON_MEMORY_ADMISSION_LIMIT_BYTES` and assigns `KAVEON_QUERY_MEMORY_LIMIT_BYTES`. Local plans and worker fragments propagate query pools to hash aggregate and hash join. Compatibility constructors remain available for embedded callers, so this is server-runtime enforcement—not a claim that every library embedding is bounded.
+The coordinator admits each submitted query against `KAVEON_MEMORY_ADMISSION_LIMIT_BYTES` and assigns `KAVEON_QUERY_MEMORY_LIMIT_BYTES`. A query whose budget does not fit on arrival waits in a FIFO admission queue (`KAVEON_MEMORY_ADMISSION_QUEUE`, default 64) for at most `KAVEON_MEMORY_ADMISSION_WAIT_SECONDS` (default 60), and is refused with HTTP 429 `MEMORY_ADMISSION_REJECTED` only when the queue is full or the wait expires; workers queue tasks the same way, bounded by cancellation and the coordinator's task timeout. The head of the queue is served first and only when its whole budget fits, so a large budget is never starved by smaller arrivals and the order is the arrival order. Local plans and worker fragments propagate query pools to hash aggregate and hash join. Compatibility constructors remain available for embedded callers, so this is server-runtime enforcement—not a claim that every library embedding is bounded.
 
 Every node also answers to its process limit: the container's cgroup limit, read by the Engine itself, or `KAVEON_PROCESS_MEMORY_LIMIT_BYTES` when set (0 disables). A headroom of the larger of 256 MiB and 15 % is kept free. A node not told its admission limit takes the process limit less the headroom; an admission limit above the process limit is refused at startup. Deployments should let the Engine read the cgroup limit rather than set the override.
 
@@ -37,7 +37,7 @@ On the AKS qualification cluster (`infra/helm/kaveon-test`, values `<role>.memor
 
 ## Required production evidence
 
-- concurrent admission never exceeds the configured process ceiling;
+- concurrent admission never exceeds the configured process ceiling, and a queued arrival is admitted in order once budget is released;
 - aggregate and join state remain within their query budget under high cardinality and skew;
 - cancellation, retry, worker loss, and operator errors return every reservation;
 - spill disk limits and cleanup hold during partial failures;
