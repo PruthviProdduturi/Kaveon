@@ -43,10 +43,6 @@ const KNOWN_UNSUPPORTED: &[(&str, &str)] = &[
     ),
     ("q15", "parse: scalar subqueries are not yet supported"),
     ("q17", "parse: scalar subqueries are not yet supported"),
-    (
-        "q18",
-        "execute: the IN subquery's HAVING sum(l_quantity) > 300 is not collected into the aggregate, so GROUP BY l_orderkey lowers to DISTINCT and the HAVING finds no l_quantity",
-    ),
     ("q20", "parse: scalar subqueries are not yet supported"),
     (
         "q21",

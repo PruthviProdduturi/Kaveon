@@ -8,7 +8,7 @@ use kaveon_core::{
 };
 use sqlparser::ast;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum AggregateExpr {
     Count { expr: Expr, distinct: bool },
     Sum { expr: Expr, distinct: bool },
@@ -243,6 +243,7 @@ fn select_to_plan_with_bindings(
     let plan = build_where(plan, select, ctes)?;
 
     let has_aggregates = select.projection.iter().any(contains_aggregate_select_item)
+        || select.having.as_ref().is_some_and(contains_aggregate_expr)
         || matches!(&select.group_by, ast::GroupByExpr::Expressions(exprs, _) if !exprs.is_empty());
 
     let plan = if has_aggregates {
@@ -520,6 +521,18 @@ fn build_aggregate(plan: LogicalPlan, select: &ast::Select) -> Result<LogicalPla
     let mut aggregates = Vec::new();
     for item in &select.projection {
         collect_aggregates_from_select_item(item, &mut aggregates)?;
+    }
+    // HAVING may aggregate what the projection does not (`SELECT k ...
+    // GROUP BY k HAVING SUM(x) > 300`); an aggregate it shares with the
+    // projection is computed once.
+    if let Some(having) = &select.having {
+        let mut from_having = Vec::new();
+        collect_aggregates_from_ast_expr(having, &mut from_having)?;
+        for aggregate in from_having {
+            if !aggregates.contains(&aggregate) {
+                aggregates.push(aggregate);
+            }
+        }
     }
 
     // GROUP BY over plain columns with nothing to aggregate is DISTINCT over
@@ -2506,6 +2519,71 @@ mod tests {
             },
             _ => panic!("expected Project"),
         }
+    }
+
+    #[test]
+    fn having_aggregates_are_computed_even_when_the_projection_does_not_select_them() {
+        let plan = sql_to_logical_plan(
+            "SELECT l_orderkey FROM lineitem GROUP BY l_orderkey HAVING sum(l_quantity) > 300",
+        )
+        .unwrap();
+        let LogicalPlan::Project { input, columns } = plan else {
+            panic!("projection");
+        };
+        assert_eq!(columns, vec![Expr::Column("l_orderkey".into())]);
+        let LogicalPlan::Filter { input, predicate } = *input else {
+            panic!("HAVING filter");
+        };
+        assert!(matches!(
+            predicate,
+            Expr::BinaryOp {
+                op: BinaryOp::Gt,
+                ..
+            }
+        ));
+        let LogicalPlan::Aggregate {
+            group_by,
+            aggregates,
+            ..
+        } = *input
+        else {
+            panic!("an aggregate, not the DISTINCT a bare GROUP BY lowers to");
+        };
+        assert_eq!(group_by, vec![Expr::Column("l_orderkey".into())]);
+        assert_eq!(
+            aggregates,
+            vec![AggregateExpr::Sum {
+                expr: Expr::Column("l_quantity".into()),
+                distinct: false
+            }]
+        );
+        // An aggregate the projection already carries is computed once.
+        let plan = sql_to_logical_plan(
+            "SELECT k, SUM(x) AS s FROM t GROUP BY k HAVING SUM(x) > 1 AND COUNT(*) > 2",
+        )
+        .unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("projection");
+        };
+        let LogicalPlan::Filter { input, .. } = *input else {
+            panic!("HAVING filter");
+        };
+        let LogicalPlan::Aggregate { aggregates, .. } = *input else {
+            panic!("aggregate");
+        };
+        assert_eq!(
+            aggregates,
+            vec![
+                AggregateExpr::Sum {
+                    expr: Expr::Column("x".into()),
+                    distinct: false
+                },
+                AggregateExpr::Count {
+                    expr: Expr::Star,
+                    distinct: false
+                }
+            ]
+        );
     }
 
     #[test]
