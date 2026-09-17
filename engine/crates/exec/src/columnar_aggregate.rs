@@ -1047,6 +1047,30 @@ impl ColumnarGroups {
         Ok((created, new_bytes))
     }
 
+    /// Push a batch of keys with no aggregates and report the rows that
+    /// began a group: the first row of every key the table had not seen —
+    /// DISTINCT as the grouped aggregate with nothing to accumulate.
+    /// Returns those row indices and the text bytes added.
+    pub fn push_batch_new_rows(
+        &mut self,
+        key_columns: &[ArrayRef],
+        rows: usize,
+    ) -> Result<(Vec<u32>, u64)> {
+        let before = self.len;
+        let (_, new_bytes) = self.push_batch(key_columns, &[], rows)?;
+        let mut kept = Vec::with_capacity(self.len - before);
+        let mut next = before as u32;
+        for (row, &slot) in self.slots.iter().enumerate() {
+            // Slots are handed out in row order, so the first row of a new
+            // slot carries the next unseen id.
+            if slot == next {
+                kept.push(row as u32);
+                next += 1;
+            }
+        }
+        Ok((kept, new_bytes))
+    }
+
     /// Merge one partial group (decoded key words + states) into the table:
     /// the final stage's path. Keys arrive as the exchange's logical values.
     pub fn merge_group(
