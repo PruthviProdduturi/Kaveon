@@ -25,6 +25,26 @@ coordinator:
   resources:
     requests: {cpu: "500m", memory: 1Gi, ephemeral-storage: 2Gi}
     limits: {cpu: "2", memory: 4Gi, ephemeral-storage: 8Gi}
+  # Query memory on the coordinator. It plans, admits and merges final
+  # results; workers carry the fragments, so its budgets stay small. The
+  # admission limit must not exceed the container memory limit less the
+  # Engine's headroom (max(256 MiB, 15 %)); the Engine reads the cgroup limit
+  # itself, so KAVEON_PROCESS_MEMORY_LIMIT_BYTES is deliberately not set.
+  memory:
+    # KAVEON_QUERY_MEMORY_LIMIT_BYTES: 512 MiB per admitted query.
+    queryLimitBytes: "536870912"
+    # KAVEON_MEMORY_ADMISSION_LIMIT_BYTES: 2 GiB across admitted queries.
+    admissionLimitBytes: "2147483648"
+  # Coordinator-hosted exchange spool (KAVEON_COORDINATOR_EXCHANGE_SPOOL).
+  # Off: workers spool exchanges on their own disk (workers.exchange.spool)
+  # and the coordinator relays no exchange traffic. The limits stay sized for
+  # the 32 GiB state PVC so the spool can be turned back on without retuning.
+  exchange:
+    spool: false
+    # KAVEON_EXCHANGE_DISK_LIMIT_BYTES: 24 GiB across all active exchanges.
+    diskLimitBytes: "25769803776"
+    # KAVEON_EXCHANGE_QUERY_DISK_LIMIT_BYTES: 16 GiB, one query's share.
+    queryDiskLimitBytes: "17179869184"
 workers:
   replicas: 3
   nodeSelector:
@@ -32,7 +52,28 @@ workers:
   resources:
     requests: {cpu: "1", memory: 2Gi, ephemeral-storage: 4Gi}
     limits: {cpu: "3", memory: 6Gi, ephemeral-storage: 20Gi}
-queryMemoryLimitBytes: "536870912"
-memoryAdmissionLimitBytes: "2147483648"
-exchangeDiskLimitBytes: "10737418240"
+  # Query memory on a worker, inside the 6 GiB container limit less the
+  # Engine's headroom. KAVEON_PROCESS_MEMORY_LIMIT_BYTES is not set: the
+  # Engine reads its cgroup limit.
+  memory:
+    # KAVEON_QUERY_MEMORY_LIMIT_BYTES: 3 GiB per query per worker.
+    queryLimitBytes: "3221225472"
+    # KAVEON_MEMORY_ADMISSION_LIMIT_BYTES: 4 GiB across admitted fragments.
+    admissionLimitBytes: "4294967296"
+  # Worker-hosted exchange spool (KAVEON_WORKER_EXCHANGE_SPOOL). On, a worker
+  # keeps the exchange partitions addressed to it on its own disk under
+  # /state/exchange, so producers upload straight to the consuming worker.
+  # Received payloads spool under /state too (KAVEON_IPC_SPOOL_ROOT). Both
+  # live on the ephemeral state volume sized by stateSizeLimit.
+  exchange:
+    spool: true
+    # KAVEON_EXCHANGE_DISK_LIMIT_BYTES: 8 GiB across all active exchanges.
+    diskLimitBytes: "8589934592"
+    # KAVEON_EXCHANGE_QUERY_DISK_LIMIT_BYTES: 6 GiB, one query's share.
+    queryDiskLimitBytes: "6442450944"
+  # sizeLimit of the /state emptyDir: catalog, exchange spool and received
+  # payload spool. Counts toward the container's ephemeral-storage limit.
+  stateSizeLimit: 16Gi
+# KAVEON_HASH_SPILL_BYTES on every node: hash aggregate and join spill under
+# /tmp/spill (KAVEON_HASH_SPILL_ROOT), inside the 6 GiB /tmp emptyDir.
 spillDiskLimitBytes: "4294967296"
