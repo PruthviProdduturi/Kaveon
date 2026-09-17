@@ -1,32 +1,52 @@
 //! Versioned accumulator payload inside the typed grouped Arrow envelope.
 use super::*;
 
+const MAGIC: &[u8; 4] = b"KAS\x01";
+
+/// The state tags, one per accumulator kind the payload carries.
+pub(crate) const TAG_SUM: u8 = 1;
+pub(crate) const TAG_COUNT: u8 = 2;
+pub(crate) const TAG_MIN: u8 = 3;
+pub(crate) const TAG_MAX: u8 = 4;
+pub(crate) const TAG_AVG: u8 = 5;
+const TAG_COUNT_DISTINCT: u8 = 6;
+const TAG_SUM_DISTINCT: u8 = 7;
+const TAG_AVG_DISTINCT: u8 = 8;
+const TAG_DECIMAL_SUM: u8 = 9;
+pub(crate) const TAG_INTEGER_SUM: u8 = 10;
+pub(crate) const TAG_INTEGER_MIN: u8 = 11;
+pub(crate) const TAG_INTEGER_MAX: u8 = 12;
+const TAG_INTEGER_SUM_DISTINCT: u8 = 13;
+const TAG_EXACT: u8 = 14;
+pub(crate) const TAG_UTF8_MIN: u8 = 15;
+pub(crate) const TAG_UTF8_MAX: u8 = 16;
+
 /// Append one group's states to `out`. The caller has validated the layout
 /// for the whole set of groups and checks cancellation per stride, so this
 /// is the per-group hot path with no allocation of its own.
 pub(crate) fn encode_into(states: &[AggregateState], out: &mut Vec<u8>) -> Result<()> {
-    out.extend_from_slice(b"KAS\x01");
+    out.extend_from_slice(MAGIC);
     length(out, states.len())?;
     for state in states {
         match state {
             AggregateState::Sum { sum, count } | AggregateState::Avg { sum, count } => {
                 out.push(if matches!(state, AggregateState::Sum { .. }) {
-                    1
+                    TAG_SUM
                 } else {
-                    5
+                    TAG_AVG
                 });
                 out.extend(sum.to_le_bytes());
                 out.extend(count.to_le_bytes());
             }
             AggregateState::Count(count) => {
-                out.push(2);
+                out.push(TAG_COUNT);
                 out.extend(count.to_le_bytes());
             }
             AggregateState::Min(value) | AggregateState::Max(value) => {
                 out.push(if matches!(state, AggregateState::Min(_)) {
-                    3
+                    TAG_MIN
                 } else {
-                    4
+                    TAG_MAX
                 });
                 out.push(u8::from(value.is_some()));
                 if let Some(value) = value {
@@ -35,9 +55,9 @@ pub(crate) fn encode_into(states: &[AggregateState], out: &mut Vec<u8>) -> Resul
             }
             AggregateState::Utf8Min(value) | AggregateState::Utf8Max(value) => {
                 out.push(if matches!(state, AggregateState::Utf8Min(_)) {
-                    15
+                    TAG_UTF8_MIN
                 } else {
-                    16
+                    TAG_UTF8_MAX
                 });
                 out.push(u8::from(value.is_some()));
                 if let Some(value) = value {
@@ -52,29 +72,29 @@ pub(crate) fn encode_into(states: &[AggregateState], out: &mut Vec<u8>) -> Resul
             | AggregateState::AvgDistinct(values)
             | AggregateState::IntegerSumDistinct(values) => {
                 out.push(match state {
-                    AggregateState::CountDistinct(_) => 6,
-                    AggregateState::SumDistinct(_) => 7,
-                    AggregateState::AvgDistinct(_) => 8,
-                    _ => 13,
+                    AggregateState::CountDistinct(_) => TAG_COUNT_DISTINCT,
+                    AggregateState::SumDistinct(_) => TAG_SUM_DISTINCT,
+                    AggregateState::AvgDistinct(_) => TAG_AVG_DISTINCT,
+                    _ => TAG_INTEGER_SUM_DISTINCT,
                 });
                 payload(out, &encode_distinct_values(values)?)?;
             }
             AggregateState::DecimalSum { sum, count, scale } => {
-                out.push(9);
+                out.push(TAG_DECIMAL_SUM);
                 out.extend(sum.to_le_bytes());
                 out.extend(count.to_le_bytes());
                 out.push(*scale as u8);
             }
             AggregateState::IntegerSum { sum, count } => {
-                out.push(10);
+                out.push(TAG_INTEGER_SUM);
                 out.extend(sum.to_le_bytes());
                 out.extend(count.to_le_bytes());
             }
             AggregateState::IntegerMin(value) | AggregateState::IntegerMax(value) => {
                 out.push(if matches!(state, AggregateState::IntegerMin(_)) {
-                    11
+                    TAG_INTEGER_MIN
                 } else {
-                    12
+                    TAG_INTEGER_MAX
                 });
                 out.push(u8::from(value.is_some()));
                 if let Some(value) = value {
@@ -87,7 +107,7 @@ pub(crate) fn encode_into(states: &[AggregateState], out: &mut Vec<u8>) -> Resul
                 value,
                 distinct,
             } => {
-                out.push(14);
+                out.push(TAG_EXACT);
                 out.push(match function {
                     AggFunc::Sum => 0,
                     AggFunc::Min => 1,
@@ -123,69 +143,61 @@ pub(super) fn decode(bytes: &[u8]) -> Result<Vec<AggregateState>> {
 /// costs no allocation unless it opens a new group.
 pub(crate) fn decode_into(bytes: &[u8], states: &mut Vec<AggregateState>) -> Result<()> {
     states.clear();
-    let mut input = Input(bytes);
-    if input.take(4)? != b"KAS\x01" {
-        return Err(exec_err("unsupported compact aggregate state version"));
-    }
-    let count = input.u32()? as usize;
-    if count > input.0.len() / 2 {
-        return Err(exec_err("compact aggregate count exceeds payload"));
-    }
+    let States {
+        count,
+        bytes: mut input,
+    } = begin(bytes)?;
     states.reserve(count);
     for _ in 0..count {
         let tag = input.byte()?;
         let state = match tag {
-            1 | 5 => {
+            TAG_SUM | TAG_AVG => {
                 let sum = f64::from_le_bytes(input.fixed()?);
                 let count = u64::from_le_bytes(input.fixed()?);
-                if tag == 1 {
+                if tag == TAG_SUM {
                     AggregateState::Sum { sum, count }
                 } else {
                     AggregateState::Avg { sum, count }
                 }
             }
-            2 => AggregateState::Count(u64::from_le_bytes(input.fixed()?)),
-            3 | 4 => {
+            TAG_COUNT => AggregateState::Count(u64::from_le_bytes(input.fixed()?)),
+            TAG_MIN | TAG_MAX => {
                 let value = if input.flag()? {
                     Some(f64::from_le_bytes(input.fixed()?))
                 } else {
                     None
                 };
-                if tag == 3 {
+                if tag == TAG_MIN {
                     AggregateState::Min(value)
                 } else {
                     AggregateState::Max(value)
                 }
             }
-            15 | 16 => {
+            TAG_UTF8_MIN | TAG_UTF8_MAX => {
                 let value = if input.flag()? {
-                    let AggregateValue::Utf8(value) = decode_aggregate_value(input.payload()?)?
-                    else {
-                        return Err(exec_err("invalid UTF-8 extremum payload"));
-                    };
-                    Some(value)
+                    Some(utf8_extremum(input.payload()?)?.to_owned())
                 } else {
                     None
                 };
-                if tag == 15 {
+                if tag == TAG_UTF8_MIN {
                     AggregateState::Utf8Min(value)
                 } else {
                     AggregateState::Utf8Max(value)
                 }
             }
-            6 | 7 | 8 | 13 => {
+            TAG_COUNT_DISTINCT | TAG_SUM_DISTINCT | TAG_AVG_DISTINCT | TAG_INTEGER_SUM_DISTINCT => {
                 let values = decode_distinct_values(input.payload()?)?;
                 match tag {
-                    6 => AggregateState::CountDistinct(values),
-                    7 => AggregateState::SumDistinct(values),
-                    8 => AggregateState::AvgDistinct(values),
+                    TAG_COUNT_DISTINCT => AggregateState::CountDistinct(values),
+                    TAG_SUM_DISTINCT => AggregateState::SumDistinct(values),
+                    TAG_AVG_DISTINCT => AggregateState::AvgDistinct(values),
                     _ => AggregateState::IntegerSumDistinct(values),
                 }
             }
-            9 | 10 => {
+            TAG_DECIMAL_SUM | TAG_INTEGER_SUM => {
                 let sum = i128::from_le_bytes(input.fixed()?);
                 let count = u64::from_le_bytes(input.fixed()?);
-                if tag == 9 {
+                if tag == TAG_DECIMAL_SUM {
                     let scale = input.byte()? as i8;
                     if !(-38..=38).contains(&scale) {
                         return Err(exec_err("invalid decimal SUM scale"));
@@ -195,19 +207,19 @@ pub(crate) fn decode_into(bytes: &[u8], states: &mut Vec<AggregateState>) -> Res
                     AggregateState::IntegerSum { sum, count }
                 }
             }
-            11 | 12 => {
+            TAG_INTEGER_MIN | TAG_INTEGER_MAX => {
                 let value = if input.flag()? {
                     Some(i64::from_le_bytes(input.fixed()?))
                 } else {
                     None
                 };
-                if tag == 11 {
+                if tag == TAG_INTEGER_MIN {
                     AggregateState::IntegerMin(value)
                 } else {
                     AggregateState::IntegerMax(value)
                 }
             }
-            14 => {
+            TAG_EXACT => {
                 let function = match input.byte()? {
                     0 => AggFunc::Sum,
                     1 => AggFunc::Min,
@@ -249,11 +261,58 @@ pub(crate) fn decode_into(bytes: &[u8], states: &mut Vec<AggregateState>) -> Res
         };
         states.push(state);
     }
-    if !input.0.is_empty() {
-        return Err(exec_err("trailing compact aggregate state bytes"));
+    States {
+        count,
+        bytes: input,
     }
+    .finish()?;
     state_layout(states)?;
     Ok(())
+}
+
+/// One group's states opened for reading: how many follow, and the cursor
+/// over them. The columnar final reads the accumulators straight from the
+/// cursor, one tag and payload each, without a state enum per row.
+pub(crate) struct States<'a> {
+    pub(crate) count: usize,
+    pub(crate) bytes: Input<'a>,
+}
+
+impl States<'_> {
+    /// Every state has been read: nothing may follow.
+    pub(crate) fn finish(self) -> Result<()> {
+        if !self.bytes.0.is_empty() {
+            return Err(exec_err("trailing compact aggregate state bytes"));
+        }
+        Ok(())
+    }
+}
+
+/// Check the version and read the state count of one group's payload.
+pub(crate) fn begin(bytes: &[u8]) -> Result<States<'_>> {
+    let mut input = Input(bytes);
+    if input.take(4)? != MAGIC {
+        return Err(exec_err("unsupported compact aggregate state version"));
+    }
+    let count = input.u32()? as usize;
+    if count > input.0.len() / 2 {
+        return Err(exec_err("compact aggregate count exceeds payload"));
+    }
+    Ok(States {
+        count,
+        bytes: input,
+    })
+}
+
+/// The text of a UTF-8 extremum payload: the typed value encoding, which
+/// must carry a string.
+pub(crate) fn utf8_extremum(payload: &[u8]) -> Result<&str> {
+    match payload.split_first() {
+        Some((&VALUE_UTF8, text)) => {
+            std::str::from_utf8(text).map_err(|_| exec_err("distinct string is not valid UTF-8"))
+        }
+        _ => Err(exec_err("invalid UTF-8 extremum payload")),
+    }
 }
 
 fn length(out: &mut Vec<u8>, size: usize) -> Result<()> {
@@ -269,9 +328,10 @@ fn payload(out: &mut Vec<u8>, bytes: &[u8]) -> Result<()> {
     out.extend(bytes);
     Ok(())
 }
-struct Input<'a>(&'a [u8]);
+/// A cursor over compact state bytes.
+pub(crate) struct Input<'a>(&'a [u8]);
 impl<'a> Input<'a> {
-    fn take(&mut self, len: usize) -> Result<&'a [u8]> {
+    pub(crate) fn take(&mut self, len: usize) -> Result<&'a [u8]> {
         if len > self.0.len() {
             return Err(exec_err("truncated compact aggregate payload"));
         }
@@ -279,15 +339,15 @@ impl<'a> Input<'a> {
         self.0 = tail;
         Ok(value)
     }
-    fn fixed<const N: usize>(&mut self) -> Result<[u8; N]> {
+    pub(crate) fn fixed<const N: usize>(&mut self) -> Result<[u8; N]> {
         self.take(N)?
             .try_into()
             .map_err(|_| exec_err("invalid compact field"))
     }
-    fn byte(&mut self) -> Result<u8> {
+    pub(crate) fn byte(&mut self) -> Result<u8> {
         Ok(self.take(1)?[0])
     }
-    fn flag(&mut self) -> Result<bool> {
+    pub(crate) fn flag(&mut self) -> Result<bool> {
         match self.byte()? {
             0 => Ok(false),
             1 => Ok(true),
@@ -297,7 +357,7 @@ impl<'a> Input<'a> {
     fn u32(&mut self) -> Result<u32> {
         Ok(u32::from_le_bytes(self.fixed()?))
     }
-    fn payload(&mut self) -> Result<&'a [u8]> {
+    pub(crate) fn payload(&mut self) -> Result<&'a [u8]> {
         let len = self.u32()? as usize;
         self.take(len)
     }
