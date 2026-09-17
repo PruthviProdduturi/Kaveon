@@ -35,16 +35,23 @@ and Azure credential availability.
 The data-source test endpoint currently returns a stub success message. Validate
 with SQL Lab (`SELECT 1`) or the applicable setup/admin probe, then inspect API logs.
 
-### Engine ignores `ORDER BY`
+### An Engine statement ran on the coordinator instead of the workers
 
-This is expected in alpha: SQL parsing creates a Sort plan, but the physical
-planners pass it through. Do not rely on result ordering until Sort/TopN operators
-are implemented.
+The query record's `execution` field says `{mode, detail}`: the distributed
+path taken, or the reason the stage planner could not express the shape and the
+coordinator ran it itself. Studio shows it on the query page under Execution.
+A shape listed there as unsupported for distribution is a planner gap, not a
+worker problem; check `/v1/cluster` for the workers' heartbeats and catalog
+snapshot identity only when `detail` names a worker.
 
-### Engine workers appear but queries do not scale out
+### HTTP 429 from the Engine
 
-Heartbeats implement discovery only. Statements execute on the receiving
-coordinator; fragment scheduling, exchanges, shuffle, and retry are target work.
+`MEMORY_ADMISSION_REJECTED` means the statement waited in the admission queue
+for `KAVEON_MEMORY_ADMISSION_WAIT_SECONDS` (60 s by default) and no running
+statement released enough budget, or the queue (64) was full on arrival; the
+body carries `admission_wait_ms`. A resource-group queue timeout or the
+per-principal statement limit return 429 with their own codes. Retry after the
+wait rather than at once.
 
 ### Queries/jobs disappear after restart
 

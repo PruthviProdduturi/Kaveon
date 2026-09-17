@@ -49,7 +49,7 @@ The Rust server exposes these routes:
 
 | Method | Path | Current behavior |
 |---|---|---|
-| `POST` | `/v1/statement` | Synchronously parse, plan, execute, materialize, and retain a query result |
+| `POST` | `/v1/statement` | Parse, bind, plan, execute and retain a query result; inline (up to 16 MiB) or `result_delivery: "paged"` with `next_uri` pages; accepts per-request `settings` and leading `SET SESSION` statements |
 | `GET` | `/v1/query` | Return up to 100 newest process-local query records, queued and running ones included |
 | `GET` | `/v1/query/{query_id}` | Return retained lifecycle, context, structured logical plan, result, and scan telemetry |
 | `DELETE` | `/v1/query/{query_id}` | Cancel the query: a queued statement leaves the admission queue at once; a running one propagates cancellation to active worker tasks |
@@ -66,15 +66,19 @@ The Rust server exposes these routes:
 | `GET`, `PUT`, `DELETE` | `/v1/catalog/tables/{table_id}` | Read, revision-replace, or delete a durable table definition |
 | `GET` | `/v1/catalog/{catalog}/schema` | List schemas |
 | `GET` | `/v1/catalog/{catalog}/schema/{schema}/table` | List tables |
+| `GET` | `/v1/query/{query_id}/results/{page}` | One page of a paged result (owner-scoped, immutable, 15 min TTL) |
+| `GET` | `/v1/capabilities`, `/v1/statistics`, `/v1/auth/config` | What the coordinator supports (native `ANALYZE`, transactions), published exact statistics, and the Entra sign-in configuration for the UI |
+| `POST` | `/v1/transaction`, `/v1/transaction/sql`, `/v1/transaction/{id}/stage`, `…/commit`, `…/rollback`, `…/recovery`; `GET` `/v1/transaction/metrics`, `/v1/products/{kind}`, `/v1/product/{kind}/{id}` | The bounded product-record transaction protocol and typed product reads; see the [SQL compatibility reference](engine-sql-compatibility.md#transaction-api-boundary) |
+| `POST`, `GET` | `/v1/task`, `/v1/exchange`, `/v1/internal/exchange/*`, `/v1/internal/query/{query_id}/finish`, `/v1/internal/catalog/snapshot` | Worker task submission, exchange partition upload/download, query finish and cancellation, catalog replica; exchange-token authenticated, not client routes |
 | `GET` | `/health`, `/ready`, `/ui` | Liveness, catalog readiness, and operational UI |
 
-Catalog mutations require the configured catalog-admin bearer token, an actor header, and optimistic `If-Match` revisions for replacement. Internal task/exchange routes use a separate shared bearer token. Statement clients still lack end-user authentication, authorization, TLS, quotas, and resource groups, so keep Engine behind a trusted boundary during alpha. Distributed fragments and cancellation are implemented but not production-qualified.
+Catalog mutations require the configured catalog-admin bearer token, an actor header, and optimistic `If-Match` revisions for replacement. Internal task/exchange routes use a separate shared bearer token. Statement clients authenticate with a principal token from `KAVEON_SECURITY_JSON` (roles `reader`, `analyst`, `admin`), an Entra bearer token, or the API bridge token with delegated `x-kaveon-principal`/`x-kaveon-role` headers; the server serves native TLS, applies a per-principal concurrent-statement limit, resource groups and memory admission, and scopes query records and paged results to their owner (`docs/engineering/engine-security-integration.md`). This is a credential boundary, not production identity federation: rotation without restart, tenant isolation and row/column policies remain gates, so keep the Engine on a private network during alpha.
 
 The statement JSON body requires `query`. Clients may also provide `source`,
-`client`, `time_zone`, `client_tags`, and `result_delivery`. These identify the
-submitting application and session; they are not trusted user identity. Principal
-and client address remain unavailable until authenticated request plumbing is
-implemented.
+`client`, `time_zone`, `client_tags`, `result_delivery` and `settings`. `source`,
+`client` and `client_tags` identify the submitting application and session; they
+are not trusted user identity. The record's `principal` comes from the
+authenticated identity; `client_address` is not recorded.
 
 ### Per-request settings
 

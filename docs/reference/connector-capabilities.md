@@ -24,9 +24,11 @@ that every deployment has drivers, credentials, or network access configured.
   and are stored plaintext in `data_sources`; API responses suppress the field,
   but vault-backed storage is target work.
 - Fabric/Azure SQL requires ODBC Driver 18 in the API runtime.
-- Local Parquet and local Delta Lake are Engine catalog paths, not Studio
-  data-source connectors. Local Delta requires complete JSON commit history from
-  version 0; checkpoint replay is unsupported.
+- Parquet, Delta Lake and Iceberg on local disk or ADLS Gen2 are Engine catalog
+  paths, registered through the catalog-source bridge and the registration
+  scripts, not Studio data-source connectors. SQL Lab lists Engine catalogs in
+  its source picker where `KAVEON_ENGINE_URL` is configured. Delta reads JSON
+  commits and v1 checkpoints; reader protocol v2 features are refused.
 
 See [data-source guide](../guides/data-sources.md), [configuration](configuration.md),
 and [security](../../SECURITY.md).

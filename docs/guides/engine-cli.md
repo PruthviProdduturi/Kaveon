@@ -240,14 +240,18 @@ access = "shortcut"
 format = "delta"
 ```
 
-Local Delta reads replay the JSON commits in `_delta_log` to determine the active
-Parquet files and then read all active files. The reader requires a complete JSON
-commit history beginning at version 0. Checkpoint replay is not implemented, so
-a checkpoint-only or otherwise incomplete JSON history is rejected instead of
-returning a partial snapshot.
+Delta reads reconcile the `_delta_log` (JSON commits and v1 checkpoints,
+classic or multipart) to the active Parquet files at one pinned version and
+read those files. An incomplete history is rejected instead of returning a
+partial snapshot; reader protocol v2 features (column mapping, deletion
+vectors) and v2 checkpoint sidecars are refused by name.
 
-Although catalog types and configuration values exist for cloud storage and
-Iceberg, ADLS Gen2, S3, and Iceberg reads are not executable today.
+Iceberg tables (`format = "iceberg"`, a metadata JSON pointer) and ADLS Gen2
+locations (`abfss://container@account.dfs.core.windows.net/path`, with the
+Azure CLI or workload identity) are executable through the server; S3 goes
+through the same object-store reader and is not qualified. The embedded
+`--local` mode plans without the binder, so comma joins there are cross
+products; use the server for join-heavy work.
 
 Start with the default configuration:
 
