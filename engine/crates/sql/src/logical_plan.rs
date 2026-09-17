@@ -650,7 +650,7 @@ fn replace_scalar_subqueries(
             ast::Expr::Nested(Box::new(replace_scalar_subqueries(inner, ctes, sink)?))
         }
         ast::Expr::UnaryOp { op, expr } => ast::Expr::UnaryOp {
-            op: op.clone(),
+            op: *op,
             expr: Box::new(replace_scalar_subqueries(expr, ctes, sink)?),
         },
         ast::Expr::Between {
