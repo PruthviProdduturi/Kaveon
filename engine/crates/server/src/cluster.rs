@@ -37,6 +37,10 @@ pub struct NodeInfo {
     /// The coordinator's result cache counters; workers carry none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_cache: Option<crate::result_cache::ResultCacheStats>,
+    /// Memory admission on this node: statements on the coordinator, tasks
+    /// on a worker. Workers report theirs with every heartbeat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission: Option<kaveon_core::AdmissionStats>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,6 +90,7 @@ impl ClusterState {
                 memory_limit_bytes: config.process_memory_limit_bytes,
                 catalog_snapshot_id: None,
                 result_cache: None,
+                admission: None,
             },
             workers: HashMap::new(),
             process_memory_limit_bytes: config.process_memory_limit_bytes,
@@ -161,6 +166,7 @@ pub async fn worker_heartbeat_loop(state: Arc<AppState>) {
             let mut cluster = state.cluster.write().await;
             cluster.update_uptime();
             cluster.this_node.catalog_snapshot_id = Some(snapshot_id);
+            cluster.this_node.admission = Some(state.memory_admission.stats());
             cluster.this_node.clone()
         };
 

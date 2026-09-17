@@ -11,6 +11,8 @@ use std::sync::Arc;
 
 const DEFAULT_QUERY_MEMORY_LIMIT_BYTES: u64 = 512 * 1_024 * 1_024;
 const DEFAULT_MEMORY_ADMISSION_LIMIT_BYTES: u64 = 4 * 1_024 * 1_024 * 1_024;
+const DEFAULT_MEMORY_ADMISSION_QUEUE: usize = 64;
+const DEFAULT_MEMORY_ADMISSION_WAIT_SECONDS: u64 = 60;
 const DEFAULT_RESULT_CACHE_BYTES: u64 = 256 * 1_024 * 1_024;
 const DEFAULT_RESULT_CACHE_TTL_SECONDS: u64 = 600;
 
@@ -44,6 +46,12 @@ pub struct ServerConfig {
     pub exchange_token: Option<String>,
     pub query_memory_limit_bytes: u64,
     pub memory_admission_limit_bytes: u64,
+    /// How many arrivals may wait for admission at once; zero refuses
+    /// whatever does not fit on arrival.
+    pub memory_admission_queue: usize,
+    /// How long a statement waits for admission on the coordinator before
+    /// it is refused; the ceiling of the per-request setting.
+    pub memory_admission_wait_seconds: u64,
     /// The process's memory limit: the container's cgroup limit unless
     /// `KAVEON_PROCESS_MEMORY_LIMIT_BYTES` says otherwise; None when the
     /// process is not limited.
@@ -123,6 +131,8 @@ impl Default for ServerConfig {
             exchange_token: None,
             query_memory_limit_bytes: DEFAULT_QUERY_MEMORY_LIMIT_BYTES,
             memory_admission_limit_bytes: DEFAULT_MEMORY_ADMISSION_LIMIT_BYTES,
+            memory_admission_queue: DEFAULT_MEMORY_ADMISSION_QUEUE,
+            memory_admission_wait_seconds: DEFAULT_MEMORY_ADMISSION_WAIT_SECONDS,
             process_memory_limit_bytes: None,
             result_cache_bytes: DEFAULT_RESULT_CACHE_BYTES,
             result_cache_ttl_seconds: DEFAULT_RESULT_CACHE_TTL_SECONDS,
@@ -197,6 +207,8 @@ struct ExchangeConfig {
 struct MemoryConfig {
     query_limit_bytes: Option<u64>,
     admission_limit_bytes: Option<u64>,
+    admission_queue: Option<usize>,
+    admission_wait_seconds: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -266,6 +278,12 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
             if let Some(limit) = memory.admission_limit_bytes {
                 config.memory_admission_limit_bytes = limit;
                 config_sets_admission = true;
+            }
+            if let Some(queue) = memory.admission_queue {
+                config.memory_admission_queue = queue;
+            }
+            if let Some(seconds) = memory.admission_wait_seconds {
+                config.memory_admission_wait_seconds = seconds;
             }
         }
         if let Some(cache) = raw.result_cache {
@@ -391,6 +409,20 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
             limit
         );
     }
+    if let Ok(value) = std::env::var("KAVEON_MEMORY_ADMISSION_QUEUE") {
+        config.memory_admission_queue = value.parse().map_err(|_| {
+            anyhow::anyhow!("KAVEON_MEMORY_ADMISSION_QUEUE must be an unsigned integer")
+        })?;
+    }
+    if let Ok(value) = std::env::var("KAVEON_MEMORY_ADMISSION_WAIT_SECONDS") {
+        config.memory_admission_wait_seconds = value.parse().map_err(|_| {
+            anyhow::anyhow!("KAVEON_MEMORY_ADMISSION_WAIT_SECONDS must be an unsigned integer")
+        })?;
+    }
+    anyhow::ensure!(
+        config.memory_admission_queue == 0 || config.memory_admission_wait_seconds > 0,
+        "a memory admission queue needs a positive KAVEON_MEMORY_ADMISSION_WAIT_SECONDS"
+    );
 
     if let Ok(value) = std::env::var("KAVEON_SECURITY_JSON") {
         config.security = serde_json::from_str(&value)?;
@@ -1006,6 +1038,51 @@ ttl_seconds = 0
         .unwrap();
         assert_eq!(
             load_server_config(&config_path).unwrap().result_cache_bytes,
+            0
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn admission_queue_configuration_defaults_and_loads_from_the_file() {
+        let directory = temporary_directory();
+        let config_path = directory.join("config.toml");
+        let defaults = load_server_config(&directory.join("missing.toml")).unwrap();
+        assert_eq!(defaults.memory_admission_queue, 64);
+        assert_eq!(defaults.memory_admission_wait_seconds, 60);
+        std::fs::write(
+            &config_path,
+            "[memory]
+admission_queue = 8
+admission_wait_seconds = 5
+",
+        )
+        .unwrap();
+        let config = load_server_config(&config_path).unwrap();
+        assert_eq!(config.memory_admission_queue, 8);
+        assert_eq!(config.memory_admission_wait_seconds, 5);
+        // A queue nobody may wait in is a contradiction; no queue needs no wait.
+        std::fs::write(
+            &config_path,
+            "[memory]
+admission_queue = 8
+admission_wait_seconds = 0
+",
+        )
+        .unwrap();
+        assert!(load_server_config(&config_path).is_err());
+        std::fs::write(
+            &config_path,
+            "[memory]
+admission_queue = 0
+admission_wait_seconds = 0
+",
+        )
+        .unwrap();
+        assert_eq!(
+            load_server_config(&config_path)
+                .unwrap()
+                .memory_admission_queue,
             0
         );
         std::fs::remove_dir_all(directory).unwrap();

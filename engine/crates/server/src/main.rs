@@ -159,7 +159,8 @@ async fn main() {
 
     let mut memory_admission =
         kaveon_core::MemoryAdmissionController::new(config.memory_admission_limit_bytes)
-            .expect("validated memory admission configuration");
+            .expect("validated memory admission configuration")
+            .with_queue_limit(config.memory_admission_queue);
     if let Some(process) = config.process_memory() {
         println!(
             "Memory:      process limit {} MiB, {} MiB kept free; admission {} MiB; per query {} MiB",
@@ -174,6 +175,19 @@ async fn main() {
             "Memory:      no process limit; admission {} MiB; per query {} MiB",
             config.memory_admission_limit_bytes >> 20,
             config.query_memory_limit_bytes >> 20,
+        );
+    }
+    if config.memory_admission_queue == 0 {
+        println!("Admission:   no queue; what does not fit on arrival is refused");
+    } else if config.coordinator {
+        println!(
+            "Admission:   queue of {} statements, {} s wait",
+            config.memory_admission_queue, config.memory_admission_wait_seconds
+        );
+    } else {
+        println!(
+            "Admission:   queue of {} tasks",
+            config.memory_admission_queue
         );
     }
     let spools_exchanges = if config.coordinator {

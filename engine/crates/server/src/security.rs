@@ -421,7 +421,8 @@ mod tests {
             memory_admission: kaveon_core::MemoryAdmissionController::new(
                 config.memory_admission_limit_bytes,
             )
-            .unwrap(),
+            .unwrap()
+            .with_queue_limit(config.memory_admission_queue),
             product_transactions: crate::transaction_api::TransactionRegistry::disabled(),
             config,
         });

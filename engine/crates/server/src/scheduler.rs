@@ -337,6 +337,7 @@ mod tests {
             memory_limit_bytes: None,
             catalog_snapshot_id: None,
             result_cache: None,
+            admission: None,
         }
     }
 
