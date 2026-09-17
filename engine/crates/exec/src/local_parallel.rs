@@ -175,6 +175,52 @@ impl QueueBudget {
             bytes,
         })
     }
+
+    /// Charge `bytes` from a thread that can wait: grow what is held up
+    /// to the queues' share of the budget, and past that wait for the
+    /// threads to give parts back rather than take more of the budget —
+    /// the back-pressure of a source read on its own thread. Leaves when
+    /// the operator is stopped or the query cancelled.
+    fn charge_waiting(self: &Arc<Self>, bytes: u64, stopped: &AtomicBool) -> Result<QueueCharge> {
+        let share = self.account.query().snapshot().limit_bytes / QUEUE_BUDGET_SHARE;
+        loop {
+            {
+                let mut state = self.lock()?;
+                if bytes > state.available && state.held < share {
+                    let growth = (bytes - state.available).min(share - state.held);
+                    let guard = self.account.reserve(growth)?;
+                    state.held += guard.bytes();
+                    state.available += guard.bytes();
+                    state.guards.push(guard);
+                }
+                if bytes <= state.available {
+                    state.available -= bytes;
+                    return Ok(QueueCharge {
+                        budget: Arc::clone(self),
+                        bytes,
+                    });
+                }
+                if state.held == 0 || bytes > state.held {
+                    // A batch the share cannot hold at all: the budget's
+                    // answer, not a wait.
+                    let guard = self.account.reserve(bytes - state.available)?;
+                    state.held += guard.bytes();
+                    state.available += guard.bytes();
+                    state.guards.push(guard);
+                    state.available -= bytes;
+                    return Ok(QueueCharge {
+                        budget: Arc::clone(self),
+                        bytes,
+                    });
+                }
+            }
+            if stopped.load(Ordering::Acquire) {
+                return Err(stopped_error());
+            }
+            self.account.check_cancelled()?;
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
 }
 
 /// Bytes of the queue budget in use by one batch, given back on drop.
@@ -234,10 +280,110 @@ pub type ThreadOperator = Arc<
 
 /// What every thread of one parallel operator shares.
 pub struct ThreadContext {
+    /// This thread's place among the threads, from zero.
+    pub index: usize,
     /// Threads running side by side on the query budget.
     pub workers: usize,
     /// The query's spill budget and partition count when spilling is on.
     pub spill: Option<(SpillManager, usize)>,
+}
+
+/// Opens a source inside the thread that reads it: what crosses to that
+/// thread is the means of opening, not the operator.
+pub type SourceOpener = Box<dyn FnOnce() -> Result<Box<dyn BatchOperator>> + Send>;
+
+/// Where a parallel operator's rows come from.
+pub enum Sources {
+    /// One source, read on the calling thread.
+    Here(Box<dyn BatchOperator>),
+    /// Several sources of one schema, each opened and read on a thread of
+    /// its own — the payloads of an exchange, one per producer, decoded
+    /// side by side.
+    Threads {
+        schema: SchemaRef,
+        openers: Vec<SourceOpener>,
+    },
+}
+
+impl Sources {
+    pub fn schema(&self) -> &SchemaRef {
+        match self {
+            Self::Here(source) => source.schema(),
+            Self::Threads { schema, .. } => schema,
+        }
+    }
+
+    /// The sources as one operator on the calling thread, read one after
+    /// another.
+    pub fn into_operator(self) -> Result<Box<dyn BatchOperator>> {
+        match self {
+            Self::Here(source) => Ok(source),
+            Self::Threads { schema, openers } => Ok(Box::new(ChainedSources {
+                schema,
+                openers: openers.into_iter().collect(),
+                current: None,
+            })),
+        }
+    }
+}
+
+struct ChainedSources {
+    schema: SchemaRef,
+    openers: VecDeque<SourceOpener>,
+    current: Option<Box<dyn BatchOperator>>,
+}
+
+impl BatchOperator for ChainedSources {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+    fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        loop {
+            if let Some(current) = self.current.as_mut() {
+                if let Some(batch) = current.next_batch()? {
+                    return Ok(Some(batch));
+                }
+                self.current = None;
+            }
+            let Some(opener) = self.openers.pop_front() else {
+                return Ok(None);
+            };
+            let source = opener()?;
+            if source.schema() != &self.schema {
+                return Err(error("parallel source schema differs between sources"));
+            }
+            self.current = Some(source);
+        }
+    }
+}
+
+/// Which thread a row belongs to when every thread sees every batch:
+/// the thread its encoded key hashes to. Independent of the exchange's
+/// partitioning of the same keys (another hash) and of any spill
+/// partitioning nested inside (another salt).
+pub struct ThreadSelector {
+    hasher: ahash::RandomState,
+    workers: usize,
+}
+
+impl ThreadSelector {
+    pub fn new(workers: usize) -> Self {
+        Self {
+            hasher: ahash::RandomState::with_seeds(
+                0x452A_F1AC_1B2D_9E33,
+                0x9F6C_8B54_7D31_E0A7,
+                0x3C0E_5B8D_D64A_1F29,
+                0xB7E1_5162_8AED_2A6B,
+            ),
+            workers,
+        }
+    }
+
+    #[inline]
+    pub fn thread_of(&self, key: &[u8]) -> usize {
+        (crate::exchange::mix(self.hasher.hash_one(key) ^ crate::exchange::THREAD_PARTITION_SALT)
+            % self.workers as u64) as usize
+    }
 }
 
 /// One operator run on several threads within a task: rows go to the
@@ -247,13 +393,11 @@ pub struct ThreadContext {
 /// and DISTINCT run this way.
 pub struct ParallelPartials {
     source: Option<Box<dyn BatchOperator>>,
+    /// Sources read on threads of their own; taken when the operator starts.
+    openers: Vec<SourceOpener>,
+    source_schema: SchemaRef,
     schema: SchemaRef,
-    keys: Vec<String>,
-    /// Keys that are all dictionary-encoded hold a handful of values:
-    /// cheaper to fold on every thread than to hash-partition every row.
-    /// Only an operator whose outputs merge (a partial aggregate) may take
-    /// that; DISTINCT must partition.
-    fold_low_cardinality: bool,
+    dispatch: Dispatch,
     operator: ThreadOperator,
     pool: QueryMemoryPool,
     workers: usize,
@@ -263,6 +407,8 @@ pub struct ParallelPartials {
     spill: Option<(SpillManager, usize)>,
     stopped: Arc<AtomicBool>,
     handles: Vec<JoinHandle<()>>,
+    /// The threads reading sources of their own.
+    pumps: Vec<JoinHandle<()>>,
     /// One input channel per thread; empty once the source is drained.
     senders: Vec<SyncSender<QueuedBatch>>,
     partitioner: Option<HashPartitioner>,
@@ -278,6 +424,26 @@ pub struct ParallelPartials {
     current: Option<Held>,
     failed: bool,
 }
+
+/// How rows reach the threads.
+enum Dispatch {
+    /// Rows go to the thread their key hashes to, so the threads hold
+    /// disjoint keys; unkeyed, slices round-robin. Keys that are all
+    /// dictionary-encoded hold a handful of values, cheaper to fold on
+    /// every thread than to hash-partition every row: with
+    /// `fold_low_cardinality` those slice round-robin too. Only an
+    /// operator whose outputs merge (a partial aggregate) may take that;
+    /// DISTINCT must partition.
+    Keyed {
+        keys: Vec<String>,
+        fold_low_cardinality: bool,
+    },
+    /// Every thread sees every batch and keeps its own rows: nothing is
+    /// hashed or copied on the way, and sources read on their own threads
+    /// feed the threads straight.
+    Broadcast,
+}
+
 impl ParallelPartials {
     /// Grouped partial aggregation: every thread produces the typed partial
     /// batch the final merger takes.
@@ -316,7 +482,17 @@ impl ParallelPartials {
                 context,
             )
         });
-        Self::over(source, schema, groups, true, operator, pool, workers)
+        Self::over(
+            Sources::Here(source),
+            schema,
+            Dispatch::Keyed {
+                keys: groups,
+                fold_low_cardinality: true,
+            },
+            operator,
+            pool,
+            workers,
+        )
     }
 
     /// DISTINCT over `columns`: every thread deduplicates the rows whose
@@ -353,10 +529,12 @@ impl ParallelPartials {
         });
         let account = pool.operator("distinct-union")?;
         let parallel = Self::over(
-            source,
+            Sources::Here(source),
             schema,
-            columns,
-            low_cardinality,
+            Dispatch::Keyed {
+                keys: columns,
+                fold_low_cardinality: low_cardinality,
+            },
             operator,
             pool,
             workers,
@@ -369,8 +547,8 @@ impl ParallelPartials {
     }
 
     /// Any operator whose input can be split by the hash of `keys` and
-    /// whose outputs union without a merge — the final aggregate over
-    /// partial rows keyed by their encoded group key, for one.
+    /// whose outputs union without a merge, the rows hash-partitioned to
+    /// the threads on the calling thread.
     pub fn partitioned(
         source: Box<dyn BatchOperator>,
         schema: SchemaRef,
@@ -379,14 +557,46 @@ impl ParallelPartials {
         pool: QueryMemoryPool,
         workers: usize,
     ) -> Result<Self> {
-        Self::over(source, schema, keys, false, operator, pool, workers)
+        Self::over(
+            Sources::Here(source),
+            schema,
+            Dispatch::Keyed {
+                keys,
+                fold_low_cardinality: false,
+            },
+            operator,
+            pool,
+            workers,
+        )
+    }
+
+    /// Any operator whose threads can each pick their own rows out of
+    /// every batch (`ThreadSelector` over the row's key, with the thread's
+    /// `ThreadContext::index`) and whose outputs union without a merge —
+    /// the final aggregate over partial rows, for one. Every batch goes
+    /// to every thread as it is: nothing is hashed or copied on the way,
+    /// and sources of their own threads feed the threads straight.
+    pub fn broadcast(
+        sources: Sources,
+        schema: SchemaRef,
+        operator: ThreadOperator,
+        pool: QueryMemoryPool,
+        workers: usize,
+    ) -> Result<Self> {
+        Self::over(
+            sources,
+            schema,
+            Dispatch::Broadcast,
+            operator,
+            pool,
+            workers,
+        )
     }
 
     fn over(
-        source: Box<dyn BatchOperator>,
+        sources: Sources,
         schema: SchemaRef,
-        keys: Vec<String>,
-        fold_low_cardinality: bool,
+        dispatch: Dispatch,
         operator: ThreadOperator,
         pool: QueryMemoryPool,
         workers: usize,
@@ -395,17 +605,29 @@ impl ParallelPartials {
             return Err(error("parallel worker count must be between 1 and 16"));
         }
         let spill = spill_from_environment(&pool)?;
+        let source_schema = Arc::clone(sources.schema());
+        let (source, openers) = match sources {
+            Sources::Here(source) => (Some(source), Vec::new()),
+            Sources::Threads { openers, .. } => {
+                if openers.is_empty() {
+                    return Err(error("parallel operator needs at least one source"));
+                }
+                (None, openers)
+            }
+        };
         Ok(Self {
-            source: Some(source),
+            source,
+            openers,
+            source_schema,
             schema,
-            keys,
-            fold_low_cardinality,
+            dispatch,
             operator,
             pool,
             workers,
             spill,
             stopped: Arc::new(AtomicBool::new(false)),
             handles: vec![],
+            pumps: vec![],
             senders: Vec::new(),
             partitioner: None,
             input_queue: None,
@@ -426,20 +648,20 @@ impl ParallelPartials {
     }
 
     fn start(&mut self) -> Result<()> {
-        let source = self
-            .source
-            .as_ref()
-            .ok_or_else(|| error("parallel source already consumed"))?;
+        if self.source.is_none() && self.openers.is_empty() {
+            return Err(error("parallel source already consumed"));
+        }
         let (output_tx, output_rx) = mpsc::sync_channel(self.workers * 2);
         self.output = Some(output_rx);
         let mut senders = Vec::with_capacity(self.workers);
         for index in 0..self.workers {
             let (sender, receiver) = mpsc::sync_channel(2);
             senders.push(sender);
-            let schema = source.schema().clone();
+            let schema = Arc::clone(&self.source_schema);
             let operator = self.operator.clone();
             let pool = self.pool.clone();
             let context = ThreadContext {
+                index,
                 workers: self.workers,
                 spill: self.spill.clone(),
             };
@@ -466,32 +688,69 @@ impl ParallelPartials {
                     .map_err(|e| error(&format!("cannot spawn aggregate worker: {e}")))?,
             );
         }
-        drop(output_tx);
-        self.senders = senders;
-        self.input_queue = Some(Arc::new(QueueBudget::new(
+        let queue = Arc::new(QueueBudget::new(
             self.pool.operator("parallel-input-queue")?,
-        )));
+        ));
+        self.input_queue = Some(Arc::clone(&queue));
         // Keyed: rows go to the thread their key hashes to, so the threads
         // hold disjoint keys. Unkeyed, or keyed only by dictionary columns
         // where folding is allowed (a handful of groups, cheaper to fold N
         // times than to hash-partition every row): slices round-robin.
-        let low_cardinality_keys = self.fold_low_cardinality
-            && self.keys.iter().all(|name| {
-                source
-                    .schema()
-                    .field_with_name(name)
-                    .is_ok_and(|field| matches!(field.data_type(), DataType::Dictionary(_, _)))
-            });
-        self.partitioner = if self.keys.is_empty() || self.workers == 1 || low_cardinality_keys {
-            None
-        } else {
-            Some(HashPartitioner::try_new_salted(
-                source.schema(),
-                &self.keys,
-                self.workers,
-                crate::exchange::THREAD_PARTITION_SALT,
-            )?)
+        self.partitioner = match &self.dispatch {
+            Dispatch::Keyed {
+                keys,
+                fold_low_cardinality,
+            } => {
+                let low_cardinality_keys = *fold_low_cardinality
+                    && keys.iter().all(|name| {
+                        self.source_schema.field_with_name(name).is_ok_and(|field| {
+                            matches!(field.data_type(), DataType::Dictionary(_, _))
+                        })
+                    });
+                if keys.is_empty() || self.workers == 1 || low_cardinality_keys {
+                    None
+                } else {
+                    Some(HashPartitioner::try_new_salted(
+                        &self.source_schema,
+                        keys,
+                        self.workers,
+                        crate::exchange::THREAD_PARTITION_SALT,
+                    )?)
+                }
+            }
+            Dispatch::Broadcast => None,
         };
+        // Sources of their own threads: each reads its source and hands
+        // every batch to every thread; the threads see the end of input
+        // when the last of them has dropped its senders. Nothing else
+        // holds a sender, so the calling thread's go now.
+        let openers = std::mem::take(&mut self.openers);
+        let pumps = openers.len();
+        for (index, opener) in openers.into_iter().enumerate() {
+            let senders = senders.clone();
+            let schema = Arc::clone(&self.source_schema);
+            let queue = Arc::clone(&queue);
+            let pool = self.pool.clone();
+            let stopped = self.stopped.clone();
+            let output = output_tx.clone();
+            self.pumps.push(
+                thread::Builder::new()
+                    .name(format!("kaveon-parallel-source-{index}"))
+                    .spawn(move || {
+                        let result = catch_worker_failure(|| {
+                            run_pump(opener, &schema, &senders, &queue, pumps, &pool, &stopped)
+                        });
+                        drop(senders);
+                        if let Err(err) = result {
+                            let _ = output.send(Err(err));
+                            stopped.store(true, Ordering::Release);
+                        }
+                    })
+                    .map_err(|e| error(&format!("cannot spawn source thread: {e}")))?,
+            );
+        }
+        drop(output_tx);
+        self.senders = if pumps > 0 { Vec::new() } else { senders };
         Ok(())
     }
 
@@ -523,14 +782,29 @@ impl ParallelPartials {
                 ));
             }
             account.check_cancelled()?;
-            queue.ensure_for(batch.get_array_memory_size() as u64)?;
-            match &self.partitioner {
-                Some(partitioner) => {
+            let batch_bytes = occupied_bytes(&batch)?;
+            queue.ensure_for(batch_bytes)?;
+            match (&self.dispatch, &self.partitioner) {
+                (Dispatch::Broadcast, _) => {
+                    let memory = Arc::new(queue.charge(batch_bytes)?);
+                    for worker in 0..self.workers {
+                        self.pending.push_back((
+                            worker,
+                            QueuedBatch {
+                                batch: batch.clone(),
+                                _memory: Held::Charged {
+                                    _charge: Arc::clone(&memory),
+                                },
+                            },
+                        ));
+                    }
+                }
+                (Dispatch::Keyed { .. }, Some(partitioner)) => {
                     for (worker, part) in partitioner.partition(&batch)?.into_iter().enumerate() {
                         if part.num_rows() == 0 {
                             continue;
                         }
-                        let memory = Arc::new(queue.charge(part.get_array_memory_size() as u64)?);
+                        let memory = Arc::new(queue.charge(occupied_bytes(&part)?)?);
                         self.pending.push_back((
                             worker,
                             QueuedBatch {
@@ -540,8 +814,8 @@ impl ParallelPartials {
                         ));
                     }
                 }
-                None => {
-                    let memory = Arc::new(queue.charge(batch.get_array_memory_size() as u64)?);
+                (Dispatch::Keyed { .. }, None) => {
+                    let memory = Arc::new(queue.charge(batch_bytes)?);
                     for offset in (0..batch.num_rows()).step_by(8192) {
                         let slice = batch.slice(offset, 8192.min(batch.num_rows() - offset));
                         self.pending.push_back((
@@ -566,7 +840,7 @@ impl ParallelPartials {
             match self.senders[worker].try_send(queued) {
                 Ok(()) => {}
                 Err(TrySendError::Disconnected(_)) => {
-                    return Err(error("parallel operator channel disconnected"));
+                    return Err(error(DISCONNECTED));
                 }
                 Err(TrySendError::Full(returned)) => {
                     self.pending.push_front((worker, returned));
@@ -605,7 +879,7 @@ impl ParallelPartials {
         self.pending.clear();
         self.ready.clear();
         self.output = None;
-        for handle in self.handles.drain(..) {
+        for handle in self.pumps.drain(..).chain(self.handles.drain(..)) {
             let _ = handle.join();
         }
         self.current = None;
@@ -621,7 +895,7 @@ impl BatchOperator for ParallelPartials {
         }
         self.current = None;
         let result = (|| {
-            if self.source.is_some() && self.output.is_none() {
+            if (self.source.is_some() || !self.openers.is_empty()) && self.output.is_none() {
                 self.start()?;
             }
             let account = self.pool.operator("parallel-output-queue")?;
@@ -637,6 +911,15 @@ impl BatchOperator for ParallelPartials {
                     self.pump()?;
                     self.take_ready()?;
                     continue;
+                }
+                // Sources on their own threads: once they are all read,
+                // the queues' memory goes back with the last part the
+                // threads take.
+                if self.input_queue.is_some()
+                    && !self.pumps.is_empty()
+                    && self.pumps.iter().all(JoinHandle::is_finished)
+                {
+                    self.input_queue = None;
                 }
                 let Some(output) = &self.output else {
                     return Ok(None);
@@ -674,25 +957,39 @@ impl ParallelPartials {
         self.stopped.store(true, Ordering::Release);
         self.senders.clear();
         self.pending.clear();
-        // The first error that is not a thread stopped by this very
-        // stop: a failing thread drops its input before it reports, so
-        // its siblings can report the stop ahead of it.
-        let mut reported: Option<KaveonError> = None;
+        // The first error that is not a consequence of the stop or of a
+        // thread's exit — a failing thread drops its input before it
+        // reports, so the pump can see the disconnect, and its siblings
+        // report the stop, ahead of the cause.
+        let mut reported = error;
+        let take = |failure: KaveonError, reported: &mut KaveonError| {
+            if is_consequence(reported) && !is_consequence(&failure) {
+                *reported = failure;
+            }
+        };
         while let Some(output) = &self.output {
             for message in output.try_iter() {
-                if let Err(failure) = message
-                    && reported.as_ref().is_none_or(is_stopped_error)
-                    && (reported.is_none() || !is_stopped_error(&failure))
-                {
-                    reported = Some(failure);
+                if let Err(failure) = message {
+                    take(failure, &mut reported);
                 }
             }
-            if self.handles.iter().all(JoinHandle::is_finished) {
+            if self
+                .handles
+                .iter()
+                .chain(&self.pumps)
+                .all(JoinHandle::is_finished)
+            {
+                // What a thread reported between the drain and its end.
+                for message in output.try_iter() {
+                    if let Err(failure) = message {
+                        take(failure, &mut reported);
+                    }
+                }
                 break;
             }
             thread::sleep(Duration::from_millis(1));
         }
-        reported.unwrap_or(error)
+        reported
     }
 }
 impl Drop for ParallelPartials {
@@ -715,7 +1012,7 @@ fn send_bounded<T>(
         match sender.try_send(value) {
             Ok(()) => return Ok(()),
             Err(TrySendError::Disconnected(_)) => {
-                return Err(error("parallel aggregate channel disconnected"));
+                return Err(error(DISCONNECTED));
             }
             Err(TrySendError::Full(returned)) => {
                 value = returned;
@@ -724,6 +1021,68 @@ fn send_bounded<T>(
         }
     }
 }
+/// The bytes a batch's rows occupy: its columns' data, not the capacity
+/// of the buffers behind them — a batch decoded from one IPC message has
+/// every column's buffers pointing at that whole message, and the
+/// capacity would count it once per buffer.
+fn occupied_bytes(batch: &RecordBatch) -> Result<u64> {
+    batch
+        .columns()
+        .iter()
+        .map(|column| {
+            column
+                .to_data()
+                .get_slice_memory_size()
+                .map(|bytes| bytes as u64)
+                .map_err(KaveonError::from)
+        })
+        .sum()
+}
+
+/// One source read on its own thread, every batch to every thread.
+fn run_pump(
+    opener: SourceOpener,
+    schema: &SchemaRef,
+    senders: &[SyncSender<QueuedBatch>],
+    queue: &Arc<QueueBudget>,
+    pumps: usize,
+    pool: &QueryMemoryPool,
+    stopped: &AtomicBool,
+) -> Result<()> {
+    let mut source = opener()?;
+    if source.schema() != schema {
+        return Err(error("parallel source schema differs between sources"));
+    }
+    while let Some(batch) = source.next_batch()? {
+        if batch.schema() != *schema {
+            return Err(error(
+                "parallel source batch does not match declared schema",
+            ));
+        }
+        if stopped.load(Ordering::Acquire) {
+            return Err(stopped_error());
+        }
+        let bytes = occupied_bytes(&batch)?;
+        // The queues hold this many batches from every source at once.
+        queue.ensure_for(bytes.saturating_mul(pumps as u64))?;
+        let memory = Arc::new(queue.charge_waiting(bytes, stopped)?);
+        for sender in senders {
+            send_bounded(
+                sender,
+                QueuedBatch {
+                    batch: batch.clone(),
+                    _memory: Held::Charged {
+                        _charge: Arc::clone(&memory),
+                    },
+                },
+                stopped,
+                pool,
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn catch_worker_failure(work: impl FnOnce() -> Result<()>) -> Result<()> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
         .unwrap_or_else(|_| Err(error("parallel aggregate worker panicked")))
@@ -943,8 +1302,12 @@ fn stopped_error() -> KaveonError {
     KaveonError::Execution(STOPPED.into())
 }
 
-fn is_stopped_error(error: &KaveonError) -> bool {
-    matches!(error, KaveonError::Execution(message) if message == STOPPED)
+const DISCONNECTED: &str = "parallel operator channel disconnected";
+
+/// An error that follows from another thread's failure rather than
+/// causing it.
+fn is_consequence(error: &KaveonError) -> bool {
+    matches!(error, KaveonError::Execution(message) if message == STOPPED || message == DISCONNECTED)
 }
 
 #[cfg(test)]
@@ -1404,6 +1767,153 @@ mod tests {
         assert!(set_query_parallelism(&raised, 0).is_err());
         assert!(set_query_parallelism(&raised, 1).is_err());
         set_query_parallelism(&raised, configured + 8).unwrap();
+    }
+
+    /// Keeps the rows of a binary key column whose key hashes to this
+    /// thread and counts them, one batch out per batch in.
+    struct KeepMine {
+        source: Box<dyn BatchOperator>,
+        selector: ThreadSelector,
+        index: usize,
+        schema: SchemaRef,
+    }
+    impl BatchOperator for KeepMine {
+        fn schema(&self) -> &SchemaRef {
+            &self.schema
+        }
+        fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+            let Some(batch) = self.source.next_batch()? else {
+                return Ok(None);
+            };
+            let keys = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<arrow::array::BinaryArray>()
+                .unwrap();
+            let kept = (0..batch.num_rows())
+                .filter(|row| self.selector.thread_of(keys.value(*row)) == self.index)
+                .map(|row| keys.value(row).to_vec())
+                .collect::<Vec<_>>();
+            Ok(Some(
+                RecordBatch::try_new(
+                    self.schema.clone(),
+                    vec![
+                        Arc::new(arrow::array::BinaryArray::from_iter_values(kept.iter())),
+                        Arc::new(Int64Array::from(vec![self.index as i64; kept.len()])),
+                    ],
+                )
+                .unwrap(),
+            ))
+        }
+    }
+
+    #[test]
+    fn broadcast_hands_every_batch_from_every_source_thread_to_every_thread_once() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("key", DataType::Binary, false),
+        ]));
+        let output_schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("key", DataType::Binary, false),
+            arrow::datatypes::Field::new("thread", DataType::Int64, false),
+        ]));
+        // Three sources of four batches, 1000 keys each, all distinct.
+        let sources = (0..3)
+            .map(|source| {
+                let schema = schema.clone();
+                Box::new(move || {
+                    let batches = (0..4)
+                        .map(|batch| {
+                            let keys = (0..1000)
+                                .map(|i| format!("k{source}-{batch}-{i}").into_bytes())
+                                .collect::<Vec<_>>();
+                            RecordBatch::try_new(
+                                schema.clone(),
+                                vec![Arc::new(arrow::array::BinaryArray::from_iter_values(
+                                    keys.iter(),
+                                ))],
+                            )
+                            .unwrap()
+                        })
+                        .collect::<VecDeque<_>>();
+                    Ok(Box::new(Input {
+                        schema: schema.clone(),
+                        batches,
+                    }) as Box<dyn BatchOperator>)
+                }) as SourceOpener
+            })
+            .collect::<Vec<_>>();
+        let pool = QueryMemoryPool::new("broadcast", 64 << 20).unwrap();
+        let thread_schema = output_schema.clone();
+        let operator: ThreadOperator = Arc::new(move |source, _, context| {
+            Ok(Box::new(KeepMine {
+                source,
+                selector: ThreadSelector::new(context.workers),
+                index: context.index,
+                schema: thread_schema.clone(),
+            }) as Box<dyn BatchOperator>)
+        });
+        let mut parallel = ParallelPartials::broadcast(
+            Sources::Threads {
+                schema: schema.clone(),
+                openers: sources,
+            },
+            output_schema,
+            operator,
+            pool.clone(),
+            4,
+        )
+        .unwrap();
+        let mut seen = std::collections::HashMap::<Vec<u8>, i64>::new();
+        let mut batches = 0;
+        while let Some(batch) = parallel.next_batch().unwrap() {
+            batches += 1;
+            let keys = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<arrow::array::BinaryArray>()
+                .unwrap();
+            let threads = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap();
+            for row in 0..batch.num_rows() {
+                assert!(
+                    seen.insert(keys.value(row).to_vec(), threads.value(row))
+                        .is_none(),
+                    "a key reaches one thread"
+                );
+            }
+        }
+        // Every thread saw every one of the twelve batches.
+        assert_eq!(batches, 12 * 4);
+        assert_eq!(seen.len(), 12_000);
+        let mut per_thread = [0; 4];
+        for thread in seen.values() {
+            per_thread[*thread as usize] += 1;
+        }
+        assert!(
+            per_thread.iter().all(|count| *count > 2_000),
+            "{per_thread:?}"
+        );
+        drop(parallel);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+
+        // A source thread's failure is the operator's error.
+        let failing = Sources::Threads {
+            schema: schema.clone(),
+            openers: vec![Box::new(|| Err(error("the spool is gone"))) as SourceOpener],
+        };
+        let operator: ThreadOperator = Arc::new(move |source, _, _| Ok(source));
+        let mut parallel =
+            ParallelPartials::broadcast(failing, schema, operator, pool.clone(), 2).unwrap();
+        let failure = parallel.next_batch().unwrap_err();
+        assert!(
+            failure.to_string().contains("the spool is gone"),
+            "{failure}"
+        );
+        drop(parallel);
+        assert_eq!(pool.snapshot().current_bytes, 0);
     }
 
     #[test]
