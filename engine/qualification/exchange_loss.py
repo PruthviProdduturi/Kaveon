@@ -132,7 +132,7 @@ def main():
                 raise RuntimeError("Workers did not register")
             time.sleep(0.1)
         with ThreadPoolExecutor(max_workers=1) as executor:
-            query = executor.submit(requests.post, base + "/v1/statement", headers=headers, json={"query": sql}, timeout=120)
+            query = executor.submit(requests.post, base + "/v1/statement", headers=headers, json={"query": sql, "settings": {"result_cache": False}}, timeout=120)
             try:
                 if not reached.wait(30):
                     raise AssertionError("Join consumer barrier was not reached")

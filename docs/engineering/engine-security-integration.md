@@ -154,8 +154,8 @@ scaling worker count.
 
 `KAVEON_EXCHANGE_SPOOL_ROOT` chooses the parent temporary directory.
 `KAVEON_EXCHANGE_DISK_LIMIT_BYTES` defaults to 10 GiB across active stored and
-download-retained chunks; each query is limited to 2 GiB. There are at most 1,024
-active exchange identities. Disk quota failures return explicit errors. Chunks
+download-retained chunks; `KAVEON_EXCHANGE_QUERY_DISK_LIMIT_BYTES` bounds one
+query's share, default 8 GiB. There are at most 1,024 active exchange identities. Disk quota failures return explicit errors. Chunks
 expire after 15 minutes without an upload/read. Terminal query cleanup removes
 its entries and rejects late uploads; ongoing downloads retain their file leases
 until they finish or disconnect. Coordinator restart loses the in-memory index;
@@ -173,6 +173,18 @@ garbage collection, not recovery of an interrupted query.
 `KAVEON_COORDINATOR_EXCHANGE_SPOOL=false` restores worker-hosted memory exchange
 placement. Even in that mode, consumer retries retain the original exchange
 location instead of mistakenly fetching from the new execution worker.
+
+`KAVEON_WORKER_EXCHANGE_SPOOL=true` gives a worker its own disk exchange store:
+a worker keeps the exchange partitions addressed to it under
+`KAVEON_EXCHANGE_SPOOL_ROOT`, producers upload straight to the consuming worker,
+and the coordinator relays no exchange traffic. `KAVEON_EXCHANGE_DISK_LIMIT_BYTES`
+bounds that node's spool and `KAVEON_EXCHANGE_QUERY_DISK_LIMIT_BYTES` is one
+query's share of it (default 8 GiB). `KAVEON_IPC_SPOOL_ROOT` chooses where a
+node spools received exchange payloads before decoding, defaulting to the system
+temporary directory; the directory must exist. The AKS qualification cluster runs
+this mode (`infra/helm/kaveon-test`): workers spool under `/state/exchange` with
+an 8 GiB node / 6 GiB query limit and `KAVEON_IPC_SPOOL_ROOT=/state`, and the
+coordinator spool is off.
 
 ## Platform credential encryption
 

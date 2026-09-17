@@ -24,7 +24,27 @@ function placement(q: QueryRecord) {
   if (!p) return <span className={s.na}>Not recorded</span>;
   if (p.mode === "distributed") return <>Workers{p.detail ? <span className={s.na}> · {p.detail}</span> : null}</>;
   if (p.mode === "coordinator") return <><span className={`${s.pill} ${s.pillRunning}`}>Coordinator</span>{p.detail ? <span className={s.na}> {p.detail}</span> : null}</>;
+  if (p.mode === "cache") {
+    return (
+      <>
+        Cache
+        {q.cached_from ? <span className={s.na}> · from <Link href={`/engine/queries/${encodeURIComponent(q.cached_from)}`}>{q.cached_from}</Link></span> : null}
+        {q.cached_elapsed_ms != null ? <span className={s.na}> · originally {ms(q.cached_elapsed_ms)}</span> : null}
+      </>
+    );
+  }
   return <span className={s.na}>Pending</span>;
+}
+
+/** The settings the statement carried, as the Engine recorded them; a statement that set nothing shows the defaults applied. */
+function settingsSummary(q: QueryRecord): React.ReactNode {
+  const st = q.settings;
+  if (!st || Object.keys(st).length === 0) return <span className={s.na}>Server defaults</span>;
+  const parts: string[] = [];
+  if (st.query_memory_limit_bytes != null) parts.push(`memory ${bytes(st.query_memory_limit_bytes)}`);
+  if (st.local_parallelism != null) parts.push(`parallelism ${st.local_parallelism}`);
+  if (st.result_cache != null) parts.push(st.result_cache ? "result cache on" : "result cache bypassed");
+  return parts.join(" · ");
 }
 
 function Definitions({ rows }: { rows: [string, React.ReactNode][] }) {
@@ -169,6 +189,7 @@ export default function EngineQueryPage() {
                     ["Rows in response", `${q.rows.length.toLocaleString()}${q.rows_are_preview ? " (preview)" : ""}`],
                     ["Columns", String(q.columns.length)],
                     ["Ran on", placement(q)],
+                    ["Settings", settingsSummary(q)],
                     ["Distributed stages", q.stages.length ? String(q.stages.length) : <span key="ns" className={s.na}>Node-local</span>],
                     ["KaveonDB version", <Value key="ev" v={c.engine_version} />], ["Environment", <Value key="en" v={c.environment} />],
                   ]} />

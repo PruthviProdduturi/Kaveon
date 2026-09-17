@@ -7,11 +7,26 @@ import { msalFetch } from "../../utils/msalFetch";
 
 export type QueryState = "RUNNING" | "FINISHED" | "FAILED";
 
+/** The coordinator's result cache counters, as `/v1/node` and `/v1/cluster` report them. */
+export interface ResultCacheStats {
+  enabled: boolean;
+  budget_bytes: number;
+  ttl_seconds: number;
+  entries: number;
+  bytes: number;
+  hits: number;
+  misses: number;
+  evictions: number;
+  expirations: number;
+  refused: number;
+}
+
 export interface ClusterNode {
   node_id?: string;
   version?: string;
   uptime_secs?: number;
   memory_rss_bytes?: number;
+  result_cache?: ResultCacheStats;
 }
 
 export interface Cluster {
@@ -68,10 +83,17 @@ export interface PlanNode {
   attributes?: Record<string, unknown>; children?: PlanNode[];
 }
 
-/** Where KaveonDB ran the query: on the workers, or on the coordinator and why. */
+/** Where KaveonDB ran the query: on the workers, on the coordinator and why, or from the result cache. */
 export interface ExecutionPlacement {
-  mode: "pending" | "distributed" | "coordinator";
+  mode: "pending" | "distributed" | "coordinator" | "cache";
   detail?: string;
+}
+
+/** What the statement set for itself; the Engine serialises it only when something was set. */
+export interface QuerySettings {
+  query_memory_limit_bytes?: number;
+  local_parallelism?: number;
+  result_cache?: boolean;
 }
 
 export interface QueryRecord {
@@ -83,6 +105,10 @@ export interface QueryRecord {
   rows_are_preview: boolean;
   scan_metrics_complete: boolean;
   execution?: ExecutionPlacement;
+  settings?: QuerySettings;
+  /** For a cache hit: the query whose result was served, and what it took to produce it. */
+  cached_from?: string;
+  cached_elapsed_ms?: number;
   error?: string | null;
   elapsed_ms: number;
   submitted_at_ms: number;

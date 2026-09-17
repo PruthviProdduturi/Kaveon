@@ -19,6 +19,8 @@ import time
 sys.path.insert(0, "/app")
 import services.engine_bridge as eb  # noqa: E402
 
+NO_CACHE = {"result_cache": False}
+
 
 def result_hash(rows, ordered):
     """Engine-independent digest of a result: values rendered canonically
@@ -50,10 +52,12 @@ def main():
                   "adapted": "kaveon_sql" in statement,
                   "trino_seconds": statement.get("trino_seconds"), "target_seconds": statement.get("target_seconds")}
         try:
-            eb.execute(sql, catalog, "scale-suite", "Admin", schema, timeout=900)
+            # Every execution bypasses the coordinator's result cache: a
+            # benchmark measures the Engine, never a served result.
+            eb.execute(sql, catalog, "scale-suite", "Admin", schema, timeout=900, settings=NO_CACHE)
             for _ in range(3):
                 t0 = time.time()
-                result = eb.execute(sql, catalog, "scale-suite", "Admin", schema, timeout=900)
+                result = eb.execute(sql, catalog, "scale-suite", "Admin", schema, timeout=900, settings=NO_CACHE)
                 record["seconds"].append(round(time.time() - t0, 3))
             rows = result.get("data") or result.get("rows") or []
             record["rows"] = len(rows)

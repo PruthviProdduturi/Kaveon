@@ -19,6 +19,10 @@ import pyarrow.parquet as pq
 import requests
 import trino.dbapi
 
+# Every qualification statement bypasses the coordinator's result cache:
+# a served result proves nothing about the workers.
+NO_CACHE = {"result_cache": False}
+
 
 FIXTURES = {
     "left_values": [(1,), (2,), (None,)],
@@ -223,7 +227,7 @@ def main():
                 case.update(expected=expected, trino=trino_rows)
                 if expected != trino_rows:
                     raise AssertionError("Reference engines disagree")
-                response = requests.post(base + "/v1/statement", headers=headers, json={"query": sql, "user": "spoofed"}, timeout=30)
+                response = requests.post(base + "/v1/statement", headers=headers, json={"query": sql, "user": "spoofed", "settings": NO_CACHE}, timeout=30)
                 result = response.json()
                 case.update(http_status=response.status_code, result=result)
                 response.raise_for_status()
@@ -249,7 +253,7 @@ def main():
             print(f"{'PASS' if case['passed'] else 'FAIL'} {name}", flush=True)
         if args.concurrency:
             def concurrent_query(_):
-                response = requests.post(base + "/v1/statement", headers=headers, json={"query": "SELECT COUNT(*) FROM measurements"}, timeout=30)
+                response = requests.post(base + "/v1/statement", headers=headers, json={"query": "SELECT COUNT(*) FROM measurements", "settings": NO_CACHE}, timeout=30)
                 if response.status_code == 429:
                     return {"status": 429, "passed": True, "admitted": False}
                 result = response.json()
@@ -260,7 +264,7 @@ def main():
             if args.workers < 2:
                 raise ValueError("worker-loss requires at least two workers")
             stop(processes[-1])
-            response = requests.post(base + "/v1/statement", headers=headers, json={"query": "SELECT COUNT(*) FROM measurements"}, timeout=60)
+            response = requests.post(base + "/v1/statement", headers=headers, json={"query": "SELECT COUNT(*) FROM measurements", "settings": NO_CACHE}, timeout=60)
             result = response.json()
             report["worker_loss"] = {"status": response.status_code, "result": result, "passed": response.ok and result.get("data") == [[4]]}
             print("PASS worker_loss" if report["worker_loss"]["passed"] else "FAIL worker_loss", flush=True)

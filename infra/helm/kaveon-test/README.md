@@ -19,7 +19,27 @@ Create existing TLS Secret `kaveon-engine-tls` with `tls.crt`, `tls.key` and `ca
 
 The engine's default reqwest transport uses native TLS/OpenSSL. The chart points `SSL_CERT_FILE` to the mounted CA bundle; certificate verification stays enabled. Validate worker heartbeats and a distributed query after deployment: HTTPS Kubernetes probes do not verify server certificates and therefore cannot prove internal TLS trust. Azure workload identity injects its projected token and Azure environment variables through the labeled pods and annotated ServiceAccount. An actual ADLS read must pass before declaring this integration ready.
 
-Containers run as numeric UID/GID 10001 with a read-only root filesystem, no Linux capabilities, writable `/tmp`, and group-writable state volumes. Coordinator SQLite and exchange files persist across pod replacements; running queries do not resume and this is not HA. Worker state and spills are ephemeral. Coordinator readiness uses `/ready`, which requires an initialized catalog; bootstrap through pod-local access before the coordinator Service has ready endpoints. Worker readiness uses `/health`, proving process health only: workers execute shipped fragments without a synchronized local catalog, so catalog-dependent `/ready` would prevent their headless DNS endpoints from being published. Probes do not demonstrate worker registration, ADLS authorization or query correctness; verify these separately with a distributed query. Drain queries before upgrades; the grace period alone does not provide draining.
+Containers run as numeric UID/GID 10001 with a read-only root filesystem, no Linux capabilities, writable `/tmp`, and group-writable state volumes. The coordinator's SQLite catalog persists across pod replacements; running queries do not resume and this is not HA. Worker state, exchange spools and spills are ephemeral. Coordinator readiness uses `/ready`, which requires an initialized catalog; bootstrap through pod-local access before the coordinator Service has ready endpoints. Worker readiness uses `/health`, proving process health only: workers execute shipped fragments without a synchronized local catalog, so catalog-dependent `/ready` would prevent their headless DNS endpoints from being published. Probes do not demonstrate worker registration, ADLS authorization or query correctness; verify these separately with a distributed query. Drain queries before upgrades; the grace period alone does not provide draining.
+
+## Memory and exchange settings
+
+Every memory and disk budget the Engine reads from the environment is a chart value, per role, so `helm upgrade` reproduces the running StatefulSets. Byte values are strings.
+
+| Value | Env var | Coordinator | Worker |
+|---|---|---|---|
+| `<role>.memory.queryLimitBytes` | `KAVEON_QUERY_MEMORY_LIMIT_BYTES` | 512 MiB | 3 GiB |
+| `<role>.memory.admissionLimitBytes` | `KAVEON_MEMORY_ADMISSION_LIMIT_BYTES` | 2 GiB | 4 GiB |
+| `<role>.exchange.spool` | `KAVEON_COORDINATOR_EXCHANGE_SPOOL` / `KAVEON_WORKER_EXCHANGE_SPOOL` | `false` | `true` |
+| `<role>.exchange.diskLimitBytes` | `KAVEON_EXCHANGE_DISK_LIMIT_BYTES` | 24 GiB | 8 GiB |
+| `<role>.exchange.queryDiskLimitBytes` | `KAVEON_EXCHANGE_QUERY_DISK_LIMIT_BYTES` | 16 GiB | 6 GiB |
+| `workers.stateSizeLimit` | `/state` emptyDir `sizeLimit` | 32 GiB PVC | 16Gi |
+| `spillDiskLimitBytes` | `KAVEON_HASH_SPILL_BYTES` | 4 GiB | 4 GiB |
+
+`<role>` is `coordinator` or `workers`. The spool root is `/state/exchange` on both roles; workers also set `KAVEON_IPC_SPOOL_ROOT=/state` so received exchange payloads spool on the state volume rather than `/tmp` (the directory must exist, and `/state` is always mounted). Hash spill stays under `/tmp/spill` inside the 6 GiB `/tmp` emptyDir.
+
+With `workers.exchange.spool: true`, each worker keeps the exchange partitions addressed to it on its own disk, so producers upload straight to the consuming worker and the coordinator carries no exchange traffic; `coordinator.exchange.spool` is therefore `false`. The coordinator limits remain sized for its 32 GiB state PVC so the coordinator-hosted spool can be re-enabled without retuning. `queryDiskLimitBytes` is one query's share of the node's spool.
+
+The admission limit must fit inside the container memory limit less the Engine's headroom (the larger of 256 MiB and 15 %); the Engine refuses to start otherwise. The Engine reads the cgroup limit itself, so the chart never sets `KAVEON_PROCESS_MEMORY_LIMIT_BYTES`. When raising `workers.resources.limits.memory`, raise the worker budgets together with it.
 
 ```powershell
 helm upgrade --install kaveon infra/helm/kaveon-test --namespace kaveon --create-namespace --set image.repository=<registry>/kaveon-engine --set image.digest=sha256:<digest> --set workloadIdentity.clientId=<client-id> --set productTransactions.enabled=true --set productTransactions.account=<storage-account> --set productTransactions.container=<product-container> --set productTransactions.prefix=<product-prefix> --wait --timeout 10m

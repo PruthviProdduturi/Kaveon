@@ -10,10 +10,12 @@ pub mod fragment_exec;
 pub mod lifecycle;
 pub mod orchestrator;
 pub mod planner;
+pub mod result_cache;
 pub mod results;
 pub mod runtime;
 pub mod scheduler;
 pub mod security;
+pub mod settings;
 #[cfg(test)]
 mod tpch_coverage;
 mod transaction_api;
@@ -49,6 +51,8 @@ impl std::ops::Deref for PublishedCatalog {
 pub struct AppState {
     pub disk_exchange_store: Option<disk_exchange::DiskExchangeStore>,
     pub results: results::ResultStore,
+    /// Complete results of finished statements; only a coordinator keeps any.
+    pub result_cache: result_cache::ResultCache,
     pub principal_admission: security::PrincipalAdmission,
     pub config: ServerConfig,
     pub cluster: RwLock<ClusterState>,
@@ -189,9 +193,18 @@ async fn main() {
     } else {
         None
     };
+    let result_cache = result_cache::ResultCache::new(
+        if config.coordinator {
+            config.result_cache_bytes
+        } else {
+            0
+        },
+        std::time::Duration::from_secs(config.result_cache_ttl_seconds),
+    );
     let state = Arc::new(AppState {
         disk_exchange_store,
         results: results::ResultStore::default(),
+        result_cache,
         principal_admission: security::PrincipalAdmission::default(),
         config,
         cluster: RwLock::new(cluster),

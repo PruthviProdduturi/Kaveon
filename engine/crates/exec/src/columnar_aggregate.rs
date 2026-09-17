@@ -1,8 +1,9 @@
 //! The columnar hash aggregate: keys as typed vectors, accumulators as flat
-//! columns, one hash table of slot ids. A batch is processed in three
-//! passes — key words per row, slot per row, then one tight loop per
-//! aggregate over the batch — so the per-row cost is a probe and a few
-//! stores, not an enum dispatch and a pointer chase per accumulator.
+//! columns, one open-addressed index of slot ids. A batch is processed in
+//! three passes — key words per row, slot per row with the index buckets
+//! prefetched ahead, then one tight loop per aggregate over the batch —
+//! so the per-row cost is a probe and a few stores, not an enum dispatch
+//! and a pointer chase per accumulator.
 //!
 //! Covers every key type the exchange can carry (integers, dates, booleans,
 //! text, dictionary-encoded text) and the accumulators that update in place:
@@ -12,7 +13,7 @@ use std::sync::Arc;
 
 use ahash::RandomState;
 use arrow::array::{
-    Array, ArrayRef, AsArray, BinaryBuilder, BooleanArray, Float64Array, Int32Array,
+    Array, ArrayRef, AsArray, BinaryArray, BinaryBuilder, BooleanArray, Float64Array, Int32Array,
     Int32DictionaryArray, Int64Array, StringArray, UInt64Array,
 };
 use arrow::datatypes::{DataType, Date32Type, Float64Type, Int32Type, Int64Type};
@@ -375,6 +376,93 @@ impl AccColumn {
         Ok(())
     }
 
+    /// Merge one compact-encoded partial state, read straight from
+    /// `input`, into a slot: the tag must be this column's.
+    #[inline]
+    fn merge_bytes(&mut self, slot: usize, input: &mut compact_state::Input<'_>) -> Result<()> {
+        use compact_state::{
+            TAG_AVG, TAG_COUNT, TAG_INTEGER_MAX, TAG_INTEGER_MIN, TAG_INTEGER_SUM, TAG_MAX,
+            TAG_MIN, TAG_SUM, TAG_UTF8_MAX, TAG_UTF8_MIN,
+        };
+        let tag = input.byte()?;
+        match self {
+            Self::Count(counts) if tag == TAG_COUNT => {
+                let count = u64::from_le_bytes(input.fixed()?);
+                counts[slot] = counts[slot]
+                    .checked_add(count)
+                    .ok_or_else(|| exec_err("COUNT overflow"))?;
+            }
+            Self::IntegerSum { sums, counts } if tag == TAG_INTEGER_SUM => {
+                let sum = i128::from_le_bytes(input.fixed()?);
+                let count = u64::from_le_bytes(input.fixed()?);
+                sums[slot] = sums[slot]
+                    .checked_add(sum)
+                    .ok_or_else(|| exec_err("integer SUM overflow"))?;
+                counts[slot] += count;
+            }
+            Self::IntegerMin { values, present } if tag == TAG_INTEGER_MIN => {
+                if input.flag()? {
+                    let value = i64::from_le_bytes(input.fixed()?);
+                    if !present[slot] || value < values[slot] {
+                        values[slot] = value;
+                        present[slot] = true;
+                    }
+                }
+            }
+            Self::IntegerMax { values, present } if tag == TAG_INTEGER_MAX => {
+                if input.flag()? {
+                    let value = i64::from_le_bytes(input.fixed()?);
+                    if !present[slot] || value > values[slot] {
+                        values[slot] = value;
+                        present[slot] = true;
+                    }
+                }
+            }
+            Self::Float { sums, counts, .. } if tag == TAG_SUM || tag == TAG_AVG => {
+                let sum = f64::from_le_bytes(input.fixed()?);
+                let count = u64::from_le_bytes(input.fixed()?);
+                sums[slot] += sum;
+                counts[slot] += count;
+            }
+            Self::FloatMin { values, present } if tag == TAG_MIN => {
+                if input.flag()? {
+                    let value = f64::from_le_bytes(input.fixed()?);
+                    if !present[slot] || value < values[slot] {
+                        values[slot] = value;
+                        present[slot] = true;
+                    }
+                }
+            }
+            Self::FloatMax { values, present } if tag == TAG_MAX => {
+                if input.flag()? {
+                    let value = f64::from_le_bytes(input.fixed()?);
+                    if !present[slot] || value > values[slot] {
+                        values[slot] = value;
+                        present[slot] = true;
+                    }
+                }
+            }
+            Self::TextMin(values) if tag == TAG_UTF8_MIN => {
+                if input.flag()? {
+                    let text = compact_state::utf8_extremum(input.payload()?)?;
+                    if values[slot].as_deref().is_none_or(|old| text < old) {
+                        values[slot] = Some(Box::from(text));
+                    }
+                }
+            }
+            Self::TextMax(values) if tag == TAG_UTF8_MAX => {
+                if input.flag()? {
+                    let text = compact_state::utf8_extremum(input.payload()?)?;
+                    if values[slot].as_deref().is_none_or(|old| text > old) {
+                        values[slot] = Some(Box::from(text));
+                    }
+                }
+            }
+            _ => return Err(exec_err("aggregate state layout mismatch in merge")),
+        }
+        Ok(())
+    }
+
     /// The slot's state as the enum, for the encoders and outputs that
     /// speak it.
     fn state(&self, slot: usize) -> AggregateState {
@@ -612,61 +700,59 @@ pub fn supports_aggregate(
     }
 }
 
-/// Words per row for one key column of a batch: the key's bits, or an
-/// arena id for text. `u64::MAX` with the null flag set marks null.
+/// Words per row for one key column of a batch, written into the row-major
+/// scratch at `position` of each row's `stride` words: the key's bits, or
+/// an arena id for text. A null writes `u64::MAX` and sets its bit in the
+/// row's last word.
 fn key_words(
     column: &mut KeyColumn,
     hasher: &RandomState,
     array: &ArrayRef,
-    words: &mut Vec<u64>,
-    nulls: &mut Vec<bool>,
+    packed: &mut [u64],
+    stride: usize,
+    position: usize,
     new_bytes: &mut u64,
 ) -> Result<()> {
     let rows = array.len();
-    words.clear();
-    nulls.clear();
+    let null_at = stride - 1;
+    let mut write = |row: usize, word: Option<u64>| {
+        let base = row * stride;
+        match word {
+            Some(word) => packed[base + position] = word,
+            None => {
+                packed[base + position] = u64::MAX;
+                packed[base + null_at] |= 1 << position;
+            }
+        }
+    };
     match column {
         KeyColumn::Integer { .. } => match array.data_type() {
-            // A null slot's value bits are arbitrary; every null hashes as
-            // the null word.
-            DataType::Int64 | DataType::Int32 | DataType::Date32 | DataType::Boolean
-                if array.null_count() != 0 =>
-            {
-                words.extend((0..rows).map(|row| {
-                    if array.is_null(row) {
-                        u64::MAX
-                    } else {
-                        match array.data_type() {
-                            DataType::Int64 => array.as_primitive::<Int64Type>().value(row) as u64,
-                            DataType::Boolean => array.as_boolean().value(row) as u64,
-                            DataType::Date32 => {
-                                array.as_primitive::<Date32Type>().value(row) as i64 as u64
-                            }
-                            _ => array.as_primitive::<Int32Type>().value(row) as i64 as u64,
-                        }
-                    }
-                }));
-                nulls.extend((0..rows).map(|row| array.is_null(row)));
-            }
             DataType::Int64 => {
                 let values = array.as_primitive::<Int64Type>();
-                words.extend(values.values().iter().map(|v| *v as u64));
-                nulls.extend((0..rows).map(|row| values.is_null(row)));
+                for (row, value) in values.values().iter().enumerate() {
+                    write(row, (!values.is_null(row)).then_some(*value as u64));
+                }
             }
             DataType::Int32 => {
                 let values = array.as_primitive::<Int32Type>();
-                words.extend(values.values().iter().map(|v| *v as i64 as u64));
-                nulls.extend((0..rows).map(|row| values.is_null(row)));
+                for (row, value) in values.values().iter().enumerate() {
+                    write(row, (!values.is_null(row)).then_some(*value as i64 as u64));
+                }
             }
             DataType::Date32 => {
                 let values = array.as_primitive::<Date32Type>();
-                words.extend(values.values().iter().map(|v| *v as i64 as u64));
-                nulls.extend((0..rows).map(|row| values.is_null(row)));
+                for (row, value) in values.values().iter().enumerate() {
+                    write(row, (!values.is_null(row)).then_some(*value as i64 as u64));
+                }
             }
             DataType::Boolean => {
                 let values = array.as_boolean();
-                words.extend((0..rows).map(|row| values.value(row) as u64));
-                nulls.extend((0..rows).map(|row| values.is_null(row)));
+                for row in 0..rows {
+                    write(
+                        row,
+                        (!values.is_null(row)).then_some(values.value(row) as u64),
+                    );
+                }
             }
             other => return Err(exec_err(format!("group key column type changed: {other}"))),
         },
@@ -679,22 +765,18 @@ fn key_words(
                     let values = array.as_string::<i32>();
                     for row in 0..rows {
                         if values.is_null(row) {
-                            words.push(u64::MAX);
-                            nulls.push(true);
+                            write(row, None);
                         } else {
-                            words.push(intern(values.value(row))?);
-                            nulls.push(false);
+                            write(row, Some(intern(values.value(row))?));
                         }
                     }
                 } else {
                     let values = array.as_string::<i64>();
                     for row in 0..rows {
                         if values.is_null(row) {
-                            words.push(u64::MAX);
-                            nulls.push(true);
+                            write(row, None);
                         } else {
-                            words.push(intern(values.value(row))?);
-                            nulls.push(false);
+                            write(row, Some(intern(values.value(row))?));
                         }
                     }
                 }
@@ -712,8 +794,7 @@ fn key_words(
                 let keys = dictionary.keys();
                 for row in 0..rows {
                     if keys.is_null(row) {
-                        words.push(u64::MAX);
-                        nulls.push(true);
+                        write(row, None);
                         continue;
                     }
                     let code = keys.value(row) as usize;
@@ -738,15 +819,13 @@ fn key_words(
                                     word
                                 }
                                 None => {
-                                    words.push(u64::MAX);
-                                    nulls.push(true);
+                                    write(row, None);
                                     continue;
                                 }
                             }
                         }
                     };
-                    words.push(word);
-                    nulls.push(false);
+                    write(row, Some(word));
                 }
                 *new_bytes += arena.bytes().saturating_sub(before);
             }
@@ -756,16 +835,293 @@ fn key_words(
     Ok(())
 }
 
+/// The slot index: open addressing with linear probing over a tag byte and
+/// a slot per bucket. The tag is seven bits of the hash with the high bit
+/// set (zero marks an empty bucket), so a probe reads the key columns only
+/// on a tag match; the buckets a batch will probe are prefetched a few
+/// rows ahead, so their cache misses overlap instead of serialising. A
+/// doubling re-derives every hash from the columns in slot order —
+/// sequential reads — where a bucket-order rehash reads each column at a
+/// random slot per group.
+struct SlotIndex {
+    tags: Vec<u8>,
+    slots: Vec<u32>,
+    len: usize,
+}
+
+/// Buckets per group before a doubling: the index doubles at three
+/// quarters full, which keeps a linear probe within a cache line or two.
+const INDEX_LOAD_NUMERATOR: usize = 3;
+const INDEX_LOAD_DENOMINATOR: usize = 4;
+const INDEX_MIN_BUCKETS: usize = 16;
+/// Rows between a bucket's prefetch and its probe.
+const PREFETCH_DISTANCE: usize = 16;
+
+/// Where a probe ended: the slot whose key matched, or the empty bucket a
+/// new slot takes.
+enum Probe {
+    Found(u32),
+    Vacant(usize),
+}
+
+impl SlotIndex {
+    fn new() -> Self {
+        Self {
+            tags: Vec::new(),
+            slots: Vec::new(),
+            len: 0,
+        }
+    }
+
+    /// Groups the index holds before it doubles.
+    fn capacity(&self) -> usize {
+        self.tags.len() / INDEX_LOAD_DENOMINATOR * INDEX_LOAD_NUMERATOR
+    }
+
+    fn is_full(&self) -> bool {
+        self.len >= self.capacity()
+    }
+
+    #[inline]
+    fn tag(hash: u64) -> u8 {
+        (hash >> 57) as u8 | 0x80
+    }
+
+    #[inline]
+    fn prefetch(&self, hash: u64) {
+        if !self.tags.is_empty() {
+            let index = hash as usize & (self.tags.len() - 1);
+            prefetch_read(self.tags.as_ptr().wrapping_add(index));
+            prefetch_read(self.slots.as_ptr().wrapping_add(index));
+        }
+    }
+
+    /// Probe for `hash`. The index must not be full.
+    #[inline]
+    fn probe(&self, hash: u64, mut matches: impl FnMut(u32) -> bool) -> Probe {
+        debug_assert!(!self.is_full());
+        let tag = Self::tag(hash);
+        let mask = self.tags.len() - 1;
+        let mut index = hash as usize & mask;
+        loop {
+            let found = self.tags[index];
+            if found == 0 {
+                return Probe::Vacant(index);
+            }
+            if found == tag {
+                let slot = self.slots[index];
+                if matches(slot) {
+                    return Probe::Found(slot);
+                }
+            }
+            index = (index + 1) & mask;
+        }
+    }
+
+    /// Fill the vacant bucket a probe returned.
+    #[inline]
+    fn occupy(&mut self, index: usize, hash: u64, slot: u32) {
+        debug_assert_eq!(self.tags[index], 0);
+        self.tags[index] = Self::tag(hash);
+        self.slots[index] = slot;
+        self.len += 1;
+    }
+
+    /// Double the buckets and place every slot again from `hash_of`,
+    /// called in slot order.
+    fn grow(&mut self, mut hash_of: impl FnMut(u32) -> u64) {
+        let buckets = (self.tags.len() * 2).max(INDEX_MIN_BUCKETS);
+        let mask = buckets - 1;
+        let mut tags = vec![0u8; buckets];
+        let mut slots = vec![0u32; buckets];
+        let mut hashes = [0u64; 64];
+        let mut slot = 0u32;
+        while (slot as usize) < self.len {
+            let block = ((self.len - slot as usize).min(hashes.len())) as u32;
+            for (offset, hash) in hashes[..block as usize].iter_mut().enumerate() {
+                *hash = hash_of(slot + offset as u32);
+                prefetch_read(tags.as_ptr().wrapping_add(*hash as usize & mask));
+                prefetch_read(slots.as_ptr().wrapping_add(*hash as usize & mask));
+            }
+            for (offset, hash) in hashes[..block as usize].iter().enumerate() {
+                let mut index = *hash as usize & mask;
+                while tags[index] != 0 {
+                    index = (index + 1) & mask;
+                }
+                tags[index] = Self::tag(*hash);
+                slots[index] = slot + offset as u32;
+            }
+            slot += block;
+        }
+        self.tags = tags;
+        self.slots = slots;
+    }
+}
+
+/// Ask for the cache line at `pointer` ahead of its use. A hint only:
+/// nothing is read, and targets without the instruction skip it.
+#[inline(always)]
+fn prefetch_read<T>(pointer: *const T) {
+    #[cfg(target_arch = "x86_64")]
+    // SAFETY: prefetch is a hint that never faults, whatever the address.
+    unsafe {
+        std::arch::x86_64::_mm_prefetch::<{ std::arch::x86_64::_MM_HINT_T0 }>(pointer as *const i8);
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let _ = pointer;
+    }
+}
+
+/// Index bytes charged per group: five bytes a bucket (tag and slot) at
+/// the lowest occupancy a doubling leaves, three eighths.
+const INDEX_BUCKET_BYTES_PER_SLOT: u64 = 16;
+
+/// The hash of the group at `slot`, from the columns: the same words the
+/// batch hashed when the group was created.
+fn slot_hash(keys: &[KeyColumn], hasher: &RandomState, slot: usize) -> u64 {
+    let key_count = keys.len();
+    let mut packed = [0u64; MAX_KEYS + 1];
+    let mut null_bits = 0u64;
+    for (position, key) in keys.iter().enumerate() {
+        let (word, null) = match key {
+            KeyColumn::Integer { values, nulls, .. } => (values[slot] as u64, nulls[slot]),
+            KeyColumn::Text { words, nulls, .. } => (words[slot] as u64, nulls[slot]),
+        };
+        packed[position] = if null { u64::MAX } else { word };
+        if null {
+            null_bits |= 1 << position;
+        }
+    }
+    packed[key_count] = null_bits;
+    hasher.hash_one(&packed[..=key_count])
+}
+
+/// Whether the group at `slot` has the packed key `words` (the key words,
+/// then the null bits).
+#[inline]
+fn key_matches(keys: &[KeyColumn], slot: usize, words: &[u64]) -> bool {
+    let null_bits = words[keys.len()];
+    keys.iter().enumerate().all(|(position, key)| {
+        let null = null_bits & (1 << position) != 0;
+        match key {
+            KeyColumn::Integer { values, nulls, .. } => {
+                nulls[slot] == null && (null || values[slot] as u64 == words[position])
+            }
+            KeyColumn::Text {
+                words: stored,
+                nulls,
+                ..
+            } => nulls[slot] == null && (null || stored[slot] as u64 == words[position]),
+        }
+    })
+}
+
+/// Parse one exchange-encoded group key (a count, then per key a length,
+/// a tag and the value) into packed `words`: the key words then the null
+/// bits. Text is interned; returns the arena bytes that added.
+fn parse_key_words(
+    keys: &mut [KeyColumn],
+    hasher: &RandomState,
+    key: &[u8],
+    words: &mut [u64],
+) -> Result<u64> {
+    let key_count = keys.len();
+    let mut input = KeyInput(key);
+    if input.u64()? != key_count as u64 {
+        return Err(exec_err(
+            "partial group key count does not match the aggregate",
+        ));
+    }
+    let mut null_bits = 0u64;
+    let mut new_bytes = 0u64;
+    for (position, column) in keys.iter_mut().enumerate() {
+        let length = usize::try_from(input.u64()?)
+            .map_err(|_| exec_err("partial group key is too large"))?;
+        let (tag, payload) = input
+            .take(length)?
+            .split_first()
+            .ok_or_else(|| exec_err("empty partial group key value"))?;
+        let mismatch = || exec_err("partial group key type does not match the aggregate");
+        words[position] = match (column, *tag) {
+            (_, VALUE_NULL) if payload.is_empty() => {
+                null_bits |= 1 << position;
+                u64::MAX
+            }
+            (
+                KeyColumn::Integer {
+                    data_type: DataType::Int64,
+                    ..
+                },
+                VALUE_INT64,
+            ) => i64::from_le_bytes(payload.try_into().map_err(|_| mismatch())?) as u64,
+            (
+                KeyColumn::Integer {
+                    data_type: DataType::Int32 | DataType::Date32,
+                    ..
+                },
+                VALUE_INT32,
+            ) => i32::from_le_bytes(payload.try_into().map_err(|_| mismatch())?) as i64 as u64,
+            (
+                KeyColumn::Integer {
+                    data_type: DataType::Boolean,
+                    ..
+                },
+                VALUE_BOOL,
+            ) => match payload {
+                [0] => 0,
+                [1] => 1,
+                _ => return Err(mismatch()),
+            },
+            (KeyColumn::Text { arena, .. }, VALUE_UTF8) => {
+                let text = std::str::from_utf8(payload)
+                    .map_err(|_| exec_err("partial group key is not valid UTF-8"))?;
+                let before = arena.bytes();
+                let id = arena.intern(hasher, text)?.0 as u64;
+                new_bytes += arena.bytes().saturating_sub(before);
+                id
+            }
+            _ => return Err(mismatch()),
+        };
+    }
+    if !input.0.is_empty() {
+        return Err(exec_err("trailing partial group key bytes"));
+    }
+    words[key_count] = null_bits;
+    Ok(new_bytes)
+}
+
+/// A cursor over one encoded group key.
+struct KeyInput<'a>(&'a [u8]);
+
+impl<'a> KeyInput<'a> {
+    #[inline]
+    fn take(&mut self, length: usize) -> Result<&'a [u8]> {
+        if length > self.0.len() {
+            return Err(exec_err("truncated partial group key"));
+        }
+        let (value, tail) = self.0.split_at(length);
+        self.0 = tail;
+        Ok(value)
+    }
+    #[inline]
+    fn u64(&mut self) -> Result<u64> {
+        Ok(u64::from_le_bytes(
+            self.take(8)?.try_into().expect("eight bytes"),
+        ))
+    }
+}
+
 /// Groups keyed by `keys` with `accumulators`, plus the slot index.
 pub struct ColumnarGroups {
     keys: Vec<KeyColumn>,
     accumulators: Vec<AccColumn>,
     template: Vec<AggregateState>,
-    index: HashTable<u32>,
+    index: SlotIndex,
     hasher: RandomState,
-    /// Scratch per batch: words and nulls per key column, hashes, slots.
-    words: Vec<Vec<u64>>,
-    nulls: Vec<Vec<bool>>,
+    /// Scratch per batch, row-major: each row's key words then its null
+    /// bits (`keys.len() + 1` words), the row's hash, and its slot.
+    packed: Vec<u64>,
     hashes: Vec<u64>,
     slots: Vec<u32>,
     len: usize,
@@ -817,10 +1173,9 @@ impl ColumnarGroups {
             keys,
             accumulators,
             template: template.to_vec(),
-            index: HashTable::new(),
+            index: SlotIndex::new(),
             hasher: RandomState::new(),
-            words: vec![Vec::new(); key_types.len()],
-            nulls: vec![Vec::new(); key_types.len()],
+            packed: Vec::new(),
             hashes: Vec::new(),
             slots: Vec::new(),
             len: 0,
@@ -839,8 +1194,13 @@ impl ColumnarGroups {
         self.len == 0
     }
 
+    /// Words per row in the packed scratch: the keys, then the null bits.
+    fn stride(&self) -> usize {
+        self.keys.len() + 1
+    }
+
     /// Bytes one more group costs: its key words, its accumulators, the
-    /// index entry with hashbrown's overhead.
+    /// index bucket with the load factor's slack.
     pub fn slot_bytes(&self) -> u64 {
         let keys = self
             .keys
@@ -855,17 +1215,27 @@ impl ColumnarGroups {
             .iter()
             .map(AccColumn::slot_bytes)
             .sum::<u64>()
-            + 16
+            + INDEX_BUCKET_BYTES_PER_SLOT
     }
 
-    /// Bytes a doubling of the index and the columns needs at once if
-    /// `incoming` more groups can arrive, or 0 when they fit: the old
-    /// buffers stay alive until the copy is done. Small tables are covered
-    /// by the per-group figure.
+    /// Scratch bytes a batch of `rows` takes while it is applied: the
+    /// packed key words, a hash and a slot per row.
+    pub fn scratch_bytes(&self, rows: usize) -> u64 {
+        (rows as u64).saturating_mul((self.stride() as u64 + 1) * 8 + 4)
+    }
+
+    /// Bytes the largest doubling of the index and the columns needs at
+    /// once if `incoming` more groups can arrive, or 0 when they fit: the
+    /// old buffers stay alive until the copy is done. Small tables are
+    /// covered by the per-group figure.
     pub fn growth_bytes(&self, incoming: usize) -> u64 {
-        let capacity = self.index.capacity();
+        let mut capacity = self.index.capacity();
         if capacity < 1 << 16 || self.len + incoming <= capacity {
             return 0;
+        }
+        // The last doubling within `incoming` copies the largest table.
+        while capacity.saturating_mul(2) < self.len + incoming {
+            capacity = capacity.saturating_mul(2);
         }
         (capacity as u64).saturating_mul(self.slot_bytes())
     }
@@ -917,122 +1287,86 @@ impl ColumnarGroups {
         rows: usize,
     ) -> Result<(usize, u64)> {
         let mut new_bytes = 0u64;
+        let stride = self.stride();
+        self.packed.clear();
+        self.packed.resize(rows * stride, 0);
         for (position, array) in key_columns.iter().enumerate() {
-            let (words, nulls) = (&mut self.words[position], &mut self.nulls[position]);
             key_words(
                 &mut self.keys[position],
                 &self.hasher,
                 array,
-                words,
-                nulls,
+                &mut self.packed,
+                stride,
+                position,
                 &mut new_bytes,
             )?;
         }
-        // Hash every row from its words and null flags.
-        self.hashes.clear();
-        self.hashes.reserve(rows);
-        let key_count = self.keys.len();
-        let mut packed = [0u64; MAX_KEYS + 1];
-        for row in 0..rows {
-            let mut null_bits = 0u64;
-            for (position, word) in packed.iter_mut().enumerate().take(key_count) {
-                *word = self.words[position][row];
-                if self.nulls[position][row] {
-                    null_bits |= 1 << position;
-                }
-            }
-            packed[key_count] = null_bits;
-            self.hashes
-                .push(self.hasher.hash_one(&packed[..=key_count]));
+        let created = self.resolve_slots(rows)?;
+        // One tight loop per aggregate over the batch.
+        for (accumulator, column) in self.accumulators.iter_mut().zip(value_columns) {
+            accumulator.update(*column, &self.slots)?;
         }
-        // Resolve a slot per row.
+        Ok((created, new_bytes))
+    }
+
+    /// Hash every packed row, then find or create its group: `slots` holds
+    /// one slot per row after. Returns the number of groups created.
+    fn resolve_slots(&mut self, rows: usize) -> Result<usize> {
+        let stride = self.stride();
+        let key_count = self.keys.len();
+        self.hashes.clear();
+        self.hashes.extend(
+            self.packed
+                .chunks_exact(stride)
+                .take(rows)
+                .map(|row| self.hasher.hash_one(row)),
+        );
         self.slots.clear();
         self.slots.reserve(rows);
         let mut created = 0usize;
         for row in 0..rows {
+            if self.index.is_full() {
+                let keys = &self.keys;
+                let hasher = &self.hasher;
+                self.index
+                    .grow(|slot| slot_hash(keys, hasher, slot as usize));
+            }
+            if let Some(&ahead) = self.hashes.get(row + PREFETCH_DISTANCE) {
+                self.index.prefetch(ahead);
+            }
             let hash = self.hashes[row];
-            let words = &self.words;
-            let nulls = &self.nulls;
+            let words = &self.packed[row * stride..(row + 1) * stride];
             let keys = &self.keys;
-            let found = self.index.find(hash, |&slot| {
-                let slot = slot as usize;
-                (0..key_count).all(|position| {
-                    let null = nulls[position][row];
-                    match &keys[position] {
-                        KeyColumn::Integer {
-                            values,
-                            nulls: stored,
-                            ..
-                        } => {
-                            stored[slot] == null
-                                && (null || values[slot] as u64 == words[position][row])
-                        }
-                        KeyColumn::Text {
-                            words: stored_words,
-                            nulls: stored,
-                            ..
-                        } => {
-                            stored[slot] == null
-                                && (null || stored_words[slot] as u64 == words[position][row])
-                        }
-                    }
-                })
-            });
-            let slot = match found {
-                Some(&slot) => slot,
-                None => {
+            let slot = match self
+                .index
+                .probe(hash, |slot| key_matches(keys, slot as usize, words))
+            {
+                Probe::Found(slot) => slot,
+                Probe::Vacant(bucket) => {
                     let slot = u32::try_from(self.len)
                         .map_err(|_| exec_err("too many groups for one task"))?;
-                    for position in 0..key_count {
-                        let null = self.nulls[position][row];
-                        let word = self.words[position][row];
+                    let null_bits = words[key_count];
+                    for (position, word) in words.iter().enumerate().take(key_count) {
+                        let null = null_bits & (1 << position) != 0;
                         match &mut self.keys[position] {
-                            KeyColumn::Integer {
-                                values,
-                                nulls: stored,
-                                ..
-                            } => {
-                                values.push(if null { 0 } else { word as i64 });
-                                stored.push(null);
+                            KeyColumn::Integer { values, nulls, .. } => {
+                                values.push(if null { 0 } else { *word as i64 });
+                                nulls.push(null);
                             }
                             KeyColumn::Text {
-                                words: stored_words,
-                                nulls: stored,
+                                words: stored,
+                                nulls,
                                 ..
                             } => {
-                                stored_words.push(if null { 0 } else { word as u32 });
-                                stored.push(null);
+                                stored.push(if null { 0 } else { *word as u32 });
+                                nulls.push(null);
                             }
                         }
                     }
                     for accumulator in &mut self.accumulators {
                         accumulator.push_identity();
                     }
-                    let hashes_of = |keys: &[KeyColumn], hasher: &RandomState, slot: u32| -> u64 {
-                        let slot = slot as usize;
-                        let mut packed = [0u64; MAX_KEYS + 1];
-                        let mut null_bits = 0u64;
-                        for (position, key) in keys.iter().enumerate() {
-                            let (word, null) = match key {
-                                KeyColumn::Integer { values, nulls, .. } => {
-                                    (values[slot] as u64, nulls[slot])
-                                }
-                                KeyColumn::Text { words, nulls, .. } => {
-                                    (words[slot] as u64, nulls[slot])
-                                }
-                            };
-                            packed[position] = if null { u64::MAX } else { word };
-                            if null {
-                                null_bits |= 1 << position;
-                            }
-                        }
-                        packed[keys.len()] = null_bits;
-                        hasher.hash_one(&packed[..=keys.len()])
-                    };
-                    let keys = &self.keys;
-                    let hasher = &self.hasher;
-                    self.index
-                        .insert_unique(hash, slot, |&other| hashes_of(keys, hasher, other));
+                    self.index.occupy(bucket, hash, slot);
                     self.len += 1;
                     created += 1;
                     slot
@@ -1040,11 +1374,7 @@ impl ColumnarGroups {
             };
             self.slots.push(slot);
         }
-        // One tight loop per aggregate over the batch.
-        for (accumulator, column) in self.accumulators.iter_mut().zip(value_columns) {
-            accumulator.update(*column, &self.slots)?;
-        }
-        Ok((created, new_bytes))
+        Ok(created)
     }
 
     /// Push a batch of keys with no aggregates and report the rows that
@@ -1071,8 +1401,8 @@ impl ColumnarGroups {
         Ok((kept, new_bytes))
     }
 
-    /// Merge one partial group (decoded key words + states) into the table:
-    /// the final stage's path. Keys arrive as the exchange's logical values.
+    /// Merge one partial group (decoded key words + states) into the table.
+    /// Keys arrive as the exchange's logical values.
     pub fn merge_group(
         &mut self,
         key: &[AggregateValue],
@@ -1084,12 +1414,13 @@ impl ColumnarGroups {
                 "partial group does not match the aggregate layout",
             ));
         }
-        let mut null_bits = 0u64;
-        let mut words = [0u64; MAX_KEYS];
+        let stride = self.stride();
+        self.packed.clear();
+        self.packed.resize(stride, 0);
         for (position, value) in key.iter().enumerate() {
             let word = match (value, &mut self.keys[position]) {
                 (AggregateValue::Null, _) => {
-                    null_bits |= 1 << position;
+                    self.packed[key_count] |= 1 << position;
                     u64::MAX
                 }
                 (AggregateValue::Int64(v), KeyColumn::Integer { .. }) => *v as u64,
@@ -1104,181 +1435,60 @@ impl ColumnarGroups {
                     ));
                 }
             };
-            words[position] = word;
+            self.packed[position] = word;
         }
-        self.merge_words(words, null_bits, states)
-    }
-
-    /// Merge one partial group whose key is still in the exchange's
-    /// encoding — the final stage's hot path: the bytes are parsed straight
-    /// into key words, nothing is materialised per row. Returns whether the
-    /// group is new and the text bytes it added.
-    pub fn merge_encoded(&mut self, key: &[u8], states: &[AggregateState]) -> Result<(bool, u64)> {
-        let key_count = self.keys.len();
-        if states.len() != self.accumulators.len() {
-            return Err(exec_err(
-                "partial group does not match the aggregate layout",
-            ));
-        }
-        let mut offset = 0usize;
-        let count = read_u64(key, &mut offset)?;
-        if count != key_count as u64 {
-            return Err(exec_err(
-                "partial group key count does not match the aggregate",
-            ));
-        }
-        let mut null_bits = 0u64;
-        let mut words = [0u64; MAX_KEYS];
-        let mut new_bytes = 0u64;
-        for (position, word) in words.iter_mut().enumerate().take(key_count) {
-            let length = usize::try_from(read_u64(key, &mut offset)?)
-                .map_err(|_| exec_err("partial group key is too large"))?;
-            let end = offset
-                .checked_add(length)
-                .ok_or_else(|| exec_err("partial group key length overflow"))?;
-            let encoded = key
-                .get(offset..end)
-                .ok_or_else(|| exec_err("truncated partial group key"))?;
-            offset = end;
-            let (tag, payload) = encoded
-                .split_first()
-                .ok_or_else(|| exec_err("empty partial group key value"))?;
-            let mismatch = || exec_err("partial group key type does not match the aggregate");
-            *word = match (&mut self.keys[position], *tag) {
-                (_, VALUE_NULL) => {
-                    null_bits |= 1 << position;
-                    u64::MAX
-                }
-                (
-                    KeyColumn::Integer {
-                        data_type: DataType::Int64,
-                        ..
-                    },
-                    VALUE_INT64,
-                ) => i64::from_le_bytes(payload.try_into().map_err(|_| mismatch())?) as u64,
-                (
-                    KeyColumn::Integer {
-                        data_type: DataType::Int32 | DataType::Date32,
-                        ..
-                    },
-                    VALUE_INT32,
-                ) => i32::from_le_bytes(payload.try_into().map_err(|_| mismatch())?) as i64 as u64,
-                (
-                    KeyColumn::Integer {
-                        data_type: DataType::Boolean,
-                        ..
-                    },
-                    VALUE_BOOL,
-                ) => match payload {
-                    [0] => 0,
-                    [1] => 1,
-                    _ => return Err(mismatch()),
-                },
-                (KeyColumn::Text { arena, .. }, VALUE_UTF8) => {
-                    let text = std::str::from_utf8(payload)
-                        .map_err(|_| exec_err("partial group key is not valid UTF-8"))?;
-                    let before = arena.bytes();
-                    let id = arena.intern(&self.hasher, text)?.0 as u64;
-                    new_bytes += arena.bytes().saturating_sub(before);
-                    id
-                }
-                _ => return Err(mismatch()),
-            };
-        }
-        if offset != key.len() {
-            return Err(exec_err("trailing partial group key bytes"));
-        }
-        let created = self.merge_words(words, null_bits, states)?;
-        Ok((created, new_bytes))
-    }
-
-    /// Probe or insert the group for `words`, then merge `states` into it.
-    fn merge_words(
-        &mut self,
-        words: [u64; MAX_KEYS],
-        null_bits: u64,
-        states: &[AggregateState],
-    ) -> Result<bool> {
-        let key_count = self.keys.len();
-        let mut packed = [0u64; MAX_KEYS + 1];
-        packed[..key_count].copy_from_slice(&words[..key_count]);
-        packed[key_count] = null_bits;
-        let hash = self.hasher.hash_one(&packed[..=key_count]);
-        let keys = &self.keys;
-        let found = self.index.find(hash, |&slot| {
-            let slot = slot as usize;
-            (0..key_count).all(|position| {
-                let null = null_bits & (1 << position) != 0;
-                match &keys[position] {
-                    KeyColumn::Integer { values, nulls, .. } => {
-                        nulls[slot] == null && (null || values[slot] as u64 == words[position])
-                    }
-                    KeyColumn::Text {
-                        words: stored,
-                        nulls,
-                        ..
-                    } => nulls[slot] == null && (null || stored[slot] as u64 == words[position]),
-                }
-            })
-        });
-        let (slot, created) = match found {
-            Some(&slot) => (slot, false),
-            None => {
-                let slot = u32::try_from(self.len)
-                    .map_err(|_| exec_err("too many groups for one task"))?;
-                for (position, word) in words.iter().enumerate().take(key_count) {
-                    let null = null_bits & (1 << position) != 0;
-                    match &mut self.keys[position] {
-                        KeyColumn::Integer { values, nulls, .. } => {
-                            values.push(if null { 0 } else { *word as i64 });
-                            nulls.push(null);
-                        }
-                        KeyColumn::Text {
-                            words: stored,
-                            nulls,
-                            ..
-                        } => {
-                            stored.push(if null { 0 } else { *word as u32 });
-                            nulls.push(null);
-                        }
-                    }
-                }
-                for accumulator in &mut self.accumulators {
-                    accumulator.push_identity();
-                }
-                let keys = &self.keys;
-                let hasher = &self.hasher;
-                self.index.insert_unique(hash, slot, |&other| {
-                    let other = other as usize;
-                    let mut packed = [0u64; MAX_KEYS + 1];
-                    let mut bits = 0u64;
-                    for (position, key) in keys.iter().enumerate() {
-                        let (word, null) = match key {
-                            KeyColumn::Integer { values, nulls, .. } => {
-                                (values[other] as u64, nulls[other])
-                            }
-                            KeyColumn::Text { words, nulls, .. } => {
-                                (words[other] as u64, nulls[other])
-                            }
-                        };
-                        packed[position] = if null { u64::MAX } else { word };
-                        if null {
-                            bits |= 1 << position;
-                        }
-                    }
-                    packed[keys.len()] = bits;
-                    hasher.hash_one(&packed[..=keys.len()])
-                });
-                self.len += 1;
-                (slot, true)
-            }
-        };
+        let created = self.resolve_slots(1)? == 1;
+        let slot = self.slots[0] as usize;
         for (accumulator, state) in self.accumulators.iter_mut().zip(states) {
-            accumulator.merge(slot as usize, state)?;
+            accumulator.merge(slot, state)?;
         }
         Ok(created)
     }
 
+    /// Merge a batch of partial groups still in the exchange's encoding —
+    /// the final stage's hot path. The key bytes are parsed straight into
+    /// key words, the compact states fold straight into the accumulator
+    /// columns: nothing is materialised per row. Returns the number of
+    /// groups created and the text bytes added.
+    pub fn merge_encoded_batch(
+        &mut self,
+        keys: &BinaryArray,
+        states: &BinaryArray,
+        rows: usize,
+    ) -> Result<(usize, u64)> {
+        let stride = self.stride();
+        let mut new_bytes = 0u64;
+        self.packed.clear();
+        self.packed.resize(rows * stride, 0);
+        for row in 0..rows {
+            if row % 4096 == 0 {
+                crate::expr_eval::check_expression_cancelled()?;
+            }
+            if keys.is_null(row) || states.is_null(row) {
+                return Err(exec_err("grouped aggregate state row cannot contain nulls"));
+            }
+            let words = &mut self.packed[row * stride..(row + 1) * stride];
+            new_bytes += parse_key_words(&mut self.keys, &self.hasher, keys.value(row), words)?;
+        }
+        let created = self.resolve_slots(rows)?;
+        for row in 0..rows {
+            if row % 4096 == 0 {
+                crate::expr_eval::check_expression_cancelled()?;
+            }
+            let slot = self.slots[row] as usize;
+            let mut input = compact_state::begin(states.value(row))?;
+            if input.count != self.accumulators.len() {
+                return Err(exec_err(
+                    "partial group does not match the aggregate layout",
+                ));
+            }
+            for accumulator in &mut self.accumulators {
+                accumulator.merge_bytes(slot, &mut input.bytes)?;
+            }
+            input.finish()?;
+        }
+        Ok((created, new_bytes))
+    }
     /// The group at `slot` as the row representation.
     pub(crate) fn group(&self, slot: usize) -> (Vec<GroupKey>, Vec<AggregateState>) {
         let keys = self
@@ -1445,13 +1655,12 @@ impl ColumnarGroups {
             keys,
             accumulators,
             index,
-            words,
-            nulls,
+            packed,
             hashes,
             slots,
             ..
         } = self;
-        drop((index, words, nulls, hashes, slots));
+        drop((index, packed, hashes, slots));
         let keys = keys
             .into_iter()
             .map(|key| {
@@ -1609,17 +1818,6 @@ fn output_array(acc: &AccColumn, output: &DataType) -> Result<ArrayRef> {
             )));
         }
     })
-}
-
-fn read_u64(bytes: &[u8], offset: &mut usize) -> Result<u64> {
-    let end = offset
-        .checked_add(8)
-        .ok_or_else(|| exec_err("partial group key length overflow"))?;
-    let word = bytes
-        .get(*offset..end)
-        .ok_or_else(|| exec_err("truncated partial group key"))?;
-    *offset = end;
-    Ok(u64::from_le_bytes(word.try_into().expect("eight bytes")))
 }
 
 /// The exchange's logical key types for a batch schema's group columns.
@@ -1860,5 +2058,209 @@ mod tests {
         assert_eq!(states[0], AggregateState::Count(3));
         assert_eq!(states[1], AggregateState::IntegerSum { sum: 15, count: 3 });
         assert_eq!(states[3], AggregateState::Utf8Max(Some("z".into())));
+    }
+
+    #[test]
+    fn merges_encoded_batches_of_every_accumulator_kind_like_the_row_merge() {
+        // Every in-place accumulator folds straight from its compact bytes:
+        // the result matches the row merge state for state, including the
+        // absent extrema and the text ones.
+        use crate::aggregate::{
+            GroupedAggregateState, grouped_aggregate_states_to_typed_batch,
+            merge_grouped_aggregate_states,
+        };
+        let types = [DataType::Int64, DataType::Utf8];
+        let states = |n: i64, text: Option<&str>| {
+            vec![
+                AggregateState::Count(n.unsigned_abs()),
+                AggregateState::IntegerSum {
+                    sum: n as i128,
+                    count: 1,
+                },
+                AggregateState::IntegerMin(Some(n)),
+                AggregateState::IntegerMax(text.map(|_| n)),
+                AggregateState::Sum {
+                    sum: n as f64 / 2.0,
+                    count: 1,
+                },
+                AggregateState::Avg {
+                    sum: n as f64,
+                    count: 2,
+                },
+                AggregateState::Min(text.map(|_| -(n as f64))),
+                AggregateState::Max(Some(n as f64)),
+                AggregateState::Utf8Min(text.map(str::to_owned)),
+                AggregateState::Utf8Max(text.map(str::to_owned)),
+            ]
+        };
+        let key = |k: i64, t: Option<&str>| {
+            vec![
+                AggregateValue::Int64(k),
+                t.map_or(AggregateValue::Null, |t| AggregateValue::Utf8(t.into())),
+            ]
+        };
+        let rows = vec![
+            GroupedAggregateState {
+                group_keys: key(1, Some("a")),
+                states: states(5, Some("m")),
+            },
+            GroupedAggregateState {
+                group_keys: key(1, Some("a")),
+                states: states(-3, Some("b")),
+            },
+            GroupedAggregateState {
+                group_keys: key(1, Some("a")),
+                states: states(9, None),
+            },
+            GroupedAggregateState {
+                group_keys: key(2, None),
+                states: states(7, None),
+            },
+            GroupedAggregateState {
+                group_keys: key(2, None),
+                states: states(-7, Some("zz")),
+            },
+        ];
+        let mut groups = ColumnarGroups::new(&types, &rows[0].states).unwrap();
+        for batch in rows.chunks(2) {
+            let batch = grouped_aggregate_states_to_typed_batch(batch, &types).unwrap();
+            let keys = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<BinaryArray>()
+                .unwrap();
+            let states = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<BinaryArray>()
+                .unwrap();
+            groups
+                .merge_encoded_batch(keys, states, batch.num_rows())
+                .unwrap();
+        }
+        assert_eq!(groups.len(), 2);
+        let mut actual = (0..2)
+            .map(|slot| {
+                let (keys, states) = groups.group(slot);
+                let keys = keys
+                    .into_iter()
+                    .map(AggregateValue::from)
+                    .collect::<Vec<_>>();
+                (format!("{keys:?}"), format!("{states:?}"))
+            })
+            .collect::<Vec<_>>();
+        actual.sort();
+        let mut expected = merge_grouped_aggregate_states(rows)
+            .unwrap()
+            .into_iter()
+            .map(|g| (format!("{:?}", g.group_keys), format!("{:?}", g.states)))
+            .collect::<Vec<_>>();
+        expected.sort();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn encoded_batch_merge_rejects_states_of_another_layout_or_malformed_bytes() {
+        use crate::aggregate::{GroupedAggregateState, grouped_aggregate_states_to_typed_batch};
+        let types = [DataType::Int64];
+        let batch = |state: AggregateState| {
+            grouped_aggregate_states_to_typed_batch(
+                &[GroupedAggregateState {
+                    group_keys: vec![AggregateValue::Int64(1)],
+                    states: vec![state],
+                }],
+                &types,
+            )
+            .unwrap()
+        };
+        let merge = |groups: &mut ColumnarGroups, keys: &BinaryArray, states: &BinaryArray| {
+            groups.merge_encoded_batch(keys, states, keys.len())
+        };
+        let mut groups = ColumnarGroups::new(&types, &[AggregateState::Count(0)]).unwrap();
+        let good = batch(AggregateState::Count(2));
+        let keys = good
+            .column(0)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        let states = good
+            .column(1)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        assert_eq!(merge(&mut groups, keys, states).unwrap(), (1, 0));
+
+        // A state whose tag is not this column's.
+        let other = batch(AggregateState::IntegerSum { sum: 2, count: 1 });
+        let wrong = other
+            .column(1)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        assert!(merge(&mut groups, keys, wrong).is_err());
+
+        // Two states where the layout has one, and the count that says so.
+        let two = grouped_aggregate_states_to_typed_batch(
+            &[GroupedAggregateState {
+                group_keys: vec![AggregateValue::Int64(1)],
+                states: vec![AggregateState::Count(1), AggregateState::Count(1)],
+            }],
+            &types,
+        )
+        .unwrap();
+        let wrong = two
+            .column(1)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        assert!(merge(&mut groups, keys, wrong).is_err());
+
+        // Truncated state bytes.
+        let bytes = states.value(0);
+        for end in 0..bytes.len() {
+            let truncated = BinaryArray::from(vec![&bytes[..end]]);
+            assert!(merge(&mut groups, keys, &truncated).is_err(), "{end}");
+        }
+
+        // A key with trailing bytes.
+        let mut key = keys.value(0).to_vec();
+        key.push(0);
+        let bad_key = BinaryArray::from(vec![key.as_slice()]);
+        assert!(merge(&mut groups, &bad_key, states).is_err());
+
+        // None of those touched the group; the good row still merges into it.
+        assert_eq!(merge(&mut groups, keys, states).unwrap(), (0, 0));
+        assert_eq!(groups.group(0).1, vec![AggregateState::Count(4)]);
+
+        // Trailing state bytes fail the row once its states are read.
+        let mut trailing = bytes.to_vec();
+        trailing.push(0);
+        let trailing = BinaryArray::from(vec![trailing.as_slice()]);
+        assert!(merge(&mut groups, keys, &trailing).is_err());
+    }
+
+    #[test]
+    fn growth_bytes_covers_the_largest_doubling_a_batch_can_cause() {
+        let mut groups =
+            ColumnarGroups::new(&[DataType::Int64], &[AggregateState::Count(0)]).unwrap();
+        assert_eq!(groups.growth_bytes(1 << 20), 0);
+        let rows = 70_000;
+        let ints: ArrayRef = Arc::new(Int64Array::from_iter_values(0..rows as i64));
+        groups.push_batch(&[ints], &[None], rows).unwrap();
+        let capacity = groups.capacity();
+        assert!(capacity >= 1 << 16);
+        assert!(groups.len() <= capacity);
+        // Fits: nothing to reserve.
+        assert_eq!(groups.growth_bytes(capacity - groups.len()), 0);
+        // One doubling: the current table is copied.
+        assert_eq!(
+            groups.growth_bytes(capacity - groups.len() + 1),
+            capacity as u64 * groups.slot_bytes()
+        );
+        // Three doublings within one batch: the third copies the largest.
+        assert_eq!(
+            groups.growth_bytes(capacity * 4 + 1 - groups.len()),
+            (capacity as u64) * 4 * groups.slot_bytes()
+        );
     }
 }

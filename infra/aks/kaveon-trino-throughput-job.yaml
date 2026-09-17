@@ -1,0 +1,84 @@
+# Throughput tier on Trino: CLIENTS concurrent clients run the suite's
+# statements for DURATION_SECONDS after WARMUP_SECONDS, alone on the worker
+# nodes, and the Job log ends with the THROUGHPUT= record
+# (scripts/benchmark-throughput.py, ENGINE=trino).
+#
+# Runs only inside a leased benchmark window while the kaveon-benchmark Trino
+# StatefulSets are up with trino.opensource.enabled=true and Kaveon is scaled
+# to zero. The Kaveon side of the same tier is launched from the API pod
+# contract by scripts/aks-scale-suite-job.py --script (see its docstring), with
+# the same CLIENTS, DURATION_SECONDS and WARMUP_SECONDS. Before applying:
+#
+#   kubectl -n kaveon create configmap kaveon-trino-suite-input \
+#     --from-file=benchmark-trino-suite.py=scripts/benchmark-trino-suite.py \
+#     --from-file=benchmark-throughput.py=scripts/benchmark-throughput.py \
+#     --from-file=suite.json=docs/qualification/clickbench/kaveon-suite.json \
+#     --from-file=tables.json=docs/qualification/clickbench/trino-tables.json \
+#     --dry-run=client -o yaml | kubectl apply -f -
+#
+# Replace the runner image digest and the storage account with the run's
+# values. scripts/benchmark-rounds.py --throughput applies this manifest with
+# CLIENTS, DURATION_SECONDS and WARMUP_SECONDS substituted per run.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kaveon-trino-throughput
+  namespace: kaveon
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: kaveon-benchmark
+        app.kubernetes.io/component: trino-throughput
+        azure.workload.identity/use: "true"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: kaveon-engine
+      nodeSelector: {kubernetes.azure.com/agentpool: system}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: runner
+          image: kvtesticmwwliihpppo.azurecr.io/kaveon-benchmark-runner@sha256:93fa340eadd1f5654de67defcf76b8e60b2221a33c10257413808a3e1bfdd2a4
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          command: [python, -u, /input/benchmark-throughput.py]
+          env:
+            - {name: ENGINE, value: trino}
+            - {name: TRINO_URL, value: "https://kaveon-benchmark-trino.kaveon.svc.cluster.local:8443"}
+            - {name: SUITE, value: /input/suite.json}
+            - {name: TRINO_TABLES, value: /input/tables.json}
+            - {name: TRINO_ACCOUNT, value: kvtesticmwwliihpppo}
+            - {name: CLIENTS, value: "4"}
+            - {name: DURATION_SECONDS, value: "300"}
+            - {name: WARMUP_SECONDS, value: "30"}
+            - {name: OUTPUT, value: /results/trino-throughput.json}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi, ephemeral-storage: 1Gi}
+          volumeMounts:
+            - {name: input, mountPath: /input, readOnly: true}
+            - {name: trino-tls, mountPath: /trino-tls, readOnly: true}
+            - {name: trino-auth, mountPath: /trino-auth, readOnly: true}
+            - {name: results, mountPath: /results}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: input
+          configMap: {name: kaveon-trino-suite-input}
+        - name: trino-tls
+          secret: {secretName: kaveon-trino-benchmark-tls}
+        - name: trino-auth
+          secret: {secretName: kaveon-trino-benchmark-auth}
+        # The record is read from the Job log; nothing here needs to outlive
+        # the pod.
+        - {name: results, emptyDir: {sizeLimit: 256Mi}}
+        - {name: tmp, emptyDir: {sizeLimit: 1Gi}}

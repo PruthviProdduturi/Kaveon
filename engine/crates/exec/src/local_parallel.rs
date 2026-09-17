@@ -52,6 +52,42 @@ pub fn configured_parallelism() -> Result<usize> {
         .min(MAX_WORKERS)
         .min(thread::available_parallelism().map_or(1, usize::from)))
 }
+
+// --- Per-query parallelism ceiling -------------------------------------------
+// A statement may lower its own parallelism (`settings.local_parallelism`).
+// The ceiling rides on the query memory pool, which every operator of the
+// query already receives on every node that admitted a task for it, so the
+// operators need no new argument: they ask the pool instead of the process.
+
+/// The pool resource that carries a query's parallelism ceiling.
+const QUERY_PARALLELISM_RESOURCE: &str = "kaveon.exec.local-parallelism.v1";
+
+/// Caps every operator of the query on `pool` at `threads` aggregator
+/// threads. Only lowers: a ceiling above the node's configured parallelism
+/// has no effect. Set once per pool; a second, different value is an error.
+pub fn set_query_parallelism(pool: &QueryMemoryPool, threads: usize) -> Result<()> {
+    if threads == 0 {
+        return Err(error("query parallelism must be positive"));
+    }
+    let ceiling = pool.shared_resource(QUERY_PARALLELISM_RESOURCE, || Ok(threads))?;
+    if *ceiling != threads {
+        return Err(error("query parallelism is already set for this query"));
+    }
+    Ok(())
+}
+
+/// Threads for one operator of the query on `pool`: the node's configured
+/// parallelism, lowered to the query's ceiling when the statement set one.
+/// Without a pool (embedded and test plans) the node's value stands.
+pub fn query_parallelism(pool: Option<&QueryMemoryPool>) -> Result<usize> {
+    let configured = configured_parallelism()?;
+    let Some(pool) = pool else {
+        return Ok(configured);
+    };
+    Ok(pool
+        .shared_resource_if_present::<usize>(QUERY_PARALLELISM_RESOURCE)?
+        .map_or(configured, |ceiling| configured.min(*ceiling)))
+}
 struct QueuedBatch {
     batch: RecordBatch,
     _memory: Arc<MemoryReservation>,
@@ -1131,5 +1167,21 @@ mod tests {
             assert!(start.elapsed() < Duration::from_secs(3));
             assert_eq!(pool.snapshot().current_bytes, 0);
         }
+    }
+
+    #[test]
+    fn query_parallelism_lowers_to_the_ceiling_and_never_raises() {
+        let pool = QueryMemoryPool::new("q-ceiling", 1 << 20).unwrap();
+        let configured = configured_parallelism().unwrap();
+        assert_eq!(query_parallelism(None).unwrap(), configured);
+        assert_eq!(query_parallelism(Some(&pool)).unwrap(), configured);
+        set_query_parallelism(&pool, 1).unwrap();
+        assert_eq!(query_parallelism(Some(&pool)).unwrap(), 1);
+        let raised = QueryMemoryPool::new("q-raised", 1 << 20).unwrap();
+        set_query_parallelism(&raised, configured + 8).unwrap();
+        assert_eq!(query_parallelism(Some(&raised)).unwrap(), configured);
+        assert!(set_query_parallelism(&raised, 0).is_err());
+        assert!(set_query_parallelism(&raised, 1).is_err());
+        set_query_parallelism(&raised, configured + 8).unwrap();
     }
 }

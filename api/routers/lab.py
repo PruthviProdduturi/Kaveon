@@ -337,6 +337,10 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
             column.get("name", "") if isinstance(column, dict) else str(column)
             for column in result.get("columns", [])
         ]
+        # Where the Engine answered from: the workers, the coordinator, or
+        # its result cache. The Studio labels the result with it.
+        details = result.get("query_details") if isinstance(result.get("query_details"), dict) else {}
+        execution = details.get("execution") if isinstance(details.get("execution"), dict) else None
         try:
             history_svc.create_history({
                 "sql_text": scoped_sql, "duration_ms": duration_ms,
@@ -354,6 +358,8 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
             "rows": rows,
             "rowCount": len(rows),
             "executionTime": duration_ms / 1000,
+            "execution": execution,
+            "engineQueryId": result.get("id"),
         }
     _require_legacy_data_plane()
     assert_no_platform_tables(sql, database)

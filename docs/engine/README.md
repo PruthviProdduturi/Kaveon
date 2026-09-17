@@ -21,6 +21,7 @@ Kaveon Engine is Kaveon's standalone distributed, vectorized analytical SQL quer
 - [Distributed runtime](distributed-runtime.md)
 - [Storage and catalogs](storage-and-catalogs.md)
 - [Memory management](../reference/engine-memory-management.md)
+- [Settings reference](settings.md)
 - [Operations and roadmap](operations-and-roadmap.md)
 
 `HANDSHAKE.md` is the live coordination record, `STATUS.md` is the product ledger, and `engine/DISTRIBUTED_EXECUTION_STATUS.md` records distributed verification.

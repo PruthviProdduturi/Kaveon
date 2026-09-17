@@ -211,6 +211,7 @@ class Engine:
             "schema": case["schema"],
             "result_delivery": "inline",
             "client": case.get("client", "aks-fault-pressure-qualification"),
+            "settings": {"result_cache": False},
         }
         with self.session() as session:
             response = session.post(self.base + "/v1/statement", json=payload, verify=self.ca_path, timeout=timeout)
