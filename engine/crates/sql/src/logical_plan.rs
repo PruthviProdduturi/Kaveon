@@ -287,11 +287,29 @@ fn select_to_plan_with_bindings(
         plan
     };
 
-    // A HAVING that compares with a scalar subquery references the
-    // aggregate's output columns across the join that carries the
-    // subquery's value, so every aggregate is lowered to a named column.
-    let (plan, bindings) = lower_aggregate_expressions(plan, !having_scalars.is_empty())?;
+    // Every aggregate is lowered to a named column when something above
+    // the aggregate must find it by name: a HAVING that compares with a
+    // scalar subquery references the aggregate's output across the join
+    // that carries the subquery's value, and a projection that computes
+    // with an aggregate (`0.2 * avg(x)`) evaluates the expression over the
+    // aggregate's output rather than the aggregate itself.
+    let force = !having_scalars.is_empty() || select.projection.iter().any(computes_with_aggregate);
+    let (plan, bindings) = lower_aggregate_expressions(plan, force)?;
     Ok((attach_having_scalars(plan, having_scalars), bindings))
+}
+
+/// A projected item that is an expression over an aggregate, rather than
+/// an aggregate (or an aliased aggregate) itself.
+fn computes_with_aggregate(item: &ast::SelectItem) -> bool {
+    let expr = match item {
+        ast::SelectItem::UnnamedExpr(expr) | ast::SelectItem::ExprWithAlias { expr, .. } => expr,
+        _ => return false,
+    };
+    let expr = match expr {
+        ast::Expr::Nested(inner) => inner.as_ref(),
+        other => other,
+    };
+    !matches!(expr, ast::Expr::Function(_)) && contains_aggregate_expr(expr)
 }
 
 /// The scalar subqueries of a HAVING join the aggregate's output: one
@@ -2443,6 +2461,42 @@ mod tests {
             matches!(&aggregates[0], AggregateExpr::Sum { expr: Expr::Column(name), .. } if name == "__kaveon_arg_0")
         );
         assert!(matches!(&columns[1], Expr::Column(name) if name == "sum___kaveon_arg_0"));
+    }
+
+    #[test]
+    fn an_expression_over_a_simple_aggregate_is_lowered_to_its_column() {
+        let plan = sql_to_logical_plan("SELECT 0.2 * avg(x) AS a, max(y) FROM t").unwrap();
+        let LogicalPlan::Project { input, columns } = plan else {
+            panic!("project");
+        };
+        assert_eq!(
+            columns[0],
+            Expr::Alias {
+                expr: Box::new(Expr::BinaryOp {
+                    left: Box::new(Expr::Literal(ScalarValue::Decimal128 {
+                        value: 2,
+                        precision: 2,
+                        scale: 1
+                    })),
+                    op: BinaryOp::Multiply,
+                    right: Box::new(Expr::Column("avg___kaveon_arg_0".into())),
+                }),
+                name: "a".into()
+            }
+        );
+        assert_eq!(columns[1], Expr::Column("max___kaveon_arg_1".into()));
+        let LogicalPlan::Aggregate { aggregates, .. } = *input else {
+            panic!("aggregate");
+        };
+        assert!(
+            matches!(&aggregates[0], AggregateExpr::Avg { expr: Expr::Column(name), .. } if name == "__kaveon_arg_0")
+        );
+        // Plain and aliased aggregates keep their direct form and names.
+        let plan = sql_to_logical_plan("SELECT sum(x), avg(y) AS a FROM t").unwrap();
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("project");
+        };
+        assert!(matches!(&columns[0], Expr::Function { name, .. } if name == "SUM"));
     }
 
     #[test]
