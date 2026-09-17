@@ -45,10 +45,6 @@ const KNOWN_UNSUPPORTED: &[(&str, &str)] = &[
         "plan: comma join lands as a cross product; projection column 'n_name' not in input",
     ),
     (
-        "q6",
-        "execute: arithmetic between decimal literals (0.06 - 0.01) is unsupported",
-    ),
-    (
         "q7",
         "execute: six-way comma join runs as a cross product; over budget",
     ),
