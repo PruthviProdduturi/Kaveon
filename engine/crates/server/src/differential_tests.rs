@@ -1,10 +1,13 @@
 //! The differential sweep as a gate: the statements of
 //! `scripts/differential-cases.py`, run against the same rows held in two
 //! Parquet encodings — an Arrow dictionary schema for every text column,
-//! and plain UTF-8 — through the node-local planner. Any divergence is an
-//! Engine defect, whatever the cluster later says. The encodings exercise
-//! different operator paths (dictionary-aware predicates, coded folds, the
-//! columnar aggregate's arena keys) against one truth.
+//! and plain UTF-8 — through the node-local planner, and again against the
+//! plain rows held as one file and as a directory of three files. Any
+//! divergence is an Engine defect, whatever the cluster later says. The
+//! encodings exercise different operator paths (dictionary-aware predicates,
+//! coded folds, the columnar aggregate's arena keys) against one truth; the
+//! layouts exercise the directory reader (listing, file assignment, per-file
+//! pruning) against the single-file reader.
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::PathBuf;
@@ -382,6 +385,36 @@ fn write(directory: &std::path::Path, file: &str, batch: &RecordBatch) -> TableM
     }
 }
 
+/// The batch as a directory table: `parts` files of consecutive rows, plus
+/// the marker and hidden files a writer leaves behind.
+fn write_directory(
+    directory: &std::path::Path,
+    name: &str,
+    batch: &RecordBatch,
+    parts: usize,
+) -> TableMeta {
+    let table = directory.join(name);
+    std::fs::create_dir_all(&table).unwrap();
+    let rows_per_part = batch.num_rows().div_ceil(parts);
+    for part in 0..parts {
+        let offset = part * rows_per_part;
+        let length = rows_per_part.min(batch.num_rows() - offset);
+        write(
+            &table,
+            &format!("part-{part:05}.parquet"),
+            &batch.slice(offset, length),
+        );
+    }
+    std::fs::write(table.join("_SUCCESS"), b"").unwrap();
+    TableMeta {
+        name: name.to_owned(),
+        arrow_schema: batch.schema(),
+        location: name.to_owned(),
+        access: AccessPattern::Shortcut,
+        format: DataFormat::Parquet,
+    }
+}
+
 /// Rows as text, one string per row, so both encodings compare alike.
 fn canonical_rows(operator: &mut dyn BatchOperator, ordered: bool) -> Vec<String> {
     let mut rows = Vec::new();
@@ -434,6 +467,8 @@ fn the_differential_sweep_matches_across_parquet_encodings() {
         let meta = write(&directory, file, &batch(columns, dictionary));
         catalog.register_table("events", meta).unwrap();
     }
+    let parts = write_directory(&directory, "events_parts", &batch(&events, false), 3);
+    catalog.register_table("events", parts).unwrap();
     let mut manager = CatalogManager::new("lake", "events");
     manager.register_catalog(Box::new(catalog));
 
@@ -468,11 +503,24 @@ fn the_differential_sweep_matches_across_parquet_encodings() {
                 .replace("{U}", "users"),
             *ordered,
         );
+        let parts = run(
+            &template
+                .replace("{T}", "events_parts")
+                .replace("{U}", "users"),
+            *ordered,
+        );
         assert!(!dictionary.is_empty(), "{name} returned no rows");
         if dictionary != plain {
             mismatches.push(format!(
                 "{name}: dictionary {:?} versus plain {:?}",
                 dictionary.iter().take(3).collect::<Vec<_>>(),
+                plain.iter().take(3).collect::<Vec<_>>()
+            ));
+        }
+        if parts != plain {
+            mismatches.push(format!(
+                "{name}: directory of three files {:?} versus one file {:?}",
+                parts.iter().take(3).collect::<Vec<_>>(),
                 plain.iter().take(3).collect::<Vec<_>>()
             ));
         }

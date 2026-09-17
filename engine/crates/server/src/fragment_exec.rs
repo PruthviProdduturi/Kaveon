@@ -2907,6 +2907,107 @@ mod tests {
         fs::remove_dir_all(directory).unwrap();
     }
 
+    /// A fragment whose source is a directory of Parquet files: every task
+    /// lists it under the same rule and takes its own files, the rows come
+    /// out once across the tasks, and the file counters count files.
+    #[test]
+    fn a_directory_source_is_read_once_across_the_tasks() {
+        let directory =
+            std::env::temp_dir().join(format!("kaveon-fragment-{}", uuid::Uuid::new_v4()));
+        let table = directory.join("items");
+        fs::create_dir_all(table.join("_delta_log")).unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            false,
+        )]));
+        let mut expected = Vec::new();
+        for (name, values, row_group_size) in [
+            ("part-1.parquet", (0..8).collect::<Vec<i64>>(), 8),
+            ("part-0.parquet", (8..16).collect(), 8),
+            ("part-2.parquet", (16..48).collect(), 4),
+        ] {
+            expected.extend(values.iter().copied());
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int64Array::from(values))],
+            )
+            .unwrap();
+            let properties = WriterProperties::builder()
+                .set_max_row_group_size(row_group_size)
+                .build();
+            let mut writer = ArrowWriter::try_new(
+                File::create(table.join(name)).unwrap(),
+                Arc::clone(&schema),
+                Some(properties),
+            )
+            .unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+        }
+        fs::write(table.join("_SUCCESS"), b"").unwrap();
+        fs::write(table.join("_delta_log").join("stale.json"), b"{}").unwrap();
+        expected.sort_unstable();
+
+        let catalog = CatalogManager::new("missing", "missing");
+        let fragment = ExecutableFragment {
+            version: EXECUTABLE_FRAGMENT_VERSION,
+            stage_id: StageId(3),
+            root: FragmentNodeId(1),
+            nodes: vec![node(
+                1,
+                vec![],
+                FragmentOperator::Scan(ScanSpec {
+                    source_uri: table.to_string_lossy().into_owned(),
+                    format: DataFormat::Parquet,
+                    delta_version: None,
+                    iceberg_snapshot_id: None,
+                    table: ScanTable {
+                        catalog: "test".into(),
+                        schema: "default".into(),
+                        table: "items".into(),
+                    },
+                    projection: vec!["value".into()],
+                    predicate: None,
+                }),
+            )],
+        };
+        let mut seen = Vec::new();
+        let mut files_opened = 0;
+        for index in 0..3 {
+            let execution = execute_fragment(
+                &fragment,
+                &catalog,
+                &inputs(),
+                ScanPartition::new(index, 3).unwrap(),
+            )
+            .unwrap();
+            for batch in &execution.result_batches {
+                seen.extend(
+                    batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap()
+                        .values()
+                        .iter()
+                        .copied(),
+                );
+            }
+            assert_eq!(execution.scan_metrics.len(), 1);
+            let snapshot = execution.scan_metrics[0].snapshot();
+            assert_eq!(snapshot.files_opened, snapshot.files_considered);
+            files_opened += snapshot.files_opened;
+        }
+        seen.sort_unstable();
+        assert_eq!(seen, expected);
+        // The large file is split by row group across the three tasks and the
+        // two small ones are read whole by one task each.
+        assert_eq!(files_opened, 5);
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
     #[test]
     fn scan_metric_coverage_rejects_unsupported_readers_but_accepts_exchange_only_fragments() {
         // Delta and Iceberg fragments currently have scan operators without injectable handles.
