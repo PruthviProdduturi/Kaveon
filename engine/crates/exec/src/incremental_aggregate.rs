@@ -60,6 +60,21 @@ struct ReservationSlab {
 }
 
 impl ReservationSlab {
+    /// Make `bytes` available without charging them: a batch's worst case,
+    /// held from before it is applied until its actual cost is charged.
+    /// Takes exactly what is missing — one call per batch, so there is
+    /// nothing to amortize, and a batch that creates no group holds no
+    /// more than its own worst case.
+    fn ensure(&mut self, memory: &OperatorMemoryAccount, bytes: u64) -> Result<()> {
+        if bytes > self.available {
+            let guard = memory.reserve(bytes - self.available)?;
+            self.available = self.available.saturating_add(guard.bytes());
+            self.guards.push(guard);
+        }
+        Ok(())
+    }
+
+    /// Charge `bytes`, in slabs once the merge has proven it is growing.
     fn reserve(&mut self, memory: &OperatorMemoryAccount, bytes: u64) -> Result<()> {
         if bytes > self.available {
             // Keep the common singleton-group case exact. Once a second group
@@ -132,33 +147,31 @@ impl IncrementalAggregateMerger {
         else {
             return Err(error("columnar merge without columnar groups"));
         };
-        let mut incoming = Vec::new();
-        for row in 0..rows {
-            if row % 1024 == 0
-                && let Some(memory) = &self.memory
-            {
-                memory.check_cancelled()?;
+        let _scratch = if let Some(memory) = &self.memory {
+            memory.check_cancelled()?;
+            // A doubling is paid once per capacity, before it happens, and
+            // released when the next one is paid.
+            let doubling = groups.growth_bytes(rows);
+            if doubling != 0 && groups.capacity() != *growth_reserved_at {
+                drop(growth.take());
+                *growth = Some(memory.reserve(doubling)?);
+                *growth_reserved_at = groups.capacity();
             }
-            if keys.is_null(row) || states.is_null(row) {
-                return Err(error("grouped aggregate state row cannot contain nulls"));
-            }
-            decode_group_states_into(states.value(row), &mut incoming)?;
-            if let Some(memory) = &self.memory {
-                // A doubling is paid once per capacity, before it happens,
-                // and released when the next one is paid.
-                let doubling = groups.growth_bytes(1);
-                if doubling != 0 && groups.capacity() != *growth_reserved_at {
-                    drop(growth.take());
-                    *growth = Some(memory.reserve(doubling)?);
-                    *growth_reserved_at = groups.capacity();
-                }
-            }
-            let (created, new_bytes) = groups.merge_encoded(keys.value(row), &incoming)?;
-            if let Some(memory) = &self.memory {
-                let bytes = if created { *slot_bytes } else { 0 }.saturating_add(new_bytes);
-                if bytes != 0 {
-                    self.reservations.reserve(memory, bytes)?;
-                }
+            // The batch's worst case — every row a new group — is covered
+            // before it is applied; the groups it made are charged after.
+            self.reservations
+                .ensure(memory, (rows as u64).saturating_mul(*slot_bytes))?;
+            Some(memory.reserve(groups.scratch_bytes(rows))?)
+        } else {
+            None
+        };
+        let (created, new_bytes) = groups.merge_encoded_batch(keys, states, rows)?;
+        if let Some(memory) = &self.memory {
+            let bytes = (created as u64)
+                .saturating_mul(*slot_bytes)
+                .saturating_add(new_bytes);
+            if bytes != 0 {
+                self.reservations.reserve(memory, bytes)?;
             }
         }
         Ok(())
@@ -182,6 +195,20 @@ impl IncrementalAggregateMerger {
             .as_any()
             .downcast_ref::<BinaryArray>()
             .ok_or_else(|| error("invalid aggregate state column"))?;
+        if batch.num_rows() == 0 {
+            return Ok(());
+        }
+        if matches!(self.columnar, Columnar::Undecided) {
+            if keys.is_null(0) || states.is_null(0) {
+                return Err(error("grouped aggregate state row cannot contain nulls"));
+            }
+            let mut first = Vec::new();
+            decode_group_states_into(states.value(0), &mut first)?;
+            self.decide(&types, &first);
+        }
+        if matches!(self.columnar, Columnar::Groups { .. }) {
+            return self.merge_columnar(keys, states, batch.num_rows());
+        }
         // Only one row is decoded at a time, so a single reservation for the
         // largest encoded row covers the whole batch without changing the
         // decoder's conservative memory bound.
@@ -199,20 +226,6 @@ impl IncrementalAggregateMerger {
             .filter(|_| scratch != 0)
             .map(|memory| memory.reserve(scratch))
             .transpose()?;
-        if batch.num_rows() == 0 {
-            return Ok(());
-        }
-        if matches!(self.columnar, Columnar::Undecided) {
-            if keys.is_null(0) || states.is_null(0) {
-                return Err(error("grouped aggregate state row cannot contain nulls"));
-            }
-            let mut first = Vec::new();
-            decode_group_states_into(states.value(0), &mut first)?;
-            self.decide(&types, &first);
-        }
-        if matches!(self.columnar, Columnar::Groups { .. }) {
-            return self.merge_columnar(keys, states, batch.num_rows());
-        }
         let mut incoming = Vec::new();
         for row in 0..batch.num_rows() {
             if row % 1024 == 0
@@ -640,6 +653,82 @@ mod tests {
         expected.sort_by_key(by_key);
         assert_eq!(actual, expected);
         assert!(guards.is_empty());
+    }
+
+    #[test]
+    fn columnar_merge_counts_repeats_across_batches_and_index_doublings() {
+        // 240k rows over 80k groups in batches of 20k: every group is met
+        // in three batches, some rows repeat within a batch, and the index
+        // doubles several times along the way — each group ends at three.
+        let types = [DataType::Int64, DataType::Utf8];
+        let groups_per_round = 80_000usize;
+        let batches = (0..12)
+            .map(|batch| {
+                let rows = (0..20_000)
+                    .map(|i| {
+                        let group = (batch % 4) * 20_000 + i;
+                        GroupedAggregateState {
+                            group_keys: vec![
+                                AggregateValue::Int64(group as i64 * 7),
+                                AggregateValue::Utf8(format!("g{}", group % 1000)),
+                            ],
+                            states: vec![AggregateState::Count(1)],
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                grouped_aggregate_states_to_typed_batch(&rows, &types).unwrap()
+            })
+            .collect::<Vec<_>>();
+        let pool = QueryMemoryPool::new("repeats", 64 * 1024 * 1024).unwrap();
+        let mut merger = IncrementalAggregateMerger::new(Some(pool.operator("final").unwrap()));
+        for batch in &batches {
+            merger.push_batch(batch).unwrap();
+        }
+        let (merged, guards) = merger.finish_groups().unwrap();
+        let MergedGroups::Columnar(groups) = merged else {
+            panic!("columnar layout merges into columns");
+        };
+        assert_eq!(groups.len(), groups_per_round);
+        assert!(groups.capacity() >= groups_per_round);
+        let counts = groups.output_arrays(&[DataType::UInt64]).unwrap();
+        let counts = counts[0]
+            .as_any()
+            .downcast_ref::<arrow::array::UInt64Array>()
+            .unwrap();
+        assert!(counts.values().iter().all(|&count| count == 3));
+        let keys = groups.key_arrays();
+        let ints = keys[0]
+            .as_any()
+            .downcast_ref::<arrow::array::Int64Array>()
+            .unwrap();
+        let mut seen = ints.values().to_vec();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), groups_per_round);
+        drop(groups);
+        drop(guards);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn columnar_merge_fails_closed_at_the_memory_limit_and_releases_everything() {
+        let types = [DataType::Int64];
+        let rows = (0..50_000)
+            .map(|i| GroupedAggregateState {
+                group_keys: vec![AggregateValue::Int64(i)],
+                states: vec![AggregateState::Count(1)],
+            })
+            .collect::<Vec<_>>();
+        let batch = grouped_aggregate_states_to_typed_batch(&rows, &types).unwrap();
+        // The batch alone fits; the groups it would create do not.
+        let limit = batch.get_array_memory_size() as u64 + 256 * 1024;
+        let pool = QueryMemoryPool::new("limit", limit).unwrap();
+        let mut merger = IncrementalAggregateMerger::new(Some(pool.operator("final").unwrap()));
+        let error = merger.push_batch(&batch).unwrap_err();
+        assert!(matches!(error, KaveonError::MemoryLimit(_)), "{error}");
+        assert!(pool.snapshot().peak_bytes <= limit);
+        drop(merger);
+        assert_eq!(pool.snapshot().current_bytes, 0);
     }
 
     /// The final stage's merge rate on the shape ClickBench q19 hands it:
