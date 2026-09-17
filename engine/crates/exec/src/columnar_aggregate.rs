@@ -1629,9 +1629,39 @@ impl ColumnarGroups {
         Ok((key_values, state_values))
     }
 
+    /// Encode the groups in `slots` the way `encode` does, each into the
+    /// sink `partition_of` names for its encoded key bytes.
+    pub(crate) fn encode_partitioned(
+        &self,
+        slots: std::ops::Range<usize>,
+        partition_of: &dyn Fn(&[u8]) -> usize,
+        sinks: &mut [(BinaryBuilder, BinaryBuilder)],
+    ) -> Result<()> {
+        let mut key_scratch = Vec::new();
+        let mut states = Vec::with_capacity(self.accumulators.len());
+        let mut state_scratch = Vec::new();
+        for slot in slots {
+            if slot % 1024 == 0 {
+                crate::expr_eval::check_expression_cancelled()?;
+            }
+            key_scratch.clear();
+            self.encode_keys_into(slot, &mut key_scratch);
+            self.states_into(slot, &mut states);
+            state_scratch.clear();
+            compact_state::encode_into(&states, &mut state_scratch)?;
+            let (key_values, state_values) = &mut sinks[partition_of(&key_scratch)];
+            key_values.append_value(&key_scratch);
+            state_values.append_value(&state_scratch);
+        }
+        Ok(())
+    }
+
     /// The keys as Arrow arrays in the exchange's logical types.
     pub fn key_arrays(&self) -> Vec<ArrayRef> {
-        self.keys.iter().map(key_array).collect()
+        self.keys
+            .iter()
+            .map(|key| key_array(key, 0..self.len))
+            .collect()
     }
 
     /// Each accumulator column finalized as an Arrow array of `output_type`.
@@ -1639,8 +1669,33 @@ impl ColumnarGroups {
         self.accumulators
             .iter()
             .zip(output_types)
-            .map(|(acc, output)| output_array(acc, output))
+            .map(|(acc, output)| output_array(acc, output, 0..self.len))
             .collect()
+    }
+
+    /// The finalised key and output arrays of the groups in `slots`, the
+    /// table untouched: a result emitted in bounded pieces while the
+    /// table stays whole.
+    pub fn final_arrays(
+        &self,
+        slots: std::ops::Range<usize>,
+        output_types: &[DataType],
+    ) -> Result<(Vec<ArrayRef>, Vec<ArrayRef>)> {
+        if slots.end > self.len || slots.start > slots.end {
+            return Err(exec_err("final aggregate slot range is out of bounds"));
+        }
+        let keys = self
+            .keys
+            .iter()
+            .map(|key| key_array(key, slots.clone()))
+            .collect();
+        let outputs = self
+            .accumulators
+            .iter()
+            .zip(output_types)
+            .map(|(acc, output)| output_array(acc, output, slots.clone()))
+            .collect::<Result<Vec<_>>>()?;
+        Ok((keys, outputs))
     }
 
     /// The finalised key and output arrays, consuming the table: the index
@@ -1658,13 +1713,14 @@ impl ColumnarGroups {
             packed,
             hashes,
             slots,
+            len,
             ..
         } = self;
         drop((index, packed, hashes, slots));
         let keys = keys
             .into_iter()
             .map(|key| {
-                let array = key_array(&key);
+                let array = key_array(&key, 0..len);
                 drop(key);
                 array
             })
@@ -1673,7 +1729,7 @@ impl ColumnarGroups {
             .into_iter()
             .zip(output_types)
             .map(|(acc, output)| {
-                let array = output_array(&acc, output)?;
+                let array = output_array(&acc, output, 0..len)?;
                 drop(acc);
                 Ok(array)
             })
@@ -1682,46 +1738,50 @@ impl ColumnarGroups {
     }
 }
 
-/// One key column as the Arrow array of its exchange type.
-fn key_array(key: &KeyColumn) -> ArrayRef {
+/// One key column's `slots` as the Arrow array of its exchange type.
+fn key_array(key: &KeyColumn, slots: std::ops::Range<usize>) -> ArrayRef {
     match key {
         KeyColumn::Integer {
             values,
             nulls,
             data_type,
-        } => match data_type {
-            DataType::Int32 | DataType::Date32 => {
-                let array = Int32Array::from_iter(
+        } => {
+            let values = &values[slots.clone()];
+            let nulls = &nulls[slots];
+            match data_type {
+                DataType::Int32 | DataType::Date32 => {
+                    let array = Int32Array::from_iter(
+                        values
+                            .iter()
+                            .zip(nulls)
+                            .map(|(v, n)| (!n).then_some(*v as i32)),
+                    );
+                    if data_type == &DataType::Date32 {
+                        arrow::compute::cast(&array, &DataType::Date32).expect("Int32 to Date32")
+                    } else {
+                        Arc::new(array)
+                    }
+                }
+                DataType::Boolean => Arc::new(BooleanArray::from_iter(
                     values
                         .iter()
                         .zip(nulls)
-                        .map(|(v, n)| (!n).then_some(*v as i32)),
-                );
-                if data_type == &DataType::Date32 {
-                    arrow::compute::cast(&array, &DataType::Date32).expect("Int32 to Date32")
-                } else {
-                    Arc::new(array)
-                }
+                        .map(|(v, n)| (!n).then_some(*v != 0)),
+                )),
+                _ => Arc::new(Int64Array::from_iter(
+                    values.iter().zip(nulls).map(|(v, n)| (!n).then_some(*v)),
+                )),
             }
-            DataType::Boolean => Arc::new(BooleanArray::from_iter(
-                values
-                    .iter()
-                    .zip(nulls)
-                    .map(|(v, n)| (!n).then_some(*v != 0)),
-            )),
-            _ => Arc::new(Int64Array::from_iter(
-                values.iter().zip(nulls).map(|(v, n)| (!n).then_some(*v)),
-            )),
-        },
+        }
         KeyColumn::Text {
             words,
             nulls,
             arena,
             large,
         } => {
-            let iter = words
+            let iter = words[slots.clone()]
                 .iter()
-                .zip(nulls)
+                .zip(&nulls[slots])
                 .map(|(w, n)| (!n).then(|| arena.get(*w)));
             if *large {
                 Arc::new(arrow::array::LargeStringArray::from_iter(iter))
@@ -1732,17 +1792,24 @@ fn key_array(key: &KeyColumn) -> ArrayRef {
     }
 }
 
-/// One accumulator column finalised as an Arrow array of `output`.
-fn output_array(acc: &AccColumn, output: &DataType) -> Result<ArrayRef> {
+/// One accumulator column's `slots` finalised as an Arrow array of `output`.
+fn output_array(
+    acc: &AccColumn,
+    output: &DataType,
+    slots: std::ops::Range<usize>,
+) -> Result<ArrayRef> {
     Ok(match (acc, output) {
-        (AccColumn::Count(counts), DataType::UInt64) => Arc::new(UInt64Array::from(counts.clone())),
+        (AccColumn::Count(counts), DataType::UInt64) => {
+            Arc::new(UInt64Array::from(counts[slots].to_vec()))
+        }
         (AccColumn::Count(counts), DataType::Int64) => Arc::new(Int64Array::from_iter(
-            counts.iter().map(|c| Some(*c as i64)),
+            counts[slots].iter().map(|c| Some(*c as i64)),
         )),
         (AccColumn::IntegerSum { sums, counts }, DataType::Int64) => {
             Arc::new(Int64Array::from_iter(
-                sums.iter()
-                    .zip(counts)
+                sums[slots.clone()]
+                    .iter()
+                    .zip(&counts[slots])
                     .map(|(s, c)| {
                         (*c > 0)
                             .then(|| {
@@ -1755,8 +1822,9 @@ fn output_array(acc: &AccColumn, output: &DataType) -> Result<ArrayRef> {
         }
         (AccColumn::IntegerSum { sums, counts }, DataType::Int32) => {
             Arc::new(Int32Array::from_iter(
-                sums.iter()
-                    .zip(counts)
+                sums[slots.clone()]
+                    .iter()
+                    .zip(&counts[slots])
                     .map(|(s, c)| {
                         (*c > 0)
                             .then(|| {
@@ -1772,15 +1840,18 @@ fn output_array(acc: &AccColumn, output: &DataType) -> Result<ArrayRef> {
             AccColumn::IntegerMin { values, present } | AccColumn::IntegerMax { values, present },
             DataType::Int64,
         ) => Arc::new(Int64Array::from_iter(
-            values.iter().zip(present).map(|(v, p)| p.then_some(*v)),
+            values[slots.clone()]
+                .iter()
+                .zip(&present[slots])
+                .map(|(v, p)| p.then_some(*v)),
         )),
         (
             AccColumn::IntegerMin { values, present } | AccColumn::IntegerMax { values, present },
             DataType::Int32,
         ) => Arc::new(Int32Array::from_iter(
-            values
+            values[slots.clone()]
                 .iter()
-                .zip(present)
+                .zip(&present[slots])
                 .map(|(v, p)| p.then_some(*v as i32)),
         )),
         (
@@ -1788,29 +1859,35 @@ fn output_array(acc: &AccColumn, output: &DataType) -> Result<ArrayRef> {
             DataType::Date32,
         ) => arrow::compute::cast(
             &Int32Array::from_iter(
-                values
+                values[slots.clone()]
                     .iter()
-                    .zip(present)
+                    .zip(&present[slots])
                     .map(|(v, p)| p.then_some(*v as i32)),
             ),
             &DataType::Date32,
         )?,
         (AccColumn::Float { sums, counts, avg }, DataType::Float64) => {
-            Arc::new(Float64Array::from_iter(sums.iter().zip(counts).map(
-                |(s, c)| (*c > 0).then(|| if *avg { s / *c as f64 } else { *s }),
-            )))
+            Arc::new(Float64Array::from_iter(
+                sums[slots.clone()]
+                    .iter()
+                    .zip(&counts[slots])
+                    .map(|(s, c)| (*c > 0).then(|| if *avg { s / *c as f64 } else { *s })),
+            ))
         }
         (
             AccColumn::FloatMin { values, present } | AccColumn::FloatMax { values, present },
             DataType::Float64,
         ) => Arc::new(Float64Array::from_iter(
-            values.iter().zip(present).map(|(v, p)| p.then_some(*v)),
+            values[slots.clone()]
+                .iter()
+                .zip(&present[slots])
+                .map(|(v, p)| p.then_some(*v)),
         )),
-        (AccColumn::TextMin(values) | AccColumn::TextMax(values), DataType::Utf8) => {
-            Arc::new(StringArray::from_iter(values.iter().map(|v| v.as_deref())))
-        }
+        (AccColumn::TextMin(values) | AccColumn::TextMax(values), DataType::Utf8) => Arc::new(
+            StringArray::from_iter(values[slots].iter().map(|v| v.as_deref())),
+        ),
         (AccColumn::TextMin(values) | AccColumn::TextMax(values), DataType::LargeUtf8) => Arc::new(
-            arrow::array::LargeStringArray::from_iter(values.iter().map(|v| v.as_deref())),
+            arrow::array::LargeStringArray::from_iter(values[slots].iter().map(|v| v.as_deref())),
         ),
         (_, other) => {
             return Err(exec_err(format!(
