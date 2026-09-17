@@ -38,6 +38,7 @@ are planned rather than executable.
 - [Configuration](reference/configuration.md)
 - [Engine SQL compatibility](reference/engine-sql-compatibility.md)
 - [Engine memory management](reference/engine-memory-management.md)
+- [Engine settings reference](engine/settings.md)
 - [Connector capability matrix](reference/connector-capabilities.md)
 - [Operations and troubleshooting](operations-troubleshooting.md)
 - [Upgrade and version policy](upgrade-version-policy.md)
