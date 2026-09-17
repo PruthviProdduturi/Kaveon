@@ -57,6 +57,8 @@ def main():
                 record["seconds"].append(round(time.time() - t0, 3))
             rows = result.get("data") or result.get("rows") or []
             record["rows"] = len(rows)
+            # The first rows, rendered, so a digest difference can be read.
+            record["sample"] = [[str(cell)[:80] for cell in row] for row in rows[:3]]
             record["result_sha256"] = result_hash(rows, statement.get("ordered", "ORDER BY" in sql.upper()))
             stages = (result.get("query_details") or {}).get("stages") or []
             record["rows_selected"] = sum((t.get("scan") or {}).get("rows_selected", 0) for st in stages for t in st.get("tasks", []))

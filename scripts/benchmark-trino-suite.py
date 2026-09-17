@@ -120,6 +120,7 @@ def main():
                 rows = trino.query(sql)
                 record["seconds"].append(round(time.time() - t0, 3))
             record["rows"] = len(rows)
+            record["sample"] = [[str(cell)[:80] for cell in row] for row in rows[:3]]
             record["result_sha256"] = result_hash(rows, statement.get("ordered", "ORDER BY" in sql.upper()))
             record["median_seconds"] = round(statistics.median(record["seconds"]), 3)
         except Exception as exc:
