@@ -11,10 +11,13 @@
   while Trino runs and back, so both engines get the same three machines.
 - **Same role budgets.** Coordinator 500m/1 GiB request, 2 CPU/4 GiB limit;
   workers 1 CPU/2 GiB request, 3 CPU/6 GiB limit — identical for both.
-- **Same bytes.** Both engines read the same Parquet objects in ADLS. The
-  runner verifies every blob's byte length and SHA-256 before a run. Kaveon
-  reads the objects directly; Trino reads them through Delta or Hive external
-  tables that resolve to those exact objects.
+- **Same bytes.** Both engines read the same objects in ADLS. The runner
+  verifies every blob's byte length and SHA-256 before a run. A single-object
+  table (the telemetry file, ClickBench `hits.parquet`) is read directly by
+  Kaveon and through a Hive external table by Trino; a multi-file table
+  (the TPC-H tables) is a Delta table for both, Kaveon through its Delta log
+  reader and Trino through its Delta connector, because a plain directory of
+  Parquet files is not yet a table for Kaveon (in progress).
 - **Exact results, checked.** Every statement carries a DuckDB reference hash;
   a wrong result is a failed execution, not a fast one.
 - **Rounds, not runs.** At least five rounds, alternating engine order, five
@@ -44,7 +47,10 @@
   statements. Record: `kaveon-trino-aks-2026-09-15.md` — Kaveon 2.300 QPS vs
   Trino 1.582 (1.45×), faster on 9 of 12 shapes.
 - Scale: the 504 M-row `kaveon_events_enriched` table, twenty statements with
-  a Trino column. Record: `scale-suite-2026-09-16.md`.
+  a Trino column. Record: `scale-suite-2026-09-16.md` (17 of 20 targets on
+  `1c00593`, ahead of Trino on 9 of 13; 15 of 20 on `bb82ea9` after the
+  correctness sweep; Trino's column is from the plain file and is owed a
+  pass on the dictionary object).
 - Time-to-answer: thirteen live statements, both engines, same object.
   Record: `kaveon-trino-time-to-answer-2026-09-15.md`.
 
@@ -85,9 +91,12 @@ Mechanics:
   reports the median over rounds of each round's median with the fastest and
   slowest round beside it. A statement that failed in any round is not
   "ran". One pass is a measurement; five rounds are a claim.
-- Coverage: Kaveon does not run every ClickBench query today (URL and regexp
-  functions, some casts). Every unsupported query is listed and counted as a
-  loss until it runs.
+- Coverage: every one of the 43 statements has run on the cluster (42 in the
+  `8d15fd3` full pass, `q40` after `17a33e6` on `6eed629`), so coverage is no
+  longer a loss column; a statement that fails in a round is listed by name
+  and counted as a loss for that round. Record: `clickbench-2026-09-16.md`
+  (first pass 1.00×, the `8d15fd3` pass 1.39× geometric mean Trino ÷ Kaveon
+  over 42; one pass each, not the five rounds).
 
 ### Throughput
 
@@ -147,20 +156,29 @@ TPC-H is the join benchmark. Twenty-two queries over eight tables with
 multi-way joins, correlated subqueries, EXISTS/NOT EXISTS, and aggregates over
 joins — the shapes Tier 1 and Tier 2 barely touch.
 
-- Data: generated once with Trino's `tpch` connector at scale factor 100
-  by `infra/aks/tpch-generate-job.yaml` (`scripts/generate-tpch-trino.py`,
-  chart value `trino.tpch.enabled=true` for that window only) and written to
-  `benchmarks/tpch/sf100/<table>/` in ADLS as Parquet through a writable
-  Hive catalog; the Job's manifest (`tpch/tables.json`: columns and exact
-  row counts) is what both engines register from —
-  `scripts/register-tpch-catalog.py` for Kaveon (`Benchmarks.tpch_sf100`),
-  the read-only `opensource` catalog for Trino.
+- Data: generated on 2026-09-17 with Trino's `tpch` connector at scale
+  factor 100 by `infra/aks/tpch-generate-job.yaml`
+  (`scripts/generate-tpch-trino.py`, chart value `trino.tpch.enabled=true`
+  for that window only), written as **Delta tables** under
+  `opensource/benchmarks/tpch/delta/sf100/<table>/` through the chart's
+  `lake` Delta catalog (`CREATE TABLE AS SELECT` per table, then `COUNT(*)`
+  and `DESCRIBE`). Delta rather than a plain Parquet directory because that
+  is the multi-file table both engines read from object storage today. The
+  Job's manifest (`tpch/tables.json`: format, directory, Trino column types
+  and the exact row counts, `lineitem` 600,037,902) is what both engines
+  register from: `scripts/register-tpch-catalog.py` for Kaveon
+  (`Benchmarks.tpch_sf100`, revising any definition that differs from the
+  manifest), and `scripts/benchmark-trino-suite.py` for Trino, which
+  registers the same Delta logs with `lake.system.register_table` in each
+  Trino window (a Trino restart loses its file metastore).
 - Queries: the standard 22 with the specification's validation parameters,
   in Trino's dialect (`tpch/trino-queries.sql`; suite `tpch/kaveon-suite.json`).
-- Same rounds, same coverage rule. Kaveon's distributed joins cover
-  equi-joins, broadcast builds and semi/anti joins; queries needing
-  correlated subqueries or non-equi joins are listed as losses until
-  implemented.
+- Coverage: 21 of 22 parse, bind, plan and execute on the Engine with a
+  distributed plan (`tpch/coverage.md`; the gate is `cargo test -p
+  kaveon-server tpch`); Q21 needs a semi join with a residual and is a loss
+  until implemented. No SF100 timing record exists yet; the first Kaveon and
+  Trino passes over the generated tables are the next step on this tier.
+- Same rounds, same coverage rule.
 
 ## What gets published
 
