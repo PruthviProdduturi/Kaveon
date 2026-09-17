@@ -220,13 +220,33 @@ async fn upload_exchange_chunk(
     if let Err(error) = authorize(&state, &headers) {
         return exchange_error_response(error);
     }
-    if let Some(store) = &state.disk_exchange_store {
-        return match ExchangeChunk::decode(&body, ExchangeLimits::default()) {
-            Ok(chunk) => match store.insert(chunk) {
-                Ok(()) => StatusCode::ACCEPTED.into_response(),
-                Err(error) => (StatusCode::INSUFFICIENT_STORAGE, error).into_response(),
-            },
-            Err(error) => exchange_error_response(error),
+    if state.disk_exchange_store.is_some() {
+        // The store writes the chunk to disk: off the async runtime, or a
+        // burst of uploads starves every other request — the health probe
+        // included, which is how a coordinator under exchange load was
+        // killed as unresponsive.
+        let state = Arc::clone(&state);
+        let outcome = tokio::task::spawn_blocking(move || {
+            let store = state
+                .disk_exchange_store
+                .as_ref()
+                .expect("checked before spawning");
+            ExchangeChunk::decode(&body, ExchangeLimits::default())
+                .map_err(ExchangeReceiveError::Protocol)
+                .and_then(|chunk| store.insert(chunk).map_err(ExchangeReceiveError::Store))
+        })
+        .await;
+        return match outcome {
+            Ok(Ok(())) => StatusCode::ACCEPTED.into_response(),
+            Ok(Err(ExchangeReceiveError::Store(error))) => {
+                (StatusCode::INSUFFICIENT_STORAGE, error).into_response()
+            }
+            Ok(Err(ExchangeReceiveError::Protocol(error))) => exchange_error_response(error),
+            Err(error) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("exchange store task failed: {error}"),
+            )
+                .into_response(),
         };
     }
     match ExchangeChunk::decode(&body, ExchangeLimits::default())
@@ -235,6 +255,11 @@ async fn upload_exchange_chunk(
         Ok(()) => StatusCode::ACCEPTED.into_response(),
         Err(error) => exchange_error_response(error),
     }
+}
+
+enum ExchangeReceiveError {
+    Protocol(ExchangeError),
+    Store(String),
 }
 
 async fn download_exchange(
