@@ -600,6 +600,16 @@ fn arithmetic(left: &ArrayRef, op: BinaryOp, right: &ArrayRef) -> Result<ArrayRe
                 _ => unreachable!(),
             }
         }
+        // Decimals stay exact: `0.06 - 0.01` is the decimal 0.05, with the
+        // precision and scale the kernels derive for the operation.
+        (DataType::Decimal128(_, _), DataType::Decimal128(_, _)) => match op {
+            BinaryOp::Plus => compute::kernels::numeric::add(&left, &right)?,
+            BinaryOp::Minus => compute::kernels::numeric::sub(&left, &right)?,
+            BinaryOp::Multiply => compute::kernels::numeric::mul(&left, &right)?,
+            BinaryOp::Divide => compute::kernels::numeric::div(&left, &right)?,
+            BinaryOp::Modulo => compute::kernels::numeric::rem(&left, &right)?,
+            _ => unreachable!(),
+        },
         (l, r) => {
             return Err(KaveonError::Execution(format!(
                 "arithmetic not supported between {l} and {r}"
@@ -2387,6 +2397,61 @@ mod tests {
         assert_eq!(
             result.values().iter().collect::<Vec<_>>(),
             vec![false, true, true, false]
+        );
+    }
+
+    #[test]
+    fn decimal_literal_arithmetic_stays_exact_and_bounds_a_double_column() {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "discount",
+                DataType::Float64,
+                false,
+            )])),
+            vec![Arc::new(Float64Array::from(vec![
+                0.04, 0.05, 0.06, 0.07, 0.08,
+            ]))],
+        )
+        .unwrap();
+        let decimal = |value: i128| {
+            Box::new(Expr::Literal(ScalarValue::Decimal128 {
+                value,
+                precision: 3,
+                scale: 2,
+            }))
+        };
+        let low = Expr::BinaryOp {
+            left: decimal(6),
+            op: BinaryOp::Minus,
+            right: decimal(1),
+        };
+        let high = Expr::BinaryOp {
+            left: decimal(6),
+            op: BinaryOp::Plus,
+            right: decimal(1),
+        };
+        let bound = evaluate(&low, &batch).unwrap();
+        let DataType::Decimal128(_, scale) = bound.data_type() else {
+            panic!(
+                "decimal arithmetic keeps the decimal type: {}",
+                bound.data_type()
+            );
+        };
+        let values = bound.as_primitive::<arrow::datatypes::Decimal128Type>();
+        assert_eq!(
+            values.value(0),
+            5 * 10_i128.pow(u32::from(*scale as u8) - 2)
+        );
+        let expr = Expr::Between {
+            expr: Box::new(Expr::Column("discount".into())),
+            low: Box::new(low),
+            high: Box::new(high),
+            negated: false,
+        };
+        let result = evaluate_predicate(&expr, &batch).unwrap();
+        assert_eq!(
+            result.values().iter().collect::<Vec<_>>(),
+            vec![false, true, true, true, false]
         );
     }
 
