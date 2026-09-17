@@ -1,8 +1,16 @@
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{
     Arc, Mutex, OnceLock,
     atomic::{AtomicU64, Ordering},
 };
-use std::{any::Any, collections::HashMap};
+use std::task::{Context, Poll, Waker};
+use std::{
+    any::Any,
+    collections::{HashMap, VecDeque},
+};
+
+use serde::{Deserialize, Serialize};
 
 use crate::process_memory::ProcessMemory;
 use crate::{KaveonError, Result};
@@ -65,8 +73,43 @@ pub struct QueryMemoryPool {
 #[derive(Debug)]
 struct AdmissionInner {
     limit_bytes: u64,
+    /// Mutated only under `queue`; read without it for snapshots.
     admitted_bytes: AtomicU64,
     peak_admitted_bytes: AtomicU64,
+    /// Arrivals that could not be admitted, oldest first. The head is
+    /// granted first and only when its whole budget fits; nothing behind
+    /// it is admitted ahead of it.
+    queue: Mutex<VecDeque<Arc<AdmissionWaiter>>>,
+    queue_limit: usize,
+    next_waiter: AtomicU64,
+    admitted_total: AtomicU64,
+    queued_total: AtomicU64,
+    rejected_total: AtomicU64,
+    withdrawn_total: AtomicU64,
+}
+
+/// The admission controller's counters, as `/v1/node` reports them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdmissionStats {
+    /// The sum of admitted budgets cannot exceed this.
+    pub limit_bytes: u64,
+    pub admitted_bytes: u64,
+    pub peak_admitted_bytes: u64,
+    /// How many arrivals may wait at once; zero refuses every arrival that
+    /// does not fit immediately.
+    pub queue_limit: usize,
+    /// Arrivals waiting now.
+    pub queue_depth: usize,
+    /// Budgets granted, whether immediately or after a wait.
+    pub admitted: u64,
+    /// Arrivals that had to wait before a decision.
+    pub queued: u64,
+    /// Arrivals refused: no capacity with no wait allowed, a full queue, or
+    /// a wait that expired.
+    pub rejected: u64,
+    /// Arrivals that left the queue before a decision: a cancelled
+    /// statement or a client that went away.
+    pub withdrawn: u64,
 }
 
 /// Reserves query memory budgets before execution begins.
@@ -77,6 +120,8 @@ pub struct MemoryAdmissionController {
 }
 
 impl MemoryAdmissionController {
+    /// A controller that refuses immediately whatever does not fit: no
+    /// queue. See [`Self::with_queue_limit`].
     pub fn new(limit_bytes: u64) -> Result<Self> {
         if limit_bytes == 0 {
             return Err(KaveonError::Execution(
@@ -88,9 +133,26 @@ impl MemoryAdmissionController {
                 limit_bytes,
                 admitted_bytes: AtomicU64::new(0),
                 peak_admitted_bytes: AtomicU64::new(0),
+                queue: Mutex::new(VecDeque::new()),
+                queue_limit: 0,
+                next_waiter: AtomicU64::new(0),
+                admitted_total: AtomicU64::new(0),
+                queued_total: AtomicU64::new(0),
+                rejected_total: AtomicU64::new(0),
+                withdrawn_total: AtomicU64::new(0),
             }),
             process: None,
         })
+    }
+
+    /// How many arrivals [`Self::admit_queued`] may keep waiting at once.
+    /// Must be called before the controller is shared.
+    #[must_use]
+    pub fn with_queue_limit(mut self, queue_limit: usize) -> Self {
+        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+            inner.queue_limit = queue_limit;
+        }
+        self
     }
 
     /// Every admitted query's reservations also answer to the process
@@ -106,48 +168,80 @@ impl MemoryAdmissionController {
         self.process.as_ref()
     }
 
+    /// Admits now or refuses now. An arrival is refused when its budget
+    /// does not fit, and also while anyone is queued ahead of it: the
+    /// queue is served in order.
     pub fn admit(
         &self,
         query_id: impl Into<String>,
         query_limit_bytes: u64,
     ) -> Result<AdmittedQueryMemory> {
-        if query_limit_bytes == 0 || query_limit_bytes > self.inner.limit_bytes {
+        let query_id = self.validate(query_id, query_limit_bytes)?;
+        let queue = self.lock_queue();
+        if queue.is_empty()
+            && let Some(memory) = self.grant_if_fits(&query_id, query_limit_bytes)
+        {
+            return Ok(memory);
+        }
+        let queued = queue.len();
+        drop(queue);
+        self.inner.rejected_total.fetch_add(1, Ordering::AcqRel);
+        Err(self.capacity_error(query_limit_bytes, queued))
+    }
+
+    /// Admits now when the budget fits and nobody is queued; otherwise
+    /// joins the queue and resolves once the budget is granted. The queue
+    /// is served in arrival order: the head is granted first, only when its
+    /// whole budget fits, and nothing behind it is admitted ahead of it.
+    /// That rule is predictable and starves nobody: every admitted budget
+    /// is at most the limit and is released when its query ends, so the
+    /// head always fits eventually. A small arrival behind a large head
+    /// waits for it; the caller bounds that wait.
+    ///
+    /// The queue is full: refused with [`KaveonError::Execution`]. Dropping
+    /// the returned future leaves the queue at once; see
+    /// [`AdmissionWait::expire`] for a wait the caller gives up on.
+    pub fn admit_queued(
+        &self,
+        query_id: impl Into<String>,
+        query_limit_bytes: u64,
+    ) -> Result<AdmissionWait> {
+        let query_id = self.validate(query_id, query_limit_bytes)?;
+        let mut queue = self.lock_queue();
+        if queue.is_empty()
+            && let Some(memory) = self.grant_if_fits(&query_id, query_limit_bytes)
+        {
+            return Ok(AdmissionWait {
+                controller: self.clone(),
+                waiter: None,
+                granted: Some(memory),
+            });
+        }
+        if queue.len() >= self.inner.queue_limit {
+            let queued = queue.len();
+            drop(queue);
+            self.inner.rejected_total.fetch_add(1, Ordering::AcqRel);
             return Err(KaveonError::Execution(format!(
-                "query memory limit {query_limit_bytes} must be between 1 and the admission limit of {} bytes",
+                "memory admission queue is full: {queued} of {} statements already waiting, {} of {} bytes admitted",
+                self.inner.queue_limit,
+                self.inner.admitted_bytes.load(Ordering::Acquire),
                 self.inner.limit_bytes
             )));
         }
-        let mut pool = QueryMemoryPool::new(query_id, query_limit_bytes)?;
-        let mut current = self.inner.admitted_bytes.load(Ordering::Acquire);
-        loop {
-            let Some(next) = current.checked_add(query_limit_bytes) else {
-                return Err(self.capacity_error(query_limit_bytes, current));
-            };
-            if next > self.inner.limit_bytes {
-                return Err(self.capacity_error(query_limit_bytes, current));
-            }
-            match self.inner.admitted_bytes.compare_exchange_weak(
-                current,
-                next,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => {
-                    self.inner
-                        .peak_admitted_bytes
-                        .fetch_max(next, Ordering::AcqRel);
-                    let inner =
-                        Arc::get_mut(&mut pool.inner).expect("new query pool is uniquely owned");
-                    inner._admission = Some(AdmissionLease {
-                        controller: self.clone(),
-                        admitted_bytes: query_limit_bytes,
-                    });
-                    inner.process = self.process.clone();
-                    return Ok(AdmittedQueryMemory { pool });
-                }
-                Err(observed) => current = observed,
-            }
-        }
+        let waiter = Arc::new(AdmissionWaiter {
+            id: self.inner.next_waiter.fetch_add(1, Ordering::AcqRel),
+            query_id,
+            bytes: query_limit_bytes,
+            state: Mutex::new(WaiterState::Queued(None)),
+        });
+        queue.push_back(Arc::clone(&waiter));
+        drop(queue);
+        self.inner.queued_total.fetch_add(1, Ordering::AcqRel);
+        Ok(AdmissionWait {
+            controller: self.clone(),
+            waiter: Some(waiter),
+            granted: None,
+        })
     }
 
     #[must_use]
@@ -161,16 +255,241 @@ impl MemoryAdmissionController {
         }
     }
 
-    fn capacity_error(&self, requested: u64, current: u64) -> KaveonError {
+    #[must_use]
+    pub fn stats(&self) -> AdmissionStats {
+        let queue_depth = self.lock_queue().len();
+        AdmissionStats {
+            limit_bytes: self.inner.limit_bytes,
+            admitted_bytes: self.inner.admitted_bytes.load(Ordering::Acquire),
+            peak_admitted_bytes: self.inner.peak_admitted_bytes.load(Ordering::Acquire),
+            queue_limit: self.inner.queue_limit,
+            queue_depth,
+            admitted: self.inner.admitted_total.load(Ordering::Acquire),
+            queued: self.inner.queued_total.load(Ordering::Acquire),
+            rejected: self.inner.rejected_total.load(Ordering::Acquire),
+            withdrawn: self.inner.withdrawn_total.load(Ordering::Acquire),
+        }
+    }
+
+    fn validate(&self, query_id: impl Into<String>, query_limit_bytes: u64) -> Result<String> {
+        if query_limit_bytes == 0 || query_limit_bytes > self.inner.limit_bytes {
+            return Err(KaveonError::Execution(format!(
+                "query memory limit {query_limit_bytes} must be between 1 and the admission limit of {} bytes",
+                self.inner.limit_bytes
+            )));
+        }
+        let query_id = query_id.into();
+        if query_id.trim().is_empty() {
+            return Err(KaveonError::Execution(
+                "query memory pool requires a non-empty query ID".into(),
+            ));
+        }
+        Ok(query_id)
+    }
+
+    fn lock_queue(&self) -> std::sync::MutexGuard<'_, VecDeque<Arc<AdmissionWaiter>>> {
+        // The queue holds only waiter handles; a panic while it was held
+        // cannot have left it inconsistent.
+        self.inner
+            .queue
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Reserves `bytes` and builds the admitted pool when the budget fits.
+    /// Called with the queue lock held, so the check and the reservation
+    /// are one step.
+    fn grant_if_fits(&self, query_id: &str, bytes: u64) -> Option<AdmittedQueryMemory> {
+        let current = self.inner.admitted_bytes.load(Ordering::Acquire);
+        let next = current.checked_add(bytes)?;
+        if next > self.inner.limit_bytes {
+            return None;
+        }
+        self.inner.admitted_bytes.store(next, Ordering::Release);
+        self.inner
+            .peak_admitted_bytes
+            .fetch_max(next, Ordering::AcqRel);
+        self.inner.admitted_total.fetch_add(1, Ordering::AcqRel);
+        let mut pool =
+            QueryMemoryPool::new(query_id, bytes).expect("query ID and budget were validated");
+        let inner = Arc::get_mut(&mut pool.inner).expect("new query pool is uniquely owned");
+        inner._admission = Some(AdmissionLease {
+            controller: self.clone(),
+            admitted_bytes: bytes,
+        });
+        inner.process = self.process.clone();
+        Some(AdmittedQueryMemory { pool })
+    }
+
+    /// Grants the head of the queue for as long as it fits. Called with the
+    /// queue lock held: a waiter still in the queue is in the `Queued`
+    /// state, because leaving the queue and changing state happen under
+    /// this same lock.
+    fn grant_waiting(&self, queue: &mut VecDeque<Arc<AdmissionWaiter>>) {
+        while let Some(head) = queue.front() {
+            let Some(memory) = self.grant_if_fits(&head.query_id, head.bytes) else {
+                return;
+            };
+            let head = queue.pop_front().expect("front was just observed");
+            let previous = {
+                let mut state = head.lock_state();
+                std::mem::replace(&mut *state, WaiterState::Granted(Some(memory)))
+            };
+            if let WaiterState::Queued(Some(waker)) = previous {
+                waker.wake();
+            }
+        }
+    }
+
+    fn capacity_error(&self, requested: u64, queued: usize) -> KaveonError {
+        let current = self.inner.admitted_bytes.load(Ordering::Acquire);
+        let ahead = if queued == 0 {
+            String::new()
+        } else {
+            format!(", {queued} waiting ahead")
+        };
         KaveonError::Execution(format!(
-            "memory admission rejected query budget of {requested} bytes: {current} of {} bytes already admitted",
+            "memory admission rejected query budget of {requested} bytes: {current} of {} bytes already admitted{ahead}",
             self.inner.limit_bytes
         ))
     }
 
     fn release(&self, bytes: u64) {
+        let mut queue = self.lock_queue();
         let previous = self.inner.admitted_bytes.fetch_sub(bytes, Ordering::AcqRel);
         debug_assert!(previous >= bytes, "memory admission accounting underflow");
+        self.grant_waiting(&mut queue);
+    }
+
+    /// Takes `waiter` out of the queue if it is still there, and serves
+    /// whoever is behind it. Returns a budget granted to it in the meantime,
+    /// which the caller owns.
+    fn withdraw(
+        &self,
+        waiter: &Arc<AdmissionWaiter>,
+        rejected: bool,
+    ) -> Option<AdmittedQueryMemory> {
+        let mut queue = self.lock_queue();
+        let position = queue.iter().position(|queued| queued.id == waiter.id);
+        if let Some(position) = position {
+            queue.remove(position);
+        }
+        let granted = {
+            let mut state = waiter.lock_state();
+            match std::mem::replace(&mut *state, WaiterState::Withdrawn) {
+                WaiterState::Granted(memory) => memory,
+                WaiterState::Queued(_) | WaiterState::Withdrawn => None,
+            }
+        };
+        if granted.is_none() {
+            let counter = if rejected {
+                &self.inner.rejected_total
+            } else {
+                &self.inner.withdrawn_total
+            };
+            counter.fetch_add(1, Ordering::AcqRel);
+        }
+        if position.is_some() {
+            self.grant_waiting(&mut queue);
+        }
+        granted
+    }
+}
+
+#[derive(Debug)]
+struct AdmissionWaiter {
+    id: u64,
+    query_id: String,
+    bytes: u64,
+    state: Mutex<WaiterState>,
+}
+
+impl AdmissionWaiter {
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, WaiterState> {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+#[derive(Debug)]
+enum WaiterState {
+    /// In the queue, with the waker of the last poll.
+    Queued(Option<Waker>),
+    /// Out of the queue with its budget, until the future takes it.
+    Granted(Option<AdmittedQueryMemory>),
+    /// Out of the queue without a budget.
+    Withdrawn,
+}
+
+/// A pending admission from [`MemoryAdmissionController::admit_queued`].
+/// Resolves to the admitted budget; dropping it leaves the queue at once
+/// and returns any budget granted in the meantime.
+#[derive(Debug)]
+pub struct AdmissionWait {
+    controller: MemoryAdmissionController,
+    waiter: Option<Arc<AdmissionWaiter>>,
+    granted: Option<AdmittedQueryMemory>,
+}
+
+impl AdmissionWait {
+    /// Whether the budget was granted on arrival, without queueing.
+    #[must_use]
+    pub fn admitted_immediately(&self) -> bool {
+        self.waiter.is_none()
+    }
+
+    /// Gives up the wait as a refusal: the arrival is counted as rejected
+    /// and leaves the queue. A budget granted just before the caller gave
+    /// up is returned instead, so no admission is wasted.
+    pub fn expire(mut self) -> Option<AdmittedQueryMemory> {
+        if let Some(memory) = self.granted.take() {
+            return Some(memory);
+        }
+        let waiter = self.waiter.take()?;
+        self.controller.withdraw(&waiter, true)
+    }
+}
+
+impl Future for AdmissionWait {
+    type Output = AdmittedQueryMemory;
+
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        if let Some(memory) = self.granted.take() {
+            self.waiter = None;
+            return Poll::Ready(memory);
+        }
+        let Some(waiter) = self.waiter.as_ref() else {
+            panic!("admission wait polled after it resolved");
+        };
+        let mut state = waiter.lock_state();
+        match &mut *state {
+            WaiterState::Queued(waker) => {
+                match waker {
+                    Some(waker) if waker.will_wake(context.waker()) => {}
+                    _ => *waker = Some(context.waker().clone()),
+                }
+                Poll::Pending
+            }
+            WaiterState::Granted(memory) => {
+                let memory = memory.take().expect("a granted budget is taken once");
+                *state = WaiterState::Withdrawn;
+                drop(state);
+                self.waiter = None;
+                Poll::Ready(memory)
+            }
+            WaiterState::Withdrawn => panic!("admission wait polled after it resolved"),
+        }
+    }
+}
+
+impl Drop for AdmissionWait {
+    fn drop(&mut self) {
+        if let Some(waiter) = self.waiter.take() {
+            // A budget granted in the meantime is dropped here, outside the
+            // queue lock, and its release serves the next waiter.
+            drop(self.controller.withdraw(&waiter, false));
+        }
     }
 }
 
@@ -844,5 +1163,174 @@ mod tests {
         assert!(admission.admit("query", 2_048).is_err());
         assert!(admission.admit(" ", 128).is_err());
         assert_eq!(admission.snapshot().current_bytes, 0);
+    }
+
+    /// Polls a wait once with a waker that records being woken.
+    struct Woken(std::sync::atomic::AtomicBool);
+    impl std::task::Wake for Woken {
+        fn wake(self: Arc<Self>) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+    fn poll_once(wait: &mut AdmissionWait, woken: &Arc<Woken>) -> Poll<AdmittedQueryMemory> {
+        let waker = Waker::from(Arc::clone(woken));
+        let mut context = Context::from_waker(&waker);
+        Pin::new(wait).poll(&mut context)
+    }
+    fn queued_controller(limit: u64, queue_limit: usize) -> MemoryAdmissionController {
+        MemoryAdmissionController::new(limit)
+            .unwrap()
+            .with_queue_limit(queue_limit)
+    }
+
+    #[test]
+    fn a_queued_arrival_is_admitted_when_the_budget_is_released() {
+        let admission = queued_controller(1_024, 8);
+        let running = admission.admit("running", 1_024).unwrap();
+        let mut wait = admission.admit_queued("waiting", 512).unwrap();
+        assert!(!wait.admitted_immediately());
+        let woken = Arc::new(Woken(Default::default()));
+        assert!(poll_once(&mut wait, &woken).is_pending());
+        let stats = admission.stats();
+        assert_eq!((stats.queue_depth, stats.queued, stats.admitted), (1, 1, 1));
+
+        drop(running);
+        assert!(woken.0.load(Ordering::Acquire), "release wakes the head");
+        let Poll::Ready(admitted) = poll_once(&mut wait, &woken) else {
+            panic!("the head is granted once its budget fits");
+        };
+        assert_eq!(admitted.pool().snapshot().limit_bytes, 512);
+        let stats = admission.stats();
+        assert_eq!(stats.admitted_bytes, 512);
+        assert_eq!(
+            (stats.queue_depth, stats.admitted, stats.rejected),
+            (0, 2, 0)
+        );
+        drop(admitted);
+        assert_eq!(admission.stats().admitted_bytes, 0);
+    }
+
+    #[test]
+    fn the_queue_is_served_in_arrival_order_and_the_head_blocks_what_fits_behind_it() {
+        let admission = queued_controller(1_024, 8);
+        let running = admission.admit("running", 768).unwrap();
+        // Does not fit behind 768; a later, smaller arrival would fit but
+        // waits its turn.
+        let mut large = admission.admit_queued("large", 1_024).unwrap();
+        let mut small = admission.admit_queued("small", 256).unwrap();
+        let woken = Arc::new(Woken(Default::default()));
+        assert!(poll_once(&mut large, &woken).is_pending());
+        assert!(poll_once(&mut small, &woken).is_pending());
+        // An immediate attempt does not jump the queue either.
+        let error = admission.admit("impatient", 128).unwrap_err().to_string();
+        assert!(error.contains("2 waiting ahead"), "{error}");
+
+        drop(running);
+        let Poll::Ready(large) = poll_once(&mut large, &woken) else {
+            panic!("the head is granted first");
+        };
+        assert!(poll_once(&mut small, &woken).is_pending());
+        drop(large);
+        assert!(matches!(poll_once(&mut small, &woken), Poll::Ready(_)));
+        assert_eq!(admission.stats().rejected, 1);
+    }
+
+    #[test]
+    fn a_full_queue_refuses_and_a_zero_queue_refuses_everything_that_does_not_fit() {
+        let admission = queued_controller(1_024, 1);
+        let _running = admission.admit("running", 1_024).unwrap();
+        let _first = admission.admit_queued("first", 64).unwrap();
+        let error = admission
+            .admit_queued("second", 64)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("queue is full: 1 of 1"), "{error}");
+        let stats = admission.stats();
+        assert_eq!((stats.queue_depth, stats.queued, stats.rejected), (1, 1, 1));
+
+        let immediate = MemoryAdmissionController::new(1_024).unwrap();
+        let _running = immediate.admit("running", 1_024).unwrap();
+        assert!(immediate.admit_queued("waiting", 1).is_err());
+        assert_eq!(immediate.stats().rejected, 1);
+        // Fits: admitted on arrival even with no queue.
+        drop(_running);
+        let wait = immediate.admit_queued("fits", 1).unwrap();
+        assert!(wait.admitted_immediately());
+    }
+
+    #[test]
+    fn dropping_a_wait_leaves_the_queue_and_serves_the_next_arrival() {
+        let admission = queued_controller(1_024, 8);
+        let running = admission.admit("running", 1_024).unwrap();
+        let cancelled = admission.admit_queued("cancelled", 1_024).unwrap();
+        let mut next = admission.admit_queued("next", 512).unwrap();
+        let woken = Arc::new(Woken(Default::default()));
+        assert!(poll_once(&mut next, &woken).is_pending());
+        assert_eq!(admission.stats().queue_depth, 2);
+
+        drop(cancelled);
+        let stats = admission.stats();
+        assert_eq!(
+            (stats.queue_depth, stats.withdrawn, stats.rejected),
+            (1, 1, 0)
+        );
+        // Still no capacity; the release grants the new head.
+        assert!(poll_once(&mut next, &woken).is_pending());
+        drop(running);
+        assert!(matches!(poll_once(&mut next, &woken), Poll::Ready(_)));
+    }
+
+    #[test]
+    fn an_expired_wait_is_a_rejection_unless_it_was_granted_meanwhile() {
+        let admission = queued_controller(1_024, 8);
+        let running = admission.admit("running", 1_024).unwrap();
+        let expired = admission.admit_queued("expired", 256).unwrap();
+        assert!(expired.expire().is_none());
+        let stats = admission.stats();
+        assert_eq!(
+            (stats.queue_depth, stats.rejected, stats.withdrawn),
+            (0, 1, 0)
+        );
+
+        let granted = admission.admit_queued("granted", 256).unwrap();
+        drop(running);
+        // Granted before the caller gave up: the budget is handed over, not
+        // wasted, and it is not a rejection.
+        let memory = granted.expire().expect("granted while waiting");
+        assert_eq!(memory.pool().snapshot().limit_bytes, 256);
+        assert_eq!(admission.stats().rejected, 1);
+        drop(memory);
+        assert_eq!(admission.stats().admitted_bytes, 0);
+    }
+
+    #[test]
+    fn a_wait_resolves_across_threads() {
+        let admission = queued_controller(1_024, 8);
+        let running = admission.admit("running", 1_024).unwrap();
+        let wait = admission.admit_queued("waiting", 1_024).unwrap();
+        let waiter = thread::spawn(move || block_on(wait));
+        thread::sleep(std::time::Duration::from_millis(20));
+        drop(running);
+        let admitted = waiter.join().unwrap();
+        assert_eq!(admitted.pool().snapshot().limit_bytes, 1_024);
+        assert_eq!(admission.stats().admitted, 2);
+    }
+
+    /// A minimal executor: parks the thread until the waker unparks it.
+    fn block_on(mut wait: AdmissionWait) -> AdmittedQueryMemory {
+        struct Unpark(thread::Thread);
+        impl std::task::Wake for Unpark {
+            fn wake(self: Arc<Self>) {
+                self.0.unpark();
+            }
+        }
+        let waker = Waker::from(Arc::new(Unpark(thread::current())));
+        let mut context = Context::from_waker(&waker);
+        loop {
+            if let Poll::Ready(memory) = Pin::new(&mut wait).poll(&mut context) {
+                return memory;
+            }
+            thread::park();
+        }
     }
 }
