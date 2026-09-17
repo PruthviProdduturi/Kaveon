@@ -21,12 +21,30 @@
 //! the operators resolve bare names against their inputs themselves. A
 //! table the catalog cannot describe leaves its references as written for
 //! the planner to report.
+//!
+//! A subquery binds with the enclosing query's scope behind its own. A
+//! WHERE equality between one of its columns and one of the enclosing
+//! query's is a correlation: it leaves the subquery's filter and rides up
+//! through the subquery's projection (as an extra column) and aggregate
+//! (as a group key) to the node that joins the subquery in, where it
+//! becomes that join's key — `EXISTS (... WHERE l_orderkey = o_orderkey)`
+//! is a semi join on the key, and `x < (SELECT avg(y) FROM t WHERE t.k =
+//! q.k)` is an inner join on `k` with the aggregate grouped by `k`, which
+//! keeps exactly the rows whose comparison with the per-key aggregate can
+//! hold. Any other correlated predicate is refused with its text.
+use std::cell::Cell;
+
 use kaveon_core::{BinaryOp, CatalogManager, Expr, KaveonError, Result, TableReference};
 use kaveon_sql::logical_plan::{AggregateExpr, JoinType, LogicalPlan};
 
 /// Bind `plan` against `catalog`. Table names must already be qualified.
 pub fn bind(plan: LogicalPlan, catalog: &CatalogManager) -> Result<LogicalPlan> {
-    Binder { catalog }.bind(plan).map(|bound| bound.plan)
+    Binder {
+        catalog,
+        names: Cell::new(0),
+    }
+    .bind(plan, &[])
+    .map(|bound| bound.plan)
 }
 
 /// One output column of a plan node: how a query may refer to it, and the
@@ -102,6 +120,30 @@ struct Bound {
     /// function references above it (`SUM(l_quantity)` in the projection
     /// or HAVING) bind the way the aggregate bound its arguments.
     aggregate_input: Option<Scope>,
+    /// Equalities with the enclosing query lifted out of a subquery's
+    /// WHERE, on their way to the node that joins the subquery in.
+    correlations: Vec<Correlation>,
+}
+
+impl Bound {
+    fn plain(plan: LogicalPlan) -> Self {
+        Self {
+            plan,
+            aggregate_input: None,
+            correlations: Vec::new(),
+        }
+    }
+}
+
+/// `inner = outer`, lifted out of a subquery: `inner` names the
+/// subquery-side column at the current node's output, `outer` the
+/// enclosing query's column as written, `depth` the enclosing scope it
+/// resolved in (an index into the scope stack; the innermost is last).
+#[derive(Clone, Debug)]
+struct Correlation {
+    inner: String,
+    outer: String,
+    depth: usize,
 }
 
 /// Where a conjunct of a filter over a join belongs.
@@ -114,40 +156,67 @@ enum Placement {
 
 struct Binder<'a> {
     catalog: &'a CatalogManager,
+    /// Names for the columns a correlation rides along under.
+    names: Cell<usize>,
 }
 
 impl Binder<'_> {
-    fn bind(&self, plan: LogicalPlan) -> Result<Bound> {
+    fn bind(&self, plan: LogicalPlan, outer: &[Scope]) -> Result<Bound> {
         match plan {
-            LogicalPlan::Scan { .. } => Ok(Bound {
-                plan,
-                aggregate_input: None,
-            }),
+            LogicalPlan::Scan { .. } => Ok(Bound::plain(plan)),
             LogicalPlan::Filter { input, predicate } => {
-                let input = self.bind(*input)?;
-                let (plan, residual) = self.route(conjuncts(predicate), input.plan)?;
+                let input = self.bind(*input, outer)?;
+                let scope = self.scope_of(&input.plan);
+                let mut correlations = input.correlations;
+                let mut local = Vec::new();
+                for conjunct in conjuncts(predicate) {
+                    match self.correlation(&conjunct, &scope, outer)? {
+                        Some(correlation) => correlations.push(correlation),
+                        None => local.push(conjunct),
+                    }
+                }
+                let (plan, residual) = self.route(local, input.plan)?;
                 let scope = self.scope_of(&plan);
                 let plan = self.filtered(plan, residual, &scope, input.aggregate_input.as_ref())?;
                 Ok(Bound {
                     plan,
                     aggregate_input: input.aggregate_input,
+                    correlations,
                 })
             }
             LogicalPlan::Project { input, columns } => {
-                let input = self.bind(*input)?;
+                let input = self.bind(*input, outer)?;
                 let scope = self.scope_of(&input.plan);
-                let columns = columns
+                let mut columns = columns
                     .into_iter()
                     .map(|column| {
                         self.bind_projected(column, &scope, input.aggregate_input.as_ref())
                     })
-                    .collect::<Result<_>>()?;
+                    .collect::<Result<Vec<_>>>()?;
+                // A correlated column rides through the projection under a
+                // name of its own.
+                let correlations = input
+                    .correlations
+                    .into_iter()
+                    .map(|correlation| {
+                        let name = self.fresh_name();
+                        columns.push(Expr::Alias {
+                            expr: Box::new(Expr::Column(correlation.inner)),
+                            name: name.clone(),
+                        });
+                        Correlation {
+                            inner: name,
+                            ..correlation
+                        }
+                    })
+                    .collect();
                 Ok(Bound {
                     plan: LogicalPlan::Project {
                         input: Box::new(input.plan),
                         columns,
                     },
                     aggregate_input: None,
+                    correlations,
                 })
             }
             LogicalPlan::Aggregate {
@@ -155,16 +224,37 @@ impl Binder<'_> {
                 group_by,
                 aggregates,
             } => {
-                let input = self.bind(*input)?;
+                let input = self.bind(*input, outer)?;
                 let scope = self.scope_of(&input.plan);
-                let group_by = group_by
+                let mut group_by = group_by
                     .into_iter()
                     .map(|key| self.bind_expr(key, &scope, None))
-                    .collect::<Result<_>>()?;
+                    .collect::<Result<Vec<_>>>()?;
                 let aggregates = aggregates
                     .into_iter()
                     .map(|aggregate| self.bind_aggregate(aggregate, &scope))
-                    .collect::<Result<_>>()?;
+                    .collect::<Result<Vec<_>>>()?;
+                // A correlated column becomes a group key: the aggregate
+                // answers per value of the enclosing query's column, and
+                // the join above selects the row for its value. A COUNT
+                // has an answer (zero) for a value with no rows, which no
+                // join row can carry.
+                if !input.correlations.is_empty() {
+                    if aggregates
+                        .iter()
+                        .any(|aggregate| matches!(aggregate, AggregateExpr::Count { .. }))
+                    {
+                        return Err(KaveonError::Sql(
+                            "COUNT in a correlated subquery is not supported: its result for an unmatched row is zero, which the join cannot produce".into(),
+                        ));
+                    }
+                    for correlation in &input.correlations {
+                        let key = Expr::Column(correlation.inner.clone());
+                        if !group_by.contains(&key) {
+                            group_by.push(key);
+                        }
+                    }
+                }
                 Ok(Bound {
                     plan: LogicalPlan::Aggregate {
                         input: Box::new(input.plan),
@@ -172,10 +262,11 @@ impl Binder<'_> {
                         aggregates,
                     },
                     aggregate_input: Some(scope),
+                    correlations: input.correlations,
                 })
             }
             LogicalPlan::Sort { input, order_by } => {
-                let input = self.bind(*input)?;
+                let input = self.bind(*input, outer)?;
                 let scope = self.scope_of(&input.plan);
                 let order_by = order_by
                     .into_iter()
@@ -190,42 +281,45 @@ impl Binder<'_> {
                         order_by,
                     },
                     aggregate_input: input.aggregate_input,
+                    correlations: input.correlations,
                 })
             }
             LogicalPlan::Limit { input, count } => {
-                let input = self.bind(*input)?;
+                let input = self.bind(*input, outer)?;
+                uncorrelated(&input, "LIMIT")?;
                 Ok(Bound {
                     plan: LogicalPlan::Limit {
                         input: Box::new(input.plan),
                         count,
                     },
-                    aggregate_input: input.aggregate_input,
+                    ..input
                 })
             }
             LogicalPlan::Offset { input, count } => {
-                let input = self.bind(*input)?;
+                let input = self.bind(*input, outer)?;
+                uncorrelated(&input, "OFFSET")?;
                 Ok(Bound {
                     plan: LogicalPlan::Offset {
                         input: Box::new(input.plan),
                         count,
                     },
-                    aggregate_input: input.aggregate_input,
+                    ..input
                 })
             }
             LogicalPlan::Distinct { input } => {
-                let input = self.bind(*input)?;
+                let input = self.bind(*input, outer)?;
                 Ok(Bound {
                     plan: LogicalPlan::Distinct {
                         input: Box::new(input.plan),
                     },
-                    aggregate_input: input.aggregate_input,
+                    ..input
                 })
             }
             LogicalPlan::Window {
                 input,
                 window_exprs,
             } => {
-                let input = self.bind(*input)?;
+                let input = self.bind(*input, outer)?;
                 let scope = self.scope_of(&input.plan);
                 let window_exprs = window_exprs
                     .into_iter()
@@ -236,33 +330,40 @@ impl Binder<'_> {
                         input: Box::new(input.plan),
                         window_exprs,
                     },
-                    aggregate_input: input.aggregate_input,
+                    ..input
                 })
             }
-            LogicalPlan::Union { inputs, all } => Ok(Bound {
-                plan: LogicalPlan::Union {
-                    inputs: inputs
-                        .into_iter()
-                        .map(|input| self.bind(input).map(|bound| bound.plan))
-                        .collect::<Result<_>>()?,
-                    all,
-                },
-                aggregate_input: None,
-            }),
-            LogicalPlan::Intersect { left, right } => Ok(Bound {
-                plan: LogicalPlan::Intersect {
-                    left: Box::new(self.bind(*left)?.plan),
-                    right: Box::new(self.bind(*right)?.plan),
-                },
-                aggregate_input: None,
-            }),
-            LogicalPlan::Except { left, right } => Ok(Bound {
-                plan: LogicalPlan::Except {
-                    left: Box::new(self.bind(*left)?.plan),
-                    right: Box::new(self.bind(*right)?.plan),
-                },
-                aggregate_input: None,
-            }),
+            LogicalPlan::Union { inputs, all } => {
+                let inputs = inputs
+                    .into_iter()
+                    .map(|input| {
+                        let input = self.bind(input, outer)?;
+                        uncorrelated(&input, "UNION")?;
+                        Ok(input.plan)
+                    })
+                    .collect::<Result<_>>()?;
+                Ok(Bound::plain(LogicalPlan::Union { inputs, all }))
+            }
+            LogicalPlan::Intersect { left, right } => {
+                let left = self.bind(*left, outer)?;
+                let right = self.bind(*right, outer)?;
+                uncorrelated(&left, "INTERSECT")?;
+                uncorrelated(&right, "INTERSECT")?;
+                Ok(Bound::plain(LogicalPlan::Intersect {
+                    left: Box::new(left.plan),
+                    right: Box::new(right.plan),
+                }))
+            }
+            LogicalPlan::Except { left, right } => {
+                let left = self.bind(*left, outer)?;
+                let right = self.bind(*right, outer)?;
+                uncorrelated(&left, "EXCEPT")?;
+                uncorrelated(&right, "EXCEPT")?;
+                Ok(Bound::plain(LogicalPlan::Except {
+                    left: Box::new(left.plan),
+                    right: Box::new(right.plan),
+                }))
+            }
             LogicalPlan::Join {
                 left,
                 right,
@@ -270,21 +371,47 @@ impl Binder<'_> {
                 condition,
                 distribution,
             } => {
-                let left = self.bind(*left)?.plan;
-                let right = self.bind(*right)?.plan;
+                let left = self.bind(*left, outer)?;
+                // The right input may reference the left (a scalar subquery
+                // correlated with the query it sits in): it binds with the
+                // left's scope as its innermost enclosing scope, and such
+                // correlations become this join's keys.
+                let mut right_outer = outer.to_vec();
+                right_outer.push(self.scope_of(&left.plan));
+                let right = self.bind(*right, &right_outer)?;
+                let (lateral, deeper): (Vec<_>, Vec<_>) = right
+                    .correlations
+                    .into_iter()
+                    .partition(|correlation| correlation.depth == outer.len());
+                let mut correlations = left.correlations;
+                correlations.extend(deeper);
+                let condition = conjoin(
+                    condition
+                        .into_iter()
+                        .chain(lateral.into_iter().map(|correlation| Expr::BinaryOp {
+                            left: Box::new(Expr::Column(correlation.outer)),
+                            op: BinaryOp::Eq,
+                            right: Box::new(Expr::Column(correlation.inner)),
+                        }))
+                        .collect(),
+                );
                 let Some(condition) = condition else {
                     return Ok(Bound {
                         plan: LogicalPlan::Join {
-                            left: Box::new(left),
-                            right: Box::new(right),
+                            left: Box::new(left.plan),
+                            right: Box::new(right.plan),
                             join_type,
                             condition: None,
                             distribution,
                         },
                         aggregate_input: None,
+                        correlations,
                     });
                 };
-                self.bind_on(left, right, join_type, condition, distribution)
+                let mut bound =
+                    self.bind_on(left.plan, right.plan, join_type, condition, distribution)?;
+                bound.correlations = correlations;
+                Ok(bound)
             }
             LogicalPlan::SemiJoin {
                 left,
@@ -292,8 +419,8 @@ impl Binder<'_> {
                 left_key,
                 right_key,
             } => {
-                let (left, right, left_key, right_key) =
-                    self.bind_semi_join(*left, *right, left_key, right_key)?;
+                let (left, right, left_key, right_key, correlations) =
+                    self.bind_semi_join(*left, *right, left_key, right_key, false, outer)?;
                 Ok(Bound {
                     plan: LogicalPlan::SemiJoin {
                         left,
@@ -302,6 +429,7 @@ impl Binder<'_> {
                         right_key,
                     },
                     aggregate_input: None,
+                    correlations,
                 })
             }
             LogicalPlan::AntiJoin {
@@ -310,8 +438,8 @@ impl Binder<'_> {
                 left_key,
                 right_key,
             } => {
-                let (left, right, left_key, right_key) =
-                    self.bind_semi_join(*left, *right, left_key, right_key)?;
+                let (left, right, left_key, right_key, correlations) =
+                    self.bind_semi_join(*left, *right, left_key, right_key, true, outer)?;
                 Ok(Bound {
                     plan: LogicalPlan::AntiJoin {
                         left,
@@ -320,9 +448,62 @@ impl Binder<'_> {
                         right_key,
                     },
                     aggregate_input: None,
+                    correlations,
                 })
             }
         }
+    }
+
+    fn fresh_name(&self) -> String {
+        let ordinal = self.names.get();
+        self.names.set(ordinal + 1);
+        format!("__kaveon_corr_{ordinal}")
+    }
+
+    /// The correlation a WHERE conjunct of a subquery expresses, if it
+    /// references the enclosing query: an equality between one column of
+    /// the subquery and one of the enclosing query. A conjunct that
+    /// references the enclosing query any other way is refused.
+    fn correlation(
+        &self,
+        conjunct: &Expr,
+        scope: &Scope,
+        outer: &[Scope],
+    ) -> Result<Option<Correlation>> {
+        // An aggregate's argument (HAVING sum(x) > 300) is the aggregate's
+        // input, not a reference the enclosing query could satisfy.
+        let mut references = Vec::new();
+        free_column_references(conjunct, &mut references);
+        let enclosing = |reference: &str| {
+            matches!(scope.resolve(reference), Resolution::Unresolved)
+                .then(|| outer.iter().rposition(|scope| scope.holds(reference)))
+                .flatten()
+        };
+        if !references
+            .iter()
+            .any(|reference| enclosing(reference).is_some())
+        {
+            return Ok(None);
+        }
+        if let Expr::BinaryOp {
+            left,
+            op: BinaryOp::Eq,
+            right,
+        } = conjunct
+            && let (Expr::Column(a), Expr::Column(b)) = (left.as_ref(), right.as_ref())
+        {
+            let (inner, outer_column) = if scope.holds(a) { (a, b) } else { (b, a) };
+            if let (true, Some(depth)) = (scope.holds(inner), enclosing(outer_column)) {
+                return Ok(Some(Correlation {
+                    inner: self.bind_name(inner, scope)?,
+                    outer: outer_column.clone(),
+                    depth,
+                }));
+            }
+        }
+        Err(KaveonError::Sql(format!(
+            "a correlated predicate must be an equality between a column of the subquery and a column of the enclosing query: {conjunct:?}"
+        )))
     }
 
     /// An explicit ON condition: equalities between the two sides are the
@@ -396,31 +577,94 @@ impl Binder<'_> {
         };
         let scope = self.scope_of(&plan);
         let plan = self.filtered(plan, above, &scope, None)?;
-        Ok(Bound {
-            plan,
-            aggregate_input: None,
-        })
+        Ok(Bound::plain(plan))
     }
 
+    /// IN and EXISTS subqueries. An EXISTS correlated on one equality
+    /// becomes the semi (or anti) join's key: the subquery projects its
+    /// side of the equality, and the enclosing query's side is the probe
+    /// key. NOT EXISTS matches nothing on a NULL key, so the anti join's
+    /// build side drops NULL keys first (NOT IN, which the same operator
+    /// serves, keeps them: a NULL there empties the result).
+    #[allow(clippy::type_complexity)]
     fn bind_semi_join(
         &self,
         left: LogicalPlan,
         right: LogicalPlan,
         left_key: Expr,
         right_key: Expr,
-    ) -> Result<(Box<LogicalPlan>, Box<LogicalPlan>, Expr, Expr)> {
-        let left = self.bind(left)?.plan;
-        let right = self.bind(right)?.plan;
-        let left_key = self.bind_expr(left_key, &self.scope_of(&left), None)?;
-        // The subquery side binds its key by position (`*`) or not at all
-        // (a literal marks an uncorrelated EXISTS).
-        let right_key = match right_key {
-            Expr::Column(name) if name != "*" => {
-                self.bind_expr(Expr::Column(name), &self.scope_of(&right), None)?
-            }
-            other => other,
+        anti: bool,
+        outer: &[Scope],
+    ) -> Result<(
+        Box<LogicalPlan>,
+        Box<LogicalPlan>,
+        Expr,
+        Expr,
+        Vec<Correlation>,
+    )> {
+        let left = self.bind(left, outer)?;
+        let left_scope = self.scope_of(&left.plan);
+        let mut right_outer = outer.to_vec();
+        right_outer.push(left_scope.clone());
+        let right = self.bind(right, &right_outer)?;
+        let (lateral, deeper): (Vec<_>, Vec<_>) = right
+            .correlations
+            .into_iter()
+            .partition(|correlation| correlation.depth == outer.len());
+        if !deeper.is_empty() {
+            return Err(KaveonError::Sql(
+                "a correlation reaching past an IN or EXISTS subquery is not supported".into(),
+            ));
+        }
+        if lateral.is_empty() {
+            let left_key = self.bind_expr(left_key, &left_scope, None)?;
+            // The subquery side binds its key by position (`*`) or not at
+            // all (a literal marks an uncorrelated EXISTS).
+            let right_key = match right_key {
+                Expr::Column(name) if name != "*" => {
+                    self.bind_expr(Expr::Column(name), &self.scope_of(&right.plan), None)?
+                }
+                other => other,
+            };
+            return Ok((
+                Box::new(left.plan),
+                Box::new(right.plan),
+                left_key,
+                right_key,
+                left.correlations,
+            ));
+        }
+        if !matches!(right_key, Expr::Literal(_)) {
+            return Err(KaveonError::Sql(
+                "a correlated IN subquery is not supported".into(),
+            ));
+        }
+        let [correlation] = lateral.as_slice() else {
+            return Err(KaveonError::Sql(format!(
+                "EXISTS correlated on more than one column is not supported ({} equalities)",
+                lateral.len()
+            )));
         };
-        Ok((Box::new(left), Box::new(right), left_key, right_key))
+        let key = Expr::Column(correlation.inner.clone());
+        let mut subquery = right.plan;
+        if anti {
+            subquery = LogicalPlan::Filter {
+                input: Box::new(subquery),
+                predicate: Expr::IsNotNull(Box::new(key.clone())),
+            };
+        }
+        let subquery = LogicalPlan::Project {
+            input: Box::new(subquery),
+            columns: vec![key],
+        };
+        let left_key = Expr::Column(self.bind_name(&correlation.outer, &left_scope)?);
+        Ok((
+            Box::new(left.plan),
+            Box::new(subquery),
+            left_key,
+            Expr::Column("*".into()),
+            left.correlations,
+        ))
     }
 
     /// Route the conjuncts of a filter into the join tree below it. What
@@ -910,6 +1154,19 @@ fn placement(conjunct: &Expr, left: &Scope, right: &Scope) -> Placement {
     Placement::Above
 }
 
+/// The column references of `expr` outside aggregate function arguments.
+fn free_column_references(expr: &Expr, into: &mut Vec<String>) {
+    match expr {
+        Expr::Function { name, .. } if is_aggregate(name) => {}
+        Expr::BinaryOp { left, right, .. } | Expr::And(left, right) | Expr::Or(left, right) => {
+            free_column_references(left, into);
+            free_column_references(right, into);
+        }
+        Expr::Not(inner) | Expr::Alias { expr: inner, .. } => free_column_references(inner, into),
+        other => column_references(other, into),
+    }
+}
+
 fn column_references(expr: &Expr, into: &mut Vec<String>) {
     match expr {
         Expr::Column(name) => {
@@ -992,6 +1249,16 @@ fn relation_qualifier(plan: &LogicalPlan) -> Option<&str> {
         ),
         LogicalPlan::Filter { input, .. } => relation_qualifier(input),
         _ => None,
+    }
+}
+
+fn uncorrelated(bound: &Bound, clause: &str) -> Result<()> {
+    if bound.correlations.is_empty() {
+        Ok(())
+    } else {
+        Err(KaveonError::Sql(format!(
+            "{clause} inside a correlated subquery is not supported"
+        )))
     }
 }
 
@@ -1392,6 +1659,197 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn a_correlated_exists_is_a_semi_join_on_the_correlation() {
+        let plan = bound(
+            "SELECT o_orderkey FROM orders WHERE o_orderdate > 1 AND EXISTS (SELECT * FROM lineitem WHERE l_orderkey = o_orderkey AND l_quantity > 1)",
+        );
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("projection");
+        };
+        let LogicalPlan::SemiJoin {
+            left,
+            right,
+            left_key,
+            right_key,
+        } = *input
+        else {
+            panic!("semi join at the top; the WHERE went into its left input");
+        };
+        assert_eq!(left_key, column("o_orderkey"));
+        assert_eq!(right_key, column("*"));
+        let LogicalPlan::Filter { input, .. } = *left else {
+            panic!("orders filtered by the rest of the WHERE");
+        };
+        assert!(matches!(*input, LogicalPlan::Scan { .. }));
+        let LogicalPlan::Project { input, columns } = *right else {
+            panic!("the subquery projects its side of the correlation");
+        };
+        assert_eq!(columns, vec![column("l_orderkey")]);
+        let LogicalPlan::Filter { predicate, input } = *input else {
+            panic!("the subquery keeps its own predicate");
+        };
+        assert!(matches!(
+            predicate,
+            Expr::BinaryOp {
+                op: BinaryOp::Gt,
+                ..
+            }
+        ));
+        assert!(matches!(*input, LogicalPlan::Scan { .. }));
+        // NOT EXISTS drops NULL keys on the build side.
+        let plan = bound(
+            "SELECT c_custkey FROM customer WHERE NOT EXISTS (SELECT * FROM orders WHERE o_custkey = c_custkey)",
+        );
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("projection");
+        };
+        let LogicalPlan::AntiJoin {
+            right, left_key, ..
+        } = *input
+        else {
+            panic!("anti join");
+        };
+        assert_eq!(left_key, column("c_custkey"));
+        let LogicalPlan::Project { input, columns } = *right else {
+            panic!("key projection");
+        };
+        assert_eq!(columns, vec![column("o_custkey")]);
+        let LogicalPlan::Filter { predicate, .. } = *input else {
+            panic!("NULL keys filtered");
+        };
+        assert_eq!(predicate, Expr::IsNotNull(Box::new(column("o_custkey"))));
+    }
+
+    #[test]
+    fn a_correlated_scalar_aggregate_is_a_join_on_the_grouped_aggregate() {
+        let plan = bound(
+            "SELECT o_orderkey FROM orders, customer WHERE c_custkey = o_custkey AND o_custkey > (SELECT avg(l_quantity) FROM lineitem WHERE l_orderkey = o_orderkey AND l_shipdate > 1)",
+        );
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("projection");
+        };
+        let LogicalPlan::Filter { input, predicate } = *input else {
+            panic!("the comparison stays above the join");
+        };
+        assert_eq!(
+            predicate,
+            Expr::BinaryOp {
+                left: Box::new(column("orders.o_custkey")),
+                op: BinaryOp::Gt,
+                right: Box::new(column("__kaveon_scalar_0")),
+            }
+        );
+        let LogicalPlan::Join {
+            left,
+            right,
+            join_type,
+            condition,
+            ..
+        } = *input
+        else {
+            panic!("join with the subquery");
+        };
+        assert_eq!(join_type, JoinType::Inner);
+        assert_eq!(
+            condition,
+            Some(equal("orders.o_orderkey", "__kaveon_corr_0"))
+        );
+        assert!(matches!(
+            *left,
+            LogicalPlan::Join {
+                join_type: JoinType::Inner,
+                ..
+            }
+        ));
+        let LogicalPlan::Project { input, columns } = *right else {
+            panic!("the subquery projects its value and its key");
+        };
+        assert!(matches!(&columns[0], Expr::Alias { name, .. } if name == "__kaveon_scalar_0"));
+        assert_eq!(
+            columns[1],
+            Expr::Alias {
+                expr: Box::new(column("l_orderkey")),
+                name: "__kaveon_corr_0".into()
+            }
+        );
+        let LogicalPlan::Aggregate {
+            group_by, input, ..
+        } = *input
+        else {
+            panic!("aggregate grouped by the correlation");
+        };
+        assert_eq!(group_by, vec![column("l_orderkey")]);
+        let LogicalPlan::Filter { predicate, .. } = *input else {
+            panic!("the subquery's own predicate stays");
+        };
+        assert!(matches!(
+            predicate,
+            Expr::BinaryOp {
+                op: BinaryOp::Gt,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_having_aggregate_inside_a_subquery_is_not_a_correlation() {
+        let plan = bound(
+            "SELECT o_orderkey FROM orders, lineitem WHERE o_orderkey = l_orderkey AND o_orderkey IN (SELECT l_orderkey FROM lineitem GROUP BY l_orderkey HAVING sum(l_quantity) > 300)",
+        );
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("projection");
+        };
+        let LogicalPlan::SemiJoin { right, .. } = *input else {
+            panic!("semi join");
+        };
+        let LogicalPlan::Project { input, .. } = *right else {
+            panic!("subquery projection");
+        };
+        let LogicalPlan::Filter { input, predicate } = *input else {
+            panic!("the HAVING stays in the subquery");
+        };
+        assert!(matches!(
+            predicate,
+            Expr::BinaryOp {
+                op: BinaryOp::Gt,
+                ..
+            }
+        ));
+        assert!(matches!(*input, LogicalPlan::Aggregate { .. }));
+    }
+
+    #[test]
+    fn correlations_the_join_cannot_carry_are_refused_with_their_reason() {
+        for (sql, reason) in [
+            (
+                "SELECT o_orderkey FROM orders WHERE EXISTS (SELECT * FROM lineitem WHERE l_orderkey <> o_orderkey)",
+                "must be an equality",
+            ),
+            (
+                "SELECT o_orderkey FROM orders WHERE o_custkey > (SELECT count(*) FROM lineitem WHERE l_orderkey = o_orderkey)",
+                "COUNT in a correlated subquery",
+            ),
+            (
+                "SELECT o_orderkey FROM orders WHERE EXISTS (SELECT * FROM lineitem WHERE l_orderkey = o_orderkey LIMIT 1)",
+                "LIMIT inside a correlated subquery",
+            ),
+            (
+                "SELECT o_orderkey FROM orders WHERE EXISTS (SELECT * FROM lineitem WHERE l_orderkey = o_orderkey AND l_quantity = o_custkey)",
+                "more than one column",
+            ),
+            (
+                "SELECT o_orderkey FROM orders WHERE o_custkey IN (SELECT l_quantity FROM lineitem WHERE l_orderkey = o_orderkey)",
+                "correlated IN subquery",
+            ),
+        ] {
+            let mut plan = sql_to_logical_plan(sql).unwrap();
+            qualify(&mut plan);
+            let error = bind(plan, &catalog()).unwrap_err().to_string();
+            assert!(error.contains(reason), "{sql}: {error}");
+        }
     }
 
     #[test]

@@ -30,32 +30,10 @@ const QUERIES: &str = include_str!("../../../../docs/qualification/tpch/trino-qu
 /// Statements that do not run today, with the reason. A statement listed
 /// here must still fail at some stage; one that starts working must be
 /// removed from the list.
-const KNOWN_UNSUPPORTED: &[(&str, &str)] = &[
-    (
-        "q2",
-        "execute: the scalar subquery is correlated (p_partkey = ps_partkey) and is planned uncorrelated; column p_partkey not found in the subquery",
-    ),
-    (
-        "q4",
-        "plan: correlated EXISTS (l_orderkey = o_orderkey) is planned as an uncorrelated semi join; lineitem has no column o_orderkey",
-    ),
-    (
-        "q17",
-        "plan: the scalar subquery is correlated (l_partkey = p_partkey) and is planned uncorrelated; lineitem has no column p_partkey",
-    ),
-    (
-        "q20",
-        "plan: the scalar subquery is correlated (l_partkey = ps_partkey, l_suppkey = ps_suppkey) and is planned uncorrelated; lineitem has no column ps_partkey",
-    ),
-    (
-        "q21",
-        "parse: correlated subqueries are unsupported: l1.l_orderkey",
-    ),
-    (
-        "q22",
-        "plan: correlated NOT EXISTS (o_custkey = c_custkey) is planned as an uncorrelated anti join; orders has no column c_acctbal",
-    ),
-];
+const KNOWN_UNSUPPORTED: &[(&str, &str)] = &[(
+    "q21",
+    "parse: correlated subqueries are unsupported: l1.l_orderkey (the SQL layer refuses a qualified outer reference before the binder; behind it, l2.l_suppkey <> l1.l_suppkey is a correlated non-equality, which the single-key semi join cannot carry)",
+)];
 
 /// Statements without a distributed plan today, with the reason.
 const KNOWN_NO_DISTRIBUTED_PLAN: &[(&str, &str)] = &[];
