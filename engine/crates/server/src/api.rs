@@ -2,6 +2,7 @@ use crate::AppState;
 use crate::cluster::{NodeInfo, NodeRole};
 use crate::lifecycle::{CancellationToken, TaskClaim, TaskOutcome, TaskOwner};
 use crate::security::Identity;
+use crate::settings::QuerySettings;
 use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
@@ -89,6 +90,9 @@ struct QueryRecord {
     rows_are_preview: bool,
     scan_metrics_complete: bool,
     execution: ExecutionPlacement,
+    /// What the statement set for itself; absent when it set nothing.
+    #[serde(skip_serializing_if = "QuerySettings::is_default")]
+    settings: QuerySettings,
     id: String,
     sql: String,
     state: QueryState,
@@ -213,6 +217,8 @@ struct QueryContext {
     client_tags: Vec<String>,
     result_delivery: Option<String>,
     catalog_snapshot_id: String,
+    #[serde(skip_serializing)]
+    settings: QuerySettings,
 }
 
 #[derive(Clone, Serialize)]
@@ -376,6 +382,9 @@ struct StatementRequest {
     client_tags: Vec<String>,
     #[serde(default)]
     result_delivery: Option<String>,
+    /// Per-request settings; see `crate::settings`.
+    #[serde(default)]
+    settings: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -405,6 +414,10 @@ struct TaskRequest {
     exchange_inputs: Vec<ExchangeLocationRequest>,
     #[serde(default)]
     exchange_outputs: Vec<ExchangeLocationRequest>,
+    /// The statement's settings: the task is admitted with the statement's
+    /// memory limit and runs at its parallelism.
+    #[serde(default)]
+    settings: QuerySettings,
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
@@ -564,7 +577,7 @@ async fn execute_owned_task(
             "{}:{}:{}:{}",
             req.query_id, req.stage_id, req.partition_index, req.attempt
         ),
-        state.config.query_memory_limit_bytes,
+        req.settings.query_memory_limit_bytes(&state.config),
         &cancellation,
     )
     .await
@@ -588,6 +601,14 @@ async fn execute_owned_task(
         let message = error.to_string();
         let _ = owner.complete(TaskOutcome::Failed(Arc::from(message.clone())));
         return lifecycle_error_response(message);
+    }
+    if let Some(threads) = req.settings.local_parallelism
+        && let Err(error) =
+            kaveon_exec::local_parallel::set_query_parallelism(admitted.pool(), threads)
+    {
+        let message = error.to_string();
+        let _ = owner.complete(TaskOutcome::Failed(Arc::from(message.clone())));
+        return task_failure_response(StatusCode::BAD_REQUEST, &message);
     }
     let started = Instant::now();
     if let Some(fragment) = req.fragment.as_ref() {
@@ -1485,6 +1506,20 @@ async fn submit_statement(
         )
             .into_response();
     }
+    // Settings first: a refused setting is a 400 before any permit is held.
+    let (settings, sql, time_zone) = match request_settings(&req, &state.config) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": error.to_string(),
+                    "code": "INVALID_SETTING"
+                })),
+            )
+                .into_response();
+        }
+    };
     prune_query_history().await;
     let paged = req.result_delivery.as_deref() == Some("paged");
     let _principal_permit = match state
@@ -1503,10 +1538,10 @@ async fn submit_statement(
         Err(status) => return status.into_response(),
     };
     let query_id = Uuid::new_v4().to_string();
-    let query_memory = match state
-        .memory_admission
-        .admit(query_id.clone(), state.config.query_memory_limit_bytes)
-    {
+    let query_memory = match state.memory_admission.admit(
+        query_id.clone(),
+        settings.query_memory_limit_bytes(&state.config),
+    ) {
         Ok(memory) => memory,
         Err(error) => {
             return (
@@ -1519,7 +1554,6 @@ async fn submit_statement(
                 .into_response();
         }
     };
-    let sql = req.query.trim().trim_end_matches(';').to_owned();
     if let Some((status, body)) =
         transaction_api_guidance(&sql, state.product_transactions.catalog().is_some())
     {
@@ -1594,11 +1628,12 @@ async fn submit_statement(
             client: req.client,
             catalog: catalog_name.to_owned(),
             schema: schema_name.to_owned(),
-            time_zone: req.time_zone,
+            time_zone,
             client_address: None,
             client_tags: req.client_tags,
             result_delivery: req.result_delivery,
             catalog_snapshot_id,
+            settings: settings.clone(),
         }
     };
     let cancellation = match state.lifecycle.cancellations.token(&query_id) {
@@ -1616,6 +1651,12 @@ async fn submit_statement(
     {
         return lifecycle_error_response(error.to_string());
     }
+    if let Some(threads) = settings.local_parallelism
+        && let Err(error) =
+            kaveon_exec::local_parallel::set_query_parallelism(query_memory.pool(), threads)
+    {
+        return lifecycle_error_response(error.to_string());
+    }
 
     QUERY_STORE.write().await.queries.insert(
         query_id.clone(),
@@ -1623,6 +1664,7 @@ async fn submit_statement(
             rows_are_preview: true,
             scan_metrics_complete: false,
             execution: ExecutionPlacement::pending(),
+            settings: settings.clone(),
             id: query_id.clone(),
             sql: sql.clone(),
             state: QueryState::Running,
@@ -1732,6 +1774,7 @@ async fn submit_statement(
                     rows_are_preview: true,
                     scan_metrics_complete,
                     execution: ExecutionPlacement::distributed("fragments"),
+                    settings: settings.clone(),
                     id: query_id.clone(),
                     sql,
                     state: QueryState::Finished,
@@ -1840,6 +1883,7 @@ async fn submit_statement(
                     rows_are_preview: true,
                     scan_metrics_complete,
                     execution: ExecutionPlacement::distributed("aggregate"),
+                    settings: settings.clone(),
                     id: query_id.clone(),
                     sql,
                     state: QueryState::Finished,
@@ -1941,6 +1985,7 @@ async fn submit_statement(
                     rows_are_preview: true,
                     scan_metrics_complete,
                     execution: ExecutionPlacement::distributed("top_n"),
+                    settings: settings.clone(),
                     id: query_id.clone(),
                     sql,
                     state: QueryState::Finished,
@@ -2116,6 +2161,7 @@ async fn submit_statement(
                 rows_are_preview: true,
                 scan_metrics_complete: true,
                 execution: ExecutionPlacement::coordinator(placement_reason.clone()),
+                settings: settings.clone(),
                 id: query_id.clone(),
                 sql: sql.clone(),
                 state: QueryState::Failed,
@@ -2202,6 +2248,7 @@ async fn submit_statement(
         rows_are_preview: true,
         scan_metrics_complete: true,
         execution: ExecutionPlacement::coordinator(placement_reason.clone()),
+        settings: settings.clone(),
         id: query_id.clone(),
         sql,
         state: QueryState::Finished,
@@ -2243,6 +2290,29 @@ async fn submit_statement(
     };
 
     Json(resp).into_response()
+}
+
+/// The statement's settings, its SQL with any `SET SESSION` prefix removed,
+/// and its time zone (the request's field, or the prefix's assignment; both
+/// must agree when both are given).
+fn request_settings(
+    req: &StatementRequest,
+    config: &crate::config::ServerConfig,
+) -> Result<(QuerySettings, String, Option<String>), crate::settings::SettingsError> {
+    let prefix = crate::settings::split_session_prefix(&req.query)?;
+    let mut settings = req.settings.clone().unwrap_or_default();
+    let session_time_zone = crate::settings::merge_session_prefix(&mut settings, &prefix)?;
+    let time_zone = match (&req.time_zone, session_time_zone) {
+        (Some(field), Some(session)) if *field != session => {
+            return Err(crate::settings::SettingsError(
+                "time_zone is given twice with different values".into(),
+            ));
+        }
+        (field, session) => session.or_else(|| field.clone()),
+    };
+    let settings = QuerySettings::from_request(&settings, config)?;
+    let sql = prefix.statement.trim().trim_end_matches(';').to_owned();
+    Ok((settings, sql, time_zone))
 }
 
 fn parse_analyze_table(sql: &str) -> Option<String> {
@@ -4461,6 +4531,7 @@ fn task_request_from_dispatch(dispatch: &TaskDispatch, context: &QueryContext) -
         partition_index: dispatch.assignment.task_id.partition,
         partition_count: dispatch.execution_partition.count,
         fragment: Some(dispatch.fragment.clone()),
+        settings: context.settings.clone(),
         execution_partition: Some(ExecutionPartitionRequest {
             index: dispatch.execution_partition.index,
             count: dispatch.execution_partition.count,
@@ -4594,6 +4665,7 @@ async fn execute_distributed_top_n(
         let catalog = context.catalog.clone();
         let schema_name = context.schema.clone();
         let catalog_snapshot_id = context.catalog_snapshot_id.clone();
+        let settings = context.settings.clone();
         tasks.spawn(async move {
             let mut failures = Vec::new();
             for (attempt, worker) in candidates {
@@ -4611,6 +4683,7 @@ async fn execute_distributed_top_n(
                     execution_partition: None,
                     exchange_inputs: vec![],
                     exchange_outputs: vec![],
+                    settings: settings.clone(),
                 };
                 let task_id = kaveon_core::TaskId {
                     query_id: request.query_id.clone(),
@@ -4768,6 +4841,7 @@ async fn execute_distributed_aggregate(
         let catalog = context.catalog.clone();
         let schema_name = context.schema.clone();
         let catalog_snapshot_id = context.catalog_snapshot_id.clone();
+        let settings = context.settings.clone();
         tasks.spawn(async move {
             let mut failures = Vec::new();
             for (attempt, worker) in candidates {
@@ -4785,6 +4859,7 @@ async fn execute_distributed_aggregate(
                     execution_partition: None,
                     exchange_inputs: vec![],
                     exchange_outputs: vec![],
+                    settings: settings.clone(),
                 };
                 let task_id = kaveon_core::TaskId {
                     query_id: request.query_id.clone(),
@@ -5435,6 +5510,117 @@ async fn finish_failed_query(
 
 #[cfg(test)]
 mod tests {
+    fn statement_request(query: &str, settings: serde_json::Value) -> super::StatementRequest {
+        super::StatementRequest {
+            query: query.into(),
+            catalog: None,
+            schema: None,
+            source: None,
+            client: None,
+            user: None,
+            time_zone: None,
+            client_tags: vec![],
+            result_delivery: None,
+            settings: settings.as_object().cloned(),
+        }
+    }
+
+    #[test]
+    fn request_settings_fold_the_object_and_the_set_session_prefix() {
+        let config = crate::config::ServerConfig {
+            query_memory_limit_bytes: 1 << 30,
+            ..crate::config::ServerConfig::default()
+        };
+        let request = statement_request(
+            "SET SESSION result_cache = false; SET SESSION time_zone = 'UTC'; SELECT 1;",
+            serde_json::json!({"query_memory_limit_bytes": 1 << 20}),
+        );
+        let (settings, sql, time_zone) = super::request_settings(&request, &config).unwrap();
+        assert_eq!(sql, "SELECT 1");
+        assert_eq!(time_zone.as_deref(), Some("UTC"));
+        assert_eq!(settings.result_cache, Some(false));
+        assert_eq!(settings.query_memory_limit_bytes, Some(1 << 20));
+        assert_eq!(settings.query_memory_limit_bytes(&config), 1 << 20);
+
+        // The record serialises the settings only when the statement set some.
+        let plain = statement_request("SELECT 1", serde_json::Value::Null);
+        let (settings, sql, time_zone) = super::request_settings(&plain, &config).unwrap();
+        assert!(settings.is_default());
+        assert_eq!(sql, "SELECT 1");
+        assert!(time_zone.is_none());
+
+        let unknown = statement_request("SELECT 1", serde_json::json!({"spill_bytes": 1}));
+        let error = super::request_settings(&unknown, &config).unwrap_err();
+        assert_eq!(error.0, "unknown setting 'spill_bytes'");
+
+        let raised = statement_request(
+            "SELECT 1",
+            serde_json::json!({"query_memory_limit_bytes": (1u64 << 30) + 1}),
+        );
+        assert!(super::request_settings(&raised, &config).is_err());
+
+        let mut conflicting = statement_request(
+            "SET SESSION time_zone = 'UTC'; SELECT 1",
+            serde_json::Value::Null,
+        );
+        conflicting.time_zone = Some("Europe/Dublin".into());
+        let error = super::request_settings(&conflicting, &config).unwrap_err();
+        assert!(error.0.contains("time_zone"), "{error}");
+
+        let alone = statement_request("SET SESSION result_cache = false", serde_json::Value::Null);
+        let error = super::request_settings(&alone, &config).unwrap_err();
+        assert!(error.0.contains("stateless"), "{error}");
+    }
+
+    #[test]
+    fn task_requests_carry_the_statement_settings_and_lower_the_worker_limit() {
+        let config = crate::config::ServerConfig {
+            query_memory_limit_bytes: 1 << 30,
+            ..crate::config::ServerConfig::default()
+        };
+        let settings = crate::settings::QuerySettings {
+            query_memory_limit_bytes: Some(1 << 20),
+            local_parallelism: Some(1),
+            result_cache: None,
+        };
+        let request = super::TaskRequest {
+            query_id: "query-settings".into(),
+            stage_id: 0,
+            attempt: 0,
+            query: String::new(),
+            catalog: "kaveon".into(),
+            schema: "default".into(),
+            catalog_snapshot_id: None,
+            partition_index: 0,
+            partition_count: 1,
+            fragment: None,
+            execution_partition: None,
+            exchange_inputs: vec![],
+            exchange_outputs: vec![],
+            settings,
+        };
+        let wire = serde_json::to_value(&request).unwrap();
+        assert_eq!(
+            wire["settings"],
+            serde_json::json!({"query_memory_limit_bytes": 1 << 20, "local_parallelism": 1})
+        );
+        let decoded: super::TaskRequest = serde_json::from_value(wire).unwrap();
+        assert_eq!(decoded.settings.query_memory_limit_bytes(&config), 1 << 20);
+        // An older coordinator sends no settings: the worker's own limit stands.
+        let legacy: super::TaskRequest = serde_json::from_value(serde_json::json!({
+            "query_id": "q", "stage_id": 0, "attempt": 0
+        }))
+        .unwrap();
+        assert!(legacy.settings.is_default());
+        assert_eq!(legacy.settings.query_memory_limit_bytes(&config), 1 << 30);
+        // A statement cannot raise the worker's limit through the task.
+        let raised = crate::settings::QuerySettings {
+            query_memory_limit_bytes: Some(1 << 40),
+            ..crate::settings::QuerySettings::default()
+        };
+        assert_eq!(raised.query_memory_limit_bytes(&config), 1 << 30);
+    }
+
     #[tokio::test]
     async fn exchange_releases_are_concurrent_and_bounded() {
         let active = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
@@ -5704,6 +5890,7 @@ mod tests {
             client_tags: vec![],
             result_delivery: None,
             catalog_snapshot_id: "sha256:catalog-one".into(),
+            settings: crate::settings::QuerySettings::default(),
         }
     }
 
@@ -6173,6 +6360,7 @@ mod tests {
             client_tags: Vec::new(),
             result_delivery: None,
             catalog_snapshot_id: String::new(),
+            settings: crate::settings::QuerySettings::default(),
         };
         let snapshot = kaveon_core::CatalogManager::new("kaveon", "default");
         let mut reason = None;
@@ -6258,6 +6446,7 @@ mod tests {
             execution_partition: None,
             exchange_inputs: vec![],
             exchange_outputs: vec![],
+            settings: crate::settings::QuerySettings::default(),
         };
 
         assert!(
@@ -6409,6 +6598,7 @@ mod tests {
             client_tags: vec![],
             result_delivery: None,
             catalog_snapshot_id: "sha256:test".into(),
+            settings: crate::settings::QuerySettings::default(),
         };
 
         let request = task_request_from_dispatch(&dispatch, &context);

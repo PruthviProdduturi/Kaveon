@@ -14,6 +14,7 @@ pub mod results;
 pub mod runtime;
 pub mod scheduler;
 pub mod security;
+pub mod settings;
 mod transaction_api;
 pub mod transport;
 mod ui;
