@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import s from "../../engine.module.css";
 import {
   EngineUnavailable, PlanNode, QueryRecord,
-  absoluteTime, bytes, clientLabel, fetchQuery, ms, ns, rate, us, userLabel,
+  absoluteTime, bytes, clientLabel, fetchQuery, inProgress, ms, ns, rate, us, userLabel,
 } from "../../lib";
 
 type Tab = "overview" | "plan" | "stages" | "results" | "raw";
@@ -44,7 +44,16 @@ function settingsSummary(q: QueryRecord): React.ReactNode {
   if (st.query_memory_limit_bytes != null) parts.push(`memory ${bytes(st.query_memory_limit_bytes)}`);
   if (st.local_parallelism != null) parts.push(`parallelism ${st.local_parallelism}`);
   if (st.result_cache != null) parts.push(st.result_cache ? "result cache on" : "result cache bypassed");
+  if (st.admission_wait_seconds != null) parts.push(st.admission_wait_seconds === 0 ? "no admission wait" : `admission wait ${st.admission_wait_seconds} s`);
   return parts.join(" · ");
+}
+
+/** The time between arrival and admission, as the Engine measured it; a statement admitted on arrival waited for nothing. */
+function admissionWait(q: QueryRecord) {
+  if (q.admission_wait_ms == null) return <span className={s.na}>Not recorded</span>;
+  if (q.state === "QUEUED") return <span className={s.na}>Waiting for memory</span>;
+  if (q.admission_wait_ms === 0) return <span className={s.na}>Admitted on arrival</span>;
+  return <>{ms(q.admission_wait_ms)}<span className={s.na}> queued for memory</span></>;
 }
 
 function Definitions({ rows }: { rows: [string, React.ReactNode][] }) {
@@ -102,11 +111,12 @@ export default function EngineQueryPage() {
   }, [queryId]);
 
   useEffect(() => { load(); }, [load]);
+  const live = q ? inProgress(q.state) : false;
   useEffect(() => {
-    if (q?.state !== "RUNNING") return;
+    if (!live) return;
     const t = setInterval(load, 3000);
     return () => clearInterval(t);
-  }, [q?.state, load]);
+  }, [live, load]);
 
   const copy = async (text: string, label: string) => {
     try { await navigator.clipboard.writeText(text); setCopied(`${label} copied`); }
@@ -115,7 +125,7 @@ export default function EngineQueryPage() {
   };
 
   const c = q?.context || {};
-  const stateClass = q?.state === "FAILED" ? s.pillFailed : q?.state === "RUNNING" ? s.pillRunning : "";
+  const stateClass = q?.state === "FAILED" ? s.pillFailed : q && inProgress(q.state) ? s.pillRunning : "";
 
   return (
     <div className={`page-shell ${s.root}`}>
@@ -186,6 +196,7 @@ export default function EngineQueryPage() {
                   <h2 className={s.panelTitle}>Execution</h2>
                   <Definitions rows={[
                     ["State", q.state], ["Elapsed", ms(q.elapsed_ms)],
+                    ["Admission wait", admissionWait(q)],
                     ["Rows in response", `${q.rows.length.toLocaleString()}${q.rows_are_preview ? " (preview)" : ""}`],
                     ["Columns", String(q.columns.length)],
                     ["Ran on", placement(q)],
@@ -284,7 +295,7 @@ export default function EngineQueryPage() {
                 <div className={s.state}>
                   <div className={s.stateTitle}>No result rows</div>
                   <div className={s.stateBody}>
-                    {q.state === "RUNNING" ? "Rows appear when execution completes." : q.state === "FAILED" ? "The query failed before producing a result." : "The query completed and returned no rows."}
+                    {q.state === "QUEUED" ? "The query is waiting for memory admission." : q.state === "RUNNING" ? "Rows appear when execution completes." : q.state === "FAILED" ? "The query failed before producing a result." : q.state === "CANCELED" ? "The query was canceled before producing a result." : "The query completed and returned no rows."}
                   </div>
                 </div>
               )}

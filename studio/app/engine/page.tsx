@@ -4,14 +4,17 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import s from "./engine.module.css";
 import {
-  Cluster, EngineUnavailable, QueryRecord, QueryState,
+  Cluster, EngineUnavailable, QueryRecord,
   absoluteTime, bytes, clientLabel, errorExcerpt, fetchCluster, fetchQueries,
-  firstLine, ms, relativeTime, shortUser, uptime, userLabel,
+  firstLine, inProgress, ms, relativeTime, shortUser, uptime, userLabel,
 } from "./lib";
 
 const POLL_MS = 5000;
 const MAX_SAMPLES = 48;
-type Filter = "ALL" | QueryState;
+type Filter = "ALL" | "RUNNING" | "FINISHED" | "FAILED";
+/** The filter a record falls under: queued counts as running, canceled as failed. */
+const bucket = (q: QueryRecord): Filter =>
+  inProgress(q.state) ? "RUNNING" : q.state === "FINISHED" ? "FINISHED" : "FAILED";
 
 function Sparkline({ values }: { values: number[] }) {
   if (values.length < 2) return <svg className={s.cellSpark} viewBox="0 0 100 26" preserveAspectRatio="none" aria-hidden="true" />;
@@ -66,14 +69,16 @@ export default function EngineConsolePage() {
 
   const counts = useMemo(() => {
     const c = { ALL: 0, RUNNING: 0, FINISHED: 0, FAILED: 0 } as Record<Filter, number>;
-    for (const q of queries || []) { c.ALL++; c[q.state]++; }
+    for (const q of queries || []) { c.ALL++; c[bucket(q)]++; }
     return c;
   }, [queries]);
+
+  const queued = cluster?.coordinator.admission?.queue_depth || 0;
 
   const visible = useMemo(() => {
     const term = search.trim().toLowerCase();
     return (queries || []).filter(q => {
-      if (filter !== "ALL" && q.state !== filter) return false;
+      if (filter !== "ALL" && bucket(q) !== filter) return false;
       if (!term) return true;
       return [q.id, q.sql, userLabel(q), clientLabel(q), q.context?.catalog, q.context?.schema, q.error]
         .some(v => (v || "").toLowerCase().includes(term));
@@ -130,7 +135,7 @@ export default function EngineConsolePage() {
           </div>
           <button type="button" className={`${s.cell} ${s.cellBtn}`} aria-pressed={filter === "ALL"} onClick={() => setFilter("ALL")}>
             <div className={s.cellLabel}>Queries in history</div>
-            <div className={s.cellValue}>{counts.ALL}<small>{counts.RUNNING ? `${counts.RUNNING} running` : "none running"}</small></div>
+            <div className={s.cellValue}>{counts.ALL}<small>{counts.RUNNING ? `${counts.RUNNING} running` : "none running"}{queued ? ` · ${queued} queued for memory` : ""}</small></div>
           </button>
           <button type="button" className={`${s.cell} ${s.cellBtn} ${s.cellFailed}`} aria-pressed={filter === "FAILED"} onClick={() => setFilter(f => f === "FAILED" ? "ALL" : "FAILED")}>
             <div className={s.cellLabel}>Failed</div>
@@ -173,7 +178,7 @@ export default function EngineConsolePage() {
                 <span /><span>Submitted</span><span>Query</span><span>Client · user</span><span>Duration</span><span>Output</span>
               </div>
               {visible.map(q => {
-                const failed = q.state === "FAILED", running = q.state === "RUNNING";
+                const failed = q.state === "FAILED", running = inProgress(q.state);
                 const pct = Math.max(2, Math.round(((q.elapsed_ms || 0) / slowest) * 100));
                 return (
                   <Link key={q.id} href={`/engine/queries/${encodeURIComponent(q.id)}`}
@@ -191,7 +196,7 @@ export default function EngineConsolePage() {
                       <span className={s.bar} aria-hidden="true"><span className={s.barFill} style={{ width: `${pct}%` }} /></span>
                     </span>
                     <span className={s.out}>
-                      {running ? <span>running</span>
+                      {running ? <span>{q.state === "QUEUED" ? "queued" : "running"}</span>
                         : failed ? <span>—</span>
                         : <>{q.rows.length.toLocaleString()} <span>{q.rows.length === 1 ? "row" : "rows"}</span>{q.stages.length ? <> <span>· {q.stages.length} {q.stages.length === 1 ? "stage" : "stages"}</span></> : null}</>}
                     </span>
