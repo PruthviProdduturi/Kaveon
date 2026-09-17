@@ -146,6 +146,17 @@ struct Correlation {
     depth: usize,
 }
 
+/// A bound semi or anti join: its inputs, keys and residual, and the
+/// correlations its left input carries upward.
+struct BoundSemiJoin {
+    left: Box<LogicalPlan>,
+    right: Box<LogicalPlan>,
+    left_key: Expr,
+    right_key: Expr,
+    residual: Option<Expr>,
+    correlations: Vec<Correlation>,
+}
+
 /// Where a conjunct of a filter over a join belongs.
 enum Placement {
     Left,
@@ -418,18 +429,20 @@ impl Binder<'_> {
                 right,
                 left_key,
                 right_key,
+                residual,
             } => {
-                let (left, right, left_key, right_key, correlations) =
-                    self.bind_semi_join(*left, *right, left_key, right_key, false, outer)?;
+                let join = self
+                    .bind_semi_join(*left, *right, left_key, right_key, residual, false, outer)?;
                 Ok(Bound {
                     plan: LogicalPlan::SemiJoin {
-                        left,
-                        right,
-                        left_key,
-                        right_key,
+                        left: join.left,
+                        right: join.right,
+                        left_key: join.left_key,
+                        right_key: join.right_key,
+                        residual: join.residual,
                     },
                     aggregate_input: None,
-                    correlations,
+                    correlations: join.correlations,
                 })
             }
             LogicalPlan::AntiJoin {
@@ -437,18 +450,20 @@ impl Binder<'_> {
                 right,
                 left_key,
                 right_key,
+                residual,
             } => {
-                let (left, right, left_key, right_key, correlations) =
-                    self.bind_semi_join(*left, *right, left_key, right_key, true, outer)?;
+                let join =
+                    self.bind_semi_join(*left, *right, left_key, right_key, residual, true, outer)?;
                 Ok(Bound {
                     plan: LogicalPlan::AntiJoin {
-                        left,
-                        right,
-                        left_key,
-                        right_key,
+                        left: join.left,
+                        right: join.right,
+                        left_key: join.left_key,
+                        right_key: join.right_key,
+                        residual: join.residual,
                     },
                     aggregate_input: None,
-                    correlations,
+                    correlations: join.correlations,
                 })
             }
         }
@@ -586,22 +601,17 @@ impl Binder<'_> {
     /// key. NOT EXISTS matches nothing on a NULL key, so the anti join's
     /// build side drops NULL keys first (NOT IN, which the same operator
     /// serves, keeps them: a NULL there empties the result).
-    #[allow(clippy::type_complexity)]
+    #[allow(clippy::too_many_arguments)]
     fn bind_semi_join(
         &self,
         left: LogicalPlan,
         right: LogicalPlan,
         left_key: Expr,
         right_key: Expr,
+        residual: Option<Expr>,
         anti: bool,
         outer: &[Scope],
-    ) -> Result<(
-        Box<LogicalPlan>,
-        Box<LogicalPlan>,
-        Expr,
-        Expr,
-        Vec<Correlation>,
-    )> {
+    ) -> Result<BoundSemiJoin> {
         let left = self.bind(left, outer)?;
         let left_scope = self.scope_of(&left.plan);
         let mut right_outer = outer.to_vec();
@@ -626,13 +636,14 @@ impl Binder<'_> {
                 }
                 other => other,
             };
-            return Ok((
-                Box::new(left.plan),
-                Box::new(right.plan),
+            return Ok(BoundSemiJoin {
+                left: Box::new(left.plan),
+                right: Box::new(right.plan),
                 left_key,
                 right_key,
-                left.correlations,
-            ));
+                residual,
+                correlations: left.correlations,
+            });
         }
         if !matches!(right_key, Expr::Literal(_)) {
             return Err(KaveonError::Sql(
@@ -658,13 +669,14 @@ impl Binder<'_> {
             columns: vec![key],
         };
         let left_key = Expr::Column(self.bind_name(&correlation.outer, &left_scope)?);
-        Ok((
-            Box::new(left.plan),
-            Box::new(subquery),
+        Ok(BoundSemiJoin {
+            left: Box::new(left.plan),
+            right: Box::new(subquery),
             left_key,
-            Expr::Column("*".into()),
-            left.correlations,
-        ))
+            right_key: Expr::Column("*".into()),
+            residual,
+            correlations: left.correlations,
+        })
     }
 
     /// Route the conjuncts of a filter into the join tree below it. What
@@ -731,12 +743,14 @@ impl Binder<'_> {
                 right,
                 left_key,
                 right_key,
+                residual,
             } => Ok((
                 LogicalPlan::SemiJoin {
                     left: Box::new(self.place(conjuncts, *left)?),
                     right,
                     left_key,
                     right_key,
+                    residual,
                 },
                 Vec::new(),
             )),
@@ -745,12 +759,14 @@ impl Binder<'_> {
                 right,
                 left_key,
                 right_key,
+                residual,
             } => Ok((
                 LogicalPlan::AntiJoin {
                     left: Box::new(self.place(conjuncts, *left)?),
                     right,
                     left_key,
                     right_key,
+                    residual,
                 },
                 Vec::new(),
             )),
@@ -1674,12 +1690,14 @@ mod tests {
             right,
             left_key,
             right_key,
+            residual,
         } = *input
         else {
             panic!("semi join at the top; the WHERE went into its left input");
         };
         assert_eq!(left_key, column("o_orderkey"));
         assert_eq!(right_key, column("*"));
+        assert_eq!(residual, None);
         let LogicalPlan::Filter { input, .. } = *left else {
             panic!("orders filtered by the rest of the WHERE");
         };

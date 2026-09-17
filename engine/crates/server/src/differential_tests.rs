@@ -473,8 +473,10 @@ fn the_differential_sweep_matches_across_parquet_encodings() {
     manager.register_catalog(Box::new(catalog));
 
     let run = |statement: &str, ordered: bool| -> Vec<String> {
-        let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(statement).unwrap();
+        let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan_for_binder(statement).unwrap();
         crate::planner::qualify_tables(&mut plan, "lake", "events");
+        let plan = kaveon_optim::binder::bind(plan, &manager)
+            .unwrap_or_else(|error| panic!("{statement}: {error}"));
         let plan = kaveon_optim::rules::push_filter_down(plan);
         let plan = kaveon_optim::rules::push_projection_down(plan);
         let pool = QueryMemoryPool::new("differential", 256 * 1024 * 1024).unwrap();
