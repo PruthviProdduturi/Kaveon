@@ -165,6 +165,13 @@ fn adaptive_limit(memory: &OperatorMemoryAccount) -> Result<u64> {
 /// one disk budget. This is not a process-wide or cluster-wide disk quota.
 /// Absence of the root preserves memory-only execution.
 pub fn spill_from_environment(memory: &QueryMemoryPool) -> Result<Option<(SpillManager, usize)>> {
+    // A spill already attached to the query (by an earlier operator, or a
+    // test) is the query's, whatever the environment says.
+    if let Some(resource) =
+        memory.shared_resource_if_present::<(SpillManager, usize)>("kaveon.exec.hash-spill.v1")?
+    {
+        return Ok(Some((resource.0.clone(), resource.1)));
+    }
     let Some(root) = std::env::var_os("KAVEON_HASH_SPILL_ROOT") else {
         return Ok(None);
     };

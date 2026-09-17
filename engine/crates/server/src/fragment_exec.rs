@@ -349,35 +349,7 @@ fn compile_node(
             group_by,
             aggregates,
         } => {
-            let group_by = group_by
-                .iter()
-                .map(|named| expression_column(&named.expression))
-                .collect::<Result<_>>()?;
-            let aggregates = aggregates
-                .iter()
-                .map(|aggregate| {
-                    let (function, distinct) = match aggregate.function {
-                        AggregateFunction::Count => (AggFunc::Count, false),
-                        AggregateFunction::CountDistinct => (AggFunc::Count, true),
-                        AggregateFunction::Sum => (AggFunc::Sum, false),
-                        AggregateFunction::Min => (AggFunc::Min, false),
-                        AggregateFunction::Max => (AggFunc::Max, false),
-                        AggregateFunction::Avg => (AggFunc::Avg, false),
-                    };
-                    let column = aggregate
-                        .argument
-                        .as_ref()
-                        .map(expression_column)
-                        .transpose()?
-                        .unwrap_or_else(|| "*".into());
-                    let expression = AggExpr::new(function, column).with_alias(&aggregate.output);
-                    Ok(if distinct {
-                        expression.distinct()
-                    } else {
-                        expression
-                    })
-                })
-                .collect::<Result<_>>()?;
+            let (group_by, aggregates) = aggregate_bindings(group_by, aggregates)?;
             let input = compile_input(
                 node,
                 0,
@@ -500,6 +472,7 @@ fn compile_node(
                         group_by,
                         aggregates,
                         memory,
+                        None,
                     )
                 }
             }
@@ -520,23 +493,104 @@ fn compile_node(
                 .map(|memory| memory.operator("fragment-sort"))
                 .transpose()?,
         ),
-        FragmentOperator::TopN { keys, limit } => kaveon_exec::partitioned::top_n_operator(
-            compile_input(
-                node,
-                0,
-                nodes,
-                catalog,
-                exchanges,
-                scan_partition,
-                memory,
-                scan_metrics,
-            )?,
-            sort_expressions(keys),
-            *limit,
-            memory
-                .map(|memory| memory.operator("fragment-topn"))
-                .transpose()?,
-        ),
+        FragmentOperator::TopN { keys, limit } => {
+            // A TopN straight over a final aggregate (through at most a
+            // projection) runs inside every merge thread: each thread keeps
+            // its own top rows and the merged groups never exist as a
+            // whole — `ORDER BY c DESC LIMIT 10` over eighteen million
+            // URLs holds ten rows a thread, not the eighteen million.
+            if let Some((final_node, project)) = final_under_top_n(node, nodes) {
+                let FragmentOperator::Aggregate {
+                    group_by,
+                    aggregates,
+                    ..
+                } = &final_node.operator
+                else {
+                    unreachable!("final_under_top_n returns an aggregate");
+                };
+                let (group_by, aggregates) = aggregate_bindings(group_by, aggregates)?;
+                let input = compile_input(
+                    final_node,
+                    0,
+                    nodes,
+                    catalog,
+                    exchanges,
+                    scan_partition,
+                    memory,
+                    scan_metrics,
+                )?;
+                let mut reopen = || {
+                    compile_input(
+                        final_node,
+                        0,
+                        nodes,
+                        catalog,
+                        exchanges,
+                        scan_partition,
+                        memory,
+                        &mut Vec::new(),
+                    )
+                };
+                let sort = sort_expressions(keys);
+                let limit = *limit;
+                let tail: FinalTail = Arc::new(move |operator, memory| {
+                    let operator = match &project {
+                        Some(expressions) => {
+                            let mut project = ProjectOperator::new(operator, expressions.clone())?;
+                            if let Some(memory) = memory {
+                                project = project.with_memory(memory.operator("fragment-project")?);
+                            }
+                            Box::new(project) as Box<dyn BatchOperator>
+                        }
+                        None => operator,
+                    };
+                    kaveon_exec::partitioned::top_n_operator(
+                        operator,
+                        sort.clone(),
+                        limit,
+                        memory
+                            .map(|memory| memory.operator("fragment-topn"))
+                            .transpose()?,
+                    )
+                });
+                let merged = compile_final_aggregate_replayable(
+                    input,
+                    &mut reopen,
+                    group_by,
+                    aggregates,
+                    memory,
+                    Some(Arc::clone(&tail)),
+                )?;
+                // The threads' top rows union to at most threads × limit
+                // rows; this TopN settles them (and is a no-op over a
+                // serial or replayed attempt that already applied it).
+                return kaveon_exec::partitioned::top_n_operator(
+                    merged,
+                    sort_expressions(keys),
+                    limit,
+                    memory
+                        .map(|memory| memory.operator("fragment-topn"))
+                        .transpose()?,
+                );
+            }
+            kaveon_exec::partitioned::top_n_operator(
+                compile_input(
+                    node,
+                    0,
+                    nodes,
+                    catalog,
+                    exchanges,
+                    scan_partition,
+                    memory,
+                    scan_metrics,
+                )?,
+                sort_expressions(keys),
+                *limit,
+                memory
+                    .map(|memory| memory.operator("fragment-topn"))
+                    .transpose()?,
+            )
+        }
         FragmentOperator::Limit { limit } => Ok(Box::new(LimitOperator::new(
             compile_input(
                 node,
@@ -819,38 +873,142 @@ fn should_partition_final_aggregate(group_by: &[String]) -> bool {
     !group_by.is_empty()
 }
 
+/// The grouped final aggregate a TopN node sits on, through at most one
+/// projection: the final's node and the projection's expressions.
+fn final_under_top_n<'a>(
+    top_n: &FragmentNode,
+    nodes: &HashMap<FragmentNodeId, &'a FragmentNode>,
+) -> Option<(&'a FragmentNode, Option<Vec<Expr>>)> {
+    let below = nodes.get(top_n.inputs.first()?)?;
+    let (candidate, project) = match &below.operator {
+        FragmentOperator::Project { expressions } => (
+            nodes.get(below.inputs.first()?)?,
+            Some(
+                expressions
+                    .iter()
+                    .map(|named| Expr::Alias {
+                        expr: Box::new(named.expression.clone()),
+                        name: named.name.clone(),
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+        ),
+        _ => (below, None),
+    };
+    match &candidate.operator {
+        FragmentOperator::Aggregate {
+            mode: AggregateMode::Final,
+            group_by,
+            ..
+        } if !group_by.is_empty() => Some((candidate, project)),
+        _ => None,
+    }
+}
+
+/// The group columns and aggregate expressions of an aggregate node.
+fn aggregate_bindings(
+    group_by: &[kaveon_core::NamedExpr],
+    aggregates: &[kaveon_core::AggregateSpec],
+) -> Result<(Vec<String>, Vec<AggExpr>)> {
+    let group_by = group_by
+        .iter()
+        .map(|named| expression_column(&named.expression))
+        .collect::<Result<_>>()?;
+    let aggregates = aggregates
+        .iter()
+        .map(|aggregate| {
+            let (function, distinct) = match aggregate.function {
+                AggregateFunction::Count => (AggFunc::Count, false),
+                AggregateFunction::CountDistinct => (AggFunc::Count, true),
+                AggregateFunction::Sum => (AggFunc::Sum, false),
+                AggregateFunction::Min => (AggFunc::Min, false),
+                AggregateFunction::Max => (AggFunc::Max, false),
+                AggregateFunction::Avg => (AggFunc::Avg, false),
+            };
+            let column = aggregate
+                .argument
+                .as_ref()
+                .map(expression_column)
+                .transpose()?
+                .unwrap_or_else(|| "*".into());
+            let expression = AggExpr::new(function, column).with_alias(&aggregate.output);
+            Ok(if distinct {
+                expression.distinct()
+            } else {
+                expression
+            })
+        })
+        .collect::<Result<_>>()?;
+    Ok((group_by, aggregates))
+}
+
+/// What runs over a final aggregate's output inside each merge thread —
+/// and over the serial or replayed attempt once.
+type FinalTail = Arc<
+    dyn Fn(Box<dyn BatchOperator>, Option<&QueryMemoryPool>) -> Result<Box<dyn BatchOperator>>
+        + Send
+        + Sync,
+>;
+
 /// The final aggregate over an input that can be opened again: the merge
 /// runs in memory — on several threads when the node has them, each
-/// holding the groups whose encoded key hashes to it — and its whole
-/// result is held before anything is emitted, so that a budget refusal
-/// leaves nothing half-delivered and the partitioned disk path can start
-/// over from `reopen`. A global aggregate has one group and one thread.
+/// holding the groups whose encoded key hashes to it, each emitting its
+/// finalised rows as soon as its own merge is done. A budget refusal
+/// before the first row is out starts over from `reopen` through the
+/// partitioned disk path; after the first row it is the query's error,
+/// since a consumer may already hold part of the result. A global
+/// aggregate has one group and one thread.
 pub(crate) fn compile_final_aggregate_replayable(
     input: Box<dyn BatchOperator>,
     reopen: &mut dyn FnMut() -> Result<Box<dyn BatchOperator>>,
     group_by: Vec<String>,
     aggregates: Vec<AggExpr>,
     memory: Option<&QueryMemoryPool>,
+    tail: Option<FinalTail>,
 ) -> Result<Box<dyn BatchOperator>> {
+    let apply_tail = |operator: Box<dyn BatchOperator>,
+                      memory: Option<&QueryMemoryPool>|
+     -> Result<Box<dyn BatchOperator>> {
+        match &tail {
+            Some(tail) => tail(operator, memory),
+            None => Ok(operator),
+        }
+    };
     let Some(pool) = memory else {
-        return compile_final_aggregate_in_memory(input, group_by, aggregates, None);
+        return apply_tail(
+            compile_final_aggregate_in_memory(input, group_by, aggregates, None)?,
+            None,
+        );
     };
     if group_by.is_empty() {
-        return compile_final_aggregate(input, group_by, aggregates, memory);
+        return apply_tail(
+            compile_final_aggregate(input, group_by, aggregates, memory)?,
+            memory,
+        );
     }
     let parallelism = kaveon_exec::local_parallel::configured_parallelism()?;
     let attempt = if parallelism > 1 {
-        let schema = final_schema(input.schema(), &group_by, &aggregates)?;
+        let final_schema = final_schema(input.schema(), &group_by, &aggregates)?;
+        // The per-thread output schema is the tail's, found on an empty
+        // operator of the final's schema.
+        let schema = Arc::clone(
+            apply_tail(Box::new(BatchInput::new(final_schema, Vec::new())), None)?.schema(),
+        );
         let thread_group_by = group_by.clone();
         let thread_aggregates = aggregates.clone();
+        let thread_tail = tail.clone();
         let operator: kaveon_exec::local_parallel::ThreadOperator =
             Arc::new(move |source, pool, _| {
-                compile_final_aggregate_in_memory(
+                let merged = compile_final_aggregate_in_memory(
                     source,
                     thread_group_by.clone(),
                     thread_aggregates.clone(),
                     Some(pool),
-                )
+                )?;
+                match &thread_tail {
+                    Some(tail) => tail(merged, Some(pool)),
+                    None => Ok(merged),
+                }
             });
         kaveon_exec::local_parallel::ParallelPartials::partitioned(
             input,
@@ -863,22 +1021,126 @@ pub(crate) fn compile_final_aggregate_replayable(
         .map(|operator| Box::new(operator) as Box<dyn BatchOperator>)
     } else {
         compile_final_aggregate_in_memory(input, group_by.clone(), aggregates.clone(), memory)
+            .and_then(|merged| apply_tail(merged, memory))
     };
-    let materialised = attempt.and_then(|mut operator| {
-        let schema = Arc::clone(operator.schema());
-        let batches = collect(&mut *operator)?;
-        BatchInput::with_memory(schema, batches, memory)
-    });
-    match materialised {
-        Ok(result) => Ok(Box::new(result)),
-        Err(KaveonError::MemoryLimit(_))
-            if kaveon_exec::partitioned::spill_from_environment(pool)?.is_some() =>
-        {
-            let (spill, count) = kaveon_exec::partitioned::spill_from_environment(pool)?
-                .expect("checked just above");
-            partitioned_final_aggregate(reopen()?, group_by, aggregates, pool, &spill, count)
+    let spill = kaveon_exec::partitioned::spill_from_environment(pool)?;
+    let fallback = match (&attempt, spill) {
+        (Err(KaveonError::MemoryLimit(_)), Some((spill, count))) => {
+            return apply_tail(
+                partitioned_final_aggregate(reopen()?, group_by, aggregates, pool, &spill, count)?,
+                memory,
+            );
         }
-        Err(error) => Err(error),
+        (_, spill) => spill,
+    };
+    let mut attempt = attempt?;
+    let schema = Arc::clone(attempt.schema());
+    // With a tail the threads' outputs are small (a TopN's worth each), so
+    // the attempt is drained before anything is emitted: a refusal from
+    // the last thread can still replay, whatever the first thread yielded.
+    // Without one the result streams and a late refusal is the query's.
+    let buffered = if tail.is_some() {
+        match collect(&mut *attempt) {
+            Ok(batches) => Some(BatchInput::with_memory(schema.clone(), batches, memory)?),
+            Err(KaveonError::MemoryLimit(_)) if fallback.is_some() => {
+                drop(attempt);
+                let (spill, count) = fallback.expect("checked");
+                return apply_tail(
+                    partitioned_final_aggregate(
+                        reopen()?,
+                        group_by,
+                        aggregates,
+                        pool,
+                        &spill,
+                        count,
+                    )?,
+                    memory,
+                );
+            }
+            Err(error) => return Err(error),
+        }
+    } else {
+        None
+    };
+    if let Some(buffered) = buffered {
+        return Ok(Box::new(buffered));
+    }
+    Ok(Box::new(ReplayableFinal {
+        schema,
+        attempt: Some(attempt),
+        fallback: None,
+        emitted: false,
+        replay: fallback.map(|(spill, count)| {
+            let input = reopen();
+            (input, spill, count, group_by, aggregates, pool.clone())
+        }),
+        tail,
+    }))
+}
+
+/// The in-memory final attempt, replaced by the partitioned disk path if
+/// the budget refuses it before anything was emitted.
+struct ReplayableFinal {
+    schema: SchemaRef,
+    attempt: Option<Box<dyn BatchOperator>>,
+    fallback: Option<Box<dyn BatchOperator>>,
+    emitted: bool,
+    #[allow(clippy::type_complexity)]
+    replay: Option<(
+        Result<Box<dyn BatchOperator>>,
+        kaveon_exec::spill::SpillManager,
+        usize,
+        Vec<String>,
+        Vec<AggExpr>,
+        QueryMemoryPool,
+    )>,
+    tail: Option<FinalTail>,
+}
+
+impl BatchOperator for ReplayableFinal {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        if let Some(fallback) = self.fallback.as_mut() {
+            return fallback.next_batch();
+        }
+        let Some(attempt) = self.attempt.as_mut() else {
+            return Ok(None);
+        };
+        match attempt.next_batch() {
+            Ok(Some(batch)) => {
+                self.emitted = true;
+                Ok(Some(batch))
+            }
+            Ok(None) => {
+                self.attempt = None;
+                Ok(None)
+            }
+            Err(KaveonError::MemoryLimit(message)) if !self.emitted && self.replay.is_some() => {
+                // Nothing left the attempt: release it and start over on
+                // the bounded path.
+                self.attempt = None;
+                let (input, spill, count, group_by, aggregates, pool) =
+                    self.replay.take().expect("checked above");
+                let input = input.map_err(|error| {
+                    exec_err(format!(
+                        "final aggregate exceeded its budget ({message}) and its input could not be reopened: {error}"
+                    ))
+                })?;
+                let merged =
+                    partitioned_final_aggregate(input, group_by, aggregates, &pool, &spill, count)?;
+                let mut fallback = match &self.tail {
+                    Some(tail) => tail(merged, Some(&pool))?,
+                    None => merged,
+                };
+                let batch = fallback.next_batch();
+                self.fallback = Some(fallback);
+                batch
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -1007,9 +1269,8 @@ fn compile_final_aggregate_in_memory(
                     &group_types,
                     &aggregates,
                     &output_types,
-                    &groups,
+                    *groups,
                 )?;
-                drop(groups);
                 drop(reservations);
                 return Ok(Box::new(BatchInput::with_memory(
                     batch.schema(),
@@ -1075,14 +1336,20 @@ fn columnar_final_batch(
     group_types: &[DataType],
     aggregates: &[AggExpr],
     output_types: &[DataType],
-    groups: &kaveon_exec::columnar_aggregate::ColumnarGroups,
+    groups: kaveon_exec::columnar_aggregate::ColumnarGroups,
 ) -> Result<RecordBatch> {
     let mut fields = Vec::with_capacity(group_by.len() + aggregates.len());
     let mut columns = Vec::with_capacity(group_by.len() + aggregates.len());
-    let keys = groups.key_arrays();
-    if keys.len() != group_by.len() || group_types.len() != group_by.len() {
+    if groups.key_count() != group_by.len() || group_types.len() != group_by.len() {
         return Err(exec_err("missing final aggregate key type"));
     }
+    if output_types.len() != aggregates.len() {
+        return Err(exec_err(
+            "final aggregate state layout does not match its plan",
+        ));
+    }
+    // Consuming the table: each column is dropped as its array is built.
+    let (keys, outputs) = groups.into_final_arrays(output_types)?;
     for ((name, data_type), column) in group_by.iter().zip(group_types).zip(keys) {
         if column.data_type() != data_type {
             return Err(exec_err("final aggregate key type does not match plan"));
@@ -1090,16 +1357,7 @@ fn columnar_final_batch(
         fields.push(Field::new(name, data_type.clone(), true));
         columns.push(column);
     }
-    if output_types.len() != aggregates.len() {
-        return Err(exec_err(
-            "final aggregate state layout does not match its plan",
-        ));
-    }
-    for ((aggregate, data_type), column) in aggregates
-        .iter()
-        .zip(output_types)
-        .zip(groups.output_arrays(output_types)?)
-    {
+    for ((aggregate, data_type), column) in aggregates.iter().zip(output_types).zip(outputs) {
         fields.push(Field::new(
             aggregate_output_name(aggregate),
             data_type.clone(),
@@ -2074,6 +2332,110 @@ mod tests {
         assert_eq!(pool.snapshot().current_bytes, 0);
         assert!(pool.snapshot().peak_bytes <= 4 * 1024 * 1024);
         assert_eq!(spill.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn parallel_final_with_a_top_n_tail_matches_the_serial_merge_and_replays_on_refusal() {
+        // 200 000 keys in partial rows arriving twice: the replayable final
+        // merges on several threads with the TopN inside each, and the
+        // union settles to the same top rows as a serial merge and sort.
+        // Under a budget the in-memory attempt cannot fit, it replays
+        // through the partitioned disk path before emitting anything.
+        let mut batches = Vec::new();
+        for round in 0..2i64 {
+            for start in (0..200_000).step_by(8_192) {
+                let groups = (start..(start + 8_192).min(200_000))
+                    .map(|key| GroupedAggregateState {
+                        group_keys: vec![AggregateValue::Int64(key)],
+                        states: vec![AggregateState::Count((key % 7 + round) as u64 + 1)],
+                    })
+                    .collect::<Vec<_>>();
+                batches.push(
+                    grouped_aggregate_states_to_typed_batch(&groups, &[DataType::Int64]).unwrap(),
+                );
+            }
+        }
+        let schema = batches[0].schema();
+        let expressions = vec![AggExpr::new(AggFunc::Count, "*").with_alias("count")];
+        let sort = vec![SortExpr::new(Expr::Column("count".into()), false)];
+        let expected = {
+            let merged = compile_final_aggregate_in_memory(
+                Box::new(BatchInput::new(schema.clone(), batches.clone())),
+                vec!["key".into()],
+                expressions.clone(),
+                None,
+            )
+            .unwrap();
+            let mut top =
+                kaveon_exec::partitioned::top_n_operator(merged, sort.clone(), 3, None).unwrap();
+            top.next_batch().unwrap().unwrap()
+        };
+        let counts = |batch: &RecordBatch| {
+            batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap()
+                .values()
+                .to_vec()
+        };
+        assert_eq!(counts(&expected), vec![15, 15, 15]);
+        let tail: FinalTail = Arc::new({
+            let sort = sort.clone();
+            move |operator, memory| {
+                kaveon_exec::partitioned::top_n_operator(
+                    operator,
+                    sort.clone(),
+                    3,
+                    memory.map(|m| m.operator("topn")).transpose()?,
+                )
+            }
+        });
+        for (name, budget) in [("roomy", 64 * 1024 * 1024u64), ("tight", 12 * 1024 * 1024)] {
+            let pool = QueryMemoryPool::new(name, budget).unwrap();
+            let spill_root = std::env::temp_dir().join(format!("kaveon-final-tail-{name}"));
+            let spill =
+                kaveon_exec::spill::SpillManager::new(&spill_root, 64 * 1024 * 1024).unwrap();
+            // The tight budget cannot hold the merge in memory, so the
+            // spill root stands in for the environment's.
+            pool.shared_resource("kaveon.exec.hash-spill.v1", || Ok((spill.clone(), 16usize)))
+                .unwrap();
+            let reopen_batches = batches.clone();
+            let reopen_schema = schema.clone();
+            let mut reopen = move || -> Result<Box<dyn BatchOperator>> {
+                Ok(Box::new(BatchInput::new(
+                    reopen_schema.clone(),
+                    reopen_batches.clone(),
+                )))
+            };
+            let merged = compile_final_aggregate_replayable(
+                Box::new(BatchInput::new(schema.clone(), batches.clone())),
+                &mut reopen,
+                vec!["key".into()],
+                expressions.clone(),
+                Some(&pool),
+                Some(Arc::clone(&tail)),
+            )
+            .unwrap();
+            let mut top = kaveon_exec::partitioned::top_n_operator(
+                merged,
+                sort.clone(),
+                3,
+                Some(pool.operator("outer").unwrap()),
+            )
+            .unwrap();
+            let batch = top.next_batch().unwrap().unwrap();
+            assert_eq!(counts(&batch), vec![15, 15, 15], "{name}");
+            assert!(top.next_batch().unwrap().is_none());
+            drop(top);
+            assert_eq!(pool.snapshot().current_bytes, 0, "{name}");
+            if name == "tight" {
+                assert!(
+                    spill.snapshot().runs_written > 0,
+                    "the tight budget replayed"
+                );
+            }
+        }
     }
 
     #[test]

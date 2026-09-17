@@ -1397,58 +1397,7 @@ impl ColumnarGroups {
 
     /// The keys as Arrow arrays in the exchange's logical types.
     pub fn key_arrays(&self) -> Vec<ArrayRef> {
-        self.keys
-            .iter()
-            .map(|key| -> ArrayRef {
-                match key {
-                    KeyColumn::Integer {
-                        values,
-                        nulls,
-                        data_type,
-                    } => match data_type {
-                        DataType::Int32 | DataType::Date32 => {
-                            let array = Int32Array::from_iter(
-                                values
-                                    .iter()
-                                    .zip(nulls)
-                                    .map(|(v, n)| (!n).then_some(*v as i32)),
-                            );
-                            if data_type == &DataType::Date32 {
-                                arrow::compute::cast(&array, &DataType::Date32)
-                                    .expect("Int32 to Date32")
-                            } else {
-                                Arc::new(array)
-                            }
-                        }
-                        DataType::Boolean => Arc::new(BooleanArray::from_iter(
-                            values
-                                .iter()
-                                .zip(nulls)
-                                .map(|(v, n)| (!n).then_some(*v != 0)),
-                        )),
-                        _ => Arc::new(Int64Array::from_iter(
-                            values.iter().zip(nulls).map(|(v, n)| (!n).then_some(*v)),
-                        )),
-                    },
-                    KeyColumn::Text {
-                        words,
-                        nulls,
-                        arena,
-                        large,
-                    } => {
-                        let iter = words
-                            .iter()
-                            .zip(nulls)
-                            .map(|(w, n)| (!n).then(|| arena.get(*w)));
-                        if *large {
-                            Arc::new(arrow::array::LargeStringArray::from_iter(iter))
-                        } else {
-                            Arc::new(StringArray::from_iter(iter))
-                        }
-                    }
-                }
-            })
-            .collect()
+        self.keys.iter().map(key_array).collect()
     }
 
     /// Each accumulator column finalized as an Arrow array of `output_type`.
@@ -1456,104 +1405,186 @@ impl ColumnarGroups {
         self.accumulators
             .iter()
             .zip(output_types)
-            .map(|(acc, output)| -> Result<ArrayRef> {
-                Ok(match (acc, output) {
-                    (AccColumn::Count(counts), DataType::UInt64) => {
-                        Arc::new(UInt64Array::from(counts.clone()))
-                    }
-                    (AccColumn::Count(counts), DataType::Int64) => Arc::new(Int64Array::from_iter(
-                        counts.iter().map(|c| Some(*c as i64)),
-                    )),
-                    (AccColumn::IntegerSum { sums, counts }, DataType::Int64) => {
-                        Arc::new(Int64Array::from_iter(
-                            sums.iter()
-                                .zip(counts)
-                                .map(|(s, c)| {
-                                    (*c > 0)
-                                        .then(|| {
-                                            i64::try_from(*s)
-                                                .map_err(|_| exec_err("integer SUM overflow"))
-                                        })
-                                        .transpose()
-                                })
-                                .collect::<Result<Vec<_>>>()?,
-                        ))
-                    }
-                    (AccColumn::IntegerSum { sums, counts }, DataType::Int32) => {
-                        Arc::new(Int32Array::from_iter(
-                            sums.iter()
-                                .zip(counts)
-                                .map(|(s, c)| {
-                                    (*c > 0)
-                                        .then(|| {
-                                            i32::try_from(*s)
-                                                .map_err(|_| exec_err("integer aggregate overflow"))
-                                        })
-                                        .transpose()
-                                })
-                                .collect::<Result<Vec<_>>>()?,
-                        ))
-                    }
-                    (
-                        AccColumn::IntegerMin { values, present }
-                        | AccColumn::IntegerMax { values, present },
-                        DataType::Int64,
-                    ) => Arc::new(Int64Array::from_iter(
-                        values.iter().zip(present).map(|(v, p)| p.then_some(*v)),
-                    )),
-                    (
-                        AccColumn::IntegerMin { values, present }
-                        | AccColumn::IntegerMax { values, present },
-                        DataType::Int32,
-                    ) => Arc::new(Int32Array::from_iter(
-                        values
-                            .iter()
-                            .zip(present)
-                            .map(|(v, p)| p.then_some(*v as i32)),
-                    )),
-                    (
-                        AccColumn::IntegerMin { values, present }
-                        | AccColumn::IntegerMax { values, present },
-                        DataType::Date32,
-                    ) => arrow::compute::cast(
-                        &Int32Array::from_iter(
-                            values
-                                .iter()
-                                .zip(present)
-                                .map(|(v, p)| p.then_some(*v as i32)),
-                        ),
-                        &DataType::Date32,
-                    )?,
-                    (AccColumn::Float { sums, counts, avg }, DataType::Float64) => {
-                        Arc::new(Float64Array::from_iter(sums.iter().zip(counts).map(
-                            |(s, c)| (*c > 0).then(|| if *avg { s / *c as f64 } else { *s }),
-                        )))
-                    }
-                    (
-                        AccColumn::FloatMin { values, present }
-                        | AccColumn::FloatMax { values, present },
-                        DataType::Float64,
-                    ) => Arc::new(Float64Array::from_iter(
-                        values.iter().zip(present).map(|(v, p)| p.then_some(*v)),
-                    )),
-                    (AccColumn::TextMin(values) | AccColumn::TextMax(values), DataType::Utf8) => {
-                        Arc::new(StringArray::from_iter(values.iter().map(|v| v.as_deref())))
-                    }
-                    (
-                        AccColumn::TextMin(values) | AccColumn::TextMax(values),
-                        DataType::LargeUtf8,
-                    ) => Arc::new(arrow::array::LargeStringArray::from_iter(
-                        values.iter().map(|v| v.as_deref()),
-                    )),
-                    (_, other) => {
-                        return Err(exec_err(format!(
-                            "columnar aggregate cannot produce {other}"
-                        )));
-                    }
-                })
-            })
+            .map(|(acc, output)| output_array(acc, output))
             .collect()
     }
+
+    /// The finalised key and output arrays, consuming the table: the index
+    /// goes first, then each column is dropped as soon as its array is
+    /// built, so the peak is one column's worth over the arrays rather than
+    /// the whole table beside them.
+    pub fn into_final_arrays(
+        self,
+        output_types: &[DataType],
+    ) -> Result<(Vec<ArrayRef>, Vec<ArrayRef>)> {
+        let Self {
+            keys,
+            accumulators,
+            index,
+            words,
+            nulls,
+            hashes,
+            slots,
+            ..
+        } = self;
+        drop((index, words, nulls, hashes, slots));
+        let keys = keys
+            .into_iter()
+            .map(|key| {
+                let array = key_array(&key);
+                drop(key);
+                array
+            })
+            .collect();
+        let outputs = accumulators
+            .into_iter()
+            .zip(output_types)
+            .map(|(acc, output)| {
+                let array = output_array(&acc, output)?;
+                drop(acc);
+                Ok(array)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok((keys, outputs))
+    }
+}
+
+/// One key column as the Arrow array of its exchange type.
+fn key_array(key: &KeyColumn) -> ArrayRef {
+    match key {
+        KeyColumn::Integer {
+            values,
+            nulls,
+            data_type,
+        } => match data_type {
+            DataType::Int32 | DataType::Date32 => {
+                let array = Int32Array::from_iter(
+                    values
+                        .iter()
+                        .zip(nulls)
+                        .map(|(v, n)| (!n).then_some(*v as i32)),
+                );
+                if data_type == &DataType::Date32 {
+                    arrow::compute::cast(&array, &DataType::Date32).expect("Int32 to Date32")
+                } else {
+                    Arc::new(array)
+                }
+            }
+            DataType::Boolean => Arc::new(BooleanArray::from_iter(
+                values
+                    .iter()
+                    .zip(nulls)
+                    .map(|(v, n)| (!n).then_some(*v != 0)),
+            )),
+            _ => Arc::new(Int64Array::from_iter(
+                values.iter().zip(nulls).map(|(v, n)| (!n).then_some(*v)),
+            )),
+        },
+        KeyColumn::Text {
+            words,
+            nulls,
+            arena,
+            large,
+        } => {
+            let iter = words
+                .iter()
+                .zip(nulls)
+                .map(|(w, n)| (!n).then(|| arena.get(*w)));
+            if *large {
+                Arc::new(arrow::array::LargeStringArray::from_iter(iter))
+            } else {
+                Arc::new(StringArray::from_iter(iter))
+            }
+        }
+    }
+}
+
+/// One accumulator column finalised as an Arrow array of `output`.
+fn output_array(acc: &AccColumn, output: &DataType) -> Result<ArrayRef> {
+    Ok(match (acc, output) {
+        (AccColumn::Count(counts), DataType::UInt64) => Arc::new(UInt64Array::from(counts.clone())),
+        (AccColumn::Count(counts), DataType::Int64) => Arc::new(Int64Array::from_iter(
+            counts.iter().map(|c| Some(*c as i64)),
+        )),
+        (AccColumn::IntegerSum { sums, counts }, DataType::Int64) => {
+            Arc::new(Int64Array::from_iter(
+                sums.iter()
+                    .zip(counts)
+                    .map(|(s, c)| {
+                        (*c > 0)
+                            .then(|| {
+                                i64::try_from(*s).map_err(|_| exec_err("integer SUM overflow"))
+                            })
+                            .transpose()
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            ))
+        }
+        (AccColumn::IntegerSum { sums, counts }, DataType::Int32) => {
+            Arc::new(Int32Array::from_iter(
+                sums.iter()
+                    .zip(counts)
+                    .map(|(s, c)| {
+                        (*c > 0)
+                            .then(|| {
+                                i32::try_from(*s)
+                                    .map_err(|_| exec_err("integer aggregate overflow"))
+                            })
+                            .transpose()
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            ))
+        }
+        (
+            AccColumn::IntegerMin { values, present } | AccColumn::IntegerMax { values, present },
+            DataType::Int64,
+        ) => Arc::new(Int64Array::from_iter(
+            values.iter().zip(present).map(|(v, p)| p.then_some(*v)),
+        )),
+        (
+            AccColumn::IntegerMin { values, present } | AccColumn::IntegerMax { values, present },
+            DataType::Int32,
+        ) => Arc::new(Int32Array::from_iter(
+            values
+                .iter()
+                .zip(present)
+                .map(|(v, p)| p.then_some(*v as i32)),
+        )),
+        (
+            AccColumn::IntegerMin { values, present } | AccColumn::IntegerMax { values, present },
+            DataType::Date32,
+        ) => arrow::compute::cast(
+            &Int32Array::from_iter(
+                values
+                    .iter()
+                    .zip(present)
+                    .map(|(v, p)| p.then_some(*v as i32)),
+            ),
+            &DataType::Date32,
+        )?,
+        (AccColumn::Float { sums, counts, avg }, DataType::Float64) => {
+            Arc::new(Float64Array::from_iter(sums.iter().zip(counts).map(
+                |(s, c)| (*c > 0).then(|| if *avg { s / *c as f64 } else { *s }),
+            )))
+        }
+        (
+            AccColumn::FloatMin { values, present } | AccColumn::FloatMax { values, present },
+            DataType::Float64,
+        ) => Arc::new(Float64Array::from_iter(
+            values.iter().zip(present).map(|(v, p)| p.then_some(*v)),
+        )),
+        (AccColumn::TextMin(values) | AccColumn::TextMax(values), DataType::Utf8) => {
+            Arc::new(StringArray::from_iter(values.iter().map(|v| v.as_deref())))
+        }
+        (AccColumn::TextMin(values) | AccColumn::TextMax(values), DataType::LargeUtf8) => Arc::new(
+            arrow::array::LargeStringArray::from_iter(values.iter().map(|v| v.as_deref())),
+        ),
+        (_, other) => {
+            return Err(exec_err(format!(
+                "columnar aggregate cannot produce {other}"
+            )));
+        }
+    })
 }
 
 fn read_u64(bytes: &[u8], offset: &mut usize) -> Result<u64> {
