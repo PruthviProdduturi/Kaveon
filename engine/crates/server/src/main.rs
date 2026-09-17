@@ -170,7 +170,12 @@ async fn main() {
             config.query_memory_limit_bytes >> 20,
         );
     }
-    let disk_exchange_store = if config.coordinator && config.coordinator_exchange_spool {
+    let spools_exchanges = if config.coordinator {
+        config.coordinator_exchange_spool
+    } else {
+        config.worker_exchange_spool
+    };
+    let disk_exchange_store = if spools_exchanges {
         Some(
             disk_exchange::DiskExchangeStore::with_query_limit(
                 &config.exchange_spool_root,

@@ -20,6 +20,11 @@ pub struct ServerConfig {
     pub tls_key_path: Option<PathBuf>,
     pub principal_query_limit: usize,
     pub coordinator_exchange_spool: bool,
+    /// Workers keep the exchange partitions addressed to them on their own
+    /// disk, so producers upload straight to the consuming worker and the
+    /// coordinator carries no exchange traffic. Off, the coordinator's
+    /// spool (when on) is the hub, else workers hold payloads in memory.
+    pub worker_exchange_spool: bool,
     pub exchange_spool_root: PathBuf,
     pub exchange_disk_limit_bytes: u64,
     /// One query's share of the exchange spool.
@@ -95,6 +100,7 @@ impl Default for ServerConfig {
             tls_key_path: None,
             principal_query_limit: 4,
             coordinator_exchange_spool: true,
+            worker_exchange_spool: false,
             exchange_spool_root: std::env::temp_dir(),
             exchange_disk_limit_bytes: 10 * 1024 * 1024 * 1024,
             exchange_query_disk_limit_bytes: 8 * 1024 * 1024 * 1024,
@@ -423,6 +429,13 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
             "KAVEON_COORDINATOR_EXCHANGE_SPOOL must be true or false"
         );
         config.coordinator_exchange_spool = value == "true";
+    }
+    if let Ok(value) = std::env::var("KAVEON_WORKER_EXCHANGE_SPOOL") {
+        anyhow::ensure!(
+            matches!(value.as_str(), "true" | "false"),
+            "KAVEON_WORKER_EXCHANGE_SPOOL must be true or false"
+        );
+        config.worker_exchange_spool = value == "true";
     }
     if let Ok(value) = std::env::var("KAVEON_EXCHANGE_SPOOL_ROOT") {
         config.exchange_spool_root = value.into();

@@ -143,6 +143,14 @@ impl ArrowPayload {
 pub async fn receive(response: reqwest::Response) -> Result<ArrowPayload, String> {
     receive_with_limit(response, MAX_PAYLOAD_BYTES).await
 }
+/// Where received payloads spool: `KAVEON_IPC_SPOOL_ROOT`, else the
+/// system temporary directory. The directory must exist.
+fn ipc_spool_root() -> std::path::PathBuf {
+    std::env::var_os("KAVEON_IPC_SPOOL_ROOT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+}
+
 async fn receive_with_limit(
     mut response: reqwest::Response,
     limit: u64,
@@ -150,7 +158,7 @@ async fn receive_with_limit(
     if response.content_length().is_some_and(|bytes| bytes > limit) {
         return Err("Arrow payload Content-Length exceeds receive limit".into());
     }
-    let path = std::env::temp_dir().join(format!("kaveon-ipc-{}.arrow", uuid::Uuid::new_v4()));
+    let path = ipc_spool_root().join(format!("kaveon-ipc-{}.arrow", uuid::Uuid::new_v4()));
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
