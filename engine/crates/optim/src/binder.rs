@@ -272,20 +272,19 @@ impl Binder<'_> {
             } => {
                 let left = self.bind(*left)?.plan;
                 let right = self.bind(*right)?.plan;
-                let scope = self.join_scope(&left, &right);
-                let condition = condition
-                    .map(|condition| self.bind_expr(condition, &scope, None))
-                    .transpose()?;
-                Ok(Bound {
-                    plan: LogicalPlan::Join {
-                        left: Box::new(left),
-                        right: Box::new(right),
-                        join_type,
-                        condition,
-                        distribution,
-                    },
-                    aggregate_input: None,
-                })
+                let Some(condition) = condition else {
+                    return Ok(Bound {
+                        plan: LogicalPlan::Join {
+                            left: Box::new(left),
+                            right: Box::new(right),
+                            join_type,
+                            condition: None,
+                            distribution,
+                        },
+                        aggregate_input: None,
+                    });
+                };
+                self.bind_on(left, right, join_type, condition, distribution)
             }
             LogicalPlan::SemiJoin {
                 left,
@@ -324,6 +323,83 @@ impl Binder<'_> {
                 })
             }
         }
+    }
+
+    /// An explicit ON condition: equalities between the two sides are the
+    /// hash-join keys. A conjunct on one side alone filters that side
+    /// before the join when the join can drop that side's rows (either
+    /// side of an inner join, the non-preserved side of an outer join): a
+    /// right row failing `o_comment NOT LIKE ...` matches no left row
+    /// under a LEFT JOIN, so filtering it away first is the same join. An
+    /// inner join filters anything else above itself; an outer join has no
+    /// residual and refuses it.
+    fn bind_on(
+        &self,
+        left: LogicalPlan,
+        right: LogicalPlan,
+        join_type: JoinType,
+        condition: Expr,
+        distribution: kaveon_sql::logical_plan::JoinDistribution,
+    ) -> Result<Bound> {
+        let left_scope = self.scope_of(&left).qualified_by(relation_qualifier(&left));
+        let right_scope = self
+            .scope_of(&right)
+            .qualified_by(relation_qualifier(&right));
+        let (into_left, into_right) = match join_type {
+            JoinType::Inner | JoinType::Cross => (true, true),
+            JoinType::Left => (false, true),
+            JoinType::Right => (true, false),
+            JoinType::Full => (false, false),
+        };
+        let mut left_parts = Vec::new();
+        let mut right_parts = Vec::new();
+        let mut keys = Vec::new();
+        let mut above = Vec::new();
+        for conjunct in conjuncts(condition) {
+            match placement(&conjunct, &left_scope, &right_scope) {
+                Placement::Key(left, right) => keys.push(Expr::BinaryOp {
+                    left: Box::new(Expr::Column(left)),
+                    op: BinaryOp::Eq,
+                    right: Box::new(Expr::Column(right)),
+                }),
+                Placement::Left if into_left => left_parts.push(conjunct),
+                Placement::Right if into_right => right_parts.push(conjunct),
+                _ => above.push(conjunct),
+            }
+        }
+        if !above.is_empty() && !matches!(join_type, JoinType::Inner | JoinType::Cross) {
+            return Err(KaveonError::Sql(format!(
+                "{} JOIN conditions other than equalities between the two sides are not supported: {:?}",
+                match join_type {
+                    JoinType::Left => "LEFT",
+                    JoinType::Right => "RIGHT",
+                    _ => "FULL",
+                },
+                above[0]
+            )));
+        }
+        let left = self.place(left_parts, left)?;
+        let right = self.place(right_parts, right)?;
+        let join_type = if keys.is_empty() {
+            join_type
+        } else if join_type == JoinType::Cross {
+            JoinType::Inner
+        } else {
+            join_type
+        };
+        let plan = LogicalPlan::Join {
+            left: Box::new(left),
+            right: Box::new(right),
+            join_type,
+            condition: conjoin(keys),
+            distribution,
+        };
+        let scope = self.scope_of(&plan);
+        let plan = self.filtered(plan, above, &scope, None)?;
+        Ok(Bound {
+            plan,
+            aggregate_input: None,
+        })
     }
 
     fn bind_semi_join(
@@ -1237,6 +1313,82 @@ mod tests {
             LogicalPlan::Join {
                 join_type: JoinType::Cross,
                 condition: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn an_outer_join_filters_its_non_preserved_side_by_the_on_clause_and_refuses_residuals() {
+        let plan = bound(
+            "SELECT c_custkey, COUNT(o_orderkey) AS n FROM customer LEFT OUTER JOIN orders ON c_custkey = o_custkey AND o_orderdate <> 7 GROUP BY c_custkey",
+        );
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("projection");
+        };
+        let LogicalPlan::Aggregate { input, .. } = *input else {
+            panic!("aggregate");
+        };
+        let LogicalPlan::Join {
+            left,
+            right,
+            join_type,
+            condition,
+            ..
+        } = *input
+        else {
+            panic!("the join is the aggregate's input; nothing stays above it");
+        };
+        assert_eq!(join_type, JoinType::Left);
+        assert_eq!(
+            condition,
+            Some(equal("customer.c_custkey", "orders.o_custkey"))
+        );
+        assert!(matches!(*left, LogicalPlan::Scan { .. }));
+        let LogicalPlan::Filter { predicate, .. } = *right else {
+            panic!("orders filtered before the join");
+        };
+        assert!(matches!(
+            predicate,
+            Expr::BinaryOp {
+                op: BinaryOp::Ne,
+                ..
+            }
+        ));
+        // The preserved side cannot be filtered by ON, and there is no
+        // residual for an outer join.
+        for sql in [
+            "SELECT c_custkey FROM customer LEFT JOIN orders ON c_custkey = o_custkey AND c_nationkey <> 7",
+            "SELECT c_custkey FROM customer LEFT JOIN orders ON c_custkey = o_custkey AND c_nationkey <> o_orderdate",
+            "SELECT c_custkey FROM customer FULL JOIN orders ON c_custkey = o_custkey AND o_orderdate <> 7",
+        ] {
+            let mut plan = sql_to_logical_plan(sql).unwrap();
+            qualify(&mut plan);
+            let error = bind(plan, &catalog()).unwrap_err().to_string();
+            assert!(error.contains("JOIN conditions"), "{sql}: {error}");
+        }
+        // An inner join filters a mixed conjunct above itself.
+        let plan = bound(
+            "SELECT c_custkey FROM customer JOIN orders ON c_custkey = o_custkey AND c_nationkey <> o_orderdate",
+        );
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("projection");
+        };
+        let LogicalPlan::Filter { input, predicate } = *input else {
+            panic!("residual above the inner join");
+        };
+        assert!(matches!(
+            predicate,
+            Expr::BinaryOp {
+                op: BinaryOp::Ne,
+                ..
+            }
+        ));
+        assert!(matches!(
+            *input,
+            LogicalPlan::Join {
+                join_type: JoinType::Inner,
+                condition: Some(_),
                 ..
             }
         ));
