@@ -37,13 +37,14 @@ def load_throughput(directory, engine):
 
 def throughput_cell(records):
     """(median executions per second, rendered cell, summed failures, summed
-    rejections, statements that failed everywhere in any round)."""
+    rejections, summed ties, statements that failed everywhere in any round)."""
     rates = [r["executions_per_second"] for r in records if r.get("executions_per_second") is not None]
     if not rates:
-        return None, "—", 0, 0, []
+        return None, "—", 0, 0, 0, []
     failed = sorted({sid for r in records for sid in r.get("failed_everywhere", [])})
     return (round(statistics.median(rates), 4), f"{statistics.median(rates):.3f} ({min(rates):.3f}–{max(rates):.3f})",
-            sum(r.get("failures", 0) for r in records), sum(r.get("rejections", 0) for r in records), failed)
+            sum(r.get("failures", 0) for r in records), sum(r.get("rejections", 0) for r in records),
+            sum(r.get("ties", 0) for r in records), failed)
 
 
 def digests_agree(kaveon_records, trino_records):
@@ -67,28 +68,29 @@ def report_throughput(directory):
         return None
     print()
     print("Throughput: successful exact executions per second, median over rounds with the fastest and slowest round; "
-          "failures and admission rejections are summed over the rounds. Same clients, duration and warm-up on both engines.")
+          "failures, admission rejections and ties (an ORDER BY … LIMIT statement returning a different row set of the same size) "
+          "are summed over the rounds. Same clients, duration and warm-up on both engines.")
     print()
-    print("| Clients | Rounds | Kaveon exec/s | Trino exec/s | Kaveon ÷ Trino | Kaveon fail / rej | Trino fail / rej | Digests agree | Failed every attempt |")
+    print("| Clients | Rounds | Kaveon exec/s | Trino exec/s | Kaveon ÷ Trino | Kaveon fail / rej / tie | Trino fail / rej / tie | Digests agree | Failed every attempt |")
     print("|---:|---|---:|---:|---:|---:|---:|---:|---|")
     summary = {}
     for clients in counts:
         k_records, t_records = kaveon.get(clients, []), trino.get(clients, [])
-        k_rate, k_cell, k_fail, k_rej, k_failed = throughput_cell(k_records)
-        t_rate, t_cell, t_fail, t_rej, t_failed = throughput_cell(t_records)
+        k_rate, k_cell, k_fail, k_rej, k_tie, k_failed = throughput_cell(k_records)
+        t_rate, t_cell, t_fail, t_rej, t_tie, t_failed = throughput_cell(t_records)
         ratio = f"{k_rate / t_rate:.2f}×" if k_rate is not None and t_rate else ""
         agree, shared = digests_agree(k_records, t_records)
         coverage = "; ".join(part for part in (
             f"Kaveon: {', '.join(k_failed)}" if k_failed else "", f"Trino: {', '.join(t_failed)}" if t_failed else "") if part) or "none"
-        print(f"| {clients} | K {len(k_records)}, T {len(t_records)} | {k_cell} | {t_cell} | {ratio} | {k_fail} / {k_rej} | "
-              f"{t_fail} / {t_rej} | {agree} of {shared} | {coverage} |")
+        print(f"| {clients} | K {len(k_records)}, T {len(t_records)} | {k_cell} | {t_cell} | {ratio} | {k_fail} / {k_rej} / {k_tie} | "
+              f"{t_fail} / {t_rej} / {t_tie} | {agree} of {shared} | {coverage} |")
         summary[str(clients)] = {
             "kaveon": {"rounds": len(k_records), "executions_per_second": k_rate,
                        "round_rates": [r.get("executions_per_second") for r in k_records],
-                       "failures": k_fail, "rejections": k_rej, "failed_everywhere": k_failed},
+                       "failures": k_fail, "rejections": k_rej, "ties": k_tie, "failed_everywhere": k_failed},
             "trino": {"rounds": len(t_records), "executions_per_second": t_rate,
                       "round_rates": [r.get("executions_per_second") for r in t_records],
-                      "failures": t_fail, "rejections": t_rej, "failed_everywhere": t_failed},
+                      "failures": t_fail, "rejections": t_rej, "ties": t_tie, "failed_everywhere": t_failed},
             "digests_agree": agree, "digests_compared": shared,
         }
     return summary

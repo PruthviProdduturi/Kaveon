@@ -100,9 +100,15 @@ successful executions divided by the measured wall seconds. Nothing else is
 subtracted or weighted.
 
 - What is counted. An execution succeeds when it returns and its digest
-  (the engine-independent rendering `scripts/scale-suite.py` uses) equals the
-  first digest seen for that statement on that engine in the run; a different
-  digest or an error is a failure. An admission refusal — Kaveon answers
+  (the engine-independent rendering `scripts/scale-suite.py` uses, with
+  floating-point values compared to nine significant digits and rows sorted)
+  equals the first digest seen for that statement on that engine in the run;
+  a different digest or an error is a failure. Two exceptions are the same
+  answer, not a failure: a double summed in another order under concurrency
+  differs in its last digits (hence nine digits), and an `ORDER BY … LIMIT`
+  statement whose run broke a tie at the cut differently returns a different
+  set of rows of the same size — counted as an execution and as a tie, and
+  the ties are reported beside the failures. An admission refusal — Kaveon answers
   `429 MEMORY_ADMISSION_REJECTED` (the API bridge surfaces it as HTTP 429),
   Trino `QUERY_QUEUE_FULL` — is neither: it is counted as a rejection, the
   client retries the same statement after a short backoff (0.5 s doubling to

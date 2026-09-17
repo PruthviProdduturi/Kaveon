@@ -10,9 +10,12 @@ scripts/benchmark-trino-suite.py so the Job stays a single mounted file).
 Each client is a thread that runs the suite's statements in a fixed
 permutation seeded by its client index, looping until the duration ends or
 the round count is reached. Every execution is timed and its result digest
-(scripts/scale-suite.py's engine-independent rendering) is checked against
-the first digest seen for that statement in this run; a different digest is
-a failed execution. Admission refusals (Kaveon answers 429
+(scripts/scale-suite.py's rendering, floating-point values to nine
+significant digits, rows sorted) is checked against the first digest seen
+for that statement in this run; a different digest is a failed execution,
+except that an `ORDER BY … LIMIT` statement returning a different set of
+rows of the same size broke a tie at the cut differently and is counted as
+a tie beside the execution. Admission refusals (Kaveon answers 429
 MEMORY_ADMISSION_REJECTED, which the bridge surfaces as HTTPException 429;
 Trino QUERY_QUEUE_FULL) are not wrong results: they are counted apart as
 rejections, retried after a short backoff, and cost the engine the time they
@@ -38,6 +41,7 @@ import json
 import math
 import os
 import random
+import re
 import ssl
 import statistics
 import sys
@@ -56,21 +60,35 @@ class Rejected(Exception):
     """The engine declined to admit the statement. Retried; counted apart."""
 
 
-def result_hash(rows, ordered):
-    """Identical to scripts/scale-suite.py: values rendered canonically, rows
-    sorted unless the statement orders them, so Kaveon and Trino digests
-    compare directly."""
-    def cell(value):
-        if isinstance(value, bool) or value is None:
-            return json.dumps(value)
-        if isinstance(value, float):
-            return f"{value:.6f}" if value != int(value) else str(int(value))
-        if isinstance(value, int):
-            return str(value)
-        return json.dumps(str(value))
-    rendered = ["|".join(cell(v) for v in row) for row in rows]
-    if not ordered:
-        rendered.sort()
+FRACTIONAL = re.compile(r"^[-+]?(\d+\.\d*|\.\d+|\d+)([eE][-+]?\d+)?$")
+
+
+def canonical_number(value):
+    """A floating-point value to nine significant digits, so that the sum of
+    the same numbers in a different order — a parallel or distributed
+    aggregate under concurrency — digests alike. Integers are exact."""
+    if isinstance(value, bool) or value is None:
+        return json.dumps(value)
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return f"{value:.9g}"
+    text = str(value)
+    if FRACTIONAL.match(text) and ("." in text or "e" in text or "E" in text):
+        try:
+            return f"{float(text):.9g}"
+        except ValueError:
+            pass
+    return json.dumps(text)
+
+
+def result_hash(rows):
+    """Order-insensitive: rows rendered canonically (scripts/scale-suite.py's
+    rendering, floating-point values to nine significant digits) and sorted.
+    An ordered statement's rows are sorted too — two runs that break a tie
+    in the ORDER BY differently return the same set of rows in a different
+    order, and that is the same answer."""
+    rendered = sorted("|".join(canonical_number(v) for v in row) for row in rows)
     return hashlib.sha256("\n".join(rendered).encode()).hexdigest()
 
 
@@ -94,8 +112,12 @@ def statement_sql(statement, engine):
     return statement.get({"kaveon": "kaveon_sql", "trino": "trino_sql"}[engine], statement["sql"])
 
 
-def statement_ordered(statement, sql):
-    return statement.get("ordered", "ORDER BY" in sql.upper())
+def statement_windowed(sql):
+    """`ORDER BY … LIMIT`: the rows a run returns depend on how a tie at the
+    cut is broken, so a different set of the same size is a tie, not a
+    wrong answer."""
+    upper = sql.upper()
+    return "ORDER BY" in upper and "LIMIT" in upper
 
 
 # ----- engines ---------------------------------------------------------------
@@ -198,7 +220,7 @@ class TrinoExecutor:
 # ----- bookkeeping -----------------------------------------------------------
 
 def _counter():
-    return {"executions": 0, "failures": 0, "rejections": 0}
+    return {"executions": 0, "failures": 0, "rejections": 0, "ties": 0}
 
 
 class Ledger:
@@ -209,6 +231,7 @@ class Ledger:
     def __init__(self, statement_ids, clients):
         self.lock = threading.Lock()
         self.reference = {}
+        self.reference_rows = {}
         self.samples = {}
         self.statements = {sid: {**_counter(), "seconds": [], "errors": [], "attempts": 0} for sid in statement_ids}
         self.clients = [_counter() for _ in range(clients)]
@@ -234,21 +257,27 @@ class Ledger:
                 errors.append({"kind": kind, "client": client_index, "phase": phase,
                                "seconds": round(seconds, 3), "message": message[:200]})
 
-    def completed(self, sid, client_index, phase, seconds, rows, ordered):
+    def completed(self, sid, client_index, phase, seconds, rows, windowed):
         """Digest the result and check it against the statement's reference.
-        Returns True when the execution was exact."""
-        digest = result_hash(rows, ordered)
+        Returns True when the execution was exact. A different set of rows
+        of the same size from an `ORDER BY … LIMIT` statement is a tie at
+        the cut: counted as an execution and as a tie, not as a failure."""
+        digest = result_hash(rows)
         with self.lock:
             reference = self.reference.setdefault(sid, digest)
+            reference_rows = self.reference_rows.setdefault(sid, len(rows))
             if sid not in self.samples:
                 self.samples[sid] = {"rows": len(rows), "sample": [[str(cell)[:80] for cell in row] for row in rows[:3]]}
-        if digest != reference:
+        tie = digest != reference and windowed and len(rows) == reference_rows
+        if digest != reference and not tie:
             self.failed(sid, client_index, phase, "mismatch",
-                        f"digest {digest[:12]} differs from the first-seen {reference[:12]} ({len(rows)} rows)", seconds)
+                        f"digest {digest[:12]} differs from the first-seen {reference[:12]} ({len(rows)} rows, reference {reference_rows})", seconds)
             return False
         with self.lock:
             self.statements[sid]["attempts"] += phase != "warmup"
             self._count(sid, client_index, phase, "executions")
+            if tie:
+                self._count(sid, client_index, phase, "ties")
             if phase != "warmup":
                 self.statements[sid]["seconds"].append(round(seconds, 3))
         return True
@@ -272,7 +301,7 @@ def run_client(client_index, statements, engine, execute, ledger, should_stop, p
                 return passes
             statement = by_id[sid]
             sql = statement_sql(statement, engine)
-            ordered = statement_ordered(statement, sql)
+            windowed = statement_windowed(sql)
             retries = 0
             while True:
                 if should_stop(passes):
@@ -288,7 +317,7 @@ def run_client(client_index, statements, engine, execute, ledger, should_stop, p
                 except Exception as exc:
                     ledger.failed(sid, client_index, phase, "error", str(exc), clock() - t0)
                     break
-                ledger.completed(sid, client_index, phase, clock() - t0, rows, ordered)
+                ledger.completed(sid, client_index, phase, clock() - t0, rows, windowed)
                 break
         passes += 1
     return passes
@@ -301,7 +330,7 @@ def summarise(ledger, clients, elapsed, config):
     for sid, entry in ledger.statements.items():
         seconds = entry["seconds"]
         summary = {"id": sid, "executions": entry["executions"], "failures": entry["failures"],
-                   "rejections": entry["rejections"],
+                   "rejections": entry["rejections"], "ties": entry["ties"],
                    "p50_seconds": round(statistics.median(seconds), 3) if seconds else None,
                    "p95_seconds": round(percentile(seconds, 0.95), 3) if seconds else None,
                    "max_seconds": max(seconds) if seconds else None,
@@ -319,6 +348,7 @@ def summarise(ledger, clients, elapsed, config):
         "successful": successful,
         "failures": totals["failures"],
         "rejections": totals["rejections"],
+        "ties": totals["ties"],
         "executions_per_second": round(successful / elapsed, 4) if elapsed > 0 else None,
         "per_client": [dict(c) for c in ledger.clients],
         "warmup": dict(ledger.warmup),
