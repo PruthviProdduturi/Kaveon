@@ -1,0 +1,329 @@
+{
+ "scale": 100,
+ "tables": [
+  {
+   "schema": "tpch_sf100",
+   "name": "region",
+   "format": "delta",
+   "directory": "benchmarks/tpch/delta/sf100/region/",
+   "columns": [
+    [
+     "regionkey",
+     "bigint"
+    ],
+    [
+     "name",
+     "varchar"
+    ],
+    [
+     "comment",
+     "varchar"
+    ]
+   ],
+   "rows": 5,
+   "seconds": 1.6
+  },
+  {
+   "schema": "tpch_sf100",
+   "name": "nation",
+   "format": "delta",
+   "directory": "benchmarks/tpch/delta/sf100/nation/",
+   "columns": [
+    [
+     "nationkey",
+     "bigint"
+    ],
+    [
+     "name",
+     "varchar"
+    ],
+    [
+     "regionkey",
+     "bigint"
+    ],
+    [
+     "comment",
+     "varchar"
+    ]
+   ],
+   "rows": 25,
+   "seconds": 5.2
+  },
+  {
+   "schema": "tpch_sf100",
+   "name": "supplier",
+   "format": "delta",
+   "directory": "benchmarks/tpch/delta/sf100/supplier/",
+   "columns": [
+    [
+     "suppkey",
+     "bigint"
+    ],
+    [
+     "name",
+     "varchar"
+    ],
+    [
+     "address",
+     "varchar"
+    ],
+    [
+     "nationkey",
+     "bigint"
+    ],
+    [
+     "phone",
+     "varchar"
+    ],
+    [
+     "acctbal",
+     "double"
+    ],
+    [
+     "comment",
+     "varchar"
+    ]
+   ],
+   "rows": 1000000,
+   "seconds": 13.5
+  },
+  {
+   "schema": "tpch_sf100",
+   "name": "part",
+   "format": "delta",
+   "directory": "benchmarks/tpch/delta/sf100/part/",
+   "columns": [
+    [
+     "partkey",
+     "bigint"
+    ],
+    [
+     "name",
+     "varchar"
+    ],
+    [
+     "mfgr",
+     "varchar"
+    ],
+    [
+     "brand",
+     "varchar"
+    ],
+    [
+     "type",
+     "varchar"
+    ],
+    [
+     "size",
+     "integer"
+    ],
+    [
+     "container",
+     "varchar"
+    ],
+    [
+     "retailprice",
+     "double"
+    ],
+    [
+     "comment",
+     "varchar"
+    ]
+   ],
+   "rows": 20000000,
+   "seconds": 52.6
+  },
+  {
+   "schema": "tpch_sf100",
+   "name": "partsupp",
+   "format": "delta",
+   "directory": "benchmarks/tpch/delta/sf100/partsupp/",
+   "columns": [
+    [
+     "partkey",
+     "bigint"
+    ],
+    [
+     "suppkey",
+     "bigint"
+    ],
+    [
+     "availqty",
+     "integer"
+    ],
+    [
+     "supplycost",
+     "double"
+    ],
+    [
+     "comment",
+     "varchar"
+    ]
+   ],
+   "rows": 80000000,
+   "seconds": 675.3
+  },
+  {
+   "schema": "tpch_sf100",
+   "name": "customer",
+   "format": "delta",
+   "directory": "benchmarks/tpch/delta/sf100/customer/",
+   "columns": [
+    [
+     "custkey",
+     "bigint"
+    ],
+    [
+     "name",
+     "varchar"
+    ],
+    [
+     "address",
+     "varchar"
+    ],
+    [
+     "nationkey",
+     "bigint"
+    ],
+    [
+     "phone",
+     "varchar"
+    ],
+    [
+     "acctbal",
+     "double"
+    ],
+    [
+     "mktsegment",
+     "varchar"
+    ],
+    [
+     "comment",
+     "varchar"
+    ]
+   ],
+   "rows": 15000000,
+   "seconds": 33.0
+  },
+  {
+   "schema": "tpch_sf100",
+   "name": "orders",
+   "format": "delta",
+   "directory": "benchmarks/tpch/delta/sf100/orders/",
+   "columns": [
+    [
+     "orderkey",
+     "bigint"
+    ],
+    [
+     "custkey",
+     "bigint"
+    ],
+    [
+     "orderstatus",
+     "varchar"
+    ],
+    [
+     "totalprice",
+     "double"
+    ],
+    [
+     "orderdate",
+     "date"
+    ],
+    [
+     "orderpriority",
+     "varchar"
+    ],
+    [
+     "clerk",
+     "varchar"
+    ],
+    [
+     "shippriority",
+     "integer"
+    ],
+    [
+     "comment",
+     "varchar"
+    ]
+   ],
+   "rows": 150000000,
+   "seconds": 786.2
+  },
+  {
+   "schema": "tpch_sf100",
+   "name": "lineitem",
+   "format": "delta",
+   "directory": "benchmarks/tpch/delta/sf100/lineitem/",
+   "columns": [
+    [
+     "orderkey",
+     "bigint"
+    ],
+    [
+     "partkey",
+     "bigint"
+    ],
+    [
+     "suppkey",
+     "bigint"
+    ],
+    [
+     "linenumber",
+     "integer"
+    ],
+    [
+     "quantity",
+     "double"
+    ],
+    [
+     "extendedprice",
+     "double"
+    ],
+    [
+     "discount",
+     "double"
+    ],
+    [
+     "tax",
+     "double"
+    ],
+    [
+     "returnflag",
+     "varchar"
+    ],
+    [
+     "linestatus",
+     "varchar"
+    ],
+    [
+     "shipdate",
+     "date"
+    ],
+    [
+     "commitdate",
+     "date"
+    ],
+    [
+     "receiptdate",
+     "date"
+    ],
+    [
+     "shipinstruct",
+     "varchar"
+    ],
+    [
+     "shipmode",
+     "varchar"
+    ],
+    [
+     "comment",
+     "varchar"
+    ]
+   ],
+   "rows": 600037902,
+   "seconds": 1403.7
+  }
+ ]
+}

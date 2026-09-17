@@ -46,14 +46,16 @@ def register(collection, path, body):
     else:
         existing.raise_for_status()
         current = existing.json()
-        for key, value in body.items():
-            if current.get(key) != value:
-                raise RuntimeError(f'Existing definition differs: {path}, field {key}')
-    if current['lifecycle'] != 'Active':
+    # The manifest is the source of truth for this catalog: a definition
+    # that differs from it (an earlier generation's layout, say) is revised.
+    changed = [key for key, value in body.items() if current.get(key) != value]
+    if changed or current['lifecycle'] != 'Active':
         revision = current['revision']
         response = client.put(path, headers={'If-Match': str(revision)},
                               json={**body, 'revision': revision + 1, 'lifecycle': 'Active'})
         response.raise_for_status()
+        if changed:
+            print(json.dumps({'revised': path, 'fields': changed}), flush=True)
 
 
 def main() -> int:
