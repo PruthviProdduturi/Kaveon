@@ -85,17 +85,30 @@ pub fn date_literal_days(value: &str) -> Option<i64> {
 impl ScalarValue {
     /// The value as a column of `data_type` would compare it: a text
     /// literal against a day-number date column becomes its day number,
-    /// the way SQL coerces `date_col = '2026-07-20'`. Anything else is
-    /// unchanged; the consumer keeps its own type checks.
+    /// the way SQL coerces `date_col = '2026-07-20'`; an integer or
+    /// decimal literal against a floating-point column becomes a double,
+    /// the way `quantity < 24` and `discount > 0.05` read against double
+    /// columns. Anything else is unchanged; the consumer keeps its own type
+    /// checks.
     #[must_use]
     pub fn coerced_for(&self, data_type: &arrow::datatypes::DataType) -> ScalarValue {
+        use arrow::datatypes::DataType;
+        let data_type = match data_type {
+            DataType::Dictionary(_, values) => values.as_ref(),
+            other => other,
+        };
         match (self, data_type) {
-            (ScalarValue::Utf8(text), arrow::datatypes::DataType::Date32) => {
-                match date_literal_days(text) {
-                    Some(days) => ScalarValue::Int64(days),
-                    None => self.clone(),
-                }
+            (ScalarValue::Utf8(text), DataType::Date32) => match date_literal_days(text) {
+                Some(days) => ScalarValue::Int64(days),
+                None => self.clone(),
+            },
+            (ScalarValue::Int64(value), DataType::Float32 | DataType::Float64) => {
+                ScalarValue::Float64(*value as f64)
             }
+            (
+                ScalarValue::Decimal128 { value, scale, .. },
+                DataType::Float32 | DataType::Float64,
+            ) => ScalarValue::Float64(*value as f64 / 10f64.powi(i32::from(*scale))),
             _ => self.clone(),
         }
     }
@@ -191,6 +204,67 @@ mod coercion_tests {
             StoragePredicate::In {
                 column: "name".into(),
                 values: vec![ScalarValue::Utf8("2026-07-20".into())],
+            }
+        );
+    }
+
+    #[test]
+    fn integer_and_decimal_literals_meet_double_columns_as_doubles() {
+        assert_eq!(
+            ScalarValue::Int64(24).coerced_for(&DataType::Float64),
+            ScalarValue::Float64(24.0)
+        );
+        assert_eq!(
+            ScalarValue::Int64(24).coerced_for(&DataType::Float32),
+            ScalarValue::Float64(24.0)
+        );
+        assert_eq!(
+            ScalarValue::Decimal128 {
+                value: 5,
+                precision: 3,
+                scale: 2
+            }
+            .coerced_for(&DataType::Float64),
+            ScalarValue::Float64(0.05)
+        );
+        assert_eq!(
+            ScalarValue::Decimal128 {
+                value: -1_250,
+                precision: 5,
+                scale: 3
+            }
+            .coerced_for(&DataType::Float64),
+            ScalarValue::Float64(-1.25)
+        );
+        // Integer columns keep integer literals, and a dictionary column is
+        // its value type.
+        assert_eq!(
+            ScalarValue::Int64(24).coerced_for(&DataType::Int32),
+            ScalarValue::Int64(24)
+        );
+        assert_eq!(
+            ScalarValue::Int64(24).coerced_for(&DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Float64)
+            )),
+            ScalarValue::Float64(24.0)
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "quantity",
+            DataType::Float64,
+            false,
+        )]));
+        assert_eq!(
+            StoragePredicate::Compare {
+                column: "quantity".into(),
+                op: CompareOp::Lt,
+                value: ScalarValue::Int64(24),
+            }
+            .coerced_for(&schema),
+            StoragePredicate::Compare {
+                column: "quantity".into(),
+                op: CompareOp::Lt,
+                value: ScalarValue::Float64(24.0),
             }
         );
     }
