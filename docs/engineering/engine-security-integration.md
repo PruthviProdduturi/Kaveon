@@ -111,19 +111,19 @@ clients to request paging. Query history retains only 100 rows/64 KiB per result
 and bounds terminal record retention. This preview is not the full query result.
 
 Task and exchange HTTP responses are consumed incrementally into private IPC
-spools, capped at 128 MiB per response and 512 MiB per process. Worker task reply
-caches have a separate 512 MiB process cap; replies stream in 64 KiB pieces,
-retaining the cache lease until a slow consumer finishes or disconnects. Exchange
-downloads stream validated shared chunks and cap retained active-download bytes
-at 512 MiB in addition to the existing store cap. Encoding aborts at its byte
+spools (`KAVEON_IPC_SPOOL_ROOT`), capped at 8 GiB per payload and 12 GiB per
+process (the figures here were 128 MiB and 512 MiB until the streamed-exchange
+work of 2026-09-17). Worker task reply caches have a separate 512 MiB process
+cap; replies stream in 64 KiB pieces, retaining the cache lease until a slow
+consumer finishes or disconnects. Exchange output streams from the producing
+task in 4 MiB chunks with four uploads in flight; encoding aborts at its byte
 limit. No exchange wire-version change is required.
 
-This bounds network/result retention but does not make operators fully pipelined:
-worker fragment outputs still materialize bounded batches, and stage dependencies
-still wait for completed producer stages. Consumers open immutable IPC spools as
-batch operators and decode one producer stream at a time, charging the active
-encoded stream and decoded batch excess to query memory. Local and worker CPU
-execution runs in blocking tasks so HTTP cancellation remains responsive.
+This bounds network/result retention but does not make operators fully
+pipelined: stage dependencies still wait for completed producer stages, and a
+consumer downloads a whole payload to its spool before decoding it (each
+producer's payload on a thread of its own). Local and worker CPU execution runs
+in blocking tasks so HTTP cancellation remains responsive.
 
 ## Validation and remaining gates
 
@@ -139,13 +139,17 @@ revision conflict behavior and transport rejection. Qualification should also
 exercise these boundaries over HTTP with independent user credentials.
 
 These changes provide a credential-based security boundary, not production
-identity federation. Entra/OIDC JWT validation at the Engine, credential rotation
-without restart, per-catalog/table grants, row/column policies,
-durable query audit and fair workload scheduling remain explicit gates.
+identity federation. Entra bearer validation at the Engine exists since 2026-09-08
+([Entra sign-in](engine-entra-sign-in.md)); credential rotation without restart,
+per-catalog/table grants, row/column policies, durable query audit and fair
+workload scheduling remain explicit gates. Memory admission is a FIFO queue
+since 2026-09-17 ([memory reference](../reference/engine-memory-management.md)).
 
-## Coordinator exchange placement
+## Exchange placement
 
-The coordinator now hosts query exchanges on private disk by default. Producers
+The coordinator hosts query exchanges on private disk by default
+(`KAVEON_COORDINATOR_EXCHANGE_SPOOL=true`); the AKS cluster runs the worker
+spool mode described at the end of this section instead. Producers
 upload immutable checksummed chunks there, and retried consumers fetch them from
 the same location even after execution moves to another worker. This removes
 worker-local exchange storage as a dependency for retrying tasks. It centralizes

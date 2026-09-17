@@ -25,7 +25,17 @@ visible when reporting a rating.
 
 ## Current local evidence
 
-### Current assessment — September 10
+> **2026-09-17.** The assessment below is the September 10 scoring and has not
+> been re-scored since. The performance area's "best recorded six-query
+> diagnostic ratio is 1.057×" is superseded by the cluster records under
+> `docs/qualification/`: the matched harness at 1.45× over five rounds
+> (2026-09-15), the scale suite ahead of Trino on 9 of 13 statements
+> (2026-09-16), ClickBench at a 1.39× geometric mean over 42 statements
+> (2026-09-17) and TPC-H 21 of 22 planned and executed; none has completed
+> the declared rounds of `benchmark-program.md`, so the 1.90× gate and the
+> performance score stand as written until a campaign record exists.
+
+### Assessment — September 10
 
 The evidence-backed score for the current integrated direction is **80/100
 (8.0/10)**. This is a readiness estimate for the declared Engine scope, not a

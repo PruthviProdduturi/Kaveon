@@ -1,5 +1,23 @@
 # The upper-hand program — Kaveon ahead of Trino on every shape
 
+> **Status, 2026-09-17.** The tables below are the 2026-09-15 diagnosis and
+> keep that day's numbers. Since then, recorded in `docs/qualification/`
+> and the HANDSHAKE Log: E1 (row-group pruning on inexact string statistics,
+> `95eac30`), E2 (parallel decoder lanes, `c9de306`), E4 (dictionary columns
+> end to end, `13c3479`), E5 in part (typed comparisons on the lanes,
+> `efc42bd`), E7/E11 (the columnar aggregate, flushing partials, parallel
+> partials and DISTINCT, the hybrid final merge), D1 (the dictionary-encoded
+> rebuild of the telemetry file), P3 (the coordinator result cache), G2 (the
+> scale suite: 17 of 20 targets, ahead of Trino on 9 of 13,
+> `scale-suite-2026-09-16.md`), G5 (ClickBench: every statement has run,
+> geometric mean 1.39× over 42 on the `8d15fd3` pass,
+> `clickbench-2026-09-16.md`) and G6's data (TPC-H SF100 generated as Delta,
+> 21 of 22 statements plan and execute, `tpch/coverage.md`). Open: E3
+> (page index and Bloom pruning), E6, E8, E9, E10, D2, D3, P1, P2, P4, P5,
+> P6, G1, G3, G4, the five-round campaigns. `KAVEON_LOCAL_PARALLELISM`
+> defaults to min(cores, 4) since `cf576ca`; the row below that says it
+> defaults to 1 was true on 2026-09-15.
+
 > Written 2026-09-15 from two measured runs on `kaveon-test-aks` (westus2): the matched 5 M-row fixture (Kaveon 1.45× Trino on throughput, faster on 9 of 12 shapes) and the 504 M-row time-to-answer pass (Trino faster on all 13 live corpus statements, geometric mean 5.1×). Records: `docs/qualification/kaveon-trino-aks-2026-09-15.md`, `docs/qualification/kaveon-trino-time-to-answer-2026-09-15.md`. Everything below is tied to one of those numbers; nothing is aspirational without a measurement that will prove it.
 
 ## 1. Where the seconds are

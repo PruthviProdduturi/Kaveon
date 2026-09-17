@@ -1,6 +1,19 @@
 # Engine memory and spill qualification
 
-The server's memory-aware physical plans now account for hash aggregate/join,
+> Written for the 2026-09-08 checkpoint; the settings table and the evidence
+> are that date's. What changed after it (`engine/DISTRIBUTED_EXECUTION_STATUS.md`,
+> [memory reference](../reference/engine-memory-management.md)): a process
+> memory guard over the cgroup limit and a FIFO admission queue; the columnar
+> hash aggregate, whose partial stage flushes its groups to the exchange on
+> memory pressure instead of the 8×-reduction probe and disk replay described
+> below, and whose final stage is a hybrid merge that spills sub-partitions
+> and never replays; the final merge by the batch through a slot index rather
+> than "one state row at a time"; DISTINCT and semi-join keys reserved in
+> 64 KiB slabs; and exchange output streamed while the task runs. The
+> `KAVEON_HASH_*` settings, the Sort/TopN spill, the join partition path and
+> the expression-expansion limits are unchanged.
+
+The server's memory-aware physical plans account for hash aggregate/join,
 window buffers, DISTINCT/semi-join/set-operation hash state, sort/TopN input and
 merge workspaces, filter workspaces, projection output, and partial/final
 aggregate-state conversion. Reservations enforce the configured pool limit and
