@@ -2,8 +2,10 @@
 
 The twenty-two TPC-H statements of `trino-queries.sql` (v3.0.1 validation
 parameters, Trino dialect; suite `kaveon-suite.json`), as the Engine's SQL
-layer, binder, planner and executor take them today. SF100 is not generated
-yet, so this is the SQL and planning surface, not a timing record: the gate
+layer, binder, planner and executor take them today. This is the SQL and
+planning surface, not a timing record: SF100 was generated as Delta tables
+on 2026-09-17 (`tables.json`, `benchmark-program.md` Tier 3) and no pass over
+it has been run on the cluster yet. The gate
 `engine/crates/server/src/tpch_coverage.rs` generates a deterministic
 eight-table TPC-H (Trino's column names and types — bigint keys, integer
 for `p_size`/`l_linenumber`/`o_shippriority`/`ps_availqty`, double for money
