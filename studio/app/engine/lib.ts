@@ -5,7 +5,10 @@ import { msalFetch } from "../../utils/msalFetch";
 // These mirror the coordinator's /v1 serialization exactly. Nothing is derived
 // client-side that the Engine did not measure; absent values render as absent.
 
-export type QueryState = "RUNNING" | "FINISHED" | "FAILED";
+export type QueryState = "QUEUED" | "RUNNING" | "FINISHED" | "FAILED" | "CANCELED";
+
+/** A statement that has not reached a terminal state yet. */
+export const inProgress = (state: QueryState) => state === "QUEUED" || state === "RUNNING";
 
 /** The coordinator's result cache counters, as `/v1/node` and `/v1/cluster` report them. */
 export interface ResultCacheStats {
@@ -21,12 +24,26 @@ export interface ResultCacheStats {
   refused: number;
 }
 
+/** Memory admission on one node, as `/v1/node` and `/v1/cluster` report it: statements on the coordinator, tasks on a worker. */
+export interface AdmissionStats {
+  limit_bytes: number;
+  admitted_bytes: number;
+  peak_admitted_bytes: number;
+  queue_limit: number;
+  queue_depth: number;
+  admitted: number;
+  queued: number;
+  rejected: number;
+  withdrawn: number;
+}
+
 export interface ClusterNode {
   node_id?: string;
   version?: string;
   uptime_secs?: number;
   memory_rss_bytes?: number;
   result_cache?: ResultCacheStats;
+  admission?: AdmissionStats;
 }
 
 export interface Cluster {
@@ -94,6 +111,7 @@ export interface QuerySettings {
   query_memory_limit_bytes?: number;
   local_parallelism?: number;
   result_cache?: boolean;
+  admission_wait_seconds?: number;
 }
 
 export interface QueryRecord {
@@ -109,6 +127,8 @@ export interface QueryRecord {
   /** For a cache hit: the query whose result was served, and what it took to produce it. */
   cached_from?: string;
   cached_elapsed_ms?: number;
+  /** How long the statement waited for memory admission before it ran; zero when admitted on arrival. Not part of `elapsed_ms`. */
+  admission_wait_ms?: number;
   error?: string | null;
   elapsed_ms: number;
   submitted_at_ms: number;
