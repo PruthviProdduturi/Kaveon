@@ -1118,6 +1118,50 @@ impl crate::fragment_exec::ExchangeInputProvider for PrefetchedExchangeInputs {
             metrics: Arc::clone(&self.decode_metrics),
         }))
     }
+
+    /// One source per producer payload, each decoding its spool on the
+    /// thread that reads it.
+    fn open_each(
+        &self,
+        exchange_id: &ExchangeId,
+    ) -> kaveon_core::Result<Option<kaveon_exec::local_parallel::Sources>> {
+        let inputs = self.inputs.get(exchange_id).ok_or_else(|| {
+            kaveon_core::KaveonError::Execution(format!("missing exchange {}", exchange_id.0))
+        })?;
+        let schema = inputs
+            .first()
+            .ok_or_else(|| {
+                kaveon_core::KaveonError::Execution("empty exchange payload set".into())
+            })?
+            .schema();
+        let openers = inputs
+            .iter()
+            .map(|payload| {
+                let payload = payload
+                    .fork()
+                    .map_err(kaveon_core::KaveonError::Execution)?;
+                let schema = payload.schema();
+                let memory = self.memory.clone();
+                let metrics = Arc::clone(&self.decode_metrics);
+                Ok(Box::new(move || {
+                    Ok(Box::new(DiskExchangeInput {
+                        schema,
+                        payloads: std::collections::VecDeque::from([payload]),
+                        memory,
+                        encoded: None,
+                        decoded_extra: None,
+                        metrics,
+                    })
+                        as Box<dyn kaveon_core::BatchOperator>)
+                })
+                    as kaveon_exec::local_parallel::SourceOpener)
+            })
+            .collect::<kaveon_core::Result<Vec<_>>>()?;
+        Ok(Some(kaveon_exec::local_parallel::Sources::Threads {
+            schema,
+            openers,
+        }))
+    }
 }
 
 async fn execute_fragment_task(

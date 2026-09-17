@@ -24,6 +24,7 @@ use kaveon_exec::filter::FilterOperator;
 use kaveon_exec::incremental_aggregate::{IncrementalAggregateMerger, MergedGroups};
 use kaveon_exec::join::JoinType;
 use kaveon_exec::limit::LimitOperator;
+use kaveon_exec::local_parallel::Sources;
 use kaveon_exec::offset::OffsetOperator;
 use kaveon_exec::project::ProjectOperator;
 use kaveon_exec::scan::ScanOperator;
@@ -50,6 +51,15 @@ pub trait ExchangeInputProvider {
     fn open(&self, exchange_id: &ExchangeId) -> Result<Box<dyn BatchOperator>> {
         let input = self.read(exchange_id)?;
         Ok(Box::new(BatchInput::new(input.schema, input.batches)))
+    }
+
+    /// Opens an exchange as sources that can each be read on a thread of
+    /// their own — one per producer payload — for an operator whose
+    /// threads take every batch. None when the provider cannot hand its
+    /// input across threads, and the operator reads `open` here.
+    fn open_each(&self, exchange_id: &ExchangeId) -> Result<Option<Sources>> {
+        let _ = exchange_id;
+        Ok(None)
     }
 }
 
@@ -449,9 +459,13 @@ fn compile_node(
                         }
                     }
                 }
-                AggregateMode::Final => {
-                    compile_final_aggregate_parallel(input, group_by, aggregates, memory, None)
-                }
+                AggregateMode::Final => compile_final_aggregate_parallel(
+                    final_sources(node, nodes, exchanges, input)?,
+                    group_by,
+                    aggregates,
+                    memory,
+                    None,
+                ),
             }
         }
         FragmentOperator::Sort { keys } => kaveon_exec::partitioned::sort_operator(
@@ -519,7 +533,7 @@ fn compile_node(
                     )
                 });
                 let merged = compile_final_aggregate_parallel(
-                    input,
+                    final_sources(final_node, nodes, exchanges, input)?,
                     group_by,
                     aggregates,
                     memory,
@@ -830,7 +844,7 @@ pub(crate) fn compile_final_aggregate(
         && let Some(memory) = memory
     {
         let spill = kaveon_exec::partitioned::spill_from_environment(memory)?;
-        return hybrid_final_aggregate(input, group_by, aggregates, memory, spill, None);
+        return hybrid_final_aggregate(input, group_by, aggregates, memory, spill, None, None);
     }
     compile_final_aggregate_in_memory(input, group_by, aggregates, memory)
 }
@@ -912,15 +926,42 @@ type FinalTail = Arc<
         + Sync,
 >;
 
-/// The grouped final aggregate on several threads when the node has
-/// them, each holding the groups whose encoded key hashes to it and each
-/// emitting its finalised rows as soon as its own merge is done; the
-/// hybrid merge inside every thread holds what the budget admits and
-/// spills the rest through the query's spill, so no refusal starts the
-/// stage over. The tail runs inside each thread, over groups that are
-/// complete there. A global aggregate has one group and one thread.
-pub(crate) fn compile_final_aggregate_parallel(
+/// A final aggregate's input as sources for its merge threads: the
+/// exchange's payloads, one per producer, when the input is an exchange
+/// the provider can hand across threads; the compiled input otherwise.
+fn final_sources(
+    final_node: &FragmentNode,
+    nodes: &HashMap<FragmentNodeId, &FragmentNode>,
+    exchanges: &dyn ExchangeInputProvider,
     input: Box<dyn BatchOperator>,
+) -> Result<Sources> {
+    if let Some(id) = final_node.inputs.first()
+        && let Some(below) = nodes.get(id)
+        && let FragmentOperator::ExchangeInput(exchange) = &below.operator
+        && let Some(sources) = exchanges.open_each(&exchange.exchange_id)?
+    {
+        if sources.schema() != input.schema() {
+            return Err(exec_err(
+                "exchange sources do not match the exchange schema",
+            ));
+        }
+        return Ok(sources);
+    }
+    Ok(Sources::Here(input))
+}
+
+/// The grouped final aggregate on several threads when the node has
+/// them: every thread sees every batch and keeps the rows whose encoded
+/// key hashes to it, the sources read on threads of their own when the
+/// exchange can hand them over — no batch is decoded, hashed or copied
+/// on the calling thread. Each thread emits its finalised rows as soon
+/// as its own merge is done; the hybrid merge inside every thread holds
+/// what the budget admits and spills the rest through the query's
+/// spill, so no refusal starts the stage over. The tail runs inside
+/// each thread, over groups that are complete there. A global aggregate
+/// has one group and one thread.
+pub(crate) fn compile_final_aggregate_parallel(
+    sources: Sources,
     group_by: Vec<String>,
     aggregates: Vec<AggExpr>,
     memory: Option<&QueryMemoryPool>,
@@ -936,13 +977,18 @@ pub(crate) fn compile_final_aggregate_parallel(
     };
     let Some(pool) = memory else {
         return apply_tail(
-            compile_final_aggregate_in_memory(input, group_by, aggregates, None)?,
+            compile_final_aggregate_in_memory(
+                sources.into_operator()?,
+                group_by,
+                aggregates,
+                None,
+            )?,
             None,
         );
     };
     if group_by.is_empty() {
         return apply_tail(
-            compile_final_aggregate(input, group_by, aggregates, memory)?,
+            compile_final_aggregate(sources.into_operator()?, group_by, aggregates, memory)?,
             memory,
         );
     }
@@ -950,11 +996,19 @@ pub(crate) fn compile_final_aggregate_parallel(
     if parallelism <= 1 {
         let spill = kaveon_exec::partitioned::spill_from_environment(pool)?;
         return apply_tail(
-            hybrid_final_aggregate(input, group_by, aggregates, pool, spill, None)?,
+            hybrid_final_aggregate(
+                sources.into_operator()?,
+                group_by,
+                aggregates,
+                pool,
+                spill,
+                None,
+                None,
+            )?,
             memory,
         );
     }
-    let final_schema = final_schema(input.schema(), &group_by, &aggregates)?;
+    let final_schema = final_schema(sources.schema(), &group_by, &aggregates)?;
     // The per-thread output schema is the tail's, found on an empty
     // operator of the final's schema.
     let schema =
@@ -973,6 +1027,7 @@ pub(crate) fn compile_final_aggregate_parallel(
                 pool,
                 context.spill.clone(),
                 Some(rendezvous.ticket()),
+                Some((context.index, context.workers)),
             )?;
             match &thread_tail {
                 Some(tail) => tail(merged, Some(pool)),
@@ -980,10 +1035,9 @@ pub(crate) fn compile_final_aggregate_parallel(
             }
         });
     Ok(Box::new(
-        kaveon_exec::local_parallel::ParallelPartials::partitioned(
-            input,
+        kaveon_exec::local_parallel::ParallelPartials::broadcast(
+            sources,
             schema,
-            vec!["group_keys".into()],
             operator,
             pool.clone(),
             parallelism,
@@ -1014,6 +1068,7 @@ fn hybrid_final_aggregate(
     memory: &QueryMemoryPool,
     spill: Option<(kaveon_exec::spill::SpillManager, usize)>,
     rendezvous: Option<kaveon_exec::local_parallel::RendezvousTicket>,
+    selection: Option<(usize, usize)>,
 ) -> Result<Box<dyn BatchOperator>> {
     let group_types = grouped_aggregate_key_types(input.schema())?;
     if group_types.len() != group_by.len() {
@@ -1027,6 +1082,9 @@ fn hybrid_final_aggregate(
     let mut merge = kaveon_exec::final_merge::HybridFinalMerge::new(input, account.clone(), spill)?;
     if let Some(ticket) = rendezvous {
         merge = merge.with_rendezvous(ticket);
+    }
+    if let Some((index, workers)) = selection {
+        merge = merge.with_selection(index, workers);
     }
     Ok(Box::new(HybridFinalOutput {
         merge,
@@ -2235,6 +2293,7 @@ mod tests {
             &pool,
             Some((spill.clone(), 16)),
             None,
+            None,
         )
         .unwrap();
         let mut rows = 0;
@@ -2265,7 +2324,7 @@ mod tests {
 
     #[test]
     fn parallel_final_with_a_top_n_tail_matches_the_serial_merge_and_spills_on_refusal() {
-        // 200 000 keys in partial rows arriving twice: the final merges on
+        // 400 000 keys in partial rows arriving twice: the final merges on
         // several threads with the TopN inside each, and the union settles
         // to the same top rows as a serial merge and sort. Under a budget
         // the merge cannot hold, each thread spills its table and merges
@@ -2273,8 +2332,8 @@ mod tests {
         // group once, complete.
         let mut batches = Vec::new();
         for round in 0..2i64 {
-            for start in (0..200_000).step_by(8_192) {
-                let groups = (start..(start + 8_192).min(200_000))
+            for start in (0..400_000).step_by(8_192) {
+                let groups = (start..(start + 8_192).min(400_000))
                     .map(|key| GroupedAggregateState {
                         group_keys: vec![AggregateValue::Int64(key)],
                         states: vec![AggregateState::Count((key % 7 + round) as u64 + 1)],
@@ -2321,17 +2380,42 @@ mod tests {
                 )
             }
         });
-        for (name, budget) in [("roomy", 64 * 1024 * 1024u64), ("tight", 10 * 1024 * 1024)] {
+        // The rows from one source on the calling thread, and from three
+        // sources read on threads of their own (the exchange's payloads).
+        let here = |batches: &Vec<RecordBatch>| {
+            Sources::Here(Box::new(BatchInput::new(schema.clone(), batches.clone())))
+        };
+        let threads = |batches: &Vec<RecordBatch>| Sources::Threads {
+            schema: schema.clone(),
+            openers: batches
+                .chunks(batches.len().div_ceil(3))
+                .map(|chunk| {
+                    let schema = schema.clone();
+                    let chunk = chunk.to_vec();
+                    Box::new(move || {
+                        Ok(Box::new(BatchInput::new(schema, chunk)) as Box<dyn BatchOperator>)
+                    }) as kaveon_exec::local_parallel::SourceOpener
+                })
+                .collect(),
+        };
+        type SourcesOf<'a> = &'a dyn Fn(&Vec<RecordBatch>) -> Sources;
+        let cases: [(&str, u64, SourcesOf<'_>); 4] = [
+            ("roomy", 128 * 1024 * 1024, &here),
+            ("tight", 12 * 1024 * 1024, &here),
+            ("roomy", 128 * 1024 * 1024, &threads),
+            ("tight", 12 * 1024 * 1024, &threads),
+        ];
+        for (name, budget, sources) in cases {
             let pool = QueryMemoryPool::new(name, budget).unwrap();
             let spill_root = std::env::temp_dir().join(format!("kaveon-final-tail-{name}"));
             let spill =
-                kaveon_exec::spill::SpillManager::new(&spill_root, 64 * 1024 * 1024).unwrap();
+                kaveon_exec::spill::SpillManager::new(&spill_root, 1024 * 1024 * 1024).unwrap();
             // The tight budget cannot hold the merge in memory, so the
             // spill root stands in for the environment's.
             pool.shared_resource("kaveon.exec.hash-spill.v1", || Ok((spill.clone(), 16usize)))
                 .unwrap();
             let merged = compile_final_aggregate_parallel(
-                Box::new(BatchInput::new(schema.clone(), batches.clone())),
+                sources(&batches),
                 vec!["key".into()],
                 expressions.clone(),
                 Some(&pool),
@@ -2383,6 +2467,7 @@ mod tests {
             vec![AggExpr::new(AggFunc::Count, "*")],
             &pool,
             Some((spill.clone(), 16)),
+            None,
             None,
         )
         .unwrap();

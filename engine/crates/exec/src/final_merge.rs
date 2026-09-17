@@ -16,14 +16,14 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use ahash::RandomState;
-use arrow::array::{ArrayBuilder, BinaryArray, BinaryBuilder};
+use arrow::array::{Array, ArrayBuilder, BinaryArray, BinaryBuilder, BooleanArray};
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use kaveon_core::{BatchOperator, KaveonError, MemoryReservation, OperatorMemoryAccount, Result};
 
 use crate::aggregate::{grouped_aggregate_key_types, grouped_aggregate_output_types};
 use crate::incremental_aggregate::{IncrementalAggregateMerger, MergedGroups};
-use crate::local_parallel::RendezvousTicket;
+use crate::local_parallel::{RendezvousTicket, ThreadSelector};
 use crate::partitioned::RunSource;
 use crate::spill::{SpillManager, SpillRun, SpillRunWriter};
 
@@ -69,6 +69,9 @@ pub struct HybridFinalMerge {
     spill_reserve: Option<MemoryReservation>,
     /// Where the merge waits for its sibling threads before emitting.
     rendezvous: Option<RendezvousTicket>,
+    /// This merge sees every batch and keeps the rows whose key hashes
+    /// to its thread.
+    selection: Option<(ThreadSelector, usize)>,
     /// Runs on the disk by sub-partition, each a set of distinct groups.
     runs: Vec<Vec<SpillRun>>,
     /// Sub-partitions still to merge back once the input is drained.
@@ -115,6 +118,7 @@ impl HybridFinalMerge {
             merger: None,
             spill_reserve: None,
             rendezvous: None,
+            selection: None,
             runs: (0..partitions).map(|_| Vec::new()).collect(),
             pending: VecDeque::new(),
             drained: false,
@@ -128,6 +132,14 @@ impl HybridFinalMerge {
     #[must_use]
     pub fn with_rendezvous(mut self, ticket: RendezvousTicket) -> Self {
         self.rendezvous = Some(ticket);
+        self
+    }
+
+    /// Thread `index` of `workers` that each see every batch: keep the
+    /// rows whose encoded key hashes to this thread.
+    #[must_use]
+    pub fn with_selection(mut self, index: usize, workers: usize) -> Self {
+        self.selection = (workers > 1).then(|| (ThreadSelector::new(workers), index));
         self
     }
 
@@ -239,6 +251,15 @@ impl HybridFinalMerge {
             if grouped_aggregate_output_types(&batch.schema())? != self.output_types {
                 return Err(error("final aggregate input output schema changed"));
             }
+            let batch = match &self.selection {
+                Some((selector, index)) => {
+                    let Some(batch) = select_rows(&batch, selector, *index)? else {
+                        continue;
+                    };
+                    batch
+                }
+                None => batch,
+            };
             self.push(batch)?;
         }
         Ok(())
@@ -403,6 +424,33 @@ impl HybridFinalMerge {
     }
 }
 
+/// The rows of a grouped-state batch whose key hashes to thread `index`,
+/// or None when there are none; the batch itself when they all do.
+fn select_rows(
+    batch: &RecordBatch,
+    selector: &ThreadSelector,
+    index: usize,
+) -> Result<Option<RecordBatch>> {
+    let keys = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .ok_or_else(|| error("invalid aggregate key column"))?;
+    let mut kept = 0usize;
+    let mask = BooleanArray::from_iter((0..batch.num_rows()).map(|row| {
+        let mine = !keys.is_null(row) && selector.thread_of(keys.value(row)) == index;
+        kept += usize::from(mine);
+        Some(mine)
+    }));
+    if kept == 0 {
+        return Ok(None);
+    }
+    if kept == batch.num_rows() {
+        return Ok(Some(batch.clone()));
+    }
+    Ok(Some(arrow::compute::filter_record_batch(batch, &mask)?))
+}
+
 /// Bytes per row of a grouped-state batch: its key and state bytes with
 /// their offsets, over its rows.
 fn encoded_row_bytes(batch: &RecordBatch) -> Result<u64> {
@@ -441,7 +489,9 @@ mod tests {
         grouped_aggregate_states_to_typed_batch,
     };
     use crate::incremental_aggregate::{IncrementalAggregateMerger, MergedGroups};
-    use crate::local_parallel::{ParallelPartials, ThreadOperator};
+    use crate::local_parallel::{
+        ParallelPartials, Rendezvous, SourceOpener, Sources, ThreadContext, ThreadOperator,
+    };
     use crate::spill::SpillManager;
 
     /// The q33 shape: `GROUP BY WatchID, ClientIP` with `COUNT(*)`,
@@ -567,11 +617,19 @@ mod tests {
     }
 
     /// The hybrid merge over a source, each unit of complete groups
-    /// finalised as one batch: what each thread runs now.
+    /// finalised in batches of `OUTPUT_ROWS` rows built from the unit's
+    /// columns while they stay whole: what each thread runs now, the way
+    /// the fragment executor emits it.
+    const OUTPUT_ROWS: usize = 4_096;
     struct HybridFinal {
         merge: HybridFinalMerge,
         schema: SchemaRef,
         account: kaveon_core::OperatorMemoryAccount,
+        current: Option<(
+            Box<crate::columnar_aggregate::ColumnarGroups>,
+            Vec<kaveon_core::MemoryReservation>,
+            usize,
+        )>,
         held: Option<kaveon_core::MemoryReservation>,
     }
     impl BatchOperator for HybridFinal {
@@ -580,13 +638,31 @@ mod tests {
         }
         fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
             self.held = None;
-            let Some((merged, reservations)) = self.merge.next_groups()? else {
-                return Ok(None);
-            };
-            let batch = finalized(merged)?;
-            drop(reservations);
-            self.held = Some(self.account.reserve(batch.get_array_memory_size() as u64)?);
-            Ok(Some(batch))
+            loop {
+                if let Some((groups, _, offset)) = &mut self.current
+                    && *offset < groups.len()
+                {
+                    let end = (*offset + OUTPUT_ROWS).min(groups.len());
+                    let (keys, outputs) = groups.final_arrays(*offset..end, &OUTPUT_TYPES)?;
+                    *offset = end;
+                    let batch = RecordBatch::try_new(
+                        self.schema.clone(),
+                        keys.into_iter().chain(outputs).collect(),
+                    )?;
+                    self.held = Some(self.account.reserve(batch.get_array_memory_size() as u64)?);
+                    return Ok(Some(batch));
+                }
+                self.current = None;
+                let Some((merged, reservations)) = self.merge.next_groups()? else {
+                    return Ok(None);
+                };
+                let MergedGroups::Columnar(groups) = merged else {
+                    return Err(KaveonError::Execution(
+                        "expected the columnar layout".into(),
+                    ));
+                };
+                self.current = Some((groups, reservations, 0));
+            }
         }
     }
     fn hybrid_final(
@@ -599,8 +675,105 @@ mod tests {
             merge: HybridFinalMerge::new(source, account.clone(), spill)?,
             schema: final_schema(),
             account,
+            current: None,
             held: None,
         }))
+    }
+
+    /// The hybrid merge as one of `workers` threads that each see every
+    /// batch: keeps its own rows, waits for the others before emitting.
+    fn hybrid_final_of(
+        source: Box<dyn BatchOperator>,
+        pool: &QueryMemoryPool,
+        context: &ThreadContext,
+        rendezvous: &Arc<Rendezvous>,
+    ) -> Result<Box<dyn BatchOperator>> {
+        let account = pool.operator("final-aggregate")?;
+        Ok(Box::new(HybridFinal {
+            merge: HybridFinalMerge::new(source, account.clone(), context.spill.clone())?
+                .with_selection(context.index, context.workers)
+                .with_rendezvous(rendezvous.ticket()),
+            schema: final_schema(),
+            account,
+            current: None,
+            held: None,
+        }))
+    }
+
+    /// The batches as `count` Arrow IPC streams, the way an exchange holds
+    /// one spooled payload per producer.
+    fn ipc_payloads(batches_all: &[RecordBatch], count: usize) -> Vec<Arc<[u8]>> {
+        let per_payload = batches_all.len().div_ceil(count);
+        batches_all
+            .chunks(per_payload)
+            .map(|chunk| {
+                let mut bytes = Vec::new();
+                let mut writer =
+                    arrow::ipc::writer::StreamWriter::try_new(&mut bytes, &chunk[0].schema())
+                        .unwrap();
+                for batch in chunk {
+                    writer.write(batch).unwrap();
+                }
+                writer.finish().unwrap();
+                Arc::from(bytes)
+            })
+            .collect()
+    }
+
+    /// One payload decoded batch by batch, as the exchange input decodes
+    /// its spool.
+    struct IpcSource {
+        schema: SchemaRef,
+        reader: arrow::ipc::reader::StreamReader<std::io::Cursor<Arc<[u8]>>>,
+    }
+    impl BatchOperator for IpcSource {
+        fn schema(&self) -> &SchemaRef {
+            &self.schema
+        }
+        fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+            Ok(self.reader.next().transpose()?)
+        }
+    }
+    fn ipc_source(payload: &Arc<[u8]>) -> Box<dyn BatchOperator> {
+        let reader = arrow::ipc::reader::StreamReader::try_new(
+            std::io::Cursor::new(Arc::clone(payload)),
+            None,
+        )
+        .unwrap();
+        Box::new(IpcSource {
+            schema: reader.schema(),
+            reader,
+        })
+    }
+
+    /// Every payload decoded on the calling thread, one after another.
+    fn ipc_sources_here(payloads: &[Arc<[u8]>]) -> Box<dyn BatchOperator> {
+        Sources::Threads {
+            schema: ipc_source(&payloads[0]).schema().clone(),
+            openers: payloads
+                .iter()
+                .map(|payload| {
+                    let payload = Arc::clone(payload);
+                    Box::new(move || Ok(ipc_source(&payload))) as SourceOpener
+                })
+                .collect(),
+        }
+        .into_operator()
+        .unwrap()
+    }
+
+    /// Every payload decoded on a thread of its own.
+    fn ipc_sources_threads(payloads: &[Arc<[u8]>]) -> Sources {
+        Sources::Threads {
+            schema: ipc_source(&payloads[0]).schema().clone(),
+            openers: payloads
+                .iter()
+                .map(|payload| {
+                    let payload = Arc::clone(payload);
+                    Box::new(move || Ok(ipc_source(&payload))) as SourceOpener
+                })
+                .collect(),
+        }
     }
 
     #[derive(Debug)]
@@ -666,7 +839,7 @@ mod tests {
         let pool = QueryMemoryPool::new("fits", 64 << 20).unwrap();
         let mut merged = hybrid_final(batches(&batches_all), &pool, None).unwrap();
         let totals = totals(&mut *merged).unwrap();
-        assert_eq!(totals.batches, 1);
+        assert_eq!(totals.batches, totals.rows.div_ceil(OUTPUT_ROWS));
         assert_eq!(totals.rows, 50_000 - 50_000 / REPEAT_EVERY);
         assert_eq!(totals.count, 50_000);
         drop(merged);
@@ -738,7 +911,7 @@ mod tests {
             sum,
             (0..ROWS).filter(|i| i.is_multiple_of(3)).count() as i64
         );
-        assert!(batches_out > 1 && batches_out <= 8, "{batches_out}");
+        assert!(batches_out > 1, "{batches_out}");
         let snapshot = spill.snapshot();
         assert!(snapshot.runs_written > 0);
         assert_eq!(snapshot.compactions, 0);
@@ -844,10 +1017,25 @@ mod tests {
         );
         let expected_groups = ROWS - ROWS / REPEAT_EVERY;
         let expected_sum = (0..ROWS).filter(|i| i.is_multiple_of(3)).count() as i64;
+        // Three producers' payloads, as the exchange spools them.
+        const PRODUCERS: usize = 3;
+        let payloads = ipc_payloads(&batches_all, PRODUCERS);
+        println!(
+            "{PRODUCERS} IPC payloads of {} MiB",
+            payloads.iter().map(|p| p.len()).sum::<usize>() >> 20
+        );
 
-        // The pump alone: the calling thread partitions every batch by
-        // the thread's hash before any merge thread sees a row.
+        // The pump alone: the calling thread decodes every payload and
+        // partitions every batch by the thread's hash before any merge
+        // thread sees a row.
         {
+            let started = std::time::Instant::now();
+            let mut source = ipc_sources_here(&payloads);
+            let mut decoded = 0usize;
+            while let Some(batch) = source.next_batch().unwrap() {
+                decoded += batch.num_rows();
+            }
+            let decode = started.elapsed();
             let partitioner = crate::exchange::HashPartitioner::try_new_salted(
                 &batches_all[0].schema(),
                 &["group_keys".into()],
@@ -861,7 +1049,9 @@ mod tests {
                 parts += partitioner.partition(batch).unwrap().len();
             }
             println!(
-                "pump alone: {:.2?} to partition {ROWS} rows into {parts} parts ({:.0} ns/row)",
+                "pump alone: {decode:.2?} to decode {decoded} rows ({:.0} ns/row), {:.2?} to \
+                 partition them into {parts} parts ({:.0} ns/row)",
+                decode.as_nanos() as f64 / ROWS as f64,
                 started.elapsed(),
                 started.elapsed().as_nanos() as f64 / ROWS as f64
             );
@@ -879,7 +1069,7 @@ mod tests {
             let operator: ThreadOperator =
                 Arc::new(move |source, pool, _| in_memory_final(source, pool));
             let mut attempt = ParallelPartials::partitioned(
-                batches(&batches_all),
+                ipc_sources_here(&payloads),
                 final_schema(),
                 vec!["group_keys".into()],
                 operator,
@@ -899,7 +1089,7 @@ mod tests {
             // path, one partition merged at a time on the calling thread.
             let replay_started = std::time::Instant::now();
             let partitions = crate::partitioned::partition_sources(
-                batches(&batches_all),
+                ipc_sources_here(&payloads),
                 &["group_keys".into()],
                 16,
                 &pool.operator("final-partition").unwrap(),
@@ -945,24 +1135,60 @@ mod tests {
             assert_eq!(spill.snapshot().current_bytes, 0);
         }
 
-        for round in 1..=3 {
+        // After: the hybrid merge, fed by the calling thread partitioning
+        // every batch (as before) and by the payloads decoded on threads
+        // of their own with every merge thread keeping its rows; under
+        // the refusing budget, and under one that holds the merge.
+        let mut runs = Vec::new();
+        for budget_name in ["tight", "roomy"] {
+            for variant in ["partitioned", "broadcast"] {
+                for round in 1..=3 {
+                    runs.push((budget_name, variant, round));
+                }
+            }
+        }
+        for (budget_name, variant, round) in runs {
+            let budget = if budget_name == "tight" {
+                budget
+            } else {
+                2u64 << 30
+            };
             let pool = QueryMemoryPool::new("final-after", budget).unwrap();
             let spill = SpillManager::new(spill_root("after"), 8 << 30).unwrap();
             pool.shared_resource("kaveon.exec.hash-spill.v1", || Ok((spill.clone(), 16usize)))
                 .unwrap();
             let started = std::time::Instant::now();
-            let operator: ThreadOperator = Arc::new(move |source, pool, context| {
-                hybrid_final(source, pool, context.spill.clone())
-            });
-            let mut merged = ParallelPartials::partitioned(
-                batches(&batches_all),
-                final_schema(),
-                vec!["group_keys".into()],
-                operator,
-                pool.clone(),
-                THREADS,
-            )
-            .unwrap();
+            let mut merged = if variant == "partitioned" {
+                // The calling thread hash-partitions every batch to its
+                // thread; each thread merges its part.
+                let operator: ThreadOperator = Arc::new(move |source, pool, context| {
+                    hybrid_final(source, pool, context.spill.clone())
+                });
+                ParallelPartials::partitioned(
+                    ipc_sources_here(&payloads),
+                    final_schema(),
+                    vec!["group_keys".into()],
+                    operator,
+                    pool.clone(),
+                    THREADS,
+                )
+                .unwrap()
+            } else {
+                // Three sources read on their own threads, every batch to
+                // every merge thread, each keeping its own rows.
+                let rendezvous = Rendezvous::new(THREADS);
+                let operator: ThreadOperator = Arc::new(move |source, pool, context| {
+                    hybrid_final_of(source, pool, context, &rendezvous)
+                });
+                ParallelPartials::broadcast(
+                    ipc_sources_threads(&payloads),
+                    final_schema(),
+                    operator,
+                    pool.clone(),
+                    THREADS,
+                )
+                .unwrap()
+            };
             let totals_all = totals(&mut merged).unwrap();
             let total = started.elapsed();
             assert_eq!(totals_all.rows, expected_groups);
@@ -971,9 +1197,9 @@ mod tests {
             let snapshot = spill.snapshot();
             let memory = pool.snapshot();
             println!(
-                "after, round {round}: {total:.2?} wall, {} output batches; spill {} MiB written \
-                 in {} runs, {} compactions, write {:.2?} read {:.2?}; memory peak {} MiB, {} \
-                 reservation calls",
+                "after ({variant}, {budget_name}), round {round}: {total:.2?} wall, {} output \
+                 batches; spill {} MiB written in {} runs, {} compactions, write {:.2?} read \
+                 {:.2?}; memory peak {} MiB, {} reservation calls",
                 totals_all.batches,
                 snapshot.bytes_written >> 20,
                 snapshot.runs_written,
