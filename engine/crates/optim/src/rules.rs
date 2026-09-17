@@ -278,19 +278,23 @@ fn prune_columns(plan: LogicalPlan, required: Option<HashSet<String>>) -> Logica
                 distribution,
             }
         }
+        // A semi or anti join emits its left input's rows, which need what
+        // is required above plus the probe key; the subquery side names
+        // its own output (its projection prunes beneath it), and a bare
+        // scan there is an existence test that reads what it reads.
         LogicalPlan::SemiJoin {
             left,
             right,
             left_key,
             right_key,
         } => {
-            let mut left_columns = required.clone().unwrap_or_default();
-            let mut right_columns = required.unwrap_or_default();
-            collect_columns(&left_key, &mut left_columns);
-            collect_columns(&right_key, &mut right_columns);
+            let left_required = required.map(|mut columns| {
+                collect_columns(&left_key, &mut columns);
+                columns
+            });
             LogicalPlan::SemiJoin {
-                left: Box::new(prune_columns(*left, Some(left_columns))),
-                right: Box::new(prune_columns(*right, Some(right_columns))),
+                left: Box::new(prune_columns(*left, left_required)),
+                right: Box::new(prune_columns(*right, None)),
                 left_key,
                 right_key,
             }
@@ -301,13 +305,13 @@ fn prune_columns(plan: LogicalPlan, required: Option<HashSet<String>>) -> Logica
             left_key,
             right_key,
         } => {
-            let mut left_columns = required.clone().unwrap_or_default();
-            let mut right_columns = required.unwrap_or_default();
-            collect_columns(&left_key, &mut left_columns);
-            collect_columns(&right_key, &mut right_columns);
+            let left_required = required.map(|mut columns| {
+                collect_columns(&left_key, &mut columns);
+                columns
+            });
             LogicalPlan::AntiJoin {
-                left: Box::new(prune_columns(*left, Some(left_columns))),
-                right: Box::new(prune_columns(*right, Some(right_columns))),
+                left: Box::new(prune_columns(*left, left_required)),
+                right: Box::new(prune_columns(*right, None)),
                 left_key,
                 right_key,
             }
@@ -1247,7 +1251,7 @@ mod tests {
             LogicalPlan::Project { input, .. }
             | LogicalPlan::Filter { input, .. }
             | LogicalPlan::Sort { input, .. } => scan_columns(input, scans),
-            LogicalPlan::Join { left, right, .. } => {
+            LogicalPlan::Join { left, right, .. } | LogicalPlan::SemiJoin { left, right, .. } => {
                 scan_columns(left, scans);
                 scan_columns(right, scans);
             }
@@ -1500,6 +1504,39 @@ mod tests {
         let mut scans = Vec::new();
         scan_columns(&filtered_side, &mut scans);
         assert_eq!(scans, vec![&None, &None]);
+        // A semi join asked for everything keeps its left whole; asked for
+        // named columns it adds its probe key. The subquery side prunes by
+        // its own projection.
+        let semi = |required: Option<Vec<&str>>| {
+            let plan = LogicalPlan::SemiJoin {
+                left: Box::new(aliased("orders", "o")),
+                right: Box::new(LogicalPlan::Project {
+                    input: Box::new(aliased("lineitem", "l")),
+                    columns: vec![column("l_orderkey")],
+                }),
+                left_key: column("o_orderkey"),
+                right_key: column("*"),
+            };
+            let plan = match required {
+                Some(columns) => LogicalPlan::Project {
+                    input: Box::new(plan),
+                    columns: columns.into_iter().map(column).collect(),
+                },
+                None => plan,
+            };
+            let mut scans = Vec::new();
+            let pruned = push_projection_down(plan);
+            scan_columns(&pruned, &mut scans);
+            scans.into_iter().cloned().collect::<Vec<_>>()
+        };
+        assert_eq!(semi(None), vec![None, Some(vec!["l_orderkey".to_owned()])]);
+        assert_eq!(
+            semi(Some(vec!["o_custkey"])),
+            vec![
+                Some(vec!["o_custkey".to_owned(), "o_orderkey".to_owned()]),
+                Some(vec!["l_orderkey".to_owned()])
+            ]
+        );
         // A bare column the relation names do not describe keeps both
         // sides of that join whole.
         let bare = push_projection_down(LogicalPlan::Project {
