@@ -727,17 +727,68 @@ impl BatchSource for AdlsBatchSource {
     }
 }
 
+/// The object reader with identity-pinned caches: ADLS first, but any
+/// `object_store` backend through [`AdlsParquetReader::over_store`]. Its
+/// caches are namespaced by `account/container`, so a file read through a
+/// directory table and the same file read as a single-object table share
+/// their footer, object metadata and decoded batches.
 #[derive(Clone)]
 pub struct AdlsParquetReader {
     account: String,
     container: String,
     object_path: String,
     auth_mode: AdlsAuthMode,
+    /// A store supplied by the caller (a directory table's store, a test
+    /// store) in place of the Azure client built from `account`/`container`.
+    store: Option<Arc<dyn ObjectStore>>,
     batch_size: usize,
     columns: Option<Vec<String>>,
     predicate: Option<StoragePredicate>,
     partition: Option<ScanPartition>,
     metrics: Option<ScanMetrics>,
+}
+
+/// An object whose identity and footer are resolved: what a scan needs before
+/// it decides how to decode.
+pub(crate) struct OpenedObject {
+    store: Arc<dyn ObjectStore>,
+    cache_key: String,
+    object_metadata: object_store::ObjectMeta,
+    identity: String,
+    metadata: ArrowReaderMetadata,
+}
+
+impl OpenedObject {
+    /// The file's full Arrow schema, before projection.
+    pub(crate) fn schema(&self) -> &SchemaRef {
+        self.metadata.schema()
+    }
+
+    pub(crate) fn row_count(&self) -> Result<u64> {
+        u64::try_from(self.metadata.metadata().file_metadata().num_rows())
+            .map_err(|_| storage_error("Parquet metadata contains a negative row count"))
+    }
+
+    pub(crate) fn row_group_count(&self) -> usize {
+        self.metadata.metadata().num_row_groups()
+    }
+}
+
+/// Why an object could not be opened: the location holds no object (a
+/// directory table, or nothing at all), or a failure that stands.
+pub(crate) enum OpenError {
+    /// No object at this path.
+    NotFound(String),
+    Failed(KaveonError),
+}
+
+impl From<OpenError> for KaveonError {
+    fn from(value: OpenError) -> Self {
+        match value {
+            OpenError::NotFound(path) => storage_error(format!("no object at '{path}'")),
+            OpenError::Failed(error) => error,
+        }
+    }
 }
 
 impl AdlsParquetReader {
@@ -751,12 +802,27 @@ impl AdlsParquetReader {
             container: container.into(),
             object_path: object_path.into(),
             auth_mode: AdlsAuthMode::Environment,
+            store: None,
             batch_size: DEFAULT_BATCH_SIZE,
             columns: None,
             predicate: None,
             partition: None,
             metrics: None,
         }
+    }
+
+    /// A reader over a store the caller already holds. `account` and
+    /// `container` only name the cache namespace; for an ADLS store they are
+    /// the real ones so the caches are shared with [`Self::from_abfss_uri`].
+    pub(crate) fn over_store(
+        store: Arc<dyn ObjectStore>,
+        account: impl Into<String>,
+        container: impl Into<String>,
+        object_path: impl Into<String>,
+    ) -> Self {
+        let mut reader = Self::new(account, container, object_path);
+        reader.store = Some(store);
+        reader
     }
 
     pub fn from_abfss_uri(uri: &str) -> Result<Self> {
@@ -775,6 +841,15 @@ impl AdlsParquetReader {
         let reader = Self::new(account, container, object_path.trim_start_matches('/'));
         reader.validate()?;
         Ok(reader)
+    }
+
+    /// The cache namespace (`account`, `container`) and the object path.
+    pub(crate) fn namespace_and_path(&self) -> (String, String, String) {
+        (
+            self.account.clone(),
+            self.container.clone(),
+            self.object_path.clone(),
+        )
     }
 
     pub fn with_auth_mode(mut self, auth_mode: AdlsAuthMode) -> Self {
@@ -814,27 +889,31 @@ impl AdlsParquetReader {
         self.validate()?;
         let metrics = self.metrics.clone().unwrap_or_default();
         metrics.files_considered(1);
-        let store_key = format!("{}/{}/{:?}", self.account, self.container, self.auth_mode);
-        let store: Arc<dyn ObjectStore> = match cached_object_store(&store_key) {
-            Some(store) => {
-                metrics.object_store_cache_hit();
-                store
-            }
-            None => {
-                let store: Arc<dyn ObjectStore> = Arc::new(
-                    MicrosoftAzureBuilder::from_env()
-                        .with_account(&self.account)
-                        .with_container_name(&self.container)
-                        .with_use_azure_cli(self.auth_mode == AdlsAuthMode::AzureCli)
-                        .build()
-                        .map_err(object_store_error)?,
-                );
-                cache_object_store(store_key, store.clone());
-                store
-            }
-        };
-        let path =
-            Path::parse(&self.object_path).map_err(|error| storage_error(error.to_string()))?;
+        let store = self.store(&metrics)?;
+        let opened = self.open(store, &metrics).await?;
+        metrics.file_opened();
+        self.stream(opened, metrics).await
+    }
+
+    /// The store this reader reads from: the one supplied, else the cached
+    /// Azure client for `account`/`container`, built once per process.
+    pub(crate) fn store(&self, metrics: &ScanMetrics) -> Result<Arc<dyn ObjectStore>> {
+        if let Some(store) = &self.store {
+            return Ok(Arc::clone(store));
+        }
+        adls_store(&self.account, &self.container, self.auth_mode, metrics)
+    }
+
+    /// Resolve the object's identity and footer, through the single-flight
+    /// caches. `NotFound` is reported apart from other failures because a
+    /// location that holds no object may be a directory table.
+    pub(crate) async fn open(
+        &self,
+        store: Arc<dyn ObjectStore>,
+        metrics: &ScanMetrics,
+    ) -> std::result::Result<OpenedObject, OpenError> {
+        let path = Path::parse(&self.object_path)
+            .map_err(|error| OpenError::Failed(storage_error(error.to_string())))?;
         let footer_started = Instant::now();
         let cache_key = format!("{}/{}/{}", self.account, self.container, self.object_path);
         // A query can schedule several fragments for the same object at once.
@@ -861,7 +940,13 @@ impl AdlsParquetReader {
                         metadata
                     }
                     None => {
-                        let metadata = store.head(&path).await.map_err(object_store_error)?;
+                        let metadata = match store.head(&path).await {
+                            Ok(metadata) => metadata,
+                            Err(object_store::Error::NotFound { .. }) => {
+                                return Err(OpenError::NotFound(self.object_path.clone()));
+                            }
+                            Err(error) => return Err(OpenError::Failed(object_store_error(error))),
+                        };
                         cache_object_metadata(cache_key.clone(), metadata.clone());
                         metadata
                     }
@@ -875,7 +960,7 @@ impl AdlsParquetReader {
                         let metadata =
                             ArrowReaderMetadata::load_async(&mut object_reader, Default::default())
                                 .await
-                                .map_err(parquet_error)?;
+                                .map_err(|error| OpenError::Failed(parquet_error(error)))?;
                         cache_metadata(cache_key.clone(), identity.clone(), metadata.clone());
                         metadata
                     }
@@ -883,6 +968,30 @@ impl AdlsParquetReader {
                 (object_metadata, identity, metadata)
             }
         };
+        metrics.footer_time(footer_started.elapsed());
+        Ok(OpenedObject {
+            store,
+            cache_key,
+            object_metadata,
+            identity,
+            metadata,
+        })
+    }
+
+    /// Decode an opened object: projection, row-group pruning, the partition's
+    /// row groups, and the lanes.
+    pub(crate) async fn stream(
+        &self,
+        opened: OpenedObject,
+        metrics: ScanMetrics,
+    ) -> Result<AdlsBatchStream> {
+        let OpenedObject {
+            store,
+            cache_key,
+            object_metadata,
+            identity,
+            metadata,
+        } = opened;
         let preload =
             should_preload_object(object_metadata.size, metadata.metadata().num_row_groups());
         let object_cache_key = preload.then(|| format!("{cache_key}:{identity}"));
@@ -914,9 +1023,6 @@ impl AdlsParquetReader {
                     .build()
                     .map_err(parquet_error)
             };
-        metrics.footer_time(footer_started.elapsed());
-        metrics.file_opened();
-
         let mut row_groups = if let Some(predicate) = &self.predicate {
             let predicate = predicate.coerced_for(&schema);
             validate_predicate(&predicate, &schema)?;
@@ -1070,7 +1176,32 @@ impl AdlsParquetReader {
                     }
                 };
                 runtime.block_on(async move {
-                    let mut stream = match self.read().await {
+                    let metrics = self.metrics.clone().unwrap_or_default();
+                    let store = match self.store(&metrics) {
+                        Ok(store) => store,
+                        Err(error) => {
+                            let _ = initial_sender.send(Err(error));
+                            return;
+                        }
+                    };
+                    let opened = match self.open(Arc::clone(&store), &metrics).await {
+                        Ok(opened) => opened,
+                        Err(OpenError::NotFound(_)) => {
+                            // No object at the location: a directory of
+                            // Parquet files is a table too.
+                            self.directory_reader(store, metrics)
+                                .run(initial_sender, batch_sender)
+                                .await;
+                            return;
+                        }
+                        Err(OpenError::Failed(error)) => {
+                            let _ = initial_sender.send(Err(error));
+                            return;
+                        }
+                    };
+                    metrics.files_considered(1);
+                    metrics.file_opened();
+                    let mut stream = match self.stream(opened, metrics).await {
                         Ok(stream) => stream,
                         Err(error) => {
                             let _ = initial_sender.send(Err(error));
@@ -1113,6 +1244,33 @@ impl AdlsParquetReader {
         })
     }
 
+    /// The same location read as a directory table, with this reader's
+    /// projection, predicate, partition and metrics.
+    fn directory_reader(
+        &self,
+        store: Arc<dyn ObjectStore>,
+        metrics: ScanMetrics,
+    ) -> crate::ObjectDirectoryReader {
+        let mut reader = crate::ObjectDirectoryReader::new(
+            store,
+            &self.account,
+            &self.container,
+            Path::from(self.object_path.as_str()),
+        )
+        .with_batch_size(self.batch_size)
+        .with_metrics(metrics);
+        if let Some(columns) = &self.columns {
+            reader = reader.with_columns(columns.clone());
+        }
+        if let Some(predicate) = &self.predicate {
+            reader = reader.with_predicate(predicate.clone());
+        }
+        if let Some(partition) = self.partition {
+            reader = reader.with_partition(partition);
+        }
+        reader
+    }
+
     fn validate(&self) -> Result<()> {
         for (name, value) in [
             ("ADLS account", self.account.as_str()),
@@ -1133,6 +1291,30 @@ impl AdlsParquetReader {
         }
         Ok(())
     }
+}
+
+/// The cached Azure client for one account, container and credential mode.
+pub(crate) fn adls_store(
+    account: &str,
+    container: &str,
+    auth_mode: AdlsAuthMode,
+    metrics: &ScanMetrics,
+) -> Result<Arc<dyn ObjectStore>> {
+    let store_key = format!("{account}/{container}/{auth_mode:?}");
+    if let Some(store) = cached_object_store(&store_key) {
+        metrics.object_store_cache_hit();
+        return Ok(store);
+    }
+    let store: Arc<dyn ObjectStore> = Arc::new(
+        MicrosoftAzureBuilder::from_env()
+            .with_account(account)
+            .with_container_name(container)
+            .with_use_azure_cli(auth_mode == AdlsAuthMode::AzureCli)
+            .build()
+            .map_err(object_store_error)?,
+    );
+    cache_object_store(store_key, store.clone());
+    Ok(store)
 }
 
 fn should_preload_object(size: usize, row_groups: usize) -> bool {
