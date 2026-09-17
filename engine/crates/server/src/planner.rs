@@ -2492,11 +2492,14 @@ mod tests {
                 _ => None,
             })
             .expect("HAVING becomes a filter on the final stage");
+        // `SUM(id) * 2` computes with an aggregate, so the SQL layer lowers
+        // SUM(id) to a named argument column; COUNT(*) has no argument to
+        // lower and binds here to the fragment's own output name.
         assert_eq!(
             filter,
             Expr::And(
                 Box::new(Expr::BinaryOp {
-                    left: Box::new(Expr::Column("sum_id".into())),
+                    left: Box::new(Expr::Column("sum___kaveon_arg_0".into())),
                     op: BinaryOp::Gt,
                     right: Box::new(Expr::Literal(ScalarValue::Int64(100))),
                 }),
@@ -2522,7 +2525,7 @@ mod tests {
             expressions[1].expression,
             Expr::Alias {
                 expr: Box::new(Expr::BinaryOp {
-                    left: Box::new(Expr::Column("sum_id".into())),
+                    left: Box::new(Expr::Column("sum___kaveon_arg_0".into())),
                     op: BinaryOp::Multiply,
                     right: Box::new(Expr::Literal(ScalarValue::Int64(2))),
                 }),
