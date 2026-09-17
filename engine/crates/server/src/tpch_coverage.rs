@@ -46,7 +46,7 @@ const KNOWN_UNSUPPORTED: &[(&str, &str)] = &[
     ),
     (
         "q6",
-        "plan: storage predicate l_quantity < 24 is an integer literal against a double column",
+        "execute: arithmetic between decimal literals (0.06 - 0.01) is unsupported",
     ),
     (
         "q7",
