@@ -60,10 +60,6 @@ impl Editor {
 
     /// Switch between Emacs (the default) and vi editing. Vi starts in
     /// Insert mode so a statement can be typed straight away.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "wired by the shell for --editing-mode vi")
-    )]
     pub fn set_vi(&mut self, enabled: bool) {
         self.area.cancel_selection();
         self.pending = None;
@@ -71,13 +67,6 @@ impl Editor {
     }
 
     /// The vi mode for the status line; `None` in Emacs editing.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "shown on the status line once the shell wires vi mode"
-        )
-    )]
     pub fn mode_label(&self) -> Option<&'static str> {
         self.vi.map(|mode| match mode {
             ViMode::Normal | ViMode::Operator(_) => "NORMAL",

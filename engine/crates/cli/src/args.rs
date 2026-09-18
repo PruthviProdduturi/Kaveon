@@ -46,6 +46,9 @@ pub struct Options {
     pub theme: String,
     pub no_header: bool,
     pub width: Option<u16>,
+    /// The Kaveon platform API for `.ask` (`--api`, `KAVEON_API_URL`); the
+    /// DLM lives there, not on the coordinator.
+    pub api_url: Option<String>,
     /// The catalog or schema came from a flag, the URL path, a config
     /// default, or a later USE — not the built-in `kaveon.default`.
     pub context_explicit: bool,
@@ -127,6 +130,9 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         theme: "dark".to_owned(),
         no_header: false,
         width: None,
+        api_url: std::env::var("KAVEON_API_URL")
+            .ok()
+            .filter(|url| !url.is_empty()),
         context_explicit: false,
         row_limit: Some(crate::shell::rowlimit::DEFAULT_ROW_LIMIT),
         paged: false,
@@ -176,6 +182,11 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             "--paged" => {
                 options.paged = true;
                 index += 1;
+            }
+            "--api" => {
+                let value = take_value(args, &mut index, option)?;
+                reqwest::Url::parse(&value).map_err(|_| "invalid --api URL".to_owned())?;
+                options.api_url = Some(value.trim_end_matches('/').to_owned());
             }
             "--width" => {
                 let value = take_value(args, &mut index, option)?;
@@ -412,6 +423,7 @@ fn config_arguments(text: &str) -> Result<Vec<String>, String> {
                 | "pager"
                 | "theme"
                 | "width"
+                | "api"
                 | "row-limit"
         ) {
             return Err(format!(

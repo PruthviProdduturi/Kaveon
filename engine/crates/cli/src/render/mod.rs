@@ -1,6 +1,5 @@
 //! Everything the client prints. `to_plain` strips styling for tests and
 //! for output that is not a terminal.
-#[allow(dead_code)]
 pub mod ask;
 pub mod cluster;
 pub mod error;
