@@ -18,10 +18,9 @@ use ratatui::{Terminal, TerminalOptions, Viewport};
 use std::io;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// Rows the pinned area occupies: the editor box (up to 4 SQL lines plus
-/// borders) and the status line.
-const VIEWPORT_ROWS: u16 = 7;
-const EDITOR_MAX_ROWS: u16 = VIEWPORT_ROWS - 1;
+/// The editor shows up to this many SQL lines before scrolling inside.
+const EDITOR_MAX_LINES: u16 = 6;
+const EDITOR_MAX_ROWS: u16 = EDITOR_MAX_LINES + 2;
 const CLUSTER_POLL: Duration = Duration::from_secs(30);
 
 type Term = Terminal<CrosstermBackend<io::Stdout>>;
@@ -113,20 +112,23 @@ pub fn run(session: &Session, options: &mut Options) -> Result<(), String> {
     }
 
     enable_raw_mode().map_err(|error| format!("cannot enter raw mode: {error}"))?;
-    let backend = CrosstermBackend::new(io::stdout());
-    let mut terminal = Terminal::with_options(
-        backend,
-        TerminalOptions {
-            viewport: Viewport::Inline(VIEWPORT_ROWS),
-        },
-    )
-    .map_err(|error| format!("cannot initialize the terminal: {error}"))?;
-    let result = event_loop(&mut terminal, &mut app, session, options);
+    let result = event_loop(&mut app, session, options);
     let _ = disable_raw_mode();
-    let _ = terminal.clear();
     println!();
     save_history(&app);
     result
+}
+
+/// An inline viewport of exactly `rows` lines at the cursor. The height is
+/// fixed per terminal, so the loop makes a new one when the editor grows.
+fn make_terminal(rows: u16) -> Result<Term, String> {
+    Terminal::with_options(
+        CrosstermBackend::new(io::stdout()),
+        TerminalOptions {
+            viewport: Viewport::Inline(rows),
+        },
+    )
+    .map_err(|error| format!("cannot initialize the terminal: {error}"))
 }
 
 fn save_history(app: &App) {
@@ -182,15 +184,20 @@ fn is_quit(text: &str) -> bool {
         || matches!(word, ".quit" | ".exit" | ".q")
 }
 
-fn event_loop(
-    terminal: &mut Term,
-    app: &mut App,
-    session: &Session,
-    options: &mut Options,
-) -> Result<(), String> {
+fn event_loop(app: &mut App, session: &Session, options: &mut Options) -> Result<(), String> {
     let host = host_of(&options.server);
     let mut last_cluster_poll = Instant::now();
+    let mut rows = app.editor.height(EDITOR_MAX_ROWS) + 1;
+    let mut owned = make_terminal(rows)?;
     loop {
+        let needed = app.editor.height(EDITOR_MAX_ROWS) + 1;
+        if needed != rows {
+            owned.clear().map_err(|error| error.to_string())?;
+            drop(owned);
+            owned = make_terminal(needed)?;
+            rows = needed;
+        }
+        let terminal = &mut owned;
         let title = box_title(&options.catalog, &options.schema);
         terminal
             .draw(|frame| {
@@ -233,7 +240,10 @@ fn event_loop(
         }
         match app.editor.handle(&key) {
             EditorAction::None => {}
-            EditorAction::Quit => return Ok(()),
+            EditorAction::Quit => {
+                terminal.clear().map_err(|error| error.to_string())?;
+                return Ok(());
+            }
             EditorAction::Clear => {
                 terminal.clear().map_err(|error| error.to_string())?;
             }
@@ -260,11 +270,17 @@ fn event_loop(
                     .collect();
                 emit(terminal, echo)?;
                 if is_quit(&text) {
+                    terminal.clear().map_err(|error| error.to_string())?;
                     return Ok(());
                 }
                 match run_statement(session, options, &text) {
                     Ok(executed) => {
-                        emit_text(terminal, &executed.output, &app.theme, false)?;
+                        emit_text(
+                            terminal,
+                            executed.output.trim_end_matches('\n'),
+                            &app.theme,
+                            false,
+                        )?;
                         if let Some(elapsed) = executed.elapsed_ms {
                             app.last_elapsed_ms = Some(elapsed);
                             app.last_scanned_rows = executed.scanned_rows;
