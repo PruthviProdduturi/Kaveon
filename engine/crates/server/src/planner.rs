@@ -21,10 +21,25 @@ use kaveon_optim::rules::to_storage_predicate;
 use kaveon_sql::logical_plan::{AggregateExpr, JoinDistribution, JoinType, LogicalPlan};
 const AGGREGATE_FUNCTIONS: &[&str] = &["COUNT", "SUM", "AVG", "MIN", "MAX"];
 use kaveon_storage::{
-    AdlsParquetReader, DeltaTableReader, ObjectDeltaReader, ObjectParquetReader, ParquetReader,
-    ScanPartition,
+    AdlsParquetReader, DeltaTableReader, DirectoryListing, ObjectDeltaReader,
+    ObjectDirectoryReader, ObjectParquetReader, ParquetReader, ScanPartition,
 };
 use std::collections::BTreeMap;
+use std::sync::Arc;
+
+/// What planning pinned for one query, keyed by resolved source URI: the
+/// Delta version each scan reads, and the listing each directory Parquet
+/// table was analyzed at. A scan of a pinned source reads exactly what the
+/// statistics that shaped the plan were taken from, whatever lands in the
+/// table meanwhile. The Delta version travels to the workers in the
+/// fragment; the directory listing is pinned on the coordinator only (the
+/// fragment carries the location, and every task lists it under the same
+/// deterministic rule).
+#[derive(Clone, Debug, Default)]
+pub struct SourcePins {
+    pub delta_versions: BTreeMap<String, u64>,
+    pub parquet_directories: BTreeMap<String, Arc<DirectoryListing>>,
+}
 
 const GROUPED_AGGREGATE_STATE_KEY_COLUMN: &str = "group_keys";
 
@@ -41,7 +56,7 @@ pub fn plan_to_operator(
 }
 
 pub fn plan_query(plan: &LogicalPlan, catalog: &CatalogManager) -> Result<PlannedQuery> {
-    plan_query_inner(plan, catalog, None, None)
+    plan_query_inner(plan, catalog, None, None, &SourcePins::default())
 }
 
 pub fn plan_query_with_memory(
@@ -49,7 +64,17 @@ pub fn plan_query_with_memory(
     catalog: &CatalogManager,
     memory: &QueryMemoryPool,
 ) -> Result<PlannedQuery> {
-    plan_query_inner(plan, catalog, None, Some(memory))
+    plan_query_inner(plan, catalog, None, Some(memory), &SourcePins::default())
+}
+
+/// The coordinator-local plan of a query whose sources planning pinned.
+pub fn plan_query_with_pins(
+    plan: &LogicalPlan,
+    catalog: &CatalogManager,
+    memory: &QueryMemoryPool,
+    pins: &SourcePins,
+) -> Result<PlannedQuery> {
+    plan_query_inner(plan, catalog, None, Some(memory), pins)
 }
 
 pub fn plan_partitioned_query(
@@ -57,7 +82,7 @@ pub fn plan_partitioned_query(
     catalog: &CatalogManager,
     partition: ScanPartition,
 ) -> Result<PlannedQuery> {
-    plan_query_inner(plan, catalog, Some(partition), None)
+    plan_query_inner(plan, catalog, Some(partition), None, &SourcePins::default())
 }
 
 pub fn plan_partitioned_query_with_memory(
@@ -66,7 +91,13 @@ pub fn plan_partitioned_query_with_memory(
     partition: ScanPartition,
     memory: &QueryMemoryPool,
 ) -> Result<PlannedQuery> {
-    plan_query_inner(plan, catalog, Some(partition), Some(memory))
+    plan_query_inner(
+        plan,
+        catalog,
+        Some(partition),
+        Some(memory),
+        &SourcePins::default(),
+    )
 }
 
 pub fn qualify_tables(plan: &mut LogicalPlan, catalog: &str, schema: &str) {
@@ -175,6 +206,25 @@ pub fn build_executable_fragments_with_delta_versions(
     worker_count: usize,
     analyzed_delta_versions: &BTreeMap<String, u64>,
 ) -> Result<BTreeMap<StageId, ExecutableFragment>> {
+    build_executable_fragments_with_pins(
+        query_id,
+        plan,
+        catalog,
+        worker_count,
+        &SourcePins {
+            delta_versions: analyzed_delta_versions.clone(),
+            parquet_directories: BTreeMap::new(),
+        },
+    )
+}
+
+pub fn build_executable_fragments_with_pins(
+    query_id: impl Into<String>,
+    plan: &LogicalPlan,
+    catalog: &CatalogManager,
+    worker_count: usize,
+    pins: &SourcePins,
+) -> Result<BTreeMap<StageId, ExecutableFragment>> {
     let graph = build_stage_graph(query_id, plan, worker_count)?;
     let mut builder = ExecutableFragmentBuilder {
         graph: &graph,
@@ -183,7 +233,7 @@ pub fn build_executable_fragments_with_delta_versions(
         next_stage: 0,
         // Keys are resolved source URIs from the same pinned catalog used by
         // this builder. A catalog replacement therefore cannot redirect a pin.
-        delta_versions: analyzed_delta_versions.clone(),
+        delta_versions: pins.delta_versions.clone(),
         iceberg_snapshots: BTreeMap::new(),
     };
     let root = builder.build(plan)?;
@@ -1398,8 +1448,9 @@ fn plan_query_inner(
     catalog: &CatalogManager,
     partition: Option<ScanPartition>,
     memory: Option<&QueryMemoryPool>,
+    pins: &SourcePins,
 ) -> Result<PlannedQuery> {
-    plan_query_with_predicate(plan, catalog, None, partition, memory)
+    plan_query_with_predicate(plan, catalog, None, partition, memory, pins)
 }
 
 fn plan_query_with_predicate(
@@ -1408,6 +1459,7 @@ fn plan_query_with_predicate(
     storage_predicate: Option<&kaveon_core::StoragePredicate>,
     partition: Option<ScanPartition>,
     memory: Option<&QueryMemoryPool>,
+    pins: &SourcePins,
 ) -> Result<PlannedQuery> {
     match plan {
         LogicalPlan::Scan { table, columns, .. } => {
@@ -1417,6 +1469,35 @@ fn plan_query_with_predicate(
 
             let (source, scan_metrics): (Box<dyn BatchSource>, _) = match resolved.table.format {
                 DataFormat::Parquet => {
+                    // A directory table planning already listed is read at
+                    // that listing; every other location is probed by the
+                    // reader itself (one object, or a directory listed now).
+                    if let Some(listing) = pins.parquet_directories.get(&path)
+                        && (path.starts_with("s3://") || path.starts_with("abfss://"))
+                    {
+                        let mut reader = ObjectDirectoryReader::from_uri(&path)?
+                            .with_listing(Arc::clone(listing));
+                        if let Some(cols) = columns {
+                            reader = reader.with_columns(cols.clone());
+                        }
+                        if let Some(predicate) = storage_predicate {
+                            reader = reader.with_predicate(predicate.clone());
+                        }
+                        if let Some(partition) = partition {
+                            reader = reader.with_partition(partition);
+                        }
+                        let source = reader.read_blocking().map_err(|error| {
+                            KaveonError::Execution(format!("failed to open '{path}': {error}"))
+                        })?;
+                        let metrics = source.metrics();
+                        return Ok(PlannedQuery {
+                            operator: Box::new(ScanOperator::new(
+                                Box::new(source),
+                                columns.as_deref(),
+                            )?),
+                            scan_metrics: vec![metrics],
+                        });
+                    }
                     if path.starts_with("s3://") {
                         let mut reader = ObjectParquetReader::from_uri(&path)?;
                         if let Some(cols) = columns {
@@ -1462,6 +1543,9 @@ fn plan_query_with_predicate(
                         });
                     }
                     let mut reader = ParquetReader::new(&path);
+                    if let Some(listing) = pins.parquet_directories.get(&path) {
+                        reader = reader.with_listing(Arc::clone(listing));
+                    }
                     if let Some(cols) = columns {
                         reader = reader.with_columns(cols.clone());
                     }
@@ -1544,8 +1628,8 @@ fn plan_query_with_predicate(
         } => {
             let left_qualifier = relation_qualifier(left);
             let right_qualifier = relation_qualifier(right);
-            let left = plan_query_inner(left, catalog, partition, memory)?;
-            let right = plan_query_inner(right, catalog, partition, memory)?;
+            let left = plan_query_inner(left, catalog, partition, memory, pins)?;
+            let right = plan_query_inner(right, catalog, partition, memory, pins)?;
             let keys = join_keys(condition.as_ref())?;
             let mut scan_metrics = left.scan_metrics;
             scan_metrics.extend(right.scan_metrics);
@@ -1579,8 +1663,14 @@ fn plan_query_with_predicate(
             } else {
                 to_storage_predicate(&predicate)
             };
-            let planned =
-                plan_query_with_predicate(input, catalog, pushed.as_ref(), partition, memory)?;
+            let planned = plan_query_with_predicate(
+                input,
+                catalog,
+                pushed.as_ref(),
+                partition,
+                memory,
+                pins,
+            )?;
             let mut operator = FilterOperator::new(planned.operator, predicate);
             if let Some(memory) = memory {
                 operator = operator.with_memory(memory.operator("filter")?);
@@ -1592,7 +1682,7 @@ fn plan_query_with_predicate(
         }
 
         LogicalPlan::Project { input, columns } => {
-            let planned = plan_query_inner(input, catalog, partition, memory)?;
+            let planned = plan_query_inner(input, catalog, partition, memory, pins)?;
 
             let has_star = columns.iter().any(|e| matches!(e, Expr::Star));
             if has_star {
@@ -1668,7 +1758,7 @@ fn plan_query_with_predicate(
                     scan_metrics: Vec::new(),
                 });
             }
-            let planned = plan_query_inner(input, catalog, partition, memory)?;
+            let planned = plan_query_inner(input, catalog, partition, memory, pins)?;
 
             let group_cols: Vec<String> = group_by
                 .iter()
@@ -1734,7 +1824,7 @@ fn plan_query_with_predicate(
         }
 
         LogicalPlan::Sort { input, order_by } => {
-            let planned = plan_query_inner(input, catalog, partition, memory)?;
+            let planned = plan_query_inner(input, catalog, partition, memory, pins)?;
             let sort_exprs = order_by
                 .iter()
                 .map(|(expr, ascending)| SortExpr::new(expr.clone(), *ascending))
@@ -1751,7 +1841,7 @@ fn plan_query_with_predicate(
 
         LogicalPlan::Limit { input, count } => {
             if let Some(top_n) = plan.top_n() {
-                let planned = plan_query_inner(top_n.input, catalog, partition, memory)?;
+                let planned = plan_query_inner(top_n.input, catalog, partition, memory, pins)?;
                 let sort_exprs = top_n
                     .order_by
                     .iter()
@@ -1772,7 +1862,7 @@ fn plan_query_with_predicate(
                     scan_metrics: planned.scan_metrics,
                 });
             }
-            let planned = plan_query_inner(input, catalog, partition, memory)?;
+            let planned = plan_query_inner(input, catalog, partition, memory, pins)?;
             Ok(PlannedQuery {
                 operator: Box::new(LimitOperator::new(planned.operator, *count)),
                 scan_metrics: planned.scan_metrics,
@@ -1780,7 +1870,7 @@ fn plan_query_with_predicate(
         }
 
         LogicalPlan::Offset { input, count } => {
-            let planned = plan_query_inner(input, catalog, partition, memory)?;
+            let planned = plan_query_inner(input, catalog, partition, memory, pins)?;
             Ok(PlannedQuery {
                 operator: Box::new(OffsetOperator::new(planned.operator, *count)),
                 scan_metrics: planned.scan_metrics,
@@ -1788,7 +1878,7 @@ fn plan_query_with_predicate(
         }
 
         LogicalPlan::Distinct { input } => {
-            let planned = plan_query_inner(input, catalog, partition, memory)?;
+            let planned = plan_query_inner(input, catalog, partition, memory, pins)?;
             Ok(PlannedQuery {
                 operator: crate::fragment_exec::distinct_operator(planned.operator, memory)?,
                 scan_metrics: planned.scan_metrics,
@@ -1799,7 +1889,7 @@ fn plan_query_with_predicate(
             let mut operators: Vec<Box<dyn BatchOperator>> = Vec::new();
             let mut scan_metrics = Vec::new();
             for input in inputs {
-                let planned = plan_query_inner(input, catalog, partition, memory)?;
+                let planned = plan_query_inner(input, catalog, partition, memory, pins)?;
                 operators.push(planned.operator);
                 scan_metrics.extend(planned.scan_metrics);
             }
@@ -1813,7 +1903,7 @@ fn plan_query_with_predicate(
             input,
             window_exprs,
         } => {
-            let planned = plan_query_inner(input, catalog, partition, memory)?;
+            let planned = plan_query_inner(input, catalog, partition, memory, pins)?;
             let mut operator = WindowOperator::new(planned.operator, window_exprs.clone())?;
             if let Some(memory) = memory {
                 operator = operator.with_memory(memory.operator("window")?);
@@ -1825,8 +1915,8 @@ fn plan_query_with_predicate(
         }
 
         LogicalPlan::Intersect { left, right } => {
-            let left_planned = plan_query_inner(left, catalog, partition, memory)?;
-            let right_planned = plan_query_inner(right, catalog, partition, memory)?;
+            let left_planned = plan_query_inner(left, catalog, partition, memory, pins)?;
+            let right_planned = plan_query_inner(right, catalog, partition, memory, pins)?;
             let mut scan_metrics = left_planned.scan_metrics;
             scan_metrics.extend(right_planned.scan_metrics);
             let mut operator = SetOpOperator::new(
@@ -1844,8 +1934,8 @@ fn plan_query_with_predicate(
         }
 
         LogicalPlan::Except { left, right } => {
-            let left_planned = plan_query_inner(left, catalog, partition, memory)?;
-            let right_planned = plan_query_inner(right, catalog, partition, memory)?;
+            let left_planned = plan_query_inner(left, catalog, partition, memory, pins)?;
+            let right_planned = plan_query_inner(right, catalog, partition, memory, pins)?;
             let mut scan_metrics = left_planned.scan_metrics;
             scan_metrics.extend(right_planned.scan_metrics);
             let mut operator = SetOpOperator::new(
@@ -1873,8 +1963,8 @@ fn plan_query_with_predicate(
             left_key,
             right_key,
         } => {
-            let left_planned = plan_query_inner(left, catalog, partition, memory)?;
-            let right_planned = plan_query_inner(right, catalog, partition, memory)?;
+            let left_planned = plan_query_inner(left, catalog, partition, memory, pins)?;
+            let right_planned = plan_query_inner(right, catalog, partition, memory, pins)?;
             let mut scan_metrics = left_planned.scan_metrics;
             scan_metrics.extend(right_planned.scan_metrics);
             let mut operator = SemiJoinOperator::new(
@@ -2949,6 +3039,149 @@ mod tests {
         )
         .unwrap();
         assert_eq!(version(&replacement), Some(1));
+    }
+
+    /// A table whose location is a directory of Parquet files plans like any
+    /// other: the coordinator-local partitions cover its rows once, the
+    /// fragment names the location unchanged, and a listing pinned at
+    /// planning is what the query reads even after another file lands.
+    #[test]
+    fn a_directory_location_is_a_table_across_partitions_and_pins_its_listing() {
+        let mut fixture = fixture();
+        let table = fixture.directory.join("parts");
+        fs::create_dir_all(&table).unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        let write = |name: &str, values: Vec<i64>| {
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int64Array::from(values))],
+            )
+            .unwrap();
+            let properties = WriterProperties::builder()
+                .set_max_row_group_size(2)
+                .build();
+            let mut writer = ArrowWriter::try_new(
+                File::create(table.join(name)).unwrap(),
+                Arc::clone(&schema),
+                Some(properties),
+            )
+            .unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+        };
+        write("part-0.parquet", vec![1, 2]);
+        write("part-1.parquet", vec![3, 4]);
+        write("part-2.parquet", (5..=20).collect());
+        fs::write(table.join("_SUCCESS"), b"").unwrap();
+        let mut lake = MemoryCatalog::new(
+            "lake",
+            StorageType::Local {
+                base_path: fixture.directory.clone(),
+            },
+        )
+        .with_schema("default");
+        lake.register_table(
+            "default",
+            TableMeta {
+                name: "parts".into(),
+                arrow_schema: Arc::clone(&schema),
+                location: "parts".into(),
+                access: AccessPattern::Shortcut,
+                format: DataFormat::Parquet,
+            },
+        )
+        .unwrap();
+        fixture.catalog.register_catalog(Box::new(lake));
+        let source = fixture
+            .catalog
+            .resolve_table(&TableReference::parse("lake.default.parts"))
+            .unwrap()
+            .full_path();
+        let ids = |planned: &mut PlannedQuery| {
+            let mut ids = collect_batches(&mut *planned.operator)
+                .unwrap()
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap()
+                        .values()
+                        .to_vec()
+                })
+                .collect::<Vec<_>>();
+            ids.sort_unstable();
+            ids
+        };
+
+        let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(
+            "SELECT id FROM lake.default.parts WHERE id >= 3",
+        )
+        .unwrap();
+        qualify_tables(&mut plan, "test", "default");
+        let plan = kaveon_optim::rules::push_filter_down(plan);
+        let mut seen = Vec::new();
+        let mut files = 0;
+        for index in 0..2 {
+            let mut planned = plan_partitioned_query(
+                &plan,
+                &fixture.catalog,
+                ScanPartition::new(index, 2).unwrap(),
+            )
+            .unwrap();
+            seen.extend(ids(&mut planned));
+            assert_eq!(planned.scan_metrics.len(), 1);
+            let snapshot = planned.scan_metrics[0].snapshot();
+            assert_eq!(snapshot.files_opened, snapshot.files_considered);
+            assert!(snapshot.row_groups_pruned() >= 1, "{snapshot:?}");
+            files += snapshot.files_opened;
+        }
+        seen.sort_unstable();
+        assert_eq!(seen, (3..=20).collect::<Vec<_>>());
+        // The large file is split between the two partitions; the small ones
+        // are read whole by one partition each.
+        assert_eq!(files, 4);
+
+        // The fragment carries the location, not a listing: the wire format
+        // of a Parquet scan is what it was.
+        let fragments =
+            build_executable_fragments("directory", &plan, &fixture.catalog, 2).unwrap();
+        let scan = fragments
+            .values()
+            .flat_map(|fragment| &fragment.nodes)
+            .find_map(|node| match &node.operator {
+                FragmentOperator::Scan(scan) if scan.source_uri == source => Some(scan.clone()),
+                _ => None,
+            })
+            .expect("the scan names the directory");
+        assert_eq!(scan.format, DataFormat::Parquet);
+        assert_eq!(scan.delta_version, None);
+        assert!(scan.predicate.is_some());
+
+        // Statistics list the directory once and hand the listing to the
+        // query as a pin; the pinned read does not see a later file.
+        let analyzed = kaveon_storage::analyze_source(&source, DataFormat::Parquet).unwrap();
+        assert_eq!(analyzed.row_count, 20);
+        let listing = analyzed
+            .parquet_listing
+            .clone()
+            .expect("a directory is listed");
+        assert_eq!(listing.files.len(), 3);
+        write("part-3.parquet", vec![21]);
+        let pinned = SourcePins {
+            delta_versions: BTreeMap::new(),
+            parquet_directories: BTreeMap::from([(source.clone(), listing)]),
+        };
+        let pool = QueryMemoryPool::new("directory", 64 * 1024 * 1024).unwrap();
+        let mut at_pin = plan_query_with_pins(&plan, &fixture.catalog, &pool, &pinned).unwrap();
+        assert_eq!(ids(&mut at_pin), (3..=20).collect::<Vec<_>>());
+        let mut fresh =
+            plan_query_with_pins(&plan, &fixture.catalog, &pool, &SourcePins::default()).unwrap();
+        assert_eq!(ids(&mut fresh), (3..=21).collect::<Vec<_>>());
+        let reanalyzed = kaveon_storage::analyze_source(&source, DataFormat::Parquet).unwrap();
+        assert_eq!(reanalyzed.row_count, 21);
+        assert_ne!(reanalyzed.identity_sha256, analyzed.identity_sha256);
     }
 
     #[test]

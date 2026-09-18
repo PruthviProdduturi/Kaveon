@@ -1,12 +1,15 @@
 //! Exact metadata statistics bound to an immutable source identity.
 
-use crate::{IcebergReader, ObjectDeltaReader, ObjectLocation, ObjectParquetReader, ParquetReader};
+use crate::{
+    DirectoryListing, IcebergReader, ObjectDeltaReader, ObjectDirectoryReader, ObjectParquetReader,
+    ParquetLocation, ParquetReader,
+};
 use kaveon_core::{DataFormat, KaveonError, Result};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     fs,
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
     time::UNIX_EPOCH,
 };
 
@@ -22,6 +25,9 @@ pub struct SourceStatistics {
     pub columns: Vec<String>,
     /// Immutable Delta version used to derive these statistics.
     pub delta_version: Option<u64>,
+    /// The listing a directory Parquet table was analyzed at, for the query
+    /// that analyzed it to read the same files.
+    pub parquet_listing: Option<Arc<DirectoryListing>>,
 }
 
 /// Resolves the source and derives exact row count without reading data pages.
@@ -53,39 +59,87 @@ pub fn analyze_source(location: &str, format: DataFormat) -> Result<SourceStatis
                     .map(|f| f.name().clone())
                     .collect(),
                 delta_version: None,
+                parquet_listing: None,
             })
         }
         (true, DataFormat::Parquet) => {
-            let object = ObjectLocation::from_uri(location)?;
-            let meta = crate::delta_snapshot::blocking({
-                let store = object.store.clone();
-                let path = object.path.clone();
-                async move {
-                    store
-                        .head(&path)
-                        .await
-                        .map_err(|e| KaveonError::Storage(e.to_string()))
+            let reader = ObjectDirectoryReader::from_uri(location)?;
+            let probed = crate::delta_snapshot::blocking({
+                let reader = reader.clone();
+                async move { reader.probe().await }
+            })?;
+            match probed {
+                ParquetLocation::Object(meta) => {
+                    let version = meta.e_tag.or(meta.version).ok_or_else(|| {
+                        KaveonError::Storage(
+                            "object store did not provide an ETag or version for stable ANALYZE"
+                                .into(),
+                        )
+                    })?;
+                    let identity_sha256 =
+                        digest(format!("parquet\n{location}\n{version}\n{}", meta.size));
+                    if let Some(cached) = cached_statistics(&identity_sha256) {
+                        return Ok(cached);
+                    }
+                    let parquet = crate::delta_snapshot::blocking(async move {
+                        ObjectParquetReader::new(reader.store(), reader.root().clone())
+                            .metadata()
+                            .await
+                    })?;
+                    Ok(cache_statistics(stats_from_digest(
+                        identity_sha256,
+                        parquet.row_count,
+                        &parquet.schema,
+                    )))
                 }
-            })?;
-            let version = meta.e_tag.or(meta.version).ok_or_else(|| {
-                KaveonError::Storage(
-                    "object store did not provide an ETag or version for stable ANALYZE".into(),
-                )
-            })?;
-            let identity_sha256 = digest(format!("parquet\n{location}\n{version}\n{}", meta.size));
+                ParquetLocation::Directory(listing) => {
+                    if listing.files.iter().any(|file| file.identity().is_none()) {
+                        return Err(KaveonError::Storage(
+                            "object store did not provide an ETag or version for every file of \
+                             the directory for stable ANALYZE"
+                                .into(),
+                        ));
+                    }
+                    let listing = Arc::new(listing);
+                    let identity_sha256 = digest(format!(
+                        "parquet-directory\n{location}\n{}",
+                        listing.identity_lines()
+                    ));
+                    if let Some(cached) = cached_statistics(&identity_sha256) {
+                        return Ok(cached);
+                    }
+                    let reader = reader.with_listing(Arc::clone(&listing));
+                    let parquet =
+                        crate::delta_snapshot::blocking(async move { reader.metadata().await })?;
+                    let mut statistics =
+                        stats_from_digest(identity_sha256, parquet.row_count, &parquet.schema);
+                    statistics.parquet_listing = Some(listing);
+                    Ok(cache_statistics(statistics))
+                }
+            }
+        }
+        (false, DataFormat::Parquet) if fs::metadata(location)?.is_dir() => {
+            let listing = Arc::new(crate::parquet_reader::local_directory_listing(
+                std::path::Path::new(location),
+            )?);
+            let mut identity = format!("parquet-local-directory\n{location}\n");
+            for file in &listing.files {
+                identity.push_str(&format!(
+                    "{}\t{}\t{}\n",
+                    file.path, file.size, file.modified_nanos
+                ));
+            }
+            let identity_sha256 = digest(identity);
             if let Some(cached) = cached_statistics(&identity_sha256) {
                 return Ok(cached);
             }
-            let parquet = crate::delta_snapshot::blocking(async move {
-                ObjectParquetReader::new(object.store, object.path)
-                    .metadata()
-                    .await
-            })?;
-            Ok(cache_statistics(stats_from_digest(
-                identity_sha256,
-                parquet.row_count,
-                &parquet.schema,
-            )))
+            let parquet = ParquetReader::new(location)
+                .with_listing(Arc::clone(&listing))
+                .metadata()?;
+            let mut statistics =
+                stats_from_digest(identity_sha256, parquet.row_count, &parquet.schema);
+            statistics.parquet_listing = Some(listing);
+            Ok(cache_statistics(statistics))
         }
         (false, DataFormat::Parquet) => {
             let file = fs::metadata(location)?;
@@ -137,6 +191,7 @@ pub fn analyze_source(location: &str, format: DataFormat) -> Result<SourceStatis
                     .map(|f| f.name().clone())
                     .collect(),
                 delta_version: None,
+                parquet_listing: None,
             })
         }
     }
@@ -171,6 +226,7 @@ fn analyze_object_delta(location: &str, reader: &ObjectDeltaReader) -> Result<So
             .map(|field| field.name().clone())
             .collect(),
         delta_version: Some(version),
+        parquet_listing: None,
     });
     cache_delta_statistics(location, version, statistics.clone());
     Ok(statistics)
@@ -186,6 +242,7 @@ fn stats_from_digest(
         row_count,
         columns: schema.fields().iter().map(|f| f.name().clone()).collect(),
         delta_version: None,
+        parquet_listing: None,
     }
 }
 
