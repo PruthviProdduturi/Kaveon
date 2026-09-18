@@ -352,6 +352,62 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
       </section>
 
 
+      {/* ─── Features Grid ─── */}
+      <section id="features" ref={r4} style={{ padding: "100px 24px", background: "#0a0a0a", borderTop: HAIRLINE, scrollMarginTop: 72 }}>
+        <div style={{ maxWidth: 1100, margin: "0 auto" }}>
+          <div style={{ textAlign: "center", marginBottom: 56 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: B, marginBottom: 12 }}>Platform</div>
+            <h2 style={{ fontSize: "clamp(28px, 4vw, 40px)", fontWeight: 700, letterSpacing: "-1px" }}>Everything you need</h2>
+            <p style={{ fontSize: 16, color: "#718094", marginTop: 12 }}>One platform for governed data, deterministic reasoning, fast analytics, and reusable intelligence.</p>
+          </div>
+          <div className="about-grid-3" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gridAutoRows: "auto", gap: 14 }}>
+            <Anim dir="up" delay={0} style={{ gridColumn: "span 2" }}>
+              <div className="about-card" style={{ padding: 40, borderRadius: 16, background: `linear-gradient(135deg, ${B}06 0%, transparent 100%)`, border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: B, textTransform: "uppercase", letterSpacing: "2px", marginBottom: 12 }}>Core</div>
+                <h3 style={{ fontSize: 24, fontWeight: 700, marginBottom: 12, lineHeight: 1.3 }}>Conversational Data Querying</h3>
+                <p style={{ fontSize: 15, color: "#777", lineHeight: 1.8, maxWidth: 500 }}>
+                  Type questions in plain English. A template-based NL&#x2192;SQL engine parses your words, matches schema metadata, generates SQL, and renders the answer as an interactive chart.
+                </p>
+              </div>
+            </Anim>
+            <Anim dir="up" delay={100}>
+              <div className="about-card" style={{ padding: 36, borderRadius: 16, background: "linear-gradient(135deg, rgba(16,185,129,0.05) 0%, transparent 100%)", border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
+                <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>37 Chart Types</h3>
+                <p style={{ fontSize: 13.5, color: "#777", lineHeight: 1.8 }}>Bar, line, pie, heatmap, treemap, scatter, funnel, gauge, world map, 3D globe. All dark-mode aware.</p>
+              </div>
+            </Anim>
+            <Anim dir="up" delay={200}>
+              <div className="about-card" style={{ padding: 36, borderRadius: 16, background: "linear-gradient(135deg, rgba(139,92,246,0.05) 0%, transparent 100%)", border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
+                <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>SQL Lab</h3>
+                <p style={{ fontSize: 13.5, color: "#777", lineHeight: 1.8 }}>Monaco editor with autocomplete, multi-tab, query history, and caching.</p>
+              </div>
+            </Anim>
+            <Anim dir="up" delay={300} style={{ gridColumn: "span 2" }}>
+              <div className="about-card" style={{ padding: 40, borderRadius: 16, background: "linear-gradient(135deg, rgba(245,158,11,0.05) 0%, transparent 100%)", border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#f59e0b", textTransform: "uppercase", letterSpacing: "2px", marginBottom: 12 }}>Build &amp; Share</div>
+                <h3 style={{ fontSize: 24, fontWeight: 700, marginBottom: 12, lineHeight: 1.3 }}>Dashboards That Tell Stories</h3>
+                <p style={{ fontSize: 15, color: "#777", lineHeight: 1.8, maxWidth: 500 }}>
+                  Drag-and-drop canvas with cross-chart filtering, shared filter bar, auto-refresh, and one-click publishing.
+                </p>
+              </div>
+            </Anim>
+            {[
+              { title: "Multi-Source", desc: "Register multiple supported sources; each query targets one selected source today.", color: "rgba(236,72,153,0.05)" },
+              { title: "Semantic Datasets", desc: "Define dimensions, metrics, and joins once. Reuse everywhere.", color: "rgba(6,182,212,0.05)" },
+              { title: "Governed Identity", desc: "Microsoft Entra ID, role-aware access, and customer-controlled data boundaries.", color: "rgba(99,102,241,0.05)" },
+              { title: "Deploy Your Way", desc: "Run locally with Docker today; private-cloud and distributed topologies remain explicitly staged.", color: "rgba(245,158,11,0.05)" },
+            ].map((f, idx) => (
+              <Anim key={f.title} dir="up" delay={400 + idx * 100}>
+                <div className="about-card" style={{ padding: 36, borderRadius: 16, background: `linear-gradient(135deg, ${f.color} 0%, transparent 100%)`, border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
+                  <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>{f.title}</h3>
+                  <p style={{ fontSize: 13.5, color: "#777", lineHeight: 1.8 }}>{f.desc}</p>
+                </div>
+              </Anim>
+            ))}
+          </div>
+        </div>
+      </section>
+
       {/* ─── Chat Demo ─── */}
       <section style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0a0a0a 0%, #0f1520 50%, #0a0a0a 100%)", borderTop: HAIRLINE, overflow: "hidden" }}>
         <div style={{ maxWidth: 920, margin: "0 auto" }}>
@@ -981,62 +1037,6 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
 
       {/* ─── Benchmark — rendered only when the generated figure exists ─── */}
       {hasAnyFigure(benchmarks) && <BenchmarkSection figures={benchmarks} />}
-
-      {/* ─── Features Grid ─── */}
-      <section id="features" ref={r4} style={{ padding: "100px 24px", background: "#0a0a0a", borderTop: HAIRLINE, scrollMarginTop: 72 }}>
-        <div style={{ maxWidth: 1100, margin: "0 auto" }}>
-          <div style={{ textAlign: "center", marginBottom: 56 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: B, marginBottom: 12 }}>Platform</div>
-            <h2 style={{ fontSize: "clamp(28px, 4vw, 40px)", fontWeight: 700, letterSpacing: "-1px" }}>Everything you need</h2>
-            <p style={{ fontSize: 16, color: "#718094", marginTop: 12 }}>One platform for governed data, deterministic reasoning, fast analytics, and reusable intelligence.</p>
-          </div>
-          <div className="about-grid-3" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gridAutoRows: "auto", gap: 14 }}>
-            <Anim dir="up" delay={0} style={{ gridColumn: "span 2" }}>
-              <div className="about-card" style={{ padding: 40, borderRadius: 16, background: `linear-gradient(135deg, ${B}06 0%, transparent 100%)`, border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: B, textTransform: "uppercase", letterSpacing: "2px", marginBottom: 12 }}>Core</div>
-                <h3 style={{ fontSize: 24, fontWeight: 700, marginBottom: 12, lineHeight: 1.3 }}>Conversational Data Querying</h3>
-                <p style={{ fontSize: 15, color: "#777", lineHeight: 1.8, maxWidth: 500 }}>
-                  Type questions in plain English. A template-based NL&#x2192;SQL engine parses your words, matches schema metadata, generates SQL, and renders the answer as an interactive chart.
-                </p>
-              </div>
-            </Anim>
-            <Anim dir="up" delay={100}>
-              <div className="about-card" style={{ padding: 36, borderRadius: 16, background: "linear-gradient(135deg, rgba(16,185,129,0.05) 0%, transparent 100%)", border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
-                <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>37 Chart Types</h3>
-                <p style={{ fontSize: 13.5, color: "#777", lineHeight: 1.8 }}>Bar, line, pie, heatmap, treemap, scatter, funnel, gauge, world map, 3D globe. All dark-mode aware.</p>
-              </div>
-            </Anim>
-            <Anim dir="up" delay={200}>
-              <div className="about-card" style={{ padding: 36, borderRadius: 16, background: "linear-gradient(135deg, rgba(139,92,246,0.05) 0%, transparent 100%)", border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
-                <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>SQL Lab</h3>
-                <p style={{ fontSize: 13.5, color: "#777", lineHeight: 1.8 }}>Monaco editor with autocomplete, multi-tab, query history, and caching.</p>
-              </div>
-            </Anim>
-            <Anim dir="up" delay={300} style={{ gridColumn: "span 2" }}>
-              <div className="about-card" style={{ padding: 40, borderRadius: 16, background: "linear-gradient(135deg, rgba(245,158,11,0.05) 0%, transparent 100%)", border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#f59e0b", textTransform: "uppercase", letterSpacing: "2px", marginBottom: 12 }}>Build &amp; Share</div>
-                <h3 style={{ fontSize: 24, fontWeight: 700, marginBottom: 12, lineHeight: 1.3 }}>Dashboards That Tell Stories</h3>
-                <p style={{ fontSize: 15, color: "#777", lineHeight: 1.8, maxWidth: 500 }}>
-                  Drag-and-drop canvas with cross-chart filtering, shared filter bar, auto-refresh, and one-click publishing.
-                </p>
-              </div>
-            </Anim>
-            {[
-              { title: "Multi-Source", desc: "Register multiple supported sources; each query targets one selected source today.", color: "rgba(236,72,153,0.05)" },
-              { title: "Semantic Datasets", desc: "Define dimensions, metrics, and joins once. Reuse everywhere.", color: "rgba(6,182,212,0.05)" },
-              { title: "Governed Identity", desc: "Microsoft Entra ID, role-aware access, and customer-controlled data boundaries.", color: "rgba(99,102,241,0.05)" },
-              { title: "Deploy Your Way", desc: "Run locally with Docker today; private-cloud and distributed topologies remain explicitly staged.", color: "rgba(245,158,11,0.05)" },
-            ].map((f, idx) => (
-              <Anim key={f.title} dir="up" delay={400 + idx * 100}>
-                <div className="about-card" style={{ padding: 36, borderRadius: 16, background: `linear-gradient(135deg, ${f.color} 0%, transparent 100%)`, border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
-                  <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>{f.title}</h3>
-                  <p style={{ fontSize: 13.5, color: "#777", lineHeight: 1.8 }}>{f.desc}</p>
-                </div>
-              </Anim>
-            ))}
-          </div>
-        </div>
-      </section>
 
       {/* ─── Tech Stack ─── */}
       <section ref={r5} style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0a0a0a 0%, #0f1520 50%, #0a0a0a 100%)", borderTop: HAIRLINE }}>
