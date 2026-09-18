@@ -160,8 +160,18 @@ pub fn run(options: &mut Options) -> Result<(), String> {
         options.output_format = format;
     }
 
+    if io::stdout().is_terminal() {
+        return crate::shell::run(&client, options);
+    }
     print_header(&client, options);
     repl(&client, options)
+}
+
+/// What one executed statement produced, for the shell's status line.
+pub(crate) struct Executed {
+    pub output: String,
+    pub elapsed_ms: Option<u64>,
+    pub scanned_rows: Option<u64>,
 }
 
 /// The session header: what the coordinator says about itself and about us.
@@ -298,16 +308,31 @@ fn handle_meta_command(
     options: &mut Options,
     command: &str,
 ) -> Result<bool, String> {
+    if matches!(command.trim(), ".quit" | ".exit" | ".q") {
+        return Ok(true);
+    }
+    if command.trim() == ".clear" {
+        clear_terminal()?;
+        return Ok(false);
+    }
+    print!("{}", meta_command_to_string(client, options, command)?);
+    Ok(false)
+}
+
+/// A dot command's output. `.quit` and `.clear` are the caller's to act on.
+pub(crate) fn meta_command_to_string(
+    client: &Session,
+    options: &mut Options,
+    command: &str,
+) -> Result<String, String> {
     let parts: Vec<&str> = command.split_whitespace().collect();
     let meta = match parts.as_slice() {
-        [".quit" | ".exit" | ".q"] => return Ok(true),
+        [".quit" | ".exit" | ".q" | ".clear"] => return Ok(String::new()),
         [".help" | ".h"] => {
-            print_remote_help();
-            return Ok(false);
-        }
-        [".clear"] => {
-            clear_terminal()?;
-            return Ok(false);
+            let theme = crate::theme::Theme::detect(&options.theme, io::stdout().is_terminal());
+            let mut text = crate::render::to_ansi(&crate::render::help::help(&theme));
+            text.push('\n');
+            return Ok(text);
         }
         [".catalogs"] => MetaCommand::Catalogs { like: None },
         [".schemas"] => MetaCommand::Schemas {
@@ -335,8 +360,7 @@ fn handle_meta_command(
             ));
         }
     };
-    run_meta_command(client, options, meta)?;
-    Ok(false)
+    run_meta_command(client, options, meta)
 }
 
 fn is_repl_alias(input: &str, first: &str, second: &str) -> bool {
@@ -353,9 +377,21 @@ fn clear_terminal() -> Result<(), String> {
 }
 
 fn execute(client: &Session, options: &mut Options, sql: &str) -> Result<(), String> {
+    let executed = execute_to_string(client, options, sql)?;
+    write_output(options, &executed.output)
+}
+
+pub(crate) fn execute_to_string(
+    client: &Session,
+    options: &mut Options,
+    sql: &str,
+) -> Result<Executed, String> {
     if let Some(meta) = parse_sql_metadata(sql, options)? {
-        run_meta_command(client, options, meta)?;
-        return Ok(());
+        return Ok(Executed {
+            output: run_meta_command(client, options, meta)?,
+            elapsed_ms: None,
+            scanned_rows: None,
+        });
     }
     let url = endpoint(options, "/v1/statement");
     let request = StatementRequest {
@@ -378,6 +414,7 @@ fn execute(client: &Session, options: &mut Options, sql: &str) -> Result<(), Str
         return Err(format!("query {} failed: {error}", response.id));
     }
     let mut output = format_result(&response, options.output_format)?;
+    let mut scanned_rows = None;
     if is_human_format(options.output_format) {
         output.push_str(&format!(
             "Query {} {} in {} ms ({} {} returned)",
@@ -393,12 +430,21 @@ fn execute(client: &Session, options: &mut Options, sql: &str) -> Result<(), Str
         ));
         output.push('\n');
         if let Ok(telemetry) = get_query_telemetry(client, options, &response.id) {
+            scanned_rows = telemetry
+                .scans
+                .iter()
+                .map(|scan| scan.rows_emitted)
+                .collect::<Option<Vec<_>>>()
+                .map(|counts| counts.iter().sum());
             output.push_str(&format_query_telemetry(&telemetry, &response));
         }
         output.push('\n');
     }
-    write_output(options, &output)?;
-    Ok(())
+    Ok(Executed {
+        output,
+        elapsed_ms: Some(response.elapsed_ms),
+        scanned_rows,
+    })
 }
 
 fn get_json<T: for<'de> Deserialize<'de>>(
@@ -537,24 +583,24 @@ fn run_meta_command(
     client: &Session,
     options: &mut Options,
     command: MetaCommand,
-) -> Result<(), String> {
+) -> Result<String, String> {
     match command {
         MetaCommand::Catalogs { like } => {
             let response: CatalogList = get_json(client, options, "/v1/catalog")?;
-            print_metadata(
+            Ok(metadata_to_string(
                 "Catalog",
                 filter_like(response.catalogs, like.as_deref()),
                 options,
-            )
+            ))
         }
         MetaCommand::Schemas { catalog, like } => {
             let url = metadata_url(options, &[&catalog, "schema"])?;
             let response: SchemaList = get_json_url(client, &url)?;
-            print_metadata(
+            Ok(metadata_to_string(
                 "Schema",
                 filter_like(response.schemas, like.as_deref()),
                 options,
-            )
+            ))
         }
         MetaCommand::Tables {
             catalog,
@@ -563,11 +609,11 @@ fn run_meta_command(
         } => {
             let url = metadata_url(options, &[&catalog, "schema", &schema, "table"])?;
             let response: TableList = get_json_url(client, &url)?;
-            print_metadata(
+            Ok(metadata_to_string(
                 "Table",
                 filter_like(response.tables, like.as_deref()),
                 options,
-            )
+            ))
         }
         MetaCommand::Describe {
             catalog,
@@ -633,7 +679,7 @@ fn run_meta_command(
             if is_human_format(options.output_format) {
                 output.push('\n');
             }
-            write_output(options, &output)?;
+            Ok(output)
         }
         MetaCommand::Use { catalog, schema } => {
             let url = metadata_url(options, &[&catalog, "schema"])?;
@@ -646,12 +692,12 @@ fn run_meta_command(
             options.catalog = catalog;
             options.schema = schema;
             if is_human_format(options.output_format) {
-                println!("Using {}.{}", options.catalog, options.schema);
-                println!();
+                Ok(format!("Using {}.{}\n\n", options.catalog, options.schema))
+            } else {
+                Ok(String::new())
             }
         }
     }
-    Ok(())
 }
 
 fn decode_response<T: for<'de> Deserialize<'de>>(response: Response) -> Result<T, String> {
@@ -1031,7 +1077,7 @@ fn is_human_format(format: OutputFormat) -> bool {
     )
 }
 
-fn print_metadata(header: &str, names: Vec<String>, options: &Options) {
+fn metadata_to_string(header: &str, names: Vec<String>, options: &Options) -> String {
     let response = StatementResponse {
         id: String::new(),
         state: String::new(),
@@ -1051,7 +1097,7 @@ fn print_metadata(header: &str, names: Vec<String>, options: &Options) {
     if is_human_format(options.output_format) {
         output.push('\n');
     }
-    let _ = write_output(options, &output);
+    output
 }
 
 fn print_remote_help() {
