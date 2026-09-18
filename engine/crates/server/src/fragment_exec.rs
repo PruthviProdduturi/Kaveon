@@ -359,7 +359,6 @@ fn compile_node(
             group_by,
             aggregates,
         } => {
-            let (group_by, aggregates) = aggregate_bindings(group_by, aggregates)?;
             let input = compile_input(
                 node,
                 0,
@@ -370,6 +369,15 @@ fn compile_node(
                 memory,
                 scan_metrics,
             )?;
+            // An aggregate over rows resolves its columns against its
+            // input as the node-local planner does (`t.country` over the
+            // scan of `events t` is the field `country`); a final merge
+            // names its decoded keys by the spec.
+            let resolve_against = match mode {
+                AggregateMode::Single | AggregateMode::Partial => Some(input.schema().as_ref()),
+                AggregateMode::Final => None,
+            };
+            let (group_by, aggregates) = aggregate_bindings(group_by, aggregates, resolve_against)?;
             match mode {
                 AggregateMode::Single => kaveon_exec::partitioned::hash_aggregate(
                     input,
@@ -386,18 +394,17 @@ fn compile_node(
                     )?;
                     // Keys cross the exchange as their logical values: a
                     // dictionary-encoded string column is exchanged as Utf8.
+                    // A key resolves as every column reference does: by
+                    // exact name, else by its bare name (`t.country` over
+                    // the scan of `events t`).
                     let group_types = group_by
                         .iter()
                         .map(|name| {
-                            input
-                                .schema()
-                                .field_with_name(name)
-                                .map(|field| {
-                                    kaveon_exec::aggregate::exchanged_group_key_type(
-                                        field.data_type(),
-                                    )
-                                })
-                                .map_err(KaveonError::from)
+                            let schema = input.schema();
+                            let index = kaveon_exec::expr_eval::resolve_column_index(schema, name)?;
+                            Ok(kaveon_exec::aggregate::exchanged_group_key_type(
+                                schema.field(index).data_type(),
+                            ))
                         })
                         .collect::<Result<Vec<_>>>()?;
                     // Several aggregator threads per task: rows hash to the
@@ -499,7 +506,7 @@ fn compile_node(
                 else {
                     unreachable!("final_under_top_n returns an aggregate");
                 };
-                let (group_by, aggregates) = aggregate_bindings(group_by, aggregates)?;
+                let (group_by, aggregates) = aggregate_bindings(group_by, aggregates, None)?;
                 let input = compile_input(
                     final_node,
                     0,
@@ -888,13 +895,26 @@ fn final_under_top_n<'a>(
 }
 
 /// The group columns and aggregate expressions of an aggregate node.
+/// The group columns and aggregate expressions of a spec. With `input`,
+/// every column name resolves against it — exactly, else by its bare
+/// name — to the field the operator reads.
 fn aggregate_bindings(
     group_by: &[kaveon_core::NamedExpr],
     aggregates: &[kaveon_core::AggregateSpec],
+    input: Option<&arrow::datatypes::Schema>,
 ) -> Result<(Vec<String>, Vec<AggExpr>)> {
+    let resolve = |name: String| -> Result<String> {
+        match input {
+            Some(schema) if name != "*" => {
+                let index = kaveon_exec::expr_eval::resolve_column_index(schema, &name)?;
+                Ok(schema.field(index).name().clone())
+            }
+            _ => Ok(name),
+        }
+    };
     let group_by = group_by
         .iter()
-        .map(|named| expression_column(&named.expression))
+        .map(|named| expression_column(&named.expression).and_then(&resolve))
         .collect::<Result<_>>()?;
     let aggregates = aggregates
         .iter()
@@ -911,6 +931,8 @@ fn aggregate_bindings(
                 .argument
                 .as_ref()
                 .map(expression_column)
+                .transpose()?
+                .map(&resolve)
                 .transpose()?
                 .unwrap_or_else(|| "*".into());
             let expression = AggExpr::new(function, column).with_alias(&aggregate.output);
