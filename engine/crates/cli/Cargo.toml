@@ -23,3 +23,6 @@ serde_json = { workspace = true }
 sqlparser = { workspace = true }
 rustyline = "15"
 terminal_size = "0.4"
+
+[dev-dependencies]
+parquet = { workspace = true }
