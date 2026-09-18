@@ -9,8 +9,10 @@ use crate::args::Options;
 use crate::auth::Session;
 use crate::client::error::{CliError, ErrorKind};
 use crate::client::metadata::NameCache;
+use crate::client::pages::PageCursor;
 use crate::client::session::{self as api, CliHttp, Cluster, Whoami};
 use crate::client::statement::{self, Handle, SharedSession, StatementEvent, StatementRequest};
+use crate::output::OutputFormat;
 use crate::render;
 use crate::shell::commands::{self, Command, SessionSettings};
 use crate::shell::editor::{Editor, EditorAction};
@@ -107,6 +109,32 @@ struct Running {
     cancel_requested: bool,
 }
 
+/// A result with more pages on the coordinator: the editor waits until the
+/// reader asks for the next page or stops.
+struct Paging {
+    cursor: PageCursor,
+    names: Vec<String>,
+    /// Rows rendered so far.
+    shown: usize,
+    /// The format the first page was rendered with (AUTO resolved), so
+    /// every page reads the same.
+    format: OutputFormat,
+}
+
+impl Paging {
+    /// `1,000 of 84,312 rows · Space or Enter for more · q to stop`.
+    fn hint(&self) -> String {
+        let shown = render::thousands(self.shown as i128);
+        match self.cursor.total_rows {
+            Some(total) => format!(
+                "{shown} of {} rows · Space or Enter for more · q to stop",
+                render::thousands(total as i128)
+            ),
+            None => format!("{shown} rows so far · Space or Enter for more · q to stop"),
+        }
+    }
+}
+
 pub struct App {
     session: SharedSession,
     editor: Editor,
@@ -118,6 +146,7 @@ pub struct App {
     history_path: Option<std::path::PathBuf>,
     last_cluster_poll: Instant,
     running: Option<Running>,
+    paging: Option<Paging>,
     /// Statements from one submission still to run, in order.
     pending: VecDeque<String>,
     settings: SessionSettings,
@@ -152,10 +181,14 @@ impl App {
             || (self.whoami.is_none() && options.auth == "none")
     }
 
-    /// Rows the inline viewport needs: the editor, the status line and,
-    /// while a statement runs, the running line above the editor.
+    /// Rows the inline viewport needs: the editor, the status line, the
+    /// running line above the editor while a statement runs, and the paging
+    /// hint under it while a result has more pages.
     fn viewport_rows(&self) -> u16 {
-        self.editor.height(EDITOR_MAX_ROWS) + 1 + u16::from(self.running.is_some())
+        self.editor.height(EDITOR_MAX_ROWS)
+            + 1
+            + u16::from(self.running.is_some())
+            + u16::from(self.paging.is_some())
     }
 }
 
@@ -182,6 +215,7 @@ pub fn run(session: Session, options: &mut Options) -> Result<(), String> {
         history_path,
         last_cluster_poll: Instant::now(),
         running: None,
+        paging: None,
         pending: VecDeque::new(),
         settings: SessionSettings::default(),
         names: NameCache::default(),
@@ -381,35 +415,30 @@ fn event_loop(app: &mut App, options: &mut Options) -> Result<(), String> {
             let tick = (running.handle.started.elapsed().as_millis() / SPINNER_FRAME_MS) as usize;
             progress::line(&running.progress, tick, &app.theme)
         });
+        let hint_line = app
+            .paging
+            .as_ref()
+            .map(|paging| Line::styled(format!(" {}", paging.hint()), app.theme.dim));
         terminal
             .draw(|frame| {
                 let editor_height = app.editor.height(EDITOR_MAX_ROWS);
-                let (progress_area, editor_area, status_area) = match &running_line {
-                    Some(_) => {
-                        let [progress_area, editor_area, status_area] = Layout::vertical([
-                            Constraint::Length(1),
-                            Constraint::Length(editor_height),
-                            Constraint::Length(1),
-                        ])
-                        .areas(frame.area());
-                        (Some(progress_area), editor_area, status_area)
-                    }
-                    None => {
-                        let [editor_area, status_area] = Layout::vertical([
-                            Constraint::Length(editor_height),
-                            Constraint::Length(1),
-                        ])
-                        .areas(frame.area());
-                        (None, editor_area, status_area)
-                    }
-                };
-                if let (Some(area), Some(line)) = (progress_area, running_line.clone()) {
-                    frame.render_widget(Paragraph::new(line), area);
+                let [progress_area, editor_area, hint_area, status_area] = Layout::vertical([
+                    Constraint::Length(u16::from(running_line.is_some())),
+                    Constraint::Length(editor_height),
+                    Constraint::Length(u16::from(hint_line.is_some())),
+                    Constraint::Length(1),
+                ])
+                .areas(frame.area());
+                if let Some(line) = running_line.clone() {
+                    frame.render_widget(Paragraph::new(line), progress_area);
+                }
+                if let Some(line) = hint_line.clone() {
+                    frame.render_widget(Paragraph::new(line), hint_area);
                 }
                 let [prompt_area, text_area] =
                     Layout::horizontal([Constraint::Length(prompt_width()), Constraint::Min(1)])
                         .areas(editor_area);
-                let running_now = running_line.is_some();
+                let running_now = running_line.is_some() || hint_line.is_some();
                 if !running_now && app.editor.line_count() <= usize::from(EDITOR_MAX_LINES) {
                     // Highlighted text with the cursor placed by hand; the
                     // text area keeps the buffer and the cursor.
@@ -479,6 +508,19 @@ fn event_loop(app: &mut App, options: &mut Options) -> Result<(), String> {
             // Only Ctrl-C means anything while a statement runs.
             if is_ctrl_c(&key) {
                 interrupt_running(app, terminal, options)?;
+            }
+            continue;
+        }
+        if app.paging.is_some() {
+            if is_ctrl_c(&key) {
+                app.pending.clear();
+                stop_paging(app, terminal, options)?;
+            } else {
+                match key.code {
+                    KeyCode::Char(' ') | KeyCode::Enter => next_page(app, terminal, options)?,
+                    KeyCode::Char('q') | KeyCode::Esc => stop_paging(app, terminal, options)?,
+                    _ => {}
+                }
             }
             continue;
         }
@@ -563,11 +605,7 @@ fn submit(
                 }
                 emit_text(
                     terminal,
-                    &format!(
-                        "row limit {} for queries without LIMIT (1 to {}); scripts run with -e or -f are unlimited",
-                        render::thousands(options.row_limit as i128),
-                        render::thousands(crate::shell::rowlimit::HARD_ROW_LIMIT as i128)
-                    ),
+                    &crate::shell::rowlimit::report(options.row_limit),
                     &app.theme,
                     false,
                 )?;
@@ -608,20 +646,15 @@ fn submit(
 /// thread; the first SQL statement goes to a worker thread and the rest
 /// wait for it. An error drops what is left.
 fn start_next(app: &mut App, terminal: &mut Term, options: &mut Options) -> Result<(), String> {
-    use crate::shell::rowlimit::{HARD_ROW_LIMIT, Limited, inspect, refusal};
+    use crate::shell::rowlimit::{Limited, inspect};
     while let Some(statement) = app.pending.pop_front() {
         let (statement, explain) = match strip_explain(&statement) {
             Some(inner) => (inner, true),
             None => (statement, false),
         };
         let (sql, preview_limit) = match inspect(&statement, options.row_limit) {
-            Limited::Appended(sql) => (sql, Some(options.row_limit)),
-            Limited::Explicit(explicit) if explicit > HARD_ROW_LIMIT => {
-                app.pending.clear();
-                emit_error(terminal, &refusal(explicit), &app.theme)?;
-                return emit_blank(terminal);
-            }
-            Limited::Explicit(_) | Limited::Unchanged => (statement.clone(), None),
+            Limited::Appended(sql) => (sql, options.row_limit),
+            Limited::Explicit | Limited::Unchanged => (statement.clone(), None),
         };
         let before = (options.catalog.clone(), options.schema.clone());
         let metadata = crate::remote::run_metadata_statement(&lock(&app.session), options, &sql);
@@ -751,9 +784,11 @@ fn finish(
 ) -> Result<(), String> {
     app.editor.clear();
     match event {
-        StatementEvent::Finished(result) => {
+        StatementEvent::Finished(mut result) => {
             let names = result.column_names();
             let mut truncated = false;
+            let mut rows = result.data.len();
+            let mut paging = None;
             if running.explain {
                 let record =
                     api::fetch_query(&lock(&app.session), &options.server, &result.id).ok();
@@ -764,30 +799,48 @@ fn finish(
                     .unwrap_or(serde_json::Value::Null);
                 emit(terminal, render::plan::tree(&plan, &app.theme))?;
             } else {
-                use crate::output::OutputFormat;
-                match options.output_format {
-                    OutputFormat::Table | OutputFormat::Aligned | OutputFormat::Auto => {
-                        let (lines, cut) = render::table::styled(
-                            &names,
-                            &result.data,
-                            table_width(options),
-                            &app.theme,
-                        );
-                        if cut && options.output_format == OutputFormat::Auto {
-                            let text = crate::output::format_rows(
-                                &names,
-                                &result.data,
-                                OutputFormat::Vertical,
-                            );
-                            emit_text(terminal, text.trim_end_matches('\n'), &app.theme, false)?;
-                        } else {
-                            truncated = cut;
-                            emit(terminal, lines)?;
+                // Paged delivery: the response carries no rows, the first
+                // page does. Any rows sent inline lead it.
+                let mut cursor = match result.next_uri.as_deref() {
+                    Some(next_uri) => match PageCursor::new(&options.server, next_uri) {
+                        Ok(cursor) => Some(cursor),
+                        Err(failure) => {
+                            emit_error(terminal, &failure.message, &app.theme)?;
+                            None
+                        }
+                    },
+                    None => None,
+                };
+                if let Some(cursor) = cursor.as_mut() {
+                    match cursor.fetch_next(&lock(&app.session)) {
+                        Ok(Some(page)) => result.data.extend(page.rows),
+                        Ok(None) => {}
+                        Err(failure) => {
+                            emit_error(terminal, &failure_message(&failure), &app.theme)?
                         }
                     }
-                    format => {
-                        let text = crate::output::format_rows(&names, &result.data, format);
-                        emit_text(terminal, text.trim_end_matches('\n'), &app.theme, false)?;
+                }
+                let (format, cut) = render_rows(
+                    app,
+                    terminal,
+                    options,
+                    &names,
+                    &result.data,
+                    options.output_format,
+                )?;
+                truncated = cut;
+                rows = result.data.len();
+                if let Some(cursor) = cursor {
+                    if let Some(total) = cursor.total_rows {
+                        rows = total.max(rows);
+                    }
+                    if !cursor.exhausted() {
+                        paging = Some(Paging {
+                            cursor,
+                            names: names.clone(),
+                            shown: result.data.len(),
+                            format,
+                        });
                     }
                 }
             }
@@ -795,7 +848,7 @@ fn finish(
                 &lock(&app.session),
                 options,
                 &result.id,
-                result.data.len(),
+                rows,
                 result.elapsed_ms,
                 running.preview_limit,
             );
@@ -817,6 +870,14 @@ fn finish(
                 && let Some(summary) = summary
             {
                 emit(terminal, render::summary::lines(&summary, &app.theme))?;
+            }
+            if let Some(paging) = paging {
+                emit(
+                    terminal,
+                    vec![Line::styled(format!("   {}", paging.hint()), app.theme.dim)],
+                )?;
+                app.paging = Some(paging);
+                return Ok(());
             }
             emit_blank(terminal)?;
             start_next(app, terminal, options)
@@ -861,6 +922,104 @@ fn finish(
             emit_blank(terminal)
         }
     }
+}
+
+/// One page of rows in `format`: the styled table for the table formats
+/// (AUTO falls back to VERTICAL when even narrowed columns do not fit),
+/// the plain renderer otherwise. Returns the format actually used and
+/// whether the table narrowed a column.
+fn render_rows(
+    app: &App,
+    terminal: &mut Term,
+    options: &Options,
+    names: &[String],
+    rows: &[Vec<serde_json::Value>],
+    format: OutputFormat,
+) -> Result<(OutputFormat, bool), String> {
+    match format {
+        OutputFormat::Table | OutputFormat::Aligned | OutputFormat::Auto => {
+            let (lines, cut) = render::table::styled(names, rows, table_width(options), &app.theme);
+            if cut && format == OutputFormat::Auto {
+                let text = crate::output::format_rows(names, rows, OutputFormat::Vertical);
+                emit_text(terminal, text.trim_end_matches('\n'), &app.theme, false)?;
+                Ok((OutputFormat::Vertical, false))
+            } else {
+                emit(terminal, lines)?;
+                Ok((format, cut))
+            }
+        }
+        format => {
+            let text = crate::output::format_rows(names, rows, format);
+            emit_text(terminal, text.trim_end_matches('\n'), &app.theme, false)?;
+            Ok((format, false))
+        }
+    }
+}
+
+/// Space or Enter while paging: the next page, rendered with its header;
+/// the last page ends the paging and runs whatever statement is pending.
+fn next_page(app: &mut App, terminal: &mut Term, options: &mut Options) -> Result<(), String> {
+    let Some(paging) = app.paging.as_mut() else {
+        return Ok(());
+    };
+    let fetched = paging.cursor.fetch_next(&lock(&app.session));
+    let page = match fetched {
+        Ok(Some(page)) => page,
+        Ok(None) => return finish_paging(app, terminal, options),
+        Err(failure) => {
+            emit_error(terminal, &failure_message(&failure), &app.theme)?;
+            return stop_paging(app, terminal, options);
+        }
+    };
+    let names = paging.names.clone();
+    let format = paging.format;
+    paging.shown += page.rows.len();
+    let exhausted = paging.cursor.exhausted();
+    render_rows(app, terminal, options, &names, &page.rows, format)?;
+    if exhausted {
+        finish_paging(app, terminal, options)
+    } else {
+        Ok(())
+    }
+}
+
+/// Every page shown: `all N rows shown`, then the next pending statement.
+fn finish_paging(app: &mut App, terminal: &mut Term, options: &mut Options) -> Result<(), String> {
+    let Some(paging) = app.paging.take() else {
+        return Ok(());
+    };
+    emit(
+        terminal,
+        vec![Line::styled(
+            format!(
+                "   all {} rows shown",
+                render::thousands(paging.shown as i128)
+            ),
+            app.theme.dim,
+        )],
+    )?;
+    emit_blank(terminal)?;
+    start_next(app, terminal, options)
+}
+
+/// `q`, Esc or Ctrl-C while paging: `stopped after N rows`. The remaining
+/// pages stay on the coordinator until they expire.
+fn stop_paging(app: &mut App, terminal: &mut Term, options: &mut Options) -> Result<(), String> {
+    let Some(paging) = app.paging.take() else {
+        return Ok(());
+    };
+    emit(
+        terminal,
+        vec![Line::styled(
+            format!(
+                "   stopped after {} rows",
+                render::thousands(paging.shown as i128)
+            ),
+            app.theme.dim,
+        )],
+    )?;
+    emit_blank(terminal)?;
+    start_next(app, terminal, options)
 }
 
 /// Ctrl-C while a statement runs: cancel it on the coordinator when its
@@ -1180,6 +1339,25 @@ mod tests {
     fn elapsed_reads_like_the_summary() {
         assert_eq!(seconds(Duration::from_millis(400)), "400 ms");
         assert_eq!(seconds(Duration::from_millis(4100)), "4.10 s");
+    }
+
+    #[test]
+    fn paging_hint_counts_rows_shown_against_the_total() {
+        let mut paging = Paging {
+            cursor: PageCursor::new("http://127.0.0.1:8080", "/v1/query/q/results/1").unwrap(),
+            names: vec!["n".into()],
+            shown: 1_000,
+            format: OutputFormat::Table,
+        };
+        assert_eq!(
+            paging.hint(),
+            "1,000 rows so far · Space or Enter for more · q to stop"
+        );
+        paging.cursor.total_rows = Some(84_312);
+        assert_eq!(
+            paging.hint(),
+            "1,000 of 84,312 rows · Space or Enter for more · q to stop"
+        );
     }
 
     #[test]

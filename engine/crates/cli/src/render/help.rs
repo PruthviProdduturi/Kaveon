@@ -68,8 +68,8 @@ const GROUPS: &[Group] = &[
                 description: "cancel the running statement, or clear the input",
             },
             Entry {
-                command: ".limit [n]",
-                description: "rows a query without LIMIT shows (default 1,000, up to 10,000)",
+                command: ".limit [n | off]",
+                description: "rows a query without LIMIT shows (default 1,000); off pages every row",
             },
             Entry {
                 command: "EXPLAIN <statement>",
@@ -105,6 +105,14 @@ const GROUPS: &[Group] = &[
                 command: "--theme <NAME>",
                 description: "dark, light, or mono; NO_COLOR is honoured",
             },
+            Entry {
+                command: "Space, Enter  q",
+                description: "next page of a large result; stop paging",
+            },
+            Entry {
+                command: "--paged",
+                description: "page large results in -e, -f and piped mode instead of the inline limit",
+            },
         ],
     },
     Group {
@@ -114,10 +122,6 @@ const GROUPS: &[Group] = &[
             Entry {
                 command: ".ask <question>",
                 description: "answer a question in plain language through the Kaveon DLM",
-            },
-            Entry {
-                command: "paged results",
-                description: "large results page on demand instead of the 10,000 ceiling",
             },
             Entry {
                 command: ".edit  .source <file>  .tee <file>",

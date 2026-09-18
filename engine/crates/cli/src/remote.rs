@@ -26,6 +26,9 @@ struct StatementResponse {
     data: Vec<Vec<Value>>,
     error: Option<String>,
     elapsed_ms: u64,
+    /// With `--paged`: where the first page is; the rows are not inline.
+    #[serde(default)]
+    next_uri: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -133,6 +136,8 @@ pub fn run(options: &mut Options) -> Result<(), String> {
 }
 
 /// What one executed statement produced, for the shell's status line.
+/// `output` is what remains to be written; with `--paged` the rows of a
+/// machine format have already been streamed to stdout page by page.
 pub(crate) struct Executed {
     pub output: String,
     pub elapsed_ms: Option<u64>,
@@ -399,14 +404,22 @@ pub(crate) fn execute_with_limit(
     if let Some(executed) = run_metadata_statement(client, options, sql)? {
         return Ok(executed);
     }
-    let response = post_statement(client, options, sql)?;
-    let mut output = format_result(&response, options.output_format)?;
+    let mut response = post_statement(client, options, sql)?;
+    let rows = match response.next_uri.take() {
+        Some(next_uri) => stream_pages(client, options, &mut response, &next_uri)?,
+        None => response.data.len(),
+    };
+    let mut output = if response.next_uri.is_none() && rows == response.data.len() {
+        format_result(&response, options.output_format)?
+    } else {
+        String::new()
+    };
     let mut scanned_rows = None;
     if let Some(summary) = statement_summary(
         client,
         options,
         &response.id,
-        response.data.len(),
+        rows,
         response.elapsed_ms,
         preview_limit,
     ) {
@@ -422,6 +435,71 @@ pub(crate) fn execute_with_limit(
         elapsed_ms: Some(response.elapsed_ms),
         scanned_rows,
     })
+}
+
+/// The pages of a `--paged` result. A machine format (CSV, TSV, JSON
+/// lines, NULL) is written to stdout page by page with its header once,
+/// so a result of any size streams; a format that needs every row first
+/// (the tables, VERTICAL, MARKDOWN, the JSON array) is collected into
+/// `response.data` and rendered by the caller. Returns the row count;
+/// `response.next_uri` is left `Some` when the rows were streamed.
+fn stream_pages(
+    client: &Session,
+    options: &Options,
+    response: &mut StatementResponse,
+    next_uri: &str,
+) -> Result<usize, String> {
+    use crate::client::pages::PageCursor;
+    let mut cursor =
+        PageCursor::new(&options.server, next_uri).map_err(|failure| failure.message)?;
+    let names: Vec<String> = response
+        .columns
+        .iter()
+        .map(|column| column.name.clone())
+        .collect();
+    let format = options.output_format;
+    let streams = !is_human_format(format) && format != OutputFormat::Json;
+    if !streams {
+        while let Some(page) = cursor
+            .fetch_next(client)
+            .map_err(|failure| failure.message)?
+        {
+            response.data.extend(page.rows);
+        }
+        return Ok(response.data.len());
+    }
+    // The header alone, to drop from every page after the first.
+    let header = crate::output::format_rows(&names, &[], format);
+    let mut rows = 0usize;
+    let mut first = true;
+    let mut stdout = io::stdout().lock();
+    let mut write = |page_rows: &[Vec<Value>]| -> Result<(), String> {
+        let text = crate::output::format_rows(&names, page_rows, format);
+        let text = if first {
+            first = false;
+            text.as_str()
+        } else {
+            text.strip_prefix(header.as_str()).unwrap_or(&text)
+        };
+        stdout
+            .write_all(text.as_bytes())
+            .and_then(|()| stdout.flush())
+            .map_err(|error| format!("cannot write to standard output: {error}"))
+    };
+    if !response.data.is_empty() {
+        rows += response.data.len();
+        write(&response.data)?;
+        response.data.clear();
+    }
+    while let Some(page) = cursor
+        .fetch_next(client)
+        .map_err(|failure| failure.message)?
+    {
+        rows += page.rows.len();
+        write(&page.rows)?;
+    }
+    response.next_uri = Some(next_uri.to_owned());
+    Ok(rows)
 }
 
 /// SHOW, USE and DESCRIBE are answered over the catalog API without a
@@ -441,8 +519,8 @@ pub(crate) fn run_metadata_statement(
     }))
 }
 
-/// The blocking POST, inline delivery. The shell does the same on a worker
-/// thread through `client::statement::submit`.
+/// The blocking POST: inline delivery, or paged with `--paged`. The shell
+/// does the same on a worker thread through `client::statement::submit`.
 fn post_statement(
     client: &Session,
     options: &Options,
@@ -457,7 +535,7 @@ fn post_statement(
         source: &options.source,
         client: "kaveon-cli",
         client_tags: &options.client_tags,
-        result_delivery: "inline",
+        result_delivery: if options.paged { "paged" } else { "inline" },
     };
     let response = client
         .request(reqwest::Method::POST, &url)?
@@ -612,6 +690,7 @@ fn run_meta_command(
                 id: String::new(),
                 error: None,
                 elapsed_ms: 0,
+                next_uri: None,
                 columns: vec![
                     Column {
                         name: "Column".to_owned(),
@@ -1295,6 +1374,7 @@ fn metadata_to_string(
             .collect(),
         error: None,
         elapsed_ms: 0,
+        next_uri: None,
     };
     let mut output =
         format_result(&response, options.output_format).expect("metadata output is serializable");
@@ -1334,6 +1414,7 @@ mod tests {
             data: vec![vec![Value::String("a,b".to_owned()), Value::from(2)]],
             error: None,
             elapsed_ms: 4,
+            next_uri: None,
         }
     }
 
@@ -1619,6 +1700,61 @@ mod tests {
         assert_eq!(options.catalog, "medallion");
         assert_eq!(options.schema, "test");
         server.join().unwrap();
+    }
+
+    #[test]
+    fn paged_batch_collects_every_page_for_a_table_format() {
+        use crate::client::session::test_server::{fixture, session};
+        let page = |rows: &str, next: Option<&str>| {
+            let next = next.map_or("null".to_owned(), |next| format!("\"{next}\""));
+            format!(r#"{{"id":"q","data":{rows},"next_uri":{next},"row_count":3}}"#)
+        };
+        let (url, thread) = fixture(vec![
+            (
+                "POST /v1/statement ",
+                200,
+                r#"{"id":"q","state":"FINISHED","columns":[{"name":"n","type":"Int64"}],"data":[],"error":null,"elapsed_ms":7,"next_uri":"/v1/query/q/results/0"}"#.into(),
+            ),
+            (
+                "GET /v1/query/q/results/0 ",
+                200,
+                page("[[1],[2]]", Some("/v1/query/q/results/1")),
+            ),
+            ("GET /v1/query/q/results/1 ", 200, page("[[3]]", None)),
+            (
+                "GET /v1/query/q ",
+                200,
+                r#"{"id":"q","state":"FINISHED","elapsed_ms":7}"#.into(),
+            ),
+        ]);
+        let (client, mut options) = session(&url);
+        options.paged = true;
+        options.output_format = OutputFormat::Aligned;
+        let executed = execute_to_string(&client, &mut options, "SELECT n FROM t").unwrap();
+        assert_eq!(
+            executed.output,
+            "+---+\n| n |\n+---+\n| 1 |\n| 2 |\n| 3 |\n+---+\n(3 rows)\n ✓ 7 ms · 3 rows   q\n\n"
+        );
+        let bodies = thread.join().unwrap();
+        let request: Value = serde_json::from_str(&bodies[0]).unwrap();
+        assert_eq!(request["result_delivery"], "paged");
+    }
+
+    #[test]
+    fn inline_batch_keeps_inline_delivery() {
+        use crate::client::session::test_server::{fixture, session};
+        let (url, thread) = fixture(vec![(
+            "POST /v1/statement ",
+            200,
+            r#"{"id":"q","state":"FINISHED","columns":[{"name":"n","type":"Int64"}],"data":[[1]],"error":null,"elapsed_ms":7}"#.into(),
+        )]);
+        let (client, mut options) = session(&url);
+        options.output_format = OutputFormat::Csv;
+        let executed = execute_to_string(&client, &mut options, "SELECT 1").unwrap();
+        assert_eq!(executed.output, "n\n1\n");
+        let bodies = thread.join().unwrap();
+        let request: Value = serde_json::from_str(&bodies[0]).unwrap();
+        assert_eq!(request["result_delivery"], "inline");
     }
 
     #[test]

@@ -44,6 +44,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond({'schemas': ['gold']})
         if self.path == '/v1/catalog/lake/schema/gold/table':
             return self.respond({'tables': ['orders']})
+        if self.path == '/v1/query/fixture-query/results/0':
+            return self.respond({'id': 'fixture-query', 'data': [['p0']],
+                'next_uri': '/v1/query/fixture-query/results/1', 'row_count': 2})
+        if self.path == '/v1/query/fixture-query/results/1':
+            return self.respond({'id': 'fixture-query', 'data': [['p1']], 'next_uri': None, 'row_count': 2})
         if self.path.startswith('/v1/query/'):
             return self.respond({'id': 'fixture-query', 'state': 'FINISHED', 'elapsed_ms': 20,
                 'stages': [{'task_count': 2, 'completed_tasks': 2,
@@ -61,6 +66,10 @@ class Handler(BaseHTTPRequestHandler):
                 'code': 'SYNTAX_ERROR', 'position': {'line': 1, 'column': 8}}, 400)
         if 'BAD' in query:
             return self.respond({'error': 'intentional SQL failure'}, 400)
+        if body.get('result_delivery') == 'paged':
+            return self.respond({'id': 'fixture-query', 'state': 'FINISHED', 'elapsed_ms': 20,
+                'columns': [{'name': 'value', 'type': 'VARCHAR'}], 'data': [], 'error': None,
+                'next_uri': '/v1/query/fixture-query/results/0'})
         self.respond({'id': 'fixture-query', 'state': 'FINISHED', 'elapsed_ms': 20,
             'columns': [{'name': 'value', 'type': 'VARCHAR'}], 'data': [['a; b']], 'error': None})
 
@@ -136,8 +145,22 @@ try:
     assert result.returncode == 1 and not result.stdout, result
     assert stderr_lines(result) == ['error: SQL parse error: Expected an expression, found: FROM'], result.stderr
 
+    # --paged: a machine format streams every page with the header once; a
+    # table format collects the pages first; without the flag delivery stays inline.
+    seen.clear()
+    result = run('--paged', '-e', 'SELECT 1;', '--output-format', 'CSV_HEADER')
+    assert result.returncode == 0 and result.stdout == '"value"\n"p0"\n"p1"\n', result
+    assert seen[0]['result_delivery'] == 'paged', seen
+    result = run('--paged', '-e', 'SELECT 1;', '--output-format', 'ALIGNED')
+    assert result.returncode == 0 and '| p0    |\n| p1    |\n' in result.stdout and '2 rows' in result.stdout, result
+    seen.clear()
+    result = run('-e', 'SELECT 1;', '--output-format', 'CSV_HEADER')
+    assert result.returncode == 0 and result.stdout == '"value"\n"a; b"\n', result
+    assert seen[0]['result_delivery'] == 'inline', seen
+
     print('PASS: binary batch context, quoted semicolons, file/stdin, output formats, error exit codes, '
-          'metadata commands, SHOW suggestions, one-line worker and parse failures, and a truthful summary.')
+          'metadata commands, SHOW suggestions, one-line worker and parse failures, a truthful summary, '
+          'and --paged streaming.')
 finally:
     server.shutdown()
     server.server_close()
