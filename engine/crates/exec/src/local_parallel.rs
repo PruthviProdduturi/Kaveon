@@ -3,6 +3,16 @@
 //! one thread's map and memory is the same as one aggregator's; ungrouped
 //! aggregates round-robin. Operators are constructed inside their owning
 //! threads.
+//!
+//! Sources read on threads of their own (`Sources::Threads`) hand each
+//! batch to every thread with the reservation holding it: one charge per
+//! batch in flight, the source's. When the budget refuses a source its
+//! next batch, the source keeps the batch and asks the threads for memory
+//! (`Pressure`); a thread answers between two batches — its input wakes
+//! it for that — by giving memory up (the final merge spills its live
+//! table) or declining, and the source tries again once memory was given
+//! up. The refusal is final only when every thread has declined and none
+//! gave memory up since the attempt. No thread waits with a lock held.
 use crate::{
     aggregate::{
         AggExpr, HashAggregate, aggregate_output_types, exchanged_group_key_type,
@@ -23,8 +33,8 @@ use kaveon_core::{
 use std::{
     collections::VecDeque,
     sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        Arc, Condvar, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender, TrySendError},
     },
     thread::{self, JoinHandle},
@@ -241,10 +251,18 @@ impl Drop for QueueCharge {
     }
 }
 
+/// One thread's input: the batches its queue receives, each held until
+/// the next call. While a pressure request waits on this thread's answer
+/// (`Pressure`), the input does not sleep on: it hands out an empty batch
+/// of its schema instead, so the operator over it — which answers between
+/// batches — gets to answer now. Only a thread whose operator took a
+/// responder's ticket is woken that way; an operator that does not take
+/// part never sees one.
 struct ChannelInput {
     schema: SchemaRef,
     receiver: Receiver<QueuedBatch>,
     stopped: Arc<AtomicBool>,
+    pressure: Option<(Arc<Pressure>, usize)>,
     current: Option<Held>,
 }
 impl BatchOperator for ChannelInput {
@@ -256,6 +274,11 @@ impl BatchOperator for ChannelInput {
         loop {
             if self.stopped.load(Ordering::Acquire) {
                 return Err(stopped_error());
+            }
+            if let Some((pressure, index)) = &self.pressure
+                && pressure.awaits(*index)
+            {
+                return Ok(Some(RecordBatch::new_empty(Arc::clone(&self.schema))));
             }
             match self.receiver.recv_timeout(Duration::from_millis(20)) {
                 Ok(queued) => {
@@ -290,6 +313,11 @@ pub struct ThreadContext {
     pub workers: usize,
     /// The query's spill budget and partition count when spilling is on.
     pub spill: Option<(SpillManager, usize)>,
+    /// Where the sources read on threads of their own ask the threads
+    /// for memory (`Pressure`): an operator that can give some up takes
+    /// a responder's ticket for its thread. None when the source is read
+    /// on the calling thread.
+    pub pressure: Option<Arc<Pressure>>,
 }
 
 /// A batch with the reservation that holds it: what a source read on its
@@ -318,8 +346,10 @@ impl ReservedBatch {
 /// operator through the pump. Its batches come with the reservations
 /// holding them. A reservation the budget refuses is reported as
 /// `KaveonError::MemoryLimit` **with the batch kept**: the next call
-/// offers the same batch again, its reservation tried first, so a caller
-/// that can make room may try again without a row lost or read twice.
+/// offers the same batch again, its reservation tried first, so the pump
+/// can ask the operator's threads for memory and try again without a
+/// row lost or read twice. That is the contract that lets the pump retry
+/// at all; a source that cannot keep a batch must not report a refusal.
 pub trait ThreadSource {
     fn schema(&self) -> &SchemaRef;
     fn next_batch(&mut self) -> Result<Option<ReservedBatch>>;
@@ -709,6 +739,9 @@ impl ParallelPartials {
         }
         let (output_tx, output_rx) = mpsc::sync_channel(self.workers * 2);
         self.output = Some(output_rx);
+        // Sources on threads of their own ask the operator's threads for
+        // memory when the budget refuses them a batch.
+        let pressure = (!self.openers.is_empty()).then(|| Pressure::new(self.workers));
         let mut senders = Vec::with_capacity(self.workers);
         for index in 0..self.workers {
             let (sender, receiver) = mpsc::sync_channel(2);
@@ -720,6 +753,7 @@ impl ParallelPartials {
                 index,
                 workers: self.workers,
                 spill: self.spill.clone(),
+                pressure: pressure.clone(),
             };
             let stopped = self.stopped.clone();
             let output = output_tx.clone();
@@ -732,10 +766,15 @@ impl ParallelPartials {
                                 schema,
                                 receiver,
                                 stopped: stopped.clone(),
+                                pressure: context.pressure.clone().map(|p| (p, index)),
                                 current: None,
                             });
                             run_worker(source, &operator, &pool, &context, &stopped, &output)
                         });
+                        // However the thread ended, no request waits on it.
+                        if let Some(pressure) = &context.pressure {
+                            pressure.leave(index);
+                        }
                         if let Err(err) = result {
                             let _ = output.send(Err(err));
                             stopped.store(true, Ordering::Release);
@@ -789,12 +828,16 @@ impl ParallelPartials {
             let pool = self.pool.clone();
             let stopped = self.stopped.clone();
             let output = output_tx.clone();
+            let pressure = pressure.clone().expect("pumps have a pressure state");
             self.pumps.push(
                 thread::Builder::new()
                     .name(format!("kaveon-parallel-source-{index}"))
                     .spawn(move || {
                         let result = catch_worker_failure(|| {
-                            run_pump(opener, &schema, &senders, &queue, pumps, &pool, &stopped)
+                            run_pump(
+                                opener, &schema, &senders, &queue, pumps, &pool, &stopped,
+                                &pressure,
+                            )
                         });
                         drop(senders);
                         if let Err(err) = result {
@@ -1097,7 +1140,12 @@ pub fn occupied_bytes(batch: &RecordBatch) -> Result<u64> {
         .sum()
 }
 
-/// One source read on its own thread, every batch to every thread.
+/// One source read on its own thread, every batch to every thread. A
+/// batch the budget refuses the source is not the end: the threads are
+/// asked for memory (`Pressure::request`) and the source is asked again
+/// — it kept the batch — until the reservation is taken or no thread has
+/// anything to give, when the refusal stands.
+#[allow(clippy::too_many_arguments)]
 fn run_pump(
     opener: SourceOpener,
     schema: &SchemaRef,
@@ -1106,12 +1154,28 @@ fn run_pump(
     pumps: usize,
     pool: &QueryMemoryPool,
     stopped: &AtomicBool,
+    pressure: &Pressure,
 ) -> Result<()> {
     let mut source = opener()?;
     if source.schema() != schema {
         return Err(error("parallel source schema differs between sources"));
     }
-    while let Some(reserved) = source.next_batch()? {
+    let account = pool.operator("parallel-source")?;
+    loop {
+        // What the threads had given up before this attempt: a refusal
+        // that predates a release is not the last word.
+        let since = pressure.given_up();
+        let reserved = match source.next_batch() {
+            Ok(Some(reserved)) => reserved,
+            Ok(None) => return Ok(()),
+            Err(KaveonError::MemoryLimit(message)) => {
+                match pressure.request(since, &account, stopped)? {
+                    Relief::Released => continue,
+                    Relief::Nothing => return Err(KaveonError::MemoryLimit(message)),
+                }
+            }
+            Err(error) => return Err(error),
+        };
         let batch = reserved.batch;
         if batch.schema() != *schema {
             return Err(error(
@@ -1148,7 +1212,6 @@ fn run_pump(
             )?;
         }
     }
-    Ok(())
 }
 
 fn catch_worker_failure(work: impl FnOnce() -> Result<()>) -> Result<()> {
@@ -1165,6 +1228,12 @@ fn run_worker(
 ) -> Result<()> {
     let account = pool.operator("parallel-output")?;
     let mut operator = operator(source, pool, context)?;
+    // The operator has taken a responder's ticket by now or never will:
+    // a request does not wait on this thread past this point unless it
+    // answers.
+    if let Some(pressure) = &context.pressure {
+        pressure.settle(context.index);
+    }
     while let Some(batch) = operator.next_batch()? {
         // The batch is held by the queue; whatever it came from is not.
         let memory = Arc::new(account.reserve(batch.get_array_memory_size() as u64 + 8192)?);
@@ -1286,6 +1355,363 @@ impl Drop for RendezvousTicket {
             self.arrived = true;
             self.rendezvous.arrive();
         }
+    }
+}
+
+// --- Memory pressure from the source threads ----------------------------------
+// A source read on its own thread reserves each batch it decodes. When the
+// budget refuses one, the memory is with the operator's threads — the final
+// merge's tables, which can go to the disk. Rather than fail the task, the
+// source raises a request here and waits; the threads answer between
+// batches, and the source tries again once one of them has given memory
+// up, or gives up once none has anything to give.
+//
+// The rule, kept simple:
+// - One request is open at a time. A source refused while one is open
+//   waits on the same request; whoever retries first takes what was freed,
+//   and the other raises the next request if it is refused again.
+// - Every thread answers a request once, in the order the threads reach
+//   it: a thread whose operator holds something to give up claims the
+//   request and gives it up (the final merge spills its live table); the
+//   first to claim is the only one to — the source retries after one
+//   spill, and a second refusal is a new request. A thread with nothing
+//   to give declines.
+// - The request resolves `Released` as soon as any thread has given
+//   memory up — the claimer, or a thread that spilled for a refusal of
+//   its own meanwhile — and `Nothing` when every thread has declined and
+//   none gave anything up since the source's attempt, which is the
+//   refusal made final. (Threads sharing one budget reach their refusals
+//   together: a thread that spilled on its own and then declines has
+//   still freed what the source needs.)
+// - A thread that never takes a responder's ticket (its operator has no
+//   memory to give up), or that has left (finished, failed, dropped), is
+//   never waited on. A request raised before a thread's operator exists
+//   waits for it to take a ticket or not — that is decided as the
+//   operator is constructed, never later.
+// - A source waits on a condvar, holding no lock; it leaves on stop or
+//   cancellation. A thread blocked on its input wakes to answer
+//   (`ChannelInput`), so no request waits on a thread that has nothing to
+//   do.
+
+/// What a request came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Relief {
+    /// A thread gave memory up: try the reservation again.
+    Released,
+    /// No thread has anything to give: the refusal is final.
+    Nothing,
+}
+
+/// The pressure state shared by the sources and threads of one parallel
+/// operator.
+pub struct Pressure {
+    state: Mutex<PressureState>,
+    changed: Condvar,
+    /// The open request's generation, 0 when none: what a thread checks
+    /// between batches without the lock.
+    open: AtomicU64,
+    /// Per thread: the generation it last answered.
+    answered: Vec<AtomicU64>,
+    /// Per thread: whether it holds a responder's ticket.
+    responding: Vec<AtomicBool>,
+    /// Times a thread has given memory up, on a request or on a refusal
+    /// of its own: what a source reads before an attempt, so a refusal
+    /// can be told from one made before a thread gave memory up.
+    given_up: AtomicU64,
+}
+
+struct PressureState {
+    /// Generations raised so far.
+    generation: u64,
+    request: Option<PressureRequest>,
+    roles: Vec<ThreadRole>,
+    /// The last resolved request, for the sources waiting on it.
+    last: Option<(u64, Relief)>,
+    stats: PressureStats,
+}
+
+struct PressureRequest {
+    generation: u64,
+    /// The thread giving memory up for it, once one has claimed it.
+    claimer: Option<usize>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ThreadRole {
+    /// The operator is not constructed yet.
+    Unknown,
+    /// The operator answers requests.
+    Responder,
+    /// Nothing to ask of it.
+    Absent,
+}
+
+/// What the requests came to, for the record.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PressureStats {
+    pub requests: u64,
+    pub released: u64,
+    pub nothing: u64,
+}
+
+impl Pressure {
+    pub fn new(threads: usize) -> Arc<Self> {
+        Arc::new(Self {
+            state: Mutex::new(PressureState {
+                generation: 0,
+                request: None,
+                roles: vec![ThreadRole::Unknown; threads],
+                last: None,
+                stats: PressureStats::default(),
+            }),
+            changed: Condvar::new(),
+            open: AtomicU64::new(0),
+            answered: (0..threads).map(|_| AtomicU64::new(0)).collect(),
+            responding: (0..threads).map(|_| AtomicBool::new(false)).collect(),
+            given_up: AtomicU64::new(0),
+        })
+    }
+
+    /// Times the threads have given memory up so far: read before an
+    /// attempt, passed to `request` with its refusal.
+    pub fn given_up(&self) -> u64 {
+        self.given_up.load(Ordering::Acquire)
+    }
+
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, PressureState>> {
+        self.state
+            .lock()
+            .map_err(|_| error("parallel pressure state poisoned"))
+    }
+
+    pub fn stats(&self) -> PressureStats {
+        self.state
+            .lock()
+            .map_or(PressureStats::default(), |state| state.stats)
+    }
+
+    /// Thread `index`'s place as a responder: its operator answers
+    /// requests, with this.
+    pub fn responder(self: &Arc<Self>, index: usize) -> PressureTicket {
+        if let Ok(mut state) = self.state.lock() {
+            state.roles[index] = ThreadRole::Responder;
+            self.responding[index].store(true, Ordering::Release);
+        }
+        PressureTicket {
+            pressure: Arc::clone(self),
+            index,
+        }
+    }
+
+    /// Thread `index`'s operator exists: if it took no ticket, it never
+    /// will.
+    fn settle(&self, index: usize) {
+        if let Ok(mut state) = self.state.lock()
+            && state.roles[index] == ThreadRole::Unknown
+        {
+            state.roles[index] = ThreadRole::Absent;
+            self.resolve_if_declined(&mut state);
+        }
+    }
+
+    /// Thread `index` is gone, or its operator has nothing more to give.
+    fn leave(&self, index: usize) {
+        self.responding[index].store(false, Ordering::Release);
+        if let Ok(mut state) = self.state.lock() {
+            state.roles[index] = ThreadRole::Absent;
+            if let Some(request) = &mut state.request
+                && request.claimer == Some(index)
+            {
+                // Whatever it held is released with it, or was not for
+                // lack of memory: either way the source asks again.
+                self.resolve(&mut state, Relief::Released);
+                return;
+            }
+            self.resolve_if_declined(&mut state);
+        }
+    }
+
+    /// Whether the open request waits on thread `index`'s answer.
+    fn awaits(&self, index: usize) -> bool {
+        let generation = self.open.load(Ordering::Acquire);
+        generation != 0
+            && self.responding[index].load(Ordering::Acquire)
+            && self.answered[index].load(Ordering::Acquire) != generation
+    }
+
+    /// Thread `index` answers the open request with something to give
+    /// up: true when it is the one to, false when another claimed first
+    /// (nothing more is asked of it for this request).
+    fn claim(&self, index: usize) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        let Some(request) = &mut state.request else {
+            return false;
+        };
+        if self.answered[index].load(Ordering::Acquire) == request.generation {
+            return false;
+        }
+        self.answered[index].store(request.generation, Ordering::Release);
+        if request.claimer.is_some() {
+            return false;
+        }
+        request.claimer = Some(index);
+        true
+    }
+
+    /// Thread `index` has nothing to give up for the open request.
+    fn decline(&self, index: usize) {
+        if let Ok(mut state) = self.state.lock() {
+            if let Some(request) = &state.request {
+                self.answered[index].store(request.generation, Ordering::Release);
+            }
+            self.resolve_if_declined(&mut state);
+        }
+    }
+
+    /// Thread `index` has given memory up — for the request it claimed,
+    /// or for a refusal of its own. Either frees what a source waits for:
+    /// the open request, if any, is resolved `Released`, and the thread
+    /// has answered it.
+    fn released(&self, index: usize) {
+        if let Ok(mut state) = self.state.lock() {
+            self.given_up.fetch_add(1, Ordering::AcqRel);
+            if let Some(request) = &state.request {
+                self.answered[index].store(request.generation, Ordering::Release);
+                self.resolve(&mut state, Relief::Released);
+            }
+        }
+    }
+
+    /// An unclaimed request every thread that could answer has declined
+    /// is final.
+    fn resolve_if_declined(&self, state: &mut PressureState) {
+        let Some(request) = &state.request else {
+            return;
+        };
+        if request.claimer.is_some() {
+            return;
+        }
+        let generation = request.generation;
+        let all_declined = state
+            .roles
+            .iter()
+            .enumerate()
+            .all(|(index, role)| match role {
+                ThreadRole::Unknown => false,
+                ThreadRole::Absent => true,
+                ThreadRole::Responder => self.answered[index].load(Ordering::Acquire) == generation,
+            });
+        if all_declined {
+            self.resolve(state, Relief::Nothing);
+        }
+    }
+
+    fn resolve(&self, state: &mut PressureState, relief: Relief) {
+        let Some(request) = state.request.take() else {
+            return;
+        };
+        match relief {
+            Relief::Released => state.stats.released += 1,
+            Relief::Nothing => state.stats.nothing += 1,
+        }
+        state.last = Some((request.generation, relief));
+        self.open.store(0, Ordering::Release);
+        self.changed.notify_all();
+    }
+
+    /// A source's reservation was refused: ask the threads for memory and
+    /// wait for the answer. `since` is `given_up()` as read before the
+    /// refused attempt: a `Nothing` from the threads is `Released` when
+    /// one of them has given memory up since, the attempt having come
+    /// first. Leaves with the stop or the query's cancellation.
+    pub fn request(
+        &self,
+        since: u64,
+        account: &OperatorMemoryAccount,
+        stopped: &AtomicBool,
+    ) -> Result<Relief> {
+        let mut state = self.lock()?;
+        let generation = match &state.request {
+            Some(request) => request.generation,
+            None => {
+                state.generation += 1;
+                let generation = state.generation;
+                state.stats.requests += 1;
+                state.request = Some(PressureRequest {
+                    generation,
+                    claimer: None,
+                });
+                self.open.store(generation, Ordering::Release);
+                self.resolve_if_declined(&mut state);
+                generation
+            }
+        };
+        loop {
+            if let Some((resolved, relief)) = state.last
+                && resolved >= generation
+            {
+                // Mine, or a later one whose outcome replaced it: the
+                // retry is the reservation's to decide either way.
+                return Ok(
+                    if resolved == generation && self.given_up.load(Ordering::Acquire) == since {
+                        relief
+                    } else {
+                        Relief::Released
+                    },
+                );
+            }
+            if stopped.load(Ordering::Acquire) {
+                return Err(stopped_error());
+            }
+            account.check_cancelled()?;
+            state = self
+                .changed
+                .wait_timeout(state, Duration::from_millis(20))
+                .map_err(|_| error("parallel pressure state poisoned"))?
+                .0;
+        }
+    }
+}
+
+/// A thread's place as a responder to pressure requests. Dropped, the
+/// thread has nothing more to give: no request waits on it.
+pub struct PressureTicket {
+    pressure: Arc<Pressure>,
+    index: usize,
+}
+
+impl PressureTicket {
+    /// Whether a request waits on this thread's answer.
+    pub fn pending(&self) -> bool {
+        self.pressure.awaits(self.index)
+    }
+
+    /// Answer the open request with something to give up: true when this
+    /// thread is to give it up now (and report `released` after), false
+    /// when another thread claimed the request first — or when no request
+    /// is open any more.
+    pub fn claim(&self) -> bool {
+        self.pressure.claim(self.index)
+    }
+
+    /// Answer the open request with nothing to give up.
+    pub fn decline(&self) {
+        self.pressure.decline(self.index);
+    }
+
+    /// This thread has given memory up: what it claimed, or its table
+    /// spilled for a refusal of its own. The open request, if any, is
+    /// answered with it.
+    pub fn released(&self) {
+        self.pressure.released(self.index);
+    }
+}
+
+impl Drop for PressureTicket {
+    fn drop(&mut self) {
+        self.pressure.leave(self.index);
     }
 }
 
@@ -1984,11 +2410,166 @@ mod tests {
         assert_eq!(pool.snapshot().current_bytes, 0);
     }
 
-    /// A source thread's batch crosses with its reservation — the one
-    /// charge for the batch while it is in flight — and its refusal is
-    /// the operator's error.
+    /// A request raised on a thread of its own, `since` read as a source
+    /// reads it: before the attempt the refusal came from.
+    fn request_on_a_thread(
+        pressure: &Arc<Pressure>,
+        account: &OperatorMemoryAccount,
+        stopped: &Arc<AtomicBool>,
+    ) -> JoinHandle<Result<Relief>> {
+        let since = pressure.given_up();
+        let pressure = Arc::clone(pressure);
+        let account = account.clone();
+        let stopped = Arc::clone(stopped);
+        thread::spawn(move || pressure.request(since, &account, &stopped))
+    }
+
     #[test]
-    fn a_source_thread_hands_its_reservation_over_and_its_refusal_is_the_error() {
+    fn pressure_requests_resolve_on_the_first_spill_or_once_every_responder_declines() {
+        let pool = QueryMemoryPool::new("pressure", 1 << 20).unwrap();
+        let account = pool.operator("source").unwrap();
+        let running = Arc::new(AtomicBool::new(false));
+
+        // No thread answers: the refusal is final at once.
+        let pressure = Pressure::new(2);
+        pressure.settle(0);
+        pressure.settle(1);
+        assert_eq!(
+            pressure.request(0, &account, &running).unwrap(),
+            Relief::Nothing
+        );
+
+        // Two responders and one absent thread. The request waits for
+        // the responders; the first with something to give claims it, the
+        // other's answer changes nothing; the claimer's release resolves
+        // it.
+        let pressure = Pressure::new(3);
+        let first = pressure.responder(0);
+        let second = pressure.responder(1);
+        pressure.settle(2);
+        assert!(!first.pending());
+        let waiter = request_on_a_thread(&pressure, &account, &running);
+        while !first.pending() {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(second.pending());
+        assert!(first.claim());
+        assert!(!first.pending(), "answered");
+        assert!(!second.claim(), "claimed already");
+        assert!(!second.pending());
+        thread::sleep(Duration::from_millis(30));
+        assert!(!waiter.is_finished(), "the claimer has not released yet");
+        first.released();
+        assert_eq!(waiter.join().unwrap().unwrap(), Relief::Released);
+
+        // A new request: both decline, and the refusal is final.
+        let waiter = request_on_a_thread(&pressure, &account, &running);
+        while !first.pending() {
+            thread::sleep(Duration::from_millis(1));
+        }
+        first.decline();
+        thread::sleep(Duration::from_millis(30));
+        assert!(!waiter.is_finished(), "one responder has not answered");
+        second.decline();
+        assert_eq!(waiter.join().unwrap().unwrap(), Relief::Nothing);
+
+        // A thread that gives memory up for a refusal of its own while a
+        // request is open answers it with that: no claim, no decline.
+        let waiter = request_on_a_thread(&pressure, &account, &running);
+        while !second.pending() {
+            thread::sleep(Duration::from_millis(1));
+        }
+        second.released();
+        assert_eq!(waiter.join().unwrap().unwrap(), Relief::Released);
+        assert!(!first.pending(), "resolved without the first's answer");
+
+        // A refusal that predates a release is not the last word: every
+        // thread declines, but memory was given up since the attempt.
+        let since = pressure.given_up();
+        first.released();
+        let waiter = {
+            let pressure = Arc::clone(&pressure);
+            let account = account.clone();
+            let running = Arc::clone(&running);
+            thread::spawn(move || pressure.request(since, &account, &running))
+        };
+        while !first.pending() {
+            thread::sleep(Duration::from_millis(1));
+        }
+        first.decline();
+        second.decline();
+        assert_eq!(waiter.join().unwrap().unwrap(), Relief::Released);
+        assert_eq!(
+            pressure.stats(),
+            PressureStats {
+                requests: 4,
+                released: 2,
+                nothing: 2
+            }
+        );
+
+        // A request raised before a thread's operator exists waits for
+        // that thread to take a ticket or not.
+        let pressure = Pressure::new(2);
+        let ticket = pressure.responder(0);
+        let waiter = request_on_a_thread(&pressure, &account, &running);
+        while !ticket.pending() {
+            thread::sleep(Duration::from_millis(1));
+        }
+        ticket.decline();
+        thread::sleep(Duration::from_millis(30));
+        assert!(!waiter.is_finished(), "thread 1 is not settled");
+        pressure.settle(1);
+        assert_eq!(waiter.join().unwrap().unwrap(), Relief::Nothing);
+
+        // A claimer that leaves (its ticket dropped) releases what it
+        // held: the source asks again.
+        let pressure = Pressure::new(1);
+        let ticket = pressure.responder(0);
+        let waiter = request_on_a_thread(&pressure, &account, &running);
+        while !ticket.pending() {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(ticket.claim());
+        drop(ticket);
+        assert_eq!(waiter.join().unwrap().unwrap(), Relief::Released);
+        assert_eq!(
+            pressure.stats(),
+            PressureStats {
+                requests: 1,
+                released: 1,
+                nothing: 0
+            }
+        );
+
+        // The stop and the query's cancellation end the wait.
+        let pressure = Pressure::new(1);
+        let _ticket = pressure.responder(0);
+        let stopped = Arc::new(AtomicBool::new(false));
+        let waiter = request_on_a_thread(&pressure, &account, &stopped);
+        thread::sleep(Duration::from_millis(30));
+        assert!(!waiter.is_finished());
+        stopped.store(true, Ordering::Release);
+        assert!(is_consequence(&waiter.join().unwrap().unwrap_err()));
+        let cancelled = QueryMemoryPool::new("pressure-cancelled", 1 << 20).unwrap();
+        let flag = Arc::new(AtomicBool::new(false));
+        let probe = Arc::clone(&flag);
+        cancelled
+            .set_cancellation_probe(move || probe.load(Ordering::Acquire))
+            .unwrap();
+        let account = cancelled.operator("source").unwrap();
+        let waiter = request_on_a_thread(&pressure, &account, &running);
+        thread::sleep(Duration::from_millis(30));
+        assert!(!waiter.is_finished());
+        flag.store(true, Ordering::Release);
+        assert!(waiter.join().unwrap().is_err());
+    }
+
+    /// A source thread's refusal over an operator that does not answer
+    /// pressure is final at once, and the source's batch is the one
+    /// reservation for it while it is in flight.
+    #[test]
+    fn a_refused_source_over_a_thread_that_does_not_answer_fails_closed_at_once() {
         let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
         struct Refusing {
             schema: SchemaRef,
@@ -2032,6 +2613,7 @@ mod tests {
                     }) as Box<dyn ThreadSource>)
                 }) as SourceOpener
             };
+            let started = std::time::Instant::now();
             let mut parallel = ParallelPartials::broadcast(
                 Sources::Threads {
                     schema: schema.clone(),
@@ -2058,6 +2640,10 @@ mod tests {
             } else {
                 let error = parallel.next_batch().unwrap_err();
                 assert!(matches!(error, KaveonError::MemoryLimit(_)), "{error}");
+                assert!(
+                    started.elapsed() < Duration::from_secs(2),
+                    "no wait on a thread that cannot answer"
+                );
             }
             drop(parallel);
             assert_eq!(pool.snapshot().current_bytes, 0);

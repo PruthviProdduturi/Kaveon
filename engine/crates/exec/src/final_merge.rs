@@ -12,6 +12,13 @@
 //! sub-partition is merged back on its own, one at a time, as a unit of
 //! complete groups. A sub-partition that does not fit fails the query
 //! closed, the way every disk-partitioned operator does.
+//!
+//! A refusal on the input side is answered the same way: when the budget
+//! refuses a source thread the batch it decoded, the source asks the
+//! merge threads for memory (`local_parallel::Pressure`), and a merge
+//! with groups in its table spills them between two batches, so the
+//! source can try again. The table's memory is what the input needs; the
+//! task does not fail for it while there is a table to spill.
 use std::collections::VecDeque;
 use std::sync::Arc;
 
@@ -23,7 +30,7 @@ use kaveon_core::{BatchOperator, KaveonError, MemoryReservation, OperatorMemoryA
 
 use crate::aggregate::{grouped_aggregate_key_types, grouped_aggregate_output_types};
 use crate::incremental_aggregate::{IncrementalAggregateMerger, MergedGroups};
-use crate::local_parallel::{RendezvousTicket, ThreadSelector};
+use crate::local_parallel::{PressureTicket, RendezvousTicket, ThreadSelector};
 use crate::partitioned::RunSource;
 use crate::spill::{SpillManager, SpillRun, SpillRunWriter};
 
@@ -51,6 +58,9 @@ pub struct FinalMergeSpill {
     pub tables: u64,
     /// Groups those tables held.
     pub groups: u64,
+    /// Of the tables, those written for a source thread's refusal rather
+    /// than this merge's own.
+    pub on_pressure: u64,
 }
 
 pub struct HybridFinalMerge {
@@ -69,6 +79,9 @@ pub struct HybridFinalMerge {
     spill_reserve: Option<MemoryReservation>,
     /// Where the merge waits for its sibling threads before emitting.
     rendezvous: Option<RendezvousTicket>,
+    /// Where the source threads ask for memory; held while the input is
+    /// being consumed, the table being what can be given up.
+    pressure: Option<PressureTicket>,
     /// This merge sees every batch and keeps the rows whose key hashes
     /// to its thread.
     selection: Option<(ThreadSelector, usize)>,
@@ -118,6 +131,7 @@ impl HybridFinalMerge {
             merger: None,
             spill_reserve: None,
             rendezvous: None,
+            pressure: None,
             selection: None,
             runs: (0..partitions).map(|_| Vec::new()).collect(),
             pending: VecDeque::new(),
@@ -143,6 +157,14 @@ impl HybridFinalMerge {
         self
     }
 
+    /// Fed by sources on threads of their own: answer their requests for
+    /// memory by spilling the live table.
+    #[must_use]
+    pub fn with_pressure(mut self, ticket: PressureTicket) -> Self {
+        self.pressure = Some(ticket);
+        self
+    }
+
     /// The input's grouped-state schema.
     pub fn schema(&self) -> &SchemaRef {
         &self.schema
@@ -165,6 +187,7 @@ impl HybridFinalMerge {
         if result.is_err() {
             self.failed = true;
             self.source = None;
+            self.pressure = None;
             self.merger = None;
             self.merger_memory = None;
             self.spill_reserve = None;
@@ -178,6 +201,8 @@ impl HybridFinalMerge {
         if !self.drained {
             self.consume()?;
             self.drained = true;
+            // The input is drained: the sources are done asking.
+            self.pressure = None;
             if let Some(ticket) = self.rendezvous.take() {
                 ticket.wait(&self.memory)?;
             }
@@ -239,12 +264,21 @@ impl HybridFinalMerge {
     }
 
     /// Every input batch into the table, spilling the table whenever the
-    /// budget refuses one.
+    /// budget refuses one — and whenever it refuses a source thread one,
+    /// answered between two batches.
     fn consume(&mut self) -> Result<()> {
         let Some(mut source) = self.source.take() else {
             return Ok(());
         };
-        while let Some(batch) = source.next_batch()? {
+        loop {
+            self.answer_pressure()?;
+            let Some(batch) = source.next_batch()? else {
+                break;
+            };
+            if batch.num_rows() == 0 {
+                // The input's wake-up for a request, or an empty producer.
+                continue;
+            }
             if grouped_aggregate_key_types(&batch.schema())? != self.group_types {
                 return Err(error("final aggregate input key schema changed"));
             }
@@ -262,6 +296,37 @@ impl HybridFinalMerge {
             };
             self.push(batch)?;
         }
+        Ok(())
+    }
+
+    /// A source thread's refusal, if one waits on this thread: the live
+    /// table goes to the disk when it holds groups and there is a disk —
+    /// the first thread to do so is the only one to, and the source tries
+    /// again — else this thread declines, and the refusal is final once
+    /// every thread has. A table spilled for this merge's own refusal
+    /// answers the request the same way (`spill_table`).
+    fn answer_pressure(&mut self) -> Result<()> {
+        let Some(ticket) = &self.pressure else {
+            return Ok(());
+        };
+        if !ticket.pending() {
+            return Ok(());
+        }
+        let holds_groups = self.spill.is_some()
+            && self
+                .merger
+                .as_ref()
+                .is_some_and(|merger| merger.group_count() > 0);
+        if !holds_groups {
+            ticket.decline();
+            return Ok(());
+        }
+        if !ticket.claim() {
+            return Ok(());
+        }
+        let merger = self.merger.take().expect("checked above");
+        self.spill_table(merger)?;
+        self.spilled.on_pressure += 1;
         Ok(())
     }
 
@@ -309,7 +374,8 @@ impl HybridFinalMerge {
 
     /// The table's groups to the disk as encoded partial rows, one run
     /// per sub-partition they hash to, in chunks the budget admits beside
-    /// the table; the table is gone when this returns.
+    /// the table; the table is gone when this returns, and a source
+    /// thread waiting for memory is told so.
     fn spill_table(&mut self, mut merger: IncrementalAggregateMerger) -> Result<()> {
         let (spill, count) = self.spill.clone().expect("spilling needs a spill");
         merger.release_growth();
@@ -420,6 +486,11 @@ impl HybridFinalMerge {
         }
         self.spilled.tables += 1;
         self.spilled.groups += total as u64;
+        // The table's memory is free: a source thread waiting for it may
+        // try again, whichever refusal the table went to the disk for.
+        if let Some(ticket) = &self.pressure {
+            ticket.released();
+        }
         Ok(())
     }
 }
@@ -632,6 +703,27 @@ mod tests {
             usize,
         )>,
         held: Option<kaveon_core::MemoryReservation>,
+        /// Where the merge's spill record is added up when it is dropped:
+        /// the merges run inside the threads.
+        spilled: Option<Arc<SpillTotals>>,
+    }
+    #[derive(Default)]
+    struct SpillTotals {
+        tables: std::sync::atomic::AtomicU64,
+        on_pressure: std::sync::atomic::AtomicU64,
+    }
+    impl Drop for HybridFinal {
+        fn drop(&mut self) {
+            if let Some(totals) = &self.spilled {
+                let spilled = self.merge.spilled();
+                totals
+                    .tables
+                    .fetch_add(spilled.tables, std::sync::atomic::Ordering::AcqRel);
+                totals
+                    .on_pressure
+                    .fetch_add(spilled.on_pressure, std::sync::atomic::Ordering::AcqRel);
+            }
+        }
     }
     impl BatchOperator for HybridFinal {
         fn schema(&self) -> &SchemaRef {
@@ -678,26 +770,34 @@ mod tests {
             account,
             current: None,
             held: None,
+            spilled: None,
         }))
     }
 
     /// The hybrid merge as one of `workers` threads that each see every
-    /// batch: keeps its own rows, waits for the others before emitting.
+    /// batch: keeps its own rows, answers the source threads' requests
+    /// for memory, waits for the others before emitting.
     fn hybrid_final_of(
         source: Box<dyn BatchOperator>,
         pool: &QueryMemoryPool,
         context: &ThreadContext,
         rendezvous: &Arc<Rendezvous>,
+        spilled: Option<Arc<SpillTotals>>,
     ) -> Result<Box<dyn BatchOperator>> {
         let account = pool.operator("final-aggregate")?;
+        let mut merge = HybridFinalMerge::new(source, account.clone(), context.spill.clone())?
+            .with_selection(context.index, context.workers)
+            .with_rendezvous(rendezvous.ticket());
+        if let Some(pressure) = &context.pressure {
+            merge = merge.with_pressure(pressure.responder(context.index));
+        }
         Ok(Box::new(HybridFinal {
-            merge: HybridFinalMerge::new(source, account.clone(), context.spill.clone())?
-                .with_selection(context.index, context.workers)
-                .with_rendezvous(rendezvous.ticket()),
+            merge,
             schema: final_schema(),
             account,
             current: None,
             held: None,
+            spilled,
         }))
     }
 
@@ -1043,11 +1143,239 @@ mod tests {
         assert_eq!(spill.snapshot().current_bytes, 0);
     }
 
+    /// A source that hands out one batch once `gate` has reached `open`,
+    /// reserving `bytes` for it on its account — the shape of a large IPC
+    /// batch decoded once the merge tables hold most of the budget. A
+    /// refused batch is kept for the next call, as the exchange input
+    /// keeps it.
+    struct GatedSource {
+        schema: SchemaRef,
+        batch: Option<RecordBatch>,
+        bytes: u64,
+        account: kaveon_core::OperatorMemoryAccount,
+        gate: Arc<std::sync::atomic::AtomicUsize>,
+        open: usize,
+        refusals: Arc<std::sync::atomic::AtomicU64>,
+    }
+    impl ThreadSource for GatedSource {
+        fn schema(&self) -> &SchemaRef {
+            &self.schema
+        }
+        fn next_batch(&mut self) -> Result<Option<ReservedBatch>> {
+            if self.batch.is_none() {
+                return Ok(None);
+            }
+            while self.gate.load(std::sync::atomic::Ordering::Acquire) < self.open {
+                self.account.check_cancelled()?;
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            match self.account.reserve(self.bytes) {
+                Ok(memory) => Ok(Some(ReservedBatch {
+                    batch: self.batch.take().expect("checked above"),
+                    memory: Some(memory),
+                })),
+                Err(error) => {
+                    self.refusals
+                        .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                    Err(error)
+                }
+            }
+        }
+    }
+    /// A source that counts on `done` when it ends.
+    struct Counted {
+        inner: Box<dyn ThreadSource>,
+        done: Arc<std::sync::atomic::AtomicUsize>,
+        ended: bool,
+    }
+    impl ThreadSource for Counted {
+        fn schema(&self) -> &SchemaRef {
+            self.inner.schema()
+        }
+        fn next_batch(&mut self) -> Result<Option<ReservedBatch>> {
+            let next = self.inner.next_batch()?;
+            if next.is_none() && !self.ended {
+                self.ended = true;
+                self.done.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            }
+            Ok(next)
+        }
+    }
+
+    /// Three sources on threads of their own feeding three merge threads.
+    /// Two read the IPC payloads, reserving every batch on the query the
+    /// way the exchange input does; the third holds the last batch back
+    /// until those two are done — the tables then hold what the budget
+    /// admits — and reserves for it more than what is left. The budget
+    /// refuses the source; the merge threads spill for it; the source
+    /// tries again and the merge is exact.
+    #[test]
+    fn hybrid_merge_spills_for_a_source_thread_the_budget_refuses() {
+        const ROWS: usize = 400_000;
+        const THREADS: usize = 3;
+        let batches_all = q33_partial_batches(ROWS, 8_192);
+        let (last, first) = batches_all.split_last().unwrap();
+        let expected_groups = ROWS - ROWS / REPEAT_EVERY;
+        let expected_sum = (0..ROWS).filter(|i| i.is_multiple_of(3)).count() as i64;
+        let budget = 64u64 << 20;
+        let pool = QueryMemoryPool::new("source-refused", budget).unwrap();
+        let spill = SpillManager::new(spill_root("source-refused"), 1 << 30).unwrap();
+        pool.shared_resource("kaveon.exec.hash-spill.v1", || Ok((spill.clone(), 8usize)))
+            .unwrap();
+        let payloads = ipc_payloads(first, 2);
+        let refusals = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let done = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let schema = ipc_schema(&payloads[0]);
+        let mut openers = payloads
+            .iter()
+            .map(|payload| {
+                let payload = Arc::clone(payload);
+                let account = pool.operator("exchange-input").unwrap();
+                let refusals = Arc::clone(&refusals);
+                let done = Arc::clone(&done);
+                Box::new(move || {
+                    Ok(Box::new(Counted {
+                        inner: ipc_source(&payload, Some(account), &refusals),
+                        done,
+                        ended: false,
+                    }) as Box<dyn ThreadSource>)
+                }) as SourceOpener
+            })
+            .collect::<Vec<_>>();
+        // What the spilled tables leave held — the prepaid balances, the
+        // spill reserves, the batches in flight — is well under this;
+        // what the live tables hold is well over it.
+        let leaves = 12u64 << 20;
+        openers.push({
+            let schema = schema.clone();
+            let batch = last.clone();
+            let account = pool.operator("exchange-input").unwrap();
+            let refusals = Arc::clone(&refusals);
+            let done = Arc::clone(&done);
+            Box::new(move || {
+                Ok(Box::new(GatedSource {
+                    schema,
+                    batch: Some(batch),
+                    bytes: budget - leaves,
+                    account,
+                    gate: done,
+                    open: 2,
+                    refusals,
+                }) as Box<dyn ThreadSource>)
+            }) as SourceOpener
+        });
+        let spilled = Arc::new(SpillTotals::default());
+        let rendezvous = Rendezvous::new(THREADS);
+        let operator: ThreadOperator = {
+            let spilled = Arc::clone(&spilled);
+            Arc::new(move |source, pool, context| {
+                hybrid_final_of(
+                    source,
+                    pool,
+                    context,
+                    &rendezvous,
+                    Some(Arc::clone(&spilled)),
+                )
+            })
+        };
+        let mut merged = ParallelPartials::broadcast(
+            Sources::Threads { schema, openers },
+            final_schema(),
+            operator,
+            pool.clone(),
+            THREADS,
+        )
+        .unwrap();
+        let totals_all = totals(&mut merged).unwrap();
+        assert_eq!(totals_all.rows, expected_groups);
+        assert_eq!(totals_all.count, ROWS as u64);
+        assert_eq!(totals_all.sum, expected_sum);
+        drop(merged);
+        assert!(
+            refusals.load(std::sync::atomic::Ordering::Acquire) >= 1,
+            "the held-back batch was refused"
+        );
+        let on_pressure = spilled
+            .on_pressure
+            .load(std::sync::atomic::Ordering::Acquire);
+        assert!(on_pressure >= 1, "a merge thread spilled for the source");
+        assert!(spill.snapshot().runs_written > 0);
+        assert_eq!(spill.snapshot().current_bytes, 0);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    /// The same, with nothing to spill: every source asks for more than
+    /// the budget for its first batch while the merge threads hold no
+    /// groups. Every thread declines, and the refusal is the operator's
+    /// error.
+    #[test]
+    fn a_source_thread_refusal_is_final_when_no_thread_has_groups_to_spill() {
+        const THREADS: usize = 3;
+        let batches_all = q33_partial_batches(8_192, 8_192);
+        let budget = 16u64 << 20;
+        let pool = QueryMemoryPool::new("source-refused-final", budget).unwrap();
+        let spill = SpillManager::new(spill_root("source-refused-final"), 1 << 30).unwrap();
+        pool.shared_resource("kaveon.exec.hash-spill.v1", || Ok((spill.clone(), 8usize)))
+            .unwrap();
+        let refusals = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let schema = batches_all[0].schema();
+        let openers = (0..3)
+            .map(|_| {
+                let schema = schema.clone();
+                let batch = batches_all[0].clone();
+                let account = pool.operator("exchange-input").unwrap();
+                let refusals = Arc::clone(&refusals);
+                Box::new(move || {
+                    Ok(Box::new(GatedSource {
+                        schema,
+                        batch: Some(batch),
+                        bytes: budget + 1,
+                        account,
+                        gate: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                        open: 0,
+                        refusals,
+                    }) as Box<dyn ThreadSource>)
+                }) as SourceOpener
+            })
+            .collect();
+        let rendezvous = Rendezvous::new(THREADS);
+        let operator: ThreadOperator = Arc::new(move |source, pool, context| {
+            hybrid_final_of(source, pool, context, &rendezvous, None)
+        });
+        let mut merged = ParallelPartials::broadcast(
+            Sources::Threads { schema, openers },
+            final_schema(),
+            operator,
+            pool.clone(),
+            THREADS,
+        )
+        .unwrap();
+        let error = totals(&mut merged).unwrap_err();
+        assert!(
+            matches!(&error, KaveonError::MemoryLimit(message)
+                if message.contains("operator 'exchange-input' cannot reserve")),
+            "{error}"
+        );
+        assert!(merged.next_batch().unwrap().is_none());
+        drop(merged);
+        // Each source was refused once and not retried past the final
+        // answer; a source stopped by the first failure never asked.
+        let refused = refusals.load(std::sync::atomic::Ordering::Acquire);
+        assert!((1..=3).contains(&refused), "{refused}");
+        assert_eq!(spill.snapshot().runs_written, 0);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
     /// The final stage on the q33 shape under a budget that refuses the
     /// in-memory merge near the end of its input, with a spill registered:
     /// the path the AKS final stage takes on ClickBench q19/q33/q34/q35.
     /// Before: the refused attempt thrown away and the input replayed
-    /// through the partitioned disk path. After: the hybrid merge.
+    /// through the partitioned disk path. After: the hybrid merge — and,
+    /// with the sources reserving every batch they decode the way the
+    /// exchange input does, the input-refusal shape, where a source's
+    /// refusal is answered by a spill on its request rather than the
+    /// task's failure; the record says how often the sources were
+    /// refused and how many tables went to the disk for them.
     /// Ignored by default; run it as
     /// `cargo test --release -p kaveon-exec final_merge_under_pressure -- --ignored --nocapture`.
     #[test]
@@ -1190,10 +1518,15 @@ mod tests {
         // After: the hybrid merge, fed by the calling thread partitioning
         // every batch (as before) and by the payloads decoded on threads
         // of their own with every merge thread keeping its rows; under
-        // the refusing budget, and under one that holds the merge.
+        // the refusing budget, and under one that holds the merge. Then
+        // with the sources reserving each batch they decode (the exchange
+        // input's shape), so a refusal on the input side is possible:
+        // which side the budget refuses first is a race between a
+        // source's reservation for its next batch and a merge thread's
+        // for the batch it is applying, and the record says how it went.
         let mut runs = Vec::new();
         for budget_name in ["tight", "roomy"] {
-            for variant in ["partitioned", "broadcast"] {
+            for variant in ["partitioned", "broadcast", "reserving"] {
                 for round in 1..=3 {
                     runs.push((budget_name, variant, round));
                 }
@@ -1209,6 +1542,8 @@ mod tests {
             let spill = SpillManager::new(spill_root("after"), 8 << 30).unwrap();
             pool.shared_resource("kaveon.exec.hash-spill.v1", || Ok((spill.clone(), 16usize)))
                 .unwrap();
+            let refusals = Arc::new(std::sync::atomic::AtomicU64::new(0));
+            let spilled = Arc::new(SpillTotals::default());
             let started = std::time::Instant::now();
             let mut merged = if variant == "partitioned" {
                 // The calling thread hash-partitions every batch to its
@@ -1227,13 +1562,28 @@ mod tests {
                 .unwrap()
             } else {
                 // Three sources read on their own threads, every batch to
-                // every merge thread, each keeping its own rows.
+                // every merge thread, each keeping its own rows; reserving
+                // every batch on the query when the variant says so.
                 let rendezvous = Rendezvous::new(THREADS);
-                let operator: ThreadOperator = Arc::new(move |source, pool, context| {
-                    hybrid_final_of(source, pool, context, &rendezvous)
-                });
+                let operator: ThreadOperator = {
+                    let spilled = Arc::clone(&spilled);
+                    Arc::new(move |source, pool, context| {
+                        hybrid_final_of(
+                            source,
+                            pool,
+                            context,
+                            &rendezvous,
+                            Some(Arc::clone(&spilled)),
+                        )
+                    })
+                };
+                let sources = ipc_sources_threads(
+                    &payloads,
+                    (variant == "reserving").then_some(&pool),
+                    &refusals,
+                );
                 ParallelPartials::broadcast(
-                    ipc_sources_threads(&payloads, None, &Arc::default()),
+                    sources,
                     final_schema(),
                     operator,
                     pool.clone(),
@@ -1246,22 +1596,28 @@ mod tests {
             assert_eq!(totals_all.rows, expected_groups);
             assert_eq!(totals_all.count, ROWS as u64);
             assert_eq!(totals_all.sum, expected_sum);
+            drop(merged);
             let snapshot = spill.snapshot();
             let memory = pool.snapshot();
             println!(
                 "after ({variant}, {budget_name}), round {round}: {total:.2?} wall, {} output \
-                 batches; spill {} MiB written in {} runs, {} compactions, write {:.2?} read \
-                 {:.2?}; memory peak {} MiB, {} reservation calls",
+                 batches; spill {} MiB written in {} runs ({} tables, {} of them for a source \
+                 thread's {} refusals), {} compactions, write {:.2?} read {:.2?}; memory peak \
+                 {} MiB, {} reservation calls",
                 totals_all.batches,
                 snapshot.bytes_written >> 20,
                 snapshot.runs_written,
+                spilled.tables.load(std::sync::atomic::Ordering::Acquire),
+                spilled
+                    .on_pressure
+                    .load(std::sync::atomic::Ordering::Acquire),
+                refusals.load(std::sync::atomic::Ordering::Acquire),
                 snapshot.compactions,
                 std::time::Duration::from_micros(snapshot.write_us),
                 std::time::Duration::from_micros(snapshot.read_us),
                 memory.peak_bytes >> 20,
                 memory.reservation_calls,
             );
-            drop(merged);
             assert_eq!(pool.snapshot().current_bytes, 0);
             assert_eq!(spill.snapshot().current_bytes, 0);
         }
