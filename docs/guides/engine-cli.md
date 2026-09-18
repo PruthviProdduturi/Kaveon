@@ -65,8 +65,8 @@ output includes blank-line separation and aligned numeric metadata values.
 ## Remote catalog navigation
 
 The following commands work in the remote CLI through authenticated catalog GET
-APIs. They are client metadata commands, not SQL support provided by
-`POST /v1/statement`:
+APIs. The shell answers them itself; the coordinator also accepts the same
+statements on `POST /v1/statement` for other clients:
 
 ```sql
 SHOW CATALOGS;
@@ -95,6 +95,64 @@ After a completed remote query, the CLI can show the returned row count and JSON
 result bytes with rates, plus reported node/task counts. Complete Parquet worker
 coverage reports measured reader-output rows, selected row-group rows, and
 selected compressed bytes; incomplete coverage is unavailable rather than zero.
+
+## Catalog administration
+
+`kaveon catalog|schema|table …` registers catalogs, schemas and tables from
+the command line, the way `trino --execute "CREATE TABLE …"` or the
+`register_table` procedure would. Each command is one catalog statement
+submitted to the coordinator through `POST /v1/statement` with the same
+connection options as the shell (`--server`, `--catalog`, `--schema`,
+`--auth`, `--access-token` or `KAVEON_ACCESS_TOKEN`, `--ca-cert`,
+`--timeout`, `--output-format`), so the role checks, revisions and audit
+trail are the coordinator's. Unqualified names resolve against the session
+`--catalog` and `--schema`.
+
+```bash
+# Catalogs (admin role)
+kaveon catalog list [--like 'pattern']
+kaveon catalog show Benchmarks                      # the durable definition as JSON
+kaveon catalog add Benchmarks --storage adls --account kvtest --container opensource \
+    --root benchmarks --credential workload-identity:kaveon-test-reader
+kaveon catalog add local --storage local --base-path /data/warehouse
+kaveon catalog drop staging --cascade
+
+# Schemas (analyst or admin role)
+kaveon schema list [catalog]
+kaveon schema add Benchmarks.tpch_sf100 --if-not-exists
+kaveon schema drop Benchmarks.tpch_sf100 --cascade
+
+# Tables (analyst or admin role)
+kaveon table list Benchmarks.tpch_sf100 [--like 'pattern']
+kaveon table register Benchmarks.tpch_sf100.lineitem --location tpch/sf100/lineitem --format delta
+kaveon table register Benchmarks.clickbench.hits --location clickbench/hits.parquet --format parquet \
+    --columns 'WatchID bigint, JavaEnable smallint, Title varchar'
+kaveon table relocate Benchmarks.tpch_sf100.lineitem --location tpch/sf100-v2/lineitem
+kaveon table describe Benchmarks.tpch_sf100.lineitem
+kaveon table show-create Benchmarks.tpch_sf100.lineitem
+kaveon table drop Benchmarks.tpch_sf100.lineitem --if-exists
+```
+
+`table register` without `--columns` has the coordinator read the columns
+from the table itself (the Delta log, the Iceberg metadata pointer, or the
+Parquet footers) and store them; with `--columns`, the declared list is
+stored once every column is found in the source. Either way the location is
+probed with a metadata-only read before the table is activated: an
+unreadable location — a missing object, a Parquet file registered as Delta,
+a column the source does not have — fails the command with the storage
+error and registers nothing. `--location` is a path within the catalog's
+storage root (a container-relative path for ADLS, a directory under
+`base_path` for a local catalog), not a URI. A mistaken option is reported
+by the client, naming the option, before anything reaches the coordinator.
+
+The same statements run in the shell and with `-e`, so a script of
+`CREATE SCHEMA` / `CREATE TABLE … WITH (…)` statements registers a catalog's
+tables in one `kaveon -f register.sql`; the full grammar, including
+`CALL system.register_table(schema_name => …, table_name => …,
+table_location => …)`, is in the
+[API reference](../reference/api.md#catalog-statements). Every command
+returns one row — the object and `created`, `exists`, `dropped`, `absent`,
+`relocated` or `unchanged` — and leaves a query record on the coordinator.
 
 ## Scripts, history, and output
 
@@ -359,7 +417,10 @@ roles.
   recorded in a complete JSON transaction history.
 - SQL support is intentionally narrower than Trino. See
   [Engine SQL compatibility](../reference/engine-sql-compatibility.md) before
-  relying on joins, sorting, DDL, or DML.
+  relying on joins, sorting, or DML. Catalog DDL (`CREATE CATALOG`, `CREATE
+  SCHEMA`, `CREATE TABLE … WITH (…)`, `ALTER TABLE … SET LOCATION`, `DROP`)
+  registers existing tables; there is no `CREATE TABLE AS`, `INSERT` or
+  `ALTER TABLE ADD COLUMN`.
 - The client does not provide query-history editing. `SHOW TABLES ... LIKE` is
   supported for remote catalog metadata. It does not claim full Trino command,
   session-property, wire-protocol, or SQL parity.
