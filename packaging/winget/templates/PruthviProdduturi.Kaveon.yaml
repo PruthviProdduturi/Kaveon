@@ -1,0 +1,7 @@
+# yaml-language-server: $$schema=https://aka.ms/winget-manifest.version.1.6.0.schema.json
+# Rendered by scripts/release/render-packaging.py from the cli-v${VERSION} release assets.
+PackageIdentifier: PruthviProdduturi.Kaveon
+PackageVersion: ${VERSION}
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.6.0

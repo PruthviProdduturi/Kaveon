@@ -147,7 +147,7 @@ Asia             910.00`}</Code>
       </p>
       <Code lang="bash">{`KAVEON_DATA_PATH=/path/to/parquet docker compose up -d`}</Code>
       <p>Install the CLI and connect it to the running coordinator:</p>
-      <Code lang="bash">{`curl -sSf https://raw.githubusercontent.com/PruthviProdduturi/Kaveon/dev/scripts/install.sh | sh
+      <Code lang="bash">{`curl -fsSL https://raw.githubusercontent.com/PruthviProdduturi/Kaveon/dev/scripts/install.sh | bash
 
 kaveon --server http://localhost:8081`}</Code>
       <p>

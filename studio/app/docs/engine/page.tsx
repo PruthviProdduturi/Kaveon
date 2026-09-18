@@ -33,14 +33,24 @@ export default function EngineDocs() {
     </p>
 
     <h2>Install</h2>
-    <Code lang="bash">{`# Linux x64 / Apple Silicon macOS — installs to ~/.local/bin
-curl -sSf https://raw.githubusercontent.com/PruthviProdduturi/Kaveon/dev/scripts/install.sh | sh
+    <Code lang="bash">{`# Linux x64 / Apple Silicon macOS — engine-dev preview, installs to ~/.local/bin
+curl -fsSL https://raw.githubusercontent.com/PruthviProdduturi/Kaveon/dev/scripts/install.sh | bash
 
-# Windows x64 (PowerShell; no source clone required)
+# A tagged release (adds Intel macOS), verified against its SHA256SUMS
+curl -fsSL https://raw.githubusercontent.com/PruthviProdduturi/Kaveon/dev/scripts/install.sh | KAVEON_VERSION=0.3.0 bash
+
+# Windows x64 (PowerShell; no source clone required); set $env:KAVEON_VERSION for a release
 irm https://raw.githubusercontent.com/PruthviProdduturi/Kaveon/dev/scripts/install.ps1 | iex
 
 # From source
 cd engine && cargo install --path crates/cli`}</Code>
+    <p>
+      Tagged releases are listed at{" "}
+      <a href="https://github.com/PruthviProdduturi/Kaveon/releases">github.com/PruthviProdduturi/Kaveon/releases</a>{" "}
+      with one archive per platform and a <code>SHA256SUMS</code> file. <code>winget install PruthviProdduturi.Kaveon</code>{" "}
+      and <code>brew install PruthviProdduturi/kaveon/kaveon</code> follow once the winget manifest is accepted and the
+      Homebrew tap is published; each release attaches both packaging files.
+    </p>
 
     <h2>Define a catalog</h2>
     <p>

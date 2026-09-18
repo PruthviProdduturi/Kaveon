@@ -23,6 +23,7 @@ are planned rather than executable.
 - [Deploy and connect to the Engine on AKS](engineering/azure-deployment-guide.md)
 - [Build cached Engine images in ACR](engineering/engine-acr-build-cache.md)
 - [CLI compatibility and remaining gaps](engineering/cli-compatibility.md)
+- [Cut a CLI release (tag, winget, Homebrew)](engineering/cli-release.md)
 - [Engine UI access and query attribution](engineering/engine-ui-access.md)
 - [Connect data sources](guides/data-sources.md)
 - [Use SQL Lab](guides/sql-lab.md)
