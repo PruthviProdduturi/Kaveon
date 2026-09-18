@@ -51,7 +51,7 @@ The Rust server exposes these routes:
 |---|---|---|
 | `POST` | `/v1/statement` | Parse, bind, plan, execute and retain a query result; inline (up to 16 MiB) or `result_delivery: "paged"` with `next_uri` pages; accepts per-request `settings` and leading `SET SESSION` statements |
 | `GET` | `/v1/query` | Return up to 100 newest process-local query records, queued and running ones included |
-| `GET` | `/v1/query/{query_id}` | Return retained lifecycle, context, structured logical plan, result, and scan telemetry |
+| `GET` | `/v1/query/{query_id}` | Return retained lifecycle, context, structured logical plan, result, and scan telemetry; while the state is `RUNNING`, `stages` (`completed_tasks`, `tasks`) and `scans` are updated as each distributed task completes, and `scan_metrics_complete` stays `false` until the statement finishes |
 | `DELETE` | `/v1/query/{query_id}` | Cancel the query: a queued statement leaves the admission queue at once; a running one propagates cancellation to active worker tasks |
 | `GET` | `/v1/cluster` | Coordinator and discovered-worker state, with each node's memory admission counters (`admission`) as last heartbeated |
 | `GET` | `/v1/node` | Current node information, with the result cache counters on a coordinator and the node's memory admission counters (`admission`) |
