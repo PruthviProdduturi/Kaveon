@@ -170,6 +170,85 @@
   .colSample { display: none }
 }
 
+/* ── Registration sheet: one panel from the right edge, the page kept in view.
+   Names and locations in mono, everything else in Inter; the verification
+   result is the first thing the eye lands on when it arrives. ────────────── */
+.sheetBackdrop { position: fixed; inset: 0; z-index: 900; background: rgba(15, 23, 42, .32); backdrop-filter: blur(1.5px) }
+.sheet {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 901; width: 500px; max-width: 100vw;
+  display: flex; flex-direction: column; background: var(--bg-surface); border-left: 1px solid var(--border);
+  box-shadow: -12px 0 40px rgba(0,0,0,.12);
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--text-primary);
+  --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  animation: sheetIn .18s ease-out;
+}
+@keyframes sheetIn { from { transform: translateX(24px); opacity: 0 } to { transform: none; opacity: 1 } }
+.sheetHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 20px 24px 16px; border-bottom: 1px solid var(--border) }
+.sheetEyebrow { font: 11.5px var(--mono); color: var(--text-muted); margin-bottom: 4px; overflow-wrap: anywhere }
+.sheetTitle { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.01em }
+.sheetBody { flex: 1; overflow: auto; padding: 18px 24px 24px; display: flex; flex-direction: column; gap: 16px }
+.sheetFoot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 24px; border-top: 1px solid var(--border); background: var(--bg-elevated) }
+.sheetFootActions { display: flex; gap: 8px; margin-left: auto }
+.sheetFootNote { font-size: 12px; color: var(--text-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+
+.field { display: flex; flex-direction: column; gap: 6px; min-width: 0 }
+.fieldRow { display: grid; grid-template-columns: 1fr 1fr; gap: 12px }
+.label { font-size: 12px; font-weight: 600; color: var(--text-secondary) }
+.label small { font-weight: 500; color: var(--text-muted); margin-left: 6px }
+.hint { font-size: 11.5px; line-height: 1.5; color: var(--text-muted) }
+.hint code { font: 11px var(--mono); color: var(--text-secondary) }
+.input, .select, .textarea {
+  width: 100%; box-sizing: border-box; min-height: 34px; padding: 6px 10px;
+  font: 13px Inter, sans-serif; color: var(--text-primary);
+  background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px; outline: none;
+}
+.input:focus, .select:focus, .textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .18) }
+.input:disabled, .select:disabled { color: var(--text-muted); background: var(--bg-primary) }
+.mono { font-family: var(--mono) !important; font-size: 12.5px !important }
+.textarea { min-height: 132px; resize: vertical; line-height: 1.55; white-space: pre; overflow-wrap: normal; overflow-x: auto }
+.prefix { display: flex; align-items: center; gap: 0; min-width: 0 }
+.prefix span { flex-shrink: 0; height: 34px; display: inline-flex; align-items: center; padding: 0 10px; font: 12.5px var(--mono); color: var(--text-muted); background: var(--bg-primary); border: 1px solid var(--border); border-right: 0; border-radius: 8px 0 0 8px; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.prefix .input { border-radius: 0 8px 8px 0 }
+
+.segment { display: inline-flex; padding: 3px; gap: 2px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 9px }
+.segment button { height: 28px; padding: 0 14px; border: 0; border-radius: 6px; background: transparent; font: 600 12.5px Inter, sans-serif; color: var(--text-secondary); cursor: pointer }
+.segment button:hover { color: var(--text-primary) }
+.segment button[aria-pressed="true"] { background: var(--bg-elevated); color: var(--text-primary); box-shadow: var(--shadow-sm) }
+
+.fieldErr { font-size: 12px; color: var(--error) }
+
+.result { padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elevated); display: flex; flex-direction: column; gap: 8px }
+.resultOk { border-color: rgba(16, 185, 129, .4) }
+.resultErr { border-color: rgba(239, 68, 68, .4) }
+.resultHead { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600 }
+.resultOk .resultHead { color: var(--success) }
+.resultErr .resultHead { color: var(--error) }
+.resultFacts { display: flex; gap: 20px; flex-wrap: wrap; align-items: baseline }
+.resultStat { font: 600 22px/1 var(--mono); letter-spacing: -.02em; color: var(--text-primary); display: inline-flex; align-items: baseline; gap: 6px }
+.resultStat small { font: 500 12px Inter, sans-serif; color: var(--text-muted); letter-spacing: 0 }
+.resultMessage { margin: 0; padding: 10px 12px; font: 12px/1.55 var(--mono); color: var(--text-primary); background: var(--bg-primary); border: 1px solid var(--border); border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto }
+.resultNote { font-size: 12px; color: var(--text-muted); line-height: 1.5 }
+.resultActions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px }
+
+.busy { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-muted) }
+.spin { width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; flex-shrink: 0 }
+@keyframes spin { to { transform: rotate(360deg) } }
+
+.danger { color: var(--error); border-color: rgba(239, 68, 68, .35) }
+.danger:hover { color: var(--error); background: rgba(239, 68, 68, .06); border-color: rgba(239, 68, 68, .5) }
+.dangerSolid { background: var(--error); border-color: var(--error); color: #fff }
+.dangerSolid:hover { color: #fff; background: #dc2626 }
+
+.confirmBackdrop { position: fixed; inset: 0; z-index: 950; display: flex; align-items: center; justify-content: center; background: rgba(15, 23, 42, .4); backdrop-filter: blur(2px) }
+.confirm { width: 420px; max-width: calc(100vw - 32px); padding: 22px 24px 20px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-lg); font-family: Inter, sans-serif }
+.confirmTitle { margin: 0 0 6px; font-size: 15px; font-weight: 600; color: var(--text-primary) }
+.confirmBody { margin: 0; font-size: 13px; line-height: 1.55; color: var(--text-secondary) }
+.confirmBody code { font: 12px var(--mono); color: var(--text-primary) }
+.confirmActions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px }
+
+@media (max-width: 640px) { .sheet { width: 100vw } .fieldRow { grid-template-columns: 1fr } }
+@media (prefers-reduced-motion: reduce) { .sheet { animation: none } }
+
 /* ── Query mode: the workbench takes the pane; its own chrome stays inside ── */
 .query { display: flex; flex-direction: column; min-width: 0 }
 .workbench { min-width: 0; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-sm); overflow: hidden }
