@@ -203,6 +203,30 @@ async fn receive_with_limit(
     })
 }
 
+impl ArrowPayload {
+    /// A payload spooled from IPC stream bytes, as `receive` would spool a
+    /// response body. Tests only.
+    #[cfg(test)]
+    pub(crate) fn from_ipc_bytes(bytes: &[u8]) -> Result<Self, String> {
+        let path = ipc_spool_root().join(format!("kaveon-ipc-{}.arrow", uuid::Uuid::new_v4()));
+        std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
+        RETAINED_BYTES.fetch_add(bytes.len() as u64, Ordering::AcqRel);
+        let spool = DiskSpool {
+            path,
+            bytes: bytes.len() as u64,
+        };
+        let reader = StreamReader::try_new(
+            BufReader::new(File::open(&spool.path).map_err(|error| error.to_string())?),
+            None,
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(Self {
+            reader,
+            spool: std::sync::Arc::new(spool),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

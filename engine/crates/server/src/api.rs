@@ -1057,12 +1057,18 @@ where
         .await
 }
 
+/// A spooled exchange payload read one IPC batch at a time. The spool is a
+/// file behind a buffered reader, so what the task holds in memory is the
+/// batch it last returned, not the payload: that batch is what is reserved,
+/// released when the next one replaces it. (Reserving the payload's size
+/// charged three producers' spools at once against the budget of a task
+/// that never held them — the final stage of a 100 M-group aggregate was
+/// refused for memory it did not use.)
 struct DiskExchangeInput {
     schema: arrow::datatypes::SchemaRef,
     payloads: std::collections::VecDeque<crate::transport::ArrowPayload>,
     memory: kaveon_core::OperatorMemoryAccount,
-    encoded: Option<kaveon_core::MemoryReservation>,
-    decoded_extra: Option<kaveon_core::MemoryReservation>,
+    decoded: Option<kaveon_core::MemoryReservation>,
     metrics: Arc<ExchangeDecodeMetrics>,
 }
 impl kaveon_core::BatchOperator for DiskExchangeInput {
@@ -1070,12 +1076,9 @@ impl kaveon_core::BatchOperator for DiskExchangeInput {
         &self.schema
     }
     fn next_batch(&mut self) -> kaveon_core::Result<Option<arrow::record_batch::RecordBatch>> {
-        self.decoded_extra = None;
+        self.decoded = None;
         self.memory.check_cancelled()?;
         while let Some(payload) = self.payloads.front_mut() {
-            if self.encoded.is_none() {
-                self.encoded = Some(self.memory.reserve(payload.bytes() as u64)?);
-            }
             let decode_started = Instant::now();
             if let Some(batch) = payload
                 .next_batch()
@@ -1085,18 +1088,14 @@ impl kaveon_core::BatchOperator for DiskExchangeInput {
                     .elapsed_us
                     .fetch_add(elapsed_us(decode_started), Ordering::AcqRel);
                 self.metrics.batches.fetch_add(1, Ordering::AcqRel);
-                self.metrics
-                    .bytes
-                    .fetch_add(batch.get_array_memory_size() as u64, Ordering::AcqRel);
-                let extra =
-                    (batch.get_array_memory_size() as u64).saturating_sub(payload.bytes() as u64);
-                if extra > 0 {
-                    self.decoded_extra = Some(self.memory.reserve(extra)?);
+                let bytes = batch.get_array_memory_size() as u64;
+                self.metrics.bytes.fetch_add(bytes, Ordering::AcqRel);
+                if bytes > 0 {
+                    self.decoded = Some(self.memory.reserve(bytes)?);
                 }
                 return Ok(Some(batch));
             }
             self.payloads.pop_front();
-            self.encoded = None;
         }
         Ok(None)
     }
@@ -1131,8 +1130,7 @@ impl crate::fragment_exec::ExchangeInputProvider for PrefetchedExchangeInputs {
             schema,
             payloads,
             memory: self.memory.clone(),
-            encoded: None,
-            decoded_extra: None,
+            decoded: None,
             metrics: Arc::clone(&self.decode_metrics),
         }))
     }
@@ -1166,8 +1164,7 @@ impl crate::fragment_exec::ExchangeInputProvider for PrefetchedExchangeInputs {
                         schema,
                         payloads: std::collections::VecDeque::from([payload]),
                         memory,
-                        encoded: None,
-                        decoded_extra: None,
+                        decoded: None,
                         metrics,
                     })
                         as Box<dyn kaveon_core::BatchOperator>)
@@ -6171,6 +6168,57 @@ pub(crate) fn catalog_test_state() -> crate::AppState {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_spooled_exchange_input_reserves_the_batch_it_holds_not_the_spool() {
+        use arrow::array::Int64Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use kaveon_core::BatchOperator;
+        // Four batches of 128 KiB each in one spool: a budget that holds one
+        // batch and a half must read the whole payload, because only the
+        // batch handed out is in memory.
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+        let mut bytes = Vec::new();
+        {
+            let mut writer =
+                arrow::ipc::writer::StreamWriter::try_new(&mut bytes, &schema).unwrap();
+            for round in 0..4i64 {
+                let values = (0..16_384).map(|i| i + round).collect::<Vec<_>>();
+                let batch = RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(Int64Array::from(values))],
+                )
+                .unwrap();
+                writer.write(&batch).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        let payload = crate::transport::ArrowPayload::from_ipc_bytes(&bytes).unwrap();
+        let batch_bytes = 16_384 * 8;
+        assert!(payload.bytes() > 3 * batch_bytes);
+        let pool = kaveon_core::QueryMemoryPool::new("spooled-input", (batch_bytes * 3 / 2) as u64)
+            .unwrap();
+        let mut input = super::DiskExchangeInput {
+            schema: payload.schema(),
+            payloads: std::collections::VecDeque::from([payload]),
+            memory: pool.operator("prefetched-exchanges").unwrap(),
+            decoded: None,
+            metrics: Arc::new(super::ExchangeDecodeMetrics::default()),
+        };
+        let mut rows = 0;
+        while let Some(batch) = input.next_batch().unwrap() {
+            rows += batch.num_rows();
+            let held = pool.snapshot().current_bytes;
+            assert!(
+                held >= batch_bytes as u64 && held <= (batch_bytes * 3 / 2) as u64,
+                "reserved {held} for a {batch_bytes}-byte batch"
+            );
+        }
+        assert_eq!(rows, 4 * 16_384);
+        drop(input);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
     fn statement_request(query: &str, settings: serde_json::Value) -> super::StatementRequest {
         super::StatementRequest {
             query: query.into(),
