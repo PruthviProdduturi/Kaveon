@@ -172,12 +172,16 @@ impl Editor {
 
     /// The widget, boxed and titled; dimmed while a statement runs.
     pub fn widget(&mut self, title: &str, theme: &Theme, running: bool) -> &TextArea<'static> {
-        let label = if running { theme.dim } else { theme.title };
+        let (label, rule) = if running {
+            (theme.dim, theme.dim)
+        } else {
+            (theme.title, theme.accent)
+        };
         // A rule above and below the input, the context label on the top one.
         self.area.set_block(
             Block::new()
                 .borders(Borders::TOP | Borders::BOTTOM)
-                .border_style(theme.dim)
+                .border_style(rule)
                 .title(Span::styled(format!(" {title} "), label)),
         );
         self.area

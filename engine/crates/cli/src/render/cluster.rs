@@ -35,7 +35,7 @@ pub fn header(facts: &HeaderFacts<'_>, theme: &Theme) -> Vec<Line<'static>> {
             Span::styled("  KAVEON", theme.title),
             Span::styled(format!("  v{}", facts.cli_version), theme.dim),
         ]),
-        Line::from(Span::styled(format!("  {RULE}"), theme.dim)),
+        Line::from(Span::styled(format!("  {RULE}"), theme.accent)),
     ];
     match facts.cluster {
         Some(cluster) => {

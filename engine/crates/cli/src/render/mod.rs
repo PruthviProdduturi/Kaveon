@@ -29,7 +29,9 @@ pub fn to_ansi(lines: &[Line<'_>]) -> String {
             if span.style.add_modifier.contains(Modifier::BOLD) {
                 codes.push("1".to_owned());
             }
-            if let Some(color) = span.style.fg {
+            if let Some(Color::Rgb(r, g, b)) = span.style.fg {
+                codes.push(format!("38;2;{r};{g};{b}"));
+            } else if let Some(color) = span.style.fg {
                 let code = match color {
                     Color::Black => 30,
                     Color::Red => 31,
