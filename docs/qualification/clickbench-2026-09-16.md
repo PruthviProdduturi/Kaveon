@@ -191,6 +191,50 @@ shape — the final merge over near-unique keys (`q19` 95 s, `q33` 210 s,
 `q34` 92 s, `q35` 98 s against Trino's 36–50 s): the merge itself, not the
 partials or the exchange, at roughly 1.4 µs per partial row per thread.
 
+## The five-round campaign, 2026-09-17 (Kaveon `16df10b`, Trino 483)
+
+The program's bar for a published number: `scripts/benchmark-rounds.py
+--rounds 5 --cold --throughput 4,8` — five alternating rounds, each engine
+alone on the three worker nodes, Kaveon's pods restarted before every
+Kaveon round, three timed executions per statement per round, the figure
+the median over rounds of each round's median. Records and `rounds.json`
+under `clickbench/runs/rounds-2026-09-17/`; summary from
+`scripts/benchmark-rounds-report.py`.
+
+- **Both engines ran all 43 statements in every round** (the first time
+  for Kaveon: q34 and q35 on a 3 GiB budget, q40 through the offset
+  top-N, q24 with the correct 105 columns).
+- **Kaveon faster on 24 of 43, Trino on 19; geometric mean of Trino ÷
+  Kaveon 1.42×** — the ratio was 1.43 after round one and 1.42 after two
+  and after five. Kaveon wins the scans, filters, LIKE and low-cardinality
+  aggregates by 1.5–6× (`q01` 0.86 s against 4.67 s); Trino wins the
+  near-unique GROUP BYs by 2–3.3× (`q19` 83 s against 37, `q33` 184
+  against 55, `q34` 89 against 43, `q35` 97 against 43), the exact
+  COUNT(DISTINCT) shapes by 1.2–1.5× and `q24` (105-column top-N) and
+  `q29` (REGEXP_REPLACE per row) by 1.1–1.2×.
+- **Throughput** (executions per second, medians over the five rounds,
+  300 s windows after a 30 s warm-up): 4 clients Kaveon 0.109, Trino 0.104
+  (1.05×); 8 clients Kaveon 0.150, Trino 0.070 (2.15×). Kaveon's
+  eight-client windows carry 1,246 admission refusals (the coordinator
+  admitted four statements and refused the fifth at once; the admission
+  queue of `4fe0d64` replaces that) and round one's seven pre-tie-rule
+  mismatches; Trino's carry none. The 300 s window is short against
+  statements of 0.5–185 s, which is why the round-to-round spread on
+  Kaveon (0.074–0.133 at 4 clients) is wide; the median is the figure.
+
+What this run supports: on ClickBench at 100 M rows, on the same three
+nodes and the same budget, Kaveon runs every statement and is faster on
+most of them, with a 1.4× geometric mean; the remaining gap is one shape,
+high-cardinality aggregation, plus exact DISTINCT. What it does not
+support: any claim beyond this benchmark, this cluster size and this
+Trino configuration.
+
+The build that followed (`e207a15`: the hybrid final merge that no longer
+replays its input, the admission queue, dictionary-aware
+REGEXP_REPLACE, late materialisation in the Parquet reader) was rolled
+after the campaign and measured on the targets — see the table below
+once recorded.
+
 ## Next
 
 - Five alternating rounds through the harness once the Engine items above
