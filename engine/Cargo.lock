@@ -1878,6 +1878,7 @@ dependencies = [
  "kaveon-optim",
  "kaveon-sql",
  "kaveon-storage",
+ "parquet",
  "reqwest",
  "rustyline",
  "serde",
