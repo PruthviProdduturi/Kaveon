@@ -208,7 +208,12 @@ statement also appears at http://localhost:3000/engine and
 http://localhost:8081/ui.
 
 Studio: open http://localhost:3000, and SQL Lab lists `OpenSource` as a
-source.
+source. Statements run there stream too: the grid fills page by page while
+the statement runs under a running line with the same state, tasks, rows
+scanned and workers the shell shows, and Cancel stops it on the coordinator.
+A filter such as `WHERE country = 'India' AND actions = 7 AND sessions = 3`
+shows its first rows a few seconds in; the `GROUP BY` above lands its six rows
+when it finishes.
 
 ## 6. Ask the DLM
 
