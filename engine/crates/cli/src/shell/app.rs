@@ -526,7 +526,11 @@ impl App {
         self.editor.height(EDITOR_MAX_ROWS)
             + 1
             + u16::from(self.running.is_some())
-            + u16::from(self.paging.is_some() || self.watch.is_some())
+            + u16::from(
+                self.paging.is_some()
+                    || self.watch.is_some()
+                    || self.editor.search_view().is_some(),
+            )
     }
 }
 
