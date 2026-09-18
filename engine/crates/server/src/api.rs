@@ -1726,6 +1726,21 @@ async fn submit_statement(
     Extension(identity): Extension<Identity>,
     Json(req): Json<StatementRequest>,
 ) -> impl IntoResponse {
+    run_statement(state, identity, req, Uuid::new_v4().to_string()).await
+}
+
+/// Runs one statement under `query_id` exactly as `POST /v1/statement`
+/// does — settings, admission, the record, cancellation, planning and
+/// execution — and answers with the response the client would get. The
+/// statement path calls it for the statements it runs on behalf of another
+/// (`ANALYZE … WITH (distinct = true)`), so those go through the same
+/// machinery as a client statement under an id their caller knows.
+async fn run_statement(
+    state: Arc<AppState>,
+    identity: Identity,
+    req: StatementRequest,
+    query_id: String,
+) -> Response {
     let _submitted_user = req.user.as_deref();
     if !state.config.coordinator {
         return (
@@ -1779,7 +1794,6 @@ async fn submit_statement(
         Ok(permit) => permit,
         Err(status) => return status.into_response(),
     };
-    let query_id = Uuid::new_v4().to_string();
     if let Some((status, body)) =
         transaction_api_guidance(&sql, state.product_transactions.catalog().is_some())
     {
@@ -2051,8 +2065,15 @@ async fn submit_statement(
     if let Some(statement) = catalog_statement {
         return execute_catalog(&state, &identity, &query_id, &context, statement, start).await;
     }
-    if let Some(table) = parse_analyze_table(&sql) {
-        return execute_analyze(&state, &identity, &query_id, &context, table, start).await;
+    if let Some(statement) = parse_analyze_statement(&sql) {
+        // ANALYZE runs no operator of its own, and the statements it runs
+        // for its distinct counts are admitted in their own right — memory,
+        // principal and resource group — so a single-slot coordinator does
+        // not wait on itself.
+        drop(query_memory);
+        drop(_group_permit);
+        drop(_principal_permit);
+        return execute_analyze(&state, &identity, &query_id, &context, statement, start).await;
     }
     if let Some(statement) = statistics_statement {
         return execute_statistics_statement(&state, &query_id, &context, statement, start).await;
@@ -2880,12 +2901,190 @@ fn request_settings(
     Ok((settings, sql, time_zone))
 }
 
-fn parse_analyze_table(sql: &str) -> Option<String> {
+/// Which columns `ANALYZE` counts distinct values for: none (the metadata
+/// profile only), every column, or the columns named.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum DistinctColumns {
+    None,
+    All,
+    Named(Vec<String>),
+}
+
+/// `ANALYZE [catalog.][schema.]table [WITH (distinct = true | columns =
+/// ARRAY['a', 'b'])]`, parsed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AnalyzeStatement {
+    table: String,
+    distinct: DistinctColumns,
+}
+
+/// `None` when the statement is not an `ANALYZE`; `Err` with the reason for
+/// an `ANALYZE` whose table name or `WITH` properties are malformed.
+fn parse_analyze_statement(sql: &str) -> Option<Result<AnalyzeStatement, String>> {
+    let sql = sql.trim();
     let rest = sql
-        .strip_prefix("ANALYZE ")
-        .or_else(|| sql.strip_prefix("analyze "))?
-        .trim();
-    bounded_table_name(rest)
+        .get(..7)
+        .filter(|word| word.eq_ignore_ascii_case("ANALYZE"))
+        .and_then(|_| sql.get(7..))
+        .filter(|rest| rest.is_empty() || rest.starts_with(|c: char| c.is_ascii_whitespace()))?;
+    Some(parse_analyze_body(rest.trim()))
+}
+
+fn parse_analyze_body(body: &str) -> Result<AnalyzeStatement, String> {
+    let name_end = body
+        .find(|c: char| c.is_ascii_whitespace() || c == '(')
+        .unwrap_or(body.len());
+    let (name, tail) = body.split_at(name_end);
+    let table = bounded_table_name(name).ok_or_else(|| {
+        "ANALYZE takes [catalog.][schema.]table of plain or double-quoted identifier parts"
+            .to_owned()
+    })?;
+    let tail = tail.trim();
+    if tail.is_empty() {
+        return Ok(AnalyzeStatement {
+            table,
+            distinct: DistinctColumns::None,
+        });
+    }
+    let properties = tail
+        .get(..4)
+        .filter(|word| word.eq_ignore_ascii_case("WITH"))
+        .and_then(|_| tail.get(4..))
+        .map(str::trim_start)
+        .filter(|rest| rest.starts_with('('))
+        .and_then(|rest| rest.strip_prefix('('))
+        .and_then(|rest| rest.trim_end().strip_suffix(')'))
+        .ok_or_else(|| {
+            "ANALYZE accepts WITH (distinct = true) or WITH (columns = ARRAY['a', 'b']) after the table name".to_owned()
+        })?;
+    let mut distinct = None;
+    let mut columns = None;
+    for entry in split_property_entries(properties)? {
+        let (key, value) = entry
+            .split_once('=')
+            .map(|(key, value)| (key.trim(), value.trim()))
+            .ok_or_else(|| format!("ANALYZE property '{}' needs key = value", entry.trim()))?;
+        if key.eq_ignore_ascii_case("distinct") {
+            if distinct.is_some() {
+                return Err("ANALYZE property distinct is given twice".into());
+            }
+            distinct = Some(match value {
+                v if v.eq_ignore_ascii_case("true") => true,
+                v if v.eq_ignore_ascii_case("false") => false,
+                other => {
+                    return Err(format!(
+                        "ANALYZE property distinct must be true or false, not {other}"
+                    ));
+                }
+            });
+        } else if key.eq_ignore_ascii_case("columns") {
+            if columns.is_some() {
+                return Err("ANALYZE property columns is given twice".into());
+            }
+            columns = Some(parse_column_array(value)?);
+        } else {
+            return Err(format!(
+                "unknown ANALYZE property '{key}'; the properties are distinct and columns"
+            ));
+        }
+    }
+    let distinct = match (distinct, columns) {
+        (Some(_), Some(_)) => {
+            return Err("ANALYZE takes distinct or columns, not both".into());
+        }
+        (Some(true), None) => DistinctColumns::All,
+        (Some(false), None) | (None, None) => DistinctColumns::None,
+        (None, Some(columns)) => DistinctColumns::Named(columns),
+    };
+    Ok(AnalyzeStatement { table, distinct })
+}
+
+/// The comma-separated `key = value` entries of a property list, commas
+/// inside quotes and brackets kept.
+fn split_property_entries(properties: &str) -> Result<Vec<&str>, String> {
+    let mut entries = Vec::new();
+    let mut start = 0;
+    let mut depth = 0usize;
+    let mut quoted = false;
+    for (index, c) in properties.char_indices() {
+        match c {
+            '\'' => quoted = !quoted,
+            '[' if !quoted => depth += 1,
+            ']' if !quoted => {
+                depth = depth
+                    .checked_sub(1)
+                    .ok_or_else(|| "unbalanced ']' in ANALYZE properties".to_owned())?;
+            }
+            ',' if !quoted && depth == 0 => {
+                entries.push(&properties[start..index]);
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    if quoted {
+        return Err("unterminated string in ANALYZE properties".into());
+    }
+    if depth != 0 {
+        return Err("unbalanced '[' in ANALYZE properties".into());
+    }
+    entries.push(&properties[start..]);
+    if entries.iter().any(|entry| entry.trim().is_empty()) {
+        return Err("empty entry in ANALYZE properties".into());
+    }
+    Ok(entries)
+}
+
+/// `ARRAY['a', 'b']`: at least one single-quoted column name (`''` for a
+/// quote), none repeated.
+fn parse_column_array(value: &str) -> Result<Vec<String>, String> {
+    let malformed = || {
+        "ANALYZE property columns must be ARRAY['a', 'b'] of single-quoted column names".to_owned()
+    };
+    let items = value
+        .get(..5)
+        .filter(|word| word.eq_ignore_ascii_case("ARRAY"))
+        .and_then(|_| value.get(5..))
+        .map(str::trim_start)
+        .and_then(|rest| rest.strip_prefix('['))
+        .and_then(|rest| rest.strip_suffix(']'))
+        .ok_or_else(malformed)?;
+    let mut columns: Vec<String> = Vec::new();
+    let mut rest = items.trim();
+    if rest.is_empty() {
+        return Err("ANALYZE property columns names no column".into());
+    }
+    loop {
+        let unquoted = rest.strip_prefix('\'').ok_or_else(malformed)?;
+        let mut name = String::new();
+        let mut chars = unquoted.char_indices().peekable();
+        let mut closed = None;
+        while let Some((index, c)) = chars.next() {
+            if c != '\'' {
+                name.push(c);
+            } else if chars.peek().is_some_and(|(_, next)| *next == '\'') {
+                name.push('\'');
+                chars.next();
+            } else {
+                closed = Some(index + 1);
+                break;
+            }
+        }
+        let after = closed.ok_or_else(malformed)?;
+        if name.is_empty() {
+            return Err("ANALYZE property columns names an empty column".into());
+        }
+        if columns.contains(&name) {
+            return Err(format!("ANALYZE property columns names '{name}' twice"));
+        }
+        columns.push(name);
+        rest = unquoted[after..].trim_start();
+        match rest.strip_prefix(',') {
+            Some(next) => rest = next.trim_start(),
+            None if rest.is_empty() => return Ok(columns),
+            None => return Err(malformed()),
+        }
+    }
 }
 
 /// `[catalog.][schema.]table` of plain or double-quoted identifier parts,
@@ -2954,6 +3153,7 @@ fn statistics_document(
     catalog_snapshot_sha256: &str,
     location: &str,
     profile: &kaveon_storage::SourceProfile,
+    distinct: &BTreeMap<String, u64>,
 ) -> serde_json::Value {
     let columns = profile
         .columns
@@ -2966,7 +3166,7 @@ fn statistics_document(
                 "min": column.min,
                 "max": column.max,
                 "compressed_bytes": column.compressed_bytes,
-                "distinct": serde_json::Value::Null,
+                "distinct": distinct.get(&column.name),
             })
         })
         .collect::<Vec<_>>();
@@ -3303,6 +3503,16 @@ async fn stored_statistics_document(
             "cannot read product catalog head".to_owned(),
         )
     })?;
+    statistics_document_in(commit, &snapshot, qualified).await
+}
+
+/// The table's statistics document under `snapshot`, parsed; `None` when
+/// the snapshot holds none.
+async fn statistics_document_in(
+    commit: &kaveon_catalog::product_commit::ProductCatalogCommit,
+    snapshot: &kaveon_catalog::product_manifest::CatalogSnapshot,
+    qualified: &str,
+) -> Result<Option<serde_json::Value>, (StatusCode, &'static str, String)> {
     let Some(stored) = snapshot.table_statistics.get(qualified) else {
         return Ok(None);
     };
@@ -3351,12 +3561,19 @@ async fn finish_inline_statement(
     .into_response()
 }
 
+/// `ANALYZE`: the metadata profile, then — for `WITH (distinct = true)` or
+/// `WITH (columns = ARRAY[…])` — one `SELECT COUNT(DISTINCT "column")`
+/// statement per selected column through [`run_statement`], sequentially,
+/// cancelled with this statement; then the source identity is read again
+/// and one document is committed. A column not counted by this statement
+/// keeps the count of the previous document when the source identity is
+/// unchanged, else it is null.
 async fn execute_analyze(
     state: &Arc<AppState>,
     identity: &Identity,
     query_id: &str,
     context: &QueryContext,
-    table: String,
+    statement: Result<AnalyzeStatement, String>,
     started: Instant,
 ) -> Response {
     if identity.role != crate::security::Role::Admin {
@@ -3393,7 +3610,20 @@ async fn execute_analyze(
         )
             .into_response();
     };
-    let qualified = qualify_table(context, &table);
+    let statement = match statement {
+        Ok(statement) => statement,
+        Err(message) => {
+            return analyze_failure(
+                query_id,
+                started,
+                StatusCode::BAD_REQUEST,
+                "SYNTAX_ERROR",
+                message,
+            )
+            .await;
+        }
+    };
+    let qualified = qualify_table(context, &statement.table);
     let resolved = match state
         .catalog
         .read()
@@ -3426,6 +3656,69 @@ async fn execute_analyze(
             .await;
         }
     };
+    let selected = match &statement.distinct {
+        DistinctColumns::None => Vec::new(),
+        DistinctColumns::All => first
+            .columns
+            .iter()
+            .map(|column| column.name.clone())
+            .collect(),
+        DistinctColumns::Named(names) => {
+            if let Some(unknown) = names
+                .iter()
+                .find(|name| !first.columns.iter().any(|column| column.name == **name))
+            {
+                return analyze_failure(
+                    query_id,
+                    started,
+                    StatusCode::BAD_REQUEST,
+                    "ANALYSIS_ERROR",
+                    format!("column '{unknown}' does not exist in {qualified}"),
+                )
+                .await;
+            }
+            names.clone()
+        }
+    };
+    let cancellation = match state.lifecycle.cancellations.token(query_id) {
+        Ok(token) => token,
+        Err(error) => {
+            return analyze_failure(
+                query_id,
+                started,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "ANALYZE_FAILED",
+                error.to_string(),
+            )
+            .await;
+        }
+    };
+    let mut measured = BTreeMap::new();
+    for column in &selected {
+        match count_distinct_values(
+            state,
+            identity,
+            query_id,
+            context,
+            &qualified,
+            column,
+            &cancellation,
+        )
+        .await
+        {
+            Ok(count) => {
+                measured.insert(column.clone(), count);
+            }
+            Err(SubStatementError::Canceled) => return canceled_task_response(),
+            Err(SubStatementError::Failed {
+                status,
+                code,
+                message,
+            }) => {
+                return analyze_failure(query_id, started, status, &code, message).await;
+            }
+        }
+    }
     let second = match kaveon_storage::profile_source(&location, resolved.table.format) {
         Ok(value) if value.statistics.identity_sha256 == first.statistics.identity_sha256 => value,
         Ok(_) => {
@@ -3453,16 +3746,6 @@ async fn execute_analyze(
         "{:x}",
         Sha256::digest(context.catalog_snapshot_id.as_bytes())
     );
-    let document = serde_json::to_vec(&statistics_document(
-        &qualified,
-        &catalog_snapshot_sha256,
-        &location,
-        &second,
-    ))
-    .unwrap();
-    let row_count = second.statistics.row_count;
-    let source_identity_sha256 = second.statistics.identity_sha256;
-    let document_sha = format!("{:x}", Sha256::digest(&document));
     let current = match commit.read_current().await {
         Ok(v) => v,
         Err(_) => {
@@ -3476,6 +3759,31 @@ async fn execute_analyze(
             .await;
         }
     };
+    // The counts the previous document holds for the same source identity
+    // stay; a column counted now takes the new count.
+    let mut distinct = match statistics_document_in(&commit, &current, &qualified).await {
+        Ok(previous) => previous
+            .filter(|previous| {
+                previous["source_identity_sha256"] == second.statistics.identity_sha256
+            })
+            .map(|previous| preserved_distinct_counts(&previous))
+            .unwrap_or_default(),
+        Err((status, code, message)) => {
+            return analyze_failure(query_id, started, status, code, message).await;
+        }
+    };
+    distinct.extend(measured);
+    let document = serde_json::to_vec(&statistics_document(
+        &qualified,
+        &catalog_snapshot_sha256,
+        &location,
+        &second,
+        &distinct,
+    ))
+    .unwrap();
+    let row_count = second.statistics.row_count;
+    let source_identity_sha256 = second.statistics.identity_sha256;
+    let document_sha = format!("{:x}", Sha256::digest(&document));
     let operation = Uuid::new_v4().simple().to_string();
     let path = format!("statistics/{operation}.json");
     let request = PrepareChange {
@@ -3543,18 +3851,14 @@ async fn execute_analyze(
     }
     let elapsed = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
     let columns = vec![
-        ColumnInfo {
-            name: "table".into(),
-            data_type: "VARCHAR".into(),
-        },
-        ColumnInfo {
-            name: "row_count".into(),
-            data_type: "BIGINT".into(),
-        },
+        varchar("table"),
+        bigint("row_count"),
+        bigint("distinct_columns"),
     ];
     let rows = vec![vec![
         serde_json::json!(qualified),
         serde_json::json!(row_count),
+        serde_json::json!(selected.len()),
     ]];
     if let Some(record) = QUERY_STORE.write().await.queries.get_mut(query_id) {
         record.state = QueryState::Finished;
@@ -3629,6 +3933,174 @@ async fn execute_catalog(
         elapsed_ms: elapsed,
     })
     .into_response()
+}
+
+/// The distinct counts of a stored document: column name to count, for
+/// the columns that carry one.
+fn preserved_distinct_counts(document: &serde_json::Value) -> BTreeMap<String, u64> {
+    document["columns"]
+        .as_array()
+        .map(|columns| {
+            columns
+                .iter()
+                .filter_map(|column| {
+                    Some((
+                        column["name"].as_str()?.to_owned(),
+                        column["distinct"].as_u64()?,
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Why a statement `ANALYZE` ran on its behalf did not answer with a value.
+enum SubStatementError {
+    /// The `ANALYZE` statement was cancelled; the sub-statement with it.
+    Canceled,
+    /// The sub-statement failed: its status, code and message, the column
+    /// named.
+    Failed {
+        status: StatusCode,
+        code: String,
+        message: String,
+    },
+}
+
+/// A double-quoted SQL identifier.
+fn quote_identifier(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// `SELECT COUNT(DISTINCT "column") FROM catalog.schema.table` as a
+/// statement of its own through [`run_statement`] — admitted, recorded,
+/// planned and executed as a client statement would be, tagged
+/// `analyze:<parent id>`, the result cache off — cancelled when `parent`
+/// is. The exact count of the column's non-null distinct values.
+async fn count_distinct_values(
+    state: &Arc<AppState>,
+    identity: &Identity,
+    parent_id: &str,
+    context: &QueryContext,
+    qualified: &str,
+    column: &str,
+    parent: &CancellationToken,
+) -> Result<u64, SubStatementError> {
+    let failed = |status: StatusCode, code: &str, message: String| SubStatementError::Failed {
+        status,
+        code: code.to_owned(),
+        message: format!("distinct count of column '{column}' failed: {message}"),
+    };
+    // The table name is bounded to identifier characters (see
+    // `bounded_table_name`); the column is whatever the source calls it.
+    let query = format!(
+        "SELECT COUNT(DISTINCT {}) FROM {qualified}",
+        quote_identifier(column)
+    );
+    let mut settings = match serde_json::to_value(&context.settings) {
+        Ok(serde_json::Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    };
+    settings.insert("result_cache".into(), serde_json::Value::Bool(false));
+    let mut client_tags = context.client_tags.clone();
+    client_tags.push(format!("analyze:{parent_id}"));
+    let request = StatementRequest {
+        query,
+        catalog: Some(context.catalog.clone()),
+        schema: Some(context.schema.clone()),
+        source: context.source.clone(),
+        client: context.client.clone(),
+        user: None,
+        time_zone: context.time_zone.clone(),
+        client_tags,
+        result_delivery: None,
+        settings: Some(settings),
+    };
+    let child_id = Uuid::new_v4().to_string();
+    // The child's token exists before it starts, so a cancellation of the
+    // parent that lands first is seen at the child's first check.
+    state
+        .lifecycle
+        .cancellations
+        .token(&child_id)
+        .map_err(|error| {
+            failed(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "ANALYZE_FAILED",
+                error.to_string(),
+            )
+        })?;
+    let mut child = Box::pin(run_statement(
+        Arc::clone(state),
+        identity.clone(),
+        request,
+        child_id.clone(),
+    ));
+    let response = tokio::select! {
+        response = &mut child => response,
+        () = parent.cancelled() => {
+            // The token first — it is what a child that has no record yet
+            // checks — then the client's cancellation of the child's record
+            // and its worker tasks.
+            let _ = state.lifecycle.cancellations.cancel(&child_id);
+            let _ = cancel_query(
+                State(Arc::clone(state)),
+                Extension(identity.clone()),
+                Path(child_id.clone()),
+            )
+            .await;
+            let response = child.await;
+            // A child that left the admission queue on the token alone
+            // still has a queued record: it was cancelled.
+            if let Some(record) = QUERY_STORE.write().await.queries.get_mut(&child_id)
+                && matches!(record.state, QueryState::Queued | QueryState::Running)
+            {
+                record.state = QueryState::Canceled;
+                record.error = Some(format!("canceled with ANALYZE {parent_id}"));
+                record.completed_at_ms = unix_time_ms();
+            }
+            response
+        }
+    };
+    if parent.is_cancelled() {
+        return Err(SubStatementError::Canceled);
+    }
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+        .await
+        .map_err(|error| {
+            failed(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "ANALYZE_FAILED",
+                error.to_string(),
+            )
+        })?;
+    let body = serde_json::from_slice::<serde_json::Value>(&body).map_err(|error| {
+        failed(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "ANALYZE_FAILED",
+            error.to_string(),
+        )
+    })?;
+    if status != StatusCode::OK {
+        let code = body["code"].as_str().unwrap_or("ANALYZE_FAILED");
+        let message = body["error"]
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("HTTP {status}"));
+        return Err(failed(status, code, message));
+    }
+    let value = &body["data"][0][0];
+    value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+        .ok_or_else(|| {
+            failed(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "ANALYZE_FAILED",
+                format!("the count came back as {value}"),
+            )
+        })
 }
 
 async fn analyze_failure(
@@ -7203,32 +7675,116 @@ mod tests {
     }
 
     use super::{
-        ColumnInfo, MergeOperation, StatisticsStatement, TaskRequest, TaskResponse,
-        aggregate_merge_contract, await_task_memory, capabilities, catalog_test_state,
-        collect_join_statistics_tables, decode_arrow_stream, durable_relation_statistics,
-        encode_arrow_stream, exact_metadata_count_plan, exact_source_statistics, execute_analyze,
-        general_distributed_eligible, iso_utc_ms, merge_partial_aggregates, mutation_actor,
-        parse_analyze_table, parse_statistics_statement, statistics_diagnostics,
-        task_request_from_dispatch, top_n_merge_contract, transaction_api_guidance,
-        validate_replacement,
+        AnalyzeStatement, ColumnInfo, DistinctColumns, MergeOperation, StatisticsStatement,
+        TaskRequest, TaskResponse, aggregate_merge_contract, await_task_memory, capabilities,
+        catalog_test_state, collect_join_statistics_tables, decode_arrow_stream,
+        durable_relation_statistics, encode_arrow_stream, exact_metadata_count_plan,
+        exact_source_statistics, execute_analyze, general_distributed_eligible, iso_utc_ms,
+        merge_partial_aggregates, mutation_actor, parse_analyze_statement,
+        parse_statistics_statement, statistics_diagnostics, task_request_from_dispatch,
+        top_n_merge_contract, transaction_api_guidance, validate_replacement,
     };
     use crate::security::Role;
     use arrow::array::{Int64Array, StringArray};
     use axum::http::StatusCode;
     use sha2::{Digest, Sha256};
 
+    fn analyze(sql: &str) -> Result<AnalyzeStatement, String> {
+        parse_analyze_statement(sql).expect("an ANALYZE statement")
+    }
+
+    fn analyze_of(table: &str, distinct: DistinctColumns) -> Result<AnalyzeStatement, String> {
+        Ok(AnalyzeStatement {
+            table: table.into(),
+            distinct,
+        })
+    }
+
     #[test]
     fn analyze_parser_accepts_bounded_table_names_only() {
         assert_eq!(
-            parse_analyze_table("ANALYZE \"sales\".\"orders\""),
-            Some("sales.orders".into())
+            analyze("ANALYZE \"sales\".\"orders\""),
+            analyze_of("sales.orders", DistinctColumns::None)
         );
         assert_eq!(
-            parse_analyze_table("analyze lake.sales.orders"),
-            Some("lake.sales.orders".into())
+            analyze("analyze lake.sales.orders"),
+            analyze_of("lake.sales.orders", DistinctColumns::None)
         );
-        assert_eq!(parse_analyze_table("ANALYZE orders WHERE true"), None);
-        assert_eq!(parse_analyze_table("ANALYZE a.b.c.d"), None);
+        assert_eq!(parse_analyze_statement("ANALYZER orders"), None);
+        assert_eq!(parse_analyze_statement("SELECT 1"), None);
+        assert!(analyze("ANALYZE orders WHERE true").is_err());
+        assert!(analyze("ANALYZE a.b.c.d").is_err());
+        assert!(analyze("ANALYZE ").is_err());
+    }
+
+    #[test]
+    fn analyze_parser_reads_the_with_properties() {
+        let named = |names: &[&str]| {
+            DistinctColumns::Named(names.iter().map(|n| (*n).to_owned()).collect())
+        };
+        assert_eq!(
+            analyze("ANALYZE orders WITH (distinct = true)"),
+            analyze_of("orders", DistinctColumns::All)
+        );
+        assert_eq!(
+            analyze("analyze lake.sales.orders with(DISTINCT=TRUE)"),
+            analyze_of("lake.sales.orders", DistinctColumns::All)
+        );
+        assert_eq!(
+            analyze("ANALYZE orders WITH (distinct = false)"),
+            analyze_of("orders", DistinctColumns::None)
+        );
+        assert_eq!(
+            analyze("ANALYZE \"sales\".\"orders\" WITH (columns = ARRAY['a', 'b'])"),
+            analyze_of("sales.orders", named(&["a", "b"]))
+        );
+        assert_eq!(
+            analyze("ANALYZE orders WITH ( Columns = array[ 'Region Name' , 'it''s' ] )"),
+            analyze_of("orders", named(&["Region Name", "it's"]))
+        );
+        assert_eq!(
+            analyze("ANALYZE orders\n  WITH (\n    columns = ARRAY['a,b']\n  )"),
+            analyze_of("orders", named(&["a,b"]))
+        );
+        let error = |sql: &str| analyze(sql).unwrap_err();
+        assert_eq!(
+            error("ANALYZE orders WITH (distinct = true, columns = ARRAY['a'])"),
+            "ANALYZE takes distinct or columns, not both"
+        );
+        assert_eq!(
+            error("ANALYZE orders WITH (distinct = false, columns = ARRAY['a'])"),
+            "ANALYZE takes distinct or columns, not both"
+        );
+        assert_eq!(
+            error("ANALYZE orders WITH (distinct = yes)"),
+            "ANALYZE property distinct must be true or false, not yes"
+        );
+        assert_eq!(
+            error("ANALYZE orders WITH (sample = 1)"),
+            "unknown ANALYZE property 'sample'; the properties are distinct and columns"
+        );
+        assert_eq!(
+            error("ANALYZE orders WITH (columns = ARRAY[])"),
+            "ANALYZE property columns names no column"
+        );
+        assert_eq!(
+            error("ANALYZE orders WITH (columns = ARRAY['a', 'a'])"),
+            "ANALYZE property columns names 'a' twice"
+        );
+        assert_eq!(
+            error("ANALYZE orders WITH (distinct = true, distinct = true)"),
+            "ANALYZE property distinct is given twice"
+        );
+        assert!(error("ANALYZE orders WITH (columns = ARRAY[a])").contains("single-quoted"));
+        assert!(error("ANALYZE orders WITH (columns = ARRAY['a')").contains("unbalanced"));
+        assert!(error("ANALYZE orders WITH (columns = ARRAY['a'] extra)").contains("ARRAY"));
+        assert!(error("ANALYZE orders WITH (columns = 'a')").contains("ARRAY"));
+        assert!(error("ANALYZE orders WITH (distinct = true").contains("WITH"));
+        assert!(error("ANALYZE orders USING (distinct = true)").contains("WITH"));
+        assert!(error("ANALYZE orders WITH ()").contains("empty entry"));
+        assert!(error("ANALYZE orders WITH (distinct = true,)").contains("empty entry"));
+        assert!(error("ANALYZE orders WITH (columns = ARRAY['a)").contains("unterminated"));
+        assert!(error("ANALYZE orders WITH (distinct)").contains("key = value"));
     }
 
     #[test]
@@ -7350,7 +7906,11 @@ mod tests {
         let (status, body) =
             submit(&state, &admin, "ANALYZE orders", serde_json::Value::Null).await;
         assert_eq!(status, StatusCode::OK, "{body}");
-        assert_eq!(body["data"], serde_json::json!([["lake.sales.orders", 3]]));
+        assert_eq!(
+            body["data"],
+            serde_json::json!([["lake.sales.orders", 3, 0]])
+        );
+        assert_eq!(body["columns"][2]["name"], "distinct_columns");
         let snapshot = commit.read_current().await.unwrap();
         let stored = &snapshot.table_statistics["lake.sales.orders"];
         assert_eq!(stored.row_count, 3);
@@ -7838,18 +8398,31 @@ mod tests {
         kaveon_catalog::product_commit::ProductCatalogCommit,
         std::path::PathBuf,
     ) {
-        use kaveon_core::CatalogProvider;
-        use parquet::arrow::ArrowWriter;
-        let directory =
-            std::env::temp_dir().join(format!("kaveon-server-analyze-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&directory).unwrap();
-        let path = directory.join("orders.parquet");
         let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
         )
         .unwrap();
+        analyze_test_state_over(schema, batch).await
+    }
+
+    /// A coordinator over the durable product catalog with one Parquet
+    /// table `lake.sales.orders` holding `batch`.
+    async fn analyze_test_state_over(
+        schema: Arc<Schema>,
+        batch: RecordBatch,
+    ) -> (
+        Arc<crate::AppState>,
+        kaveon_catalog::product_commit::ProductCatalogCommit,
+        std::path::PathBuf,
+    ) {
+        use kaveon_core::CatalogProvider;
+        use parquet::arrow::ArrowWriter;
+        let directory =
+            std::env::temp_dir().join(format!("kaveon-server-analyze-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("orders.parquet");
         let mut writer =
             ArrowWriter::try_new(std::fs::File::create(&path).unwrap(), schema.clone(), None)
                 .unwrap();
@@ -8479,6 +9052,448 @@ mod tests {
         }
     }
 
+    fn admin() -> crate::security::Identity {
+        crate::security::Identity {
+            principal: "admin".into(),
+            display_identity: None,
+            role: Role::Admin,
+        }
+    }
+
+    /// The stored document's `distinct` per column name.
+    async fn stored_distinct(
+        commit: &kaveon_catalog::product_commit::ProductCatalogCommit,
+    ) -> Vec<(String, serde_json::Value)> {
+        let document = super::stored_statistics_document(commit, "lake.sales.orders")
+            .await
+            .unwrap()
+            .expect("a statistics document");
+        assert_eq!(document["version"], 2);
+        document["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|column| {
+                (
+                    column["name"].as_str().unwrap().to_owned(),
+                    column["distinct"].clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// The query records tagged as sub-statements of `parent`, newest last.
+    async fn sub_statement_records(parent: &str) -> Vec<super::QueryRecord> {
+        let tag = format!("analyze:{parent}");
+        let store = super::QUERY_STORE.read().await;
+        let mut records = store
+            .queries
+            .values()
+            .filter(|record| record.context.client_tags.contains(&tag))
+            .cloned()
+            .collect::<Vec<_>>();
+        records.sort_by_key(|record| record.submitted_at_ms);
+        records
+    }
+
+    #[tokio::test]
+    async fn analyze_with_distinct_counts_exact_values_and_keeps_them_for_the_same_source() {
+        use arrow::array::Float64Array;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("region", DataType::Utf8, false),
+            Field::new("amount", DataType::Float64, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![
+                    Some(1),
+                    Some(2),
+                    Some(2),
+                    Some(3),
+                    None,
+                ])),
+                Arc::new(StringArray::from(vec![
+                    "east", "west", "east", "west", "east",
+                ])),
+                Arc::new(Float64Array::from(vec![
+                    Some(1.5),
+                    Some(1.5),
+                    None,
+                    Some(2.5),
+                    None,
+                ])),
+            ],
+        )
+        .unwrap();
+        let (state, commit, directory) = analyze_test_state_over(schema, batch).await;
+        let admin = admin();
+        let null = serde_json::Value::Null;
+
+        // Every column: three sub-statements, exact counts of non-null
+        // distinct values, none in the result cache.
+        let (status, body) = submit(
+            &state,
+            &admin,
+            "ANALYZE orders WITH (distinct = true)",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            body["columns"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|column| column["name"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["table", "row_count", "distinct_columns"]
+        );
+        assert_eq!(body["columns"][2]["type"], "BIGINT");
+        assert_eq!(
+            body["data"],
+            serde_json::json!([["lake.sales.orders", 5, 3]])
+        );
+        assert_eq!(
+            stored_distinct(&commit).await,
+            [
+                ("id".to_owned(), serde_json::json!(3)),
+                ("region".into(), serde_json::json!(2)),
+                ("amount".into(), serde_json::json!(2)),
+            ]
+        );
+        assert_eq!(state.result_cache.stats().entries, 0);
+        let parent = body["id"].as_str().unwrap().to_owned();
+        let children = sub_statement_records(&parent).await;
+        assert_eq!(
+            children
+                .iter()
+                .map(|record| record.sql.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "SELECT COUNT(DISTINCT \"id\") FROM lake.sales.orders",
+                "SELECT COUNT(DISTINCT \"region\") FROM lake.sales.orders",
+                "SELECT COUNT(DISTINCT \"amount\") FROM lake.sales.orders",
+            ]
+        );
+        for child in &children {
+            assert!(
+                matches!(child.state, super::QueryState::Finished),
+                "{} {:?}",
+                child.id,
+                child.error
+            );
+            assert_eq!(child.settings.result_cache, Some(false));
+            assert_eq!(child.context.principal.as_deref(), Some("admin"));
+            assert_ne!(child.id, parent);
+        }
+        let listed = super::list_queries(axum::Extension(admin.clone())).await.0;
+        assert!(
+            listed
+                .iter()
+                .filter(|record| record.sql.starts_with("SELECT COUNT(DISTINCT"))
+                .all(|record| record.context.client_tags == [format!("analyze:{parent}")])
+        );
+
+        // SHOW STATS FOR presents the counts.
+        let (status, body) = submit(
+            &state,
+            &admin,
+            "SHOW STATS FOR orders",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let rows = body["data"].as_array().unwrap();
+        assert_eq!(rows.len(), 4);
+        assert_eq!(
+            (&rows[0][0], &rows[0][4]),
+            (&serde_json::json!("id"), &serde_json::json!(3))
+        );
+        assert_eq!(rows[0][3], 0.2);
+        assert_eq!(
+            (&rows[1][0], &rows[1][4]),
+            (&serde_json::json!("region"), &serde_json::json!(2))
+        );
+        assert_eq!(
+            (&rows[2][0], &rows[2][4]),
+            (&serde_json::json!("amount"), &serde_json::json!(2))
+        );
+        assert_eq!((&rows[3][0], &rows[3][4]), (&null, &null));
+
+        // Named columns: only those are counted; the others keep their
+        // counts, the source being unchanged.
+        let (status, body) = submit(
+            &state,
+            &admin,
+            "ANALYZE orders WITH (columns = ARRAY['region'])",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            body["data"],
+            serde_json::json!([["lake.sales.orders", 5, 1]])
+        );
+        assert_eq!(
+            sub_statement_records(body["id"].as_str().unwrap())
+                .await
+                .len(),
+            1
+        );
+        assert_eq!(
+            stored_distinct(&commit).await,
+            [
+                ("id".to_owned(), serde_json::json!(3)),
+                ("region".into(), serde_json::json!(2)),
+                ("amount".into(), serde_json::json!(2)),
+            ]
+        );
+
+        // A plain ANALYZE keeps them too.
+        let (status, body) =
+            submit(&state, &admin, "ANALYZE orders", serde_json::Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            body["data"],
+            serde_json::json!([["lake.sales.orders", 5, 0]])
+        );
+        assert!(
+            sub_statement_records(body["id"].as_str().unwrap())
+                .await
+                .is_empty()
+        );
+        assert_eq!(
+            stored_distinct(&commit).await,
+            [
+                ("id".to_owned(), serde_json::json!(3)),
+                ("region".into(), serde_json::json!(2)),
+                ("amount".into(), serde_json::json!(2)),
+            ]
+        );
+
+        // An unknown column is refused before any count, the record failed,
+        // the document untouched; so are both properties together.
+        let before = commit.read_current().await.unwrap();
+        let (status, body) = submit(
+            &state,
+            &admin,
+            "ANALYZE orders WITH (columns = ARRAY['region', 'nope'])",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["code"], "ANALYSIS_ERROR");
+        assert_eq!(
+            body["error"],
+            "column 'nope' does not exist in lake.sales.orders"
+        );
+        assert!(
+            sub_statement_records(body["id"].as_str().unwrap())
+                .await
+                .is_empty()
+        );
+        assert_eq!(
+            record(body["id"].as_str().unwrap(), &admin).await["state"],
+            "FAILED"
+        );
+        let (status, body) = submit(
+            &state,
+            &admin,
+            "ANALYZE orders WITH (distinct = true, columns = ARRAY['id'])",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["code"], "SYNTAX_ERROR");
+        assert_eq!(body["error"], "ANALYZE takes distinct or columns, not both");
+        assert_eq!(
+            commit.read_current().await.unwrap().table_statistics["lake.sales.orders"],
+            before.table_statistics["lake.sales.orders"]
+        );
+
+        // A changed source: the counts of the columns not measured are
+        // gone, the measured one is fresh.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("region", DataType::Utf8, false),
+            Field::new("amount", DataType::Float64, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(7), Some(8)])),
+                Arc::new(StringArray::from(vec!["north", "north"])),
+                Arc::new(Float64Array::from(vec![Some(1.0), Some(2.0)])),
+            ],
+        )
+        .unwrap();
+        let mut writer = parquet::arrow::ArrowWriter::try_new(
+            std::fs::File::create(directory.join("orders.parquet")).unwrap(),
+            schema,
+            None,
+        )
+        .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let (status, body) =
+            submit(&state, &admin, "ANALYZE orders", serde_json::Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            body["data"],
+            serde_json::json!([["lake.sales.orders", 2, 0]])
+        );
+        assert_eq!(
+            stored_distinct(&commit).await,
+            [
+                ("id".to_owned(), null.clone()),
+                ("region".into(), null.clone()),
+                ("amount".into(), null.clone()),
+            ]
+        );
+        let (status, body) = submit(
+            &state,
+            &admin,
+            "ANALYZE \"lake\".\"sales\".\"orders\" WITH (columns = ARRAY['region'])",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            body["data"],
+            serde_json::json!([["lake.sales.orders", 2, 1]])
+        );
+        assert_eq!(
+            stored_distinct(&commit).await,
+            [
+                ("id".to_owned(), null.clone()),
+                ("region".into(), serde_json::json!(1)),
+                ("amount".into(), null),
+            ]
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// Cancelling the ANALYZE cancels the count it is running, the counts
+    /// after it never start, and no document is written.
+    #[tokio::test]
+    async fn a_cancelled_analyze_cancels_its_counts_and_writes_no_document() {
+        let columns = 12;
+        let rows = 50_000i64;
+        let schema = Arc::new(Schema::new(
+            (0..columns)
+                .map(|index| Field::new(format!("c{index}"), DataType::Int64, false))
+                .collect::<Vec<_>>(),
+        ));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            (0..columns)
+                .map(|index| {
+                    Arc::new(Int64Array::from(
+                        (0..rows).map(|row| row * (index + 1)).collect::<Vec<_>>(),
+                    )) as Arc<dyn arrow::array::Array>
+                })
+                .collect(),
+        )
+        .unwrap();
+        let (state, commit, directory) = analyze_test_state_over(schema, batch).await;
+        let admin = admin();
+        let parent = format!("analyze-parent-{}", uuid::Uuid::new_v4());
+        let running = {
+            let state = state.clone();
+            let admin = admin.clone();
+            let parent = parent.clone();
+            tokio::spawn(async move {
+                let response = super::run_statement(
+                    state,
+                    admin,
+                    super::StatementRequest {
+                        query: "ANALYZE orders WITH (distinct = true)".into(),
+                        catalog: Some("lake".into()),
+                        schema: Some("sales".into()),
+                        source: None,
+                        client: None,
+                        user: None,
+                        time_zone: None,
+                        client_tags: vec!["nightly".into()],
+                        result_delivery: None,
+                        settings: None,
+                    },
+                    parent,
+                )
+                .await;
+                let status = response.status();
+                (status, json_body(response).await)
+            })
+        };
+        // The first count is under way: the ANALYZE record runs, and so
+        // does a sub-statement tagged with it.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no sub-statement started"
+            );
+            assert!(
+                !running.is_finished(),
+                "ANALYZE finished before it was cancelled"
+            );
+            if !sub_statement_records(&parent).await.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+        assert_eq!(record(&parent, &admin).await["state"], "RUNNING");
+        let cancelled = super::cancel_query(
+            axum::extract::State(state.clone()),
+            axum::Extension(admin.clone()),
+            axum::extract::Path(parent.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(cancelled.status(), StatusCode::NO_CONTENT);
+        let (status, body) = running.await.unwrap();
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["code"], "QUERY_CANCELED");
+        assert_eq!(record(&parent, &admin).await["state"], "CANCELED");
+        let children = sub_statement_records(&parent).await;
+        assert!(!children.is_empty());
+        assert!(
+            (children.len() as i64) < columns,
+            "every count ran: {}",
+            children.len()
+        );
+        for child in &children {
+            assert!(
+                !matches!(
+                    child.state,
+                    super::QueryState::Queued | super::QueryState::Running
+                ),
+                "{} {:?}",
+                child.id,
+                child.error
+            );
+            assert_eq!(
+                child.context.client_tags,
+                ["nightly".to_owned(), format!("analyze:{parent}")]
+            );
+        }
+        assert!(matches!(
+            children.last().unwrap().state,
+            super::QueryState::Canceled
+        ));
+        assert!(
+            commit
+                .read_current()
+                .await
+                .unwrap()
+                .table_statistics
+                .is_empty()
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     #[tokio::test]
     async fn analyze_requires_admin_and_publishes_exact_durable_binding() {
         let (state, commit, directory) = analyze_test_state().await;
@@ -8499,7 +9514,7 @@ mod tests {
             &reader,
             "denied",
             &analyze_context(),
-            "orders".into(),
+            analyze("ANALYZE orders"),
             std::time::Instant::now(),
         )
         .await;
@@ -8522,7 +9537,7 @@ mod tests {
             &admin,
             "allowed",
             &analyze_context(),
-            "orders".into(),
+            analyze("ANALYZE orders"),
             std::time::Instant::now(),
         )
         .await;

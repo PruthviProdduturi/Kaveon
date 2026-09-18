@@ -64,8 +64,8 @@ const GROUPS: &[Group] = &[
                 description: "analyst or admin",
             },
             Entry {
-                command: "ANALYZE [catalog.][schema.]table",
-                description: "collect table and column statistics (admin); see SHOW STATS FOR",
+                command: "ANALYZE [catalog.][schema.]table [WITH (...)]",
+                description: "statistics (admin); WITH (distinct = true) counts distinct values",
             },
             Entry {
                 command: "CREATE TABLE t [(cols)] WITH (location = '...', format = '...')",
@@ -218,7 +218,7 @@ mod tests {
         assert!(text.contains("    SHOW CREATE TABLE table"));
         assert!(text.contains("    SHOW STATS FOR table"));
         assert!(text.contains("    DESCRIBE DETAIL table"));
-        assert!(text.contains("collect table and column statistics (admin); see SHOW STATS FOR"));
+        assert!(text.contains("WITH (distinct = true) counts distinct values"));
         assert!(text.contains("  Define\n    CREATE CATALOG"));
         assert!(text.contains("CALL system.register_table"));
         assert!(text.contains("  Run\n"));
