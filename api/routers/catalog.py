@@ -51,6 +51,8 @@ def get_table_definition(source_id: str, schema: str, table: str, response: Resp
     return {
         "success": True,
         "table": {
+            "id": _text(definition.get("id")),
+            "schemaId": _text(definition.get("schema_id")),
             "catalog": source["engine_catalog"],
             "schema": schema,
             "name": definition.get("name") if isinstance(definition.get("name"), str) else table,
