@@ -2,6 +2,11 @@
 //! draws uses these five styles. Plain when the output is not a terminal.
 use ratatui::style::{Color, Modifier, Style};
 
+/// Kaveon blue, the Studio `--accent` (#4A9EE8), and its darker form for
+/// light backgrounds (#2D7DD2).
+pub const KAVEON_BLUE: Color = Color::Rgb(74, 158, 232);
+pub const KAVEON_BLUE_DARK: Color = Color::Rgb(45, 125, 210);
+
 #[derive(Clone, Copy, Debug)]
 pub struct Theme {
     pub accent: Style,
@@ -24,9 +29,9 @@ impl Theme {
             return Theme::mono();
         }
         let accent = if flag == "light" {
-            Color::Blue
+            KAVEON_BLUE_DARK
         } else {
-            Color::Cyan
+            KAVEON_BLUE
         };
         Theme {
             accent: Style::default().fg(accent),
