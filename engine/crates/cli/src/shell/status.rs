@@ -1,8 +1,10 @@
-//! The editor box title and the one-line status bar under it.
+//! The prompt in front of the input and the one-line status bar under it.
 use crate::theme::Theme;
 use ratatui::text::{Line, Span};
 
 pub struct StatusFacts<'a> {
+    /// `catalog.schema`, once chosen.
+    pub context: Option<(&'a str, &'a str)>,
     pub host: &'a str,
     pub workers_ready: Option<(usize, usize)>,
     pub last_elapsed_ms: Option<u64>,
@@ -13,6 +15,8 @@ pub fn box_title(catalog: &str, schema: &str) -> String {
     format!("{catalog}.{schema}")
 }
 
+/// `catalog.schema · host · workers · last query …`; the context leads in
+/// the accent colour, the rest is dim (warning colour when a worker is stale).
 pub fn status_line(facts: &StatusFacts<'_>, theme: &Theme) -> Line<'static> {
     let mut parts = vec![facts.host.to_owned()];
     let mut style = theme.dim;
@@ -37,31 +41,25 @@ pub fn status_line(facts: &StatusFacts<'_>, theme: &Theme) -> Line<'static> {
         }
         parts.push(last);
     }
-    Line::from(Span::styled(format!(" {}", parts.join(" · ")), style))
-}
-
-/// `context › ` in front of the input.
-/// `KAVEON: catalog.schema › ` — the catalog plain, the schema dimmed so the
-/// two read apart — or just `KAVEON › ` until a context is chosen.
-pub fn prompt(context: Option<(&str, &str)>, theme: &Theme) -> Line<'static> {
-    let mut spans = vec![Span::styled(" KAVEON", theme.title)];
-    match context {
-        Some((catalog, schema)) => {
-            spans.push(Span::raw(format!(": {catalog}")));
-            spans.push(Span::styled(format!(".{schema} "), theme.dim));
-        }
-        None => spans.push(Span::raw(" ")),
+    let mut spans = Vec::new();
+    if let Some((catalog, schema)) = facts.context {
+        spans.push(Span::styled(format!(" {catalog}"), theme.accent));
+        spans.push(Span::styled(format!(".{schema} ·"), theme.dim));
     }
-    spans.push(Span::styled("› ", theme.accent));
+    spans.push(Span::styled(format!(" {}", parts.join(" · ")), style));
     Line::from(spans)
 }
 
-pub fn prompt_width(context: Option<(&str, &str)>) -> u16 {
-    let context_width = match context {
-        Some((catalog, schema)) => 2 + catalog.chars().count() + 1 + schema.chars().count(),
-        None => 0,
-    };
-    (" KAVEON".len() + context_width + 3) as u16
+/// `kaveon › ` in front of the input; the context lives on the status line.
+pub fn prompt(theme: &Theme) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(" kaveon", theme.title),
+        Span::styled(" › ", theme.accent),
+    ])
+}
+
+pub fn prompt_width() -> u16 {
+    " kaveon › ".chars().count() as u16
 }
 
 pub fn host_of(server: &str) -> String {
@@ -81,8 +79,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn status_line_lists_host_workers_and_last_query() {
+    fn status_line_lists_context_host_workers_and_last_query() {
         let facts = StatusFacts {
+            context: Some(("OpenSource", "kaveon_product")),
             host: "localhost:8081",
             workers_ready: Some((2, 0)),
             last_elapsed_ms: Some(1100),
@@ -91,21 +90,25 @@ mod tests {
         let line = status_line(&facts, &Theme::mono());
         assert_eq!(
             crate::render::to_plain(&[line]),
-            " localhost:8081 · 2 workers · last query 1.10 s, 18.0M rows scanned\n"
+            " OpenSource.kaveon_product · localhost:8081 · 2 workers · last query 1.10 s, 18.0M rows scanned\n"
+        );
+        let bare = StatusFacts {
+            context: None,
+            host: "localhost:8081",
+            workers_ready: None,
+            last_elapsed_ms: None,
+            last_scanned_rows: None,
+        };
+        assert_eq!(
+            crate::render::to_plain(&[status_line(&bare, &Theme::mono())]),
+            " localhost:8081\n"
         );
         assert_eq!(host_of("http://localhost:8081/"), "localhost:8081");
         assert_eq!(
-            crate::render::to_plain(&[prompt(Some(("OpenSource", "nyc")), &Theme::mono())]),
-            " KAVEON: OpenSource.nyc › 
-"
+            crate::render::to_plain(&[prompt(&Theme::mono())]),
+            " kaveon › \n"
         );
-        assert_eq!(prompt_width(Some(("OpenSource", "nyc"))), 26);
-        assert_eq!(
-            crate::render::to_plain(&[prompt(None, &Theme::mono())]),
-            " KAVEON › 
-"
-        );
-        assert_eq!(prompt_width(None), 10);
+        assert_eq!(prompt_width(), 10);
         assert_eq!(
             box_title("OpenSource", "kaveon_product"),
             "OpenSource.kaveon_product"

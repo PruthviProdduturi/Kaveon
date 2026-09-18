@@ -137,7 +137,7 @@ fn print_usage() {
     println!("      --no-header             Skip the session header");
     println!("      --width <COLS>          Terminal width for result tables (default: detected)");
     println!(
-        "      --row-limit <N|off>     Rows an interactive query without LIMIT shows (default: 1000)"
+        "      --row-limit <N>         Rows an interactive query without LIMIT shows (default: 1000, max: 10000)"
     );
     println!("      --access-token <TOKEN>  Explicit Engine token (prefer KAVEON_ACCESS_TOKEN)");
     println!("      --auth <MODE>           auto (default), azure-cli, microsoft, or none");

@@ -421,10 +421,7 @@ pub(crate) fn execute_with_limit(
         if let Some(limit) = preview_limit
             && response.data.len() >= limit
         {
-            summary.message = Some(format!(
-                "first {} rows only · .limit <n> or .limit off to change",
-                crate::render::thousands(limit as i128)
-            ));
+            summary.message = Some(crate::shell::rowlimit::note(limit));
         }
         scanned_rows = summary.rows_scanned;
         output.push_str(&styled_or_plain(&crate::render::summary::lines(
