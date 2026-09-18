@@ -857,7 +857,9 @@ pub(crate) fn compile_final_aggregate(
         && let Some(memory) = memory
     {
         let spill = kaveon_exec::partitioned::spill_from_environment(memory)?;
-        return hybrid_final_aggregate(input, group_by, aggregates, memory, spill, None, None);
+        return hybrid_final_aggregate(
+            input, group_by, aggregates, memory, spill, None, None, None,
+        );
     }
     compile_final_aggregate_in_memory(input, group_by, aggregates, memory)
 }
@@ -1021,7 +1023,11 @@ pub(crate) fn compile_final_aggregate_parallel(
         );
     }
     let parallelism = kaveon_exec::local_parallel::query_parallelism(memory)?;
-    if parallelism <= 1 {
+    // One thread over a source on the calling thread: the merge reads it
+    // straight. Sources on threads of their own go through the pump even
+    // for one merge thread, so a source's refusal is answered by a spill
+    // rather than the task's failure.
+    if parallelism <= 1 && matches!(sources, Sources::Here(_)) {
         let spill = kaveon_exec::partitioned::spill_from_environment(pool)?;
         return apply_tail(
             hybrid_final_aggregate(
@@ -1032,10 +1038,12 @@ pub(crate) fn compile_final_aggregate_parallel(
                 spill,
                 None,
                 None,
+                None,
             )?,
             memory,
         );
     }
+    let parallelism = parallelism.max(1);
     let final_schema = final_schema(sources.schema(), &group_by, &aggregates)?;
     // The per-thread output schema is the tail's, found on an empty
     // operator of the final's schema.
@@ -1056,6 +1064,10 @@ pub(crate) fn compile_final_aggregate_parallel(
                 context.spill.clone(),
                 Some(rendezvous.ticket()),
                 Some((context.index, context.workers)),
+                context
+                    .pressure
+                    .as_ref()
+                    .map(|pressure| pressure.responder(context.index)),
             )?;
             match &thread_tail {
                 Some(tail) => tail(merged, Some(pool)),
@@ -1089,6 +1101,7 @@ fn final_schema(
 
 /// The hybrid merge over a grouped-state input, each unit of complete
 /// groups it yields finalised as one batch.
+#[allow(clippy::too_many_arguments)]
 fn hybrid_final_aggregate(
     input: Box<dyn BatchOperator>,
     group_by: Vec<String>,
@@ -1097,6 +1110,7 @@ fn hybrid_final_aggregate(
     spill: Option<(kaveon_exec::spill::SpillManager, usize)>,
     rendezvous: Option<kaveon_exec::local_parallel::RendezvousTicket>,
     selection: Option<(usize, usize)>,
+    pressure: Option<kaveon_exec::local_parallel::PressureTicket>,
 ) -> Result<Box<dyn BatchOperator>> {
     let group_types = grouped_aggregate_key_types(input.schema())?;
     if group_types.len() != group_by.len() {
@@ -1113,6 +1127,9 @@ fn hybrid_final_aggregate(
     }
     if let Some((index, workers)) = selection {
         merge = merge.with_selection(index, workers);
+    }
+    if let Some(ticket) = pressure {
+        merge = merge.with_pressure(ticket);
     }
     Ok(Box::new(HybridFinalOutput {
         merge,
@@ -2322,6 +2339,7 @@ mod tests {
             Some((spill.clone(), 16)),
             None,
             None,
+            None,
         )
         .unwrap();
         let mut rows = 0;
@@ -2498,6 +2516,7 @@ mod tests {
             vec![AggExpr::new(AggFunc::Count, "*")],
             &pool,
             Some((spill.clone(), 16)),
+            None,
             None,
             None,
         )

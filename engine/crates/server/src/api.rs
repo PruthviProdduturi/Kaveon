@@ -1078,7 +1078,8 @@ where
 /// A batch whose reservation the budget refuses is kept: the refusal is
 /// reported, and the next call offers the same batch again, its
 /// reservation tried first — the IPC reader has moved on, so nothing else
-/// could bring the batch back (`local_parallel::ThreadSource`).
+/// could bring the batch back. That is what lets the pump ask the merge
+/// threads for memory and try again (`local_parallel::ThreadSource`).
 struct DiskExchangeInput {
     schema: arrow::datatypes::SchemaRef,
     payloads: std::collections::VecDeque<crate::transport::ArrowPayload>,
