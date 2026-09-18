@@ -1,4 +1,5 @@
-//! The session header printed once after connecting, and the `.cluster` panel.
+//! The session header printed once after connecting (or once the embedded
+//! engine is open), and the `.cluster` panel.
 use crate::client::session::{Cluster, Whoami};
 use crate::render::human_bytes;
 use crate::theme::Theme;
@@ -21,6 +22,10 @@ pub struct HeaderFacts<'a> {
     pub insecure_development: bool,
     pub user: &'a str,
     pub now_unix: u64,
+    /// `--local`: the engine's own description (`embedded · <data dir>
+    /// (<n> tables)`) replaces the coordinator facts; there is no cluster
+    /// and no authentication.
+    pub embedded: Option<String>,
 }
 
 fn row(label: &str, parts: Vec<Span<'static>>, theme: &Theme) -> Line<'static> {
@@ -43,8 +48,15 @@ pub fn header(facts: &HeaderFacts<'_>, theme: &Theme) -> Vec<Line<'static>> {
         ]),
         Line::from(Span::styled(format!("  {RULE}"), theme.accent)),
     ];
-    match facts.cluster {
-        Some(cluster) => {
+    match (facts.embedded.as_deref(), facts.cluster) {
+        (Some(description), _) => {
+            lines.push(row(
+                "Engine",
+                vec![Span::raw(description.to_owned())],
+                theme,
+            ));
+        }
+        (None, Some(cluster)) => {
             lines.push(row(
                 "Engine",
                 vec![Span::raw(joined(&[
@@ -79,7 +91,7 @@ pub fn header(facts: &HeaderFacts<'_>, theme: &Theme) -> Vec<Line<'static>> {
                 theme,
             ));
         }
-        None => {
+        (None, None) => {
             lines.push(row(
                 "Engine",
                 vec![Span::raw(facts.server.to_owned())],
@@ -102,15 +114,21 @@ pub fn header(facts: &HeaderFacts<'_>, theme: &Theme) -> Vec<Line<'static>> {
         }
         None => session.push(facts.user.to_owned()),
     }
-    session.push(if facts.insecure_development {
-        format!("auth {} (insecure development)", facts.auth_mode)
-    } else {
-        format!("auth {}", facts.auth_mode)
-    });
+    if facts.embedded.is_none() {
+        session.push(if facts.insecure_development {
+            format!("auth {} (insecure development)", facts.auth_mode)
+        } else {
+            format!("auth {}", facts.auth_mode)
+        });
+    }
     lines.push(row("Session", vec![Span::raw(joined(&session))], theme));
     lines.push(Line::raw(""));
     lines.push(Line::from(Span::styled(
-        "  SQL ends with ;   .help for commands   Ctrl-C cancels a running query",
+        if facts.embedded.is_some() {
+            "  SQL ends with ;   .help for commands   statements run in this process"
+        } else {
+            "  SQL ends with ;   .help for commands   Ctrl-C cancels a running query"
+        },
         theme.dim,
     )));
     lines.push(Line::raw(""));
@@ -199,6 +217,7 @@ mod tests {
             insecure_development: true,
             user: "prproddu",
             now_unix: 1000,
+            embedded: None,
         }
     }
 
@@ -248,6 +267,22 @@ mod tests {
         assert!(text.contains("Cluster   unavailable"));
         assert!(text.contains("Session   ana  ·  auth auto\n"));
         assert!(!text.contains("insecure"));
+    }
+
+    #[test]
+    fn embedded_header_names_the_engine_and_drops_cluster_and_auth() {
+        let mut facts = facts(None, None);
+        facts.embedded = Some("embedded · D:\\data (3 tables)".to_owned());
+        let text = crate::render::to_plain(&header(&facts, &Theme::mono()));
+        assert!(
+            text.contains("Engine    embedded · D:\\data (3 tables)\n"),
+            "{text}"
+        );
+        assert!(!text.contains("Cluster"), "{text}");
+        assert!(text.contains("Session   prproddu\n"), "{text}");
+        assert!(!text.contains("auth"), "{text}");
+        assert!(text.contains("statements run in this process"), "{text}");
+        assert!(!text.contains("Ctrl-C"), "{text}");
     }
 
     #[test]

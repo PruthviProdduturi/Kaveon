@@ -2,16 +2,22 @@
 //! (editor box + status line) with everything finished pushed into normal
 //! terminal scrollback above it.
 //!
-//! A statement runs on a worker thread (`client::statement`); this thread
-//! keeps drawing, finds the statement's record on the coordinator by its
-//! tag and polls it for the running line, and turns Ctrl-C into a cancel.
+//! A statement runs on a worker thread; this thread keeps drawing. Against
+//! a coordinator (`client::statement`) it finds the statement's record by
+//! its tag and polls it for the running line, and turns Ctrl-C into a
+//! cancel. With `--local` the worker thread runs the embedded engine and
+//! the running line shows elapsed time only.
 use crate::args::Options;
 use crate::auth::Session;
 use crate::client::error::{CliError, ErrorKind};
 use crate::client::metadata::NameCache;
 use crate::client::pages::PageCursor;
 use crate::client::session::{self as api, CliHttp, Cluster, Whoami};
-use crate::client::statement::{self, Handle, SharedSession, StatementEvent, StatementRequest};
+use crate::client::statement::{
+    self, Column, Handle, SharedSession, StatementEvent, StatementRequest, StatementResult,
+};
+use crate::local::LocalEngine;
+use crate::local::catalog::{CatalogCommand, parse_catalog_command};
 use crate::output::OutputFormat;
 use crate::render;
 use crate::shell::commands::{self, Command, SessionSettings};
@@ -46,8 +52,19 @@ const TAG_POLLS: u32 = 240;
 const QUEUED_CLUSTER_POLL: Duration = Duration::from_secs(1);
 /// One spinner frame per this many milliseconds.
 const SPINNER_FRAME_MS: u128 = 80;
+const EMBEDDED_ONLY: &str = "not available in embedded mode";
 
 type Term = Terminal<CrosstermBackend<io::Stdout>>;
+type SharedEngine = Arc<Mutex<LocalEngine>>;
+
+/// Where statements run: a coordinator over HTTP, or the embedded engine
+/// in this process (`--local`). Both answer through the same
+/// `StatementEvent` channel, so the loop, the renderers and the summary do
+/// not care which.
+pub enum Backend {
+    Remote(SharedSession),
+    Local(SharedEngine),
+}
 
 fn now_unix() -> u64 {
     SystemTime::now()
@@ -56,12 +73,14 @@ fn now_unix() -> u64 {
 }
 
 fn refresh_cluster(app: &mut App, options: &Options) {
-    refresh_cluster_fields(
-        &app.session,
-        &mut app.cluster,
-        &mut app.last_cluster_poll,
-        options,
-    );
+    if let Backend::Remote(session) = &app.backend {
+        refresh_cluster_fields(
+            session,
+            &mut app.cluster,
+            &mut app.last_cluster_poll,
+            options,
+        );
+    }
 }
 
 /// By field, so a caller holding another part of the app can refresh.
@@ -84,6 +103,13 @@ fn lock(session: &SharedSession) -> MutexGuard<'_, Session> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// The embedded engine, likewise.
+fn lock_engine(engine: &SharedEngine) -> MutexGuard<'_, LocalEngine> {
+    engine
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// One line of `.history`: what ran, how it went.
 struct HistoryEntry {
     statement: String,
@@ -91,7 +117,7 @@ struct HistoryEntry {
     ok: bool,
 }
 
-/// A statement on the coordinator.
+/// A statement on the coordinator, or on the embedded engine's thread.
 struct Running {
     handle: Handle,
     progress: Progress,
@@ -136,7 +162,7 @@ impl Paging {
 }
 
 pub struct App {
-    session: SharedSession,
+    backend: Backend,
     editor: Editor,
     theme: Theme,
     cluster: Option<Cluster>,
@@ -157,6 +183,60 @@ pub struct App {
 }
 
 impl App {
+    fn new(backend: Backend, options: &Options) -> App {
+        let history_path = (!options.no_history)
+            .then(|| {
+                options
+                    .history_file
+                    .clone()
+                    .or_else(crate::input::default_history_file)
+            })
+            .flatten();
+        let mut app = App {
+            backend,
+            editor: Editor::new(),
+            theme: Theme::detect(&options.theme, true),
+            cluster: None,
+            whoami: None,
+            last_elapsed_ms: None,
+            last_scanned_rows: None,
+            history_path,
+            last_cluster_poll: Instant::now(),
+            running: None,
+            paging: None,
+            pending: VecDeque::new(),
+            settings: SessionSettings::default(),
+            names: NameCache::default(),
+            history_log: Vec::new(),
+            timing: true,
+        };
+        if let Some(path) = &app.history_path
+            && let Ok(text) = std::fs::read_to_string(path)
+        {
+            app.editor.set_history(
+                text.lines()
+                    .filter(|line| !line.trim().is_empty())
+                    .map(|line| line.replace("\\n", "\n"))
+                    .collect(),
+            );
+        }
+        app
+    }
+
+    fn session(&self) -> Option<&SharedSession> {
+        match &self.backend {
+            Backend::Remote(session) => Some(session),
+            Backend::Local(_) => None,
+        }
+    }
+
+    fn engine(&self) -> Option<&SharedEngine> {
+        match &self.backend {
+            Backend::Remote(_) => None,
+            Backend::Local(engine) => Some(engine),
+        }
+    }
+
     fn status_facts<'a>(
         &'a self,
         context: Option<(&'a str, &'a str)>,
@@ -192,47 +272,13 @@ impl App {
     }
 }
 
+/// The shell against a coordinator.
 pub fn run(session: Session, options: &mut Options) -> Result<(), String> {
-    let theme = Theme::detect(&options.theme, true);
     let cluster = api::fetch_cluster(&session, &options.server).ok();
     let whoami = api::fetch_whoami(&session, &options.server).ok().flatten();
-    let history_path = (!options.no_history)
-        .then(|| {
-            options
-                .history_file
-                .clone()
-                .or_else(crate::input::default_history_file)
-        })
-        .flatten();
-    let mut app = App {
-        session: Arc::new(Mutex::new(session)),
-        editor: Editor::new(),
-        theme,
-        cluster,
-        whoami,
-        last_elapsed_ms: None,
-        last_scanned_rows: None,
-        history_path,
-        last_cluster_poll: Instant::now(),
-        running: None,
-        paging: None,
-        pending: VecDeque::new(),
-        settings: SessionSettings::default(),
-        names: NameCache::default(),
-        history_log: Vec::new(),
-        timing: true,
-    };
-    if let Some(path) = &app.history_path
-        && let Ok(text) = std::fs::read_to_string(path)
-    {
-        app.editor.set_history(
-            text.lines()
-                .filter(|line| !line.trim().is_empty())
-                .map(|line| line.replace("\\n", "\n"))
-                .collect(),
-        );
-    }
-
+    let mut app = App::new(Backend::Remote(Arc::new(Mutex::new(session))), options);
+    app.cluster = cluster;
+    app.whoami = whoami;
     if !options.no_header {
         let header = render::cluster::header(
             &render::cluster::HeaderFacts {
@@ -244,14 +290,48 @@ pub fn run(session: Session, options: &mut Options) -> Result<(), String> {
                 insecure_development: app.insecure_development(options),
                 user: &options.user,
                 now_unix: now_unix(),
+                embedded: None,
             },
             &app.theme,
         );
         print!("{}", render::to_ansi(&header));
     }
+    start(app, options, host_of(&options.server))
+}
 
+/// The same shell over the embedded engine (`--local` on a terminal): no
+/// cluster, no query ids, no cancel; the session context comes from the
+/// engine's catalog.
+pub fn run_local(engine: LocalEngine, options: &mut Options) -> Result<(), String> {
+    let (catalog, schema) = engine.context();
+    options.catalog = catalog;
+    options.schema = schema;
+    options.context_explicit = true;
+    let description = engine.description();
+    let app = App::new(Backend::Local(Arc::new(Mutex::new(engine))), options);
+    if !options.no_header {
+        let header = render::cluster::header(
+            &render::cluster::HeaderFacts {
+                cli_version: env!("CARGO_PKG_VERSION"),
+                server: &options.server,
+                cluster: None,
+                whoami: None,
+                auth_mode: &options.auth,
+                insecure_development: false,
+                user: &options.user,
+                now_unix: now_unix(),
+                embedded: Some(description),
+            },
+            &app.theme,
+        );
+        print!("{}", render::to_ansi(&header));
+    }
+    start(app, options, "embedded".to_owned())
+}
+
+fn start(mut app: App, options: &mut Options, host: String) -> Result<(), String> {
     enable_raw_mode().map_err(|error| format!("cannot enter raw mode: {error}"))?;
-    let result = event_loop(&mut app, options);
+    let result = event_loop(&mut app, options, &host);
     let _ = disable_raw_mode();
     println!();
     save_history(&app);
@@ -342,6 +422,33 @@ fn error_from_message(message: &str, sql: Option<&str>) -> CliError {
     CliError::from_message(message, sql)
 }
 
+/// The embedded engine's errors, which it words as `SQL error: …`,
+/// `Planning error: …` and `Execution error: …`.
+fn local_error(message: &str, sql: Option<&str>) -> CliError {
+    const PREFIXES: [(&str, ErrorKind); 3] = [
+        ("SQL error: ", ErrorKind::Parse),
+        ("Planning error: ", ErrorKind::Planning),
+        ("Execution error: ", ErrorKind::Execution),
+    ];
+    for (prefix, kind) in PREFIXES {
+        if let Some(rest) = message.strip_prefix(prefix) {
+            let mut error = error_from_message(rest.trim(), sql);
+            if error.kind == ErrorKind::Coordinator {
+                error.kind = kind;
+            }
+            if error.sql.is_none() {
+                error.sql = sql.map(str::to_owned);
+            }
+            return error;
+        }
+    }
+    let mut error = error_from_message(message, sql);
+    if error.kind == ErrorKind::Coordinator {
+        error.kind = ErrorKind::Execution;
+    }
+    error
+}
+
 /// The width result tables may use: `--width`, else the terminal's.
 fn table_width(options: &Options) -> Option<usize> {
     options.width.map(usize::from).or_else(|| {
@@ -395,8 +502,20 @@ fn failure_message(failure: &CliHttp) -> String {
     }
 }
 
-fn event_loop(app: &mut App, options: &mut Options) -> Result<(), String> {
-    let host = host_of(&options.server);
+/// The running line for the embedded engine: elapsed time only, since
+/// there is no record to poll and nothing to cancel.
+fn local_running_line(elapsed: Duration, tick: usize, theme: &Theme) -> Line<'static> {
+    Line::from(Span::styled(
+        format!(
+            " {} Running {:.1} s · embedded",
+            progress::SPINNER[tick % progress::SPINNER.len()],
+            elapsed.as_secs_f64()
+        ),
+        theme.accent,
+    ))
+}
+
+fn event_loop(app: &mut App, options: &mut Options, host: &str) -> Result<(), String> {
     let mut rows = app.viewport_rows();
     let mut owned = make_terminal(rows)?;
     loop {
@@ -412,8 +531,12 @@ fn event_loop(app: &mut App, options: &mut Options) -> Result<(), String> {
             .context_explicit
             .then_some((options.catalog.as_str(), options.schema.as_str()));
         let running_line = app.running.as_ref().map(|running| {
-            let tick = (running.handle.started.elapsed().as_millis() / SPINNER_FRAME_MS) as usize;
-            progress::line(&running.progress, tick, &app.theme)
+            let elapsed = running.handle.started.elapsed();
+            let tick = (elapsed.as_millis() / SPINNER_FRAME_MS) as usize;
+            match app.backend {
+                Backend::Remote(_) => progress::line(&running.progress, tick, &app.theme),
+                Backend::Local(_) => local_running_line(elapsed, tick, &app.theme),
+            }
         });
         let hint_line = app
             .paging
@@ -482,7 +605,7 @@ fn event_loop(app: &mut App, options: &mut Options) -> Result<(), String> {
                 };
                 frame.render_widget(Paragraph::new(prompt(&app.theme)), prompt_row);
                 frame.render_widget(
-                    Paragraph::new(status_line(&app.status_facts(context, &host), &app.theme)),
+                    Paragraph::new(status_line(&app.status_facts(context, host), &app.theme)),
                     status_area,
                 );
             })
@@ -615,12 +738,33 @@ fn submit(
         return emit_blank(terminal);
     }
     if text.starts_with('.') {
-        let output = crate::remote::meta_command_to_string(&lock(&app.session), options, text);
-        match output {
-            Ok(output) => emit_text(terminal, output.trim_end_matches('\n'), &app.theme, false)?,
-            Err(error) => emit_error(terminal, &error, &app.theme)?,
+        match &app.backend {
+            Backend::Remote(session) => {
+                let output = crate::remote::meta_command_to_string(&lock(session), options, text);
+                match output {
+                    Ok(output) => {
+                        emit_text(terminal, output.trim_end_matches('\n'), &app.theme, false)?
+                    }
+                    Err(error) => emit_error(terminal, &error, &app.theme)?,
+                }
+                return emit_blank(terminal);
+            }
+            Backend::Local(_) => {
+                return match local_dot_command_sql(text) {
+                    Ok(sql) => {
+                        if !run_local_metadata(app, terminal, options, &sql)? {
+                            emit_error(terminal, "unknown command; type .help", &app.theme)?;
+                            emit_blank(terminal)?;
+                        }
+                        Ok(())
+                    }
+                    Err(error) => {
+                        emit_error(terminal, &error, &app.theme)?;
+                        emit_blank(terminal)
+                    }
+                };
+            }
         }
-        return emit_blank(terminal);
     }
     let word = text.trim().trim_end_matches(';').trim();
     if word.eq_ignore_ascii_case("help") {
@@ -642,6 +786,30 @@ fn submit(
     }
 }
 
+/// The metadata dot commands as the SQL the embedded catalog answers.
+fn local_dot_command_sql(text: &str) -> Result<String, String> {
+    let text = text.trim().trim_end_matches(';').trim();
+    let parts: Vec<&str> = text.split_whitespace().collect();
+    match parts.as_slice() {
+        [".catalogs"] => Ok("SHOW CATALOGS".to_owned()),
+        [".schemas"] => Ok("SHOW SCHEMAS".to_owned()),
+        [".schemas", catalog] => Ok(format!("SHOW SCHEMAS IN {catalog}")),
+        [".tables"] => Ok("SHOW TABLES".to_owned()),
+        [".tables", target] => Ok(format!("SHOW TABLES IN {target}")),
+        [".describe" | ".desc", table] => Ok(format!("DESCRIBE {table}")),
+        [".use", target] => Ok(format!("USE {target}")),
+        [".catalogs", ..] => Err("usage: .catalogs".to_owned()),
+        [".schemas", ..] => Err("usage: .schemas [catalog]".to_owned()),
+        [".tables", ..] => Err("usage: .tables [[catalog.]schema]".to_owned()),
+        [".describe" | ".desc", ..] => Err("usage: .describe <table>".to_owned()),
+        [".use", ..] => Err("usage: .use <catalog[.schema]>".to_owned()),
+        [unknown, ..] => Err(format!(
+            "unknown command '{unknown}'; type .help for commands"
+        )),
+        [] => Err("type .help for commands".to_owned()),
+    }
+}
+
 /// Runs pending statements in order: SHOW, USE and DESCRIBE finish on this
 /// thread; the first SQL statement goes to a worker thread and the rest
 /// wait for it. An error drops what is left.
@@ -656,81 +824,243 @@ fn start_next(app: &mut App, terminal: &mut Term, options: &mut Options) -> Resu
             Limited::Appended(sql) => (sql, options.row_limit),
             Limited::Explicit | Limited::Unchanged => (statement.clone(), None),
         };
-        let before = (options.catalog.clone(), options.schema.clone());
-        let metadata = crate::remote::run_metadata_statement(&lock(&app.session), options, &sql);
-        match metadata {
-            Ok(Some(executed)) => {
-                if (options.catalog.as_str(), options.schema.as_str())
-                    != (before.0.as_str(), before.1.as_str())
-                {
-                    options.context_explicit = true;
+        match &app.backend {
+            Backend::Remote(session) => {
+                let session = Arc::clone(session);
+                let before = (options.catalog.clone(), options.schema.clone());
+                let metadata =
+                    crate::remote::run_metadata_statement(&lock(&session), options, &sql);
+                match metadata {
+                    Ok(Some(executed)) => {
+                        if (options.catalog.as_str(), options.schema.as_str())
+                            != (before.0.as_str(), before.1.as_str())
+                        {
+                            options.context_explicit = true;
+                        }
+                        emit_text(
+                            terminal,
+                            executed.output.trim_end_matches('\n'),
+                            &app.theme,
+                            false,
+                        )?;
+                        if let Some(elapsed) = executed.elapsed_ms {
+                            app.last_elapsed_ms = Some(elapsed);
+                            app.last_scanned_rows = executed.scanned_rows;
+                        }
+                        emit_blank(terminal)?;
+                    }
+                    Ok(None) => {
+                        let mut request = StatementRequest::new(&sql, options);
+                        let mut settings = app.settings.as_map().unwrap_or_default();
+                        if explain {
+                            settings.insert("result_cache".into(), serde_json::Value::Bool(false));
+                        }
+                        request.settings = (!settings.is_empty()).then_some(settings);
+                        let handle = statement::submit(
+                            session,
+                            options.server.clone(),
+                            request,
+                            options.timeout,
+                        );
+                        set_running(app, handle, statement, explain, preview_limit);
+                        return Ok(());
+                    }
+                    Err(error) => {
+                        app.pending.clear();
+                        let message =
+                            crate::remote::explain_missing_table(&lock(&session), options, &error)
+                                .unwrap_or(error);
+                        emit_error(terminal, &message, &app.theme)?;
+                        return emit_blank(terminal);
+                    }
                 }
-                emit_text(
-                    terminal,
-                    executed.output.trim_end_matches('\n'),
-                    &app.theme,
-                    false,
-                )?;
-                if let Some(elapsed) = executed.elapsed_ms {
-                    app.last_elapsed_ms = Some(elapsed);
-                    app.last_scanned_rows = executed.scanned_rows;
-                }
-                emit_blank(terminal)?;
             }
-            Ok(None) => {
-                let mut request = StatementRequest::new(&sql, options);
-                let mut settings = app.settings.as_map().unwrap_or_default();
+            Backend::Local(engine) => {
                 if explain {
-                    settings.insert("result_cache".into(), serde_json::Value::Bool(false));
+                    app.pending.clear();
+                    emit_error(terminal, &format!("EXPLAIN is {EMBEDDED_ONLY}"), &app.theme)?;
+                    return emit_blank(terminal);
                 }
-                request.settings = (!settings.is_empty()).then_some(settings);
-                let handle = statement::submit(
-                    Arc::clone(&app.session),
-                    options.server.clone(),
-                    request,
-                    options.timeout,
-                );
-                app.editor.set_text(&statement);
-                app.running = Some(Running {
-                    handle,
-                    progress: Progress::default(),
-                    sql: statement.clone(),
-                    explain,
-                    preview_limit,
-                    polls: 0,
-                    last_poll: Instant::now(),
-                    cancel_requested: false,
-                });
+                let engine = Arc::clone(engine);
+                if parse_catalog_command(&sql).is_some() {
+                    if !run_local_metadata(app, terminal, options, &sql)? {
+                        app.pending.clear();
+                        return Ok(());
+                    }
+                    continue;
+                }
+                let handle = submit_local(engine, sql);
+                set_running(app, handle, statement, false, preview_limit);
                 return Ok(());
-            }
-            Err(error) => {
-                app.pending.clear();
-                let message =
-                    crate::remote::explain_missing_table(&lock(&app.session), options, &error)
-                        .unwrap_or(error);
-                emit_error(terminal, &message, &app.theme)?;
-                return emit_blank(terminal);
             }
         }
     }
     Ok(())
 }
 
+fn set_running(
+    app: &mut App,
+    handle: Handle,
+    statement: String,
+    explain: bool,
+    preview_limit: Option<usize>,
+) {
+    app.editor.set_text(&statement);
+    app.running = Some(Running {
+        handle,
+        progress: Progress::default(),
+        sql: statement,
+        explain,
+        preview_limit,
+        polls: 0,
+        last_poll: Instant::now(),
+        cancel_requested: false,
+    });
+}
+
+/// The embedded engine on a worker thread, reporting through the same
+/// channel a coordinator statement does. The engine is `Send`, so the UI
+/// thread keeps drawing the elapsed time while it plans and runs.
+fn submit_local(engine: SharedEngine, sql: String) -> Handle {
+    let (sender, events) = mpsc::channel();
+    let started = Instant::now();
+    std::thread::spawn(move || {
+        let outcome = lock_engine(&engine).execute(&sql);
+        let event = match outcome {
+            Ok(result) => StatementEvent::Finished(StatementResult {
+                id: String::new(),
+                state: "FINISHED".to_owned(),
+                columns: result
+                    .columns
+                    .into_iter()
+                    .map(|(name, data_type)| Column { name, data_type })
+                    .collect(),
+                data: result.rows,
+                error: None,
+                elapsed_ms: result.elapsed_ms,
+                next_uri: None,
+            }),
+            Err(message) => StatementEvent::Failed(CliHttp::local(message)),
+        };
+        let _ = sender.send(event);
+    });
+    Handle {
+        tag: String::new(),
+        events,
+        started,
+    }
+}
+
+/// SHOW, DESCRIBE and USE answered by the embedded catalog on this thread,
+/// rendered like any result. `Ok(false)` when `sql` is not one of them or
+/// it failed (the error is already shown).
+fn run_local_metadata(
+    app: &mut App,
+    terminal: &mut Term,
+    options: &mut Options,
+    sql: &str,
+) -> Result<bool, String> {
+    let Some(command) = parse_catalog_command(sql) else {
+        return Ok(false);
+    };
+    let Some(engine) = app.engine().map(Arc::clone) else {
+        return Ok(false);
+    };
+    match command {
+        CatalogCommand::Use { target } => {
+            let outcome = lock_engine(&engine).use_context(&target);
+            match outcome {
+                Ok((catalog, schema)) => {
+                    options.catalog = catalog;
+                    options.schema = schema;
+                    options.context_explicit = true;
+                    app.names.invalidate();
+                    emit(
+                        terminal,
+                        vec![Line::from(vec![
+                            Span::styled(" ✓ ", app.theme.ok),
+                            Span::raw(format!("session is {}.{}", options.catalog, options.schema)),
+                        ])],
+                    )?;
+                }
+                Err(error) => {
+                    emit_error(terminal, &error, &app.theme)?;
+                    emit_blank(terminal)?;
+                    return Ok(false);
+                }
+            }
+        }
+        _ => {
+            let outcome = lock_engine(&engine).execute(sql);
+            match outcome {
+                Ok(result) => {
+                    let names: Vec<String> =
+                        result.columns.into_iter().map(|(name, _)| name).collect();
+                    render_rows(
+                        app,
+                        terminal,
+                        options,
+                        &names,
+                        &result.rows,
+                        options.output_format,
+                    )?;
+                    if app.timing && is_human_format(options.output_format) {
+                        let summary = render::summary::Summary {
+                            ok: true,
+                            elapsed_ms: result.elapsed_ms,
+                            rows: result.rows.len(),
+                            noun: "rows",
+                            ..render::summary::Summary::default()
+                        };
+                        emit(terminal, render::summary::lines(&summary, &app.theme))?;
+                    }
+                    app.last_elapsed_ms = Some(result.elapsed_ms);
+                    app.last_scanned_rows = None;
+                }
+                Err(error) => {
+                    emit(
+                        terminal,
+                        render::error::panel(&local_error(&error, None), &app.theme),
+                    )?;
+                    emit_blank(terminal)?;
+                    return Ok(false);
+                }
+            }
+        }
+    }
+    emit_blank(terminal)?;
+    Ok(true)
+}
+
+fn is_human_format(format: OutputFormat) -> bool {
+    matches!(
+        format,
+        OutputFormat::Table
+            | OutputFormat::Aligned
+            | OutputFormat::Vertical
+            | OutputFormat::Auto
+            | OutputFormat::Markdown
+    )
+}
+
 /// Every `STATE_POLL`: the record by tag until it is found, then by id.
-/// Then whatever the worker thread has reported.
+/// Then whatever the worker thread has reported. The embedded engine has
+/// no record; only the elapsed time moves.
 fn poll_running(app: &mut App, terminal: &mut Term, options: &mut Options) -> Result<(), String> {
     let Some(running) = app.running.as_mut() else {
         return Ok(());
     };
     let elapsed = running.handle.started.elapsed();
     running.progress.elapsed = elapsed;
-    if running.last_poll.elapsed() >= STATE_POLL {
+    if let Backend::Remote(session) = &app.backend
+        && running.last_poll.elapsed() >= STATE_POLL
+    {
         running.last_poll = Instant::now();
         let record = match running.progress.query_id.clone() {
-            Some(id) => api::fetch_query(&lock(&app.session), &options.server, &id).ok(),
+            Some(id) => api::fetch_query(&lock(session), &options.server, &id).ok(),
             None if running.polls < TAG_POLLS => {
                 running.polls += 1;
-                api::find_query_by_tag(&lock(&app.session), &options.server, &running.handle.tag)
+                api::find_query_by_tag(&lock(session), &options.server, &running.handle.tag)
                     .ok()
                     .flatten()
             }
@@ -744,7 +1074,7 @@ fn poll_running(app: &mut App, terminal: &mut Term, options: &mut Options) -> Re
             if progress.phase == Phase::Queued {
                 if app.last_cluster_poll.elapsed() >= QUEUED_CLUSTER_POLL {
                     refresh_cluster_fields(
-                        &app.session,
+                        session,
                         &mut app.cluster,
                         &mut app.last_cluster_poll,
                         options,
@@ -790,8 +1120,8 @@ fn finish(
             let mut rows = result.data.len();
             let mut paging = None;
             if running.explain {
-                let record =
-                    api::fetch_query(&lock(&app.session), &options.server, &result.id).ok();
+                let session = app.session().expect("EXPLAIN runs against a coordinator");
+                let record = api::fetch_query(&lock(session), &options.server, &result.id).ok();
                 let plan = record
                     .as_ref()
                     .and_then(|record| record.plan.as_ref())
@@ -801,18 +1131,18 @@ fn finish(
             } else {
                 // Paged delivery: the response carries no rows, the first
                 // page does. Any rows sent inline lead it.
-                let mut cursor = match result.next_uri.as_deref() {
-                    Some(next_uri) => match PageCursor::new(&options.server, next_uri) {
+                let mut cursor = match (result.next_uri.as_deref(), app.session()) {
+                    (Some(next_uri), Some(_)) => match PageCursor::new(&options.server, next_uri) {
                         Ok(cursor) => Some(cursor),
                         Err(failure) => {
                             emit_error(terminal, &failure.message, &app.theme)?;
                             None
                         }
                     },
-                    None => None,
+                    _ => None,
                 };
-                if let Some(cursor) = cursor.as_mut() {
-                    match cursor.fetch_next(&lock(&app.session)) {
+                if let (Some(cursor), Some(session)) = (cursor.as_mut(), app.session()) {
+                    match cursor.fetch_next(&lock(session)) {
                         Ok(Some(page)) => result.data.extend(page.rows),
                         Ok(None) => {}
                         Err(failure) => {
@@ -844,14 +1174,31 @@ fn finish(
                     }
                 }
             }
-            let mut summary = crate::remote::statement_summary(
-                &lock(&app.session),
-                options,
-                &result.id,
-                rows,
-                result.elapsed_ms,
-                running.preview_limit,
-            );
+            let mut summary = match &app.backend {
+                Backend::Remote(session) => crate::remote::statement_summary(
+                    &lock(session),
+                    options,
+                    &result.id,
+                    rows,
+                    result.elapsed_ms,
+                    running.preview_limit,
+                ),
+                Backend::Local(_) => is_human_format(options.output_format).then(|| {
+                    let mut summary = render::summary::Summary {
+                        ok: true,
+                        elapsed_ms: result.elapsed_ms,
+                        rows,
+                        noun: "rows",
+                        ..render::summary::Summary::default()
+                    };
+                    if let Some(limit) = running.preview_limit
+                        && rows >= limit
+                    {
+                        summary.message = Some(crate::shell::rowlimit::note(limit));
+                    }
+                    summary
+                }),
+            };
             if truncated && let Some(summary) = summary.as_mut() {
                 let note = "some columns truncated · .format vertical to see them whole";
                 summary.message = Some(match summary.message.take() {
@@ -897,20 +1244,26 @@ fn finish(
                 };
                 emit(terminal, render::summary::lines(&summary, &app.theme))?;
             } else {
-                let message = failure_message(&failure);
-                let error = match crate::remote::explain_missing_table(
-                    &lock(&app.session),
-                    options,
-                    &message,
-                ) {
-                    Some(resolved) => error_from_message(&resolved, None),
-                    None => {
-                        let mut error = CliError::from_message(&message, Some(&running.sql));
-                        if error.query_id.is_none() {
-                            error.query_id = running.progress.query_id.clone();
+                let error = match &app.backend {
+                    Backend::Remote(session) => {
+                        let message = failure_message(&failure);
+                        match crate::remote::explain_missing_table(
+                            &lock(session),
+                            options,
+                            &message,
+                        ) {
+                            Some(resolved) => error_from_message(&resolved, None),
+                            None => {
+                                let mut error =
+                                    CliError::from_message(&message, Some(&running.sql));
+                                if error.query_id.is_none() {
+                                    error.query_id = running.progress.query_id.clone();
+                                }
+                                error
+                            }
                         }
-                        error
                     }
+                    Backend::Local(_) => local_error(&failure.message, Some(&running.sql)),
                 };
                 emit(terminal, render::error::panel(&error, &app.theme))?;
             }
@@ -959,10 +1312,13 @@ fn render_rows(
 /// Space or Enter while paging: the next page, rendered with its header;
 /// the last page ends the paging and runs whatever statement is pending.
 fn next_page(app: &mut App, terminal: &mut Term, options: &mut Options) -> Result<(), String> {
+    let Some(session) = app.session().map(Arc::clone) else {
+        return finish_paging(app, terminal, options);
+    };
     let Some(paging) = app.paging.as_mut() else {
         return Ok(());
     };
-    let fetched = paging.cursor.fetch_next(&lock(&app.session));
+    let fetched = paging.cursor.fetch_next(&lock(&session));
     let page = match fetched {
         Ok(Some(page)) => page,
         Ok(None) => return finish_paging(app, terminal, options),
@@ -1024,6 +1380,7 @@ fn stop_paging(app: &mut App, terminal: &mut Term, options: &mut Options) -> Res
 
 /// Ctrl-C while a statement runs: cancel it on the coordinator when its
 /// id is known; a second press, or no id to cancel, abandons the wait.
+/// The embedded engine cannot be interrupted; the statement runs on.
 fn interrupt_running(
     app: &mut App,
     terminal: &mut Term,
@@ -1032,12 +1389,20 @@ fn interrupt_running(
     let Some(running) = app.running.as_mut() else {
         return Ok(());
     };
+    let Backend::Remote(session) = &app.backend else {
+        return emit_text(
+            terminal,
+            "embedded statements cannot be cancelled; waiting for it to finish",
+            &app.theme,
+            true,
+        );
+    };
     if !running.cancel_requested {
         if running.progress.query_id.is_none() {
             // One more look before giving up on a cancel: the record may
             // have appeared since the last poll.
             let found =
-                api::find_query_by_tag(&lock(&app.session), &options.server, &running.handle.tag)
+                api::find_query_by_tag(&lock(session), &options.server, &running.handle.tag)
                     .ok()
                     .flatten();
             if let Some(record) = found {
@@ -1045,7 +1410,7 @@ fn interrupt_running(
             }
         }
         if let Some(id) = running.progress.query_id.clone() {
-            let _ = api::cancel_query(&lock(&app.session), &options.server, &id);
+            let _ = api::cancel_query(&lock(session), &options.server, &id);
             running.cancel_requested = true;
             running.progress.phase = Phase::Cancelling;
             return Ok(());
@@ -1103,13 +1468,21 @@ fn complete_at_cursor(app: &mut App, terminal: &mut Term, options: &Options) -> 
     let names = if prefix.is_empty() {
         Vec::new()
     } else {
-        app.names.candidates(
-            &lock(&app.session),
-            &options.server,
-            &options.catalog,
-            &options.schema,
-            &prefix,
-        )
+        match &app.backend {
+            Backend::Remote(session) => app.names.candidates(
+                &lock(session),
+                &options.server,
+                &options.catalog,
+                &options.schema,
+                &prefix,
+            ),
+            Backend::Local(engine) => local_candidates(
+                &lock_engine(engine),
+                &options.catalog,
+                &options.schema,
+                &prefix,
+            ),
+        }
     };
     let (from, candidates) = crate::shell::complete::complete(&line, byte_cursor, &names);
     let typed_chars = line[from..byte_cursor].chars().count();
@@ -1135,14 +1508,55 @@ fn complete_at_cursor(app: &mut App, terminal: &mut Term, options: &Options) -> 
     }
 }
 
+/// The embedded catalog's names that start with `prefix`, in the order
+/// `NameCache::candidates` offers them: tables and columns of the session's
+/// schema, then its catalog's schemas, then the catalogs.
+fn local_candidates(
+    engine: &LocalEngine,
+    catalog: &str,
+    schema: &str,
+    prefix: &str,
+) -> Vec<String> {
+    let prefix = prefix.to_lowercase();
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |names: Vec<String>| {
+        let mut matching: Vec<String> = names
+            .into_iter()
+            .filter(|name| name.to_lowercase().starts_with(&prefix))
+            .filter(|name| !out.iter().any(|seen| seen == name))
+            .collect();
+        matching.sort_unstable();
+        matching.dedup();
+        out.extend(matching);
+    };
+    let tables = engine.tables(catalog, schema).unwrap_or_default();
+    let columns: Vec<String> = tables
+        .iter()
+        .filter_map(|table| engine.describe(&format!("{catalog}.{schema}.{table}")).ok())
+        .flatten()
+        .map(|(name, _, _)| name)
+        .collect();
+    push(tables);
+    push(columns);
+    push(engine.schemas(catalog).unwrap_or_default());
+    push(engine.catalogs());
+    out
+}
+
 fn run_command(
     app: &mut App,
     terminal: &mut Term,
     options: &mut Options,
     command: Command,
 ) -> Result<(), String> {
+    let coordinator_only = |terminal: &mut Term, what: &str, theme: &Theme| {
+        emit_text(terminal, &format!("{what} is {EMBEDDED_ONLY}"), theme, true)
+    };
     match command {
         Command::Cluster => {
+            if app.session().is_none() {
+                return coordinator_only(terminal, ".cluster", &app.theme);
+            }
             refresh_cluster(app, options);
             match &app.cluster {
                 Some(cluster) => emit(
@@ -1151,6 +1565,9 @@ fn run_command(
                 ),
                 None => emit_error(terminal, "the cluster payload is unavailable", &app.theme),
             }
+        }
+        Command::Settings(_) | Command::SettingsReset if app.session().is_none() => {
+            coordinator_only(terminal, ".settings", &app.theme)
         }
         Command::Settings(None) => {
             if app.settings.is_empty() {
@@ -1209,11 +1626,12 @@ fn run_command(
             emit(terminal, lines)
         }
         Command::Queries => {
-            let records: Vec<api::QueryRecord> = api::get(
-                &lock(&app.session),
-                &api::endpoint(&options.server, "/v1/query"),
-            )
-            .map_err(|failure| failure.message)?;
+            let Some(session) = app.session() else {
+                return coordinator_only(terminal, ".queries", &app.theme);
+            };
+            let records: Vec<api::QueryRecord> =
+                api::get(&lock(session), &api::endpoint(&options.server, "/v1/query"))
+                    .map_err(|failure| failure.message)?;
             let live: Vec<&api::QueryRecord> = records
                 .iter()
                 .filter(|record| matches!(record.state.as_str(), "QUEUED" | "RUNNING"))
@@ -1253,15 +1671,20 @@ fn run_command(
                 .collect();
             emit(terminal, lines)
         }
-        Command::Kill(id) => match api::cancel_query(&lock(&app.session), &options.server, &id) {
-            Ok(()) => emit_text(
-                terminal,
-                &format!("cancel requested for {id}"),
-                &app.theme,
-                true,
-            ),
-            Err(failure) => emit_error(terminal, &failure.message, &app.theme),
-        },
+        Command::Kill(id) => {
+            let Some(session) = app.session() else {
+                return coordinator_only(terminal, ".kill", &app.theme);
+            };
+            match api::cancel_query(&lock(session), &options.server, &id) {
+                Ok(()) => emit_text(
+                    terminal,
+                    &format!("cancel requested for {id}"),
+                    &app.theme,
+                    true,
+                ),
+                Err(failure) => emit_error(terminal, &failure.message, &app.theme),
+            }
+        }
         Command::Timing => {
             app.timing = !app.timing;
             emit_text(
@@ -1366,5 +1789,96 @@ mod tests {
         assert!(is_quit("QUIT;"));
         assert!(is_quit(".q"));
         assert!(!is_quit("SELECT 1"));
+    }
+
+    #[test]
+    fn embedded_errors_keep_their_kind() {
+        let parse = local_error("SQL error: Expected end of statement", Some("SELEC 1"));
+        assert_eq!(parse.kind, ErrorKind::Parse);
+        assert_eq!(parse.message, "Expected end of statement");
+        assert_eq!(parse.sql.as_deref(), Some("SELEC 1"));
+        let planning = local_error(
+            "Planning error: table 'kaveon.default.nowhere' not found",
+            None,
+        );
+        assert_eq!(planning.kind, ErrorKind::NotFound);
+        let execution = local_error("Execution error: division by zero", None);
+        assert_eq!(execution.kind, ErrorKind::Execution);
+        assert_eq!(execution.message, "division by zero");
+    }
+
+    #[test]
+    fn dot_commands_map_to_the_embedded_catalog_statements() {
+        assert_eq!(local_dot_command_sql(".catalogs").unwrap(), "SHOW CATALOGS");
+        assert_eq!(
+            local_dot_command_sql(".schemas lake;").unwrap(),
+            "SHOW SCHEMAS IN lake"
+        );
+        assert_eq!(
+            local_dot_command_sql(".tables lake.gold").unwrap(),
+            "SHOW TABLES IN lake.gold"
+        );
+        assert_eq!(
+            local_dot_command_sql(".desc events").unwrap(),
+            "DESCRIBE events"
+        );
+        assert_eq!(local_dot_command_sql(".use lake").unwrap(), "USE lake");
+        assert!(
+            local_dot_command_sql(".describe")
+                .unwrap_err()
+                .starts_with("usage")
+        );
+        assert!(
+            local_dot_command_sql(".nope")
+                .unwrap_err()
+                .contains("unknown command")
+        );
+    }
+
+    #[test]
+    fn embedded_completion_offers_tables_columns_schemas_and_catalogs() {
+        let dir = crate::local::catalog::tests::parquet_fixture();
+        let engine = LocalEngine::from_data_dir(&dir).unwrap();
+        assert_eq!(
+            local_candidates(&engine, "kaveon", "default", "e"),
+            vec!["events".to_owned()]
+        );
+        assert_eq!(
+            local_candidates(&engine, "kaveon", "default", "k"),
+            vec!["kind".to_owned(), "kaveon".to_owned()]
+        );
+        assert_eq!(
+            local_candidates(&engine, "kaveon", "default", "d"),
+            vec!["default".to_owned()]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn embedded_statements_report_through_the_statement_channel() {
+        let dir = crate::local::catalog::tests::parquet_fixture();
+        let engine = Arc::new(Mutex::new(LocalEngine::from_data_dir(&dir).unwrap()));
+        let handle = submit_local(
+            Arc::clone(&engine),
+            "SELECT id FROM events ORDER BY id".to_owned(),
+        );
+        assert!(handle.tag.is_empty());
+        match handle.events.recv_timeout(Duration::from_secs(30)).unwrap() {
+            StatementEvent::Finished(result) => {
+                assert!(result.id.is_empty());
+                assert_eq!(result.column_names(), vec!["id".to_owned()]);
+                assert_eq!(result.data.len(), 3);
+                assert!(result.next_uri.is_none());
+            }
+            StatementEvent::Failed(failure) => panic!("{failure:?}"),
+        }
+        let handle = submit_local(engine, "SELECT * FROM nowhere".to_owned());
+        match handle.events.recv_timeout(Duration::from_secs(30)).unwrap() {
+            StatementEvent::Failed(failure) => {
+                assert!(failure.message.contains("nowhere"), "{}", failure.message);
+            }
+            StatementEvent::Finished(_) => panic!("a missing table is not a result"),
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

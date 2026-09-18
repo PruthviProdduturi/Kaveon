@@ -3,16 +3,14 @@
 //! `LocalEngine` owns the catalog and plans and runs statements in-process,
 //! handing back the same `columns` / `rows` / `elapsed` shape a coordinator
 //! serves so the shell and renderers need not know which side ran the query.
-//! `run` is today's stdin REPL and `-e` path over that engine.
+//! `run` is the stdin REPL and `-e` path over that engine; on a terminal
+//! `shell::run_local` drives the same engine from the shared shell.
 
 pub mod catalog;
 pub mod config;
 pub mod display;
 pub mod planner;
 mod repl;
-// The JSON row shape is consumed by the shared shell once `--local` runs
-// through it; until then the stdin REPL drives the engine via `execute_batches`.
-#[allow(dead_code)]
 pub mod rows;
 
 use crate::args::Options;
@@ -35,7 +33,6 @@ pub enum LocalSource {
 }
 
 /// A finished statement in the coordinator's shape.
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct LocalResult {
     /// `(name, type)` per output column, types spelled as Arrow presents them.
@@ -127,7 +124,6 @@ impl LocalEngine {
     /// Plans and runs one statement. `SHOW CATALOGS` / `SHOW SCHEMAS` /
     /// `SHOW TABLES` / `DESCRIBE` are answered from the catalog; `USE` must go
     /// through `use_context` because it changes the session.
-    #[allow(dead_code)]
     pub fn execute(&self, sql: &str) -> Result<LocalResult, String> {
         let start = Instant::now();
         let (columns, rows) = match catalog::parse_catalog_command(sql) {
@@ -277,7 +273,6 @@ impl LocalEngine {
 
     /// One line for the shell header, e.g. `embedded · D:\data (3 tables)` or
     /// `embedded · ~/.kaveon/config.toml (2 catalogs, 5 tables)`.
-    #[allow(dead_code)]
     pub fn description(&self) -> String {
         let tables = catalog::count_tables(&self.catalog);
         let plural = |count: usize, noun: &str| {

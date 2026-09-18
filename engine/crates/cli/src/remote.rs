@@ -169,6 +169,7 @@ fn print_header(client: &Session, options: &Options) {
             insecure_development,
             user: &options.user,
             now_unix,
+            embedded: None,
         },
         &theme,
     );
