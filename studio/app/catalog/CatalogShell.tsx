@@ -16,6 +16,9 @@ interface TreeState {
   sourceFor: (catalog: string) => EngineSource | null;
   loadSchemas: (catalog: string) => Promise<void>;
   loadTables: (catalog: string, schema: string) => Promise<void>;
+  /** Re-read one level after a registration or removal, so the tree and the pages agree at once. */
+  refreshSchemas: (catalog: string) => Promise<void>;
+  refreshTables: (catalog: string, schema: string) => Promise<void>;
 }
 
 const TreeContext = createContext<TreeState | null>(null);
@@ -58,6 +61,18 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
     try { const list = await fetchTables(src.id, schema); setTables(prev => ({ ...prev, [k]: list })); } catch (e) { fail(e); }
   }, [sourceFor, tables]);
 
+  const refreshSchemas = useCallback(async (catalog: string) => {
+    const src = sourceFor(catalog);
+    if (!src) return;
+    try { const list = await fetchSchemas(src.id); setSchemas(prev => ({ ...prev, [catalog]: list })); } catch (e) { fail(e); }
+  }, [sourceFor]);
+
+  const refreshTables = useCallback(async (catalog: string, schema: string) => {
+    const src = sourceFor(catalog), k = tableKey(catalog, schema);
+    if (!src) return;
+    try { const list = await fetchTables(src.id, schema); setTables(prev => ({ ...prev, [k]: list })); } catch (e) { fail(e); }
+  }, [sourceFor]);
+
   useEffect(() => {
     let cancelled = false;
     fetchSources()
@@ -85,8 +100,8 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
     load?.();
   };
 
-  const value = useMemo<TreeState>(() => ({ catalogs, schemas, tables, error, sourceFor, loadSchemas, loadTables }),
-    [catalogs, schemas, tables, error, sourceFor, loadSchemas, loadTables]);
+  const value = useMemo<TreeState>(() => ({ catalogs, schemas, tables, error, sourceFor, loadSchemas, loadTables, refreshSchemas, refreshTables }),
+    [catalogs, schemas, tables, error, sourceFor, loadSchemas, loadTables, refreshSchemas, refreshTables]);
 
   return (
     <TreeContext.Provider value={value}>

@@ -1,14 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { useRole } from "../../../../../hooks/useRole";
+import { RemoveTableDialog } from "../../../CatalogEditor";
 import { useCatalogTree } from "../../../CatalogShell";
 import s from "../../../catalog.module.css";
 import {
   CatalogError, Sample, TableDef, Usage,
-  fetchSample, fetchTable, fetchUsage, labHref, shortLocation,
+  deleteTable, enc, fetchSample, fetchTable, fetchUsage, labHref, shortLocation,
 } from "../../../lib";
 
 const fmt = (n: number) => n.toLocaleString();
@@ -32,8 +33,9 @@ function distinctValues(sample: Sample | null, column: string, limit = 3): strin
 export default function CatalogTablePage() {
   const p = useParams<{ catalog: string; schema: string; table: string }>();
   const catalog = decodeURIComponent(p.catalog), schema = decodeURIComponent(p.schema), table = decodeURIComponent(p.table);
-  const { isAnalyst } = useRole();
-  const { catalogs, sourceFor } = useCatalogTree();
+  const { isAnalyst, isEditor } = useRole();
+  const { catalogs, sourceFor, refreshTables } = useCatalogTree();
+  const router = useRouter();
   const source = sourceFor(catalog)?.id ?? null;
   const fullName = `${catalog}.${schema}.${table}`;
 
@@ -43,6 +45,19 @@ export default function CatalogTablePage() {
   const [sample, setSample] = useState<Sample | null>(null);
   const [sampleState, setSampleState] = useState<"idle" | "loading" | "done" | "failed">("idle");
   const [copied, setCopied] = useState(false);
+  const [removing, setRemoving] = useState<{ busy: boolean; error: string | null } | null>(null);
+
+  const remove = async () => {
+    if (!def?.id || def.revision == null) return;
+    setRemoving({ busy: true, error: null });
+    try {
+      await deleteTable(def.id, def.revision);
+      await refreshTables(catalog, schema);
+      router.push(`/catalog/${enc(catalog)}/${enc(schema)}`);
+    } catch (e) {
+      setRemoving({ busy: false, error: e instanceof CatalogError ? e.message : "The table could not be removed." });
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -114,6 +129,9 @@ export default function CatalogTablePage() {
           {askDataset != null && <Link href={`/home?dataset=${askDataset}`} className={s.ghost}><i className="fas fa-comment" aria-hidden="true" /> Ask</Link>}
           {isAnalyst && !usage?.datasets.length && <Link href="/datasets/new" className={s.ghost}><i className="fas fa-plus" aria-hidden="true" /> Create dataset</Link>}
           <Link href={labHref(def.catalog, def.schema, def.name)} className={`${s.ghost} ${s.primary}`}><i className="fas fa-code" aria-hidden="true" /> Query in SQL Lab</Link>
+          {isEditor && def.id && def.revision != null && (
+            <button type="button" className={`${s.ghost} ${s.danger}`} onClick={() => setRemoving({ busy: false, error: null })} title="Remove the table from the catalog"><i className="fas fa-trash-can" aria-hidden="true" /> Remove</button>
+          )}
         </div>
         {loc && (
           <p className={s.heroLocation}>
@@ -180,6 +198,11 @@ export default function CatalogTablePage() {
           </div>
         )}
       </section>
+
+      {removing && (
+        <RemoveTableDialog fullName={fullName} busy={removing.busy} error={removing.error}
+          onCancel={() => setRemoving(null)} onConfirm={remove} />
+      )}
     </div>
   );
 }
