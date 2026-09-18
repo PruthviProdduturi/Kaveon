@@ -1,11 +1,15 @@
 mod args;
 mod auth;
+#[allow(dead_code)]
+mod client;
 mod config;
 mod display;
 mod input;
 mod output;
 mod planner;
 mod remote;
+#[allow(dead_code)]
+mod theme;
 
 use kaveon_core::{
     AccessPattern, CatalogManager, CatalogProvider, DataFormat, MemoryCatalog, StorageType,
