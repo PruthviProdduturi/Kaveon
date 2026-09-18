@@ -49,9 +49,12 @@ pub struct Options {
     /// The catalog or schema came from a flag, the URL path, a config
     /// default, or a later USE — not the built-in `kaveon.default`.
     pub context_explicit: bool,
-    /// Interactive queries without a LIMIT show at most this many rows
-    /// (1 to 10,000). Never applied to `-e`, `-f` or piped input.
-    pub row_limit: usize,
+    /// Interactive queries without a LIMIT get one appended; `None` is
+    /// `--row-limit off`. Never applied to `-e`, `-f` or piped input.
+    pub row_limit: crate::shell::rowlimit::RowLimit,
+    /// Batch mode asks for paged delivery and streams every page, so a
+    /// result is not refused at the coordinator's inline size limit.
+    pub paged: bool,
 }
 
 fn normalize_args(args: &[String]) -> Vec<String> {
@@ -73,6 +76,7 @@ fn normalize_args(args: &[String]) -> Vec<String> {
                     | "--ignore-errors"
                     | "--no-history"
                     | "--no-header"
+                    | "--paged"
                     | "--disable-auto-suggestion"
                     | "--help"
                     | "-h"
@@ -124,7 +128,8 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         no_header: false,
         width: None,
         context_explicit: false,
-        row_limit: crate::shell::rowlimit::DEFAULT_ROW_LIMIT,
+        row_limit: Some(crate::shell::rowlimit::DEFAULT_ROW_LIMIT),
+        paged: false,
     };
     let mut positional_server = false;
     let mut explicit_server = false;
@@ -166,13 +171,11 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             }
             "--row-limit" => {
                 let value = take_value(args, &mut index, option)?;
-                options.row_limit = value
-                    .parse::<usize>()
-                    .ok()
-                    .filter(|limit| (1..=10_000).contains(limit))
-                    .ok_or_else(|| {
-                        format!("invalid row limit '{value}': expected a number from 1 to 10000")
-                    })?;
+                options.row_limit = crate::shell::rowlimit::parse_value(&value)?;
+            }
+            "--paged" => {
+                options.paged = true;
+                index += 1;
             }
             "--width" => {
                 let value = take_value(args, &mut index, option)?;
@@ -340,6 +343,7 @@ pub fn parse_with_config(args: &[String]) -> Result<Command, String> {
                     | "--ignore-errors"
                     | "--no-history"
                     | "--no-header"
+                    | "--paged"
                     | "--disable-auto-suggestion"
             ) {
                 1
@@ -603,14 +607,33 @@ mod tests {
         assert_eq!(options.theme, "mono");
         assert!(options.no_header);
         assert_eq!(options.width, Some(100));
-        assert_eq!(options.row_limit, 1_000);
+        assert_eq!(options.row_limit, Some(1_000));
+        assert!(!options.paged);
         let Command::Run(options) = parse(&strings(&["kaveon", "--row-limit", "50"])).unwrap()
         else {
             panic!("run");
         };
-        assert_eq!(options.row_limit, 50);
-        assert!(parse(&strings(&["kaveon", "--row-limit", "off"])).is_err());
-        assert!(parse(&strings(&["kaveon", "--row-limit", "20000"])).is_err());
+        assert_eq!(options.row_limit, Some(50));
+        let Command::Run(options) = parse(&strings(&["kaveon", "--row-limit", "off"])).unwrap()
+        else {
+            panic!("run");
+        };
+        assert_eq!(options.row_limit, None);
+        let Command::Run(options) = parse(&strings(&[
+            "kaveon",
+            "--row-limit",
+            "20000",
+            "--paged",
+            "-e",
+            "SELECT 1",
+        ]))
+        .unwrap() else {
+            panic!("run");
+        };
+        assert_eq!(options.row_limit, Some(20_000));
+        assert!(options.paged);
+        assert_eq!(options.execute.as_deref(), Some("SELECT 1"));
+        assert!(parse(&strings(&["kaveon", "--row-limit", "-3"])).is_err());
         assert!(parse(&strings(&["kaveon", "--theme", "neon"])).is_err());
         assert!(parse(&strings(&["kaveon", "--width", "0"])).is_err());
     }

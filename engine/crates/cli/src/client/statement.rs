@@ -1,7 +1,8 @@
 //! A statement on a worker thread. The UI thread keeps drawing while the
 //! blocking `POST /v1/statement` runs; the request carries a unique client
 //! tag so the coordinator's history can be searched for the record before
-//! the response arrives.
+//! the response arrives. The shell asks for paged delivery: the response
+//! carries a `next_uri` and the rows come through `client::pages`.
 use crate::args::Options;
 use crate::auth::Session;
 use crate::client::session::CliHttp;
@@ -39,7 +40,7 @@ impl StatementRequest {
             source: options.source.clone(),
             client: "kaveon-cli",
             client_tags: options.client_tags.clone(),
-            result_delivery: "inline",
+            result_delivery: "paged",
             settings: None,
         }
     }
@@ -194,7 +195,7 @@ mod tests {
         let body: Value = serde_json::from_str(&bodies[0]).unwrap();
         assert_eq!(body["query"], "SELECT 1");
         assert_eq!(body["client"], "kaveon-cli");
-        assert_eq!(body["result_delivery"], "inline");
+        assert_eq!(body["result_delivery"], "paged");
         assert_eq!(
             body["client_tags"],
             serde_json::json!(["team:analytics", handle.tag])
