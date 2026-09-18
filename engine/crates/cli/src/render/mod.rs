@@ -5,6 +5,7 @@ pub mod cluster;
 pub mod error;
 pub mod help;
 pub mod plan;
+pub mod stats;
 pub mod summary;
 pub mod table;
 

@@ -43,8 +43,12 @@ impl ErrorKind {
             "PLANNING_ERROR" | "ANALYSIS_ERROR" => ErrorKind::Planning,
             "MEMORY_ADMISSION_REJECTED" => ErrorKind::Admission,
             "QUERY_CANCELED" => ErrorKind::Cancelled,
-            "QUERY_NOT_FOUND" | "CATALOG_NOT_FOUND" | "SCHEMA_NOT_FOUND" | "TABLE_NOT_FOUND"
-            | "TABLE_NOT_READABLE" => ErrorKind::NotFound,
+            "QUERY_NOT_FOUND"
+            | "CATALOG_NOT_FOUND"
+            | "SCHEMA_NOT_FOUND"
+            | "TABLE_NOT_FOUND"
+            | "TABLE_NOT_READABLE"
+            | "STATISTICS_UNAVAILABLE" => ErrorKind::NotFound,
             "CATALOG_CONFLICT" => ErrorKind::Conflict,
             "CATALOG_INVALID" => ErrorKind::Planning,
             "FORBIDDEN" => ErrorKind::Authentication,
@@ -424,6 +428,7 @@ mod tests {
             (404, None, ErrorKind::NotFound),
             (400, Some("PLANNING_ERROR"), ErrorKind::Planning),
             (400, Some("CATALOG_NOT_FOUND"), ErrorKind::NotFound),
+            (400, Some("STATISTICS_UNAVAILABLE"), ErrorKind::NotFound),
             (503, None, ErrorKind::Coordinator),
         ] {
             let failure = http(Some(status), code, "m");
@@ -446,6 +451,26 @@ mod tests {
             ..CliHttp::local("slow")
         };
         assert_eq!(CliError::from(timeout).kind, ErrorKind::Connection);
+    }
+
+    #[test]
+    fn missing_statistics_read_as_not_found_with_the_analyze_hint() {
+        let failure = http(
+            Some(400),
+            Some("STATISTICS_UNAVAILABLE"),
+            "no statistics for lake.sales.orders; run ANALYZE lake.sales.orders",
+        );
+        let error = CliError::from_http(failure, Some("SHOW STATS FOR lake.sales.orders"));
+        assert_eq!(error.kind, ErrorKind::NotFound);
+        assert_eq!(
+            render::error::plain(&error),
+            "error: Not found: no statistics for lake.sales.orders; run ANALYZE lake.sales.orders"
+        );
+        let panel = render::to_plain(&render::error::panel(&error, &Theme::mono()));
+        assert!(
+            panel.starts_with(" ✗ Not found\n   no statistics for"),
+            "{panel}"
+        );
     }
 
     #[test]
