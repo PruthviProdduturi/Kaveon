@@ -414,9 +414,14 @@ pub struct App {
     ask_clarify: Option<Clarification>,
 }
 
-/// A pending `.ask` clarification: the slot kind and its (id, label,
-/// description) options, answered by number.
-type Clarification = (String, Vec<(String, String, String)>);
+/// A pending `.ask` clarification: the slot kind, its (id, label,
+/// description) options, answered by number, and how to resume the
+/// question once one is chosen.
+type Clarification = (
+    String,
+    Vec<(String, String, String)>,
+    crate::client::dlm::Resume,
+);
 
 impl App {
     fn new(backend: Backend, options: &Options) -> App {
@@ -2711,17 +2716,24 @@ fn ask(
     let mut choices = None;
     let mut asked = question.to_owned();
     if let Ok(number) = question.parse::<usize>()
-        && let Some((kind, options_list)) = app.ask_clarify.take()
+        && let Some((kind, options_list, resume)) = app.ask_clarify.take()
     {
         match options_list.get(number.wrapping_sub(1)) {
-            Some((id, label, _)) => {
-                let mut map = serde_json::Map::new();
+            Some((id, _, _)) => {
+                // The original question goes back with the choice pinned
+                // on top of what was already chosen; a label alone would
+                // be read as a new question inside the last answer's frame.
+                let mut map = resume.choices.clone();
                 map.insert(kind, serde_json::Value::String(id.clone()));
                 choices = Some(map);
-                asked = label.clone();
+                asked = if resume.question.trim().is_empty() {
+                    options_list[number - 1].1.clone()
+                } else {
+                    resume.question.clone()
+                };
             }
             None => {
-                app.ask_clarify = Some((kind, options_list));
+                app.ask_clarify = Some((kind, options_list, resume));
                 return emit_error(
                     terminal,
                     &format!("choose a number from 1 to {}", number.max(1)),
@@ -2773,12 +2785,13 @@ fn ask(
             kind,
             options: choices,
             frame,
+            resume,
             ..
         } => {
-            if frame.is_some() {
-                app.ask_frame = frame;
-            }
-            app.ask_clarify = Some((kind, choices));
+            // The clarified question is a fresh one: the last answer's
+            // frame must not colour it.
+            app.ask_frame = frame;
+            app.ask_clarify = Some((kind, choices, resume));
             Ok(())
         }
         AskAnswer::OutOfScope { .. } | AskAnswer::Refused { .. } => Ok(()),

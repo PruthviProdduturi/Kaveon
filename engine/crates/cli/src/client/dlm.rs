@@ -47,12 +47,15 @@ pub enum AskAnswer {
         duration_ms: Option<f64>,
     },
     /// The question is ambiguous; `options` are `(id, label, description)`.
+    /// `resume` is what to send back with the choice: the question as the
+    /// DLM wants it re-asked and the choices already pinned.
     Clarify {
         dataset: Option<String>,
         prompt: String,
         kind: String,
         options: Vec<(String, String, String)>,
         frame: Option<Value>,
+        resume: Resume,
     },
     OutOfScope {
         datasets: Vec<String>,
@@ -239,9 +242,21 @@ struct Raw {
     #[serde(default)]
     clarification: Option<Clarification>,
     #[serde(default)]
+    resume: Option<Resume>,
+    #[serde(default)]
     datasets: Vec<String>,
     #[serde(default)]
     hint: Option<String>,
+}
+
+/// How a clarification is answered: the DLM's `resume` — the original
+/// question and the slots already chosen — plus the new choice.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+pub struct Resume {
+    #[serde(default)]
+    pub question: String,
+    #[serde(default)]
+    pub choices: Map<String, Value>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -291,6 +306,7 @@ impl Raw {
                         .map(|option| (option.id, option.label, option.description))
                         .collect(),
                     frame: self.frame,
+                    resume: self.resume.unwrap_or_default(),
                 });
             }
             let reason = self.reason.unwrap_or_default();
@@ -522,6 +538,10 @@ mod tests {
                     ),
                 ],
                 frame: None,
+                resume: Resume {
+                    question: "revenue".into(),
+                    choices: Map::new(),
+                },
             }
         );
     }

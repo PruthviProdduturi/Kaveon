@@ -239,6 +239,7 @@ mod tests {
                 ("gross".into(), "Gross revenue".into(), String::new()),
             ],
             frame: None,
+            resume: crate::client::dlm::Resume::default(),
         };
         assert_eq!(
             plain(&answer),
