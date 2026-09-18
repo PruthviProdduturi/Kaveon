@@ -347,9 +347,6 @@ export default function ProductPage({ benchmark = null }: { benchmark?: ClickBen
         </div>
       </section>
 
-      {/* ─── Benchmark — rendered only when the generated figure exists ─── */}
-      {benchmark && <BenchmarkSection figure={benchmark} />}
-
 
       {/* ─── Chat Demo ─── */}
       <section style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0a0a0a 0%, #0f1520 50%, #0a0a0a 100%)", overflow: "hidden" }}>
@@ -977,6 +974,9 @@ export default function ProductPage({ benchmark = null }: { benchmark?: ClickBen
           </Anim>
         </div>
       </Section>
+
+      {/* ─── Benchmark — rendered only when the generated figure exists ─── */}
+      {benchmark && <BenchmarkSection figure={benchmark} />}
 
       {/* ─── Features Grid ─── */}
       <section id="features" ref={r4} style={{ padding: "100px 24px", background: "#0a0a0a", scrollMarginTop: 72 }}>
