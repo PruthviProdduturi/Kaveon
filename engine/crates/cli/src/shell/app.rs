@@ -6,7 +6,7 @@ use crate::auth::Session;
 use crate::client::session::{self as api, Cluster, Whoami};
 use crate::render;
 use crate::shell::editor::{Editor, EditorAction};
-use crate::shell::status::{StatusFacts, box_title, host_of, prompt, prompt_width, status_line};
+use crate::shell::status::{StatusFacts, host_of, prompt, prompt_width, status_line};
 use crate::theme::Theme;
 use crossterm::event::{self, Event, KeyEventKind};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
@@ -203,7 +203,6 @@ fn event_loop(app: &mut App, session: &Session, options: &mut Options) -> Result
             rows = needed;
         }
         let terminal = &mut owned;
-        let title = box_title(&options.catalog, &options.schema);
         let context = options
             .context_explicit
             .then_some((options.catalog.as_str(), options.schema.as_str()));
@@ -281,14 +280,18 @@ fn event_loop(app: &mut App, session: &Session, options: &mut Options) -> Result
                 if !is_quit(&text) {
                     app.editor.push_history(text.clone());
                 }
+                let echo_prefix = match context {
+                    Some((catalog, schema)) => format!("kaveon {catalog}.{schema} › "),
+                    None => "kaveon › ".to_owned(),
+                };
                 let echo = text
                     .lines()
                     .enumerate()
                     .map(|(index, line)| {
                         let prefix = if index == 0 {
-                            format!("{title}> ")
+                            echo_prefix.clone()
                         } else {
-                            " ".repeat(title.len() + 2)
+                            " ".repeat(echo_prefix.chars().count())
                         };
                         Line::styled(format!("{prefix}{line}"), app.theme.dim)
                     })
@@ -372,15 +375,23 @@ fn run_statement(
     };
     for statement in crate::input::split_statements(text)? {
         use crate::shell::rowlimit::{HARD_ROW_LIMIT, Limited, inspect, refusal};
-        let executed = match inspect(&statement, options.row_limit) {
+        let outcome = match inspect(&statement, options.row_limit) {
             Limited::Appended(sql) => {
-                crate::remote::execute_with_limit(session, options, &sql, Some(options.row_limit))?
+                crate::remote::execute_with_limit(session, options, &sql, Some(options.row_limit))
             }
             Limited::Explicit(explicit) if explicit > HARD_ROW_LIMIT => {
                 return Err(refusal(explicit));
             }
             Limited::Explicit(_) | Limited::Unchanged => {
-                crate::remote::execute_to_string(session, options, &statement)?
+                crate::remote::execute_to_string(session, options, &statement)
+            }
+        };
+        let executed = match outcome {
+            Ok(executed) => executed,
+            Err(error) => {
+                return Err(
+                    crate::remote::explain_missing_table(session, options, &error).unwrap_or(error),
+                );
             }
         };
         merged.output.push_str(&executed.output);

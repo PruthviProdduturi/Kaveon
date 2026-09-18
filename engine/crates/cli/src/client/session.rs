@@ -5,7 +5,10 @@ use serde::Deserialize;
 use std::time::Duration;
 
 pub const METADATA_TIMEOUT: Duration = Duration::from_secs(30);
-const STALE_HEARTBEAT_SECS: u64 = 30;
+/// The coordinator drops a worker after 30 s without a heartbeat, so a
+/// worker in the payload is live by the server's own rule; this guards only
+/// against clock skew between the client and the coordinator.
+const STALE_HEARTBEAT_SECS: u64 = 90;
 
 /// A transport or HTTP failure as the coordinator reported it. The error
 /// module turns this into a message for people.

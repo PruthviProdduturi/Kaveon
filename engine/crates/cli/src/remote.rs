@@ -360,7 +360,10 @@ fn execute(client: &Session, options: &mut Options, sql: &str) -> Result<(), Str
         let output = meta_command_to_string(client, options, sql.trim())?;
         return write_output(options, &output);
     }
-    let executed = execute_to_string(client, options, sql)?;
+    let executed = match execute_to_string(client, options, sql) {
+        Ok(executed) => executed,
+        Err(error) => return Err(explain_missing_table(client, options, &error).unwrap_or(error)),
+    };
     write_output(options, &executed.output)
 }
 
@@ -617,6 +620,70 @@ fn run_meta_command(
             } else {
                 Ok(String::new())
             }
+        }
+    }
+}
+
+/// For a `table '<c>.<s>.<t>' not found` error: where that table (or the
+/// closest name) does exist, and how to get there. `None` when the error is
+/// something else or nothing similar exists.
+pub(crate) fn explain_missing_table(
+    client: &Session,
+    options: &Options,
+    error: &str,
+) -> Option<String> {
+    let start = error.find("table '")? + "table '".len();
+    let end = start + error[start..].find('\'')?;
+    let missing = &error[start..end];
+    let table = missing.rsplit('.').next()?.to_owned();
+    let catalogs: CatalogList = get_json(client, options, "/v1/catalog").ok()?;
+    let mut exact = Vec::new();
+    let mut names: Vec<(String, String, String)> = Vec::new();
+    for catalog in catalogs.catalogs.iter().take(16) {
+        let url = metadata_url(options, &[catalog, "schema"]).ok()?;
+        let Ok(schemas) = get_json_url::<SchemaList>(client, &url) else {
+            continue;
+        };
+        for schema in schemas.schemas.iter().take(32) {
+            let url = metadata_url(options, &[catalog, "schema", schema, "table"]).ok()?;
+            let Ok(tables) = get_json_url::<TableList>(client, &url) else {
+                continue;
+            };
+            for name in tables.tables {
+                if name.eq_ignore_ascii_case(&table) {
+                    exact.push((catalog.clone(), schema.clone(), name.clone()));
+                }
+                names.push((catalog.clone(), schema.clone(), name));
+            }
+        }
+    }
+    let context = if options.context_explicit {
+        format!(
+            "table '{table}' is not in {}.{}",
+            options.catalog, options.schema
+        )
+    } else {
+        format!("no catalog.schema is selected, and '{table}' is not in the default")
+    };
+    match exact.as_slice() {
+        [(catalog, schema, name)] => Some(format!(
+            "{context}; it is in {catalog}.{schema} — run USE {catalog}.{schema}; or query {catalog}.{schema}.{name}"
+        )),
+        [_, _, ..] => Some(format!(
+            "{context}; it exists in {} — pick one with USE catalog.schema;",
+            exact
+                .iter()
+                .map(|(c, s, _)| format!("{c}.{s}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+        [] => {
+            let candidates: Vec<&str> = names.iter().map(|(_, _, n)| n.as_str()).collect();
+            let suggestion = closest(&table, &candidates)?;
+            let (catalog, schema, name) = names.iter().find(|(_, _, n)| n == suggestion)?;
+            Some(format!(
+                "table '{table}' not found; did you mean {catalog}.{schema}.{name}?"
+            ))
         }
     }
 }

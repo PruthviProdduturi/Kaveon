@@ -11,10 +11,6 @@ pub struct StatusFacts<'a> {
     pub last_scanned_rows: Option<u64>,
 }
 
-pub fn box_title(catalog: &str, schema: &str) -> String {
-    format!("{catalog}.{schema}")
-}
-
 /// `catalog.schema · host · workers · last query …`; the context leads in
 /// the accent colour, the rest is dim (warning colour when a worker is stale).
 pub fn status_line(facts: &StatusFacts<'_>, theme: &Theme) -> Line<'static> {
@@ -109,9 +105,5 @@ mod tests {
             " kaveon › \n"
         );
         assert_eq!(prompt_width(), 10);
-        assert_eq!(
-            box_title("OpenSource", "kaveon_product"),
-            "OpenSource.kaveon_product"
-        );
     }
 }
