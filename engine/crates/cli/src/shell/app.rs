@@ -7,6 +7,11 @@
 //! its tag and polls it for the running line, and turns Ctrl-C into a
 //! cancel. With `--local` the worker thread runs the embedded engine and
 //! the running line shows elapsed time only.
+//!
+//! `.source` feeds a file through the submit path, `.tee` copies scrollback
+//! to a file, `.edit` hands the last statement to `$VISUAL`/`$EDITOR`,
+//! `\G` asks for the vertical format once, and `.watch` re-runs a
+//! statement on an interval until a key is pressed.
 use crate::args::Options;
 use crate::auth::Session;
 use crate::client::error::{CliError, ErrorKind};
@@ -26,14 +31,17 @@ use crate::shell::progress::{self, Phase, Progress};
 use crate::shell::status::{StatusFacts, host_of, prompt, prompt_width, status_line};
 use crate::theme::Theme;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use crossterm::terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 use ratatui::{Terminal, TerminalOptions, Viewport};
+use sqlparser::dialect::GenericDialect;
+use sqlparser::tokenizer::Tokenizer;
 use std::collections::VecDeque;
-use std::io;
+use std::io::{self, Write as _};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use unicode_width::UnicodeWidthStr;
@@ -56,6 +64,99 @@ const EMBEDDED_ONLY: &str = "not available in embedded mode";
 
 type Term = Terminal<CrosstermBackend<io::Stdout>>;
 type SharedEngine = Arc<Mutex<LocalEngine>>;
+
+/// `.tee`: everything pushed into scrollback, ANSI-free, appended here.
+struct Tee {
+    path: PathBuf,
+    file: std::fs::File,
+}
+
+/// The inline viewport plus the `.tee` copy of what goes above it. The
+/// terminal is remade whenever the viewport's height changes or the
+/// screen is reset; the tee outlives both.
+struct Screen {
+    terminal: Term,
+    /// The viewport height the terminal was made with.
+    rows: u16,
+    tee: Option<Tee>,
+    /// A tee write failed: reported once by the loop, the tee dropped.
+    tee_error: Option<String>,
+}
+
+impl Screen {
+    fn new(rows: u16) -> Result<Screen, String> {
+        Ok(Screen {
+            terminal: make_terminal(rows)?,
+            rows,
+            tee: None,
+            tee_error: None,
+        })
+    }
+
+    /// A fresh viewport of `rows` lines at the cursor, the old one cleared.
+    fn resize(&mut self, rows: u16) -> Result<(), String> {
+        self.terminal.clear().map_err(|error| error.to_string())?;
+        self.terminal = make_terminal(rows)?;
+        self.rows = rows;
+        Ok(())
+    }
+
+    /// The viewport remade where the cursor is, the screen left alone:
+    /// after a child process (`.edit`) has used the terminal.
+    fn remake(&mut self, rows: u16) -> Result<(), String> {
+        self.terminal = make_terminal(rows)?;
+        self.rows = rows;
+        Ok(())
+    }
+
+    /// The whole screen cleared and the viewport remade at the top:
+    /// `.clear`, Ctrl-L, every `.watch` run, and around `.edit`.
+    fn reset(&mut self, rows: u16) -> Result<(), String> {
+        let mut stdout = io::stdout();
+        crossterm::execute!(
+            stdout,
+            Clear(ClearType::All),
+            crossterm::cursor::MoveTo(0, 0)
+        )
+        .map_err(|error| error.to_string())?;
+        self.terminal = make_terminal(rows)?;
+        self.rows = rows;
+        Ok(())
+    }
+
+    /// Push finished lines above the viewport, into normal scrollback, and
+    /// into the tee file when one is open.
+    fn emit(&mut self, lines: Vec<Line<'static>>) -> Result<(), String> {
+        let height = lines.len() as u16;
+        if height == 0 {
+            return Ok(());
+        }
+        if let Some(tee) = self.tee.as_mut() {
+            let text = render::to_plain(&lines);
+            if let Err(error) = tee.file.write_all(text.as_bytes()) {
+                self.tee_error = Some(format!(
+                    "cannot write to {}: {error}; tee off",
+                    tee.path.display()
+                ));
+                self.tee = None;
+            }
+        }
+        self.terminal
+            .insert_before(height, |buf| {
+                Paragraph::new(Text::from(lines)).render(buf.area, buf);
+            })
+            .map_err(|error| error.to_string())
+    }
+}
+
+/// `.watch`: the statement, how often, and when it runs next.
+struct Watch {
+    statement: String,
+    interval: Duration,
+    next_run: Instant,
+    started: Instant,
+    runs: u32,
+}
 
 /// Where statements run: a coordinator over HTTP, or the embedded engine
 /// in this process (`--local`). Both answer through the same
@@ -173,6 +274,9 @@ pub struct App {
     last_cluster_poll: Instant,
     running: Option<Running>,
     paging: Option<Paging>,
+    watch: Option<Watch>,
+    /// The submission ended with `\G`: its results use the vertical format.
+    vertical_once: bool,
     /// Statements from one submission still to run, in order.
     pending: VecDeque<String>,
     settings: SessionSettings,
@@ -204,6 +308,8 @@ impl App {
             last_cluster_poll: Instant::now(),
             running: None,
             paging: None,
+            watch: None,
+            vertical_once: false,
             pending: VecDeque::new(),
             settings: SessionSettings::default(),
             names: NameCache::default(),
@@ -254,6 +360,16 @@ impl App {
         }
     }
 
+    /// The format results of the current submission use: VERTICAL after
+    /// `\G`, else the session's.
+    fn result_format(&self, options: &Options) -> OutputFormat {
+        if self.vertical_once {
+            OutputFormat::Vertical
+        } else {
+            options.output_format
+        }
+    }
+
     fn insecure_development(&self, options: &Options) -> bool {
         self.whoami
             .as_ref()
@@ -263,12 +379,12 @@ impl App {
 
     /// Rows the inline viewport needs: the editor, the status line, the
     /// running line above the editor while a statement runs, and the paging
-    /// hint under it while a result has more pages.
+    /// hint (or the watch line) under it while one is active.
     fn viewport_rows(&self) -> u16 {
         self.editor.height(EDITOR_MAX_ROWS)
             + 1
             + u16::from(self.running.is_some())
-            + u16::from(self.paging.is_some())
+            + u16::from(self.paging.is_some() || self.watch.is_some())
     }
 }
 
@@ -370,19 +486,11 @@ fn save_history(app: &App) {
 }
 
 /// Push finished lines above the viewport, into normal scrollback.
-fn emit(terminal: &mut Term, lines: Vec<Line<'static>>) -> Result<(), String> {
-    let height = lines.len() as u16;
-    if height == 0 {
-        return Ok(());
-    }
-    terminal
-        .insert_before(height, |buf| {
-            Paragraph::new(Text::from(lines)).render(buf.area, buf);
-        })
-        .map_err(|error| error.to_string())
+fn emit(terminal: &mut Screen, lines: Vec<Line<'static>>) -> Result<(), String> {
+    terminal.emit(lines)
 }
 
-fn emit_text(terminal: &mut Term, text: &str, theme: &Theme, dim: bool) -> Result<(), String> {
+fn emit_text(terminal: &mut Screen, text: &str, theme: &Theme, dim: bool) -> Result<(), String> {
     let lines = text
         .lines()
         .map(|line| {
@@ -399,7 +507,7 @@ fn emit_text(terminal: &mut Term, text: &str, theme: &Theme, dim: bool) -> Resul
 /// Any error, as the panel. Messages the shell composed itself (a
 /// resolved missing table, a refused limit) are already for people and
 /// keep their wording under a "Not found" or "Shell" heading.
-fn emit_error(terminal: &mut Term, message: &str, theme: &Theme) -> Result<(), String> {
+fn emit_error(terminal: &mut Screen, message: &str, theme: &Theme) -> Result<(), String> {
     let error = error_from_message(message, None);
     emit(terminal, render::error::panel(&error, theme))
 }
@@ -458,7 +566,7 @@ fn table_width(options: &Options) -> Option<usize> {
     })
 }
 
-fn emit_blank(terminal: &mut Term) -> Result<(), String> {
+fn emit_blank(terminal: &mut Screen) -> Result<(), String> {
     emit(terminal, vec![Line::raw("")])
 }
 
@@ -516,17 +624,26 @@ fn local_running_line(elapsed: Duration, tick: usize, theme: &Theme) -> Line<'st
 }
 
 fn event_loop(app: &mut App, options: &mut Options, host: &str) -> Result<(), String> {
-    let mut rows = app.viewport_rows();
-    let mut owned = make_terminal(rows)?;
+    let mut screen = Screen::new(app.viewport_rows())?;
     loop {
+        let terminal = &mut screen;
         let needed = app.viewport_rows();
-        if needed != rows {
-            owned.clear().map_err(|error| error.to_string())?;
-            drop(owned);
-            owned = make_terminal(needed)?;
-            rows = needed;
+        if needed != terminal.rows {
+            terminal.resize(needed)?;
         }
-        let terminal = &mut owned;
+        if let Some(error) = terminal.tee_error.take() {
+            emit_error(terminal, &error, &app.theme)?;
+        }
+        if app.running.is_none()
+            && app.paging.is_none()
+            && app
+                .watch
+                .as_ref()
+                .is_some_and(|watch| Instant::now() >= watch.next_run)
+        {
+            watch_tick(app, terminal, options)?;
+            continue;
+        }
         let context = options
             .context_explicit
             .then_some((options.catalog.as_str(), options.schema.as_str()));
@@ -538,11 +655,24 @@ fn event_loop(app: &mut App, options: &mut Options, host: &str) -> Result<(), St
                 Backend::Local(_) => local_running_line(elapsed, tick, &app.theme),
             }
         });
-        let hint_line = app
-            .paging
+        let hint_line = match (&app.paging, &app.watch) {
+            (Some(paging), _) => Some(Line::styled(format!(" {}", paging.hint()), app.theme.dim)),
+            (None, Some(watch)) => Some(Line::styled(
+                format!(
+                    " watch every {} s · run {} · any key to stop",
+                    watch.interval.as_secs(),
+                    watch.runs
+                ),
+                app.theme.dim,
+            )),
+            (None, None) => None,
+        };
+        let tee = terminal
+            .tee
             .as_ref()
-            .map(|paging| Line::styled(format!(" {}", paging.hint()), app.theme.dim));
+            .map(|tee| format!(" · tee {}", tee.path.display()));
         terminal
+            .terminal
             .draw(|frame| {
                 let editor_height = app.editor.height(EDITOR_MAX_ROWS);
                 let [progress_area, editor_area, hint_area, status_area] = Layout::vertical([
@@ -604,10 +734,11 @@ fn event_loop(app: &mut App, options: &mut Options, host: &str) -> Result<(), St
                     ..prompt_area
                 };
                 frame.render_widget(Paragraph::new(prompt(&app.theme)), prompt_row);
-                frame.render_widget(
-                    Paragraph::new(status_line(&app.status_facts(context, host), &app.theme)),
-                    status_area,
-                );
+                let mut status = status_line(&app.status_facts(context, host), &app.theme);
+                if let Some(tee) = tee.clone() {
+                    status.spans.push(Span::styled(tee, app.theme.dim));
+                }
+                frame.render_widget(Paragraph::new(status), status_area);
             })
             .map_err(|error| error.to_string())?;
 
@@ -626,6 +757,15 @@ fn event_loop(app: &mut App, options: &mut Options, host: &str) -> Result<(), St
         };
         if key.kind != KeyEventKind::Press {
             continue;
+        }
+        if app.watch.take().is_some() {
+            // Any key ends the watch; a running statement finishes (or is
+            // cancelled by Ctrl-C below) and nothing follows it.
+            emit_text(terminal, "watch stopped", &app.theme, true)?;
+            if app.running.is_none() {
+                emit_blank(terminal)?;
+                continue;
+            }
         }
         if app.running.is_some() {
             // Only Ctrl-C means anything while a statement runs.
@@ -651,14 +791,29 @@ fn event_loop(app: &mut App, options: &mut Options, host: &str) -> Result<(), St
             complete_at_cursor(app, terminal, options)?;
             continue;
         }
-        match app.editor.handle(&key) {
+        // `\G` ends a statement like `;` does, which the editor does not
+        // know; Enter on such a line submits here.
+        let action = if key.code == KeyCode::Enter
+            && key.modifiers.is_empty()
+            && ends_with_vertical_marker(&app.editor.lines())
+        {
+            let text = app.editor.lines().trim().to_owned();
+            app.editor.clear();
+            EditorAction::Submit(text)
+        } else {
+            app.editor.handle(&key)
+        };
+        match action {
             EditorAction::None => {}
             EditorAction::Quit => {
-                terminal.clear().map_err(|error| error.to_string())?;
+                terminal
+                    .terminal
+                    .clear()
+                    .map_err(|error| error.to_string())?;
                 return Ok(());
             }
             EditorAction::Clear => {
-                terminal.clear().map_err(|error| error.to_string())?;
+                terminal.reset(app.viewport_rows())?;
             }
             EditorAction::Interrupt => {
                 if app.editor.is_empty() {
@@ -668,7 +823,7 @@ fn event_loop(app: &mut App, options: &mut Options, host: &str) -> Result<(), St
                 }
             }
             EditorAction::Submit(text) => {
-                if !is_quit(&text) {
+                if !is_quit(&text) && !is_edit(&text) {
                     app.editor.push_history(text.clone());
                 }
                 let echo_prefix = if options.context_explicit {
@@ -690,12 +845,158 @@ fn event_loop(app: &mut App, options: &mut Options, host: &str) -> Result<(), St
                     .collect();
                 emit(terminal, echo)?;
                 if is_quit(&text) {
-                    terminal.clear().map_err(|error| error.to_string())?;
+                    terminal
+                        .terminal
+                        .clear()
+                        .map_err(|error| error.to_string())?;
                     return Ok(());
                 }
+                let (text, vertical) = split_vertical_marker(&text);
+                app.vertical_once = vertical;
                 submit(app, terminal, options, &text)?;
             }
         }
+    }
+}
+
+/// `SELECT … \G`: the statement ends with the vertical marker instead of
+/// `;`, outside any string, on the last non-blank line.
+fn ends_with_vertical_marker(text: &str) -> bool {
+    let trimmed = text.trim_end();
+    let Some(body) = trimmed.strip_suffix("\\G") else {
+        return false;
+    };
+    // The marker is not part of a string or identifier still open: the
+    // tokenizer of everything before it must end cleanly.
+    !body.trim().is_empty() && Tokenizer::new(&GenericDialect {}, body).tokenize().is_ok()
+}
+
+/// The text without a trailing `\G`, and whether there was one.
+fn split_vertical_marker(text: &str) -> (String, bool) {
+    if ends_with_vertical_marker(text) {
+        let body = text.trim_end();
+        (body[..body.len() - 2].trim_end().to_owned(), true)
+    } else {
+        (text.to_owned(), false)
+    }
+}
+
+fn is_edit(text: &str) -> bool {
+    text.trim().trim_end_matches(';').trim() == ".edit"
+}
+
+/// A `.watch` run: the screen cleared, one line saying what runs and how
+/// often, then the statement through the normal submit path.
+fn watch_tick(app: &mut App, terminal: &mut Screen, options: &mut Options) -> Result<(), String> {
+    let Some(watch) = app.watch.as_mut() else {
+        return Ok(());
+    };
+    watch.runs += 1;
+    watch.next_run = Instant::now() + watch.interval;
+    let statement = watch.statement.clone();
+    let title = format!(
+        " every {} s · {} · run {} at {} · any key to stop",
+        watch.interval.as_secs(),
+        statement.replace('\n', " "),
+        watch.runs,
+        seconds(watch.started.elapsed())
+    );
+    terminal.reset(app.viewport_rows())?;
+    emit(terminal, vec![Line::styled(title, app.theme.dim)])?;
+    emit_blank(terminal)?;
+    let (statement, vertical) = split_vertical_marker(&statement);
+    app.vertical_once = vertical;
+    submit(app, terminal, options, &statement)
+}
+
+/// `.edit`: the editor's text, or the last statement, in `$VISUAL` /
+/// `$EDITOR` (`notepad` on Windows, `vi` elsewhere, when neither is set);
+/// the file comes back into the editor without running.
+fn edit_in_editor(app: &mut App, terminal: &mut Screen) -> Result<(), String> {
+    let text = if app.editor.is_empty() {
+        app.editor.history().last().cloned().unwrap_or_default()
+    } else {
+        app.editor.lines()
+    };
+    let path = std::env::temp_dir().join(format!("kaveon-edit-{}.sql", std::process::id()));
+    if let Err(error) = std::fs::write(&path, &text) {
+        return emit_error(
+            terminal,
+            &format!("cannot write {}: {error}", path.display()),
+            &app.theme,
+        );
+    }
+    let editor = editor_command();
+    // Leave the viewport and raw mode to the editor, then come back.
+    terminal
+        .terminal
+        .clear()
+        .map_err(|error| error.to_string())?;
+    let _ = disable_raw_mode();
+    let status = editor_process(&editor, &path).status();
+    enable_raw_mode().map_err(|error| format!("cannot re-enter raw mode: {error}"))?;
+    terminal.remake(app.viewport_rows())?;
+    let outcome = match status {
+        Ok(status) if status.success() => match std::fs::read_to_string(&path) {
+            Ok(contents) => {
+                app.editor.set_text(contents.trim_end());
+                emit_text(
+                    terminal,
+                    &format!("loaded from {editor} · Enter to run"),
+                    &app.theme,
+                    true,
+                )
+            }
+            Err(error) => emit_error(
+                terminal,
+                &format!("cannot read {} back: {error}", path.display()),
+                &app.theme,
+            ),
+        },
+        Ok(status) => emit_error(
+            terminal,
+            &format!("{editor} exited with {status}; the editor is unchanged"),
+            &app.theme,
+        ),
+        Err(error) => emit_error(
+            terminal,
+            &format!("cannot start {editor}: {error}; set VISUAL or EDITOR"),
+            &app.theme,
+        ),
+    };
+    let _ = std::fs::remove_file(&path);
+    outcome
+}
+
+/// `$VISUAL`, else `$EDITOR`, else the platform's editor.
+fn editor_command() -> String {
+    ["VISUAL", "EDITOR"]
+        .iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .map(|value| value.trim().to_owned())
+        .find(|value| !value.is_empty())
+        .unwrap_or_else(|| if cfg!(windows) { "notepad" } else { "vi" }.to_owned())
+}
+
+/// The editor as the platform shell runs it, so `code --wait` and a
+/// quoted program path both work; the file is the last argument.
+fn editor_process(editor: &str, path: &std::path::Path) -> std::process::Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut command = std::process::Command::new("cmd");
+        command.raw_arg(format!("/C \"{editor} \"{}\"\"", path.display()));
+        command
+    }
+    #[cfg(not(windows))]
+    {
+        let mut command = std::process::Command::new("sh");
+        command
+            .arg("-c")
+            .arg(format!("{editor} \"$1\""))
+            .arg("kaveon")
+            .arg(path);
+        command
     }
 }
 
@@ -703,7 +1004,7 @@ fn event_loop(app: &mut App, options: &mut Options, host: &str) -> Result<(), St
 /// split into statements and started through the worker thread.
 fn submit(
     app: &mut App,
-    terminal: &mut Term,
+    terminal: &mut Screen,
     options: &mut Options,
     text: &str,
 ) -> Result<(), String> {
@@ -813,7 +1114,19 @@ fn local_dot_command_sql(text: &str) -> Result<String, String> {
 /// Runs pending statements in order: SHOW, USE and DESCRIBE finish on this
 /// thread; the first SQL statement goes to a worker thread and the rest
 /// wait for it. An error drops what is left.
-fn start_next(app: &mut App, terminal: &mut Term, options: &mut Options) -> Result<(), String> {
+fn start_next(app: &mut App, terminal: &mut Screen, options: &mut Options) -> Result<(), String> {
+    let outcome = start_pending(app, terminal, options);
+    if app.running.is_none() && app.paging.is_none() {
+        app.vertical_once = false;
+    }
+    outcome
+}
+
+fn start_pending(
+    app: &mut App,
+    terminal: &mut Screen,
+    options: &mut Options,
+) -> Result<(), String> {
     use crate::shell::rowlimit::{Limited, inspect};
     while let Some(statement) = app.pending.pop_front() {
         let (statement, explain) = match strip_explain(&statement) {
@@ -956,7 +1269,7 @@ fn submit_local(engine: SharedEngine, sql: String) -> Handle {
 /// it failed (the error is already shown).
 fn run_local_metadata(
     app: &mut App,
-    terminal: &mut Term,
+    terminal: &mut Screen,
     options: &mut Options,
     sql: &str,
 ) -> Result<bool, String> {
@@ -996,15 +1309,9 @@ fn run_local_metadata(
                 Ok(result) => {
                     let names: Vec<String> =
                         result.columns.into_iter().map(|(name, _)| name).collect();
-                    render_rows(
-                        app,
-                        terminal,
-                        options,
-                        &names,
-                        &result.rows,
-                        options.output_format,
-                    )?;
-                    if app.timing && is_human_format(options.output_format) {
+                    let format = app.result_format(options);
+                    render_rows(app, terminal, options, &names, &result.rows, format)?;
+                    if app.timing && is_human_format(format) {
                         let summary = render::summary::Summary {
                             ok: true,
                             elapsed_ms: result.elapsed_ms,
@@ -1046,7 +1353,7 @@ fn is_human_format(format: OutputFormat) -> bool {
 /// Every `STATE_POLL`: the record by tag until it is found, then by id.
 /// Then whatever the worker thread has reported. The embedded engine has
 /// no record; only the elapsed time moves.
-fn poll_running(app: &mut App, terminal: &mut Term, options: &mut Options) -> Result<(), String> {
+fn poll_running(app: &mut App, terminal: &mut Screen, options: &mut Options) -> Result<(), String> {
     let Some(running) = app.running.as_mut() else {
         return Ok(());
     };
@@ -1107,7 +1414,7 @@ fn poll_running(app: &mut App, terminal: &mut Term, options: &mut Options) -> Re
 /// into scrollback; then the next pending statement.
 fn finish(
     app: &mut App,
-    terminal: &mut Term,
+    terminal: &mut Screen,
     options: &mut Options,
     running: Running,
     event: StatementEvent,
@@ -1156,7 +1463,7 @@ fn finish(
                     options,
                     &names,
                     &result.data,
-                    options.output_format,
+                    app.result_format(options),
                 )?;
                 truncated = cut;
                 rows = result.data.len();
@@ -1174,6 +1481,7 @@ fn finish(
                     }
                 }
             }
+            let summary_format = app.result_format(options);
             let mut summary = match &app.backend {
                 Backend::Remote(session) => crate::remote::statement_summary(
                     &lock(session),
@@ -1183,7 +1491,7 @@ fn finish(
                     result.elapsed_ms,
                     running.preview_limit,
                 ),
-                Backend::Local(_) => is_human_format(options.output_format).then(|| {
+                Backend::Local(_) => is_human_format(summary_format).then(|| {
                     let mut summary = render::summary::Summary {
                         ok: true,
                         elapsed_ms: result.elapsed_ms,
@@ -1219,18 +1527,39 @@ fn finish(
                 emit(terminal, render::summary::lines(&summary, &app.theme))?;
             }
             if let Some(paging) = paging {
-                emit(
-                    terminal,
-                    vec![Line::styled(format!("   {}", paging.hint()), app.theme.dim)],
-                )?;
-                app.paging = Some(paging);
-                return Ok(());
+                if app.watch.is_some() {
+                    // A watch shows the first page each run; nothing waits.
+                    let total = paging
+                        .cursor
+                        .total_rows
+                        .map_or("more".to_owned(), |total| render::thousands(total as i128));
+                    emit(
+                        terminal,
+                        vec![Line::styled(
+                            format!(
+                                "   {} of {total} rows · a watch shows the first page",
+                                render::thousands(paging.shown as i128)
+                            ),
+                            app.theme.dim,
+                        )],
+                    )?;
+                } else {
+                    emit(
+                        terminal,
+                        vec![Line::styled(format!("   {}", paging.hint()), app.theme.dim)],
+                    )?;
+                    app.paging = Some(paging);
+                    return Ok(());
+                }
             }
             emit_blank(terminal)?;
             start_next(app, terminal, options)
         }
         StatementEvent::Failed(failure) => {
             app.pending.clear();
+            if app.watch.take().is_some() {
+                emit_text(terminal, "watch stopped", &app.theme, true)?;
+            }
             // Ours, or cancelled from elsewhere (the web UI, another client).
             let cancelled =
                 running.cancel_requested || failure.code.as_deref() == Some("QUERY_CANCELED");
@@ -1283,7 +1612,7 @@ fn finish(
 /// whether the table narrowed a column.
 fn render_rows(
     app: &App,
-    terminal: &mut Term,
+    terminal: &mut Screen,
     options: &Options,
     names: &[String],
     rows: &[Vec<serde_json::Value>],
@@ -1311,7 +1640,7 @@ fn render_rows(
 
 /// Space or Enter while paging: the next page, rendered with its header;
 /// the last page ends the paging and runs whatever statement is pending.
-fn next_page(app: &mut App, terminal: &mut Term, options: &mut Options) -> Result<(), String> {
+fn next_page(app: &mut App, terminal: &mut Screen, options: &mut Options) -> Result<(), String> {
     let Some(session) = app.session().map(Arc::clone) else {
         return finish_paging(app, terminal, options);
     };
@@ -1340,7 +1669,11 @@ fn next_page(app: &mut App, terminal: &mut Term, options: &mut Options) -> Resul
 }
 
 /// Every page shown: `all N rows shown`, then the next pending statement.
-fn finish_paging(app: &mut App, terminal: &mut Term, options: &mut Options) -> Result<(), String> {
+fn finish_paging(
+    app: &mut App,
+    terminal: &mut Screen,
+    options: &mut Options,
+) -> Result<(), String> {
     let Some(paging) = app.paging.take() else {
         return Ok(());
     };
@@ -1360,7 +1693,7 @@ fn finish_paging(app: &mut App, terminal: &mut Term, options: &mut Options) -> R
 
 /// `q`, Esc or Ctrl-C while paging: `stopped after N rows`. The remaining
 /// pages stay on the coordinator until they expire.
-fn stop_paging(app: &mut App, terminal: &mut Term, options: &mut Options) -> Result<(), String> {
+fn stop_paging(app: &mut App, terminal: &mut Screen, options: &mut Options) -> Result<(), String> {
     let Some(paging) = app.paging.take() else {
         return Ok(());
     };
@@ -1383,7 +1716,7 @@ fn stop_paging(app: &mut App, terminal: &mut Term, options: &mut Options) -> Res
 /// The embedded engine cannot be interrupted; the statement runs on.
 fn interrupt_running(
     app: &mut App,
-    terminal: &mut Term,
+    terminal: &mut Screen,
     options: &mut Options,
 ) -> Result<(), String> {
     let Some(running) = app.running.as_mut() else {
@@ -1449,7 +1782,11 @@ fn strip_explain(statement: &str) -> Option<String> {
 
 /// Tab: complete the word before the cursor from keywords and the
 /// catalog's names; several candidates are listed above the editor.
-fn complete_at_cursor(app: &mut App, terminal: &mut Term, options: &Options) -> Result<(), String> {
+fn complete_at_cursor(
+    app: &mut App,
+    terminal: &mut Screen,
+    options: &Options,
+) -> Result<(), String> {
     let line = app.editor.current_line();
     let (_, column) = app.editor.cursor();
     let byte_cursor = line
@@ -1545,11 +1882,11 @@ fn local_candidates(
 
 fn run_command(
     app: &mut App,
-    terminal: &mut Term,
+    terminal: &mut Screen,
     options: &mut Options,
     command: Command,
 ) -> Result<(), String> {
-    let coordinator_only = |terminal: &mut Term, what: &str, theme: &Theme| {
+    let coordinator_only = |terminal: &mut Screen, what: &str, theme: &Theme| {
         emit_text(terminal, &format!("{what} is {EMBEDDED_ONLY}"), theme, true)
     };
     match command {
@@ -1698,8 +2035,73 @@ fn run_command(
                 true,
             )
         }
+        Command::Source(path) => match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                emit_text(
+                    terminal,
+                    &format!("source {}", path.display()),
+                    &app.theme,
+                    true,
+                )?;
+                submit(app, terminal, options, &text)
+            }
+            Err(error) => emit_error(
+                terminal,
+                &format!("cannot read {}: {error}", path.display()),
+                &app.theme,
+            ),
+        },
+        Command::Tee(Some(path)) => {
+            match std::fs::OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(&path)
+            {
+                Ok(file) => {
+                    terminal.tee = Some(Tee {
+                        path: path.clone(),
+                        file,
+                    });
+                    emit_text(
+                        terminal,
+                        &format!(
+                            "tee {} · everything shown is appended there",
+                            path.display()
+                        ),
+                        &app.theme,
+                        true,
+                    )
+                }
+                Err(error) => emit_error(
+                    terminal,
+                    &format!("cannot open {}: {error}", path.display()),
+                    &app.theme,
+                ),
+            }
+        }
+        Command::Tee(None) => {
+            let message = match terminal.tee.take() {
+                Some(tee) => format!("tee off · {}", tee.path.display()),
+                None => "tee is off".to_owned(),
+            };
+            emit_text(terminal, &message, &app.theme, true)
+        }
+        Command::Edit => edit_in_editor(app, terminal),
+        Command::Watch {
+            interval,
+            statement,
+        } => {
+            app.watch = Some(Watch {
+                statement,
+                interval,
+                next_run: Instant::now(),
+                started: Instant::now(),
+                runs: 0,
+            });
+            Ok(())
+        }
         Command::Help => emit(terminal, render::help::help(&app.theme)),
-        Command::Clear => terminal.clear().map_err(|error| error.to_string()),
+        Command::Clear => terminal.reset(app.viewport_rows()),
         Command::Quit => Ok(()),
     }
 }
@@ -1781,6 +2183,42 @@ mod tests {
             paging.hint(),
             "1,000 of 84,312 rows · Space or Enter for more · q to stop"
         );
+    }
+
+    #[test]
+    fn a_trailing_vertical_marker_ends_a_statement() {
+        assert!(ends_with_vertical_marker("SELECT 1 \\G"));
+        assert!(ends_with_vertical_marker("SELECT *\nFROM t\\G\n"));
+        assert!(!ends_with_vertical_marker("SELECT 1;"));
+        assert!(!ends_with_vertical_marker("\\G"));
+        assert!(!ends_with_vertical_marker("SELECT '\\G"));
+        assert_eq!(
+            split_vertical_marker("SELECT 1 \\G"),
+            ("SELECT 1".to_owned(), true)
+        );
+        assert_eq!(
+            split_vertical_marker("SELECT 1;"),
+            ("SELECT 1;".to_owned(), false)
+        );
+        assert!(is_edit(".edit"));
+        assert!(is_edit(" .edit; "));
+        assert!(!is_edit(".editor"));
+    }
+
+    #[test]
+    fn the_editor_command_prefers_visual_then_editor() {
+        let command = editor_command();
+        let expected = std::env::var("VISUAL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| std::env::var("EDITOR").ok())
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| value.trim().to_owned())
+            .unwrap_or_else(|| if cfg!(windows) { "notepad" } else { "vi" }.to_owned());
+        assert_eq!(command, expected);
+        let process = editor_process("myeditor --wait", std::path::Path::new("x y.sql"));
+        let program = process.get_program().to_string_lossy().into_owned();
+        assert!(program == "cmd" || program == "sh", "{program}");
     }
 
     #[test]

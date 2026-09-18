@@ -91,6 +91,18 @@ const GROUPS: &[Group] = &[
                 command: "Tab",
                 description: "complete keywords, tables, columns, schemas and catalogs",
             },
+            Entry {
+                command: ".source <file>",
+                description: "run the statements in a file, as if typed",
+            },
+            Entry {
+                command: ".edit",
+                description: "the last statement in $VISUAL or $EDITOR, back into the editor",
+            },
+            Entry {
+                command: ".watch [seconds] <statement>",
+                description: "re-run every N seconds (default 2) until a key is pressed",
+            },
         ],
     },
     Group {
@@ -110,6 +122,14 @@ const GROUPS: &[Group] = &[
                 description: "next page of a large result; stop paging",
             },
             Entry {
+                command: "<statement>\\G",
+                description: "end with \\G instead of ; for the vertical format once",
+            },
+            Entry {
+                command: ".tee <file>  .tee off",
+                description: "append everything shown to a file; stop",
+            },
+            Entry {
                 command: "--paged",
                 description: "page large results in -e, -f and piped mode instead of the inline limit",
             },
@@ -124,12 +144,8 @@ const GROUPS: &[Group] = &[
                 description: "answer a question in plain language through the Kaveon DLM",
             },
             Entry {
-                command: ".edit  .source <file>  .tee <file>",
-                description: "edit in $EDITOR, run a script, copy output to a file",
-            },
-            Entry {
-                command: "\\G  .watch <seconds>",
-                description: "vertical output for one statement; re-run on an interval",
+                command: "streaming rows",
+                description: "rows shown while a statement runs",
             },
         ],
     },
@@ -180,6 +196,16 @@ mod tests {
         assert!(text.contains("  Shell\n"));
         assert!(text.contains("  Output\n"));
         assert!(text.contains("  Coming soon\n    .ask <question>"));
+        assert!(text.contains("    .source <file>"));
+        assert!(text.contains("    .tee <file>  .tee off"));
+        assert!(text.contains("    .edit "));
+        assert!(text.contains("    .watch [seconds] <statement>"));
+        assert!(text.contains("    <statement>\\G"));
+        let coming = text.split("  Coming soon\n").nth(1).unwrap_or_default();
+        assert!(
+            !coming.contains(".edit") && !coming.contains("paged"),
+            "{coming}"
+        );
         assert!(text.lines().count() <= 40, "{}", text.lines().count());
         assert!(text.lines().all(|line| line.chars().count() <= 118));
     }

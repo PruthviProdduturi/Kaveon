@@ -1,9 +1,12 @@
 //! Dot commands: `.cluster`, `.settings`, `.format`, `.history`, `.queries`,
-//! `.kill`, `.timing`, `.help`, `.clear`, `.quit`, and the session settings
-//! `.settings` edits, validated against the ranges the coordinator enforces.
+//! `.kill`, `.timing`, `.source`, `.tee`, `.edit`, `.watch`, `.help`,
+//! `.clear`, `.quit`, and the session settings `.settings` edits, validated
+//! against the ranges the coordinator enforces.
 use crate::theme::Theme;
 use ratatui::text::{Line, Span};
 use serde_json::{Map, Value};
+use std::path::PathBuf;
+use std::time::Duration;
 
 /// The dot commands this module parses. Metadata commands (`.catalogs`,
 /// `.schemas`, `.tables`, `.describe`, `.use`) and `.limit` keep their
@@ -16,6 +19,10 @@ pub const DOT_COMMANDS: &[&str] = &[
     ".queries",
     ".kill",
     ".timing",
+    ".source",
+    ".tee",
+    ".edit",
+    ".watch",
     ".help",
     ".clear",
     ".quit",
@@ -35,6 +42,9 @@ const ELSEWHERE: &[&str] = &[
 
 const HISTORY_DEFAULT: usize = 20;
 const HISTORY_MAX: usize = 1_000;
+/// `.watch` without an interval re-runs this often.
+const WATCH_DEFAULT: Duration = Duration::from_secs(2);
+const WATCH_MAX_SECONDS: u64 = 86_400;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -47,6 +57,17 @@ pub enum Command {
     Queries,
     Kill(String),
     Timing,
+    /// `.source <file>`: run the file's statements as if typed.
+    Source(PathBuf),
+    /// `.tee <file>` appends everything shown to the file; `.tee off` stops.
+    Tee(Option<PathBuf>),
+    /// `.edit`: the last statement in `$VISUAL` / `$EDITOR`.
+    Edit,
+    /// `.watch [seconds] <statement>`: re-run until a key is pressed.
+    Watch {
+        interval: Duration,
+        statement: String,
+    },
     Help,
     Clear,
     Quit,
@@ -63,6 +84,9 @@ pub fn parse(text: &str) -> Option<Result<Command, String>> {
     let word = words.next()?;
     let command = word.to_ascii_lowercase();
     let arguments: Vec<&str> = words.collect();
+    // Everything after the command word, as typed: paths and statements
+    // keep their spaces.
+    let rest = text[word.len()..].trim();
     if ELSEWHERE.contains(&command.as_str()) {
         return None;
     }
@@ -105,6 +129,24 @@ pub fn parse(text: &str) -> Option<Result<Command, String>> {
             [id] => Ok(Command::Kill((*id).to_owned())),
             _ => Err("usage: .kill <query id>".to_owned()),
         },
+        ".source" => {
+            if rest.is_empty() {
+                Err("usage: .source <file>".to_owned())
+            } else {
+                Ok(Command::Source(PathBuf::from(unquote(rest))))
+            }
+        }
+        ".tee" => {
+            if rest.is_empty() {
+                Err("usage: .tee <file> | .tee off".to_owned())
+            } else if rest.eq_ignore_ascii_case("off") {
+                Ok(Command::Tee(None))
+            } else {
+                Ok(Command::Tee(Some(PathBuf::from(unquote(rest)))))
+            }
+        }
+        ".edit" => none_expected(Command::Edit),
+        ".watch" => parse_watch(&arguments, rest),
         unknown => {
             let known: Vec<&str> = DOT_COMMANDS.iter().chain(ELSEWHERE).copied().collect();
             Err(match closest(unknown, &known) {
@@ -115,6 +157,52 @@ pub fn parse(text: &str) -> Option<Result<Command, String>> {
             })
         }
     })
+}
+
+/// `.watch [seconds] <statement>`; the interval is at least one second and
+/// defaults to two.
+fn parse_watch(arguments: &[&str], rest: &str) -> Result<Command, String> {
+    const USAGE: &str = "usage: .watch [seconds] <statement>";
+    let Some(first) = arguments.first() else {
+        return Err(USAGE.to_owned());
+    };
+    let (interval, statement) = match first.parse::<u64>() {
+        Ok(seconds) => {
+            if seconds == 0 || seconds > WATCH_MAX_SECONDS {
+                return Err(format!(
+                    "invalid watch interval '{first}'; use seconds from 1 to {WATCH_MAX_SECONDS}"
+                ));
+            }
+            (
+                Duration::from_secs(seconds),
+                rest[first.len()..].trim().to_owned(),
+            )
+        }
+        Err(_) => (WATCH_DEFAULT, rest.to_owned()),
+    };
+    if statement.is_empty() {
+        return Err(USAGE.to_owned());
+    }
+    if statement.starts_with('.') && statement[1..].starts_with("watch") {
+        return Err(".watch cannot watch itself".to_owned());
+    }
+    Ok(Command::Watch {
+        interval,
+        statement,
+    })
+}
+
+/// A path typed with surrounding quotes keeps its spaces without them.
+fn unquote(text: &str) -> &str {
+    let text = text.trim();
+    if text.len() >= 2
+        && ((text.starts_with('"') && text.ends_with('"'))
+            || (text.starts_with('\'') && text.ends_with('\'')))
+    {
+        &text[1..text.len() - 1]
+    } else {
+        text
+    }
 }
 
 fn parse_settings(arguments: &[&str]) -> Result<Command, String> {
@@ -364,6 +452,45 @@ mod tests {
         assert!(err(".history many").contains("invalid history count 'many'"));
         assert_eq!(ok(".kill 20260917_1"), Command::Kill("20260917_1".into()));
         assert_eq!(err(".kill"), "usage: .kill <query id>");
+    }
+
+    #[test]
+    fn script_and_output_commands_keep_their_arguments_as_typed() {
+        assert_eq!(
+            ok(".source C:\\Scripts\\daily report.sql"),
+            Command::Source(PathBuf::from("C:\\Scripts\\daily report.sql"))
+        );
+        assert_eq!(
+            ok(".source \"quoted path.sql\";"),
+            Command::Source(PathBuf::from("quoted path.sql"))
+        );
+        assert_eq!(err(".source"), "usage: .source <file>");
+        assert_eq!(
+            ok(".tee out.txt"),
+            Command::Tee(Some(PathBuf::from("out.txt")))
+        );
+        assert_eq!(ok(".tee OFF"), Command::Tee(None));
+        assert!(err(".tee").starts_with("usage: .tee"));
+        assert_eq!(ok(".edit"), Command::Edit);
+        assert_eq!(err(".edit now"), ".edit takes no arguments");
+        assert_eq!(
+            ok(".watch 5 SELECT COUNT(*) FROM t;"),
+            Command::Watch {
+                interval: Duration::from_secs(5),
+                statement: "SELECT COUNT(*) FROM t".into(),
+            }
+        );
+        assert_eq!(
+            ok(".watch SELECT 1"),
+            Command::Watch {
+                interval: Duration::from_secs(2),
+                statement: "SELECT 1".into(),
+            }
+        );
+        assert!(err(".watch 0 SELECT 1").contains("1 to 86400"));
+        assert_eq!(err(".watch"), "usage: .watch [seconds] <statement>");
+        assert_eq!(err(".watch 3"), "usage: .watch [seconds] <statement>");
+        assert_eq!(err(".watch 2 .watch 2 x"), ".watch cannot watch itself");
     }
 
     #[test]
