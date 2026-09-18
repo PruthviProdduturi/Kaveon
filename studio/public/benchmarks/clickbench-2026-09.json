@@ -1,16 +1,19 @@
 {
+ "kind": "latency",
  "suite": "ClickBench",
+ "title": "ClickBench",
  "engine": "Kaveon",
- "date": "2026-09-17",
- "rounds": 2,
+ "rounds": 3,
  "executions_per_round": 3,
  "rows": 99997497,
  "table": "hits",
+ "scale_factor": null,
  "cluster": {
   "workers": 3,
   "node_sku": "Standard_D4s_v3",
   "memory_per_query_per_worker": "3 GiB"
  },
+ "date": "2026-09-17",
  "engine_digests": [
   "sha256:8580e4ea3728fbf749249ef4922a302985bc6dda7f22db73d88cc472fb78f26d"
  ],
@@ -18,11 +21,11 @@
  "summary": {
   "statements": 43,
   "ran_every_round": 43,
-  "under_1s": 8,
-  "under_10s": 23,
+  "under_1s": 9,
+  "under_10s": 21,
   "slowest": {
    "id": "q33",
-   "seconds": 186.273
+   "seconds": 184.066
   }
  },
  "statements": [
@@ -30,259 +33,285 @@
    "id": "q01",
    "label": "COUNT(*)",
    "sql": "SELECT COUNT(*) FROM hits",
-   "seconds": 0.843,
+   "seconds": 0.857,
    "round_medians": [
     0.857,
-    0.828
+    0.828,
+    1.209
    ]
   },
   {
    "id": "q02",
    "label": "COUNT(*) with a filter",
    "sql": "SELECT COUNT(*) FROM hits WHERE AdvEngineID <> 0",
-   "seconds": 0.783,
+   "seconds": 0.755,
    "round_medians": [
     0.821,
-    0.746
+    0.746,
+    0.755
    ]
   },
   {
    "id": "q03",
    "label": "SUM(AdvEngineID), COUNT(*), AVG(ResolutionWidth)",
    "sql": "SELECT SUM(AdvEngineID), COUNT(*), AVG(ResolutionWidth) FROM hits",
-   "seconds": 1.206,
+   "seconds": 1.199,
    "round_medians": [
     1.29,
-    1.121
+    1.121,
+    1.199
    ]
   },
   {
    "id": "q04",
    "label": "AVG(UserID)",
    "sql": "SELECT AVG(UserID) FROM hits",
-   "seconds": 1.816,
+   "seconds": 1.762,
    "round_medians": [
     1.87,
-    1.762
+    1.762,
+    1.718
    ]
   },
   {
    "id": "q05",
    "label": "COUNT(DISTINCT UserID)",
    "sql": "SELECT COUNT(DISTINCT UserID) FROM hits",
-   "seconds": 7.858,
+   "seconds": 7.721,
    "round_medians": [
     8.092,
-    7.624
+    7.624,
+    7.721
    ]
   },
   {
    "id": "q06",
    "label": "COUNT(DISTINCT SearchPhrase)",
    "sql": "SELECT COUNT(DISTINCT SearchPhrase) FROM hits",
-   "seconds": 12.262,
+   "seconds": 12.417,
    "round_medians": [
     12.417,
-    12.108
+    12.108,
+    13.184
    ]
   },
   {
    "id": "q07",
    "label": "MIN(EventDate), MAX(EventDate)",
    "sql": "SELECT MIN(EventDate), MAX(EventDate) FROM hits",
-   "seconds": 1.074,
+   "seconds": 0.8,
    "round_medians": [
     1.348,
-    0.8
+    0.8,
+    0.795
    ]
   },
   {
    "id": "q08",
    "label": "Group by AdvEngineID with a filter",
    "sql": "SELECT AdvEngineID, COUNT(*) FROM hits WHERE AdvEngineID <> 0 GROUP BY AdvEngineID ORDER BY COUNT(*) DESC",
-   "seconds": 0.779,
+   "seconds": 0.775,
    "round_medians": [
     0.783,
-    0.775
+    0.775,
+    0.72
    ]
   },
   {
    "id": "q09",
    "label": "Group by RegionID, top 10",
    "sql": "SELECT RegionID, COUNT(DISTINCT UserID) AS u FROM hits GROUP BY RegionID ORDER BY u DESC LIMIT 10",
-   "seconds": 11.925,
+   "seconds": 12.09,
    "round_medians": [
     12.09,
-    11.761
+    11.761,
+    12.372
    ]
   },
   {
    "id": "q10",
    "label": "Group by RegionID, top 10",
    "sql": "SELECT RegionID, SUM(AdvEngineID), COUNT(*) AS c, AVG(ResolutionWidth), COUNT(DISTINCT UserID) FROM hits GROUP BY RegionID ORDER BY c DESC LIMIT 10",
-   "seconds": 16.986,
+   "seconds": 17.056,
    "round_medians": [
     17.317,
-    16.654
+    16.654,
+    17.056
    ]
   },
   {
    "id": "q11",
    "label": "Group by MobilePhoneModel with a filter, top 10",
    "sql": "SELECT MobilePhoneModel, COUNT(DISTINCT UserID) AS u FROM hits WHERE MobilePhoneModel <> '' GROUP BY MobilePhoneModel ORDER BY u DESC LIMIT 10",
-   "seconds": 6.835,
+   "seconds": 6.752,
    "round_medians": [
     6.918,
-    6.752
+    6.752,
+    6.631
    ]
   },
   {
    "id": "q12",
    "label": "Group by MobilePhone, MobilePhoneModel with a filter, top 10",
    "sql": "SELECT MobilePhone, MobilePhoneModel, COUNT(DISTINCT UserID) AS u FROM hits WHERE MobilePhoneModel <> '' GROUP BY MobilePhone, MobilePhoneModel ORDER BY u DESC LIMIT 10",
-   "seconds": 7.611,
+   "seconds": 7.399,
    "round_medians": [
     8.109,
-    7.112
+    7.112,
+    7.399
    ]
   },
   {
    "id": "q13",
    "label": "Group by SearchPhrase with a filter, top 10",
    "sql": "SELECT SearchPhrase, COUNT(*) AS c FROM hits WHERE SearchPhrase <> '' GROUP BY SearchPhrase ORDER BY c DESC LIMIT 10",
-   "seconds": 9.998,
+   "seconds": 10.136,
    "round_medians": [
     10.136,
-    9.86
+    9.86,
+    10.464
    ]
   },
   {
    "id": "q14",
    "label": "Group by SearchPhrase with a filter, top 10",
    "sql": "SELECT SearchPhrase, COUNT(DISTINCT UserID) AS u FROM hits WHERE SearchPhrase <> '' GROUP BY SearchPhrase ORDER BY u DESC LIMIT 10",
-   "seconds": 25.522,
+   "seconds": 24.887,
    "round_medians": [
     26.327,
-    24.716
+    24.716,
+    24.887
    ]
   },
   {
    "id": "q15",
    "label": "Group by SearchEngineID, SearchPhrase with a filter, top 10",
    "sql": "SELECT SearchEngineID, SearchPhrase, COUNT(*) AS c FROM hits WHERE SearchPhrase <> '' GROUP BY SearchEngineID, SearchPhrase ORDER BY c DESC LIMIT 10",
-   "seconds": 12.137,
+   "seconds": 11.866,
    "round_medians": [
     12.421,
-    11.853
+    11.853,
+    11.866
    ]
   },
   {
    "id": "q16",
    "label": "Group by UserID, top 10",
    "sql": "SELECT UserID, COUNT(*) FROM hits GROUP BY UserID ORDER BY COUNT(*) DESC LIMIT 10",
-   "seconds": 11.709,
+   "seconds": 11.575,
    "round_medians": [
     11.495,
-    11.923
+    11.923,
+    11.575
    ]
   },
   {
    "id": "q17",
    "label": "Group by UserID, SearchPhrase, top 10",
    "sql": "SELECT UserID, SearchPhrase, COUNT(*) FROM hits GROUP BY UserID, SearchPhrase ORDER BY COUNT(*) DESC LIMIT 10",
-   "seconds": 26.237,
+   "seconds": 26.95,
    "round_medians": [
     26.95,
-    25.525
+    25.525,
+    27.318
    ]
   },
   {
    "id": "q18",
    "label": "Group by UserID, SearchPhrase, top 10",
    "sql": "SELECT UserID, SearchPhrase, COUNT(*) FROM hits GROUP BY UserID, SearchPhrase LIMIT 10",
-   "seconds": 26.433,
+   "seconds": 26.833,
    "round_medians": [
     26.833,
-    26.033
+    26.033,
+    27.754
    ]
   },
   {
    "id": "q19",
    "label": "Group by UserID, minute, SearchPhrase, top 10",
    "sql": "SELECT UserID, extract(minute FROM EventTime) AS m, SearchPhrase, COUNT(*) FROM hits GROUP BY UserID, extract(minute FROM EventTime), SearchPhrase ORDER BY COUNT(*) DESC LIMIT 10",
-   "seconds": 82.713,
+   "seconds": 82.938,
    "round_medians": [
     83.995,
-    81.43
+    81.43,
+    82.938
    ]
   },
   {
    "id": "q20",
    "label": "UserID with a filter",
    "sql": "SELECT UserID FROM hits WHERE UserID = 435090932899640449",
-   "seconds": 1.61,
+   "seconds": 1.641,
    "round_medians": [
     1.687,
-    1.533
+    1.533,
+    1.641
    ]
   },
   {
    "id": "q21",
    "label": "COUNT(*) with a filter",
    "sql": "SELECT COUNT(*) FROM hits WHERE URL LIKE '%google%'",
-   "seconds": 9.78,
+   "seconds": 10.06,
    "round_medians": [
     10.618,
-    8.941
+    8.941,
+    10.06
    ]
   },
   {
    "id": "q22",
    "label": "Group by SearchPhrase with a filter, top 10",
    "sql": "SELECT SearchPhrase, MIN(URL), COUNT(*) AS c FROM hits WHERE URL LIKE '%google%' AND SearchPhrase <> '' GROUP BY SearchPhrase ORDER BY c DESC LIMIT 10",
-   "seconds": 11.36,
+   "seconds": 11.298,
    "round_medians": [
     11.221,
-    11.498
+    11.498,
+    11.298
    ]
   },
   {
    "id": "q23",
    "label": "Group by SearchPhrase with a filter, top 10",
    "sql": "SELECT SearchPhrase, MIN(URL), MIN(Title), COUNT(*) AS c, COUNT(DISTINCT UserID) FROM hits WHERE Title LIKE '%Google%' AND URL NOT LIKE '%.google.%' AND SearchPhrase <> '' GROUP BY SearchPhrase ORDER BY c DESC LIMIT 10",
-   "seconds": 17.841,
+   "seconds": 18.083,
    "round_medians": [
     18.083,
-    17.599
+    17.599,
+    22.457
    ]
   },
   {
    "id": "q24",
    "label": "Order by EventTime with a filter, top 10",
    "sql": "SELECT * FROM hits WHERE URL LIKE '%google%' ORDER BY EventTime LIMIT 10",
-   "seconds": 51.31,
+   "seconds": 49.941,
    "round_medians": [
     55.117,
-    47.503
+    47.503,
+    49.941
    ]
   },
   {
    "id": "q25",
    "label": "Order by EventTime with a filter, top 10",
    "sql": "SELECT SearchPhrase FROM hits WHERE SearchPhrase <> '' ORDER BY EventTime LIMIT 10",
-   "seconds": 3.76,
+   "seconds": 3.663,
    "round_medians": [
     3.856,
-    3.663
+    3.663,
+    3.57
    ]
   },
   {
    "id": "q26",
    "label": "Order by SearchPhrase with a filter, top 10",
    "sql": "SELECT SearchPhrase FROM hits WHERE SearchPhrase <> '' ORDER BY SearchPhrase LIMIT 10",
-   "seconds": 3.057,
+   "seconds": 2.894,
    "round_medians": [
     3.22,
+    2.894,
     2.894
    ]
   },
@@ -290,170 +319,187 @@
    "id": "q27",
    "label": "Order by EventTime, SearchPhrase with a filter, top 10",
    "sql": "SELECT SearchPhrase FROM hits WHERE SearchPhrase <> '' ORDER BY EventTime, SearchPhrase LIMIT 10",
-   "seconds": 3.579,
+   "seconds": 3.569,
    "round_medians": [
     3.629,
-    3.528
+    3.528,
+    3.569
    ]
   },
   {
    "id": "q28",
    "label": "Group by CounterID with a filter, top 25",
    "sql": "SELECT CounterID, AVG(length(URL)) AS l, COUNT(*) AS c FROM hits WHERE URL <> '' GROUP BY CounterID HAVING COUNT(*) > 100000 ORDER BY l DESC LIMIT 25",
-   "seconds": 10.713,
+   "seconds": 10.896,
    "round_medians": [
     10.529,
-    10.896
+    10.896,
+    11.241
    ]
   },
   {
    "id": "q29",
    "label": "Group by regexp_replace(…) with a filter, top 25",
    "sql": "SELECT REGEXP_REPLACE(Referer, '^https?://(?:www\\.)?([^/]+)/.*$', '$1') AS k, AVG(length(Referer)) AS l, COUNT(*) AS c, MIN(Referer) FROM hits WHERE Referer <> '' GROUP BY REGEXP_REPLACE(Referer, '^https?://(?:www\\.)?([^/]+)/.*$', '$1') HAVING COUNT(*) > 100000 ORDER BY l DESC LIMIT 25",
-   "seconds": 65.791,
+   "seconds": 65.644,
    "round_medians": [
     67.498,
-    64.084
+    64.084,
+    65.644
    ]
   },
   {
    "id": "q30",
    "label": "SUM(ResolutionWidth), sum(…), sum(…) and 87 more",
    "sql": "SELECT SUM(ResolutionWidth), SUM(ResolutionWidth + 1), SUM(ResolutionWidth + 2), SUM(ResolutionWidth + 3), SUM(ResolutionWidth + 4), SUM(ResolutionWidth + 5), SUM(ResolutionWidth + 6), SUM(ResolutionWidth + 7), SUM(ResolutionWidth + 8), SUM(ResolutionWidth + 9), SUM(ResolutionWidth + 10), SUM(ResolutionWidth + 11), SUM(ResolutionWidth + 12), SUM(ResolutionWidth + 13), SUM(ResolutionWidth + 14), SUM(ResolutionWidth + 15), SUM(ResolutionWidth + 16), SUM(ResolutionWidth + 17), SUM(ResolutionWidth + 18), SUM(ResolutionWidth + 19), SUM(ResolutionWidth + 20), SUM(ResolutionWidth + 21), SUM(ResolutionWidth + 22), SUM(ResolutionWidth + 23), SUM(ResolutionWidth + 24), SUM(ResolutionWidth + 25), SUM(ResolutionWidth + 26), SUM(ResolutionWidth + 27), SUM(ResolutionWidth + 28), SUM(ResolutionWidth + 29), SUM(ResolutionWidth + 30), SUM(ResolutionWidth + 31), SUM(ResolutionWidth + 32), SUM(ResolutionWidth + 33), SUM(ResolutionWidth + 34), SUM(ResolutionWidth + 35), SUM(ResolutionWidth + 36), SUM(ResolutionWidth + 37), SUM(ResolutionWidth + 38), SUM(ResolutionWidth + 39), SUM(ResolutionWidth + 40), SUM(ResolutionWidth + 41), SUM(ResolutionWidth + 42), SUM(ResolutionWidth + 43), SUM(ResolutionWidth + 44), SUM(ResolutionWidth + 45), SUM(ResolutionWidth + 46), SUM(ResolutionWidth + 47), SUM(ResolutionWidth + 48), SUM(ResolutionWidth + 49), SUM(ResolutionWidth + 50), SUM(ResolutionWidth + 51), SUM(ResolutionWidth + 52), SUM(ResolutionWidth + 53), SUM(ResolutionWidth + 54), SUM(ResolutionWidth + 55), SUM(ResolutionWidth + 56), SUM(ResolutionWidth + 57), SUM(ResolutionWidth + 58), SUM(ResolutionWidth + 59), SUM(ResolutionWidth + 60), SUM(ResolutionWidth + 61), SUM(ResolutionWidth + 62), SUM(ResolutionWidth + 63), SUM(ResolutionWidth + 64), SUM(ResolutionWidth + 65), SUM(ResolutionWidth + 66), SUM(ResolutionWidth + 67), SUM(ResolutionWidth + 68), SUM(ResolutionWidth + 69), SUM(ResolutionWidth + 70), SUM(ResolutionWidth + 71), SUM(ResolutionWidth + 72), SUM(ResolutionWidth + 73), SUM(ResolutionWidth + 74), SUM(ResolutionWidth + 75), SUM(ResolutionWidth + 76), SUM(ResolutionWidth + 77), SUM(ResolutionWidth + 78), SUM(ResolutionWidth + 79), SUM(ResolutionWidth + 80), SUM(ResolutionWidth + 81), SUM(ResolutionWidth + 82), SUM(ResolutionWidth + 83), SUM(ResolutionWidth + 84), SUM(ResolutionWidth + 85), SUM(ResolutionWidth + 86), SUM(ResolutionWidth + 87), SUM(ResolutionWidth + 88), SUM(ResolutionWidth + 89) FROM hits",
-   "seconds": 26.564,
+   "seconds": 26.154,
    "round_medians": [
     27.825,
-    25.303
+    25.303,
+    26.154
    ]
   },
   {
    "id": "q31",
    "label": "Group by SearchEngineID, ClientIP with a filter, top 10",
    "sql": "SELECT SearchEngineID, ClientIP, COUNT(*) AS c, SUM(IsRefresh), AVG(ResolutionWidth) FROM hits WHERE SearchPhrase <> '' GROUP BY SearchEngineID, ClientIP ORDER BY c DESC LIMIT 10",
-   "seconds": 8.84,
+   "seconds": 9.068,
    "round_medians": [
     9.068,
-    8.613
+    8.613,
+    9.213
    ]
   },
   {
    "id": "q32",
    "label": "Group by WatchID, ClientIP with a filter, top 10",
    "sql": "SELECT WatchID, ClientIP, COUNT(*) AS c, SUM(IsRefresh), AVG(ResolutionWidth) FROM hits WHERE SearchPhrase <> '' GROUP BY WatchID, ClientIP ORDER BY c DESC LIMIT 10",
-   "seconds": 16.877,
+   "seconds": 16.785,
    "round_medians": [
     17.348,
-    16.406
+    16.406,
+    16.785
    ]
   },
   {
    "id": "q33",
    "label": "Group by WatchID, ClientIP, top 10",
    "sql": "SELECT WatchID, ClientIP, COUNT(*) AS c, SUM(IsRefresh), AVG(ResolutionWidth) FROM hits GROUP BY WatchID, ClientIP ORDER BY c DESC LIMIT 10",
-   "seconds": 186.273,
+   "seconds": 184.066,
    "round_medians": [
     188.479,
-    184.066
+    184.066,
+    183.186
    ]
   },
   {
    "id": "q34",
    "label": "Group by URL, top 10",
    "sql": "SELECT URL, COUNT(*) AS c FROM hits GROUP BY URL ORDER BY c DESC LIMIT 10",
-   "seconds": 88.266,
+   "seconds": 88.499,
    "round_medians": [
     88.499,
-    88.032
+    88.032,
+    90.511
    ]
   },
   {
    "id": "q35",
    "label": "Group by 1, URL, top 10",
    "sql": "SELECT 1, URL, COUNT(*) AS c FROM hits GROUP BY 1, URL ORDER BY c DESC LIMIT 10",
-   "seconds": 94.516,
+   "seconds": 97.1,
    "round_medians": [
     97.222,
-    91.809
+    91.809,
+    97.1
    ]
   },
   {
    "id": "q36",
    "label": "Group by ClientIP, ClientIP - 1, ClientIP - 2 and 1 more, top 10",
    "sql": "SELECT ClientIP, ClientIP - 1, ClientIP - 2, ClientIP - 3, COUNT(*) AS c FROM hits GROUP BY ClientIP, ClientIP - 1, ClientIP - 2, ClientIP - 3 ORDER BY c DESC LIMIT 10",
-   "seconds": 16.562,
+   "seconds": 16.469,
    "round_medians": [
     17.064,
-    16.061
+    16.061,
+    16.469
    ]
   },
   {
    "id": "q37",
    "label": "Group by URL with a filter, top 10",
    "sql": "SELECT URL, COUNT(*) AS PageViews FROM hits WHERE CounterID = 62 AND EventDate >= DATE '2013-07-01' AND EventDate <= DATE '2013-07-31' AND DontCountHits = 0 AND IsRefresh = 0 AND URL <> '' GROUP BY URL ORDER BY PageViews DESC LIMIT 10",
-   "seconds": 1.349,
+   "seconds": 1.292,
    "round_medians": [
     1.292,
-    1.407
+    1.407,
+    1.288
    ]
   },
   {
    "id": "q38",
    "label": "Group by Title with a filter, top 10",
    "sql": "SELECT Title, COUNT(*) AS PageViews FROM hits WHERE CounterID = 62 AND EventDate >= DATE '2013-07-01' AND EventDate <= DATE '2013-07-31' AND DontCountHits = 0 AND IsRefresh = 0 AND Title <> '' GROUP BY Title ORDER BY PageViews DESC LIMIT 10",
-   "seconds": 0.71,
+   "seconds": 0.715,
    "round_medians": [
     0.661,
-    0.758
+    0.758,
+    0.715
    ]
   },
   {
    "id": "q39",
    "label": "Group by URL with a filter, rows 1000–1010",
    "sql": "SELECT URL, COUNT(*) AS PageViews FROM hits WHERE CounterID = 62 AND EventDate >= DATE '2013-07-01' AND EventDate <= DATE '2013-07-31' AND IsRefresh = 0 AND IsLink <> 0 AND IsDownload = 0 GROUP BY URL ORDER BY PageViews DESC OFFSET 1000 LIMIT 10",
-   "seconds": 0.792,
+   "seconds": 0.815,
    "round_medians": [
     0.77,
-    0.815
+    0.815,
+    0.866
    ]
   },
   {
    "id": "q40",
    "label": "Group by TraficSourceID, SearchEngineID, AdvEngineID and 2 more with a filter, rows 1000–1010",
    "sql": "SELECT TraficSourceID, SearchEngineID, AdvEngineID, CASE WHEN (SearchEngineID = 0 AND AdvEngineID = 0) THEN Referer ELSE '' END AS Src, URL AS Dst, COUNT(*) AS PageViews FROM hits WHERE CounterID = 62 AND EventDate >= DATE '2013-07-01' AND EventDate <= DATE '2013-07-31' AND IsRefresh = 0 GROUP BY TraficSourceID, SearchEngineID, AdvEngineID, CASE WHEN (SearchEngineID = 0 AND AdvEngineID = 0) THEN Referer ELSE '' END, URL ORDER BY PageViews DESC OFFSET 1000 LIMIT 10",
-   "seconds": 2.394,
+   "seconds": 2.428,
    "round_medians": [
     2.361,
-    2.428
+    2.428,
+    2.488
    ]
   },
   {
    "id": "q41",
    "label": "Group by URLHash, EventDate with a filter, rows 100–110",
    "sql": "SELECT URLHash, EventDate, COUNT(*) AS PageViews FROM hits WHERE CounterID = 62 AND EventDate >= DATE '2013-07-01' AND EventDate <= DATE '2013-07-31' AND IsRefresh = 0 AND TraficSourceID IN (-1, 6) AND RefererHash = 3594120000172545465 GROUP BY URLHash, EventDate ORDER BY PageViews DESC OFFSET 100 LIMIT 10",
-   "seconds": 0.502,
+   "seconds": 0.529,
    "round_medians": [
     0.529,
-    0.476
+    0.476,
+    0.554
    ]
   },
   {
    "id": "q42",
    "label": "Group by WindowClientWidth, WindowClientHeight with a filter, rows 10000–10010",
    "sql": "SELECT WindowClientWidth, WindowClientHeight, COUNT(*) AS PageViews FROM hits WHERE CounterID = 62 AND EventDate >= DATE '2013-07-01' AND EventDate <= DATE '2013-07-31' AND IsRefresh = 0 AND DontCountHits = 0 AND URLHash = 2868770270353813622 GROUP BY WindowClientWidth, WindowClientHeight ORDER BY PageViews DESC OFFSET 10000 LIMIT 10",
-   "seconds": 0.474,
+   "seconds": 0.489,
    "round_medians": [
     0.459,
-    0.489
+    0.489,
+    0.665
    ]
   },
   {
    "id": "q43",
    "label": "Group by date_trunc(…) with a filter, rows 1000–1010",
    "sql": "SELECT DATE_TRUNC('minute', EventTime) AS M, COUNT(*) AS PageViews FROM hits WHERE CounterID = 62 AND EventDate >= DATE '2013-07-14' AND EventDate <= DATE '2013-07-15' AND IsRefresh = 0 AND DontCountHits = 0 GROUP BY DATE_TRUNC('minute', EventTime) ORDER BY DATE_TRUNC('minute', EventTime) OFFSET 1000 LIMIT 10",
-   "seconds": 0.421,
+   "seconds": 0.428,
    "round_medians": [
     0.414,
-    0.428
+    0.428,
+    0.429
    ]
   }
  ]
