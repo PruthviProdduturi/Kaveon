@@ -4,7 +4,7 @@ use crate::theme::Theme;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Style;
 use ratatui::text::Span;
-use ratatui::widgets::Block;
+use ratatui::widgets::{Block, Borders};
 use sqlparser::dialect::GenericDialect;
 use sqlparser::tokenizer::{Token, Tokenizer};
 use tui_textarea::{CursorMove, Input, Key, TextArea};
@@ -172,21 +172,22 @@ impl Editor {
 
     /// The widget, boxed and titled; dimmed while a statement runs.
     pub fn widget(&mut self, title: &str, theme: &Theme, running: bool) -> &TextArea<'static> {
-        let border = if running { theme.dim } else { theme.accent };
+        let label = if running { theme.dim } else { theme.title };
         self.area.set_block(
-            Block::bordered()
-                .border_style(border)
-                .title(Span::styled(format!(" {title} "), theme.title)),
+            Block::new()
+                .borders(Borders::TOP)
+                .border_style(theme.dim)
+                .title(Span::styled(format!(" {title} "), label)),
         );
         self.area
             .set_style(if running { theme.dim } else { Style::default() });
         &self.area
     }
 
-    /// Rows the box needs: the lines plus two borders, within `max`.
+    /// Rows the editor needs: the rule plus the lines, within `max`.
     pub fn height(&self, max: u16) -> u16 {
         let lines = self.area.lines().len() as u16;
-        (lines + 2).clamp(3, max.max(3))
+        (lines + 1).clamp(2, max.max(2))
     }
 }
 
@@ -288,6 +289,6 @@ mod tests {
             editor.handle(&KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL)),
             EditorAction::None
         ));
-        assert_eq!(editor.height(8), 3);
+        assert_eq!(editor.height(8), 2);
     }
 }
