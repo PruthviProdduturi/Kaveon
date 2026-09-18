@@ -4048,31 +4048,76 @@ async fn execute_analyze(
             .await;
         }
     };
-    let mut measured = BTreeMap::new();
-    for column in &selected {
-        match count_distinct_values(
+    // The counts run a few at a time: each is one distributed scan of the
+    // table, and the cluster has room for more than one. The width stays
+    // under the principal's statement limit so no count is refused
+    // admission, and the parent's own permits are already released.
+    let width = state
+        .config
+        .principal_query_limit
+        .clamp(1, ANALYZE_COUNT_CONCURRENCY);
+    let children: Vec<(String, String)> = selected
+        .iter()
+        .map(|column| (column.clone(), Uuid::new_v4().to_string()))
+        .collect();
+    let mut pending = children.iter();
+    let mut counts = futures::stream::FuturesUnordered::new();
+    for child in pending.by_ref().take(width) {
+        counts.push(count_distinct_values(
             state,
             identity,
             query_id,
             context,
             &qualified,
-            column,
+            child,
             &cancellation,
-        )
-        .await
-        {
-            Ok(count) => {
-                measured.insert(column.clone(), count);
+        ));
+    }
+    let mut measured = BTreeMap::new();
+    let mut failure = None;
+    while let Some(result) = counts.next().await {
+        match result {
+            Ok((column, count)) => {
+                measured.insert(column, count);
+                if let Some(child) = pending.next() {
+                    counts.push(count_distinct_values(
+                        state,
+                        identity,
+                        query_id,
+                        context,
+                        &qualified,
+                        child,
+                        &cancellation,
+                    ));
+                }
             }
-            Err(SubStatementError::Canceled) => return canceled_task_response(),
-            Err(SubStatementError::Failed {
+            Err(error) => {
+                failure = Some(error);
+                break;
+            }
+        }
+    }
+    drop(counts);
+    if let Some(error) = failure {
+        // The other counts still running are cancelled with the parent:
+        // their tokens first, then their records and worker tasks.
+        for (_, child_id) in &children {
+            let _ = state.lifecycle.cancellations.cancel(child_id);
+            let _ = cancel_query(
+                State(Arc::clone(state)),
+                Extension(identity.clone()),
+                Path(child_id.clone()),
+            )
+            .await;
+        }
+        return match error {
+            SubStatementError::Canceled => canceled_task_response(),
+            SubStatementError::Failed {
                 status,
                 code,
                 message,
-            }) => {
-                return analyze_failure(query_id, started, status, &code, message).await;
-            }
-        }
+            } => analyze_failure(query_id, started, status, &code, message).await,
+        };
     }
     let second = match kaveon_storage::profile_source(&location, resolved.table.format) {
         Ok(value) if value.statistics.identity_sha256 == first.statistics.identity_sha256 => value,
@@ -4332,15 +4377,19 @@ fn quote_identifier(name: &str) -> String {
 /// planned and executed as a client statement would be, tagged
 /// `analyze:<parent id>`, the result cache off — cancelled when `parent`
 /// is. The exact count of the column's non-null distinct values.
+/// How many distinct counts an `ANALYZE … WITH (distinct …)` runs at once.
+const ANALYZE_COUNT_CONCURRENCY: usize = 4;
+
 async fn count_distinct_values(
     state: &Arc<AppState>,
     identity: &Identity,
     parent_id: &str,
     context: &QueryContext,
     qualified: &str,
-    column: &str,
+    child: &(String, String),
     parent: &CancellationToken,
-) -> Result<u64, SubStatementError> {
+) -> Result<(String, u64), SubStatementError> {
+    let (column, child_id) = (child.0.as_str(), child.1.as_str());
     let failed = |status: StatusCode, code: &str, message: String| SubStatementError::Failed {
         status,
         code: code.to_owned(),
@@ -4371,7 +4420,7 @@ async fn count_distinct_values(
         result_delivery: None,
         settings: Some(settings),
     };
-    let child_id = Uuid::new_v4().to_string();
+    let child_id = child_id.to_owned();
     // The child's token exists before it starts, so a cancellation of the
     // parent that lands first is seen at the child's first check.
     state
@@ -4449,6 +4498,7 @@ async fn count_distinct_values(
     value
         .as_u64()
         .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+        .map(|count| (column.to_owned(), count))
         .ok_or_else(|| {
             failed(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -9913,15 +9963,15 @@ mod tests {
         assert_eq!(state.result_cache.stats().entries, 0);
         let parent = body["id"].as_str().unwrap().to_owned();
         let children = sub_statement_records(&parent).await;
+        // The counts run a few at a time, so their records finish in any order.
+        let mut child_sql: Vec<&str> = children.iter().map(|record| record.sql.as_str()).collect();
+        child_sql.sort_unstable();
         assert_eq!(
-            children
-                .iter()
-                .map(|record| record.sql.as_str())
-                .collect::<Vec<_>>(),
+            child_sql,
             [
+                "SELECT COUNT(DISTINCT \"amount\") FROM lake.sales.orders",
                 "SELECT COUNT(DISTINCT \"id\") FROM lake.sales.orders",
                 "SELECT COUNT(DISTINCT \"region\") FROM lake.sales.orders",
-                "SELECT COUNT(DISTINCT \"amount\") FROM lake.sales.orders",
             ]
         );
         for child in &children {
