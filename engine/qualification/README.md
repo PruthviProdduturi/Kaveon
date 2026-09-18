@@ -54,6 +54,22 @@ silently omitted. The five initial failures are fixed; the expanded suite curren
 passes 37 SQL cases. The suite also checks authenticated paging and replay. See the
 [readiness evidence and open gates](../../docs/engineering/engine-readiness-qualification.md).
 
+## CLI gates
+
+```powershell
+# The packaged client's batch contract against a fixture coordinator (also run by the Engine workflow).
+python engine/qualification/cli_workflows.py --cli engine/target/release/kaveon.exe
+
+# The interactive shell driven through a Windows ConPTY (pip install pywinpty pyte):
+# suggestion, Ctrl-R, prefix history, a multi-line paste, Ctrl-A/K/U, Ctrl-C.
+$env:KAVEON_TOKEN = "<admin token>"
+python engine/qualification/cli_pty_windows.py --cli engine/target/release/kaveon.exe --server http://localhost:8081
+```
+
+`cli_pty_windows.py` needs a reachable coordinator (the local Compose stack)
+and checks the text each step leaves on a 120×32 screen; `--show` prints every
+screen. It is Windows-only and not part of CI.
+
 ## Same-file comparison
 
 The disposable Trino `lake` catalog uses a file metastore for local qualification

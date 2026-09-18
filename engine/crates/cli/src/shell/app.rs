@@ -71,6 +71,8 @@ const STREAM_POLL: Duration = Duration::from_millis(500);
 const STREAM_TIMEOUT: Duration = Duration::from_secs(5);
 /// One spinner frame per this many milliseconds.
 const SPINNER_FRAME_MS: u128 = 80;
+/// Keys closer together than this are one paste (see the event loop).
+const PASTE_GAP: Duration = Duration::from_millis(12);
 const EMBEDDED_ONLY: &str = "not available in embedded mode";
 
 type Term = Terminal<CrosstermBackend<io::Stdout>>;
@@ -868,7 +870,15 @@ fn event_loop(app: &mut App, options: &mut Options, host: &str) -> Result<(), St
                         if rest.contains('\n') {
                             shown.push_str(" …");
                         }
-                        last.spans.push(Span::styled(shown, app.theme.dim));
+                        // Without colour the suggestion still has to read as
+                        // a suggestion: the terminal's dim attribute.
+                        let ghost = if app.theme.plain {
+                            ratatui::style::Style::default()
+                                .add_modifier(ratatui::style::Modifier::DIM)
+                        } else {
+                            app.theme.dim
+                        };
+                        last.spans.push(Span::styled(shown, ghost));
                     }
                     frame.render_widget(Paragraph::new(lines).block(block), text_area);
                     let (row, column) = app.editor.cursor();
@@ -939,8 +949,13 @@ fn event_loop(app: &mut App, options: &mut Options, host: &str) -> Result<(), St
             }
             _ => continue,
         };
+        // Keys that follow within a few milliseconds belong to the same
+        // paste: a terminal that does not bracket a paste (the Windows
+        // console) delivers its text as key records a moment apart, so the
+        // gap that closes a burst is longer than the console's, shorter
+        // than any keystroke.
         let mut batch = vec![first];
-        while event::poll(Duration::ZERO).map_err(|error| error.to_string())? {
+        while event::poll(PASTE_GAP).map_err(|error| error.to_string())? {
             if let Event::Key(key) = event::read().map_err(|error| error.to_string())?
                 && key.kind == KeyEventKind::Press
             {
@@ -1088,10 +1103,14 @@ fn is_paste_burst(batch: &[event::KeyEvent]) -> bool {
     if batch.len() < 2 {
         return false;
     }
+    // A bare line feed reaches the Windows console as Ctrl-Enter: inside a
+    // burst that is a line break, not the force-submit key.
     let textual = batch.iter().all(|key| {
-        !key.modifiers
-            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-            && matches!(key.code, KeyCode::Char(_) | KeyCode::Enter | KeyCode::Tab)
+        matches!(key.code, KeyCode::Enter)
+            || (!key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                && matches!(key.code, KeyCode::Char(_) | KeyCode::Tab))
     });
     let breaks = batch
         .iter()
@@ -3176,6 +3195,20 @@ mod tests {
             event::KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
         ];
         assert!(!is_paste_burst(&with_ctrl), "a control key is never pasted");
+        let line_feed = vec![
+            plain(KeyCode::Char('a')),
+            event::KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL),
+            plain(KeyCode::Char('b')),
+        ];
+        assert!(
+            is_paste_burst(&line_feed),
+            "a line feed is Ctrl-Enter on Windows"
+        );
+        assert_eq!(
+            burst_text(&line_feed),
+            "a
+b"
+        );
         assert!(!is_paste_burst(&[plain(KeyCode::Enter)]));
     }
 }
