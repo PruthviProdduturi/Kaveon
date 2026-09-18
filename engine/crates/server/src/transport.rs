@@ -1,11 +1,17 @@
-//! Receive Arrow IPC incrementally into a bounded private disk spool.
+//! Receive Arrow IPC incrementally into a bounded private disk spool, or
+//! decode it batch by batch as it arrives (`receive_stream`).
 //! The immutable spool permits decoding without retaining an encoded body copy.
 use arrow::{datatypes::SchemaRef, ipc::reader::StreamReader, record_batch::RecordBatch};
+use axum::body::Bytes;
+use futures::StreamExt;
 use std::{
     fs::{File, OpenOptions},
-    io::{BufReader, Write},
+    io::{BufReader, Read, Write},
     path::PathBuf,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 /// The most one exchange partition or task result may carry, matching the
@@ -26,6 +32,9 @@ pub struct CachedTaskResult {
     pub elapsed_us: u64,
     pub scan_metrics_header: Option<String>,
     pub execution_metrics_header: Option<String>,
+    /// The task streamed its rows to the coordinator as it ran: `bytes` is
+    /// empty and only the metrics are retained.
+    pub streamed: bool,
 }
 impl CachedTaskResult {
     pub fn new(
@@ -45,7 +54,22 @@ impl CachedTaskResult {
             elapsed_us,
             scan_metrics_header,
             execution_metrics_header,
+            streamed: false,
         })
+    }
+    /// The record of a streamed root task: its metrics, no bytes.
+    pub fn streamed(
+        elapsed_us: u64,
+        scan_metrics_header: Option<String>,
+        execution_metrics_header: Option<String>,
+    ) -> Self {
+        Self {
+            bytes: Vec::new(),
+            elapsed_us,
+            scan_metrics_header,
+            execution_metrics_header,
+            streamed: true,
+        }
     }
 }
 impl Drop for CachedTaskResult {
@@ -203,6 +227,287 @@ async fn receive_with_limit(
     })
 }
 
+/// Encoded bytes of one streamed task result held between the network and
+/// the decoder. The pump stops reading the body once this much is waiting,
+/// so a slow consumer holds the worker back through TCP instead of making
+/// the coordinator buffer the task's output.
+const STREAM_IN_FLIGHT_BYTES: usize = 8 * 1024 * 1024;
+/// Decoded batches held between the decoder and the consumer.
+const STREAM_DECODED_BATCHES: usize = 2;
+
+/// Process spool quota held by bytes in flight; released when consumed.
+struct RetainedBytes(u64);
+impl Drop for RetainedBytes {
+    fn drop(&mut self) {
+        RETAINED_BYTES.fetch_sub(self.0, Ordering::AcqRel);
+    }
+}
+
+/// One received chunk with the in-flight permit and the process quota it
+/// holds until the decoder has read it.
+struct InFlightChunk {
+    bytes: Bytes,
+    _permit: tokio::sync::OwnedSemaphorePermit,
+    _retained: RetainedBytes,
+}
+
+/// The decoder's `Read` over the chunks the pump hands it; blocks on the
+/// channel from the decoder's blocking thread. `eof` records that the
+/// producer closed the channel while the reader still wanted bytes — an
+/// Arrow stream reader treats end-of-file as end-of-stream, so this is
+/// what tells a truncated stream from a finished one.
+struct ChunkRead {
+    chunks: tokio::sync::mpsc::UnboundedReceiver<Result<InFlightChunk, String>>,
+    current: Option<InFlightChunk>,
+    offset: usize,
+    eof: bool,
+    failure: Option<String>,
+}
+
+impl Read for ChunkRead {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            if let Some(chunk) = &self.current {
+                let remaining = &chunk.bytes[self.offset..];
+                if !remaining.is_empty() {
+                    let count = remaining.len().min(buf.len());
+                    buf[..count].copy_from_slice(&remaining[..count]);
+                    self.offset += count;
+                    if self.offset == chunk.bytes.len() {
+                        self.current = None;
+                        self.offset = 0;
+                    }
+                    return Ok(count);
+                }
+                self.current = None;
+                self.offset = 0;
+            }
+            if self.eof {
+                return Ok(0);
+            }
+            match self.chunks.blocking_recv() {
+                Some(Ok(chunk)) => {
+                    self.current = Some(chunk);
+                    self.offset = 0;
+                }
+                Some(Err(message)) => {
+                    self.eof = true;
+                    self.failure = Some(message.clone());
+                    return Err(std::io::Error::other(message));
+                }
+                None => {
+                    self.eof = true;
+                    return Ok(0);
+                }
+            }
+        }
+    }
+}
+
+/// A task result decoded as its bytes arrive: the schema first, then each
+/// batch as soon as its message is complete. Dropping it stops the decoder
+/// and the network pump.
+pub struct ReceivedStream {
+    schema: SchemaRef,
+    batches: tokio::sync::mpsc::Receiver<Result<RecordBatch, String>>,
+    received: Arc<AtomicU64>,
+}
+
+impl ReceivedStream {
+    pub fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+    /// Encoded bytes received from the network so far.
+    pub fn bytes(&self) -> u64 {
+        self.received.load(Ordering::Acquire)
+    }
+    /// The next batch; `None` once the stream ended with its end-of-stream
+    /// marker. A stream that ends without the marker, a network failure or
+    /// an undecodable message is the final `Err`.
+    pub async fn next_batch(&mut self) -> Option<Result<RecordBatch, String>> {
+        self.batches.recv().await
+    }
+}
+
+impl futures::Stream for ReceivedStream {
+    type Item = Result<RecordBatch, String>;
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.batches.poll_recv(cx)
+    }
+}
+
+/// Decode a task result's Arrow IPC stream from the response body as it
+/// arrives. Returns once the schema is decoded.
+pub async fn receive_stream(response: reqwest::Response) -> Result<ReceivedStream, String> {
+    let content_length = response.content_length();
+    let body = futures::stream::unfold(response, |mut response| async move {
+        match response.chunk().await {
+            Ok(Some(chunk)) => Some((Ok(chunk), response)),
+            Ok(None) => None,
+            Err(error) => Some((Err(error.to_string()), response)),
+        }
+    });
+    receive_stream_from(body, content_length, MAX_PAYLOAD_BYTES).await
+}
+
+/// `receive_stream` over any chunk source. The pump reads chunks into a
+/// channel bounded by `STREAM_IN_FLIGHT_BYTES` and the process quota; the
+/// decoder runs on a blocking thread and hands batches over a channel of
+/// `STREAM_DECODED_BATCHES`.
+pub async fn receive_stream_from<S>(
+    body: S,
+    content_length: Option<u64>,
+    limit: u64,
+) -> Result<ReceivedStream, String>
+where
+    S: futures::Stream<Item = Result<Bytes, String>> + Send + 'static,
+{
+    if content_length.is_some_and(|bytes| bytes > limit) {
+        return Err("Arrow payload Content-Length exceeds receive limit".into());
+    }
+    let (chunk_sender, chunk_receiver) = tokio::sync::mpsc::unbounded_channel();
+    let (schema_sender, schema_receiver) = tokio::sync::oneshot::channel();
+    let (batch_sender, batch_receiver) = tokio::sync::mpsc::channel(STREAM_DECODED_BATCHES);
+    let received = Arc::new(AtomicU64::new(0));
+    tokio::spawn(pump_chunks(
+        body,
+        limit,
+        chunk_sender,
+        Arc::clone(&received),
+    ));
+    tokio::task::spawn_blocking(move || {
+        decode_chunks(chunk_receiver, schema_sender, batch_sender);
+    });
+    let schema = schema_receiver
+        .await
+        .map_err(|_| "Arrow stream decoder stopped before reading the schema".to_owned())??;
+    Ok(ReceivedStream {
+        schema,
+        batches: batch_receiver,
+        received,
+    })
+}
+
+async fn pump_chunks<S>(
+    body: S,
+    limit: u64,
+    chunks: tokio::sync::mpsc::UnboundedSender<Result<InFlightChunk, String>>,
+    received: Arc<AtomicU64>,
+) where
+    S: futures::Stream<Item = Result<Bytes, String>>,
+{
+    let in_flight = Arc::new(tokio::sync::Semaphore::new(STREAM_IN_FLIGHT_BYTES));
+    let mut total = 0u64;
+    let mut body = std::pin::pin!(body);
+    while let Some(next) = body.next().await {
+        let chunk = match next {
+            Ok(chunk) => chunk,
+            Err(error) => {
+                let _ = chunks.send(Err(format!("network receive: {error}")));
+                return;
+            }
+        };
+        let mut offset = 0;
+        while offset < chunk.len() {
+            let end = (offset + STREAM_IN_FLIGHT_BYTES).min(chunk.len());
+            let piece = chunk.slice(offset..end);
+            offset = end;
+            let bytes = piece.len() as u64;
+            total = total.saturating_add(bytes);
+            if total > limit {
+                let _ = chunks.send(Err("Arrow payload exceeds receive limit".into()));
+                return;
+            }
+            if RETAINED_BYTES
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                    used.checked_add(bytes)
+                        .filter(|total| *total <= PROCESS_SPOOL_BYTES)
+                })
+                .is_err()
+            {
+                let _ = chunks.send(Err("process IPC disk spool quota exceeded".into()));
+                return;
+            }
+            let retained = RetainedBytes(bytes);
+            let Ok(permit) = Arc::clone(&in_flight)
+                .acquire_many_owned(piece.len() as u32)
+                .await
+            else {
+                return;
+            };
+            received.fetch_add(bytes, Ordering::AcqRel);
+            if chunks
+                .send(Ok(InFlightChunk {
+                    bytes: piece,
+                    _permit: permit,
+                    _retained: retained,
+                }))
+                .is_err()
+            {
+                // The decoder stopped: nothing reads what is left.
+                return;
+            }
+        }
+    }
+}
+
+fn decode_chunks(
+    chunks: tokio::sync::mpsc::UnboundedReceiver<Result<InFlightChunk, String>>,
+    schema: tokio::sync::oneshot::Sender<Result<SchemaRef, String>>,
+    batches: tokio::sync::mpsc::Sender<Result<RecordBatch, String>>,
+) {
+    let read = ChunkRead {
+        chunks,
+        current: None,
+        offset: 0,
+        eof: false,
+        failure: None,
+    };
+    let mut reader = match StreamReader::try_new(read, None) {
+        Ok(reader) => reader,
+        Err(error) => {
+            let _ = schema.send(Err(format!("invalid Arrow stream: {error}")));
+            return;
+        }
+    };
+    if schema.send(Ok(reader.schema())).is_err() {
+        return;
+    }
+    loop {
+        match reader.next() {
+            Some(Ok(batch)) => {
+                if batches.blocking_send(Ok(batch)).is_err() {
+                    return;
+                }
+            }
+            Some(Err(error)) => {
+                let message = reader
+                    .get_mut()
+                    .failure
+                    .take()
+                    .unwrap_or_else(|| format!("invalid Arrow stream: {error}"));
+                let _ = batches.blocking_send(Err(message));
+                return;
+            }
+            None => {
+                if reader.get_ref().eof {
+                    let _ = batches.blocking_send(Err(
+                        "truncated Arrow stream: the producer ended before the end-of-stream marker"
+                            .into(),
+                    ));
+                }
+                return;
+            }
+        }
+    }
+}
+
 impl ArrowPayload {
     /// A payload spooled from IPC stream bytes, as `receive` would spool a
     /// response body. Tests only.
@@ -312,6 +617,139 @@ mod tests {
         assert!(!path.exists());
         task.abort();
     }
+    /// An IPC stream of three one-column batches, cut at its message
+    /// boundaries: schema, batch 0, batch 1, batch 2, end-of-stream.
+    fn ipc_messages() -> (SchemaRef, Vec<Vec<u8>>) {
+        use arrow::array::Int64Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+        let mut bytes = Vec::new();
+        let mut cuts = Vec::new();
+        {
+            let mut writer =
+                arrow::ipc::writer::StreamWriter::try_new(&mut bytes, &schema).unwrap();
+            cuts.push(writer.get_ref().len());
+            for round in 0..3i64 {
+                let batch = RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(Int64Array::from(vec![round; 4]))],
+                )
+                .unwrap();
+                writer.write(&batch).unwrap();
+                cuts.push(writer.get_ref().len());
+            }
+            writer.finish().unwrap();
+            cuts.push(writer.get_ref().len());
+        }
+        let mut messages = Vec::new();
+        let mut start = 0;
+        for cut in cuts {
+            messages.push(bytes[start..cut].to_vec());
+            start = cut;
+        }
+        (schema, messages)
+    }
+
+    fn chunk_source() -> (
+        tokio::sync::mpsc::UnboundedSender<Result<Bytes, String>>,
+        impl futures::Stream<Item = Result<Bytes, String>> + Send + 'static,
+    ) {
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let stream = futures::stream::unfold(receiver, |mut receiver| async move {
+            receiver.recv().await.map(|chunk| (chunk, receiver))
+        });
+        (sender, stream)
+    }
+
+    #[tokio::test]
+    async fn streamed_receive_decodes_each_batch_as_its_bytes_arrive() {
+        let (schema, messages) = ipc_messages();
+        let (sender, body) = chunk_source();
+        // The schema alone unblocks the receiver; no batch has arrived.
+        sender.send(Ok(Bytes::from(messages[0].clone()))).unwrap();
+        let mut stream = receive_stream_from(body, None, MAX_PAYLOAD_BYTES)
+            .await
+            .unwrap();
+        assert_eq!(stream.schema(), schema);
+        assert_eq!(stream.bytes(), messages[0].len() as u64);
+        // Batch 0 in one chunk, batch 1 split across two: each is decoded
+        // while the sender is still open.
+        sender.send(Ok(Bytes::from(messages[1].clone()))).unwrap();
+        let first = stream.next_batch().await.unwrap().unwrap();
+        assert_eq!(first.num_rows(), 4);
+        let half = messages[2].len() / 2;
+        sender
+            .send(Ok(Bytes::from(messages[2][..half].to_vec())))
+            .unwrap();
+        sender
+            .send(Ok(Bytes::from(messages[2][half..].to_vec())))
+            .unwrap();
+        let second = stream.next_batch().await.unwrap().unwrap();
+        assert_eq!(second.num_rows(), 4);
+        sender.send(Ok(Bytes::from(messages[3].clone()))).unwrap();
+        sender.send(Ok(Bytes::from(messages[4].clone()))).unwrap();
+        assert!(stream.next_batch().await.unwrap().is_ok());
+        drop(sender);
+        assert!(stream.next_batch().await.is_none());
+        assert_eq!(
+            stream.bytes(),
+            messages
+                .iter()
+                .map(|message| message.len() as u64)
+                .sum::<u64>()
+        );
+    }
+
+    #[tokio::test]
+    async fn streamed_receive_reports_a_stream_that_ends_without_its_marker() {
+        // Cut at a message boundary: an Arrow reader would call that a
+        // finished stream; the receiver knows the marker never came.
+        let (_, messages) = ipc_messages();
+        let (sender, body) = chunk_source();
+        sender.send(Ok(Bytes::from(messages[0].clone()))).unwrap();
+        sender.send(Ok(Bytes::from(messages[1].clone()))).unwrap();
+        let mut stream = receive_stream_from(body, None, MAX_PAYLOAD_BYTES)
+            .await
+            .unwrap();
+        assert!(stream.next_batch().await.unwrap().is_ok());
+        drop(sender);
+        let error = stream.next_batch().await.unwrap().unwrap_err();
+        assert!(error.starts_with("truncated Arrow stream"), "{error}");
+        assert!(stream.next_batch().await.is_none());
+
+        // Cut inside a message: the decoder fails on the message.
+        let (sender, body) = chunk_source();
+        sender.send(Ok(Bytes::from(messages[0].clone()))).unwrap();
+        let half = messages[1].len() / 2;
+        sender
+            .send(Ok(Bytes::from(messages[1][..half].to_vec())))
+            .unwrap();
+        let mut stream = receive_stream_from(body, None, MAX_PAYLOAD_BYTES)
+            .await
+            .unwrap();
+        drop(sender);
+        assert!(stream.next_batch().await.unwrap().is_err());
+
+        // A network failure mid-stream is reported as such.
+        let (sender, body) = chunk_source();
+        sender.send(Ok(Bytes::from(messages[0].clone()))).unwrap();
+        let mut stream = receive_stream_from(body, None, MAX_PAYLOAD_BYTES)
+            .await
+            .unwrap();
+        sender.send(Err("connection reset".into())).unwrap();
+        let error = stream.next_batch().await.unwrap().unwrap_err();
+        assert_eq!(error, "network receive: connection reset");
+
+        // Nothing before the schema is a failed receive, not a stream.
+        let (sender, body) = chunk_source();
+        drop(sender);
+        assert!(
+            receive_stream_from(body, None, MAX_PAYLOAD_BYTES)
+                .await
+                .is_err()
+        );
+    }
+
     #[tokio::test]
     async fn receive_cap_rejects_large_body_and_cleans_up() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

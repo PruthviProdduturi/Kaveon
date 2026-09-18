@@ -332,6 +332,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(crate::transaction_api::routes())
         .route("/v1/task", post(execute_task))
         .route(
+            "/v1/task/{query_id}/{stage_id}/{partition}/{attempt}/metrics",
+            get(task_metrics),
+        )
+        .route(
             "/v1/internal/query/{query_id}/finish",
             post(finish_worker_query),
         )
@@ -456,6 +460,12 @@ struct TaskRequest {
     /// memory limit and runs at its parallelism.
     #[serde(default)]
     settings: QuerySettings,
+    /// A root task (no exchange output) streams its rows in the response
+    /// body as it produces them, and its metrics are read afterwards from
+    /// `/v1/task/{query}/{stage}/{partition}/{attempt}/metrics`. Absent
+    /// for an older coordinator, which gets the collected result as before.
+    #[serde(default)]
+    stream_result: bool,
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
@@ -650,6 +660,19 @@ async fn execute_owned_task(
     }
     let started = Instant::now();
     if let Some(fragment) = req.fragment.as_ref() {
+        if req.stream_result && is_root_fragment(&req, fragment) {
+            return stream_root_task(
+                state,
+                req,
+                partition,
+                admitted,
+                owner,
+                cancellation,
+                started,
+                elapsed_us(admission_started),
+            )
+            .await;
+        }
         let result = execute_fragment_task(
             state,
             &req,
@@ -657,6 +680,7 @@ async fn execute_owned_task(
             partition,
             admitted.pool(),
             elapsed_us(admission_started),
+            None,
         )
         .await;
         if cancellation.is_cancelled() {
@@ -753,6 +777,286 @@ async fn execute_owned_task(
             let message = error.to_string();
             let _ = owner.complete(TaskOutcome::Failed(Arc::from(message.clone())));
             task_failure_response(StatusCode::INTERNAL_SERVER_ERROR, &message)
+        }
+    }
+}
+
+/// A root task produces the statement's rows: it has no exchange output.
+fn is_root_fragment(req: &TaskRequest, fragment: &ExecutableFragment) -> bool {
+    req.exchange_outputs.is_empty()
+        && !fragment.nodes.iter().any(|node| {
+            node.id == fragment.root
+                && matches!(
+                    node.operator,
+                    kaveon_core::FragmentOperator::ExchangeOutput(_)
+                )
+        })
+}
+
+/// Chunks of a streamed root result held between the executing thread and
+/// the response body: with 4 MiB chunks, 32 MiB of back-pressure.
+const ROOT_STREAM_CHUNKS: usize = 8;
+const ROOT_STREAM_CHUNK_BYTES: usize = 4 * 1024 * 1024;
+
+/// The response header that marks a root task's body as streamed while the
+/// task ran: its metrics are at `/metrics`, not in the headers.
+const TASK_STREAMED_HEADER: &str = "x-kaveon-task-streamed";
+
+type RootReady = Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<Result<(), String>>>>>;
+
+/// A test's hook into a streamed root task, keyed by query: called from
+/// the executing thread after each batch leaves with the batch's index; an
+/// error fails the task there.
+#[cfg(test)]
+type RootStreamProbe = Arc<dyn Fn(usize) -> Result<(), String> + Send + Sync>;
+#[cfg(test)]
+static ROOT_STREAM_PROBES: std::sync::LazyLock<std::sync::Mutex<HashMap<String, RootStreamProbe>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// The executing thread's side of a streamed root result: an IPC writer
+/// whose bytes leave as chunks after every batch, so a batch reaches the
+/// coordinator as soon as it is produced. Opening it — the schema is known
+/// — is what lets the handler answer `200` and start the body.
+struct RootStreamSink {
+    /// Which task the test probes address.
+    #[cfg_attr(not(test), allow(dead_code))]
+    query_id: String,
+    writer: Option<arrow::ipc::writer::StreamWriter<Vec<u8>>>,
+    chunks: tokio::sync::mpsc::Sender<axum::body::Bytes>,
+    ready: RootReady,
+    batches: usize,
+}
+
+impl RootStreamSink {
+    fn cut(&mut self) -> kaveon_core::Result<()> {
+        let Some(writer) = self.writer.as_mut() else {
+            return Ok(());
+        };
+        let buffer = writer.get_mut();
+        while !buffer.is_empty() {
+            let take = buffer.len().min(ROOT_STREAM_CHUNK_BYTES);
+            let chunk: Vec<u8> = buffer.drain(..take).collect();
+            // From the executing thread: waits while the body is behind,
+            // which is the back-pressure.
+            self.chunks
+                .blocking_send(axum::body::Bytes::from(chunk))
+                .map_err(|_| {
+                    kaveon_core::KaveonError::Execution(
+                        "the result's consumer stopped reading".into(),
+                    )
+                })?;
+        }
+        Ok(())
+    }
+
+    /// Close the stream: the end-of-stream marker leaves as the last chunk.
+    fn finish(mut self) -> kaveon_core::Result<()> {
+        let mut writer = self.writer.take().ok_or_else(|| {
+            kaveon_core::KaveonError::Execution("root result was never opened".into())
+        })?;
+        writer
+            .finish()
+            .map_err(|error| kaveon_core::KaveonError::Execution(error.to_string()))?;
+        self.writer = Some(writer);
+        self.cut()
+    }
+}
+
+impl crate::fragment_exec::RootSink for RootStreamSink {
+    fn open(&mut self, schema: &arrow::datatypes::SchemaRef) -> kaveon_core::Result<()> {
+        if self.writer.is_some() {
+            return Ok(());
+        }
+        let options = arrow::ipc::writer::IpcWriteOptions::default()
+            .try_with_compression(Some(arrow::ipc::CompressionType::LZ4_FRAME))
+            .map_err(|error| kaveon_core::KaveonError::Execution(error.to_string()))?;
+        self.writer = Some(
+            arrow::ipc::writer::StreamWriter::try_new_with_options(Vec::new(), schema, options)
+                .map_err(|error| kaveon_core::KaveonError::Execution(error.to_string()))?,
+        );
+        if let Some(ready) = self.ready.lock().ok().and_then(|mut ready| ready.take()) {
+            let _ = ready.send(Ok(()));
+        }
+        self.cut()
+    }
+
+    fn write(&mut self, batch: &arrow::record_batch::RecordBatch) -> kaveon_core::Result<()> {
+        let writer = self.writer.as_mut().ok_or_else(|| {
+            kaveon_core::KaveonError::Execution("root result was never opened".into())
+        })?;
+        writer
+            .write(batch)
+            .map_err(|error| kaveon_core::KaveonError::Execution(error.to_string()))?;
+        self.cut()?;
+        self.batches += 1;
+        #[cfg(test)]
+        {
+            let probe = ROOT_STREAM_PROBES
+                .lock()
+                .ok()
+                .and_then(|probes| probes.get(&self.query_id).cloned());
+            if let Some(probe) = probe {
+                probe(self.batches - 1).map_err(kaveon_core::KaveonError::Execution)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Run a root fragment with its rows streamed in the response body. The
+/// request is answered once the result schema is known: `200` and a body
+/// that carries the Arrow IPC stream as the fragment produces it, or the
+/// failure that came first with its status as for a collected task. A
+/// failure after the body began leaves the stream without its end marker;
+/// the task's outcome, with the failure, is at `/metrics` before the body
+/// ends.
+#[allow(clippy::too_many_arguments)]
+async fn stream_root_task(
+    state: &Arc<AppState>,
+    req: TaskRequest,
+    partition: kaveon_storage::ScanPartition,
+    admitted: AdmittedQueryMemory,
+    owner: TaskOwner<crate::transport::CachedTaskResult>,
+    cancellation: CancellationToken,
+    started: Instant,
+    admission_wait_us: u64,
+) -> Response {
+    let (chunks, body) = tokio::sync::mpsc::channel::<axum::body::Bytes>(ROOT_STREAM_CHUNKS);
+    let (ready_sender, ready) = tokio::sync::oneshot::channel::<Result<(), String>>();
+    let ready_sender: RootReady = Arc::new(std::sync::Mutex::new(Some(ready_sender)));
+    let sink = RootStreamSink {
+        query_id: req.query_id.clone(),
+        writer: None,
+        chunks: chunks.clone(),
+        ready: Arc::clone(&ready_sender),
+        batches: 0,
+    };
+    let state = Arc::clone(state);
+    let task_cancellation = cancellation.clone();
+    tokio::spawn(async move {
+        let result = match req.fragment.as_ref() {
+            Some(fragment) => {
+                execute_fragment_task(
+                    &state,
+                    &req,
+                    fragment,
+                    partition,
+                    admitted.pool(),
+                    admission_wait_us,
+                    Some(sink),
+                )
+                .await
+            }
+            None => Err("streamed task has no fragment".to_owned()),
+        };
+        let outcome = if task_cancellation.is_cancelled() {
+            TaskOutcome::Failed(Arc::from("query canceled"))
+        } else {
+            match result {
+                Ok((_, _, scan, execution)) => {
+                    TaskOutcome::Success(Arc::new(crate::transport::CachedTaskResult::streamed(
+                        elapsed_us(started),
+                        scan.and_then(|scan| serde_json::to_string(&scan).ok()),
+                        serde_json::to_string(&execution).ok(),
+                    )))
+                }
+                Err(message) => TaskOutcome::Failed(Arc::from(message)),
+            }
+        };
+        // A failure before the schema answers the request itself.
+        if let Some(ready) = ready_sender.lock().ok().and_then(|mut ready| ready.take()) {
+            let _ = ready.send(Err(match &outcome {
+                TaskOutcome::Failed(message) => message.to_string(),
+                TaskOutcome::Success(_) => "task produced no result".to_owned(),
+            }));
+        }
+        // The outcome is recorded before the body ends: a coordinator that
+        // sees the end of the body finds the metrics, or the failure, at
+        // `/metrics` without waiting.
+        let _ = owner.complete(outcome);
+        drop(chunks);
+        drop(admitted);
+    });
+    match ready.await {
+        Ok(Ok(())) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/vnd.apache.arrow.stream")
+            .header(TASK_STREAMED_HEADER, "1")
+            .body(Body::from_stream(futures::stream::unfold(
+                body,
+                |mut body| async move {
+                    body.recv()
+                        .await
+                        .map(|chunk| (Ok::<_, std::io::Error>(chunk), body))
+                },
+            )))
+            .unwrap_or_else(|error| lifecycle_error_response(error.to_string())),
+        Ok(Err(message)) => {
+            if cancellation.is_cancelled() {
+                canceled_task_response()
+            } else {
+                task_failure_response(StatusCode::INTERNAL_SERVER_ERROR, &message)
+            }
+        }
+        Err(_) => task_failure_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "task ended before producing a result",
+        ),
+    }
+}
+
+/// The metrics of a task once it finished: `200` with `elapsed_us`, `scan`
+/// and `execution` (null when the task carries none), `202` while it still
+/// runs, `500` with its failure, `404` for a task this worker does not know
+/// (or has already forgotten with its query).
+async fn task_metrics(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((query_id, stage_id, partition, attempt)): Path<(String, u32, usize, u32)>,
+) -> Response {
+    let expected = state.config.exchange_token.as_deref().unwrap_or_default();
+    if crate::exchange::validate_bearer_header(
+        headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok()),
+        expected,
+    )
+    .is_err()
+    {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let task_id = TaskId {
+        query_id,
+        stage_id: StageId(stage_id),
+        partition,
+        attempt,
+    };
+    match state.lifecycle.tasks.status(&task_id) {
+        Err(error) => lifecycle_error_response(error.to_string()),
+        Ok(crate::lifecycle::TaskStatus::Unknown) => {
+            task_failure_response(StatusCode::NOT_FOUND, "unknown task")
+        }
+        Ok(crate::lifecycle::TaskStatus::Running) => (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({ "state": "RUNNING" })),
+        )
+            .into_response(),
+        Ok(crate::lifecycle::TaskStatus::Completed(TaskOutcome::Failed(message))) => {
+            task_failure_response(StatusCode::INTERNAL_SERVER_ERROR, &message)
+        }
+        Ok(crate::lifecycle::TaskStatus::Completed(TaskOutcome::Success(result))) => {
+            let json = |header: Option<&str>| {
+                header
+                    .filter(|value| !value.is_empty())
+                    .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+                    .unwrap_or(serde_json::Value::Null)
+            };
+            Json(serde_json::json!({
+                "elapsed_us": result.elapsed_us,
+                "scan": json(result.scan_metrics_header.as_deref()),
+                "execution": json(result.execution_metrics_header.as_deref()),
+            }))
+            .into_response()
         }
     }
 }
@@ -1270,6 +1574,8 @@ impl crate::fragment_exec::ExchangeInputProvider for PrefetchedExchangeInputs {
     }
 }
 
+/// Run a fragment task. With `root`, a root fragment's result streams
+/// through it as it is produced and the returned batches are empty.
 async fn execute_fragment_task(
     state: &Arc<AppState>,
     req: &TaskRequest,
@@ -1277,6 +1583,7 @@ async fn execute_fragment_task(
     partition: kaveon_storage::ScanPartition,
     memory: &kaveon_core::QueryMemoryPool,
     admission_wait_us: u64,
+    root: Option<RootStreamSink>,
 ) -> Result<
     (
         arrow::datatypes::SchemaRef,
@@ -1412,7 +1719,8 @@ async fn execute_fragment_task(
         let mut sink = |partition: usize, batch: &arrow::record_batch::RecordBatch| {
             outputs.write(partition, batch)
         };
-        let result = crate::fragment_exec::execute_fragment_streaming(
+        let mut root = root;
+        let result = crate::fragment_exec::execute_fragment_streaming_root(
             &execution_fragment,
             &catalog,
             &PrefetchedExchangeInputs {
@@ -1423,6 +1731,8 @@ async fn execute_fragment_task(
             partition,
             Some(&execution_memory),
             &mut sink,
+            root.as_mut()
+                .map(|root| root as &mut dyn crate::fragment_exec::RootSink),
         )
         .map_err(|error| error.to_string());
         let outputs = match &result {
@@ -1431,13 +1741,27 @@ async fn execute_fragment_task(
                 .map_err(|error| error.to_string()),
             Err(error) => Err(error.clone()),
         };
+        // A failed fragment leaves the streamed result without its end
+        // marker: that is how the coordinator learns to ask for the outcome.
+        let root_finished = match (&result, root) {
+            (Ok(_), Some(root)) => root.finish().map_err(|error| error.to_string()),
+            _ => Ok(()),
+        };
         let cpu_us =
             cpu_started.and_then(|started| thread_cpu_us().map(|end| end.saturating_sub(started)));
-        (result, outputs, cpu_us, queue_us, elapsed_us(wall_started))
+        (
+            result,
+            outputs,
+            root_finished,
+            cpu_us,
+            queue_us,
+            elapsed_us(wall_started),
+        )
     })
     .await
     .map_err(|error| format!("fragment execution task failed: {error}"))?;
-    let (execution, outputs, compute_cpu_us, compute_queue_us, compute_wall_us) = execution;
+    let (execution, outputs, root_finished, compute_cpu_us, compute_queue_us, compute_wall_us) =
+        execution;
     // The uploaders finish once their channels close; a failed upload is a
     // failed task whatever the fragment returned.
     let upload_started = Instant::now();
@@ -1457,6 +1781,7 @@ async fn execute_fragment_task(
     }
     let execution = execution?;
     let outputs = outputs?;
+    root_finished?;
     metrics.exchange_encode_us = outputs.encode_us;
     metrics.exchange_output_copies = outputs.lanes as u64;
     metrics.exchange_output_bytes = uploaded;
@@ -1591,6 +1916,17 @@ fn complete_owned_task(
 
 fn task_outcome_response(outcome: TaskOutcome<crate::transport::CachedTaskResult>) -> Response {
     match outcome {
+        // A streamed root task's rows went to the coordinator as it ran and
+        // are not retained: a second submission is refused, and its
+        // metrics stay at `/metrics`.
+        TaskOutcome::Success(result) if result.streamed => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "streamed root task result is not retained; its metrics are at /metrics",
+                "code": "TASK_RESULT_NOT_RETAINED"
+            })),
+        )
+            .into_response(),
         TaskOutcome::Success(result) => Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "application/vnd.apache.arrow.stream")
@@ -5614,7 +5950,14 @@ const REMOTE_TASK_TIMEOUT: Duration = Duration::from_secs(600);
 struct RemoteTaskFailure {
     message: String,
     retryable: bool,
+    /// Rows of a streamed root task already in the statement's pages when
+    /// it failed: a retry would deliver them again, so there is none.
+    rows_delivered: usize,
 }
+
+/// The message a statement fails with when a streamed root task failed
+/// after some of its rows reached the pages.
+const ROWS_DELIVERED_NO_RETRY: &str = " (rows already delivered; the statement is not retried)";
 
 async fn execute_remote_task(
     client: &reqwest::Client,
@@ -5638,24 +5981,19 @@ async fn execute_remote_task(
     let (schema, batches) = payload.collect().map_err(|message| RemoteTaskFailure {
         message,
         retryable: false,
+        rows_delivered: 0,
     })?;
     Ok((schema, batches, elapsed_us, output_bytes, scan, execution))
 }
 
-async fn execute_remote_task_payload(
+/// Submit a task and return its successful response; a refusal or an
+/// unreachable worker is the failure, classified for retry as before.
+async fn send_task_request(
     client: &reqwest::Client,
     worker: &NodeInfo,
     request: &TaskRequest,
     exchange_token: Option<&str>,
-) -> Result<
-    (
-        crate::transport::ArrowPayload,
-        u64,
-        Option<TaskScanMetrics>,
-        Option<TaskExecutionMetrics>,
-    ),
-    RemoteTaskFailure,
-> {
+) -> Result<reqwest::Response, RemoteTaskFailure> {
     let url = format!("{}/v1/task", worker.address.trim_end_matches('/'));
     let mut submission = client.post(url).json(request);
     if let Some(token) = exchange_token {
@@ -5678,6 +6016,7 @@ async fn execute_remote_task_payload(
             // A task that ran out of time would run out of time again, and
             // the first attempt is still running until the query is finished.
             retryable: !error.is_timeout(),
+            rows_delivered: 0,
         })?;
     if !response.status().is_success() {
         let status = response.status();
@@ -5698,34 +6037,359 @@ async fn execute_remote_task_payload(
                 worker.node_id
             ),
             retryable,
+            rows_delivered: 0,
         });
     }
-    let elapsed_us = response
-        .headers()
+    Ok(response)
+}
+
+/// The task metrics a collected task carries in its response headers.
+/// Absence is valid for an older worker or a fragment without reader
+/// telemetry.
+fn task_metrics_from_headers(
+    headers: &HeaderMap,
+) -> (u64, Option<TaskScanMetrics>, Option<TaskExecutionMetrics>) {
+    let elapsed_us = headers
         .get("x-kaveon-task-elapsed-us")
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse().ok())
         .unwrap_or_default();
-    // Absence is valid for an older worker or a fragment that has no reader telemetry.
-    let scan = response
-        .headers()
+    let scan = headers
         .get("x-kaveon-task-scan-metrics")
         .and_then(|value| value.to_str().ok())
         .filter(|value| !value.is_empty())
         .and_then(|value| serde_json::from_str(value).ok());
-    let execution = response
-        .headers()
+    let execution = headers
         .get("x-kaveon-task-execution-metrics")
         .and_then(|value| value.to_str().ok())
         .filter(|value| !value.is_empty())
         .and_then(|value| serde_json::from_str(value).ok());
+    (elapsed_us, scan, execution)
+}
+
+async fn execute_remote_task_payload(
+    client: &reqwest::Client,
+    worker: &NodeInfo,
+    request: &TaskRequest,
+    exchange_token: Option<&str>,
+) -> Result<
+    (
+        crate::transport::ArrowPayload,
+        u64,
+        Option<TaskScanMetrics>,
+        Option<TaskExecutionMetrics>,
+    ),
+    RemoteTaskFailure,
+> {
+    let response = send_task_request(client, worker, request, exchange_token).await?;
+    let (elapsed_us, scan, execution) = task_metrics_from_headers(response.headers());
     let payload = crate::transport::receive(response)
         .await
         .map_err(|message| RemoteTaskFailure {
             retryable: message.starts_with("network receive:"),
             message,
+            rows_delivered: 0,
         })?;
     Ok((payload, elapsed_us, scan, execution))
+}
+
+/// What a streamed root task delivered: its rows are in the pages; what
+/// is left is what the telemetry needs.
+struct StreamedTaskResult {
+    elapsed_us: u64,
+    output_rows: usize,
+    output_batches: usize,
+    output_bytes: usize,
+    scan: Option<TaskScanMetrics>,
+    execution: Option<TaskExecutionMetrics>,
+}
+
+/// One finished task as the coordinator's loop sees it.
+enum RemoteTaskOutput {
+    /// The whole result, spooled: non-root tasks and inline delivery.
+    Spooled {
+        payload: crate::transport::ArrowPayload,
+        elapsed_us: u64,
+        scan: Option<TaskScanMetrics>,
+        execution: Option<TaskExecutionMetrics>,
+    },
+    /// A root task whose rows streamed into the statement's pages.
+    Streamed(StreamedTaskResult),
+}
+
+/// What the root tasks of a paged statement share while they run at once:
+/// the writer their rows interleave into and the schema they must agree on.
+#[derive(Clone)]
+struct StreamedRootSink {
+    writer: Arc<std::sync::Mutex<Option<crate::results::ResultWriter>>>,
+    schema: Arc<std::sync::Mutex<Option<arrow::datatypes::SchemaRef>>>,
+}
+
+/// Takes the shared writer out when the run is left by any path that did
+/// not publish it: the dropped writer leaves the `410` tombstone, and a
+/// root task still streaming finds the writer gone rather than a page
+/// nobody will read.
+struct StreamedRootSinkGuard(Option<StreamedRootSink>);
+
+impl Drop for StreamedRootSinkGuard {
+    fn drop(&mut self) {
+        if let Some(sink) = &self.0
+            && let Ok(mut writer) = sink.writer.lock()
+        {
+            drop(writer.take());
+        }
+    }
+}
+
+/// The metrics of a finished task as its worker's `/metrics` reports them.
+struct FinishedTaskMetrics {
+    elapsed_us: u64,
+    scan: Option<TaskScanMetrics>,
+    execution: Option<TaskExecutionMetrics>,
+}
+
+/// The answer of a worker's `/metrics` for one task.
+enum TaskMetricsAnswer {
+    Finished(Box<FinishedTaskMetrics>),
+    Failed(String),
+    Running,
+}
+
+/// How long the coordinator waits for a task's metrics to settle after its
+/// stream ended; a worker records the outcome before it ends the body, so
+/// `202` here means the body was cut, not that the task is slow.
+const TASK_METRICS_ATTEMPTS: usize = 20;
+const TASK_METRICS_INTERVAL: Duration = Duration::from_millis(100);
+
+async fn fetch_task_metrics(
+    client: &reqwest::Client,
+    worker: &NodeInfo,
+    request: &TaskRequest,
+    exchange_token: &str,
+) -> Result<TaskMetricsAnswer, String> {
+    let url = format!(
+        "{}/v1/task/{}/{}/{}/{}/metrics",
+        worker.address.trim_end_matches('/'),
+        request.query_id,
+        request.stage_id,
+        request.partition_index,
+        request.attempt
+    );
+    for attempt in 0..TASK_METRICS_ATTEMPTS {
+        if attempt > 0 {
+            tokio::time::sleep(TASK_METRICS_INTERVAL).await;
+        }
+        let response = client
+            .get(&url)
+            .bearer_auth(exchange_token)
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await
+            .map_err(|error| format!("worker '{}' is unavailable: {error}", worker.node_id))?;
+        let status = response.status();
+        let body: serde_json::Value = response.json().await.unwrap_or_default();
+        match status {
+            StatusCode::OK => {
+                return Ok(TaskMetricsAnswer::Finished(Box::new(FinishedTaskMetrics {
+                    elapsed_us: body["elapsed_us"].as_u64().unwrap_or_default(),
+                    scan: serde_json::from_value(body["scan"].clone()).ok(),
+                    execution: serde_json::from_value(body["execution"].clone()).ok(),
+                })));
+            }
+            StatusCode::ACCEPTED => continue,
+            StatusCode::INTERNAL_SERVER_ERROR => {
+                return Ok(TaskMetricsAnswer::Failed(
+                    body["error"].as_str().unwrap_or("task failed").to_owned(),
+                ));
+            }
+            _ => {
+                return Err(format!(
+                    "worker '{}' answered {status} for the task's metrics",
+                    worker.node_id
+                ));
+            }
+        }
+    }
+    Ok(TaskMetricsAnswer::Running)
+}
+
+/// The failure of a streamed root task whose body did not arrive whole:
+/// the worker's own outcome when it has one — the stream ends without its
+/// marker when the fragment fails — else the transport's account.
+async fn streamed_task_failure(
+    client: &reqwest::Client,
+    worker: &NodeInfo,
+    request: &TaskRequest,
+    exchange_token: &str,
+    streamed: bool,
+    transport_message: String,
+    rows_delivered: usize,
+) -> RemoteTaskFailure {
+    if streamed
+        && let Ok(TaskMetricsAnswer::Failed(error)) =
+            fetch_task_metrics(client, worker, request, exchange_token).await
+    {
+        return RemoteTaskFailure {
+            message: format!("worker '{}' failed task: {error}", worker.node_id),
+            retryable: true,
+            rows_delivered,
+        };
+    }
+    RemoteTaskFailure {
+        retryable: transport_message.starts_with("network receive:"),
+        message: transport_message,
+        rows_delivered,
+    }
+}
+
+/// Run a root task with its rows streamed into the statement's pages as
+/// the worker produces them. The first task to deliver a schema publishes
+/// the columns; every task's rows go to the shared writer in arrival
+/// order. The task's metrics come from `/metrics` once its body ended —
+/// or from the headers, for a worker that answered the old way.
+async fn execute_remote_root_task_streamed(
+    client: &reqwest::Client,
+    worker: &NodeInfo,
+    request: &TaskRequest,
+    exchange_token: &str,
+    query_id: &str,
+    sink: &StreamedRootSink,
+) -> Result<StreamedTaskResult, RemoteTaskFailure> {
+    let response = send_task_request(client, worker, request, Some(exchange_token)).await?;
+    let streamed = response.headers().contains_key(TASK_STREAMED_HEADER);
+    let header_metrics = task_metrics_from_headers(response.headers());
+    let mut stream = match crate::transport::receive_stream(response).await {
+        Ok(stream) => stream,
+        Err(message) => {
+            return Err(streamed_task_failure(
+                client,
+                worker,
+                request,
+                exchange_token,
+                streamed,
+                message,
+                0,
+            )
+            .await);
+        }
+    };
+    let schema = stream.schema();
+    let publish = {
+        let mut expected = sink.writer_schema()?;
+        match expected.as_ref() {
+            Some(expected) if expected != &schema => {
+                return Err(RemoteTaskFailure {
+                    message: "root tasks returned incompatible schemas".into(),
+                    retryable: false,
+                    rows_delivered: 0,
+                });
+            }
+            Some(_) => false,
+            None => {
+                *expected = Some(Arc::clone(&schema));
+                true
+            }
+        }
+    };
+    if publish {
+        // A paged reader can render page 0 the moment it lands: give the
+        // running record its columns now.
+        publish_columns(query_id, &column_infos(&schema)).await;
+    }
+    let mut output_rows = 0;
+    let mut output_batches = 0;
+    loop {
+        match stream.next_batch().await {
+            Some(Ok(batch)) => {
+                output_batches += 1;
+                let rows = batches_to_json(&[batch]);
+                let mut writer = sink.writer.lock().map_err(|_| RemoteTaskFailure {
+                    message: "result writer unavailable".into(),
+                    retryable: false,
+                    rows_delivered: output_rows,
+                })?;
+                let Some(writer) = writer.as_mut() else {
+                    return Err(RemoteTaskFailure {
+                        message: "the statement's result was closed while its rows streamed".into(),
+                        retryable: false,
+                        rows_delivered: output_rows,
+                    });
+                };
+                for row in rows {
+                    writer.push(row).map_err(|error| RemoteTaskFailure {
+                        message: error.to_string(),
+                        retryable: false,
+                        rows_delivered: output_rows,
+                    })?;
+                    output_rows += 1;
+                }
+            }
+            Some(Err(message)) => {
+                return Err(streamed_task_failure(
+                    client,
+                    worker,
+                    request,
+                    exchange_token,
+                    streamed,
+                    message,
+                    output_rows,
+                )
+                .await);
+            }
+            None => break,
+        }
+    }
+    let output_bytes = stream.bytes() as usize;
+    let (elapsed_us, scan, execution) = if streamed {
+        match fetch_task_metrics(client, worker, request, exchange_token).await {
+            Ok(TaskMetricsAnswer::Finished(metrics)) => {
+                (metrics.elapsed_us, metrics.scan, metrics.execution)
+            }
+            // The rows arrived whole; the task's telemetry did not. The
+            // record shows the scan totals as incomplete.
+            Ok(TaskMetricsAnswer::Running) => (0, None, None),
+            Ok(TaskMetricsAnswer::Failed(error)) => {
+                return Err(RemoteTaskFailure {
+                    message: format!(
+                        "worker '{}' reported a failure after streaming a complete result: {error}",
+                        worker.node_id
+                    ),
+                    retryable: false,
+                    rows_delivered: output_rows,
+                });
+            }
+            Err(error) => {
+                eprintln!(
+                    "task {}/{}/{} metrics unavailable: {error}",
+                    request.query_id, request.stage_id, request.partition_index
+                );
+                (0, None, None)
+            }
+        }
+    } else {
+        header_metrics
+    };
+    Ok(StreamedTaskResult {
+        elapsed_us,
+        output_rows,
+        output_batches,
+        output_bytes,
+        scan,
+        execution,
+    })
+}
+
+impl StreamedRootSink {
+    fn writer_schema(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, Option<arrow::datatypes::SchemaRef>>, RemoteTaskFailure>
+    {
+        self.schema.lock().map_err(|_| RemoteTaskFailure {
+            message: "result schema unavailable".into(),
+            retryable: false,
+            rows_delivered: 0,
+        })
+    }
 }
 
 async fn cleanup_distributed_query(state: &Arc<AppState>, query_id: &str) {
@@ -5883,6 +6547,14 @@ async fn execute_distributed_fragments(
     let mut result_schema = None;
     let mut result_batches = Vec::new();
     let mut result_bytes = 0usize;
+    // Paged delivery: the root tasks stream their rows into the writer as
+    // they run, several at once. The guard takes the writer back out on
+    // every exit but the publish.
+    let streamed_sink = result_writer.take().map(|writer| StreamedRootSink {
+        writer: Arc::new(std::sync::Mutex::new(Some(writer))),
+        schema: Arc::new(std::sync::Mutex::new(None)),
+    });
+    let sink_guard = StreamedRootSinkGuard(streamed_sink.clone());
 
     while !orchestrator.is_terminal() {
         if cancellation.is_cancelled() {
@@ -5909,12 +6581,31 @@ async fn execute_distributed_fragments(
             else {
                 return Some(Err("task references an unavailable worker".into()));
             };
-            let request = task_request_from_dispatch(&dispatch, context);
+            let mut request = task_request_from_dispatch(&dispatch, context);
+            let root = dispatch.exchange_outputs.is_empty();
+            let root_sink = if root { streamed_sink.clone() } else { None };
+            request.stream_result = root_sink.is_some();
             let client = client.clone();
             let token = token.clone();
+            let query_id = query_id.to_owned();
             tasks.spawn(async move {
-                let result =
-                    execute_remote_task_payload(&client, &worker, &request, Some(&token)).await;
+                let result = match root_sink {
+                    Some(sink) => execute_remote_root_task_streamed(
+                        &client, &worker, &request, &token, &query_id, &sink,
+                    )
+                    .await
+                    .map(RemoteTaskOutput::Streamed),
+                    None => execute_remote_task_payload(&client, &worker, &request, Some(&token))
+                        .await
+                        .map(
+                            |(payload, elapsed_us, scan, execution)| RemoteTaskOutput::Spooled {
+                                payload,
+                                elapsed_us,
+                                scan,
+                                execution,
+                            },
+                        ),
+                };
                 (dispatch, worker, result)
             });
         }
@@ -5928,52 +6619,69 @@ async fn execute_distributed_fragments(
             };
             let task_id = &dispatch.assignment.task_id;
             match result {
-                Ok((mut payload, elapsed_us, scan, execution)) => {
-                    let schema = payload.schema();
-                    let output_bytes = payload.bytes();
-                    let mut output_rows = 0;
-                    let mut output_batches = 0;
-                    let root = dispatch.exchange_outputs.is_empty();
-                    if root {
-                        if result_schema
-                            .as_ref()
-                            .is_some_and(|expected| expected != &schema)
-                        {
-                            orchestrator.cancel();
-                            return Some(Err("root tasks returned incompatible schemas".into()));
-                        }
-                        if result_schema.is_none() && result_writer.is_some() {
-                            // A paged reader can render page 0 the moment it
-                            // lands: give the running record its columns now.
-                            publish_columns(query_id, &column_infos(&schema)).await;
-                        }
-                        result_schema.get_or_insert(schema);
-                    }
-                    loop {
-                        let batch = match payload.next_batch() {
-                            Ok(Some(batch)) => batch,
-                            Ok(None) => break,
-                            Err(error) => return Some(Err(error)),
-                        };
-                        output_rows += batch.num_rows();
-                        output_batches += 1;
-                        if root {
-                            if let Some(writer) = result_writer.as_mut() {
-                                for row in batches_to_json(&[batch]) {
-                                    if let Err(error) = writer.push(row) {
-                                        return Some(Err(error.to_string()));
+                Ok(output) => {
+                    let (elapsed_us, output_rows, output_batches, output_bytes, scan, execution) =
+                        match output {
+                            RemoteTaskOutput::Streamed(streamed) => (
+                                streamed.elapsed_us,
+                                streamed.output_rows,
+                                streamed.output_batches,
+                                streamed.output_bytes,
+                                streamed.scan,
+                                streamed.execution,
+                            ),
+                            RemoteTaskOutput::Spooled {
+                                mut payload,
+                                elapsed_us,
+                                scan,
+                                execution,
+                            } => {
+                                let schema = payload.schema();
+                                let output_bytes = payload.bytes();
+                                let mut output_rows = 0;
+                                let mut output_batches = 0;
+                                // A spooled root is inline delivery: the
+                                // rows collect here under the inline cap.
+                                let root = dispatch.exchange_outputs.is_empty();
+                                if root {
+                                    if result_schema
+                                        .as_ref()
+                                        .is_some_and(|expected| expected != &schema)
+                                    {
+                                        orchestrator.cancel();
+                                        return Some(Err(
+                                            "root tasks returned incompatible schemas".into(),
+                                        ));
+                                    }
+                                    result_schema.get_or_insert(schema);
+                                }
+                                loop {
+                                    let batch = match payload.next_batch() {
+                                        Ok(Some(batch)) => batch,
+                                        Ok(None) => break,
+                                        Err(error) => return Some(Err(error)),
+                                    };
+                                    output_rows += batch.num_rows();
+                                    output_batches += 1;
+                                    if root {
+                                        result_bytes = result_bytes
+                                            .saturating_add(batch.get_array_memory_size());
+                                        if result_bytes > 16 * 1024 * 1024 {
+                                            return Some(Err("inline results exceed 16 MiB; request result_delivery=paged".into()));
+                                        }
+                                        result_batches.push(batch);
                                     }
                                 }
-                            } else {
-                                result_bytes =
-                                    result_bytes.saturating_add(batch.get_array_memory_size());
-                                if result_bytes > 16 * 1024 * 1024 {
-                                    return Some(Err("inline results exceed 16 MiB; request result_delivery=paged".into()));
-                                }
-                                result_batches.push(batch);
+                                (
+                                    elapsed_us,
+                                    output_rows,
+                                    output_batches,
+                                    output_bytes,
+                                    scan,
+                                    execution,
+                                )
                             }
-                        }
-                    }
+                        };
                     let task = TaskTelemetry {
                         task_id: task_id.to_string(),
                         node_id: worker.node_id,
@@ -6004,6 +6712,12 @@ async fn execute_distributed_fragments(
                     eprintln!("distributed task {task_id} failed: {}", failure.message);
                     task_failures.push(failure.message.clone());
                     release_dispatch_outputs(&client, &token, &dispatch).await;
+                    // Rows of a streamed root task are already in the pages:
+                    // running it again would deliver them twice.
+                    if failure.retryable && failure.rows_delivered > 0 {
+                        orchestrator.cancel();
+                        return Some(Err(format!("{}{ROWS_DELIVERED_NO_RETRY}", failure.message)));
+                    }
                     if !failure.retryable {
                         orchestrator.cancel();
                         return Some(Err(failure.message));
@@ -6038,7 +6752,10 @@ async fn execute_distributed_fragments(
     if !orchestrator.is_finished() {
         return Some(Err("distributed query terminated before completion".into()));
     }
-    let Some(schema) = result_schema else {
+    let streamed_schema = streamed_sink
+        .as_ref()
+        .and_then(|sink| sink.schema.lock().ok().and_then(|schema| schema.clone()));
+    let Some(schema) = result_schema.or(streamed_schema) else {
         return Some(Err(
             "distributed query completed without a root result".into()
         ));
@@ -6054,7 +6771,13 @@ async fn execute_distributed_fragments(
             record_stage_task(&mut stages, stage_id.0, task_count, stage_elapsed_us, task);
         }
     }
-    let data = if let Some(writer) = result_writer.take() {
+    let data = if let Some(sink) = &streamed_sink {
+        let writer = sink.writer.lock().ok().and_then(|mut writer| writer.take());
+        let Some(writer) = writer else {
+            return Some(Err(
+                "the statement's result was closed before it completed".into()
+            ));
+        };
         if let Err(error) = state.results.publish(query_id, writer) {
             return Some(Err(error.to_string()));
         }
@@ -6062,6 +6785,7 @@ async fn execute_distributed_fragments(
     } else {
         batches_to_json(&result_batches)
     };
+    drop(sink_guard);
     Some(Ok((
         TaskResponse {
             columns: columns_from_schema(&schema),
@@ -6164,6 +6888,7 @@ fn task_request_from_dispatch(dispatch: &TaskDispatch, context: &QueryContext) -
                 worker_uri: location.worker_uri.clone(),
             })
             .collect(),
+        stream_result: false,
     }
 }
 
@@ -6292,6 +7017,7 @@ async fn execute_distributed_top_n(
                     exchange_inputs: vec![],
                     exchange_outputs: vec![],
                     settings: settings.clone(),
+                    stream_result: false,
                 };
                 let task_id = kaveon_core::TaskId {
                     query_id: request.query_id.clone(),
@@ -6476,6 +7202,7 @@ async fn execute_distributed_aggregate(
                     exchange_inputs: vec![],
                     exchange_outputs: vec![],
                     settings: settings.clone(),
+                    stream_result: false,
                 };
                 let task_id = kaveon_core::TaskId {
                     query_id: request.query_id.clone(),
@@ -7560,6 +8287,7 @@ mod tests {
             exchange_inputs: vec![],
             exchange_outputs: vec![],
             settings,
+            stream_result: false,
         };
         let wire = serde_json::to_value(&request).unwrap();
         assert_eq!(
@@ -10061,6 +10789,7 @@ mod tests {
             exchange_inputs: vec![],
             exchange_outputs: vec![],
             settings: crate::settings::QuerySettings::default(),
+            stream_result: false,
         };
 
         assert!(
@@ -10601,5 +11330,496 @@ mod tests {
         let (decoded_schema, decoded_batches) = decode_arrow_stream(&bytes).unwrap();
         assert_eq!(decoded_schema, schema);
         assert!(decoded_batches.is_empty());
+    }
+}
+
+/// The streamed root path: a worker streams a root task's rows while the
+/// task runs, the coordinator pages them as they arrive, and a failure
+/// after delivery is final.
+#[cfg(test)]
+mod streamed_root_tests {
+    use super::*;
+    use arrow::array::Int64Array;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use kaveon_core::{
+        AccessPattern, CatalogManager, CatalogProvider, DataFormat, MemoryCatalog, StorageType,
+        TableMeta,
+    };
+
+    const TOKEN: &str = "exchange-token-at-least-32-bytes-long";
+    const SNAPSHOT: &str = "sha256:streamed-root-tests";
+    const ROW_GROUPS: i64 = 2;
+    const ROWS_PER_GROUP: i64 = 20_000;
+    /// The reader's batch size: a row group of `ROWS_PER_GROUP` rows comes
+    /// out as three batches, the first this long.
+    const FIRST_BATCH_ROWS: usize = 8_192;
+
+    /// A catalog over one Parquet table of `ROW_GROUPS` row groups of
+    /// `ROWS_PER_GROUP` rows each: one row group per task of a two-task
+    /// scan, several batches per task.
+    fn table(directory: &std::path::Path) -> CatalogManager {
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+        let path = directory.join("numbers.parquet");
+        if !path.exists() {
+            let properties = parquet::file::properties::WriterProperties::builder()
+                .set_max_row_group_size(ROWS_PER_GROUP as usize)
+                .build();
+            let mut writer = parquet::arrow::ArrowWriter::try_new(
+                std::fs::File::create(&path).unwrap(),
+                Arc::clone(&schema),
+                Some(properties),
+            )
+            .unwrap();
+            for group in 0..ROW_GROUPS {
+                let values = (0..ROWS_PER_GROUP)
+                    .map(|row| group * ROWS_PER_GROUP + row)
+                    .collect::<Vec<_>>();
+                let batch = RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(Int64Array::from(values))],
+                )
+                .unwrap();
+                writer.write(&batch).unwrap();
+                writer.flush().unwrap();
+            }
+            writer.close().unwrap();
+        }
+        let mut catalog = MemoryCatalog::new(
+            "lake",
+            StorageType::Local {
+                base_path: directory.to_path_buf(),
+            },
+        )
+        .with_schema("data");
+        catalog
+            .register_table(
+                "data",
+                TableMeta {
+                    name: "numbers".into(),
+                    arrow_schema: schema,
+                    location: "numbers.parquet".into(),
+                    access: AccessPattern::Shortcut,
+                    format: DataFormat::Parquet,
+                },
+            )
+            .unwrap();
+        let mut manager = CatalogManager::new("lake", "data");
+        manager.register_catalog(Box::new(catalog));
+        manager
+    }
+
+    fn plan(statement: &str, manager: &CatalogManager) -> LogicalPlan {
+        let mut plan = sql_to_logical_plan_for_binder(statement).unwrap();
+        crate::planner::qualify_tables(&mut plan, "lake", "data");
+        kaveon_optim::binder::bind(plan, manager).unwrap()
+    }
+
+    fn state_over(manager: CatalogManager, coordinator: bool, node_id: &str) -> Arc<AppState> {
+        let mut state = catalog_test_state();
+        state.config.coordinator = coordinator;
+        state.config.node_id = node_id.to_owned();
+        *state.catalog.get_mut() = Arc::new(crate::PublishedCatalog {
+            manager,
+            snapshot_id: SNAPSHOT.into(),
+        });
+        Arc::new(state)
+    }
+
+    /// A worker over the table, served on a loopback port.
+    async fn spawn_worker(
+        manager: CatalogManager,
+        node_id: &str,
+    ) -> (NodeInfo, tokio::task::JoinHandle<()>) {
+        let state = state_over(manager, false, node_id);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = build_router(Arc::clone(&state));
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut info = state.cluster.read().await.this_node.clone();
+        info.node_id = node_id.to_owned();
+        info.address = format!("http://{address}");
+        info.role = NodeRole::Worker;
+        info.catalog_snapshot_id = Some(SNAPSHOT.into());
+        info.last_heartbeat = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        (info, server)
+    }
+
+    fn context() -> QueryContext {
+        QueryContext {
+            engine_version: "test".into(),
+            environment: "test".into(),
+            principal: None,
+            user: None,
+            source: None,
+            client: None,
+            catalog: "lake".into(),
+            schema: "data".into(),
+            time_zone: None,
+            client_address: None,
+            client_tags: Vec::new(),
+            result_delivery: Some("paged".into()),
+            catalog_snapshot_id: SNAPSHOT.into(),
+            settings: QuerySettings::default(),
+        }
+    }
+
+    /// A gate a probe waits at, from the executing thread, until the test
+    /// has seen what it needs.
+    struct Gate(std::sync::Mutex<bool>, std::sync::Condvar);
+    impl Gate {
+        fn new() -> Arc<Self> {
+            Arc::new(Self(
+                std::sync::Mutex::new(false),
+                std::sync::Condvar::new(),
+            ))
+        }
+        fn wait(&self) {
+            let mut released = self.0.lock().unwrap();
+            while !*released {
+                released = self.1.wait(released).unwrap();
+            }
+        }
+        fn release(&self) {
+            *self.0.lock().unwrap() = true;
+            self.1.notify_all();
+        }
+    }
+
+    /// A probe that holds every task of `query_id` after its first batch.
+    fn hold_after_first_batch(query_id: &str) -> Arc<Gate> {
+        let gate = Gate::new();
+        let probe: RootStreamProbe = Arc::new({
+            let gate = Arc::clone(&gate);
+            move |index| {
+                if index == 0 {
+                    gate.wait();
+                }
+                Ok(())
+            }
+        });
+        ROOT_STREAM_PROBES
+            .lock()
+            .unwrap()
+            .insert(query_id.to_owned(), probe);
+        gate
+    }
+
+    fn task_request(query_id: &str, fragment: ExecutableFragment, count: usize) -> TaskRequest {
+        TaskRequest {
+            query_id: query_id.into(),
+            stage_id: fragment.stage_id.0,
+            attempt: 0,
+            query: String::new(),
+            catalog: "lake".into(),
+            schema: "data".into(),
+            catalog_snapshot_id: None,
+            partition_index: 0,
+            partition_count: count,
+            fragment: Some(fragment),
+            execution_partition: Some(ExecutionPartitionRequest { index: 0, count }),
+            exchange_inputs: vec![],
+            exchange_outputs: vec![],
+            settings: QuerySettings::default(),
+            stream_result: true,
+        }
+    }
+
+    fn root_fragment(
+        query_id: &str,
+        manager: &CatalogManager,
+        workers: usize,
+    ) -> ExecutableFragment {
+        let plan = plan("SELECT v FROM numbers", manager);
+        let graph = crate::planner::build_stage_graph(query_id, &plan, workers).unwrap();
+        let fragments =
+            crate::planner::build_executable_fragments(query_id, &plan, manager, workers).unwrap();
+        fragments[&graph.root_stage].clone()
+    }
+
+    async fn metrics_status(
+        client: &reqwest::Client,
+        worker: &NodeInfo,
+        request: &TaskRequest,
+    ) -> (StatusCode, serde_json::Value) {
+        let response = client
+            .get(format!(
+                "{}/v1/task/{}/{}/{}/{}/metrics",
+                worker.address,
+                request.query_id,
+                request.stage_id,
+                request.partition_index,
+                request.attempt
+            ))
+            .bearer_auth(TOKEN)
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        (status, response.json().await.unwrap_or_default())
+    }
+
+    #[tokio::test]
+    async fn a_worker_streams_a_root_tasks_batches_before_the_fragment_finishes() {
+        let directory =
+            std::env::temp_dir().join(format!("kaveon-streamed-root-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let manager = table(&directory);
+        let fragment = root_fragment("q-stream", &manager, 1);
+        let (worker, server) = spawn_worker(manager, "worker-stream").await;
+        let client = reqwest::Client::new();
+        let request = task_request("q-stream", fragment.clone(), 1);
+        assert!(is_root_fragment(&request, &fragment));
+
+        let gate = hold_after_first_batch("q-stream");
+        let response = client
+            .post(format!("{}/v1/task", worker.address))
+            .bearer_auth(TOKEN)
+            .json(&request)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().contains_key(TASK_STREAMED_HEADER));
+        assert!(!response.headers().contains_key("x-kaveon-task-elapsed-us"));
+        let mut stream = crate::transport::receive_stream(response).await.unwrap();
+        assert_eq!(stream.schema().fields().len(), 1);
+        // The first batch arrives while the task is held: still running.
+        let first = stream.next_batch().await.unwrap().unwrap();
+        assert_eq!(first.num_rows(), FIRST_BATCH_ROWS);
+        let (status, body) = metrics_status(&client, &worker, &request).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+        gate.release();
+        let mut rows = first.num_rows();
+        let mut batches = 1;
+        while let Some(batch) = stream.next_batch().await {
+            rows += batch.unwrap().num_rows();
+            batches += 1;
+        }
+        assert_eq!(rows, (ROW_GROUPS * ROWS_PER_GROUP) as usize);
+        assert!(batches >= 2);
+        // The body ended after the outcome was recorded: the metrics are
+        // there at once.
+        let (status, body) = metrics_status(&client, &worker, &request).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body["elapsed_us"].is_u64());
+        assert!(body["scan"].is_object(), "{body}");
+        assert!(body["execution"].is_object(), "{body}");
+        let scan: TaskScanMetrics = serde_json::from_value(body["scan"].clone()).unwrap();
+        assert_eq!(scan.rows_emitted, (ROW_GROUPS * ROWS_PER_GROUP) as u64);
+        // A second submission of a streamed task is refused; the metrics stay.
+        let duplicate = client
+            .post(format!("{}/v1/task", worker.address))
+            .bearer_auth(TOKEN)
+            .json(&request)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+        let body: serde_json::Value = duplicate.json().await.unwrap();
+        assert_eq!(body["code"], "TASK_RESULT_NOT_RETAINED");
+        // Unknown and unauthenticated lookups.
+        let mut unknown = task_request("q-stream", fragment.clone(), 1);
+        unknown.attempt = 7;
+        let (status, _) = metrics_status(&client, &worker, &unknown).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let unauthorized = client
+            .get(format!(
+                "{}/v1/task/q-stream/{}/0/0/metrics",
+                worker.address, request.stage_id
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        // Without `stream_result` the task answers the collected way, with
+        // its metrics in the headers.
+        let mut collected = task_request("q-collected", fragment, 1);
+        collected.stream_result = false;
+        let response = client
+            .post(format!("{}/v1/task", worker.address))
+            .bearer_auth(TOKEN)
+            .json(&collected)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(!response.headers().contains_key(TASK_STREAMED_HEADER));
+        assert!(response.headers().contains_key("x-kaveon-task-elapsed-us"));
+        let (_, batches) = crate::transport::receive(response)
+            .await
+            .unwrap()
+            .collect()
+            .unwrap();
+        assert_eq!(
+            batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+            (ROW_GROUPS * ROWS_PER_GROUP) as usize
+        );
+        server.abort();
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// A coordinator over two workers, and the paged writer for `query_id`.
+    async fn cluster(
+        directory: &std::path::Path,
+        query_id: &str,
+    ) -> (
+        Arc<AppState>,
+        crate::results::ResultWriter,
+        Vec<tokio::task::JoinHandle<()>>,
+    ) {
+        let (first, first_server) = spawn_worker(table(directory), "worker-a").await;
+        let (second, second_server) = spawn_worker(table(directory), "worker-b").await;
+        let state = state_over(table(directory), true, "coordinator");
+        {
+            let mut cluster = state.cluster.write().await;
+            cluster.register_worker(first);
+            cluster.register_worker(second);
+        }
+        let writer = state.results.begin(query_id, "alice").unwrap();
+        (state, writer, vec![first_server, second_server])
+    }
+
+    fn alice() -> Identity {
+        Identity {
+            principal: "alice".into(),
+            display_identity: None,
+            role: crate::security::Role::Analyst,
+        }
+    }
+
+    #[allow(clippy::type_complexity)]
+    async fn run_statement(
+        state: &Arc<AppState>,
+        query_id: &str,
+        writer: crate::results::ResultWriter,
+    ) -> Option<Result<(TaskResponse, Vec<StageTelemetry>, u64), String>> {
+        let context = context();
+        let snapshot = Arc::clone(&*state.catalog.read().await);
+        let plan = plan("SELECT v FROM numbers", &snapshot);
+        let mut reason = None;
+        let mut writer = Some(writer);
+        execute_distributed_fragments(
+            state,
+            query_id,
+            &context,
+            &plan,
+            &snapshot,
+            &SourcePins::default(),
+            DistributedSink {
+                placement_reason: &mut reason,
+                result_writer: &mut writer,
+            },
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn the_coordinator_pages_root_rows_before_the_root_task_ends() {
+        let directory =
+            std::env::temp_dir().join(format!("kaveon-streamed-pages-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let (state, writer, servers) = cluster(&directory, "q-pages").await;
+        // Both root tasks hold after their first batch: whatever page 0
+        // shows arrived while they ran.
+        let gate = hold_after_first_batch("q-pages");
+        let run = run_statement(&state, "q-pages", writer);
+        let watch = async {
+            let deadline = Instant::now() + Duration::from_secs(60);
+            let page = loop {
+                match state.results.page("q-pages", 0, &alice()) {
+                    Ok(crate::results::ResultPage::Ready(page)) => break page,
+                    Ok(crate::results::ResultPage::Pending(_)) => {}
+                    Err(status) => panic!("page 0 answered {status}"),
+                }
+                assert!(Instant::now() < deadline, "page 0 never landed");
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            };
+            gate.release();
+            page
+        };
+        let (page, outcome) = tokio::join!(watch, run);
+        assert_eq!(page["complete"], serde_json::Value::Bool(false));
+        assert_eq!(page["data"].as_array().unwrap().len(), 1_000);
+        let (response, stages, _) = outcome.expect("distributed").expect("statement succeeds");
+        assert_eq!(response.columns[0].name, "v");
+        assert!(response.data.is_empty());
+        let root = stages.last().unwrap();
+        assert_eq!(root.tasks.len(), 2);
+        assert_eq!(
+            root.tasks
+                .iter()
+                .map(|task| task.output_rows)
+                .sum::<usize>(),
+            (ROW_GROUPS * ROWS_PER_GROUP) as usize
+        );
+        for task in &root.tasks {
+            assert!(task.output_batches >= 2, "{}", task.output_batches);
+            assert!(task.output_bytes > 0);
+            assert!(task.scan.is_some(), "scan metrics from /metrics");
+            assert!(task.execution.is_some(), "execution metrics from /metrics");
+        }
+        let (_, complete) = distributed_scan_telemetry(&stages);
+        assert!(complete);
+        // The result is complete, with every row.
+        let crate::results::ResultPage::Ready(first) =
+            state.results.page("q-pages", 0, &alice()).unwrap()
+        else {
+            panic!("page 0 is ready");
+        };
+        assert_eq!(first["complete"], serde_json::Value::Bool(true));
+        assert_eq!(
+            first["row_count"],
+            serde_json::Value::from(ROW_GROUPS * ROWS_PER_GROUP)
+        );
+        for server in servers {
+            server.abort();
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[tokio::test]
+    async fn a_root_task_that_fails_after_delivering_rows_fails_the_statement_for_good() {
+        let directory =
+            std::env::temp_dir().join(format!("kaveon-streamed-fail-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let (state, writer, servers) = cluster(&directory, "q-fail").await;
+        let probe: RootStreamProbe = Arc::new(|index| {
+            if index == 1 {
+                Err("injected failure after the first batch".into())
+            } else {
+                Ok(())
+            }
+        });
+        ROOT_STREAM_PROBES
+            .lock()
+            .unwrap()
+            .insert("q-fail".to_owned(), probe);
+        let error = match run_statement(&state, "q-fail", writer)
+            .await
+            .expect("distributed")
+        {
+            Ok(_) => panic!("the statement fails"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("injected failure after the first batch"),
+            "{error}"
+        );
+        assert!(error.ends_with(ROWS_DELIVERED_NO_RETRY), "{error}");
+        // The pages are gone: a client following them sees 410, not 404.
+        assert_eq!(
+            state.results.page("q-fail", 0, &alice()).unwrap_err(),
+            StatusCode::GONE
+        );
+        assert!(!state.results.contains("q-fail"));
+        for server in servers {
+            server.abort();
+        }
+        let _ = std::fs::remove_dir_all(&directory);
     }
 }

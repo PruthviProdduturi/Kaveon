@@ -124,6 +124,14 @@ pub fn execute_fragment_with_memory(
 /// batch), in production order, from the executing thread.
 pub type ExchangeSink<'a> = dyn FnMut(usize, &RecordBatch) -> Result<()> + 'a;
 
+/// Where a root fragment's result goes when it is streamed: `open` once
+/// with the schema before any batch — also for a result with no rows —
+/// then `write` per batch in production order, from the executing thread.
+pub trait RootSink {
+    fn open(&mut self, schema: &SchemaRef) -> Result<()>;
+    fn write(&mut self, batch: &RecordBatch) -> Result<()>;
+}
+
 /// Execute a fragment whose root is an exchange output, handing each
 /// partitioned batch to `sink` as it is produced instead of holding the
 /// task's whole output — a partial aggregate's output can be as large as
@@ -137,6 +145,30 @@ pub fn execute_fragment_streaming(
     scan_partition: ScanPartition,
     memory: Option<&QueryMemoryPool>,
     sink: &mut ExchangeSink<'_>,
+) -> Result<FragmentExecution> {
+    execute_fragment_streaming_root(
+        fragment,
+        catalog,
+        exchanges,
+        scan_partition,
+        memory,
+        sink,
+        None,
+    )
+}
+
+/// `execute_fragment_streaming`, with a root fragment's result handed to
+/// `root` batch by batch as it is produced when one is given: the returned
+/// execution then carries the result schema with no batches. A root sink
+/// is never consulted for a fragment whose root is an exchange output.
+pub fn execute_fragment_streaming_root(
+    fragment: &ExecutableFragment,
+    catalog: &CatalogManager,
+    exchanges: &dyn ExchangeInputProvider,
+    scan_partition: ScanPartition,
+    memory: Option<&QueryMemoryPool>,
+    sink: &mut ExchangeSink<'_>,
+    root_sink: Option<&mut dyn RootSink>,
 ) -> Result<FragmentExecution> {
     fragment.validate()?;
     let nodes = fragment
@@ -191,9 +223,19 @@ pub fn execute_fragment_streaming(
     )?;
     let result_schema = Arc::clone(operator.schema());
     let scan_metrics_complete = has_complete_scan_metrics(scan_count, scan_metrics.len());
+    let result_batches = match root_sink {
+        Some(root_sink) => {
+            root_sink.open(&result_schema)?;
+            while let Some(batch) = operator.next_batch()? {
+                root_sink.write(&batch)?;
+            }
+            Vec::new()
+        }
+        None => collect(&mut *operator)?,
+    };
     Ok(FragmentExecution {
         result_schema,
-        result_batches: collect(&mut *operator)?,
+        result_batches,
         exchange_outputs: BTreeMap::new(),
         scan_metrics,
         scan_metrics_complete,

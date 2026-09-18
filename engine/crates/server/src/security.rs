@@ -236,6 +236,7 @@ pub async fn authorize(
         return next.run(request).await;
     }
     let internal = path == "/v1/task"
+        || path.starts_with("/v1/task/")
         || path == "/v1/node/heartbeat"
         || path.starts_with("/v1/internal/")
         || path.starts_with("/v1/exchange")
