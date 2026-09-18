@@ -48,7 +48,8 @@ spec:
             # Delta tables (see scripts/generate-tpch-trino.py); the plain
             # Parquet layout from the first generation stays under
             # benchmarks/tpch/sf100/ until it is removed.
-            - {name: TPCH_ROOT, value: benchmarks/tpch/delta/sf100}
+            - {name: TPCH_ROOT, value: benchmarks/tpch/v2/sf100}
+            - {name: TPCH_REPLACE, value: "1"}
             - {name: TPCH_OUTPUT, value: /results/tpch-tables.json}
           resources:
             requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 128Mi}
