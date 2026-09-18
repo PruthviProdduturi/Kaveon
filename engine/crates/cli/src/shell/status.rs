@@ -41,8 +41,10 @@ pub fn status_line(facts: &StatusFacts<'_>, theme: &Theme) -> Line<'static> {
     }
     let mut spans = Vec::new();
     if let Some((catalog, schema)) = facts.context {
-        spans.push(Span::styled(format!(" {catalog}"), theme.accent));
-        spans.push(Span::styled(format!(".{schema} ·"), theme.dim));
+        spans.push(Span::styled(format!(" {catalog}"), theme.catalog));
+        spans.push(Span::styled(".", theme.dim));
+        spans.push(Span::styled(schema.to_owned(), theme.schema));
+        spans.push(Span::styled(" ·", theme.dim));
     }
     spans.push(Span::styled(format!(" {}", parts.join(" · ")), style));
     if let Some(mode) = facts.mode {
