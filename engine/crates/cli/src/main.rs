@@ -1,3 +1,4 @@
+mod admin;
 mod args;
 mod auth;
 mod config;
@@ -27,6 +28,12 @@ fn main() {
         Ok(args::Command::Run(options)) if options.local => run_local(*options),
         Ok(args::Command::Run(mut options)) => {
             if let Err(error) = remote::run(&mut options) {
+                eprintln!("error: {error}");
+                std::process::exit(1);
+            }
+        }
+        Ok(args::Command::Admin(options, command)) => {
+            if let Err(error) = remote::run_admin(&options, &command) {
                 eprintln!("error: {error}");
                 std::process::exit(1);
             }
@@ -102,6 +109,7 @@ fn run_local(options: args::Options) {
 
 fn print_usage() {
     println!("Usage: kaveon [URL[/catalog/schema]] [OPTIONS]");
+    println!("       kaveon <catalog|schema|table> <command> [ARGS] [OPTIONS]");
     println!();
     println!("Remote coordinator mode is the default.");
     println!();
@@ -138,6 +146,9 @@ fn print_usage() {
     println!("  -h, --help                  Print help");
     println!();
     println!("Connection defaults: KAVEON_CONFIG or ~/.kaveon_config (key=value).");
+    println!();
+    admin::print_usage();
+    println!();
     println!("Meta-commands:");
     println!("  .catalogs              List catalogs");
     println!("  .schemas               List schemas in current catalog");

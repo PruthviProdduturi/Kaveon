@@ -12,6 +12,9 @@ pub use crate::output::OutputFormat;
 #[derive(Debug, Eq, PartialEq)]
 pub enum Command {
     Run(Box<Options>),
+    /// `kaveon catalog|schema|table …` with the connection options it was
+    /// given.
+    Admin(Box<Options>, crate::admin::AdminCommand),
     Help,
     Version,
 }
@@ -82,6 +85,21 @@ fn normalize_args(args: &[String]) -> Vec<String> {
 }
 
 pub fn parse(args: &[String]) -> Result<Command, String> {
+    if let Some(noun) = args.get(1).filter(|word| crate::admin::is_noun(word)) {
+        let (command, connection) = crate::admin::split(&args[1..])?;
+        let mut merged = vec![args[0].clone()];
+        merged.extend(connection);
+        return match parse(&merged)? {
+            Command::Run(options) if options.local => Err(format!(
+                "kaveon {noun} commands run against a coordinator; --local does not apply"
+            )),
+            Command::Run(options) if options.execute.is_some() || options.file.is_some() => Err(
+                format!("kaveon {noun} commands cannot be combined with --execute or --file"),
+            ),
+            Command::Run(options) => Ok(Command::Admin(options, command)),
+            other => Ok(other),
+        };
+    }
     let normalized = normalize_args(args);
     let args = normalized.as_slice();
     let mut options = Options {
@@ -293,7 +311,7 @@ pub fn parse_with_config(args: &[String]) -> Result<Command, String> {
                 2
             };
         } else {
-            positional = true;
+            positional |= arg.starts_with("http://") || arg.starts_with("https://");
             index += 1;
         }
     }
@@ -529,6 +547,58 @@ mod tests {
         assert!(config_arguments("access-token=secret").is_err());
         assert!(config_arguments("invalid line").is_err());
     }
+    #[test]
+    fn administration_commands_take_the_connection_options() {
+        let Command::Admin(options, command) = parse(&strings(&[
+            "kaveon",
+            "table",
+            "register",
+            "orders",
+            "--location",
+            "orders.parquet",
+            "--format",
+            "parquet",
+            "--server",
+            "https://engine.example",
+            "--catalog",
+            "lake",
+            "--schema",
+            "sales",
+            "--timeout",
+            "2m",
+        ]))
+        .unwrap() else {
+            panic!("expected an administration command");
+        };
+        assert_eq!(options.server, "https://engine.example");
+        assert_eq!(options.catalog, "lake");
+        assert_eq!(options.schema, "sales");
+        assert_eq!(options.timeout, Duration::from_secs(120));
+        assert_eq!(
+            command.statement().unwrap().unwrap(),
+            "CREATE TABLE orders WITH (location = 'orders.parquet', format = 'parquet')"
+        );
+        assert!(
+            parse(&strings(&["kaveon", "catalog", "list", "--local"]))
+                .unwrap_err()
+                .contains("--local")
+        );
+        assert!(
+            parse(&strings(&["kaveon", "catalog", "list", "-e", "SELECT 1"]))
+                .unwrap_err()
+                .contains("--execute")
+        );
+        assert!(
+            parse(&strings(&["kaveon", "table", "vacuum"]))
+                .unwrap_err()
+                .contains("unknown command")
+        );
+        assert!(matches!(
+            parse(&strings(&["kaveon", "table", "list", "--help"])).unwrap(),
+            Command::Help
+        ));
+    }
+
     #[test]
     fn option_like_sql_is_never_reparsed_as_a_flag() {
         let Command::Run(options) =
