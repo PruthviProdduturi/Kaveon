@@ -38,7 +38,10 @@ On Linux x64 or Apple Silicon macOS, use:
 curl -fsSL https://raw.githubusercontent.com/PruthviProdduturi/Kaveon/dev/scripts/install.sh | bash
 ```
 
-Intel macOS and Linux ARM do not currently have prebuilt release assets.
+The preview has no Intel macOS or Linux ARM build. Tagged releases add Intel
+macOS: set `KAVEON_VERSION=<X.Y.Z>` (or `$env:KAVEON_VERSION`) before running
+either script to install a checksummed release instead of the preview; see
+[Install](../guides/engine-cli.md#install).
 
 ### 2. Sign in and select Kaveon
 

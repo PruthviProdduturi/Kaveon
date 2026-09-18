@@ -1,0 +1,18 @@
+# yaml-language-server: $$schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+# Rendered by scripts/release/render-packaging.py from the cli-v${VERSION} release assets.
+PackageIdentifier: PruthviProdduturi.Kaveon
+PackageVersion: ${VERSION}
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+  - RelativeFilePath: kaveon.exe
+    PortableCommandAlias: kaveon
+Commands:
+  - kaveon
+ReleaseDate: ${RELEASE_DATE}
+Installers:
+  - Architecture: x64
+    InstallerUrl: ${DOWNLOAD_BASE}/kaveon-${VERSION}-x86_64-pc-windows-msvc.zip
+    InstallerSha256: ${SHA256_WINDOWS_X64}
+ManifestType: installer
+ManifestVersion: 1.6.0
