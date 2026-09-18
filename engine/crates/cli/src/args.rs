@@ -41,6 +41,9 @@ pub struct Options {
     pub timeout: Duration,
     pub data_dir: Option<PathBuf>,
     pub config_path: Option<PathBuf>,
+    pub theme: String,
+    pub no_header: bool,
+    pub width: Option<u16>,
 }
 
 fn normalize_args(args: &[String]) -> Vec<String> {
@@ -61,6 +64,7 @@ fn normalize_args(args: &[String]) -> Vec<String> {
                 "--local"
                     | "--ignore-errors"
                     | "--no-history"
+                    | "--no-header"
                     | "--disable-auto-suggestion"
                     | "--help"
                     | "-h"
@@ -108,6 +112,9 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECONDS),
         data_dir: None,
         config_path: None,
+        theme: "dark".to_owned(),
+        no_header: false,
+        width: None,
     };
     let mut positional_server = false;
     let mut explicit_server = false;
@@ -136,6 +143,28 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             "--disable-auto-suggestion" => {
                 options.disable_auto_suggestion = true;
                 index += 1;
+            }
+            "--no-header" => {
+                options.no_header = true;
+                index += 1;
+            }
+            "--theme" => {
+                options.theme = take_value(args, &mut index, option)?.to_ascii_lowercase();
+                if !matches!(options.theme.as_str(), "dark" | "light" | "mono") {
+                    return Err("--theme expects dark, light, or mono".to_owned());
+                }
+            }
+            "--width" => {
+                let value = take_value(args, &mut index, option)?;
+                options.width = Some(
+                    value
+                        .parse::<u16>()
+                        .ok()
+                        .filter(|width| *width > 0)
+                        .ok_or_else(|| {
+                            format!("invalid width '{value}': expected a positive column count")
+                        })?,
+                );
             }
             "--ca-cert" => {
                 options.ca_cert = Some(PathBuf::from(take_value(args, &mut index, option)?))
@@ -286,7 +315,11 @@ pub fn parse_with_config(args: &[String]) -> Result<Command, String> {
             keys.insert(arg.as_str());
             index += if matches!(
                 arg.as_str(),
-                "--local" | "--ignore-errors" | "--no-history" | "--disable-auto-suggestion"
+                "--local"
+                    | "--ignore-errors"
+                    | "--no-history"
+                    | "--no-header"
+                    | "--disable-auto-suggestion"
             ) {
                 1
             } else {
@@ -352,6 +385,8 @@ fn config_arguments(text: &str) -> Result<Vec<String>, String> {
                 | "history-file"
                 | "editing-mode"
                 | "pager"
+                | "theme"
+                | "width"
         ) {
             return Err(format!(
                 "unsupported CLI config key '{key}' on line {}",
@@ -529,6 +564,26 @@ mod tests {
         assert!(config_arguments("access-token=secret").is_err());
         assert!(config_arguments("invalid line").is_err());
     }
+    #[test]
+    fn parses_shell_presentation_flags() {
+        let Command::Run(options) = parse(&strings(&[
+            "kaveon",
+            "--theme",
+            "mono",
+            "--no-header",
+            "--width",
+            "100",
+        ]))
+        .unwrap() else {
+            panic!("run");
+        };
+        assert_eq!(options.theme, "mono");
+        assert!(options.no_header);
+        assert_eq!(options.width, Some(100));
+        assert!(parse(&strings(&["kaveon", "--theme", "neon"])).is_err());
+        assert!(parse(&strings(&["kaveon", "--width", "0"])).is_err());
+    }
+
     #[test]
     fn option_like_sql_is_never_reparsed_as_a_flag() {
         let Command::Run(options) =
