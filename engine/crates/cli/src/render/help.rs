@@ -68,8 +68,8 @@ const GROUPS: &[Group] = &[
                 description: "cancel the running statement, or clear the input",
             },
             Entry {
-                command: ".limit [n | off]",
-                description: "rows a query without LIMIT shows (default 1,000); never for scripts",
+                command: ".limit [n]",
+                description: "rows a query without LIMIT shows (default 1,000, up to 10,000)",
             },
         ],
     },

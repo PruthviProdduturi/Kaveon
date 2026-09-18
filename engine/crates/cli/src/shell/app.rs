@@ -42,8 +42,13 @@ pub struct App {
 }
 
 impl App {
-    fn status_facts<'a>(&'a self, host: &'a str) -> StatusFacts<'a> {
+    fn status_facts<'a>(
+        &'a self,
+        context: Option<(&'a str, &'a str)>,
+        host: &'a str,
+    ) -> StatusFacts<'a> {
         StatusFacts {
+            context,
             host,
             workers_ready: self
                 .cluster
@@ -208,11 +213,9 @@ fn event_loop(app: &mut App, session: &Session, options: &mut Options) -> Result
                 let [editor_area, status_area] =
                     Layout::vertical([Constraint::Length(editor_height), Constraint::Length(1)])
                         .areas(frame.area());
-                let [prompt_area, text_area] = Layout::horizontal([
-                    Constraint::Length(prompt_width(context)),
-                    Constraint::Min(1),
-                ])
-                .areas(editor_area);
+                let [prompt_area, text_area] =
+                    Layout::horizontal([Constraint::Length(prompt_width()), Constraint::Min(1)])
+                        .areas(editor_area);
                 frame.render_widget(app.editor.widget(&app.theme, false), text_area);
                 // The rules span the whole width; the prompt sits on the first
                 // text row between them.
@@ -235,9 +238,9 @@ fn event_loop(app: &mut App, session: &Session, options: &mut Options) -> Result
                     height: 1,
                     ..prompt_area
                 };
-                frame.render_widget(Paragraph::new(prompt(context, &app.theme)), prompt_row);
+                frame.render_widget(Paragraph::new(prompt(&app.theme)), prompt_row);
                 frame.render_widget(
-                    Paragraph::new(status_line(&app.status_facts(&host), &app.theme)),
+                    Paragraph::new(status_line(&app.status_facts(context, &host), &app.theme)),
                     status_area,
                 );
             })
@@ -344,13 +347,11 @@ fn run_statement(
         if let Some(limit) = crate::shell::rowlimit::parse_command(argument)? {
             options.row_limit = limit;
         }
-        return Ok(plain(match options.row_limit {
-            Some(limit) => format!(
-                "row limit {} (interactive queries without LIMIT)\n",
-                render::thousands(limit as i128)
-            ),
-            None => "row limit off\n".to_owned(),
-        }));
+        return Ok(plain(format!(
+            "row limit {} for queries without LIMIT (1 to {}); scripts run with -e or -f are unlimited\n",
+            render::thousands(options.row_limit as i128),
+            render::thousands(crate::shell::rowlimit::HARD_ROW_LIMIT as i128)
+        )));
     }
     if text.starts_with('.') {
         return crate::remote::meta_command_to_string(session, options, text).map(plain);
@@ -370,14 +371,17 @@ fn run_statement(
         scanned_rows: None,
     };
     for statement in crate::input::split_statements(text)? {
-        let limited = options
-            .row_limit
-            .and_then(|limit| crate::shell::rowlimit::apply(&statement, limit));
-        let executed = match &limited {
-            Some(sql) => {
-                crate::remote::execute_with_limit(session, options, sql, options.row_limit)?
+        use crate::shell::rowlimit::{HARD_ROW_LIMIT, Limited, inspect, refusal};
+        let executed = match inspect(&statement, options.row_limit) {
+            Limited::Appended(sql) => {
+                crate::remote::execute_with_limit(session, options, &sql, Some(options.row_limit))?
             }
-            None => crate::remote::execute_to_string(session, options, &statement)?,
+            Limited::Explicit(explicit) if explicit > HARD_ROW_LIMIT => {
+                return Err(refusal(explicit));
+            }
+            Limited::Explicit(_) | Limited::Unchanged => {
+                crate::remote::execute_to_string(session, options, &statement)?
+            }
         };
         merged.output.push_str(&executed.output);
         if executed.elapsed_ms.is_some() {
