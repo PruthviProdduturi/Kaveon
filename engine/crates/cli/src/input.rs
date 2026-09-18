@@ -128,7 +128,7 @@ impl TerminalInput {
     }
 }
 
-fn default_history_file() -> Option<PathBuf> {
+pub fn default_history_file() -> Option<PathBuf> {
     std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .map(|path| path.join("kaveon").join("history"))

@@ -10,6 +10,7 @@ mod planner;
 mod remote;
 #[allow(dead_code)]
 mod render;
+mod shell;
 #[allow(dead_code)]
 mod theme;
 
