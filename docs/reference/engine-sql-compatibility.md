@@ -10,6 +10,7 @@ by the selected database and Kaveon's API guardrails.
 |---|---|---|
 | `SELECT` | Alpha | Local and object-store Parquet, Delta, and Iceberg tables resolved through the Engine catalog |
 | `ANALYZE catalog.schema.table` | Alpha | Admin-only on the coordinator; publishes exact metadata row counts bound to the catalog and immutable storage-source identity through the ADLS catalog head |
+| Catalog DDL: `CREATE CATALOG`, `CREATE SCHEMA`, `CREATE TABLE … WITH (location, format)`, `CALL system.register_table`, `ALTER TABLE … SET LOCATION`, `DROP CATALOG|SCHEMA|TABLE`, `SHOW CREATE TABLE`, `DESCRIBE`, `SHOW CATALOGS|SCHEMAS|TABLES` | Alpha | Registers existing Parquet, Delta and Iceberg tables in the durable catalog under the principal's role (admin for catalogs, analyst or admin for schemas and tables); columns are read from the source when omitted; a table is activated only after a metadata-only probe of its location. See the [API reference](api.md#catalog-statements) |
 | Column projection and aliases | Alpha | Projection is strict; unknown or duplicate requested columns fail |
 | `WHERE` comparisons and boolean expressions | Alpha | Row-level filter operator is implemented |
 | `GROUP BY` | Alpha | Local and distributed columnar hash aggregation: partials on several threads that flush on memory pressure, a hybrid final merge that spills sub-partitions; `GROUP BY` without an aggregate is DISTINCT over the keys |
@@ -27,7 +28,7 @@ by the selected database and Kaveon's API guardrails.
 | Window functions | Alpha | `ROW_NUMBER`, `RANK`, `DENSE_RANK`, `LAG`, `LEAD`, aggregates with `OVER (PARTITION BY … ORDER BY …)` and `ROWS`/`RANGE`/`GROUPS` frames |
 | Set operations | Alpha | `UNION [ALL]`, `INTERSECT`, `EXCEPT`, distributed (each side deduplicated on the workers) |
 | Date/time | Alpha | `EXTRACT`, `DATE_TRUNC`, `DATE_PART`, `TO_CHAR`, `NOW`, `CURRENT_DATE`, `CURRENT_TIMESTAMP`, `DATE '…'` literals, `date ± INTERVAL 'n' DAY`; `MONTH`/`YEAR` intervals only against a DATE literal |
-| Conditional, comparison and strings | Alpha | `CASE`, `COALESCE`, `BETWEEN`, `IN`, `LIKE`/`ILIKE` (Arrow kernels), `REGEXP_REPLACE`, `CAST`, concatenation, `UPPER`/`LOWER`/`LENGTH`/`TRIM`/`SUBSTR`/`REPEAT`/`REPLACE`/`LPAD`/`RPAD`; functions over dictionary columns run once per dictionary value |
+| Conditional, comparison and strings | Alpha | `CASE`, `COALESCE`, `BETWEEN`, `IN`, `LIKE`/`ILIKE` (Arrow kernels), `REGEXP_REPLACE`, `CAST`, concatenation, `UPPER`/`LOWER`/`LENGTH`/`TRIM`/`SUBSTR`/`REPEAT`/`REPLACE`/`LPAD`/`RPAD`; functions over dictionary columns run once per dictionary value the batch uses and keep a text result dictionary-encoded; `REGEXP_REPLACE` over plain text runs once per distinct value in the batch |
 | Literals against columns | Alpha | Integer literals push down to narrow integer and Date32 columns; integer and decimal literals meet double columns; text literals against Date32 columns are coerced on every reader |
 | `SUM(DISTINCT)`, `AVG(DISTINCT)` | Alpha | Exact mergeable distinct state |
 
@@ -39,9 +40,10 @@ by the selected database and Kaveon's API guardrails.
   more than one column, correlated `IN`; each is refused by name.
 - Non-equality join conditions (residual join filters) and `GROUPING SETS`/
   `CUBE`/`ROLLUP`, recursive CTEs, approximate aggregates, array/map/JSON types.
-- General-purpose table DDL and row DML. The separate product transaction API
-  accepts a bounded, revisioned metadata-record DML subset; it is not arbitrary
-  OLTP SQL.
+- Table-creating DDL and row DML: `CREATE TABLE AS`, `INSERT`, `UPDATE`,
+  `DELETE`, `ALTER TABLE ADD/DROP COLUMN`. Catalog DDL registers tables that
+  already exist in storage. The separate product transaction API accepts a
+  bounded, revisioned metadata-record DML subset; it is not arbitrary OLTP SQL.
 - Scalar optimizer statistics beyond row count. Native `ANALYZE` persists the
   exact row count and an immutable statistics document, but histogram/selectivity
   planning is not yet implemented.
@@ -78,6 +80,9 @@ The native CLI provides metadata commands over the Engine HTTP API:
 `SHOW COLUMNS FROM table`, `DESCRIBE table`, `USE [catalog.]schema`, and
 single-quoted `LIKE` filters. These commands resolve catalog definitions and
 are not emulations of PostgreSQL's `pg_catalog` or `information_schema`.
+The coordinator answers the same `SHOW` and `DESCRIBE` statements on
+`POST /v1/statement`, and `kaveon catalog|schema|table …` submits the catalog
+DDL from the command line ([CLI guide](../guides/engine-cli.md#catalog-administration)).
 The CLI currently has no PostgreSQL wire-protocol, JDBC, or ODBC compatibility
 claim.
 

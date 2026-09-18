@@ -16,7 +16,8 @@ tables, uncorrelated scalar subqueries in WHERE and HAVING, correlated
 binder, window functions (`ROW_NUMBER`, `RANK`, `DENSE_RANK`, `LAG`, `LEAD`
 and aggregate windows with `ROWS`/`RANGE`/`GROUPS` frames), `CASE`,
 `COALESCE`, `BETWEEN`, `IN` lists, `LIKE`/`ILIKE` through Arrow's kernels,
-`REGEXP_REPLACE`, `CAST`, string concatenation and functions
+`REGEXP_REPLACE` (once per distinct value of a batch, once per used
+dictionary value of a dictionary-encoded column), `CAST`, string concatenation and functions
 (`UPPER`, `LOWER`, `LENGTH`, `TRIM`, `CONCAT`, `SUBSTR`/`SUBSTRING`, `REPEAT`, `REPLACE`, `LPAD`, `RPAD`),
 `EXTRACT`, `DATE_TRUNC`, `DATE_PART`, `TO_CHAR`, `NOW`, `CURRENT_DATE`,
 `CURRENT_TIMESTAMP`, `DATE 'YYYY-MM-DD'` literals, `date ± INTERVAL 'n'

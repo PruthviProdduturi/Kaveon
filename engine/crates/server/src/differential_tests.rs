@@ -180,6 +180,25 @@ const CASES: &[(&str, &str, bool)] = &[
         "SELECT COUNT(*) AS n FROM {T} WHERE country LIKE 'United%'",
         false,
     ),
+    // Late materialisation's shape: every column of the few rows a
+    // contains-LIKE admits, then a top-N — the reader decodes the wide
+    // rest only for the survivors, and the executor's filter is still the
+    // truth on what arrives (the decoder admits short skip runs whole).
+    (
+        "wide_like_topn",
+        "SELECT * FROM {T} WHERE country LIKE '%ted King%' AND actions > 30 ORDER BY event_date DESC, user_id, latency_p75_ms, duration_sec LIMIT 10",
+        true,
+    ),
+    (
+        "not_like_ilike",
+        "SELECT country, surface, COUNT(*) AS n FROM {T} WHERE country NOT LIKE '%a%' AND surface ILIKE 'sql%' GROUP BY country, surface ORDER BY country, surface",
+        true,
+    ),
+    (
+        "like_or_null",
+        "SELECT COUNT(*) AS n FROM {T} WHERE industry LIKE 'Gov%' OR industry IS NULL",
+        false,
+    ),
     (
         "or_predicate",
         "SELECT COUNT(*) AS n FROM {T} WHERE region = 'Africa' OR platform = 'Mobile'",
@@ -307,6 +326,21 @@ const CASES: &[(&str, &str, bool)] = &[
         "count_star_filter_only",
         "SELECT COUNT(*) AS n FROM {T} WHERE surface = 'Chat' AND country = 'India' AND event_date >= '2026-07-20'",
         false,
+    ),
+    (
+        "regexp_group_key",
+        "SELECT REGEXP_REPLACE(country, '^([A-Z][a-z]+).*$', '$1') AS k, AVG(LENGTH(country)) AS l, COUNT(*) AS n, MIN(country) AS first FROM {T} WHERE country <> '' GROUP BY REGEXP_REPLACE(country, '^([A-Z][a-z]+).*$', '$1') HAVING COUNT(*) > 1000 ORDER BY l DESC, k LIMIT 6",
+        true,
+    ),
+    (
+        "regexp_projection",
+        "SELECT REGEXP_REPLACE(surface, '[^A-Za-z]+', '_') AS s, region FROM {T} WHERE event_date = '2026-07-04' AND industry IS NULL ORDER BY s, region LIMIT 6",
+        true,
+    ),
+    (
+        "regexp_distinct",
+        "SELECT DISTINCT REGEXP_REPLACE(platform, 'top|ile', '') AS p FROM {T} ORDER BY p",
+        true,
     ),
 ];
 

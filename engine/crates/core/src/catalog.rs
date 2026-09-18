@@ -488,6 +488,17 @@ impl TableDefinition {
         next.revision = self.revision.next()?;
         Ok(next)
     }
+    /// The next revision of this definition at another location, the same
+    /// lifecycle, columns, format and access: what `ALTER TABLE … SET
+    /// LOCATION` publishes.
+    pub fn with_location(&self, location: impl Into<String>) -> Result<Self> {
+        let location = location.into();
+        validate_metadata_text("table location", &location)?;
+        let mut next = self.clone();
+        next.location = location;
+        next.revision = self.revision.next()?;
+        Ok(next)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1009,6 +1020,14 @@ mod tests {
         .unwrap();
         assert_eq!(table.columns(), std::slice::from_ref(&column));
         assert_eq!(table.revision(), CatalogRevision::initial());
+
+        let active = table.transition(CatalogLifecycle::Active).unwrap();
+        let relocated = active.with_location("sales/orders_v2").unwrap();
+        assert_eq!(relocated.location(), "sales/orders_v2");
+        assert_eq!(relocated.revision().value(), 3);
+        assert_eq!(relocated.lifecycle(), CatalogLifecycle::Active);
+        assert_eq!(relocated.columns(), active.columns());
+        assert!(active.with_location(" ").is_err());
 
         assert!(
             TableDefinition::new(

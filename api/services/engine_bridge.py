@@ -1,5 +1,6 @@
 """Opt-in Engine control/data plane client. No secrets enter catalog definitions."""
 import json
+import re
 import uuid
 import os
 import ssl
@@ -37,7 +38,8 @@ def _verify_context():
         raise HTTPException(503, "Engine CA certificate is unavailable or invalid") from None
 
 
-def _request(method, path, token_name, actor, *, payload=None, revision=None, role=None, timeout=60):
+def _send(method, path, token_name, actor, *, payload=None, revision=None, role=None, timeout=60):
+    """One Engine round trip. Returns the raw response; only transport failures raise."""
     token = os.getenv(token_name)
     if not token:
         raise HTTPException(503, "Engine service credential is not configured")
@@ -47,14 +49,18 @@ def _request(method, path, token_name, actor, *, payload=None, revision=None, ro
     if revision is not None:
         headers["If-Match"] = str(revision)
     try:
-        response = httpx.request(method, _endpoint() + path, headers=headers, json=payload,
-                                 timeout=timeout, follow_redirects=False, verify=_verify_context())
+        return httpx.request(method, _endpoint() + path, headers=headers, json=payload,
+                             timeout=timeout, follow_redirects=False, verify=_verify_context())
     except httpx.TimeoutException:
         # The statement may still be running on the Engine; the caller chose how
         # long it was prepared to wait, so say that rather than "unavailable".
         raise HTTPException(504, f"Engine statement exceeded the client bound ({timeout}s)") from None
     except httpx.HTTPError:
         raise HTTPException(502, "Engine is unavailable") from None
+
+
+def _request(method, path, token_name, actor, *, payload=None, revision=None, role=None, timeout=60):
+    response = _send(method, path, token_name, actor, payload=payload, revision=revision, role=role, timeout=timeout)
     if response.status_code == 404:
         return None
     # Admission exhaustion is temporary. Preserve it for the Studio's bounded
@@ -287,3 +293,163 @@ def table_definition(catalog, schema, table, actor, role):
     if not isinstance(definition.get("columns"), list):
         raise HTTPException(502, "Engine table definition is invalid")
     return definition
+
+
+# ── Catalog management ───────────────────────────────────────────────────────
+# Trino users add catalogs, schemas and tables by name; the Engine keeps stable
+# ids, optimistic revisions and a Draft → Active lifecycle underneath. These
+# helpers speak the Engine's catalog API with the catalog-admin credential and
+# keep the Engine's own refusal message, because the person registering a
+# table needs to read why a definition or a location was refused. Locations
+# are storage paths and credentials are references; nothing here is secret.
+
+CATALOG_TOKEN = "KAVEON_ENGINE_CATALOG_TOKEN"
+
+
+def _engine_message(response, fallback):
+    try:
+        body = response.json()
+    except ValueError:
+        return fallback
+    message = body.get("error") if isinstance(body, dict) else None
+    return message.strip() if isinstance(message, str) and message.strip() else fallback
+
+
+def catalog_request(method, path, actor, *, payload=None, revision=None):
+    """A catalog definition read or mutation. Refusals carry the Engine's message."""
+    response = _send(method, path, CATALOG_TOKEN, actor, payload=payload, revision=revision)
+    status = response.status_code
+    if status == 404:
+        return None
+    if status in {409, 412, 428}:
+        raise HTTPException(409, _engine_message(response, "Engine revision conflict; reload before retrying"))
+    if status == 400:
+        raise HTTPException(422, _engine_message(response, "Engine refused the definition"))
+    if status == 401:
+        raise HTTPException(502, "Engine rejected the catalog credential")
+    if status in {403, 503}:
+        raise HTTPException(503, _engine_message(response, "Engine catalog mutations are unavailable"))
+    if not response.is_success:
+        raise HTTPException(502, "Engine rejected the request")
+    try:
+        return response.json()
+    except ValueError:
+        return None   # 204 from a delete
+
+
+def catalog_definitions(actor, role):
+    """Every durable catalog definition the Engine holds, in every lifecycle state."""
+    result = _request("GET", "/v1/catalog/definitions", "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role))
+    return result if isinstance(result, list) else []
+
+
+def catalog_definition(catalog_id, actor, role):
+    return _request("GET", "/v1/catalog/definitions/" + quote(catalog_id, safe=""),
+                    "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role))
+
+
+def schema_definitions(catalog_id, actor, role):
+    result = _request("GET", "/v1/catalog/definitions/" + quote(catalog_id, safe="") + "/schemas",
+                      "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role))
+    return result if isinstance(result, list) else []
+
+
+def schema_definition(schema_id, actor, role):
+    return _request("GET", "/v1/catalog/schemas/" + quote(schema_id, safe=""),
+                    "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role))
+
+
+def table_definitions(schema_id, actor, role):
+    result = _request("GET", "/v1/catalog/schemas/" + quote(schema_id, safe="") + "/tables",
+                      "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role))
+    return result if isinstance(result, list) else []
+
+
+def table_definition_by_id(table_id, actor, role):
+    return _request("GET", "/v1/catalog/tables/" + quote(table_id, safe=""),
+                    "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role))
+
+
+def _activate(path, definition, actor):
+    """Draft revision 1 → Active revision 2. The Engine publishes only Active
+    definitions into its query snapshot, so nothing is queryable before this."""
+    active = {**definition, "revision": definition["revision"] + 1, "lifecycle": "Active"}
+    return catalog_request("PUT", path, actor, payload=active, revision=definition["revision"])
+
+
+def create_schema(catalog_id, schema_id, name, actor):
+    draft = {"id": schema_id, "catalog_id": catalog_id, "name": name, "revision": 1, "lifecycle": "Draft"}
+    created = catalog_request("POST", "/v1/catalog/definitions/" + quote(catalog_id, safe="") + "/schemas",
+                              actor, payload=draft)
+    if not isinstance(created, dict):
+        raise HTTPException(502, "Engine returned an invalid schema definition")
+    return _activate("/v1/catalog/schemas/" + quote(schema_id, safe=""), created, actor)
+
+
+def delete_schema(schema_id, revision, actor):
+    catalog_request("DELETE", "/v1/catalog/schemas/" + quote(schema_id, safe=""), actor, revision=revision)
+
+
+def create_table(definition, actor):
+    """Register a table as Draft and activate it. Returns the Active definition."""
+    draft = {**definition, "revision": 1, "lifecycle": "Draft"}
+    created = catalog_request("POST", "/v1/catalog/schemas/" + quote(definition["schema_id"], safe="") + "/tables",
+                              actor, payload=draft)
+    if not isinstance(created, dict):
+        raise HTTPException(502, "Engine returned an invalid table definition")
+    return _activate("/v1/catalog/tables/" + quote(definition["id"], safe=""), created, actor)
+
+
+def replace_table(definition, revision, actor):
+    """Revision-replace one table; `revision` is the caller's If-Match."""
+    payload = {**definition, "revision": revision + 1}
+    return catalog_request("PUT", "/v1/catalog/tables/" + quote(definition["id"], safe=""), actor,
+                           payload=payload, revision=revision)
+
+
+def delete_table(table_id, revision, actor):
+    catalog_request("DELETE", "/v1/catalog/tables/" + quote(table_id, safe=""), actor, revision=revision)
+
+
+def probe_table(catalog, schema, table, actor, role, timeout=120):
+    """Read the table once through the Engine — `SELECT COUNT(*)`, result cache
+    bypassed — so registration proves the location is readable. Parquet and
+    Delta answer from footers and the pinned snapshot without scanning rows.
+    Returns {"ok": True, "row_count", "elapsed_ms", "query_id"} or
+    {"ok": False, "message", "code"} with the Engine's storage or analysis
+    error verbatim: the registrant needs the path or schema mismatch it names."""
+    roles = {"Editor": "analyst", "Admin": "admin"}
+    if role not in roles:
+        raise HTTPException(403, "The Editor role is required to verify a table")
+    if not all(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", part) for part in (schema, table)):
+        raise HTTPException(422, "Schema and table names must be plain SQL identifiers to be verified")
+    tag = "kaveon-api:catalog-probe:" + uuid.uuid4().hex
+    payload = {"query": f"SELECT COUNT(*) FROM {schema}.{table}", "catalog": catalog, "schema": schema,
+               "source": "studio", "client": "kaveon-api", "client_tags": [tag],
+               "settings": {"result_cache": False}}
+    try:
+        response = _send("POST", "/v1/statement", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
+                         payload=payload, role=roles[role], timeout=timeout)
+    except HTTPException as error:
+        if error.status_code == 504:
+            cancel_tagged(tag, actor, roles[role])
+        raise
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+    if response.status_code == 429:
+        raise HTTPException(429, "Engine query capacity is temporarily exhausted", headers={"Retry-After": "1"})
+    if not response.is_success or (isinstance(body, dict) and body.get("error")):
+        message = _engine_message(response, "Engine could not read the table")
+        code = body.get("code") if isinstance(body, dict) and isinstance(body.get("code"), str) else None
+        return {"ok": False, "message": message, "code": code}
+    rows = body.get("data", body.get("rows")) if isinstance(body, dict) else None
+    try:
+        row_count = int(rows[0][0])
+    except (TypeError, IndexError, ValueError, KeyError):
+        return {"ok": False, "message": "Engine returned no row count for the table", "code": None}
+    elapsed = body.get("elapsed_ms")
+    return {"ok": True, "row_count": row_count,
+            "elapsed_ms": int(elapsed) if isinstance(elapsed, (int, float)) else None,
+            "query_id": body.get("id")}

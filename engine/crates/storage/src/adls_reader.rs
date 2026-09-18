@@ -20,14 +20,17 @@ use parquet::arrow::{
     arrow_reader::ArrowReaderMetadata,
     async_reader::{AsyncFileReader, ParquetObjectReader, ParquetRecordBatchStream},
 };
-use parquet::{errors::ParquetError, file::metadata::ParquetMetaData};
+use parquet::{
+    errors::ParquetError,
+    file::metadata::{ParquetMetaData, ParquetMetaDataReader},
+};
 
 use crate::{
     ScanMetrics, ScanPartition,
     parquet_reader::{
-        BatchPredicate, matching_row_groups, projection_indices, record_selection_metrics,
-        validate_predicate,
+        matching_row_groups, projection_indices, record_selection_metrics, validate_predicate,
     },
+    scan_predicate::{BatchPredicate, LateMaterialisation, RowFilterPlan},
 };
 
 const DEFAULT_BATCH_SIZE: usize = 8_192;
@@ -86,7 +89,7 @@ fn cached_object_store(key: &str) -> Option<Arc<dyn ObjectStore>> {
         .cloned()
 }
 
-fn cache_object_store(key: String, store: Arc<dyn ObjectStore>) {
+pub(crate) fn cache_object_store(key: String, store: Arc<dyn ObjectStore>) {
     let Ok(mut cache) = OBJECT_STORE_CACHE.get_or_init(Default::default).lock() else {
         return;
     };
@@ -416,6 +419,39 @@ struct AdlsObjectReader {
     e_tag: Option<String>,
     version: Option<String>,
     shared: Option<Arc<FullObjectEntry>>,
+    metrics: ScanMetrics,
+}
+
+/// Page ranges the decoder asks for under an offset index come one per
+/// page; neighbours closer than this are read as one request.
+const RANGE_COALESCE_GAP: usize = 1024 * 1024;
+
+/// Merge ascending ranges whose gaps are at most `gap` bytes. Returns the
+/// merged ranges and, per input range, the merged range it lies in and its
+/// offset there. Ranges that are not ascending are returned as asked.
+fn coalesce_ranges(
+    ranges: &[std::ops::Range<usize>],
+    gap: usize,
+) -> (Vec<std::ops::Range<usize>>, Vec<(usize, usize)>) {
+    let mut merged: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut placement = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        match merged.last_mut() {
+            Some(last) if range.start >= last.start && range.start <= last.end + gap => {
+                last.end = last.end.max(range.end);
+            }
+            Some(last) if range.start < last.start => {
+                return (
+                    ranges.to_vec(),
+                    (0..ranges.len()).map(|index| (index, 0)).collect(),
+                );
+            }
+            _ => merged.push(range.clone()),
+        }
+        let index = merged.len() - 1;
+        placement.push((index, range.start - merged[index].start));
+    }
+    (merged, placement)
 }
 
 impl AdlsObjectReader {
@@ -423,6 +459,7 @@ impl AdlsObjectReader {
         store: Arc<dyn ObjectStore>,
         metadata: object_store::ObjectMeta,
         cache_key: Option<String>,
+        metrics: ScanMetrics,
     ) -> Self {
         let shared = cache_key.and_then(|key| full_object_entry(key, metadata.size));
         Self {
@@ -433,6 +470,7 @@ impl AdlsObjectReader {
             e_tag: metadata.e_tag,
             version: metadata.version,
             shared,
+            metrics,
         }
     }
 
@@ -473,6 +511,7 @@ impl AsyncFileReader for AdlsObjectReader {
         &mut self,
         range: std::ops::Range<usize>,
     ) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
+        self.metrics.bytes_read(range.len());
         if self.shared.is_none() {
             let store = self.store.clone();
             let path = self.path.clone();
@@ -513,13 +552,16 @@ impl AsyncFileReader for AdlsObjectReader {
         &mut self,
         ranges: Vec<std::ops::Range<usize>>,
     ) -> BoxFuture<'_, parquet::errors::Result<Vec<Bytes>>> {
+        self.metrics
+            .bytes_read(ranges.iter().map(std::ops::Range::len).sum());
         if self.shared.is_none() {
             let store = self.store.clone();
             let path = self.path.clone();
             let e_tag = self.e_tag.clone();
             let version = self.version.clone();
+            let (requests, placement) = coalesce_ranges(&ranges, RANGE_COALESCE_GAP);
             return async move {
-                futures::stream::iter(ranges.into_iter().map(|range| {
+                let answered = futures::stream::iter(requests.into_iter().map(|range| {
                     let store = store.clone();
                     let path = path.clone();
                     let e_tag = e_tag.clone();
@@ -546,7 +588,14 @@ impl AsyncFileReader for AdlsObjectReader {
                 .collect::<Vec<_>>()
                 .await
                 .into_iter()
-                .collect()
+                .collect::<parquet::errors::Result<Vec<Bytes>>>()?;
+                Ok(ranges
+                    .iter()
+                    .zip(placement)
+                    .map(|(range, (request, offset))| {
+                        answered[request].slice(offset..offset + range.len())
+                    })
+                    .collect())
             }
             .boxed();
         }
@@ -746,6 +795,7 @@ pub struct AdlsParquetReader {
     predicate: Option<StoragePredicate>,
     partition: Option<ScanPartition>,
     metrics: Option<ScanMetrics>,
+    late_materialisation: LateMaterialisation,
 }
 
 /// An object whose identity and footer are resolved: what a scan needs before
@@ -808,6 +858,7 @@ impl AdlsParquetReader {
             predicate: None,
             partition: None,
             metrics: None,
+            late_materialisation: LateMaterialisation::from_environment(),
         }
     }
 
@@ -885,6 +936,13 @@ impl AdlsParquetReader {
         self
     }
 
+    /// Whether the predicate's evaluable part runs inside the decoder
+    /// (see [`LateMaterialisation`]); the process default otherwise.
+    pub fn with_late_materialisation(mut self, mode: LateMaterialisation) -> Self {
+        self.late_materialisation = mode;
+        self
+    }
+
     pub async fn read(&self) -> Result<AdlsBatchStream> {
         self.validate()?;
         let metrics = self.metrics.clone().unwrap_or_default();
@@ -955,8 +1013,12 @@ impl AdlsParquetReader {
                 let metadata = match cached_metadata(&cache_key, &identity) {
                     Some(metadata) => metadata,
                     None => {
-                        let mut object_reader =
-                            AdlsObjectReader::new(store.clone(), object_metadata.clone(), None);
+                        let mut object_reader = AdlsObjectReader::new(
+                            store.clone(),
+                            object_metadata.clone(),
+                            None,
+                            metrics.clone(),
+                        );
                         let metadata =
                             ArrowReaderMetadata::load_async(&mut object_reader, Default::default())
                                 .await
@@ -1002,31 +1064,13 @@ impl AdlsParquetReader {
             .as_ref()
             .map(|columns| projection_indices(&schema, columns))
             .transpose()?;
-        // One decoder per lane, each over its own object reader; the footer,
-        // projection and predicate are shared, the row groups are not.
-        let build_stream =
-            |groups: Vec<usize>| -> Result<ParquetRecordBatchStream<AdlsObjectReader>> {
-                let reader = AdlsObjectReader::new(
-                    store.clone(),
-                    object_metadata.clone(),
-                    object_cache_key.clone(),
-                );
-                let mut builder =
-                    ParquetRecordBatchStreamBuilder::new_with_metadata(reader, metadata.clone())
-                        .with_batch_size(batch_size);
-                if let Some(projection) = &projection {
-                    let mask = ProjectionMask::roots(builder.parquet_schema(), projection.clone());
-                    builder = builder.with_projection(mask);
-                }
-                builder
-                    .with_row_groups(groups)
-                    .build()
-                    .map_err(parquet_error)
-            };
-        let mut row_groups = if let Some(predicate) = &self.predicate {
-            let predicate = predicate.coerced_for(&schema);
-            validate_predicate(&predicate, &schema)?;
-            matching_row_groups(metadata.metadata().as_ref(), &schema, &predicate)
+        let coerced = self
+            .predicate
+            .as_ref()
+            .map(|predicate| predicate.coerced_for(&schema));
+        let mut row_groups = if let Some(predicate) = &coerced {
+            validate_predicate(predicate, &schema)?;
+            matching_row_groups(metadata.metadata().as_ref(), &schema, predicate)
         } else {
             (0..metadata.metadata().num_row_groups()).collect()
         };
@@ -1039,6 +1083,74 @@ impl AdlsParquetReader {
             projection.as_deref(),
             &metrics,
         );
+        // Late materialisation: the evaluable part of the predicate runs
+        // inside the decoder, one stage per conjunct, so the rows it
+        // rejects are never decoded for the rest of the projection and a
+        // row group it empties is never read for it. It costs a second
+        // fetch round per row group, so it applies when the rest of the
+        // projection outweighs the predicate's columns (or the object is
+        // preloaded, where the second round reads memory).
+        let row_filter_plan = coerced
+            .as_ref()
+            .and_then(|predicate| RowFilterPlan::new(predicate, &schema))
+            .filter(|plan| {
+                self.late_materialisation.applies(
+                    metadata.metadata().as_ref(),
+                    &row_groups,
+                    projection.as_deref(),
+                    &plan.columns(),
+                    preload,
+                )
+            })
+            .map(|mut plan| {
+                plan.order_by_bytes(metadata.metadata().as_ref(), &row_groups);
+                plan
+            });
+        // With a row filter, the decoder reads only the pages the selection
+        // touches when the file carries an offset index; load it once per
+        // object and keep it with the footer.
+        let metadata = if row_filter_plan.is_some() {
+            self.with_offset_index(
+                &store,
+                &cache_key,
+                &object_metadata,
+                &identity,
+                metadata,
+                &metrics,
+            )
+            .await?
+        } else {
+            metadata
+        };
+        // One decoder per lane, each over its own object reader; the footer,
+        // projection and predicate are shared, the row groups are not.
+        let build_stream =
+            |groups: Vec<usize>| -> Result<ParquetRecordBatchStream<AdlsObjectReader>> {
+                let reader = AdlsObjectReader::new(
+                    store.clone(),
+                    object_metadata.clone(),
+                    object_cache_key.clone(),
+                    metrics.clone(),
+                );
+                let mut builder =
+                    ParquetRecordBatchStreamBuilder::new_with_metadata(reader, metadata.clone())
+                        .with_batch_size(batch_size);
+                if let Some(projection) = &projection {
+                    let mask = ProjectionMask::roots(builder.parquet_schema(), projection.clone());
+                    builder = builder.with_projection(mask);
+                }
+                if let Some(plan) = &row_filter_plan {
+                    let row_filter = plan.row_filter(builder.parquet_schema(), &metrics);
+                    builder = builder.with_row_filter(row_filter);
+                }
+                builder
+                    .with_row_groups(groups)
+                    .build()
+                    .map_err(parquet_error)
+            };
+        // The decoded batches depend on the predicate (a row filter or a
+        // lane predicate drops rows), so it is part of the key: a later
+        // scan with another predicate never sees these batches.
         let decoded_cache_key = preload.then(|| {
             format!(
                 "{cache_key}:{identity}:batch={}:projection={projection:?}:predicate={:?}:row_groups={row_groups:?}",
@@ -1070,13 +1182,17 @@ impl AdlsParquetReader {
             }
             None => Arc::clone(&schema),
         };
-        // Comparisons the lanes evaluate on each decoded batch (see
-        // BatchPredicate); the executor still applies the whole predicate.
-        let lane_predicate = self
-            .predicate
-            .as_ref()
-            .and_then(|predicate| BatchPredicate::new(&projected_schema, predicate))
-            .map(Arc::new);
+        // Without a row filter, the lanes evaluate the same predicate on
+        // each decoded batch (see BatchPredicate) so rejected rows never
+        // leave the lane; the executor still applies the whole predicate.
+        let lane_predicate = if row_filter_plan.is_some() {
+            None
+        } else {
+            coerced
+                .as_ref()
+                .and_then(|predicate| BatchPredicate::new(&projected_schema, predicate))
+                .map(Arc::new)
+        };
         let (schema, output_projection) =
             crate::parquet_reader::ordered_projection(projected_schema, self.columns.as_deref())?;
         let acquired = match decoded_cache_key {
@@ -1153,6 +1269,68 @@ impl AdlsParquetReader {
             decoded_batches: Vec::new(),
             object_cache_key: cache_key,
         })
+    }
+
+    /// The footer with the file's offset index loaded, from the cache or
+    /// from the object once; the footer alone when the file carries none.
+    async fn with_offset_index(
+        &self,
+        store: &Arc<dyn ObjectStore>,
+        cache_key: &str,
+        object_metadata: &object_store::ObjectMeta,
+        identity: &str,
+        metadata: ArrowReaderMetadata,
+        metrics: &ScanMetrics,
+    ) -> Result<ArrowReaderMetadata> {
+        let parquet = metadata.metadata();
+        let carries_index = parquet
+            .row_groups()
+            .iter()
+            .flat_map(|group| group.columns())
+            .any(|column| column.offset_index_offset().is_some());
+        if !carries_index
+            || parquet
+                .offset_index()
+                .is_some_and(|index| !index.is_empty())
+        {
+            return Ok(metadata);
+        }
+        let load_lock = metadata_load_lock(cache_key);
+        let _load_guard = load_lock.lock().await;
+        if let Some(cached) = cached_metadata(cache_key, identity)
+            && cached
+                .metadata()
+                .offset_index()
+                .is_some_and(|index| !index.is_empty())
+        {
+            return Ok(cached);
+        }
+        let started = Instant::now();
+        let mut object_reader = AdlsObjectReader::new(
+            Arc::clone(store),
+            object_metadata.clone(),
+            None,
+            metrics.clone(),
+        );
+        let mut reader = ParquetMetaDataReader::new_with_metadata(parquet.as_ref().clone())
+            .with_offset_indexes(true)
+            .with_column_indexes(false);
+        reader
+            .load_page_index(&mut object_reader)
+            .await
+            .map_err(parquet_error)?;
+        let with_index = ArrowReaderMetadata::try_new(
+            Arc::new(reader.finish().map_err(parquet_error)?),
+            Default::default(),
+        )
+        .map_err(parquet_error)?;
+        metrics.footer_time(started.elapsed());
+        cache_metadata(
+            cache_key.to_owned(),
+            identity.to_owned(),
+            with_index.clone(),
+        );
+        Ok(with_index)
     }
 
     pub fn read_blocking(self) -> Result<AdlsBatchSource> {
@@ -1344,6 +1522,7 @@ fn object_store_error(error: object_store::Error) -> KaveonError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ScanMetricsSnapshot;
     use arrow::array::{AsArray, Int64Array};
     use object_store::{ObjectStore, PutPayload, memory::InMemory};
 
@@ -1510,7 +1689,7 @@ mod tests {
             .put(&path, PutPayload::from_static(b"second"))
             .await
             .unwrap();
-        let mut pinned = AdlsObjectReader::new(store, first, None);
+        let mut pinned = AdlsObjectReader::new(store, first, None, ScanMetrics::default());
         assert!(pinned.get_bytes(0..1).await.is_err());
 
         invalidate_object_metadata(&key);
@@ -1733,7 +1912,7 @@ mod tests {
             .unwrap();
         let metadata = store.head(&path).await.unwrap();
         // No shared full-object cache: this exercises the remote range path.
-        let mut reader = AdlsObjectReader::new(store, metadata, None);
+        let mut reader = AdlsObjectReader::new(store, metadata, None, ScanMetrics::default());
         let ranges = vec![12..16, 0..2, 8..12, 4..8];
         let result = reader.get_byte_ranges(ranges).await.unwrap();
         assert_eq!(
@@ -1758,8 +1937,14 @@ mod tests {
         let metadata = store.head(&path).await.unwrap();
         let before = FULL_OBJECT_CACHE_BYTES.load(Ordering::Acquire);
         let key = "test-many-ranges-shared-cache".to_owned();
-        let mut reader = AdlsObjectReader::new(store.clone(), metadata.clone(), Some(key.clone()));
-        let mut concurrent = AdlsObjectReader::new(store, metadata, Some(key));
+        let mut reader = AdlsObjectReader::new(
+            store.clone(),
+            metadata.clone(),
+            Some(key.clone()),
+            ScanMetrics::default(),
+        );
+        let mut concurrent =
+            AdlsObjectReader::new(store, metadata, Some(key), ScanMetrics::default());
         let (first, competing) = tokio::join!(
             reader.get_byte_ranges(vec![0..2, 4..8, 12..16]),
             concurrent.get_bytes(2..4)
@@ -1797,6 +1982,246 @@ mod tests {
         assert_eq!(FULL_OBJECT_CACHE_BYTES.load(Ordering::Acquire), before + 16);
         drop(reader);
         drop(concurrent);
+    }
+
+    /// A text column with a `%google%` hit every fiftieth row beside a wide
+    /// payload column, in row groups of 100 rows and pages of 20, as
+    /// dictionary or plain text, with or without an offset index.
+    async fn row_filter_fixture(
+        account: &str,
+        rows: usize,
+        row_group_rows: usize,
+        dictionary: bool,
+        offset_index: bool,
+    ) -> AdlsParquetReader {
+        use arrow::array::{StringArray, StringDictionaryBuilder};
+        use arrow::datatypes::{DataType, Field, Int32Type, Schema};
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        let text_type = if dictionary {
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+        } else {
+            DataType::Utf8
+        };
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("url", text_type, false),
+            Field::new("payload", DataType::Utf8, false),
+        ]));
+        let urls = (0..rows).map(|row| {
+            if row.is_multiple_of(50) {
+                format!("http://www.google.com/search?q={row}")
+            } else {
+                format!("http://site-{row}.example/path")
+            }
+        });
+        let url: arrow::array::ArrayRef = if dictionary {
+            let mut builder = StringDictionaryBuilder::<Int32Type>::new();
+            for value in urls {
+                builder.append_value(value);
+            }
+            Arc::new(builder.finish())
+        } else {
+            Arc::new(StringArray::from_iter_values(urls))
+        };
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int64Array::from((0..rows as i64).collect::<Vec<_>>())),
+                url,
+                Arc::new(StringArray::from_iter_values(
+                    (0..rows).map(|row| format!("{row:0>200}")),
+                )),
+            ],
+        )
+        .unwrap();
+        let mut bytes = Vec::new();
+        let properties = WriterProperties::builder()
+            .set_max_row_group_size(row_group_rows)
+            .set_write_batch_size(20)
+            .set_data_page_row_count_limit(20)
+            .set_dictionary_enabled(dictionary)
+            .set_offset_index_disabled(!offset_index)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut bytes, schema, Some(properties)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        store
+            .put(&Path::from("wide.parquet"), PutPayload::from(bytes))
+            .await
+            .unwrap();
+        cache_object_store(
+            format!("{account}/wide/{:?}", AdlsAuthMode::Environment),
+            store,
+        );
+        AdlsParquetReader::new(account, "wide", "wide.parquet")
+    }
+
+    fn google_urls() -> StoragePredicate {
+        StoragePredicate::Like {
+            column: "url".into(),
+            pattern: "%google%".into(),
+            negated: false,
+            case_insensitive: false,
+        }
+    }
+
+    /// The ids a scan returns, in file order, and its metrics.
+    async fn ids_of(reader: AdlsParquetReader) -> (Vec<i64>, ScanMetricsSnapshot) {
+        let metrics = ScanMetrics::default();
+        let mut stream = reader.with_metrics(metrics.clone()).read().await.unwrap();
+        let mut ids = Vec::new();
+        while let Some(batch) = stream.next_batch().await.unwrap() {
+            let column = batch
+                .column(stream.schema().index_of("id").unwrap())
+                .as_primitive::<arrow::datatypes::Int64Type>();
+            ids.extend(column.values().iter().copied());
+        }
+        ids.sort_unstable();
+        (ids, metrics.snapshot())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+    async fn row_filter_admits_exactly_the_matching_rows_over_object_storage() {
+        let expected = (0..600).step_by(50).map(i64::from).collect::<Vec<_>>();
+        for dictionary in [true, false] {
+            let mut bytes_read = Vec::new();
+            for offset_index in [true, false] {
+                let account = format!(
+                    "row-filter-{}-{dictionary}-{offset_index}",
+                    std::process::id()
+                );
+                let reader = row_filter_fixture(&account, 600, 100, dictionary, offset_index)
+                    .await
+                    .with_predicate(google_urls());
+                // The lanes filter decoded batches: the same rows, no row
+                // filter ran.
+                let (ids, snapshot) = ids_of(
+                    reader
+                        .clone()
+                        .with_late_materialisation(LateMaterialisation::Never),
+                )
+                .await;
+                assert_eq!(ids, expected);
+                assert_eq!(snapshot.row_filter_rows_examined, 0);
+                assert_eq!(snapshot.row_groups_selected, 6);
+                // The row filter: every row examined, the twelve admitted,
+                // and only they are decoded for the payload.
+                let (ids, snapshot) = ids_of(
+                    reader
+                        .clone()
+                        .with_late_materialisation(LateMaterialisation::Always),
+                )
+                .await;
+                assert_eq!(ids, expected);
+                assert_eq!(snapshot.row_filter_rows_examined, 600);
+                assert_eq!(snapshot.row_filter_rows_admitted, 12);
+                assert_eq!(snapshot.rows_emitted, 12);
+                assert!(snapshot.compressed_bytes_read > 0);
+                bytes_read.push(snapshot.compressed_bytes_read);
+                // Auto: the payload outweighs the url, so the filter runs
+                // for the whole projection; for `id, url` it does not.
+                let (ids, snapshot) = ids_of(
+                    reader
+                        .clone()
+                        .with_late_materialisation(LateMaterialisation::Auto),
+                )
+                .await;
+                assert_eq!(ids, expected);
+                assert_eq!(snapshot.row_filter_rows_examined, 600);
+                let (ids, snapshot) = ids_of(
+                    reader
+                        .clone()
+                        .with_columns(vec!["id".into(), "url".into()])
+                        .with_late_materialisation(LateMaterialisation::Auto),
+                )
+                .await;
+                assert_eq!(ids, expected);
+                assert_eq!(snapshot.row_filter_rows_examined, 0);
+                // A conjunct the storage layer cannot evaluate is left to
+                // the executor; the rest still runs as a stage.
+                let (ids, snapshot) = ids_of(
+                    reader
+                        .clone()
+                        .with_predicate(StoragePredicate::Compare {
+                            column: "id".into(),
+                            op: kaveon_core::CompareOp::Ge,
+                            value: kaveon_core::ScalarValue::Int64(300),
+                        })
+                        .with_late_materialisation(LateMaterialisation::Always),
+                )
+                .await;
+                assert_eq!(ids, vec![300, 350, 400, 450, 500, 550]);
+                // Statistics dropped the first three row groups; the
+                // filter examined the rest.
+                assert_eq!(snapshot.row_groups_selected, 3);
+                assert_eq!(snapshot.row_filter_rows_examined, 300);
+                assert_eq!(snapshot.row_filter_rows_admitted, 6);
+            }
+            // With the offset index the decoder reads only the pages the
+            // selection touches (two of five per row group for the payload);
+            // without it, every page.
+            assert!(
+                bytes_read[0] < bytes_read[1],
+                "dictionary {dictionary}: {} bytes with the offset index, {} without",
+                bytes_read[0],
+                bytes_read[1]
+            );
+        }
+    }
+
+    /// A small object of many row groups is held in memory and decoded once
+    /// per predicate: the row filter runs (the second round reads memory),
+    /// the decoded batches are keyed by the predicate, and a scan with
+    /// another predicate never sees them.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+    async fn preloaded_objects_row_filter_and_key_the_decoded_cache_by_predicate() {
+        let account = format!("row-filter-preload-{}", std::process::id());
+        let reader = row_filter_fixture(&account, 400, 10, false, true).await;
+        let expected = (0..400).step_by(50).map(i64::from).collect::<Vec<_>>();
+        let (ids, snapshot) = ids_of(reader.clone().with_predicate(google_urls())).await;
+        assert_eq!(ids, expected);
+        assert_eq!(snapshot.row_filter_rows_examined, 400);
+        assert_eq!(snapshot.row_filter_rows_admitted, 8);
+        assert_eq!(snapshot.decoded_batch_cache_misses, 1);
+        assert_eq!(snapshot.decoded_batch_cache_hits, 0);
+        let (ids, snapshot) = ids_of(reader.clone().with_predicate(StoragePredicate::Compare {
+            column: "id".into(),
+            op: kaveon_core::CompareOp::Ge,
+            value: kaveon_core::ScalarValue::Int64(300),
+        }))
+        .await;
+        assert_eq!(ids, (300..400).collect::<Vec<_>>());
+        assert_eq!(snapshot.decoded_batch_cache_misses, 1);
+        assert_eq!(snapshot.decoded_batch_cache_hits, 0);
+        // The same predicate again is served from the cache, whichever
+        // way the rows were filtered: the row filter and the lane predicate
+        // admit the same rows.
+        let (ids, snapshot) = ids_of(
+            reader
+                .clone()
+                .with_predicate(google_urls())
+                .with_late_materialisation(LateMaterialisation::Never),
+        )
+        .await;
+        assert_eq!(ids, expected);
+        assert_eq!(snapshot.decoded_batch_cache_hits, 1);
+        assert_eq!(snapshot.row_filter_rows_examined, 0);
+        // The operator's `never` is honoured for a preloaded object too.
+        let (ids, snapshot) = ids_of(
+            reader
+                .with_predicate(StoragePredicate::Compare {
+                    column: "id".into(),
+                    op: kaveon_core::CompareOp::Lt,
+                    value: kaveon_core::ScalarValue::Int64(20),
+                })
+                .with_late_materialisation(LateMaterialisation::Never),
+        )
+        .await;
+        assert_eq!(ids, (0..20).collect::<Vec<_>>());
+        assert_eq!(snapshot.decoded_batch_cache_misses, 1);
+        assert_eq!(snapshot.row_filter_rows_examined, 0);
     }
 
     #[test]

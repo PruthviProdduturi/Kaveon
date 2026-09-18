@@ -1,4 +1,5 @@
 mod api;
+mod catalog_ddl;
 pub mod cluster;
 mod config;
 #[cfg(test)]

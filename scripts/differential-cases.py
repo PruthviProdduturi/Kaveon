@@ -46,6 +46,9 @@ CASES = [
     ("string_concat", "SELECT country || ' / ' || region AS place, COUNT(*) AS n FROM {T} WHERE event_date = '2026-07-04' AND surface = 'Chat' GROUP BY country || ' / ' || region ORDER BY n DESC LIMIT 3", True),
     ("window_rank", "SELECT country, a, RANK() OVER (ORDER BY a DESC) AS r FROM (SELECT country, SUM(actions) AS a FROM {T} WHERE event_date = '2026-07-04' GROUP BY country) x ORDER BY r LIMIT 3", True),
     ("count_star_filter_only", "SELECT COUNT(*) AS n FROM {T} WHERE surface = 'Chat' AND country = 'India' AND event_date >= '2026-07-20'", False),
+    ("regexp_group_key", "SELECT REGEXP_REPLACE(country, '^([A-Z][a-z]+).*$', '$1') AS k, AVG(LENGTH(country)) AS l, COUNT(*) AS n, MIN(country) AS first FROM {T} WHERE country <> '' GROUP BY REGEXP_REPLACE(country, '^([A-Z][a-z]+).*$', '$1') HAVING COUNT(*) > 1000 ORDER BY l DESC, k LIMIT 6", True),
+    ("regexp_projection", "SELECT REGEXP_REPLACE(surface, '[^A-Za-z]+', '_') AS s, region FROM {T} WHERE event_date = '2026-07-04' AND industry IS NULL ORDER BY s, region LIMIT 6", True),
+    ("regexp_distinct", "SELECT DISTINCT REGEXP_REPLACE(platform, 'top|ile', '') AS p FROM {T} ORDER BY p", True),
 ]
 
 

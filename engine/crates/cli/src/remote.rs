@@ -176,6 +176,59 @@ fn print_header(client: &Session, options: &Options) {
     print!("{}", crate::render::to_ansi(&lines));
 }
 
+/// `kaveon catalog|schema|table …`: one catalog statement through
+/// `POST /v1/statement`, or the durable definition for `catalog show`.
+pub fn run_admin(options: &Options, command: &crate::admin::AdminCommand) -> Result<(), String> {
+    let client = Session::connect(options)?;
+    let Some(sql) = command.statement()? else {
+        let crate::admin::AdminCommand::CatalogShow { name } = command else {
+            return Err("internal error: command has neither a statement nor a lookup".into());
+        };
+        let definitions: Vec<Value> = get_json(&client, options, "/v1/catalog/definitions")?;
+        let definition = definitions
+            .into_iter()
+            .find(|definition| definition.get("name").and_then(Value::as_str) == Some(name))
+            .ok_or_else(|| format!("catalog '{name}' not found"))?;
+        let rendered = serde_json::to_string_pretty(&definition)
+            .map_err(|error| format!("cannot render the definition: {error}"))?;
+        println!("{rendered}");
+        return Ok(());
+    };
+    let response = submit_statement(&client, options, &sql)?;
+    if let Some(error) = response.error {
+        return Err(format!("query {} failed: {error}", response.id));
+    }
+    let mut output = format_result(&response, options.output_format)?;
+    if is_human_format(options.output_format) {
+        output.push('\n');
+    }
+    write_output(options, &output)
+}
+
+fn submit_statement(
+    client: &Session,
+    options: &Options,
+    sql: &str,
+) -> Result<StatementResponse, String> {
+    let url = endpoint(options, "/v1/statement");
+    let request = StatementRequest {
+        query: sql,
+        catalog: &options.catalog,
+        schema: &options.schema,
+        user: &options.user,
+        source: &options.source,
+        client: "kaveon-cli",
+        client_tags: &options.client_tags,
+        result_delivery: "inline",
+    };
+    let response = client
+        .request(reqwest::Method::POST, &url)?
+        .json(&request)
+        .send()
+        .map_err(connection_error)?;
+    decode_response(response)
+}
+
 fn repl(client: &Session, options: &mut Options) -> Result<(), String> {
     let mut input = TerminalInput::new(
         options.history_file.clone(),
@@ -712,13 +765,7 @@ fn run_meta_command(
                     .map(|column| {
                         vec![
                             Value::String(column.name),
-                            Value::String(
-                                column
-                                    .data_type
-                                    .as_str()
-                                    .map(str::to_owned)
-                                    .unwrap_or_else(|| column.data_type.to_string()),
-                            ),
+                            Value::String(presented_type(&column.data_type)),
                             Value::String(if column.nullable { "YES" } else { "NO" }.to_owned()),
                         ]
                     })
@@ -905,6 +952,19 @@ fn resolve_use(
                 ),
             },
         ),
+    }
+}
+
+/// The SQL spelling of a stored column type (`bigint`, `varchar`), as the
+/// coordinator's own `DESCRIBE` presents it; an unrecognised encoding is
+/// shown as received.
+fn presented_type(data_type: &Value) -> String {
+    match serde_json::from_value::<arrow::datatypes::DataType>(data_type.clone()) {
+        Ok(data_type) => kaveon_sql::ddl::sql_type_name(&data_type),
+        Err(_) => data_type
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| data_type.to_string()),
     }
 }
 
@@ -1756,6 +1816,74 @@ mod tests {
         let bodies = thread.join().unwrap();
         let request: Value = serde_json::from_str(&bodies[0]).unwrap();
         assert_eq!(request["result_delivery"], "inline");
+    }
+
+    #[test]
+    fn administration_commands_submit_one_catalog_statement() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            loop {
+                let bytes = stream.read(&mut buffer).unwrap();
+                request.extend_from_slice(&buffer[..bytes]);
+                let text = String::from_utf8_lossy(&request);
+                if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                    let length = head
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length: "))
+                        .and_then(|value| value.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    if body.len() >= length {
+                        break;
+                    }
+                }
+            }
+            let text = String::from_utf8(request).unwrap();
+            assert!(text.starts_with("POST /v1/statement HTTP/1.1"), "{text}");
+            let body: Value = serde_json::from_str(text.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+            assert_eq!(
+                body["query"],
+                "CREATE TABLE lake.sales.orders WITH (location = 'orders.parquet', format = 'parquet')"
+            );
+            assert_eq!(body["catalog"], "kaveon");
+            let reply = r#"{"id":"q-1","state":"FINISHED","columns":[{"name":"table","type":"Utf8"},{"name":"result","type":"Utf8"}],"data":[["lake.sales.orders","created"]],"elapsed_ms":3}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+                reply.len(),
+                reply
+            )
+            .unwrap();
+        });
+        let mut options = options();
+        options.auth = "none".to_owned();
+        options.server = format!("http://{address}");
+        let (command, _) = crate::admin::split(&[
+            "table".to_owned(),
+            "register".to_owned(),
+            "lake.sales.orders".to_owned(),
+            "--location".to_owned(),
+            "orders.parquet".to_owned(),
+            "--format".to_owned(),
+            "parquet".to_owned(),
+        ])
+        .unwrap();
+        run_admin(&options, &command).unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn describe_presents_stored_arrow_types_with_their_sql_names() {
+        assert_eq!(presented_type(&Value::String("Int64".into())), "bigint");
+        assert_eq!(presented_type(&Value::String("Utf8".into())), "varchar");
+        assert_eq!(
+            presented_type(&serde_json::json!({"Decimal128": [12, 2]})),
+            "decimal(12, 2)"
+        );
+        assert_eq!(presented_type(&Value::String("Mystery".into())), "Mystery");
     }
 
     #[test]

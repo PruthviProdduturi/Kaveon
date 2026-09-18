@@ -195,6 +195,22 @@
   color: var(--bf-muted);
 }
 
+.dotHollow {
+  fill: transparent;
+  stroke: var(--bf-accent);
+  stroke-width: 2;
+}
+
+.pending .dotHollow { opacity: 0; }
+.revealed .dotHollow {
+  transition: opacity 320ms ease-out;
+  transition-delay: calc(var(--i, 0) * 60ms + 180ms);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pending .dotHollow { opacity: 1; }
+  .revealed .dotHollow { transition: none; }
+}
+
 .srOnly {
   position: absolute;
   width: 1px;

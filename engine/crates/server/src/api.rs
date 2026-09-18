@@ -209,6 +209,9 @@ struct TaskScanMetrics {
     rows_selected: u64,
     rows_emitted: u64,
     compressed_bytes_selected: u64,
+    compressed_bytes_read: u64,
+    row_filter_rows_examined: u64,
+    row_filter_rows_admitted: u64,
     batches_emitted: u64,
     snapshot_ns: u64,
     footer_ns: u64,
@@ -254,6 +257,14 @@ struct ScanTelemetry {
     rows_emitted: u64,
     batches_emitted: u64,
     compressed_bytes_selected: u64,
+    /// Compressed bytes the decoder read, against what the selected row
+    /// groups hold: the difference is what late materialisation and the
+    /// offset index left unread.
+    compressed_bytes_read: u64,
+    /// Rows a decoder-side row filter examined and admitted to the rest of
+    /// the projection.
+    row_filter_rows_examined: u64,
+    row_filter_rows_admitted: u64,
     snapshot_ns: u64,
     footer_ns: u64,
     read_ns: u64,
@@ -1680,6 +1691,22 @@ async fn submit_statement(
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64;
+    // A catalog statement is recognised before the session context is
+    // checked: `CREATE CATALOG` on an empty coordinator, or `CREATE SCHEMA`
+    // in a catalog with no schema yet, has no valid context to validate.
+    let catalog_statement = match kaveon_sql::ddl::parse_catalog_statement(&sql) {
+        Ok(statement) => statement,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": format!("SQL parse error: {error}"),
+                    "code": "SYNTAX_ERROR"
+                })),
+            )
+                .into_response();
+        }
+    };
     // Pin one immutable catalog manager for validation, optimization and
     // physical planning. Publishing a newer manager swaps the outer Arc and
     // cannot change the definitions observed by this query.
@@ -1688,7 +1715,7 @@ async fn submit_statement(
         .catalog
         .as_deref()
         .unwrap_or_else(|| catalog_snapshot.default_catalog());
-    if catalog_snapshot.catalog(requested_catalog).is_none() {
+    if catalog_statement.is_none() && catalog_snapshot.catalog(requested_catalog).is_none() {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
@@ -1709,7 +1736,8 @@ async fn submit_statement(
             .schema
             .as_deref()
             .unwrap_or_else(|| catalog.default_schema());
-        let Some(selected_catalog) = catalog.catalog(catalog_name) else {
+        let selected_catalog = catalog.catalog(catalog_name);
+        if catalog_statement.is_none() && selected_catalog.is_none() {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({
@@ -1718,11 +1746,14 @@ async fn submit_statement(
                 })),
             )
                 .into_response();
-        };
-        if !selected_catalog
-            .schema_names()
-            .iter()
-            .any(|name| name == schema_name)
+        }
+        if catalog_statement.is_none()
+            && !selected_catalog.is_some_and(|selected| {
+                selected
+                    .schema_names()
+                    .iter()
+                    .any(|name| name == schema_name)
+            })
         {
             return (
                 StatusCode::BAD_REQUEST,
@@ -1876,6 +1907,9 @@ async fn submit_statement(
         );
     }
 
+    if let Some(statement) = catalog_statement {
+        return execute_catalog(&state, &identity, &query_id, &context, statement, start).await;
+    }
     if let Some(table) = parse_analyze_table(&sql) {
         return execute_analyze(&state, &identity, &query_id, &context, table, start).await;
     }
@@ -2918,6 +2952,60 @@ async fn execute_analyze(
     .into_response()
 }
 
+/// A catalog statement (`CREATE`/`DROP`/`ALTER` on the durable catalog,
+/// `SHOW`/`DESCRIBE` over the published snapshot) runs on the coordinator
+/// and leaves a query record like any statement.
+async fn execute_catalog(
+    state: &Arc<AppState>,
+    identity: &Identity,
+    query_id: &str,
+    context: &QueryContext,
+    statement: kaveon_sql::ddl::CatalogStatement,
+    started: Instant,
+) -> Response {
+    let result = crate::catalog_ddl::execute_catalog_statement(
+        state,
+        identity,
+        &context.catalog,
+        &context.schema,
+        statement,
+    )
+    .await;
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            finish_failed_query(query_id, error.message.clone(), started, None, None, None).await;
+            return (
+                error.status,
+                Json(serde_json::json!({
+                    "id": query_id,
+                    "error": error.message,
+                    "code": error.code
+                })),
+            )
+                .into_response();
+        }
+    };
+    let elapsed = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+    if let Some(record) = QUERY_STORE.write().await.queries.get_mut(query_id) {
+        record.state = QueryState::Finished;
+        record.columns = result.columns.clone();
+        record.rows = result.rows.clone();
+        record.elapsed_ms = elapsed;
+        record.completed_at_ms = unix_time_ms();
+    }
+    Json(StatementResponse {
+        next_uri: None,
+        id: query_id.into(),
+        state: QueryState::Finished,
+        columns: Some(result.columns),
+        data: Some(result.rows),
+        error: None,
+        elapsed_ms: elapsed,
+    })
+    .into_response()
+}
+
 async fn analyze_failure(
     query_id: &str,
     started: Instant,
@@ -3813,30 +3901,15 @@ fn validate_replacement(
     }
 }
 
-pub(crate) async fn refresh_catalog_snapshot(state: &AppState) -> Result<(), Box<Response>> {
-    let snapshot =
-        crate::config::catalog_manager_snapshot(&state.catalog_store).map_err(|error| {
-            Box::new(
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(
-                        serde_json::json!({ "error": format!("catalog snapshot failed: {error}") }),
-                    ),
-                )
-                    .into_response(),
-            )
-        })?;
-    let snapshot_id = state.catalog_store.snapshot_identity().map_err(|error| {
-        Box::new(
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "error": format!("catalog identity failed: {error}")
-                })),
-            )
-                .into_response(),
-        )
-    })?;
+/// Rebuild the planning snapshot from the durable definitions and publish
+/// it; every catalog mutation ends here, whichever surface made it.
+pub(crate) async fn publish_catalog_snapshot(state: &AppState) -> anyhow::Result<()> {
+    let snapshot = crate::config::catalog_manager_snapshot(&state.catalog_store)
+        .map_err(|error| anyhow::anyhow!("catalog snapshot failed: {error}"))?;
+    let snapshot_id = state
+        .catalog_store
+        .snapshot_identity()
+        .map_err(|error| anyhow::anyhow!("catalog identity failed: {error}"))?;
     *state.catalog.write().await = Arc::new(crate::PublishedCatalog {
         manager: snapshot,
         snapshot_id,
@@ -3845,6 +3918,18 @@ pub(crate) async fn refresh_catalog_snapshot(state: &AppState) -> Result<(), Box
     // entries bounds staleness and frees the budget at once.
     state.result_cache.clear();
     Ok(())
+}
+
+pub(crate) async fn refresh_catalog_snapshot(state: &AppState) -> Result<(), Box<Response>> {
+    publish_catalog_snapshot(state).await.map_err(|error| {
+        Box::new(
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": error.to_string() })),
+            )
+                .into_response(),
+        )
+    })
 }
 
 async fn list_catalog_definitions(State(state): State<Arc<AppState>>) -> Response {
@@ -5758,6 +5843,9 @@ fn scan_telemetry(metrics: &kaveon_storage::ScanMetrics) -> ScanTelemetry {
         rows_emitted: snapshot.rows_emitted,
         batches_emitted: snapshot.batches_emitted,
         compressed_bytes_selected: snapshot.compressed_bytes_selected,
+        compressed_bytes_read: snapshot.compressed_bytes_read,
+        row_filter_rows_examined: snapshot.row_filter_rows_examined,
+        row_filter_rows_admitted: snapshot.row_filter_rows_admitted,
         snapshot_ns: duration_ns(snapshot.snapshot_elapsed),
         footer_ns: duration_ns(snapshot.footer_elapsed),
         read_ns: duration_ns(snapshot.read_elapsed),
@@ -5812,6 +5900,9 @@ fn merge_task_scan_metrics<'a>(
         total.rows_selected += snapshot.rows_selected;
         total.rows_emitted += snapshot.rows_emitted;
         total.compressed_bytes_selected += snapshot.compressed_bytes_selected;
+        total.compressed_bytes_read += snapshot.compressed_bytes_read;
+        total.row_filter_rows_examined += snapshot.row_filter_rows_examined;
+        total.row_filter_rows_admitted += snapshot.row_filter_rows_admitted;
         total.batches_emitted += snapshot.batches_emitted;
         total.snapshot_ns += duration_ns(snapshot.snapshot_elapsed);
         total.footer_ns += duration_ns(snapshot.footer_elapsed);
@@ -5933,6 +6024,9 @@ fn distributed_scan_telemetry(stages: &[StageTelemetry]) -> (Vec<ScanTelemetry>,
             total.rows_selected += scan.rows_selected;
             total.rows_emitted += scan.rows_emitted;
             total.compressed_bytes_selected += scan.compressed_bytes_selected;
+            total.compressed_bytes_read += scan.compressed_bytes_read;
+            total.row_filter_rows_examined += scan.row_filter_rows_examined;
+            total.row_filter_rows_admitted += scan.row_filter_rows_admitted;
             total.batches_emitted += scan.batches_emitted;
             total.snapshot_ns += scan.snapshot_ns;
             total.footer_ns += scan.footer_ns;
@@ -5975,6 +6069,9 @@ fn distributed_scan_telemetry(stages: &[StageTelemetry]) -> (Vec<ScanTelemetry>,
             rows_emitted: total.rows_emitted,
             batches_emitted: total.batches_emitted,
             compressed_bytes_selected: total.compressed_bytes_selected,
+            compressed_bytes_read: total.compressed_bytes_read,
+            row_filter_rows_examined: total.row_filter_rows_examined,
+            row_filter_rows_admitted: total.row_filter_rows_admitted,
             snapshot_ns: total.snapshot_ns,
             footer_ns: total.footer_ns,
             read_ns: total.read_ns,
@@ -6025,6 +6122,44 @@ async fn finish_failed_query(
         record.plan.logical = logical_plan;
         record.scans.clear();
         record.stages.clear();
+    }
+}
+
+/// A coordinator state over an empty in-memory catalog store, for the
+/// catalog API and catalog statement tests.
+#[cfg(test)]
+pub(crate) fn catalog_test_state() -> crate::AppState {
+    let config = crate::config::ServerConfig {
+        catalog_admin_token: Some("admin-token".into()),
+        exchange_token: Some("exchange-token-at-least-32-bytes-long".into()),
+        ..crate::config::ServerConfig::default()
+    };
+    let catalog_store = kaveon_catalog::CatalogStore::open_in_memory().unwrap();
+    let snapshot_id = catalog_store.snapshot_identity().unwrap();
+    crate::AppState {
+        disk_exchange_store: None,
+        results: crate::results::ResultStore::default(),
+        result_cache: crate::result_cache::ResultCache::new(
+            1 << 20,
+            std::time::Duration::from_secs(60),
+        ),
+        principal_admission: crate::security::PrincipalAdmission::default(),
+        cluster: tokio::sync::RwLock::new(crate::cluster::ClusterState::new(&config)),
+        catalog: tokio::sync::RwLock::new(Arc::new(crate::PublishedCatalog {
+            manager: kaveon_core::CatalogManager::new("kaveon", "default"),
+            snapshot_id,
+        })),
+        catalog_store,
+        exchange_store: crate::exchange::ExchangeStore::default(),
+        internal_http_client: reqwest::Client::new(),
+        lifecycle: crate::lifecycle::WorkerLifecycle::default(),
+        memory_admission: kaveon_core::MemoryAdmissionController::new(
+            config.memory_admission_limit_bytes,
+        )
+        .unwrap()
+        .with_queue_limit(config.memory_admission_queue),
+        product_transactions: crate::transaction_api::TransactionRegistry::disabled(),
+        config,
     }
 }
 
@@ -6235,12 +6370,12 @@ mod tests {
 
     use super::{
         ColumnInfo, MergeOperation, TaskRequest, TaskResponse, aggregate_merge_contract,
-        await_task_memory, capabilities, collect_join_statistics_tables, decode_arrow_stream,
-        durable_relation_statistics, encode_arrow_stream, exact_metadata_count_plan,
-        exact_source_statistics, execute_analyze, general_distributed_eligible,
-        merge_partial_aggregates, mutation_actor, parse_analyze_table, statistics_diagnostics,
-        task_request_from_dispatch, top_n_merge_contract, transaction_api_guidance,
-        validate_replacement,
+        await_task_memory, capabilities, catalog_test_state, collect_join_statistics_tables,
+        decode_arrow_stream, durable_relation_statistics, encode_arrow_stream,
+        exact_metadata_count_plan, exact_source_statistics, execute_analyze,
+        general_distributed_eligible, merge_partial_aggregates, mutation_actor,
+        parse_analyze_table, statistics_diagnostics, task_request_from_dispatch,
+        top_n_merge_contract, transaction_api_guidance, validate_replacement,
     };
     use crate::security::Role;
     use arrow::array::{Int64Array, StringArray};
@@ -6719,6 +6854,123 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn catalog_statements_run_through_the_statement_api() {
+        use parquet::arrow::ArrowWriter;
+        let directory =
+            std::env::temp_dir().join(format!("kaveon-server-ddl-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5]))],
+        )
+        .unwrap();
+        let mut writer = ArrowWriter::try_new(
+            std::fs::File::create(directory.join("orders.parquet")).unwrap(),
+            schema.clone(),
+            None,
+        )
+        .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        // An empty coordinator: no catalog, so the session context the
+        // request names does not exist yet. Catalog statements still run.
+        let state = Arc::new(catalog_test_state());
+        let admin = crate::security::Identity {
+            principal: "admin".into(),
+            display_identity: None,
+            role: Role::Admin,
+        };
+        let analyst = crate::security::Identity {
+            principal: "analyst".into(),
+            display_identity: None,
+            role: Role::Analyst,
+        };
+        let (status, body) = submit(&state, &analyst, "SELECT 1", serde_json::Value::Null).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["code"], "CATALOG_NOT_FOUND");
+
+        let create_catalog = format!(
+            "CREATE CATALOG lake WITH (storage = 'local', base_path = '{}')",
+            directory.display().to_string().replace('\'', "''")
+        );
+        let (status, body) =
+            submit(&state, &analyst, &create_catalog, serde_json::Value::Null).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["code"], "FORBIDDEN");
+        let (status, body) = submit(&state, &admin, &create_catalog, serde_json::Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["data"], serde_json::json!([["lake", "created"]]));
+        assert_eq!(body["state"], "FINISHED");
+        let created = record(body["id"].as_str().unwrap(), &admin).await;
+        assert_eq!(created["state"], "FINISHED");
+        assert_eq!(created["columns"][0]["name"], "catalog");
+        assert_eq!(created["context"]["catalog"], "lake");
+
+        let (status, body) = submit(
+            &state,
+            &analyst,
+            "CREATE SCHEMA lake.sales",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (status, body) = submit(
+            &state,
+            &analyst,
+            "CREATE TABLE orders WITH (location = 'orders.parquet', format = 'parquet')",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            body["data"],
+            serde_json::json!([["lake.sales.orders", "created"]])
+        );
+
+        // The registered table answers queries at once.
+        let (status, body) = submit(
+            &state,
+            &analyst,
+            "SELECT COUNT(*) FROM orders",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["data"], serde_json::json!([[5]]));
+
+        // A location that cannot be read fails the statement and its record.
+        let (status, body) = submit(
+            &state,
+            &analyst,
+            "CREATE TABLE ghosts WITH (location = 'ghosts.parquet', format = 'parquet')",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["code"], "TABLE_NOT_READABLE");
+        let failed = record(body["id"].as_str().unwrap(), &analyst).await;
+        assert_eq!(failed["state"], "FAILED");
+        let (status, body) = submit(&state, &analyst, "SHOW TABLES", serde_json::Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["data"], serde_json::json!([["orders"]]));
+
+        // A malformed catalog statement is a syntax error, not a query.
+        let (status, body) = submit(
+            &state,
+            &analyst,
+            "CREATE TABLE orders WITH (location = 'x')",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["code"], "SYNTAX_ERROR");
+        assert!(body["error"].as_str().unwrap().contains("format"));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
     async fn a_repeated_statement_is_served_from_the_result_cache() {
         let (state, _commit, directory) = analyze_test_state().await;
         let analyst = crate::security::Identity {
@@ -7123,41 +7375,6 @@ mod tests {
                 assert!(!token.is_cancelled());
             }
             assert!(token.is_cancelled());
-        }
-    }
-
-    fn catalog_test_state() -> crate::AppState {
-        let config = crate::config::ServerConfig {
-            catalog_admin_token: Some("admin-token".into()),
-            exchange_token: Some("exchange-token-at-least-32-bytes-long".into()),
-            ..crate::config::ServerConfig::default()
-        };
-        let catalog_store = kaveon_catalog::CatalogStore::open_in_memory().unwrap();
-        let snapshot_id = catalog_store.snapshot_identity().unwrap();
-        crate::AppState {
-            disk_exchange_store: None,
-            results: crate::results::ResultStore::default(),
-            result_cache: crate::result_cache::ResultCache::new(
-                1 << 20,
-                std::time::Duration::from_secs(60),
-            ),
-            principal_admission: crate::security::PrincipalAdmission::default(),
-            cluster: tokio::sync::RwLock::new(crate::cluster::ClusterState::new(&config)),
-            catalog: tokio::sync::RwLock::new(Arc::new(crate::PublishedCatalog {
-                manager: kaveon_core::CatalogManager::new("kaveon", "default"),
-                snapshot_id,
-            })),
-            catalog_store,
-            exchange_store: crate::exchange::ExchangeStore::default(),
-            internal_http_client: reqwest::Client::new(),
-            lifecycle: crate::lifecycle::WorkerLifecycle::default(),
-            memory_admission: kaveon_core::MemoryAdmissionController::new(
-                config.memory_admission_limit_bytes,
-            )
-            .unwrap()
-            .with_queue_limit(config.memory_admission_queue),
-            product_transactions: crate::transaction_api::TransactionRegistry::disabled(),
-            config,
         }
     }
 
@@ -7869,6 +8086,9 @@ mod tests {
             rows_emitted,
             rows_selected,
             compressed_bytes_selected: 12,
+            compressed_bytes_read: 5,
+            row_filter_rows_examined: rows_selected,
+            row_filter_rows_admitted: rows_emitted,
             ..Default::default()
         };
         let stages = vec![super::StageTelemetry {
@@ -7883,6 +8103,9 @@ mod tests {
         assert!(complete);
         assert_eq!(scans[0].rows_emitted, 70);
         assert_eq!(scans[0].rows_selected, 110);
+        assert_eq!(scans[0].compressed_bytes_read, 10);
+        assert_eq!(scans[0].row_filter_rows_examined, 110);
+        assert_eq!(scans[0].row_filter_rows_admitted, 70);
         assert_ne!(scans[0].rows_emitted, stages[0].tasks[0].output_rows as u64);
         let incomplete = vec![super::StageTelemetry {
             tasks: vec![task(None)],
