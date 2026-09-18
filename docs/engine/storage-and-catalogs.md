@@ -107,13 +107,37 @@ definitions. Workers execute coordinator-resolved fragment sources rather
 than consulting mutable local catalogs; a published catalog snapshot has an
 identity that every query record and result-cache key carries.
 
+Three surfaces write those definitions, and all three produce the same
+records:
+
+- **Catalog statements** on `POST /v1/statement` — `CREATE CATALOG`,
+  `CREATE SCHEMA`, `CREATE TABLE … WITH (location, format)`,
+  `CALL system.register_table`, `ALTER TABLE … SET LOCATION`, `DROP …`,
+  `SHOW CREATE TABLE`, `DESCRIBE`, `SHOW CATALOGS|SCHEMAS|TABLES` — under
+  the submitting principal's role (admin for catalogs, analyst or admin for
+  schemas and tables). `CREATE TABLE` without a column list reads the
+  columns from the source with a metadata-only probe (the Delta log, the
+  Iceberg metadata pointer, the Parquet footers) and stores them; the table
+  is created as a draft, probed, and activated only when the location is
+  readable — a failed probe deletes the draft and reports the storage error.
+  The grammar and error codes are in the
+  [API reference](../reference/api.md#catalog-statements).
+- **The `kaveon` CLI** — `kaveon catalog add|drop|list|show`,
+  `kaveon schema add|drop|list`, `kaveon table register|relocate|drop|
+  describe|show-create|list` — which submits those statements to the
+  coordinator ([CLI guide](../guides/engine-cli.md#catalog-administration)).
+- **The catalog HTTP API** (`/v1/catalog/definitions`, `…/schemas`,
+  `…/tables`, revisioned with `If-Match`) under the catalog service
+  credential, which the registration scripts use
+  (`scripts/register-curated-catalog.py`, `register-clickbench-catalog.py`,
+  `register-tpch-catalog.py`: tables from a manifest, each `COUNT(*)`
+  verified against it). This surface does not probe a location; a table
+  registered through it is verified by the script's count.
+
 The platform PostgreSQL source registry and the Engine catalog are separate
 stores, connected by the native catalog synchronization API
 (`POST /api/v1/catalog-sources/{id}/engine-sync`, revision-aware). Saving a
-platform source does not import data or register its tables; registration
-scripts (`scripts/register-curated-catalog.py`,
-`register-clickbench-catalog.py`, `register-tpch-catalog.py`) register
-tables from a manifest and verify each `COUNT(*)` against it. See the
+platform source does not import data or register its tables. See the
 [registration guide](../guides/register-engine-catalog.md).
 
 The product transaction store (`KAVEON_PRODUCT_TRANSACTIONS_ENABLED`) commits

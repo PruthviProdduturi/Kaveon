@@ -6,7 +6,7 @@ import Link from "next/link";
 import { KaveonMark } from "../components/KaveonMark";
 import { PublicHeader } from "../components/PublicHeader";
 import { BenchmarkSection } from "../components/product/BenchmarkSection";
-import type { ClickBenchFigure } from "../utils/clickbench";
+import { hasAnyFigure, type BenchmarkFigures } from "../utils/benchmarkTypes";
 
 type AnimDirection = "up" | "down" | "left" | "right" | "scale" | "none";
 
@@ -45,11 +45,15 @@ function Anim({ dir = "up" as AnimDirection, delay = 0, duration = 0.8, children
 
 // Legacy compat
 function useFadeIn(delay = 0) { return useScrollAnim("up", delay); }
+
+/** The one rule between sections: every section after the hero carries it at its top, so no two ever meet. */
+const HAIRLINE = "1px solid rgba(255,255,255,0.05)";
+
 function Section({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
-  return <Anim dir="up">{(() => { return <div style={style}>{children}</div>; })()}</Anim>;
+  return <section style={{ borderTop: HAIRLINE, ...style }}><Anim dir="up">{children}</Anim></section>;
 }
 
-export default function ProductPage({ benchmark = null }: { benchmark?: ClickBenchFigure | null }) {
+export default function ProductPage({ benchmarks = null }: { benchmarks?: BenchmarkFigures | null }) {
   const r1 = useFadeIn(0);
   const r2 = useFadeIn(100);
   const r3 = useFadeIn(0);
@@ -320,7 +324,7 @@ export default function ProductPage({ benchmark = null }: { benchmark?: ClickBen
       </section>
 
       {/* ─── Unified Platform ─── */}
-      <section style={{ padding: "96px 24px", background: "#0a0a0a", borderTop: "1px solid rgba(255,255,255,0.05)", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+      <section style={{ padding: "96px 24px", background: "#0a0a0a", borderTop: HAIRLINE }}>
         <div style={{ maxWidth: 1080, margin: "0 auto" }}>
           <Anim dir="up" style={{ textAlign: "center", marginBottom: 48 }}>
             <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: B, marginBottom: 12 }}>The Unified Data Intelligence Platform</div>
@@ -331,7 +335,7 @@ export default function ProductPage({ benchmark = null }: { benchmark?: ClickBen
             {[
               { name: "Kaveon Studio", status: "Available", color: B, body: "Questions, SQL Lab, governed dashboards, chart building, and operational exploration." },
               { name: "Data Language Model", status: "Available", color: "#8b5cf6", body: "Compiled dataset semantics and deterministic NL→SQL for supported question classes." },
-              { name: "Kaveon Engine", status: "Alpha", color: "#f59e0b", body: "Arrow batch execution with local Parquet and Delta reads today; cloud object storage and distributed execution are targets." },
+              { name: "Kaveon Engine", status: "Alpha", color: "#f59e0b", body: "Distributed Arrow execution over Parquet, Delta and Iceberg tables on ADLS Gen2 and local storage, with exact memory accounting. Qualified on a cluster, not yet a general release." },
             ].map((pillar, index) => (
               <Anim key={pillar.name} dir="up" delay={index * 120} style={{ padding: "30px 28px", borderRadius: 16, background: "rgba(255,255,255,0.022)", border: "1px solid rgba(255,255,255,0.07)", minHeight: 220 }} className="about-card">
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 28 }}>
@@ -347,12 +351,65 @@ export default function ProductPage({ benchmark = null }: { benchmark?: ClickBen
         </div>
       </section>
 
-      {/* ─── Benchmark — rendered only when the generated figure exists ─── */}
-      {benchmark && <BenchmarkSection figure={benchmark} />}
 
+      {/* ─── Features Grid ─── */}
+      <section id="features" ref={r4} style={{ padding: "100px 24px", background: "#0a0a0a", borderTop: HAIRLINE, scrollMarginTop: 72 }}>
+        <div style={{ maxWidth: 1100, margin: "0 auto" }}>
+          <div style={{ textAlign: "center", marginBottom: 56 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: B, marginBottom: 12 }}>Platform</div>
+            <h2 style={{ fontSize: "clamp(28px, 4vw, 40px)", fontWeight: 700, letterSpacing: "-1px" }}>Everything you need</h2>
+            <p style={{ fontSize: 16, color: "#718094", marginTop: 12 }}>One platform for governed data, deterministic reasoning, fast analytics, and reusable intelligence.</p>
+          </div>
+          <div className="about-grid-3" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gridAutoRows: "auto", gap: 14 }}>
+            <Anim dir="up" delay={0} style={{ gridColumn: "span 2" }}>
+              <div className="about-card" style={{ padding: 40, borderRadius: 16, background: `linear-gradient(135deg, ${B}06 0%, transparent 100%)`, border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: B, textTransform: "uppercase", letterSpacing: "2px", marginBottom: 12 }}>Core</div>
+                <h3 style={{ fontSize: 24, fontWeight: 700, marginBottom: 12, lineHeight: 1.3 }}>Conversational Data Querying</h3>
+                <p style={{ fontSize: 15, color: "#777", lineHeight: 1.8, maxWidth: 500 }}>
+                  Type questions in plain English. A template-based NL&#x2192;SQL engine parses your words, matches schema metadata, generates SQL, and renders the answer as an interactive chart.
+                </p>
+              </div>
+            </Anim>
+            <Anim dir="up" delay={100}>
+              <div className="about-card" style={{ padding: 36, borderRadius: 16, background: "linear-gradient(135deg, rgba(16,185,129,0.05) 0%, transparent 100%)", border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
+                <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>37 Chart Types</h3>
+                <p style={{ fontSize: 13.5, color: "#777", lineHeight: 1.8 }}>Bar, line, pie, heatmap, treemap, scatter, funnel, gauge, world map, 3D globe. All dark-mode aware.</p>
+              </div>
+            </Anim>
+            <Anim dir="up" delay={200}>
+              <div className="about-card" style={{ padding: 36, borderRadius: 16, background: "linear-gradient(135deg, rgba(139,92,246,0.05) 0%, transparent 100%)", border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
+                <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>SQL Lab</h3>
+                <p style={{ fontSize: 13.5, color: "#777", lineHeight: 1.8 }}>Monaco editor with autocomplete, multi-tab, query history, and caching.</p>
+              </div>
+            </Anim>
+            <Anim dir="up" delay={300} style={{ gridColumn: "span 2" }}>
+              <div className="about-card" style={{ padding: 40, borderRadius: 16, background: "linear-gradient(135deg, rgba(245,158,11,0.05) 0%, transparent 100%)", border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#f59e0b", textTransform: "uppercase", letterSpacing: "2px", marginBottom: 12 }}>Build &amp; Share</div>
+                <h3 style={{ fontSize: 24, fontWeight: 700, marginBottom: 12, lineHeight: 1.3 }}>Dashboards That Tell Stories</h3>
+                <p style={{ fontSize: 15, color: "#777", lineHeight: 1.8, maxWidth: 500 }}>
+                  Drag-and-drop canvas with cross-chart filtering, shared filter bar, auto-refresh, and one-click publishing.
+                </p>
+              </div>
+            </Anim>
+            {[
+              { title: "Multi-Source", desc: "Register multiple supported sources; each query targets one selected source today.", color: "rgba(236,72,153,0.05)" },
+              { title: "Semantic Datasets", desc: "Define dimensions, metrics, and joins once. Reuse everywhere.", color: "rgba(6,182,212,0.05)" },
+              { title: "Governed Identity", desc: "Microsoft Entra ID, role-aware access, and customer-controlled data boundaries.", color: "rgba(99,102,241,0.05)" },
+              { title: "Deploy Your Way", desc: "Run locally with Docker today; private-cloud and distributed topologies remain explicitly staged.", color: "rgba(245,158,11,0.05)" },
+            ].map((f, idx) => (
+              <Anim key={f.title} dir="up" delay={400 + idx * 100}>
+                <div className="about-card" style={{ padding: 36, borderRadius: 16, background: `linear-gradient(135deg, ${f.color} 0%, transparent 100%)`, border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
+                  <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>{f.title}</h3>
+                  <p style={{ fontSize: 13.5, color: "#777", lineHeight: 1.8 }}>{f.desc}</p>
+                </div>
+              </Anim>
+            ))}
+          </div>
+        </div>
+      </section>
 
       {/* ─── Chat Demo ─── */}
-      <section style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0a0a0a 0%, #0f1520 50%, #0a0a0a 100%)", overflow: "hidden" }}>
+      <section style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0a0a0a 0%, #0f1520 50%, #0a0a0a 100%)", borderTop: HAIRLINE, overflow: "hidden" }}>
         <div style={{ maxWidth: 920, margin: "0 auto" }}>
           <Anim dir="up" style={{ textAlign: "center", marginBottom: 48 }}>
             <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: "#8b5cf6", marginBottom: 12 }}>Conversational Analytics</div>
@@ -452,7 +509,7 @@ export default function ProductPage({ benchmark = null }: { benchmark?: ClickBen
 
       {/* ─── How It Works ─── */}
 
-      <section ref={r3} style={{ padding: "100px 24px", background: "#0a0a0a" }}>
+      <section ref={r3} style={{ padding: "100px 24px", background: "#0a0a0a", borderTop: HAIRLINE }}>
         <div style={{ maxWidth: 1000, margin: "0 auto" }}>
           <div style={{ textAlign: "center", marginBottom: 56 }}>
             <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: B, marginBottom: 12 }}>One Governed Path</div>
@@ -576,7 +633,7 @@ export default function ProductPage({ benchmark = null }: { benchmark?: ClickBen
       </Section>
 
       {/* ─── Data Language Model (DLM) ─── */}
-      <section style={{ padding: "100px 24px", background: "#0a0a0a", position: "relative", overflow: "hidden" }}>
+      <section style={{ padding: "100px 24px", background: "#0a0a0a", borderTop: HAIRLINE, position: "relative", overflow: "hidden" }}>
         <div style={{ position: "absolute", top: "30%", right: "-10%", width: 800, height: 800, borderRadius: "50%", background: "radial-gradient(circle, rgba(245,158,11,0.04) 0%, transparent 60%)", pointerEvents: "none" }} />
         <div style={{ maxWidth: 1000, margin: "0 auto", position: "relative" }}>
           <Anim dir="up" style={{ textAlign: "center", marginBottom: 56 }}>
@@ -646,7 +703,7 @@ export default function ProductPage({ benchmark = null }: { benchmark?: ClickBen
       </section>
 
       {/* ─── Freshness Algorithm ─── */}
-      <section style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0a0a0a 0%, #0f1520 50%, #0a0a0a 100%)", position: "relative", overflow: "hidden" }}>
+      <section style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0a0a0a 0%, #0f1520 50%, #0a0a0a 100%)", borderTop: HAIRLINE, position: "relative", overflow: "hidden" }}>
         <div style={{ position: "absolute", bottom: "10%", left: "-5%", width: 700, height: 700, borderRadius: "50%", background: "radial-gradient(circle, rgba(16,185,129,0.04) 0%, transparent 60%)", pointerEvents: "none" }} />
         <div style={{ maxWidth: 1000, margin: "0 auto", position: "relative" }}>
           <Anim dir="up" style={{ textAlign: "center", marginBottom: 56 }}>
@@ -808,7 +865,7 @@ export default function ProductPage({ benchmark = null }: { benchmark?: ClickBen
       </Section>
 
       {/* ─── Dashboard Showcase — Apple-style horizontal scroll ─────── */}
-      <section id="dashboards" ref={r7} style={{ padding: "60px 0 100px", background: "#0a0a0a", position: "relative", overflow: "hidden" }}>
+      <section id="dashboards" ref={r7} style={{ padding: "60px 0 100px", background: "#0a0a0a", borderTop: HAIRLINE, position: "relative", overflow: "hidden" }}>
         <div style={{ position: "absolute", top: "20%", left: "50%", transform: "translateX(-50%)", width: 1200, height: 600, borderRadius: "50%", background: `radial-gradient(circle, ${B}06 0%, transparent 60%)`, pointerEvents: "none" }} />
 
         <Anim dir="up" style={{ textAlign: "center", marginBottom: 40, position: "relative", padding: "0 24px" }}>
@@ -968,7 +1025,7 @@ export default function ProductPage({ benchmark = null }: { benchmark?: ClickBen
             </div>
           </Anim>
           <Anim dir="right" delay={200}>
-            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "3px", color: "#8b5cf6", marginBottom: 16 }}>SQL Lab</div>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: "#8b5cf6", marginBottom: 12 }}>SQL Lab</div>
             <h3 style={{ fontSize: 32, fontWeight: 700, lineHeight: 1.2, marginBottom: 16, letterSpacing: "-0.5px", color: "#e2e8f0" }}>VS Code in your browser</h3>
             <p style={{ fontSize: 15, color: "#666", lineHeight: 1.8, marginBottom: 24 }}>
               Monaco editor with SQL autocomplete, syntax highlighting, multi-tab sessions, query history, and result caching across supported connectors.
@@ -978,64 +1035,11 @@ export default function ProductPage({ benchmark = null }: { benchmark?: ClickBen
         </div>
       </Section>
 
-      {/* ─── Features Grid ─── */}
-      <section id="features" ref={r4} style={{ padding: "100px 24px", background: "#0a0a0a", scrollMarginTop: 72 }}>
-        <div style={{ maxWidth: 1100, margin: "0 auto" }}>
-          <div style={{ textAlign: "center", marginBottom: 56 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: B, marginBottom: 12 }}>Platform</div>
-            <h2 style={{ fontSize: "clamp(28px, 4vw, 40px)", fontWeight: 700, letterSpacing: "-1px" }}>Everything you need</h2>
-            <p style={{ fontSize: 16, color: "#718094", marginTop: 12 }}>One platform for governed data, deterministic reasoning, fast analytics, and reusable intelligence.</p>
-          </div>
-          <div className="about-grid-3" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gridAutoRows: "auto", gap: 14 }}>
-            <Anim dir="up" delay={0} style={{ gridColumn: "span 2" }}>
-              <div className="about-card" style={{ padding: 40, borderRadius: 16, background: `linear-gradient(135deg, ${B}06 0%, transparent 100%)`, border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: B, textTransform: "uppercase", letterSpacing: "2px", marginBottom: 12 }}>Core</div>
-                <h3 style={{ fontSize: 24, fontWeight: 700, marginBottom: 12, lineHeight: 1.3 }}>Conversational Data Querying</h3>
-                <p style={{ fontSize: 15, color: "#777", lineHeight: 1.8, maxWidth: 500 }}>
-                  Type questions in plain English. A template-based NL&#x2192;SQL engine parses your words, matches schema metadata, generates SQL, and renders the answer as an interactive chart.
-                </p>
-              </div>
-            </Anim>
-            <Anim dir="up" delay={100}>
-              <div className="about-card" style={{ padding: 36, borderRadius: 16, background: "linear-gradient(135deg, rgba(16,185,129,0.05) 0%, transparent 100%)", border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
-                <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>37 Chart Types</h3>
-                <p style={{ fontSize: 13.5, color: "#777", lineHeight: 1.8 }}>Bar, line, pie, heatmap, treemap, scatter, funnel, gauge, world map, 3D globe. All dark-mode aware.</p>
-              </div>
-            </Anim>
-            <Anim dir="up" delay={200}>
-              <div className="about-card" style={{ padding: 36, borderRadius: 16, background: "linear-gradient(135deg, rgba(139,92,246,0.05) 0%, transparent 100%)", border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
-                <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>SQL Lab</h3>
-                <p style={{ fontSize: 13.5, color: "#777", lineHeight: 1.8 }}>Monaco editor with autocomplete, multi-tab, query history, and caching.</p>
-              </div>
-            </Anim>
-            <Anim dir="up" delay={300} style={{ gridColumn: "span 2" }}>
-              <div className="about-card" style={{ padding: 40, borderRadius: 16, background: "linear-gradient(135deg, rgba(245,158,11,0.05) 0%, transparent 100%)", border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#f59e0b", textTransform: "uppercase", letterSpacing: "2px", marginBottom: 12 }}>Build &amp; Share</div>
-                <h3 style={{ fontSize: 24, fontWeight: 700, marginBottom: 12, lineHeight: 1.3 }}>Dashboards That Tell Stories</h3>
-                <p style={{ fontSize: 15, color: "#777", lineHeight: 1.8, maxWidth: 500 }}>
-                  Drag-and-drop canvas with cross-chart filtering, shared filter bar, auto-refresh, and one-click publishing.
-                </p>
-              </div>
-            </Anim>
-            {[
-              { title: "Multi-Source", desc: "Register multiple supported sources; each query targets one selected source today.", color: "rgba(236,72,153,0.05)" },
-              { title: "Semantic Datasets", desc: "Define dimensions, metrics, and joins once. Reuse everywhere.", color: "rgba(6,182,212,0.05)" },
-              { title: "Governed Identity", desc: "Microsoft Entra ID, role-aware access, and customer-controlled data boundaries.", color: "rgba(99,102,241,0.05)" },
-              { title: "Deploy Your Way", desc: "Run locally with Docker today; private-cloud and distributed topologies remain explicitly staged.", color: "rgba(245,158,11,0.05)" },
-            ].map((f, idx) => (
-              <Anim key={f.title} dir="up" delay={400 + idx * 100}>
-                <div className="about-card" style={{ padding: 36, borderRadius: 16, background: `linear-gradient(135deg, ${f.color} 0%, transparent 100%)`, border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
-                  <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>{f.title}</h3>
-                  <p style={{ fontSize: 13.5, color: "#777", lineHeight: 1.8 }}>{f.desc}</p>
-                </div>
-              </Anim>
-            ))}
-          </div>
-        </div>
-      </section>
+      {/* ─── Benchmark — rendered only when the generated figure exists ─── */}
+      {hasAnyFigure(benchmarks) && <BenchmarkSection figures={benchmarks} />}
 
       {/* ─── Tech Stack ─── */}
-      <section ref={r5} style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0a0a0a 0%, #0f1520 50%, #0a0a0a 100%)" }}>
+      <section ref={r5} style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0a0a0a 0%, #0f1520 50%, #0a0a0a 100%)", borderTop: HAIRLINE }}>
         <div style={{ maxWidth: 900, margin: "0 auto" }}>
           <div style={{ textAlign: "center", marginBottom: 48 }}>
             <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: B, marginBottom: 12 }}>Stack</div>
@@ -1074,7 +1078,7 @@ export default function ProductPage({ benchmark = null }: { benchmark?: ClickBen
       </section>
 
       {/* ─── CTA ─── */}
-      <section ref={r6} style={{ textAlign: "center", padding: "80px 24px 60px", position: "relative" }}>
+      <section ref={r6} style={{ textAlign: "center", padding: "80px 24px 60px", borderTop: HAIRLINE, position: "relative" }}>
         <Anim dir="scale">
           <div style={{ position: "relative" }}>
             <KaveonMark size={44} useDirectColor />

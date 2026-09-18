@@ -23,6 +23,10 @@ pub struct SourceStatistics {
     pub identity_sha256: String,
     pub row_count: u64,
     pub columns: Vec<String>,
+    /// The source's own schema (Delta log, Iceberg metadata, Parquet
+    /// footer), read with the row count and no data pages: `CREATE TABLE`
+    /// without a column list stores it.
+    pub schema: arrow::datatypes::SchemaRef,
     /// Immutable Delta version used to derive these statistics.
     pub delta_version: Option<u64>,
     /// The listing a directory Parquet table was analyzed at, for the query
@@ -58,6 +62,7 @@ pub fn analyze_source(location: &str, format: DataFormat) -> Result<SourceStatis
                     .iter()
                     .map(|f| f.name().clone())
                     .collect(),
+                schema: Arc::clone(&snapshot.schema),
                 delta_version: None,
                 parquet_listing: None,
             })
@@ -190,6 +195,7 @@ pub fn analyze_source(location: &str, format: DataFormat) -> Result<SourceStatis
                     .iter()
                     .map(|f| f.name().clone())
                     .collect(),
+                schema: Arc::clone(&snapshot.schema),
                 delta_version: None,
                 parquet_listing: None,
             })
@@ -225,6 +231,7 @@ fn analyze_object_delta(location: &str, reader: &ObjectDeltaReader) -> Result<So
             .iter()
             .map(|field| field.name().clone())
             .collect(),
+        schema: Arc::clone(&metadata.schema),
         delta_version: Some(version),
         parquet_listing: None,
     });
@@ -241,6 +248,7 @@ fn stats_from_digest(
         identity_sha256,
         row_count,
         columns: schema.fields().iter().map(|f| f.name().clone()).collect(),
+        schema: Arc::clone(schema),
         delta_version: None,
         parquet_listing: None,
     }
@@ -363,6 +371,22 @@ mod tests {
         let repeated = analyze_source(path.to_str().unwrap(), DataFormat::Parquet).unwrap();
         assert_eq!(first.row_count, 3);
         assert_eq!(first.columns, ["id", "name"]);
+        assert_eq!(
+            first
+                .schema
+                .fields()
+                .iter()
+                .map(|field| (
+                    field.name().as_str(),
+                    field.data_type().clone(),
+                    field.is_nullable()
+                ))
+                .collect::<Vec<_>>(),
+            [
+                ("id", DataType::Int64, false),
+                ("name", DataType::Utf8, false)
+            ]
+        );
         assert_eq!(first.identity_sha256, repeated.identity_sha256);
         write(&path, 17);
         let replaced = analyze_source(path.to_str().unwrap(), DataFormat::Parquet).unwrap();
@@ -389,6 +413,8 @@ mod tests {
         let first = analyze_source(directory.to_str().unwrap(), DataFormat::Delta).unwrap();
         assert_eq!(first.row_count, 8);
         assert_eq!(first.columns, ["id", "name"]);
+        assert_eq!(first.schema.fields().len(), 2);
+        assert_eq!(first.schema.field(0).data_type(), &DataType::Int64);
         assert_eq!(first.delta_version, Some(0));
 
         std::fs::write(

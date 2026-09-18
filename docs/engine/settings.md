@@ -85,10 +85,11 @@ attempted at most 3 times.
 | `KAVEON_PRODUCT_ADLS_CONTAINER` | `product_transactions.container` | empty (required when enabled with `adls`) | container name | The container of the product store. | coordinator | `product-transactions` |
 | `KAVEON_PRODUCT_ADLS_PREFIX` | `product_transactions.prefix` | `kaveon/product-catalog` | object prefix | The prefix under which the product store commits. Must be nonempty when enabled. | coordinator | `kaveon/product-catalog` |
 | `KAVEON_PRODUCT_LOCAL_PATH` | `product_transactions.local_path` | `/var/lib/kaveon/product-transactions` | directory path | The product store's directory in `local` mode. | coordinator | not applicable |
+| `KAVEON_LATE_MATERIALISATION` | none | `auto` | `auto`, `always`, `never` (`on`/`off` accepted) | Whether a scan over object storage runs the evaluable part of its predicate inside the Parquet decoder as a row filter (the predicate's columns decoded first, the rest of the projection only for the rows that survive; pages the selection never touches are skipped when the file carries an offset index). `auto` applies it when the remaining projection holds at least 4x the compressed bytes of the predicate's columns, or when the object is held in the full-object cache; otherwise the decoder lanes filter decoded batches. `always` and `never` override the ratio. Local Parquet files always use the row filter. Unrecognised values are `auto`. | worker, coordinator | not set |
 | `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_FEDERATED_TOKEN_FILE`, `AZURE_AUTHORITY_HOST` | none | none | strings | Workload identity for the product store's ADLS commits (`adls_commit.rs`) and, through the object store's `from_env`, for ADLS scans. Set by the AKS workload identity webhook. | coordinator (commits), worker and coordinator (scans) | injected by the `kaveon-engine` service account |
 
 Fixed storage limits that are not settings: decoder lanes are capped at 4 per
-scan; the full-object cache admits objects up to 64 MiB and holds 256 MiB per
+scan; the late-materialisation byte ratio is 4; the full-object cache admits objects up to 64 MiB and holds 256 MiB per
 process; the decoded-batch cache holds 256 MiB per process; a Delta log
 replay reads at most 64 MiB of commit JSON; Iceberg metadata is capped at
 64 MiB.

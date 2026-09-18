@@ -17,6 +17,17 @@ pub struct ScanMetricsSnapshot {
     pub rows_selected: u64,
     pub rows_emitted: u64,
     pub compressed_bytes_selected: u64,
+    /// Compressed bytes the decoder asked the object reader for (the ADLS
+    /// reader records it; gaps bridged when neighbouring page ranges are
+    /// fetched as one request are not counted), against
+    /// `compressed_bytes_selected` for what the selected row groups hold.
+    /// The difference is what a row filter over the offset index left
+    /// unread.
+    pub compressed_bytes_read: u64,
+    /// Rows a decoder-side row filter examined (rows of the row groups it
+    /// ran on) and admitted to the rest of the projection.
+    pub row_filter_rows_examined: u64,
+    pub row_filter_rows_admitted: u64,
     pub batches_emitted: u64,
     pub snapshot_elapsed: Duration,
     pub footer_elapsed: Duration,
@@ -72,6 +83,9 @@ struct ScanMetricsInner {
     rows_selected: AtomicU64,
     rows_emitted: AtomicU64,
     compressed_bytes_selected: AtomicU64,
+    compressed_bytes_read: AtomicU64,
+    row_filter_rows_examined: AtomicU64,
+    row_filter_rows_admitted: AtomicU64,
     batches_emitted: AtomicU64,
     snapshot_nanos: AtomicU64,
     footer_nanos: AtomicU64,
@@ -100,6 +114,9 @@ impl ScanMetrics {
             rows_selected: self.load(&self.0.rows_selected),
             rows_emitted: self.load(&self.0.rows_emitted),
             compressed_bytes_selected: self.load(&self.0.compressed_bytes_selected),
+            compressed_bytes_read: self.load(&self.0.compressed_bytes_read),
+            row_filter_rows_examined: self.load(&self.0.row_filter_rows_examined),
+            row_filter_rows_admitted: self.load(&self.0.row_filter_rows_admitted),
             batches_emitted: self.load(&self.0.batches_emitted),
             snapshot_elapsed: Duration::from_nanos(self.load(&self.0.snapshot_nanos)),
             footer_elapsed: Duration::from_nanos(self.load(&self.0.footer_nanos)),
@@ -187,6 +204,21 @@ impl ScanMetrics {
         self.0
             .compressed_bytes_selected
             .fetch_add(bytes, Ordering::Relaxed);
+    }
+    pub(crate) fn bytes_read(&self, bytes: usize) {
+        self.0
+            .compressed_bytes_read
+            .fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+    pub(crate) fn row_filter_examined(&self, rows: usize) {
+        self.0
+            .row_filter_rows_examined
+            .fetch_add(rows as u64, Ordering::Relaxed);
+    }
+    pub(crate) fn row_filter_admitted(&self, rows: usize) {
+        self.0
+            .row_filter_rows_admitted
+            .fetch_add(rows as u64, Ordering::Relaxed);
     }
     pub(crate) fn emitted(&self, rows: usize) {
         self.0

@@ -40,7 +40,7 @@ are planned rather than executable.
 - [Engine SQL compatibility](reference/engine-sql-compatibility.md)
 - [Engine memory management](reference/engine-memory-management.md)
 - [Engine settings reference](engine/settings.md)
-- [Connector capability matrix](reference/connector-capabilities.md)
+- [Connectors: Delta, Iceberg, Parquet, storage, and how to register them](reference/connector-capabilities.md)
 - [Operations and troubleshooting](operations-troubleshooting.md)
 - [Upgrade and version policy](upgrade-version-policy.md)
 - [Release notes and changelog guidance](release-notes.md)

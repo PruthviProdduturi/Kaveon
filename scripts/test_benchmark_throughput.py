@@ -282,5 +282,5 @@ def test_rounds_report_reads_throughput_records(tmp_path, capsys):
     assert (summary["4"]["kaveon"]["failures"], summary["4"]["kaveon"]["rejections"]) == (3, 9)
     assert summary["4"]["kaveon"]["failed_everywhere"] == ["q33"]
     assert (summary["4"]["digests_agree"], summary["4"]["digests_compared"]) == (1, 2)
-    assert "| 4 | K 3, T 3 | 2.200 (2.000–2.400) | 1.100 (1.000–1.200) | 2.00× | 3 / 9 | 0 / 0 | 1 of 2 | Kaveon: q33 |" in out
+    assert "| 4 | K 3, T 3 | 2.200 (2.000–2.400) | 1.100 (1.000–1.200) | 2.00× | 3 / 9 / 0 | 0 / 0 / 0 | 1 of 2 | Kaveon: q33 |" in out
     assert report.report_throughput(tmp_path / "empty") is None

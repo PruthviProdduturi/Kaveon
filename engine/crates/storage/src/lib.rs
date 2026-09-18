@@ -11,6 +11,9 @@ pub mod object_delta;
 pub mod object_reader;
 pub mod parquet_directory;
 pub mod parquet_reader;
+#[cfg(test)]
+mod scan_bench;
+pub mod scan_predicate;
 pub mod source_statistics;
 
 pub use adls_commit::{
@@ -31,6 +34,7 @@ pub use parquet_directory::{
     ParquetLocation, assign_files, list_parquet_directory,
 };
 pub use parquet_reader::{ParquetBatchIterator, ParquetFileMetadata, ParquetReader};
+pub use scan_predicate::LateMaterialisation;
 pub use source_statistics::{SourceStatistics, analyze_source};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -625,22 +625,53 @@ fn strip_qualifier(expression: Expr, qualifier: &str) -> Expr {
     }
 }
 
+/// The part of a filter the storage layer can reason about: a predicate
+/// implied by `expr`, so a reader that keeps only the rows (or row groups)
+/// satisfying it never drops a row the filter would keep. A conjunct with no
+/// storage form is left out, which only weakens the result; anything under
+/// NOT is translated exactly or not at all, since the negation of a weaker
+/// predicate is not implied by the filter.
 pub fn to_storage_predicate(expr: &Expr) -> Option<StoragePredicate> {
+    storage_predicate(expr, false)
+}
+
+fn storage_predicate(expr: &Expr, exact: bool) -> Option<StoragePredicate> {
     match expr {
         Expr::BinaryOp { left, op, right } => comparison(left, *op, right),
         Expr::IsNull(expr) => column_name(expr).map(|column| StoragePredicate::IsNull { column }),
         Expr::IsNotNull(expr) => {
             column_name(expr).map(|column| StoragePredicate::IsNotNull { column })
         }
-        Expr::And(left, right) => match (to_storage_predicate(left), to_storage_predicate(right)) {
+        Expr::And(left, right) => match (
+            storage_predicate(left, exact),
+            storage_predicate(right, exact),
+        ) {
             (Some(left), Some(right)) => Some(StoragePredicate::And(vec![left, right])),
-            (Some(predicate), None) | (None, Some(predicate)) => Some(predicate),
-            (None, None) => None,
+            (Some(predicate), None) | (None, Some(predicate)) if !exact => Some(predicate),
+            _ => None,
         },
-        Expr::Or(left, right) => combine_predicates(left, right, StoragePredicate::Or),
-        Expr::Not(expr) => {
-            to_storage_predicate(expr).map(|predicate| StoragePredicate::Not(Box::new(predicate)))
-        }
+        Expr::Or(left, right) => Some(StoragePredicate::Or(vec![
+            storage_predicate(left, exact)?,
+            storage_predicate(right, exact)?,
+        ])),
+        Expr::Not(expr) => storage_predicate(expr, true)
+            .map(|predicate| StoragePredicate::Not(Box::new(predicate))),
+        Expr::Like {
+            expr,
+            pattern,
+            negated,
+            case_insensitive,
+        } => match (column_name(expr), pattern.as_ref()) {
+            (Some(column), Expr::Literal(ScalarValue::Utf8(pattern))) => {
+                Some(StoragePredicate::Like {
+                    column,
+                    pattern: pattern.clone(),
+                    negated: *negated,
+                    case_insensitive: *case_insensitive,
+                })
+            }
+            _ => None,
+        },
         Expr::InList {
             expr,
             list,
@@ -703,7 +734,6 @@ pub fn to_storage_predicate(expr: &Expr) -> Option<StoragePredicate> {
         | Expr::Star
         | Expr::Alias { .. }
         | Expr::Case { .. }
-        | Expr::Like { .. }
         | Expr::Cast { .. }
         | Expr::WindowFunction { .. }
         | Expr::Extract { .. } => None,
@@ -1001,17 +1031,6 @@ fn reverse_compare_op(op: CompareOp) -> CompareOp {
     }
 }
 
-fn combine_predicates(
-    left: &Expr,
-    right: &Expr,
-    combine: impl FnOnce(Vec<StoragePredicate>) -> StoragePredicate,
-) -> Option<StoragePredicate> {
-    Some(combine(vec![
-        to_storage_predicate(left)?,
-        to_storage_predicate(right)?,
-    ]))
-}
-
 fn column_name(expr: &Expr) -> Option<String> {
     match expr {
         Expr::Column(column) => Some(column.clone()),
@@ -1252,6 +1271,84 @@ mod tests {
             }
             other => panic!("expected In predicate, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn converts_like_with_a_literal_pattern_to_storage_predicate() {
+        let like = |negated: bool, case_insensitive: bool| Expr::Like {
+            expr: Box::new(column("url")),
+            pattern: Box::new(Expr::Literal(ScalarValue::Utf8("%google%".into()))),
+            negated,
+            case_insensitive,
+        };
+        assert_eq!(
+            to_storage_predicate(&like(false, false)),
+            Some(StoragePredicate::Like {
+                column: "url".into(),
+                pattern: "%google%".into(),
+                negated: false,
+                case_insensitive: false,
+            })
+        );
+        assert_eq!(
+            to_storage_predicate(&like(true, true)),
+            Some(StoragePredicate::Like {
+                column: "url".into(),
+                pattern: "%google%".into(),
+                negated: true,
+                case_insensitive: true,
+            })
+        );
+        // A pattern that is not a literal, or a subject that is not a
+        // column, has no storage form.
+        let computed = Expr::Like {
+            expr: Box::new(column("url")),
+            pattern: Box::new(column("other")),
+            negated: false,
+            case_insensitive: false,
+        };
+        assert_eq!(to_storage_predicate(&computed), None);
+    }
+
+    #[test]
+    fn a_negated_conjunction_is_translated_exactly_or_not_at_all() {
+        let pushable = compare(column("a"), BinaryOp::Eq, int(1));
+        let opaque = Expr::Function {
+            name: "length".into(),
+            args: vec![column("b")],
+        };
+        // Outside NOT, the opaque conjunct is dropped: the result is weaker
+        // than the filter, which is what a reader may act on.
+        let conjunction = Expr::And(Box::new(pushable.clone()), Box::new(opaque.clone()));
+        assert!(matches!(
+            to_storage_predicate(&conjunction),
+            Some(StoragePredicate::Compare { .. })
+        ));
+        // Under NOT, dropping it would negate a weaker predicate and reject
+        // rows the filter keeps (a = 1, length(b) false), so nothing is
+        // pushed.
+        let negated = Expr::Not(Box::new(conjunction));
+        assert_eq!(to_storage_predicate(&negated), None);
+        // NOT over a fully translatable conjunction is pushed whole.
+        let both = Expr::Not(Box::new(Expr::And(
+            Box::new(pushable.clone()),
+            Box::new(compare(column("c"), BinaryOp::Gt, int(2))),
+        )));
+        match to_storage_predicate(&both) {
+            Some(StoragePredicate::Not(inner)) => {
+                assert!(matches!(*inner, StoragePredicate::And(ref parts) if parts.len() == 2));
+            }
+            other => panic!("expected NOT over AND, got {other:?}"),
+        }
+        // NOT nested under OR keeps the exactness requirement.
+        let nested = Expr::Or(
+            Box::new(pushable),
+            Box::new(Expr::Not(Box::new(Expr::And(
+                Box::new(compare(column("c"), BinaryOp::Gt, int(2))),
+                Box::new(opaque),
+            )))),
+        );
+        assert_eq!(to_storage_predicate(&nested), None);
     }
 
     #[test]
