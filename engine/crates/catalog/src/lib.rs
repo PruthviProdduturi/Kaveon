@@ -247,6 +247,24 @@ impl CatalogStore {
         transaction.commit().map_err(db_error)
     }
 
+    /// The actor of an object's `create` audit event, when the object was
+    /// created through this store.
+    pub fn creator(&self, object_type: &str, object_id: &str) -> Result<Option<String>> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT actor FROM audit_events WHERE object_type = ?1 AND object_id = ?2 AND action = 'create' ORDER BY id LIMIT 1",
+            )
+            .map_err(db_error)?;
+        let mut rows = statement
+            .query(params![object_type, object_id])
+            .map_err(db_error)?;
+        match rows.next().map_err(db_error)? {
+            Some(row) => Ok(Some(row.get::<_, String>(0).map_err(db_error)?)),
+            None => Ok(None),
+        }
+    }
+
     pub fn audit_events(&self, after_id: Option<i64>, limit: usize) -> Result<Vec<AuditEvent>> {
         if limit == 0 {
             return Ok(Vec::new());

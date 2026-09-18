@@ -387,8 +387,16 @@ impl ParquetReader {
         // when the file carries one, lets it skip whole pages the selection
         // never touches instead of decompressing them.
         let options = ArrowReaderOptions::new().with_page_index(self.predicate.is_some());
-        ParquetRecordBatchReaderBuilder::try_new_with_options(File::open(&self.path)?, options)
-            .map_err(parquet_error)
+        // The path is the fact a reader of the error needs: a table whose
+        // file moved answers "cannot open /data/x.parquet", not "os error 2".
+        let file = File::open(&self.path).map_err(|error| {
+            storage_error(format!(
+                "cannot open '{}': {}",
+                self.path.display(),
+                io_reason(&error)
+            ))
+        })?;
+        ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).map_err(parquet_error)
     }
 
     fn configure_builder(
@@ -779,6 +787,15 @@ fn storage_error(message: impl Into<String>) -> KaveonError {
     KaveonError::Storage(message.into())
 }
 
+/// An I/O error's reason without the platform's `(os error N)` suffix.
+fn io_reason(error: &std::io::Error) -> String {
+    let text = error.to_string();
+    match text.find(" (os error") {
+        Some(index) => text[..index].to_owned(),
+        None => text,
+    }
+}
+
 fn parquet_error(error: parquet::errors::ParquetError) -> KaveonError {
     storage_error(error.to_string())
 }
@@ -986,10 +1003,16 @@ mod tests {
     #[test]
     fn reports_missing_and_corrupt_files() {
         let missing = std::env::temp_dir().join("kaveon-storage-file-does-not-exist.parquet");
-        assert!(matches!(
-            ParquetReader::new(missing).read(),
-            Err(KaveonError::Io(_))
-        ));
+        let Err(error) = ParquetReader::new(&missing).read() else {
+            panic!("a missing file must not read");
+        };
+        assert!(matches!(error, KaveonError::Storage(_)));
+        let text = error.to_string();
+        assert!(
+            text.contains(&format!("cannot open '{}'", missing.display())),
+            "{text}"
+        );
+        assert!(!text.contains("os error"), "{text}");
 
         let corrupt = TestFile(std::env::temp_dir().join(format!(
             "kaveon-storage-corrupt-{}.parquet",

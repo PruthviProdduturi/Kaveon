@@ -639,7 +639,38 @@ fn bootstrap_catalog(store: &CatalogStore, config: &ServerConfig) -> anyhow::Res
                 store.create_schema(BOOTSTRAP_ACTOR, &schema)?;
                 schema_id
             };
-            for table_name in provider.table_names(&schema_name)? {
+            let discovered_tables = provider.table_names(&schema_name)?;
+            // A table this bootstrap registered from the data directory on
+            // an earlier start whose file is no longer there would answer
+            // every query with a missing-file failure on the workers: it
+            // is retired here. A table anyone created through the catalog
+            // API or DDL is theirs and stays, whatever its location.
+            if let Some(data_dir) = config
+                .data_dir
+                .as_deref()
+                .filter(|_| catalog_name == "kaveon")
+            {
+                for stored in store.list_tables(&schema_id)? {
+                    if discovered_tables.iter().any(|name| name == stored.name()) {
+                        continue;
+                    }
+                    let created_by = store.creator("table", stored.id().as_str())?;
+                    if created_by.as_deref() != Some(BOOTSTRAP_ACTOR) {
+                        continue;
+                    }
+                    let path = data_dir.join(stored.location());
+                    if path.exists() {
+                        continue;
+                    }
+                    store.delete_table(BOOTSTRAP_ACTOR, stored.id(), stored.revision())?;
+                    eprintln!(
+                        "catalog: retired {catalog_name}.{schema_name}.{}: registered from the data directory, {} no longer exists",
+                        stored.name(),
+                        path.display()
+                    );
+                }
+            }
+            for table_name in discovered_tables {
                 if store
                     .list_tables(&schema_id)?
                     .iter()
@@ -1206,6 +1237,88 @@ admission_wait_seconds = 0
         config.product_transactions.local_path = std::path::PathBuf::new();
         assert!(validate_product_transactions(&config).is_err());
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn bootstrap_retires_a_data_directory_table_whose_file_is_gone_and_keeps_the_rest() {
+        let data_dir = temporary_directory();
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            false,
+        )]));
+        let write = |path: &std::path::Path| {
+            let batch = arrow::record_batch::RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(arrow::array::Int64Array::from(vec![1]))],
+            )
+            .unwrap();
+            let mut writer = parquet::arrow::ArrowWriter::try_new(
+                std::fs::File::create(path).unwrap(),
+                Arc::clone(&schema),
+                None,
+            )
+            .unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+        };
+        write(&data_dir.join("keep.parquet"));
+        write(&data_dir.join("gone.parquet"));
+        let config = ServerConfig {
+            data_dir: Some(data_dir.clone()),
+            catalog_database_path: data_dir.join("catalog.db"),
+            ..ServerConfig::default()
+        };
+        let (store, manager) = open_catalog(&config).unwrap();
+        assert!(
+            manager
+                .resolve_table(&TableReference::parse("kaveon.default.gone"))
+                .is_ok()
+        );
+        // A table a person registered, with a location that does not
+        // exist, is not the bootstrap's to remove.
+        let theirs = TableDefinition::new(
+            TableId::new("table:kaveon:default:theirs").unwrap(),
+            SchemaId::new("schema:kaveon:default").unwrap(),
+            "theirs",
+            "elsewhere.parquet",
+            AccessPattern::Shortcut,
+            DataFormat::Parquet,
+            vec![ColumnDefinition::new("value", DataType::Int64, true).unwrap()],
+        )
+        .unwrap()
+        .transition(CatalogLifecycle::Active)
+        .unwrap();
+        store.create_table("analyst", &theirs).unwrap();
+        drop(store);
+        std::fs::remove_file(data_dir.join("gone.parquet")).unwrap();
+
+        let (store, manager) = open_catalog(&config).unwrap();
+        assert!(
+            manager
+                .resolve_table(&TableReference::parse("kaveon.default.keep"))
+                .is_ok()
+        );
+        assert!(
+            manager
+                .resolve_table(&TableReference::parse("kaveon.default.theirs"))
+                .is_ok()
+        );
+        assert!(
+            manager
+                .resolve_table(&TableReference::parse("kaveon.default.gone"))
+                .is_err(),
+            "the table whose file is gone is retired"
+        );
+        assert_eq!(
+            store
+                .creator("table", "table:kaveon:default:theirs")
+                .unwrap()
+                .as_deref(),
+            Some("analyst")
+        );
+        drop(store);
+        std::fs::remove_dir_all(&data_dir).unwrap();
     }
 
     #[test]
