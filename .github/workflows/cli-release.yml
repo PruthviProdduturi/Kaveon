@@ -1,0 +1,279 @@
+name: CLI release
+
+# Versioned `kaveon` CLI releases. Push a tag `cli-v<semver>` whose version
+# equals engine/crates/cli/Cargo.toml, or dispatch with that version. The
+# workflow builds the four targets, packages them with LICENSE, writes
+# SHA256SUMS, publishes the GitHub release `cli-v<version>` and attaches the
+# rendered winget manifests and Homebrew formula for the maintainer to
+# submit. See docs/engineering/cli-release.md.
+
+on:
+  push:
+    tags: ["cli-v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (must equal engine/crates/cli/Cargo.toml); the tag cli-v<version> is created at this commit if it does not exist"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CLI_MANIFEST: engine/crates/cli/Cargo.toml
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve the version and check it against Cargo.toml
+        id: resolve
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/cli-v* ]]; then
+            version="${GITHUB_REF#refs/tags/cli-v}"
+          else
+            version="${INPUT_VERSION#cli-v}"
+            version="${version#v}"
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::'$version' is not a semantic version"
+            exit 1
+          fi
+          crate_version="$(python3 - "$CLI_MANIFEST" <<'PY'
+          import sys, tomllib
+          with open(sys.argv[1], "rb") as handle:
+              print(tomllib.load(handle)["package"]["version"])
+          PY
+          )"
+          if [[ "$crate_version" != "$version" ]]; then
+            echo "::error file=$CLI_MANIFEST::release version $version does not match the crate version $crate_version"
+            exit 1
+          fi
+          if [[ "$GITHUB_REF" != refs/tags/cli-v* ]]; then
+            existing="$(git rev-parse -q --verify "refs/tags/cli-v$version^{commit}" || true)"
+            if [[ -n "$existing" && "$existing" != "$GITHUB_SHA" ]]; then
+              echo "::error::tag cli-v$version already exists at $existing, not at $GITHUB_SHA"
+              exit 1
+            fi
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing kaveon $version from $GITHUB_SHA"
+
+  build:
+    name: Build — ${{ matrix.target }}
+    needs: version
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: kaveon
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: kaveon
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: kaveon
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: kaveon.exe
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      TARGET: ${{ matrix.target }}
+      BINARY: engine/target/${{ matrix.target }}/release/${{ matrix.artifact }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine
+          key: ${{ matrix.target }}
+
+      - name: Build release
+        working-directory: engine
+        run: cargo build --release --locked --package kaveon-cli --target ${{ matrix.target }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: CLI workflows against the built binary
+        shell: bash
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          if [[ "$TARGET" == x86_64-apple-darwin ]] && ! arch -x86_64 /usr/bin/true 2>/dev/null; then
+            echo "::warning::Rosetta is unavailable on this runner; the x86_64-apple-darwin binary was built but not executed"
+            exit 0
+          fi
+          python engine/qualification/cli_workflows.py --cli "$BINARY"
+
+      - name: Check the binary reports the release version
+        shell: bash
+        run: |
+          if [[ "$TARGET" == x86_64-apple-darwin ]] && ! arch -x86_64 /usr/bin/true 2>/dev/null; then
+            exit 0
+          fi
+          reported="$("$BINARY" --version)"
+          if [[ "$reported" != "kaveon $VERSION" ]]; then
+            echo "::error::binary reports '$reported', expected 'kaveon $VERSION'"
+            exit 1
+          fi
+
+      - name: Package (tar.gz)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          COPYFILE_DISABLE: "1"
+        run: |
+          mkdir -p stage release
+          cp "$BINARY" stage/kaveon
+          cp LICENSE stage/LICENSE
+          chmod 755 stage/kaveon
+          tar -C stage -czf "release/kaveon-$VERSION-$TARGET.tar.gz" kaveon LICENSE
+          tar -tzf "release/kaveon-$VERSION-$TARGET.tar.gz"
+
+      - name: Package (zip)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path stage, release | Out-Null
+          Copy-Item -LiteralPath $env:BINARY -Destination stage\kaveon.exe
+          Copy-Item -LiteralPath LICENSE -Destination stage\LICENSE
+          $archive = "release\kaveon-$env:VERSION-$env:TARGET.zip"
+          Compress-Archive -Path stage\kaveon.exe, stage\LICENSE -DestinationPath $archive -CompressionLevel Optimal
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [IO.Compression.ZipFile]::OpenRead((Resolve-Path $archive))
+          try { $entries = @($zip.Entries | ForEach-Object FullName) } finally { $zip.Dispose() }
+          $entries
+          if (Compare-Object $entries @('kaveon.exe', 'LICENSE')) { throw "unexpected archive layout: $entries" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kaveon-${{ matrix.target }}
+          path: release/*
+          if-no-files-found: error
+
+  release:
+    name: Release
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      TAG: cli-v${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          pattern: kaveon-*
+          merge-multiple: true
+
+      - name: Write SHA256SUMS
+        shell: bash
+        working-directory: release
+        run: |
+          expected=(
+            "kaveon-$VERSION-x86_64-unknown-linux-gnu.tar.gz"
+            "kaveon-$VERSION-aarch64-apple-darwin.tar.gz"
+            "kaveon-$VERSION-x86_64-apple-darwin.tar.gz"
+            "kaveon-$VERSION-x86_64-pc-windows-msvc.zip"
+          )
+          for asset in "${expected[@]}"; do
+            test -s "$asset" || { echo "::error::missing release asset $asset"; exit 1; }
+          done
+          sha256sum "${expected[@]}" > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Render winget manifests and Homebrew formula
+        shell: bash
+        run: |
+          python -m pip install --quiet --disable-pip-version-check pyyaml
+          python scripts/release/render-packaging.py --version "$VERSION" \
+            --sums release/SHA256SUMS --out packaging-out
+          manifests="packaging-out/winget/manifests/p/PruthviProdduturi/Kaveon/$VERSION"
+          python - "$manifests" <<'PY'
+          import pathlib, sys, yaml
+          for path in sorted(pathlib.Path(sys.argv[1]).glob("*.yaml")):
+              document = yaml.safe_load(path.read_text(encoding="utf-8"))
+              assert document["PackageIdentifier"] == "PruthviProdduturi.Kaveon", path
+              print(f"{path.name}: {document['ManifestType']} {document['PackageVersion']}")
+          PY
+          cp "$manifests"/*.yaml packaging-out/homebrew/Formula/kaveon.rb release/
+          ls -l release
+
+      - name: Create or update the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cat > release-notes.md <<NOTES
+          Kaveon CLI $VERSION — the \`kaveon\` terminal client for a Kaveon Engine coordinator.
+
+          ## Install
+
+          Download the archive for your platform, verify it against \`SHA256SUMS\`, and place \`kaveon\` on your PATH:
+
+          | Platform | Asset |
+          |---|---|
+          | Windows x64 | \`kaveon-$VERSION-x86_64-pc-windows-msvc.zip\` |
+          | macOS Apple Silicon | \`kaveon-$VERSION-aarch64-apple-darwin.tar.gz\` |
+          | macOS Intel | \`kaveon-$VERSION-x86_64-apple-darwin.tar.gz\` |
+          | Linux x64 | \`kaveon-$VERSION-x86_64-unknown-linux-gnu.tar.gz\` |
+
+          Or let the install scripts verify and install this release:
+
+          \`\`\`powershell
+          \$env:KAVEON_VERSION = "$VERSION"; irm https://raw.githubusercontent.com/$GITHUB_REPOSITORY/dev/scripts/install.ps1 | iex
+          \`\`\`
+
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/$GITHUB_REPOSITORY/dev/scripts/install.sh | KAVEON_VERSION=$VERSION bash
+          \`\`\`
+
+          Package managers: \`winget install PruthviProdduturi.Kaveon\` once this version's manifest is accepted in winget-pkgs; \`brew install PruthviProdduturi/kaveon/kaveon\` once the tap carries this formula.
+
+          ## Packaging assets
+
+          \`PruthviProdduturi.Kaveon.yaml\`, \`PruthviProdduturi.Kaveon.installer.yaml\` and \`PruthviProdduturi.Kaveon.locale.en-US.yaml\` are the winget manifests for \`manifests/p/PruthviProdduturi/Kaveon/$VERSION/\`; \`kaveon.rb\` is the Homebrew formula for the tap. Both are rendered from the hashes in \`SHA256SUMS\`. See [docs/engineering/cli-release.md](https://github.com/$GITHUB_REPOSITORY/blob/dev/docs/engineering/cli-release.md).
+
+          Source commit: \`$GITHUB_SHA\`.
+          NOTES
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release edit "$TAG" --title "Kaveon CLI $VERSION" \
+              --prerelease=false --latest --notes-file release-notes.md
+          else
+            gh release create "$TAG" --target "$GITHUB_SHA" \
+              --title "Kaveon CLI $VERSION" --latest \
+              --notes-file release-notes.md
+          fi
+          gh release upload "$TAG" release/* --clobber
+          gh release view "$TAG" --json assets --jq '.assets[].name'

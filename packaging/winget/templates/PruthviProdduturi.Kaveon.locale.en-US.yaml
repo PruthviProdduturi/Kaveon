@@ -1,0 +1,29 @@
+# yaml-language-server: $$schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+# Rendered by scripts/release/render-packaging.py from the cli-v${VERSION} release assets.
+PackageIdentifier: PruthviProdduturi.Kaveon
+PackageVersion: ${VERSION}
+PackageLocale: en-US
+Publisher: Pruthvi Prodduturi
+PublisherUrl: https://github.com/PruthviProdduturi
+PublisherSupportUrl: https://github.com/PruthviProdduturi/Kaveon/issues
+PackageName: Kaveon CLI
+PackageUrl: https://github.com/PruthviProdduturi/Kaveon
+License: MIT
+LicenseUrl: https://github.com/PruthviProdduturi/Kaveon/blob/dev/LICENSE
+Copyright: Copyright (c) 2026 Pruthvi Prodduturi
+ShortDescription: Terminal client for the Kaveon Engine, an interactive SQL shell for a Kaveon coordinator.
+Description: |-
+  kaveon connects to a Kaveon Engine coordinator over HTTPS, runs SQL with live
+  progress and cancellation, answers catalog questions (SHOW, DESCRIBE, USE) and
+  runs scripts non-interactively with -e and -f. Embedded --local mode queries
+  Parquet and Delta files without a server.
+Moniker: kaveon
+Tags:
+  - cli
+  - data
+  - kaveon
+  - parquet
+  - sql
+ReleaseNotesUrl: https://github.com/PruthviProdduturi/Kaveon/releases/tag/cli-v${VERSION}
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

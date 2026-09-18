@@ -9,6 +9,11 @@ semantic-versioning compatibility across persisted metadata or APIs.
 
 - `dev` is the active integration branch. Engine CI may publish a moving
   `engine-dev` prerelease from successful `dev` builds.
+- The `kaveon` CLI has versioned releases: a `cli-vX.Y.Z` tag equal to the
+  `kaveon-cli` crate version produces a checksummed GitHub release with the
+  winget and Homebrew packaging files attached
+  ([procedure](engineering/cli-release.md)). CLI versions do not imply
+  Engine, API or metadata compatibility.
 - Database schema creation/migration is performed by application startup and the
   checked-in schema/setup paths; there is no documented downgrade mechanism.
 - HTTP routes and stored JSON structures may change before 1.0.
