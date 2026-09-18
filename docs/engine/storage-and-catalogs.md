@@ -22,6 +22,62 @@ Telemetry measures file and row-group selection, compressed bytes, output,
 footer/read/snapshot time, lane count with the lightest and heaviest lane,
 and throughput.
 
+## Directory Parquet tables
+
+A `Parquet` table's location may be one object or file, or a directory of
+Parquet files — the Hive/Spark layout, and what Trino writes (`sf100/region/`
+holding N files). The reader decides at open time: a `HEAD` that finds an
+object reads that object as before; ADLS answers a directory `HEAD` with
+`x-ms-resource-type: directory` (surfaced as not-found) and S3 has no object
+at a prefix, and either is followed by one recursive listing of the prefix.
+A local path that is a directory is listed the same way through the
+`object_store` local filesystem, so both paths share one rule:
+
+- Hidden, skipped: an object whose name, or any directory below the root,
+  begins with `_` or `.` (`_SUCCESS`, `_delta_log/…`, `_temporary/…`,
+  `.part-….crc`). A zero-byte object holds no rows and is skipped too.
+- Data: every other object whose name ends in `.parquet` (any case) or has
+  no extension at all (Trino's file names).
+- Anything else (`README.md`, `part-0.orc`) is an error naming the object, so
+  a stray file is neither read as data nor silently dropped from the table.
+- The listing is sorted by path. Partition directories
+  (`year=2026/part-0.parquet`) are included; the values in their names are
+  not surfaced as columns.
+
+The schema is the first listed file's, projected in the query's column order.
+Every other file is checked against it — same names, order and types; a file
+may declare a column non-nullable where the first declares it nullable,
+never the reverse — and a difference is an error naming both files. No file
+is cast to another's schema.
+
+Files are spread over the scan partitions by size: whole files go to the
+partition with the fewest bytes so far, largest first; if the heaviest
+partition would then carry more than a quarter over its fair share, the
+largest whole file is split by row group across every partition instead
+(the row-group modulo a single-file table has always used) and the rest are
+placed again. The assignment is a pure function of the listing and the
+partition count, so every task of a query derives the same one from the same
+listing. Each file is read through the per-object reader with its own
+identity-pinned footer cache, row-group pruning, projection and decoder
+lanes; `files_considered` counts the files a partition was assigned and
+`files_opened` the files it opened, and the listing time is reported as the
+scan's snapshot time.
+
+`ANALYZE` and planning statistics list the directory once, take the exact
+row count from every file's footer, and key the statistics by a digest of
+the listing (path, size, ETag or version per file; modification time for
+local files). The listing that planning analyzed is pinned for that query on
+the coordinator (`SourcePins`), the way Delta versions are, so the
+coordinator-local scan reads the files the statistics came from even if a
+file lands meanwhile. Workers of a distributed query list the location
+themselves under the same deterministic rule: the executable fragment names
+the location and carries no listing (its wire format is unchanged), so a
+file that lands between two tasks' listings is a window the fragment does
+not yet close; carrying the listing in the fragment belongs to the split
+assignment workstream. A local data directory (`KAVEON_DATA_DIR`) registers
+each child directory of Parquet files without a `_delta_log` as a Parquet
+table, alongside `*.parquet` files and Delta directories.
+
 ## Cloud read boundary
 
 An ADLS Parquet scan pins the object identity returned by `HEAD` (ETag or

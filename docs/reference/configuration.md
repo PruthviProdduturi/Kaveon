@@ -75,9 +75,11 @@ from the code and its value on the AKS cluster, is in the
 
 Parquet, Delta (JSON commits and v1 checkpoints) and Iceberg are executable on
 local disk and ADLS Gen2, and distributed execution is the default on a
-coordinator with workers. S3 is implemented through the same object-store
-reader and not qualified. The `Optimized` access pattern (rewritten layouts in
-customer storage) remains a target capability.
+coordinator with workers. A Parquet table's location may be one file or a
+directory of Parquet files (the Hive/Spark layout; see the Engine storage
+documentation for the listing rule). S3 is implemented through the same
+object-store reader and not qualified. The `Optimized` access pattern
+(rewritten layouts in customer storage) remains a target capability.
 
 ## Deployment secrets
 
