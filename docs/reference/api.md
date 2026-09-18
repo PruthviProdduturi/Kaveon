@@ -26,6 +26,8 @@ All paths below are relative to the FastAPI origin.
 | Data sources | `/api/v1/data-sources` | Registration, metadata, favorites; connection test is currently a stub |
 | SQL | `/api/v1/sql/*` | SQL generation, execution, detached jobs, result cache, filter values |
 | SQL Lab | `/api/v1/lab/*` | Discovery, saved queries, execution, CTAS, history, distinct values |
+| Engine catalog | `/api/v1/engine/catalog/*` | Register catalogs (Admin), schemas and tables (Editor) on KaveonDB by name; tables are verified by a read before they are kept. Routes and roles in [Connectors](connector-capabilities.md#from-the-platform-api) |
+| Engine console | `/api/v1/engine/console/*` | Cluster, query history and statistics diagnostics, read-only |
 | DLM | `/api/v1/dlm/*` | Routing, ask, chart serving, filter values, coverage, cache and freshness operations |
 | Context router | `/api/v1/context/*` | Build, validity, and adaptive-context ask endpoints |
 | Chat | `/api/v1/chat`, `/api/v1/chat/history*` | Assistant and conversation persistence |
