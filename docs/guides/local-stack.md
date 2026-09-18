@@ -194,10 +194,9 @@ GROUP BY surface
 ORDER BY events DESC;
 ```
 
-The query summary under the result reports the two worker nodes, the tasks,
-and the 504,000,000 rows the storage readers scanned. Set
-`--timeout 10m` for long statements; the client default is 30 seconds and a
-timeout on the client does not stop the query on the coordinator. Every
+The summary line under the result reports the time, the two worker nodes and
+the 504,000,000 rows the storage readers scanned. A running line shows the
+statement's state while it runs; Ctrl-C cancels it on the coordinator. Every
 statement also appears at http://localhost:3000/engine and
 http://localhost:8081/ui.
 
