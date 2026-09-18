@@ -65,6 +65,13 @@ services:
       # over the 504M-row local lake; these match the AKS coordinator.
       KAVEON_EXCHANGE_DISK_LIMIT_BYTES: ${KAVEON_EXCHANGE_DISK_LIMIT_BYTES:-25769803776}
       KAVEON_EXCHANGE_QUERY_DISK_LIMIT_BYTES: ${KAVEON_EXCHANGE_QUERY_DISK_LIMIT_BYTES:-17179869184}
+      # The durable product catalog on the coordinator's state volume: the
+      # transaction API and native ANALYZE (exact statistics for the planner),
+      # the same profile docker-compose.kavedb.yml runs standalone.
+      KAVEON_PRODUCT_TRANSACTIONS_ENABLED: "true"
+      KAVEON_PRODUCT_STORAGE_MODE: local
+      KAVEON_PRODUCT_LOCAL_PATH: /var/lib/kaveon/product-transactions
+      KAVEON_PRODUCT_ADLS_PREFIX: kaveon/product-catalog
     volumes:
       - ./engine/etc/coordinator.toml:/etc/kaveon/config.toml:ro
       - catalog-data:/var/lib/kaveon
