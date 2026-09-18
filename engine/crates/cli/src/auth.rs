@@ -217,8 +217,8 @@ impl Session {
 
     fn azure_cli_or_device(&self, entra: &Entra) -> Result<Credentials, String> {
         match self.auth.as_str() {
-            "azure-cli" => azure_cli_login(entra, self.timeout),
-            "auto" => azure_cli_login(entra, self.timeout).or_else(|_| {
+            "azure-cli" => azure_cli_login(entra, azure_cli_bound(self.timeout)),
+            "auto" => azure_cli_login(entra, azure_cli_bound(self.timeout)).or_else(|_| {
                 eprintln!("Azure CLI session unavailable; using Microsoft device sign-in.");
                 Credentials::from_device(device_login(
                     &self.identity_client,
@@ -251,6 +251,12 @@ impl Credentials {
         })
     }
 }
+/// The `az` token command gets at most a minute regardless of the
+/// statement timeout, which can be a day.
+fn azure_cli_bound(timeout: Duration) -> Duration {
+    timeout.min(Duration::from_secs(60))
+}
+
 fn azure_cli_login(entra: &Entra, timeout: Duration) -> Result<Credentials, String> {
     let executable = if cfg!(windows) { "az.cmd" } else { "az" };
     let mut child = Command::new(executable)

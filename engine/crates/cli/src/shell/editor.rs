@@ -45,6 +45,32 @@ impl Editor {
         self.area.lines().join("\n")
     }
 
+    pub fn line_count(&self) -> usize {
+        self.area.lines().len()
+    }
+
+    /// (row, column) of the cursor, in characters.
+    pub fn cursor(&self) -> (usize, usize) {
+        self.area.cursor()
+    }
+
+    /// The line the cursor is on.
+    pub fn current_line(&self) -> String {
+        self.area
+            .lines()
+            .get(self.area.cursor().0)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Replace the `chars` characters before the cursor with `text`.
+    pub fn replace_before_cursor(&mut self, chars: usize, text: &str) {
+        if chars > 0 {
+            self.area.delete_str(chars);
+        }
+        self.area.insert_str(text);
+    }
+
     pub fn is_empty(&self) -> bool {
         self.area.lines().iter().all(|line| line.trim().is_empty())
     }
