@@ -128,8 +128,12 @@ const GROUPS: &[Group] = &[
         coming_soon: false,
         entries: &[
             Entry {
-                command: "Tab  ·  Up/Down  ·  --editing-mode vi",
-                description: "complete keywords and names; history; vi keys",
+                command: "Tab  ·  Up/Down  ·  Right  ·  Ctrl-R",
+                description: "complete; history by prefix; take the suggestion; search history",
+            },
+            Entry {
+                command: "Ctrl-A/E  Ctrl-K/U  Ctrl-W  Alt-Z/Y  ·  --editing-mode vi",
+                description: "readline editing; undo, redo; vi keys",
             },
             Entry {
                 command: ".history [n]  .timing  .clear  help  exit",

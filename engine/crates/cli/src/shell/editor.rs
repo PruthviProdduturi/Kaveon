@@ -1,6 +1,7 @@
 //! The pinned SQL editor: a `tui-textarea` with the submit rule, history
-//! navigation, an optional vi editing mode and the box the shell draws
-//! around it.
+//! navigation (prefix-filtered Up/Down, Ctrl-R reverse search, an inline
+//! suggestion from history), an optional vi editing mode and the box the
+//! shell draws around it.
 use crate::theme::Theme;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Style;
@@ -28,12 +29,32 @@ enum ViMode {
     Operator(char),
 }
 
+/// Reverse incremental search over the history (Ctrl-R): the query typed
+/// so far and the entry it currently shows.
+struct Search {
+    query: String,
+    /// The history index previewed in the editor; `None` before the first
+    /// match.
+    index: Option<usize>,
+    /// The last keystroke found nothing; the preview is the previous match.
+    failing: bool,
+}
+
+/// What the shell shows under the editor while a search runs.
+pub struct SearchView {
+    pub query: String,
+    pub failing: bool,
+}
+
 pub struct Editor {
     area: TextArea<'static>,
     history: Vec<String>,
     /// Index into `history` while browsing; `None` when editing a new statement.
     browsing: Option<usize>,
+    /// What was typed before browsing or searching started: restored on the
+    /// way back, and the prefix Up/Down keep to.
     draft: String,
+    search: Option<Search>,
     vi: Option<ViMode>,
     /// The first key of a two-key vi sequence (`gg`).
     pending: Option<char>,
@@ -53,6 +74,7 @@ impl Editor {
             history: Vec::new(),
             browsing: None,
             draft: String::new(),
+            search: None,
             vi: None,
             pending: None,
         }
@@ -112,7 +134,67 @@ impl Editor {
     pub fn clear(&mut self) {
         self.area = blank_area();
         self.browsing = None;
+        self.search = None;
         self.pending = None;
+    }
+
+    /// Text pasted into the editor: inserted as it is, tabs as spaces, and
+    /// never submitted — Enter after it runs the statement.
+    pub fn paste(&mut self, text: &str) {
+        let text = text
+            .replace("\r\n", "\n")
+            .replace('\r', "\n")
+            .replace('\t', "    ");
+        self.area.insert_str(&text);
+        self.browsing = None;
+    }
+
+    /// The rest of the most recent history entry that begins with what is
+    /// typed, when the cursor is at the end of it: shown dimmed after the
+    /// cursor, taken with Right, End or Ctrl-E.
+    pub fn suggestion(&self) -> Option<String> {
+        if self.search.is_some()
+            || self.browsing.is_some()
+            || matches!(
+                self.vi,
+                Some(ViMode::Normal | ViMode::Visual | ViMode::Operator(_))
+            )
+            || !self.at_end()
+        {
+            return None;
+        }
+        let text = self.lines();
+        if text.trim().is_empty() {
+            return None;
+        }
+        self.history
+            .iter()
+            .rev()
+            .find(|entry| entry.len() > text.len() && entry.starts_with(&text))
+            .map(|entry| entry[text.len()..].to_owned())
+    }
+
+    fn accept_suggestion(&mut self) -> bool {
+        match self.suggestion() {
+            Some(rest) => {
+                self.area.insert_str(&rest);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn at_end(&self) -> bool {
+        let (row, column) = self.area.cursor();
+        row + 1 == self.area.lines().len() && column == self.current_line().chars().count()
+    }
+
+    /// The search in progress, for the hint line.
+    pub fn search_view(&self) -> Option<SearchView> {
+        self.search.as_ref().map(|search| SearchView {
+            query: search.query.clone(),
+            failing: search.failing,
+        })
     }
 
     pub fn set_text(&mut self, text: &str) {
@@ -156,9 +238,22 @@ impl Editor {
     }
 
     pub fn handle(&mut self, key: &KeyEvent) -> EditorAction {
+        if self.search.is_some() {
+            return self.handle_search(key);
+        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         match (key.code, ctrl) {
+            (KeyCode::Char('r'), true) if matches!(self.vi, None | Some(ViMode::Insert)) => {
+                self.pending = None;
+                self.draft = self.lines();
+                self.search = Some(Search {
+                    query: String::new(),
+                    index: None,
+                    failing: false,
+                });
+                return EditorAction::None;
+            }
             (KeyCode::Char('c'), true) => return EditorAction::Interrupt,
             (KeyCode::Char('d'), true) if self.is_empty() => return EditorAction::Quit,
             (KeyCode::Char('d'), true) => return EditorAction::None,
@@ -190,6 +285,35 @@ impl Editor {
             }
             KeyCode::Up if self.on_first_line() => return self.history_back(),
             KeyCode::Down if self.on_last_line() => return self.history_forward(),
+            KeyCode::Right | KeyCode::End if self.accept_suggestion() => {
+                return EditorAction::None;
+            }
+            _ => {}
+        }
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        match key.code {
+            // Readline's line editing where the textarea's defaults differ:
+            // Ctrl-U kills to the start of the line, Ctrl-E accepts the
+            // suggestion at the end, undo and redo move off Ctrl-U/Ctrl-R.
+            KeyCode::Char('u') if ctrl => {
+                self.area.delete_line_by_head();
+                self.browsing = None;
+                return EditorAction::None;
+            }
+            KeyCode::Char('e') if ctrl && self.accept_suggestion() => return EditorAction::None,
+            KeyCode::Char('_') if ctrl => {
+                self.area.undo();
+                return EditorAction::None;
+            }
+            KeyCode::Char('z') if alt => {
+                self.area.undo();
+                return EditorAction::None;
+            }
+            KeyCode::Char('y') if alt => {
+                self.area.redo();
+                return EditorAction::None;
+            }
             _ => {}
         }
         let input: Input = (*key).into();
@@ -199,6 +323,82 @@ impl Editor {
         self.area.input(input);
         self.browsing = None;
         EditorAction::None
+    }
+
+    /// Keys while a reverse search runs: characters narrow the query,
+    /// Ctrl-R steps to an older match, Backspace widens (the match shown
+    /// stays when it still fits), Enter keeps the
+    /// match in the editor (it is not run), Esc, Ctrl-G or Ctrl-C put the
+    /// draft back. Any other key keeps the match and is then handled as
+    /// usual.
+    fn handle_search(&mut self, key: &KeyEvent) -> EditorAction {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let Some(mut search) = self.search.take() else {
+            return EditorAction::None;
+        };
+        match (key.code, ctrl) {
+            (KeyCode::Char('r'), true) => {
+                let from = search.index.map(|index| index.checked_sub(1));
+                match from {
+                    Some(None) => search.failing = true,
+                    Some(Some(from)) => self.search_from(&mut search, Some(from)),
+                    None => self.search_from(&mut search, None),
+                }
+                self.search = Some(search);
+            }
+            (KeyCode::Esc, _) | (KeyCode::Char('g'), true) | (KeyCode::Char('c'), true) => {
+                let draft = self.draft.clone();
+                self.set_text(&draft);
+            }
+            (KeyCode::Backspace, _) => {
+                search.query.pop();
+                if search.query.is_empty() {
+                    search.index = None;
+                    search.failing = false;
+                    let draft = self.draft.clone();
+                    self.set_text(&draft);
+                } else {
+                    // The match shown stays when it still fits the query.
+                    let from = search.index;
+                    self.search_from(&mut search, from);
+                }
+                self.search = Some(search);
+            }
+            (KeyCode::Char(ch), false) => {
+                search.query.push(ch);
+                let from = search.index;
+                self.search_from(&mut search, from);
+                self.search = Some(search);
+            }
+            (KeyCode::Enter, _) => {
+                self.area.move_cursor(CursorMove::End);
+            }
+            _ => {
+                self.area.move_cursor(CursorMove::End);
+                return self.handle(key);
+            }
+        }
+        EditorAction::None
+    }
+
+    /// The newest history entry at or before `from` (the newest of all when
+    /// `None`) containing the query, case-insensitively, previewed in the
+    /// editor; the previous preview stays when there is none.
+    fn search_from(&mut self, search: &mut Search, from: Option<usize>) {
+        let query = search.query.to_lowercase();
+        let upper = from.map_or(self.history.len(), |from| from + 1);
+        let found = (0..upper)
+            .rev()
+            .find(|&index| self.history[index].to_lowercase().contains(&query));
+        match found {
+            Some(index) => {
+                search.index = Some(index);
+                search.failing = false;
+                let text = self.history[index].clone();
+                self.set_text(&text);
+            }
+            None => search.failing = true,
+        }
     }
 
     /// Vi Normal, Visual and Operator modes.
@@ -415,17 +615,24 @@ impl Editor {
         EditorAction::Submit(text)
     }
 
+    /// Up: the previous history entry that begins with what was typed
+    /// before browsing started (every entry when nothing was).
     fn history_back(&mut self) -> EditorAction {
         if self.history.is_empty() {
             return EditorAction::None;
         }
-        let next = match self.browsing {
+        let upper = match self.browsing {
             None => {
                 self.draft = self.lines();
-                self.history.len() - 1
+                self.history.len()
             }
-            Some(0) => return EditorAction::None,
-            Some(index) => index - 1,
+            Some(index) => index,
+        };
+        let Some(next) = (0..upper)
+            .rev()
+            .find(|&index| self.history[index].starts_with(&self.draft))
+        else {
+            return EditorAction::None;
         };
         let text = self.history[next].clone();
         self.set_text(&text);
@@ -433,18 +640,24 @@ impl Editor {
         EditorAction::None
     }
 
+    /// Down: the next matching entry, then the draft again.
     fn history_forward(&mut self) -> EditorAction {
         let Some(current) = self.browsing else {
             return EditorAction::None;
         };
-        if current + 1 < self.history.len() {
-            let text = self.history[current + 1].clone();
-            self.set_text(&text);
-            self.browsing = Some(current + 1);
-        } else {
-            let draft = self.draft.clone();
-            self.set_text(&draft);
-            self.browsing = None;
+        let next = (current + 1..self.history.len())
+            .find(|&index| self.history[index].starts_with(&self.draft));
+        match next {
+            Some(index) => {
+                let text = self.history[index].clone();
+                self.set_text(&text);
+                self.browsing = Some(index);
+            }
+            None => {
+                let draft = self.draft.clone();
+                self.set_text(&draft);
+                self.browsing = None;
+            }
         }
         EditorAction::None
     }
@@ -548,6 +761,122 @@ mod tests {
             editor.handle(&KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL)),
             EditorAction::Submit(sql) if sql == "SELECT 3"
         ));
+    }
+
+    #[test]
+    fn up_keeps_to_the_typed_prefix() {
+        let mut editor = Editor::new();
+        editor.set_history(vec![
+            "SELECT 1;".into(),
+            "SHOW TABLES;".into(),
+            "SELECT 2;".into(),
+            ".cluster".into(),
+        ]);
+        type_text(&mut editor, "SEL");
+        editor.handle(&key(KeyCode::Up));
+        assert_eq!(editor.lines(), "SELECT 2;");
+        editor.handle(&key(KeyCode::Up));
+        assert_eq!(editor.lines(), "SELECT 1;");
+        editor.handle(&key(KeyCode::Up));
+        assert_eq!(editor.lines(), "SELECT 1;");
+        editor.handle(&key(KeyCode::Down));
+        assert_eq!(editor.lines(), "SELECT 2;");
+        editor.handle(&key(KeyCode::Down));
+        assert_eq!(editor.lines(), "SEL");
+        assert!(editor.browsing.is_none());
+    }
+
+    #[test]
+    fn a_suggestion_comes_from_history_and_right_takes_it() {
+        let mut editor = Editor::new();
+        editor.set_history(vec![
+            "SELECT count(*) FROM t;".into(),
+            "SHOW TABLES;".into(),
+            "SELECT 2;".into(),
+        ]);
+        assert!(editor.suggestion().is_none());
+        type_text(&mut editor, "SELECT c");
+        assert_eq!(editor.suggestion().as_deref(), Some("ount(*) FROM t;"));
+        editor.handle(&key(KeyCode::Left));
+        assert!(editor.suggestion().is_none(), "only at the end of the text");
+        editor.handle(&key(KeyCode::Right));
+        assert_eq!(editor.lines(), "SELECT c");
+        editor.handle(&key(KeyCode::Right));
+        assert_eq!(editor.lines(), "SELECT count(*) FROM t;");
+        assert!(editor.suggestion().is_none());
+        editor.clear();
+        type_text(&mut editor, "SEL");
+        assert_eq!(editor.suggestion().as_deref(), Some("ECT 2;"));
+        editor.handle(&KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
+        assert_eq!(editor.lines(), "SELECT 2;");
+    }
+
+    #[test]
+    fn ctrl_r_searches_history_backwards_and_enter_keeps_the_match() {
+        let mut editor = Editor::new();
+        editor.set_history(vec![
+            "SELECT 1 FROM orders;".into(),
+            "SHOW TABLES;".into(),
+            "select 2 from orders;".into(),
+        ]);
+        type_text(&mut editor, "draft");
+        let ctrl_r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
+        editor.handle(&ctrl_r);
+        let view = editor.search_view().expect("searching");
+        assert_eq!(view.query, "");
+        assert_eq!(editor.lines(), "draft");
+        type_text(&mut editor, "ORD");
+        assert_eq!(editor.lines(), "select 2 from orders;");
+        assert_eq!(
+            editor.search_view().map(|view| view.query).as_deref(),
+            Some("ORD")
+        );
+        editor.handle(&ctrl_r);
+        assert_eq!(editor.lines(), "SELECT 1 FROM orders;");
+        editor.handle(&ctrl_r);
+        assert_eq!(editor.lines(), "SELECT 1 FROM orders;");
+        assert!(editor.search_view().is_some_and(|view| view.failing));
+        type_text(&mut editor, "x");
+        assert!(editor.search_view().is_some_and(|view| view.failing));
+        editor.handle(&key(KeyCode::Backspace));
+        assert!(editor.search_view().is_some_and(|view| !view.failing));
+        assert!(matches!(
+            editor.handle(&key(KeyCode::Enter)),
+            EditorAction::None
+        ));
+        assert!(editor.search_view().is_none());
+        assert_eq!(editor.lines(), "SELECT 1 FROM orders;");
+        assert!(matches!(
+            editor.handle(&key(KeyCode::Enter)),
+            EditorAction::Submit(sql) if sql == "SELECT 1 FROM orders;"
+        ));
+    }
+
+    #[test]
+    fn escape_leaves_a_search_with_the_draft_back() {
+        let mut editor = Editor::new();
+        editor.set_history(vec!["SELECT 1;".into()]);
+        type_text(&mut editor, "SHOW");
+        editor.handle(&KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        type_text(&mut editor, "sel");
+        assert_eq!(editor.lines(), "SELECT 1;");
+        editor.handle(&key(KeyCode::Esc));
+        assert!(editor.search_view().is_none());
+        assert_eq!(editor.lines(), "SHOW");
+    }
+
+    #[test]
+    fn paste_inserts_verbatim_and_ctrl_u_kills_to_the_line_start() {
+        let mut editor = Editor::new();
+        editor.paste("SELECT 1\r\n\tFROM t;");
+        assert_eq!(editor.lines(), "SELECT 1\n    FROM t;");
+        assert!(editor.is_complete());
+        editor.handle(&KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        assert_eq!(editor.lines(), "SELECT 1\n");
+        editor.handle(&KeyEvent::new(KeyCode::Char('z'), KeyModifiers::ALT));
+        assert_eq!(editor.lines(), "SELECT 1\n    FROM t;");
+        editor.handle(&KeyEvent::new(KeyCode::Char('y'), KeyModifiers::ALT));
+        assert_eq!(editor.lines(), "SELECT 1\n");
     }
 
     #[test]

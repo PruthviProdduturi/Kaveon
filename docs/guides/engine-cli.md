@@ -157,7 +157,11 @@ else is a newline.
 | Enter | Submits when the buffer, ignoring trailing whitespace and comments, ends with `;` (or is a one-line dot command or alias); otherwise inserts a newline. Several statements in one buffer run in order. |
 | Ctrl-Enter, Alt-Enter | Submits regardless of the trailing `;`. |
 | Backspace at the start of a line | Joins it to the line above. |
-| Up, Down | On the first or last line of the buffer, browse history; the unsent draft is kept and restored. Elsewhere they move the cursor. |
+| Up, Down | On the first or last line of the buffer, browse history — only the entries that begin with what was typed, when something was; the unsent draft is kept and restored. Elsewhere they move the cursor. |
+| Right, End, Ctrl-E at the end of the text | Take the inline suggestion: the rest of the most recent history entry that begins with what is typed, shown dimmed after the cursor. |
+| Ctrl-R | Reverse search through history: type to narrow (case-insensitive, anywhere in the statement), Ctrl-R again for an older match, Backspace to widen, Enter keeps the match in the editor without running it, Esc puts the draft back. The line under the editor shows the query. |
+| Ctrl-A, Ctrl-E, Ctrl-K, Ctrl-U, Ctrl-W, Alt-B, Alt-F | Readline editing: start and end of line, kill to the end and to the start of the line, kill the previous word, word back and forward. Alt-Z undoes, Alt-Y redoes. |
+| Paste | Pasted text is inserted as it is, tabs as spaces, and never run: Tab inside it does not complete and a newline inside it does not submit. Enter after it runs the statement. |
 | Tab | Completes the word before the cursor: SQL keywords, dot commands, and catalog, schema, table and column names fetched lazily from the catalog API (the cache is refreshed by `USE`). One candidate is inserted; several are listed above the editor and the common prefix is inserted. |
 | Ctrl-C | Cancels the running statement (see below); with nothing running, clears the buffer; with an empty buffer, prints how to leave. |
 | Ctrl-D, `exit`, `quit`, `.quit` | Leaves and saves history. |
@@ -348,6 +352,12 @@ a coordinator statement; everything else is SQL for `POST /v1/statement`.
 | `.queries` | Statements queued or running on the coordinator now, with id, state, elapsed time and tags |
 | `.kill <id>` | `DELETE /v1/query/{id}` for a statement of any client |
 | `.settings`, `.settings <key> <value>`, `.settings reset` | Show, set or clear the session settings (below) |
+| `.ask <question>`, `.ask <n>` | A question in plain language, answered through the Kaveon DLM on the platform API (`--api`); `<n>` answers a clarification. See [Asking in plain language](#asking-in-plain-language) |
+| `.source <file>` | Runs the statements of a file through the shell in order, each with its result and summary; a path with spaces is quoted |
+| `.tee <file>`, `.tee off` | Appends everything shown from then on — echoed statements, results, summaries, errors, without colour — to the file; the status line names it |
+| `.edit` | Opens the last statement in `$VISUAL`, else `$EDITOR` (else `notepad` or `vi`); on return the text is loaded into the editor, Enter runs it |
+| `<statement>\G` | Ends a statement like `;` and shows that result in the vertical format once |
+| `.watch [seconds] <statement>` | Re-runs the statement every *seconds* (default 2, at most 86,400), clearing the screen each run, until any key |
 | `.help`, `.h`, `help` | The command reference, grouped, one screen |
 | `.clear`, `clear` | Clear the screen |
 | `.quit`, `.exit`, `.q`, `exit`, `quit` | Leave |
@@ -367,6 +377,49 @@ Values are validated in the client against the same ranges the coordinator
 enforces; the coordinator still caps them at its own limits and answers HTTP
 400 `INVALID_SETTING` for anything it refuses. The Engine's HTTP API is
 stateless, so a setting lives only as long as the statements that carry it.
+
+## Asking in plain language
+
+```text
+kaveon OpenSource.kaveon_product › .ask users by platform in Europe
+→ Product users · Users by platform, Europe
+SELECT platform, COUNT(*) AS users
+FROM kaveon_events_users
+WHERE region = 'Europe'
+GROUP BY platform
+ORDER BY users DESC
+confidence 0.91
+┌──────────┬─────────┐
+│ platform │   users │
+…
+```
+
+`.ask` sends the question to the Kaveon DLM — the platform's deterministic
+data language model, not a hosted LLM — at `POST /api/v1/dlm/ask` on the
+platform API named by `--api <url>` or `KAVEON_API_URL` (`KAVEON_API_TOKEN`
+is sent as a bearer token when set). The DLM routes the question to a
+registered dataset and answers in one of four shapes:
+
+- **Live**: the SQL it wrote, highlighted, with the dataset, title, note and
+  confidence. When the dataset is a native Kaveon catalog the shell switches
+  the session to that catalog and schema and runs the SQL on the coordinator
+  as any statement, with progress, the result table and the summary. When
+  the dataset is served by the platform (a PostgreSQL or Fabric source) the
+  SQL is shown to run in SQL Lab.
+- **From context**: the rows answered from the DLM's precomputed context
+  without a scan, marked `from context · no scan` (`≈ approximate` for a
+  sketch-backed distinct count).
+- **Clarify**: a numbered list of the readings the question could have;
+  `.ask <n>` chooses one and the answer follows. A later question inherits
+  the previous answer's frame, so `.ask and in Asia` narrows the same
+  question.
+- **Out of scope** or refused: one line saying why, with the registered
+  datasets when there are any.
+
+In scripts (`-e ".ask …"`) a question is answered once: a Live answer over a
+native catalog runs and prints its result; a clarification lists its choices
+and asks for the choice to be put in the question, since a script keeps no
+session. Without `--api` the command explains where the DLM runs.
 
 ## Catalog administration
 
