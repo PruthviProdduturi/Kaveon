@@ -2440,6 +2440,7 @@ async fn submit_statement(
     }
 
     let local_catalog_snapshot = Arc::clone(&catalog_snapshot);
+    let local_query_id = query_id.clone();
     // Build non-Send operators inside the blocking task. Retain admission until
     // both execution and result publication complete, even if the HTTP future drops.
     let local_execution = tokio::task::spawn_blocking(move || {
@@ -2456,15 +2457,16 @@ async fn submit_statement(
                 let planning_us = elapsed_us(planning_start);
                 let scan_handles = planned.scan_metrics;
                 let mut operator = planned.operator;
-                local_columns = operator
-                    .schema()
-                    .fields()
-                    .iter()
-                    .map(|field| ColumnInfo {
-                        name: field.name().clone(),
-                        data_type: presented_type(field.data_type()),
-                    })
-                    .collect();
+                local_columns = column_infos(operator.schema());
+                if result_writer.is_some()
+                    && let Some(record) = QUERY_STORE
+                        .blocking_write()
+                        .queries
+                        .get_mut(&local_query_id)
+                    && matches!(record.state, QueryState::Running)
+                {
+                    record.columns = local_columns.clone();
+                }
                 let execution_start = Instant::now();
                 let result = if let Some(writer) = result_writer.as_mut() {
                     spool_operator(&mut *operator, writer)
@@ -2687,6 +2689,27 @@ async fn submit_statement(
     };
 
     Json(resp).into_response()
+}
+
+/// The record's columns while it still runs, so a paged reader has a header
+/// for the pages it can already read. A record past RUNNING is left alone.
+async fn publish_columns(query_id: &str, columns: &[ColumnInfo]) {
+    if let Some(record) = QUERY_STORE.write().await.queries.get_mut(query_id)
+        && matches!(record.state, QueryState::Running)
+    {
+        record.columns = columns.to_vec();
+    }
+}
+
+fn column_infos(schema: &arrow::datatypes::Schema) -> Vec<ColumnInfo> {
+    schema
+        .fields()
+        .iter()
+        .map(|field| ColumnInfo {
+            name: field.name().clone(),
+            data_type: presented_type(field.data_type()),
+        })
+        .collect()
 }
 
 /// Keeps a finished distributed result in the cache, when the statement
@@ -4896,6 +4919,11 @@ async fn execute_distributed_fragments(
                         {
                             orchestrator.cancel();
                             return Some(Err("root tasks returned incompatible schemas".into()));
+                        }
+                        if result_schema.is_none() && result_writer.is_some() {
+                            // A paged reader can render page 0 the moment it
+                            // lands: give the running record its columns now.
+                            publish_columns(query_id, &column_infos(&schema)).await;
                         }
                         result_schema.get_or_insert(schema);
                     }
