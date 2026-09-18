@@ -1465,7 +1465,15 @@ fn run_local_metadata(
                     let names: Vec<String> =
                         result.columns.into_iter().map(|(name, _)| name).collect();
                     let format = app.result_format(options);
-                    render_rows(app, terminal, options, &names, &result.rows, format)?;
+                    render_rows(
+                        app,
+                        terminal,
+                        options,
+                        Some(sql),
+                        &names,
+                        &result.rows,
+                        format,
+                    )?;
                     if app.timing && is_human_format(format) {
                         let summary = render::summary::Summary {
                             ok: true,
@@ -1635,8 +1643,17 @@ fn try_first_page(
                 unreachable!("the stream was pending a moment ago");
             };
             running.progress.rows_so_far = Some(page.row_count);
+            let statement = running.sql.clone();
             let format = app.result_format(options);
-            let (format, cut) = render_rows(app, terminal, options, &names, &page.rows, format)?;
+            let (format, cut) = render_rows(
+                app,
+                terminal,
+                options,
+                Some(&statement),
+                &names,
+                &page.rows,
+                format,
+            )?;
             if cursor.exhausted() {
                 // Page 0 was the whole result; the summary follows the POST.
                 if let Some(Running {
@@ -1738,6 +1755,7 @@ fn finish(
                     app,
                     terminal,
                     options,
+                    Some(&running.sql),
                     &names,
                     &result.data,
                     app.result_format(options),
@@ -1890,27 +1908,51 @@ fn finish(
 /// One page of rows in `format`: the styled table for the table formats
 /// (AUTO falls back to VERTICAL when even narrowed columns do not fit),
 /// the plain renderer otherwise. Returns the format actually used and
-/// whether the table narrowed a column.
+/// whether the table narrowed a column. `statement` is the SQL the rows
+/// answer, when known: `SHOW STATS FOR t` names its table from it.
 fn render_rows(
     app: &App,
     terminal: &mut Screen,
     options: &Options,
+    statement: Option<&str>,
     names: &[String],
     rows: &[Vec<serde_json::Value>],
     format: OutputFormat,
 ) -> Result<(OutputFormat, bool), String> {
-    if let Some(text) = single_text_cell(names, rows)
-        && matches!(
-            format,
-            OutputFormat::Table | OutputFormat::Aligned | OutputFormat::Auto
-        )
-    {
+    let boxed = matches!(
+        format,
+        OutputFormat::Table | OutputFormat::Aligned | OutputFormat::Auto
+    );
+    if boxed && let Some(text) = single_text_cell(names, rows) {
         // `SHOW CREATE TABLE` and the like: the statement itself, not a
         // one-cell table with escaped newlines.
         emit(
             terminal,
             crate::shell::highlight::highlight(&text, &app.theme),
         )?;
+        return Ok((format, false));
+    }
+    if boxed && let Some(kind) = render::stats::kind(names) {
+        // `SHOW STATS FOR` and `DESCRIBE DETAIL`: humanised, with the
+        // table's totals over the columns.
+        let lines = match kind {
+            render::stats::Kind::Stats => {
+                let table = statement.and_then(|sql| {
+                    render::stats::table_reference(sql, &options.catalog, &options.schema)
+                });
+                render::stats::stats(
+                    table.as_deref(),
+                    names,
+                    rows,
+                    table_width(options),
+                    &app.theme,
+                )
+            }
+            render::stats::Kind::Detail => {
+                render::stats::detail(names, rows, table_width(options), &app.theme)
+            }
+        };
+        emit(terminal, lines)?;
         return Ok((format, false));
     }
     match format {
@@ -1959,7 +2001,7 @@ fn next_page(app: &mut App, terminal: &mut Screen, options: &mut Options) -> Res
             let format = paging.format;
             paging.shown += page.rows.len();
             let exhausted = paging.cursor.exhausted();
-            let (_, cut) = render_rows(app, terminal, options, &names, &page.rows, format)?;
+            let (_, cut) = render_rows(app, terminal, options, None, &names, &page.rows, format)?;
             if let Some(paging) = app.paging.as_mut() {
                 paging.truncated |= cut;
             }

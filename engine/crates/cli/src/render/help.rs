@@ -34,6 +34,14 @@ const GROUPS: &[Group] = &[
                 description: "the full definition: columns, location, format, access",
             },
             Entry {
+                command: "SHOW STATS FOR table",
+                description: "column statistics from the last ANALYZE",
+            },
+            Entry {
+                command: "DESCRIBE DETAIL table",
+                description: "format, location, files, size, versions",
+            },
+            Entry {
                 command: "USE [catalog.]schema  ·  USE catalog",
                 description: "switch the session context (a bare catalog name works)",
             },
@@ -57,7 +65,7 @@ const GROUPS: &[Group] = &[
             },
             Entry {
                 command: "ANALYZE [catalog.][schema.]table",
-                description: "exact row count and source identity for the planner (admin)",
+                description: "collect table and column statistics (admin); see SHOW STATS FOR",
             },
             Entry {
                 command: "CREATE TABLE t [(cols)] WITH (location = '...', format = '...')",
@@ -204,6 +212,9 @@ mod tests {
         let text = crate::render::to_plain(&help(&Theme::mono()));
         assert!(text.contains("  Browse\n    SHOW CATALOGS"));
         assert!(text.contains("    SHOW CREATE TABLE table"));
+        assert!(text.contains("    SHOW STATS FOR table"));
+        assert!(text.contains("    DESCRIBE DETAIL table"));
+        assert!(text.contains("collect table and column statistics (admin); see SHOW STATS FOR"));
         assert!(text.contains("  Define\n    CREATE CATALOG"));
         assert!(text.contains("CALL system.register_table"));
         assert!(text.contains("  Run\n"));

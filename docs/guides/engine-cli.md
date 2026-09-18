@@ -333,6 +333,9 @@ a coordinator statement; everything else is SQL for `POST /v1/statement`.
 | `SHOW SCHEMAS [IN catalog] [LIKE 'p']` | Schemas of the session catalog or a named one; `FROM` equals `IN` |
 | `SHOW TABLES [IN [catalog.]schema] [LIKE 'p']` | Tables; `LIKE` filters names with `%` and `_` in the client |
 | `DESCRIBE [catalog.][schema.]table`, `DESC`, `SHOW COLUMNS FROM …` | Column name, type and nullability from the catalog definitions |
+| `ANALYZE [catalog.][schema.]table` | Coordinator statement (admin role): collects the table's row count, file count and bytes, and each column's null fraction, minimum, maximum and data size. Distinct counts are not collected yet. |
+| `SHOW STATS FOR [catalog.][schema.]table` | Coordinator statement: the column statistics of the last `ANALYZE`, one row per column plus a summary row with the table's row count. The shell shows a header line (`catalog.schema.table · 3,000,000 rows · 40.2 MiB`) over the columns with nulls as a percentage and sizes humanised; `SHOW STAT FOR` is accepted. A table never analyzed answers `Not found: no statistics for …; run ANALYZE …`. |
+| `DESCRIBE DETAIL [catalog.][schema.]table` | Coordinator statement: format, location, created and modified times, file count, size, row count, Delta version, partition columns, when it was analyzed and the catalog snapshot, shown in the shell as a `field \| value` list |
 | `USE [catalog.]schema`, `USE catalog` | Validates the target before switching. A bare name is the schema in the current catalog when it exists, else the catalog of that name (keeping the current schema when it has it, or its only schema). |
 | `EXPLAIN <statement>` | Runs the statement with the result cache off, discards the rows and prints `plan.logical` as an indented tree with the summary |
 | `SET SESSION key = value; <statement>` | Passed through to the coordinator unchanged |
@@ -399,8 +402,16 @@ kaveon table register Benchmarks.clickbench.hits --location clickbench/hits.parq
 kaveon table relocate Benchmarks.tpch_sf100.lineitem --location tpch/sf100-v2/lineitem
 kaveon table describe Benchmarks.tpch_sf100.lineitem
 kaveon table show-create Benchmarks.tpch_sf100.lineitem
+kaveon table stats Benchmarks.tpch_sf100.lineitem       # SHOW STATS FOR: the last ANALYZE
+kaveon table detail Benchmarks.tpch_sf100.lineitem      # DESCRIBE DETAIL: format, location, files, size, versions
 kaveon table drop Benchmarks.tpch_sf100.lineitem --if-exists
 ```
+
+`table stats` and `table detail` submit `SHOW STATS FOR` and `DESCRIBE
+DETAIL` and print the rows as the coordinator returns them in the chosen
+`--output-format` (the humanised header and percentages are the shell's).
+Statistics exist once an admin has run `ANALYZE table` in the shell or with
+`-e`; until then `table stats` answers `no statistics for …; run ANALYZE …`.
 
 `table register` without `--columns` has the coordinator read the columns
 from the table itself (the Delta log, the Iceberg metadata pointer, or the
