@@ -1078,12 +1078,14 @@ where
 /// A batch whose reservation the budget refuses is kept: the refusal is
 /// reported, and the next call offers the same batch again, its
 /// reservation tried first — the IPC reader has moved on, so nothing else
-/// could bring the batch back.
+/// could bring the batch back (`local_parallel::ThreadSource`).
 struct DiskExchangeInput {
     schema: arrow::datatypes::SchemaRef,
     payloads: std::collections::VecDeque<crate::transport::ArrowPayload>,
     memory: kaveon_core::OperatorMemoryAccount,
-    /// The batch handed out last, held until the next call.
+    /// The batch handed out last, held until the next call, when read as
+    /// a `BatchOperator`; a thread source hands the reservation over with
+    /// the batch instead.
     decoded: Option<kaveon_core::MemoryReservation>,
     /// A decoded batch whose reservation was refused, with its size,
     /// offered again on the next call.
@@ -1178,6 +1180,18 @@ impl kaveon_core::BatchOperator for DiskExchangeInput {
         Ok(Some(batch))
     }
 }
+impl kaveon_exec::local_parallel::ThreadSource for DiskExchangeInput {
+    fn schema(&self) -> &arrow::datatypes::SchemaRef {
+        &self.schema
+    }
+    fn next_batch(
+        &mut self,
+    ) -> kaveon_core::Result<Option<kaveon_exec::local_parallel::ReservedBatch>> {
+        Ok(self
+            .decode_next()?
+            .map(|(batch, memory)| kaveon_exec::local_parallel::ReservedBatch { batch, memory }))
+    }
+}
 impl crate::fragment_exec::ExchangeInputProvider for PrefetchedExchangeInputs {
     fn read(
         &self,
@@ -1243,7 +1257,7 @@ impl crate::fragment_exec::ExchangeInputProvider for PrefetchedExchangeInputs {
                         memory,
                         metrics,
                     ))
-                        as Box<dyn kaveon_core::BatchOperator>)
+                        as Box<dyn kaveon_exec::local_parallel::ThreadSource>)
                 })
                     as kaveon_exec::local_parallel::SourceOpener)
             })
@@ -6944,6 +6958,42 @@ mod tests {
             metrics.batches.load(std::sync::atomic::Ordering::Acquire),
             3
         );
+        drop(input);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    /// The same input read as a thread source hands each batch over with
+    /// the reservation holding it — the one charge for the batch while
+    /// it is in flight — and keeps a refused batch the same way.
+    #[test]
+    fn a_spooled_exchange_input_hands_its_reservation_over_with_the_batch() {
+        use kaveon_exec::local_parallel::ThreadSource;
+        let (payload, batch_bytes, first_bytes, firsts) = three_batch_spool();
+        let pool = kaveon_core::QueryMemoryPool::new("handed-over", batch_bytes * 2).unwrap();
+        let mut input = super::DiskExchangeInput::new(
+            payload.schema(),
+            std::collections::VecDeque::from([payload]),
+            pool.operator("prefetched-exchanges").unwrap(),
+            Arc::new(super::ExchangeDecodeMetrics::default()),
+        );
+        let first = ThreadSource::next_batch(&mut input).unwrap().unwrap();
+        assert_eq!(first_value(&first.batch), firsts[0]);
+        assert_eq!(first.memory.as_ref().unwrap().bytes(), first_bytes);
+        // The source holds nothing of its own: the reservation is the
+        // batch's holder's, and the two held together leave the third
+        // refused until one of them is dropped.
+        let second = ThreadSource::next_batch(&mut input).unwrap().unwrap();
+        assert_eq!(first_value(&second.batch), firsts[1]);
+        assert_eq!(pool.snapshot().current_bytes, first_bytes + batch_bytes);
+        let refused = ThreadSource::next_batch(&mut input).unwrap_err();
+        assert!(matches!(refused, kaveon_core::KaveonError::MemoryLimit(_)));
+        drop(first);
+        assert_eq!(pool.snapshot().current_bytes, batch_bytes);
+        let third = ThreadSource::next_batch(&mut input).unwrap().unwrap();
+        assert_eq!(first_value(&third.batch), firsts[2]);
+        assert!(ThreadSource::next_batch(&mut input).unwrap().is_none());
+        drop(second);
+        drop(third);
         drop(input);
         assert_eq!(pool.snapshot().current_bytes, 0);
     }

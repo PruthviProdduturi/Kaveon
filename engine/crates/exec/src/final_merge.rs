@@ -490,7 +490,8 @@ mod tests {
     };
     use crate::incremental_aggregate::{IncrementalAggregateMerger, MergedGroups};
     use crate::local_parallel::{
-        ParallelPartials, Rendezvous, SourceOpener, Sources, ThreadContext, ThreadOperator,
+        ParallelPartials, Rendezvous, ReservedBatch, SourceOpener, Sources, ThreadContext,
+        ThreadOperator, ThreadSource,
     };
     use crate::spill::SpillManager;
 
@@ -721,20 +722,53 @@ mod tests {
     }
 
     /// One payload decoded batch by batch, as the exchange input decodes
-    /// its spool.
+    /// its spool: with an account, each batch is reserved for what its
+    /// rows occupy and a refused batch is kept for the next call, the way
+    /// the server's spooled exchange input does it.
     struct IpcSource {
         schema: SchemaRef,
         reader: arrow::ipc::reader::StreamReader<std::io::Cursor<Arc<[u8]>>>,
+        reserve: Option<kaveon_core::OperatorMemoryAccount>,
+        pending: Option<(RecordBatch, u64)>,
+        refusals: Arc<std::sync::atomic::AtomicU64>,
     }
-    impl BatchOperator for IpcSource {
+    impl ThreadSource for IpcSource {
         fn schema(&self) -> &SchemaRef {
             &self.schema
         }
-        fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
-            Ok(self.reader.next().transpose()?)
+        fn next_batch(&mut self) -> Result<Option<ReservedBatch>> {
+            let (batch, bytes) = match self.pending.take() {
+                Some(pending) => pending,
+                None => {
+                    let Some(batch) = self.reader.next().transpose()? else {
+                        return Ok(None);
+                    };
+                    let bytes = crate::local_parallel::occupied_bytes(&batch)?;
+                    (batch, bytes)
+                }
+            };
+            let Some(account) = &self.reserve else {
+                return Ok(Some(ReservedBatch::unreserved(batch)));
+            };
+            match account.reserve(bytes) {
+                Ok(memory) => Ok(Some(ReservedBatch {
+                    batch,
+                    memory: Some(memory),
+                })),
+                Err(error) => {
+                    self.refusals
+                        .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                    self.pending = Some((batch, bytes));
+                    Err(error)
+                }
+            }
         }
     }
-    fn ipc_source(payload: &Arc<[u8]>) -> Box<dyn BatchOperator> {
+    fn ipc_source(
+        payload: &Arc<[u8]>,
+        reserve: Option<kaveon_core::OperatorMemoryAccount>,
+        refusals: &Arc<std::sync::atomic::AtomicU64>,
+    ) -> Box<dyn ThreadSource> {
         let reader = arrow::ipc::reader::StreamReader::try_new(
             std::io::Cursor::new(Arc::clone(payload)),
             None,
@@ -743,18 +777,28 @@ mod tests {
         Box::new(IpcSource {
             schema: reader.schema(),
             reader,
+            reserve,
+            pending: None,
+            refusals: Arc::clone(refusals),
         })
+    }
+    fn ipc_schema(payload: &Arc<[u8]>) -> SchemaRef {
+        arrow::ipc::reader::StreamReader::try_new(std::io::Cursor::new(Arc::clone(payload)), None)
+            .unwrap()
+            .schema()
     }
 
     /// Every payload decoded on the calling thread, one after another.
     fn ipc_sources_here(payloads: &[Arc<[u8]>]) -> Box<dyn BatchOperator> {
+        let refusals = Arc::new(std::sync::atomic::AtomicU64::new(0));
         Sources::Threads {
-            schema: ipc_source(&payloads[0]).schema().clone(),
+            schema: ipc_schema(&payloads[0]),
             openers: payloads
                 .iter()
                 .map(|payload| {
                     let payload = Arc::clone(payload);
-                    Box::new(move || Ok(ipc_source(&payload))) as SourceOpener
+                    let refusals = Arc::clone(&refusals);
+                    Box::new(move || Ok(ipc_source(&payload, None, &refusals))) as SourceOpener
                 })
                 .collect(),
         }
@@ -762,15 +806,23 @@ mod tests {
         .unwrap()
     }
 
-    /// Every payload decoded on a thread of its own.
-    fn ipc_sources_threads(payloads: &[Arc<[u8]>]) -> Sources {
+    /// Every payload decoded on a thread of its own; with a pool, each
+    /// source reserves its batches on it (the exchange input's shape) and
+    /// counts its refusals.
+    fn ipc_sources_threads(
+        payloads: &[Arc<[u8]>],
+        reserve: Option<&QueryMemoryPool>,
+        refusals: &Arc<std::sync::atomic::AtomicU64>,
+    ) -> Sources {
         Sources::Threads {
-            schema: ipc_source(&payloads[0]).schema().clone(),
+            schema: ipc_schema(&payloads[0]),
             openers: payloads
                 .iter()
                 .map(|payload| {
                     let payload = Arc::clone(payload);
-                    Box::new(move || Ok(ipc_source(&payload))) as SourceOpener
+                    let reserve = reserve.map(|pool| pool.operator("exchange-input").unwrap());
+                    let refusals = Arc::clone(refusals);
+                    Box::new(move || Ok(ipc_source(&payload, reserve, &refusals))) as SourceOpener
                 })
                 .collect(),
         }
@@ -1181,7 +1233,7 @@ mod tests {
                     hybrid_final_of(source, pool, context, &rendezvous)
                 });
                 ParallelPartials::broadcast(
-                    ipc_sources_threads(&payloads),
+                    ipc_sources_threads(&payloads, None, &Arc::default()),
                     final_schema(),
                     operator,
                     pool.clone(),

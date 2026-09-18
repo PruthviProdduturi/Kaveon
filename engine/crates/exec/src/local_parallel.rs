@@ -93,7 +93,11 @@ struct QueuedBatch {
     _memory: Held,
 }
 
-/// What a queued batch holds until it is consumed.
+/// What a queued batch holds until it is consumed. One batch is held by
+/// exactly one of these, cloned to every thread that takes the batch:
+/// the reservation its source handed over with it, or the queue's charge
+/// for a batch that came without one.
+#[derive(Clone)]
 enum Held {
     Reserved { _guard: Arc<MemoryReservation> },
     Charged { _charge: Arc<QueueCharge> },
@@ -288,9 +292,56 @@ pub struct ThreadContext {
     pub spill: Option<(SpillManager, usize)>,
 }
 
+/// A batch with the reservation that holds it: what a source read on its
+/// own thread hands the pump. The reservation crosses with the batch and
+/// is held by the threads' queues until the last thread is done with it,
+/// so an in-flight batch is charged exactly once — by its source, when it
+/// was decoded — never again by the queue. A batch without one is charged
+/// to the queue's budget instead.
+#[derive(Debug)]
+pub struct ReservedBatch {
+    pub batch: RecordBatch,
+    pub memory: Option<MemoryReservation>,
+}
+
+impl ReservedBatch {
+    /// A batch the pump is to charge for.
+    pub fn unreserved(batch: RecordBatch) -> Self {
+        Self {
+            batch,
+            memory: None,
+        }
+    }
+}
+
+/// A source read on a thread of its own, feeding every thread of the
+/// operator through the pump. Its batches come with the reservations
+/// holding them. A reservation the budget refuses is reported as
+/// `KaveonError::MemoryLimit` **with the batch kept**: the next call
+/// offers the same batch again, its reservation tried first, so a caller
+/// that can make room may try again without a row lost or read twice.
+pub trait ThreadSource {
+    fn schema(&self) -> &SchemaRef;
+    fn next_batch(&mut self) -> Result<Option<ReservedBatch>>;
+}
+
+/// Any operator as a thread source: its batches come unreserved and the
+/// pump charges its queue's budget for them. A refusal from such a source
+/// is final — the operator's contract does not keep the batch.
+pub struct Unreserved(pub Box<dyn BatchOperator>);
+
+impl ThreadSource for Unreserved {
+    fn schema(&self) -> &SchemaRef {
+        self.0.schema()
+    }
+    fn next_batch(&mut self) -> Result<Option<ReservedBatch>> {
+        Ok(self.0.next_batch()?.map(ReservedBatch::unreserved))
+    }
+}
+
 /// Opens a source inside the thread that reads it: what crosses to that
-/// thread is the means of opening, not the operator.
-pub type SourceOpener = Box<dyn FnOnce() -> Result<Box<dyn BatchOperator>> + Send>;
+/// thread is the means of opening, not the source.
+pub type SourceOpener = Box<dyn FnOnce() -> Result<Box<dyn ThreadSource>> + Send>;
 
 /// Where a parallel operator's rows come from.
 pub enum Sources {
@@ -314,7 +365,8 @@ impl Sources {
     }
 
     /// The sources as one operator on the calling thread, read one after
-    /// another.
+    /// another; each batch's reservation is held until the next call, as
+    /// any operator holds its output.
     pub fn into_operator(self) -> Result<Box<dyn BatchOperator>> {
         match self {
             Self::Here(source) => Ok(source),
@@ -322,6 +374,7 @@ impl Sources {
                 schema,
                 openers: openers.into_iter().collect(),
                 current: None,
+                held: None,
             })),
         }
     }
@@ -330,7 +383,8 @@ impl Sources {
 struct ChainedSources {
     schema: SchemaRef,
     openers: VecDeque<SourceOpener>,
-    current: Option<Box<dyn BatchOperator>>,
+    current: Option<Box<dyn ThreadSource>>,
+    held: Option<MemoryReservation>,
 }
 
 impl BatchOperator for ChainedSources {
@@ -338,10 +392,12 @@ impl BatchOperator for ChainedSources {
         &self.schema
     }
     fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        self.held = None;
         loop {
             if let Some(current) = self.current.as_mut() {
-                if let Some(batch) = current.next_batch()? {
-                    return Ok(Some(batch));
+                if let Some(reserved) = current.next_batch()? {
+                    self.held = reserved.memory;
+                    return Ok(Some(reserved.batch));
                 }
                 self.current = None;
             }
@@ -1025,7 +1081,8 @@ fn send_bounded<T>(
 /// of the buffers behind them — a batch decoded from one IPC message has
 /// every column's buffers pointing at that whole message, and the
 /// capacity would count it once per buffer. What a source reserves for a
-/// decoded batch, and what the queue charges for one.
+/// decoded batch, and what the queue charges for one that came without a
+/// reservation.
 pub fn occupied_bytes(batch: &RecordBatch) -> Result<u64> {
     batch
         .columns()
@@ -1054,7 +1111,8 @@ fn run_pump(
     if source.schema() != schema {
         return Err(error("parallel source schema differs between sources"));
     }
-    while let Some(batch) = source.next_batch()? {
+    while let Some(reserved) = source.next_batch()? {
+        let batch = reserved.batch;
         if batch.schema() != *schema {
             return Err(error(
                 "parallel source batch does not match declared schema",
@@ -1063,18 +1121,27 @@ fn run_pump(
         if stopped.load(Ordering::Acquire) {
             return Err(stopped_error());
         }
-        let bytes = occupied_bytes(&batch)?;
-        // The queues hold this many batches from every source at once.
-        queue.ensure_for(bytes.saturating_mul(pumps as u64))?;
-        let memory = Arc::new(queue.charge_waiting(bytes, stopped)?);
+        let held = match reserved.memory {
+            // The source's reservation crosses with the batch: the queues
+            // hold it until the last thread is done with the batch.
+            Some(reservation) => Held::Reserved {
+                _guard: Arc::new(reservation),
+            },
+            None => {
+                let bytes = occupied_bytes(&batch)?;
+                // The queues hold this many batches from every source at once.
+                queue.ensure_for(bytes.saturating_mul(pumps as u64))?;
+                Held::Charged {
+                    _charge: Arc::new(queue.charge_waiting(bytes, stopped)?),
+                }
+            }
+        };
         for sender in senders {
             send_bounded(
                 sender,
                 QueuedBatch {
                     batch: batch.clone(),
-                    _memory: Held::Charged {
-                        _charge: Arc::clone(&memory),
-                    },
+                    _memory: held.clone(),
                 },
                 stopped,
                 pool,
@@ -1836,10 +1903,10 @@ mod tests {
                             .unwrap()
                         })
                         .collect::<VecDeque<_>>();
-                    Ok(Box::new(Input {
+                    Ok(Box::new(Unreserved(Box::new(Input {
                         schema: schema.clone(),
                         batches,
-                    }) as Box<dyn BatchOperator>)
+                    }))) as Box<dyn ThreadSource>)
                 }) as SourceOpener
             })
             .collect::<Vec<_>>();
@@ -1915,6 +1982,86 @@ mod tests {
         );
         drop(parallel);
         assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    /// A source thread's batch crosses with its reservation — the one
+    /// charge for the batch while it is in flight — and its refusal is
+    /// the operator's error.
+    #[test]
+    fn a_source_thread_hands_its_reservation_over_and_its_refusal_is_the_error() {
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+        struct Refusing {
+            schema: SchemaRef,
+            account: OperatorMemoryAccount,
+            bytes: u64,
+            batch: Option<RecordBatch>,
+        }
+        impl ThreadSource for Refusing {
+            fn schema(&self) -> &SchemaRef {
+                &self.schema
+            }
+            fn next_batch(&mut self) -> Result<Option<ReservedBatch>> {
+                if self.batch.is_none() {
+                    return Ok(None);
+                }
+                let memory = self.account.reserve(self.bytes)?;
+                Ok(Some(ReservedBatch {
+                    batch: self.batch.take().expect("checked above"),
+                    memory: Some(memory),
+                }))
+            }
+        }
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int64Array::from((0..1000).collect::<Vec<_>>()))],
+        )
+        .unwrap();
+        let pool = QueryMemoryPool::new("refusing", 1 << 20).unwrap();
+        let operator: ThreadOperator = Arc::new(move |source, _, _| Ok(source));
+        for (bytes, admitted) in [(512u64 << 10, true), (2u64 << 20, false)] {
+            let opener = {
+                let schema = schema.clone();
+                let batch = batch.clone();
+                let account = pool.operator("source").unwrap();
+                Box::new(move || {
+                    Ok(Box::new(Refusing {
+                        schema,
+                        account,
+                        bytes,
+                        batch: Some(batch),
+                    }) as Box<dyn ThreadSource>)
+                }) as SourceOpener
+            };
+            let mut parallel = ParallelPartials::broadcast(
+                Sources::Threads {
+                    schema: schema.clone(),
+                    openers: vec![opener],
+                },
+                schema.clone(),
+                operator.clone(),
+                pool.clone(),
+                2,
+            )
+            .unwrap();
+            if admitted {
+                let out = parallel.next_batch().unwrap().unwrap();
+                assert_eq!(out.num_rows(), 1000);
+                // The source's reservation, transferred: nothing else was
+                // charged for the batch in flight, and the output's own.
+                let held = pool.snapshot().current_bytes;
+                assert!(
+                    held <= bytes + 2 * (out.get_array_memory_size() as u64 + 8192),
+                    "{held}"
+                );
+                assert_eq!(parallel.next_batch().unwrap().unwrap().num_rows(), 1000);
+                assert!(parallel.next_batch().unwrap().is_none());
+            } else {
+                let error = parallel.next_batch().unwrap_err();
+                assert!(matches!(error, KaveonError::MemoryLimit(_)), "{error}");
+            }
+            drop(parallel);
+            assert_eq!(pool.snapshot().current_bytes, 0);
+        }
     }
 
     #[test]
