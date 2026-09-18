@@ -89,11 +89,10 @@ cargo test --workspace
 The root Docker Compose stack starts Studio, the API and DLM, PostgreSQL metadata and data databases, and the Engine coordinator plus two workers:
 
 ```powershell
-$env:KAVEON_DATA_PATH='F:\kaveon-data' # optional; defaults to ./data
-docker compose up --build
+docker compose up -d --build
 ```
 
-Open Studio at `http://localhost:3000`, the API at `http://localhost:8082`, and the Engine UI at `http://localhost:8081/ui`. All published ports bind to localhost. The stack uses an explicit development identity and local-only secrets; it is not a production deployment configuration. The Engine coordinator distributes eligible single-source partial aggregates across its two workers; joins, shuffle, retries, and fault-tolerant execution are not implemented. Use `docker compose down` to stop it; add `--volumes` only when you intentionally want to delete the local PostgreSQL state.
+Open Studio at `http://localhost:3000`, the API at `http://localhost:8082`, and the Engine UI at `http://localhost:8081/ui`. All published ports bind to localhost. The stack uses an explicit development identity and local-only secrets; it is not a production deployment configuration. The Engine coordinator distributes eligible single-source partial aggregates across its two workers; joins, shuffle, retries, and fault-tolerant execution are not implemented. Use `docker compose down` to stop it; add `--volumes` only when you intentionally want to delete the local PostgreSQL state. The step-by-step install, including the local 504M-row lake and its catalog registration, is in the [local stack guide](docs/guides/local-stack.md).
 
 For a standalone KaveonDB and Engine install with no metadata service, run
 `./scripts/kavedb.sh build` or `./scripts/kavedb.ps1 -Build`. It binds the

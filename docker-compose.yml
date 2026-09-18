@@ -60,6 +60,11 @@ services:
       KAVEON_DATA_DIR: /data
       KAVEON_EXCHANGE_TOKEN: ${KAVEON_EXCHANGE_TOKEN:-kaveon-local-exchange}
       KAVEON_CATALOG_ADMIN_TOKEN: ${KAVEON_CATALOG_ADMIN_TOKEN:-kaveon-local-catalog-admin}
+      # The exchange spool lives on the coordinator's container filesystem. The
+      # 10 GiB / 8 GiB defaults refuse (HTTP 507) a repartitioned exact DISTINCT
+      # over the 504M-row local lake; these match the AKS coordinator.
+      KAVEON_EXCHANGE_DISK_LIMIT_BYTES: ${KAVEON_EXCHANGE_DISK_LIMIT_BYTES:-25769803776}
+      KAVEON_EXCHANGE_QUERY_DISK_LIMIT_BYTES: ${KAVEON_EXCHANGE_QUERY_DISK_LIMIT_BYTES:-17179869184}
     volumes:
       - ./engine/etc/coordinator.toml:/etc/kaveon/config.toml:ro
       - catalog-data:/var/lib/kaveon
