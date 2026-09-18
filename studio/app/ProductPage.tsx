@@ -5,6 +5,8 @@ import Image from "next/image";
 import Link from "next/link";
 import { KaveonMark } from "../components/KaveonMark";
 import { PublicHeader } from "../components/PublicHeader";
+import { BenchmarkSection } from "../components/product/BenchmarkSection";
+import type { ClickBenchFigure } from "../utils/clickbench";
 
 type AnimDirection = "up" | "down" | "left" | "right" | "scale" | "none";
 
@@ -47,7 +49,7 @@ function Section({ children, style }: { children: React.ReactNode; style?: React
   return <Anim dir="up">{(() => { return <div style={style}>{children}</div>; })()}</Anim>;
 }
 
-export default function AboutPage() {
+export default function ProductPage({ benchmark = null }: { benchmark?: ClickBenchFigure | null }) {
   const r1 = useFadeIn(0);
   const r2 = useFadeIn(100);
   const r3 = useFadeIn(0);
@@ -344,6 +346,9 @@ export default function AboutPage() {
           <div style={{ display: "flex", justifyContent: "center", gap: 18, flexWrap: "wrap", marginTop: 26, color: "#6f7d90", fontSize: 12 }}><span>Solid capabilities are available today</span><span>·</span><span>Alpha and target work is labeled explicitly</span></div>
         </div>
       </section>
+
+      {/* ─── Benchmark — rendered only when the generated figure exists ─── */}
+      {benchmark && <BenchmarkSection figure={benchmark} />}
 
 
       {/* ─── Chat Demo ─── */}
