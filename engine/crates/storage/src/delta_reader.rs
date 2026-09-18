@@ -66,8 +66,23 @@ impl DeltaTableReader {
         self
     }
 
+    /// The resolved snapshot: the version, its active files and the
+    /// logical schema, from the transaction log alone.
+    pub fn snapshot(&self) -> Result<crate::delta_snapshot::DeltaSnapshot> {
+        local_snapshot(&self.path, self.version)
+    }
+
     pub fn metadata(&self) -> Result<ParquetFileMetadata> {
         let snapshot = local_snapshot(&self.path, self.version)?;
+        self.metadata_for_snapshot(snapshot)
+    }
+
+    /// Exact file statistics for an already resolved snapshot: every active
+    /// file's footer, summed and merged, checked against the logical schema.
+    pub fn metadata_for_snapshot(
+        &self,
+        snapshot: crate::delta_snapshot::DeltaSnapshot,
+    ) -> Result<ParquetFileMetadata> {
         let files = snapshot
             .files
             .iter()
@@ -80,6 +95,7 @@ impl DeltaTableReader {
                     .ok_or_else(|| delta_error("empty Delta snapshot has no logical schema"))?,
                 row_count: 0,
                 row_group_count: 0,
+                profile: crate::FooterProfile::default(),
             });
         }
         let first = files
@@ -101,6 +117,7 @@ impl DeltaTableReader {
             metadata.row_group_count = metadata
                 .row_group_count
                 .saturating_add(next.row_group_count);
+            metadata.profile.merge(next.profile);
         }
         if let Some(schema) = snapshot.schema {
             crate::delta_snapshot::validate_physical_schema(&schema, &metadata.schema)?;

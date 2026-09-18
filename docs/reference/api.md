@@ -180,6 +180,94 @@ A catalog statement does not need an existing session context: `CREATE
 CATALOG` on an empty coordinator, or `CREATE SCHEMA` in a catalog with no
 schema, runs with whatever `catalog`/`schema` the request names.
 
+### Statistics statements
+
+`ANALYZE` publishes a table's statistics; two statements read them. All
+three take the `ANALYZE` name form — `[catalog.][schema.]table`, plain or
+double-quoted identifier parts, unqualified names resolved by the session
+`catalog` and `schema` — answer inline regardless of `result_delivery`, and
+leave a query record like any statement.
+
+```sql
+ANALYZE [catalog.][schema.]table
+SHOW STATS FOR [catalog.][schema.]table
+DESCRIBE DETAIL [catalog.][schema.]table
+```
+
+- **`ANALYZE`** (admin only; needs the durable product catalog, else 503
+  `ANALYZE_DISABLED`) reads the source's metadata twice — Parquet footers,
+  the Delta log, the Iceberg metadata pointer and manifests; never a data
+  page — refuses with 409 `SOURCE_CHANGED` when the immutable identity
+  moved between the reads, and commits one statistics document at
+  `statistics/<operation>.json` under the catalog head, bound to the catalog
+  snapshot and the source identity. Its result is unchanged: one row,
+  `table (VARCHAR), row_count (BIGINT)`. The planner keeps using the
+  committed row count alone.
+- **`SHOW STATS FOR`** (any statement-capable role) presents the stored
+  document, never a fresh read: Trino's columns plus `row_count` and
+  `analyzed_at`, one row per column and a final summary row whose
+  `column_name` is null and which carries the table's `row_count` and total
+  `data_size`. A table that was never analyzed is 400
+  `STATISTICS_UNAVAILABLE` with `no statistics for c.s.t; run ANALYZE
+  c.s.t`; 503 `STATISTICS_DISABLED` without a durable product catalog.
+
+  | Column | Type | Value |
+  |---|---|---|
+  | `column_name` | `VARCHAR` | The column; null on the summary row |
+  | `data_type` | `VARCHAR` | The SQL spelling `DESCRIBE` uses (`bigint`, `varchar`, `decimal(10, 2)`, …) |
+  | `data_size` | `BIGINT` | Compressed bytes of the column's chunks; on the summary row the data files' bytes as stored; null when the source does not record it |
+  | `nulls_fraction` | `DOUBLE` | `nulls / row_count`; null when the null count is unknown or the table is empty |
+  | `distinct_values_count` | `BIGINT` | Always null in this round (no scan) |
+  | `low_value` / `high_value` | `VARCHAR` | The bounds as text: numbers as digits, dates and timestamps as ISO 8601, decimals exact; null when any file or row group lacks the bound |
+  | `row_count` | `BIGINT` | Null on column rows; the exact row count on the summary row |
+  | `analyzed_at` | `TIMESTAMP` | ISO 8601 UTC text (`2026-09-18T18:17:56.667Z`), the same on every row |
+
+- **`DESCRIBE DETAIL`** (any statement-capable role) is one row of
+  table-level facts: from the stored document when the table was analyzed,
+  else from a fresh metadata read, so it works before `ANALYZE` (400
+  `DESCRIBE_FAILED` with the storage error when the source cannot be read).
+  Columns: `format (VARCHAR: parquet|delta|iceberg)`, `location (VARCHAR)`,
+  `created_at (TIMESTAMP, null: no source records it)`, `last_modified
+  (TIMESTAMP)`, `num_files (BIGINT)`, `size_in_bytes (BIGINT)`, `row_count
+  (BIGINT)`, `delta_version (BIGINT)`, `partition_columns (VARCHAR,
+  comma-separated)`, `analyzed_at (TIMESTAMP)`, `catalog_snapshot (VARCHAR,
+  the SHA-256 the document is bound to)`. `row_count`, `analyzed_at` and
+  `catalog_snapshot` are null until the table is analyzed. Timestamps are
+  ISO 8601 UTC text.
+
+**The statistics document** (version 2) is what `ANALYZE` writes and the
+two statements read. Every fact is a metadata read: Parquet column facts
+are the row-group column-chunk statistics merged over row groups and files
+(null counts summed, bounds widened; a bound any chunk lacks is null); a
+Delta table whose add actions all carry `stats` and whose log carries the
+schema is profiled from the log alone (`numRecords`, `minValues`,
+`maxValues`, `nullCount`; `size` and `modificationTime` for the table),
+else from the active files' footers; an Iceberg table's rows and bytes come
+from the manifests and its column facts from the live files' footers,
+matched by field id. `min`/`max` are JSON of the logical type — numbers as
+numbers, strings as strings, dates and timestamps as ISO 8601 strings,
+decimals as exact decimal text, booleans as booleans; binary and INT96
+columns carry no bounds. `distinct` is null in this round.
+
+```json
+{"version": 2, "table": "lake.sales.orders", "analyzed_at_ms": 1789841876667,
+ "catalog_snapshot_sha256": "…", "source_identity_sha256": "…",
+ "format": "parquet", "location": "/data/orders.parquet", "delta_version": null,
+ "row_count": 3, "file_count": 1, "row_group_count": 1,
+ "compressed_bytes": 499, "uncompressed_bytes": 66, "last_modified_ms": 1789841876000,
+ "partition_columns": [],
+ "columns": [{"name": "id", "type": "bigint", "nulls": 0, "min": 1, "max": 3,
+              "compressed_bytes": 85, "distinct": null}]}
+```
+
+`row_group_count`, `uncompressed_bytes`, `last_modified_ms`, `delta_version`
+and every column fact are null when the source does not record them (a
+Delta table profiled from its log has no row groups; a version 1 document
+from an earlier `ANALYZE` lists column names only and `SHOW STATS FOR`
+presents those with null facts). `partition_columns` is the Iceberg default
+partition spec's field names; Parquet and Delta tables report `[]` (the
+Delta reader refuses partitioned tables). `/v1/statistics` is unchanged.
+
 ### Per-request settings
 
 A statement may carry a `settings` object. Each key is validated against the

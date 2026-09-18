@@ -4,6 +4,7 @@ pub mod adls_commit;
 pub mod adls_reader;
 pub mod delta_reader;
 pub mod delta_snapshot;
+pub mod footer_profile;
 pub mod iceberg_reader;
 pub mod immutable_data_writer;
 pub mod metrics;
@@ -22,6 +23,7 @@ pub use adls_commit::{
 };
 pub use adls_reader::{AdlsAuthMode, AdlsBatchSource, AdlsBatchStream, AdlsParquetReader};
 pub use delta_reader::{DeltaBatchIterator, DeltaTableReader};
+pub use footer_profile::{ColumnProfile, FooterProfile, StatValue};
 pub use iceberg_reader::{IcebergReader, IcebergSnapshot, IcebergSource};
 pub use immutable_data_writer::{
     DEFAULT_MAX_PARQUET_BYTES, DataWriteError, ImmutableDataReference, ImmutableParquetWriter,
@@ -35,7 +37,9 @@ pub use parquet_directory::{
 };
 pub use parquet_reader::{ParquetBatchIterator, ParquetFileMetadata, ParquetReader};
 pub use scan_predicate::LateMaterialisation;
-pub use source_statistics::{SourceStatistics, analyze_source};
+pub use source_statistics::{
+    SourceColumnProfile, SourceProfile, SourceStatistics, analyze_source, profile_source,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScanPartition {
