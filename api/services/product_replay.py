@@ -101,10 +101,10 @@ def apply_event(event: dict) -> int | None:
     return int(generation)
 
 
-def replay_pending(limit: int = 50) -> dict:
+def replay_pending(limit: int = 50, through: int | None = None) -> dict:
     """Replay a bounded prefix; stop before acknowledging the first failure."""
     applied = []
-    for event in product_outbox.pending(limit):
+    for event in product_outbox.pending(limit, through):
         try:
             generation = apply_event(event)
         except Exception as error:
@@ -128,3 +128,36 @@ def replay_pending(limit: int = 50) -> dict:
             "target_generation": generation,
         })
     return {"applied": applied, "count": len(applied)}
+
+
+# The most source events a request-path caller replays before it gives up on
+# reaching its own record. The background worker owns any longer backlog.
+MAX_RECORD_REPLAY_EVENTS = 1000
+
+
+def replay_record(family: str, record_id: str) -> int:
+    """Replay the ordered prefix through one record's newest pending event.
+
+    A source-side writer that must observe its own record in KaveonDB now
+    (rather than after the background worker's next pass) calls this. Source
+    order is the replay contract, so every older pending event is applied
+    first; the work is bounded and fails closed on the first failed event,
+    which stays recorded in the outbox. Returns the number of events applied.
+    """
+    applied = 0
+    through = product_outbox.newest_pending_sequence(family, record_id)
+    while through is not None:
+        if applied >= MAX_RECORD_REPLAY_EVENTS:
+            raise RuntimeError(
+                "KaveonDB replay backlog ahead of the record exceeds the request bound"
+            )
+        batch = min(100, MAX_RECORD_REPLAY_EVENTS - applied)
+        count = int(replay_pending(batch, through)["count"])
+        applied += count
+        # The background worker may have acknowledged the same prefix in the
+        # meantime; an empty batch is only a fault while the event stays pending.
+        latest = product_outbox.newest_pending_sequence(family, record_id)
+        if count == 0 and latest == through:
+            raise RuntimeError("Product outbox event is pending but was not replayable")
+        through = latest
+    return applied
