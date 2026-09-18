@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::tokenizer::{Token, Tokenizer};
-use std::collections::BTreeSet;
 use std::io::{self, IsTerminal, Read, Write};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -21,7 +20,6 @@ struct Column {
 #[derive(Debug, Deserialize)]
 struct StatementResponse {
     id: String,
-    state: String,
     #[serde(default)]
     columns: Vec<Column>,
     #[serde(default)]
@@ -75,39 +73,6 @@ struct DefinitionColumn {
     #[serde(rename = "data_type")]
     data_type: Value,
     nullable: bool,
-}
-
-#[derive(Debug, Deserialize)]
-struct QueryTelemetry {
-    #[serde(default)]
-    scan_metrics_complete: Option<bool>,
-    #[serde(default)]
-    stages: Vec<StageTelemetry>,
-    #[serde(default)]
-    scans: Vec<ScanTelemetry>,
-}
-
-#[derive(Debug, Deserialize)]
-struct StageTelemetry {
-    #[serde(default)]
-    task_count: usize,
-    #[serde(default)]
-    completed_tasks: usize,
-    #[serde(default)]
-    tasks: Vec<TaskTelemetry>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TaskTelemetry {
-    node_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ScanTelemetry {
-    #[serde(default)]
-    rows_emitted: Option<u64>,
-    rows_selected: u64,
-    compressed_bytes_selected: u64,
 }
 
 #[derive(Debug, PartialEq)]
@@ -416,28 +381,19 @@ pub(crate) fn execute_to_string(
     let mut output = format_result(&response, options.output_format)?;
     let mut scanned_rows = None;
     if is_human_format(options.output_format) {
-        output.push_str(&format!(
-            "Query {} {} in {} ms ({} {} returned)",
-            response.id,
-            response.state,
+        let record =
+            crate::client::session::fetch_query(client, &options.server, &response.id).ok();
+        let summary = crate::render::summary::Summary::from_record(
             response.elapsed_ms,
             response.data.len(),
-            if response.data.len() == 1 {
-                "row"
-            } else {
-                "rows"
-            },
-        ));
-        output.push('\n');
-        if let Ok(telemetry) = get_query_telemetry(client, options, &response.id) {
-            scanned_rows = telemetry
-                .scans
-                .iter()
-                .map(|scan| scan.rows_emitted)
-                .collect::<Option<Vec<_>>>()
-                .map(|counts| counts.iter().sum());
-            output.push_str(&format_query_telemetry(&telemetry, &response));
-        }
+            &response.id,
+            record.as_ref(),
+        );
+        scanned_rows = summary.rows_scanned;
+        output.push_str(&styled_or_plain(&crate::render::summary::lines(
+            &summary,
+            &human_theme(options),
+        )));
         output.push('\n');
     }
     Ok(Executed {
@@ -445,6 +401,19 @@ pub(crate) fn execute_to_string(
         elapsed_ms: Some(response.elapsed_ms),
         scanned_rows,
     })
+}
+
+fn human_theme(options: &Options) -> crate::theme::Theme {
+    crate::theme::Theme::detect(&options.theme, io::stdout().is_terminal())
+}
+
+/// ANSI on a terminal, plain text otherwise.
+fn styled_or_plain(lines: &[ratatui::text::Line<'_>]) -> String {
+    if io::stdout().is_terminal() {
+        crate::render::to_ansi(lines)
+    } else {
+        crate::render::to_plain(lines)
+    }
 }
 
 fn get_json<T: for<'de> Deserialize<'de>>(
@@ -458,19 +427,6 @@ fn get_json<T: for<'de> Deserialize<'de>>(
 fn get_json_url<T: for<'de> Deserialize<'de>>(client: &Session, url: &str) -> Result<T, String> {
     let response = client
         .request(reqwest::Method::GET, url)?
-        .send()
-        .map_err(connection_error)?;
-    decode_response(response)
-}
-
-fn get_json_url_with_timeout<T: for<'de> Deserialize<'de>>(
-    client: &Session,
-    url: &str,
-    timeout: Duration,
-) -> Result<T, String> {
-    let response = client
-        .request(reqwest::Method::GET, url)?
-        .timeout(timeout)
         .send()
         .map_err(connection_error)?;
     decode_response(response)
@@ -490,95 +446,6 @@ fn metadata_url(options: &Options, segments: &[&str]) -> Result<String, String> 
     Ok(url.into())
 }
 
-fn get_query_telemetry(
-    client: &Session,
-    options: &Options,
-    query_id: &str,
-) -> Result<QueryTelemetry, String> {
-    let mut url = reqwest::Url::parse(&endpoint(options, "/v1/query"))
-        .map_err(|error| format!("invalid coordinator URL: {error}"))?;
-    url.path_segments_mut()
-        .map_err(|_| "coordinator URL cannot accept query paths".to_owned())?
-        .push(query_id);
-    get_json_url_with_timeout(client, url.as_str(), Duration::from_secs(3))
-}
-
-fn format_query_telemetry(telemetry: &QueryTelemetry, response: &StatementResponse) -> String {
-    let (nodes, tasks) = if telemetry.stages.is_empty() {
-        ("N/A".to_owned(), "N/A".to_owned())
-    } else {
-        let nodes = telemetry
-            .stages
-            .iter()
-            .flat_map(|stage| stage.tasks.iter().map(|task| task.node_id.as_str()))
-            .collect::<BTreeSet<_>>()
-            .len();
-        let tasks: usize = telemetry.stages.iter().map(|stage| stage.task_count).sum();
-        let completed: usize = telemetry
-            .stages
-            .iter()
-            .map(|stage| stage.completed_tasks)
-            .sum();
-        let progress = if tasks > 0 {
-            format!("{:.2}%", completed as f64 * 100.0 / tasks as f64)
-        } else {
-            "N/A".to_owned()
-        };
-        (
-            nodes.to_string(),
-            format!("{tasks} total, {completed} done ({progress})"),
-        )
-    };
-    let result_bytes = serde_json::to_vec(&response.data).map_or(0, |value| value.len());
-    let elapsed_seconds = response.elapsed_ms as f64 / 1_000.0;
-    let rates = if elapsed_seconds > 0.0 {
-        format!(
-            "{:.1} rows/s, {:.1} JSON result bytes/s",
-            response.data.len() as f64 / elapsed_seconds,
-            result_bytes as f64 / elapsed_seconds
-        )
-    } else {
-        "N/A (elapsed time is 0 ms)".to_owned()
-    };
-    let scan = if telemetry.scans.is_empty() {
-        "Scan metrics: not reported".to_owned()
-    } else {
-        let rows: u64 = telemetry.scans.iter().map(|scan| scan.rows_selected).sum();
-        let bytes: u64 = telemetry
-            .scans
-            .iter()
-            .map(|scan| scan.compressed_bytes_selected)
-            .sum();
-        let scanned = telemetry
-            .scans
-            .iter()
-            .map(|scan| scan.rows_emitted)
-            .collect::<Option<Vec<_>>>();
-        let coverage = if telemetry.scan_metrics_complete == Some(false) {
-            " (partial worker metrics)"
-        } else {
-            ""
-        };
-        let scanned_line = match scanned {
-            Some(counts) => {
-                let count: u64 = counts.iter().sum();
-                let rate = if elapsed_seconds > 0.0 {
-                    format!("{:.1} rows/s", count as f64 / elapsed_seconds)
-                } else {
-                    "N/A rows/s".to_owned()
-                };
-                format!("Scanned: {count} rows from storage readers, {rate}{coverage}")
-            }
-            None => "Scanned: not reported".to_owned(),
-        };
-        format!("{scanned_line}\nScan selected: {rows} rows, {bytes} compressed bytes{coverage}")
-    };
-    format!(
-        "Nodes: {nodes}  Tasks: {tasks}\nRows: {} returned  JSON result bytes: {result_bytes}  Rates: {rates}\n{scan}\n",
-        response.data.len()
-    )
-}
-
 fn run_meta_command(
     client: &Session,
     options: &mut Options,
@@ -586,19 +453,25 @@ fn run_meta_command(
 ) -> Result<String, String> {
     match command {
         MetaCommand::Catalogs { like } => {
+            let started = std::time::Instant::now();
             let response: CatalogList = get_json(client, options, "/v1/catalog")?;
             Ok(metadata_to_string(
                 "Catalog",
+                "catalogs",
                 filter_like(response.catalogs, like.as_deref()),
+                started.elapsed(),
                 options,
             ))
         }
         MetaCommand::Schemas { catalog, like } => {
+            let started = std::time::Instant::now();
             let url = metadata_url(options, &[&catalog, "schema"])?;
             let response: SchemaList = get_json_url(client, &url)?;
             Ok(metadata_to_string(
                 "Schema",
+                "schemas",
                 filter_like(response.schemas, like.as_deref()),
+                started.elapsed(),
                 options,
             ))
         }
@@ -607,11 +480,14 @@ fn run_meta_command(
             schema,
             like,
         } => {
+            let started = std::time::Instant::now();
             let url = metadata_url(options, &[&catalog, "schema", &schema, "table"])?;
             let response: TableList = get_json_url(client, &url)?;
             Ok(metadata_to_string(
                 "Table",
+                "tables",
                 filter_like(response.tables, like.as_deref()),
+                started.elapsed(),
                 options,
             ))
         }
@@ -620,6 +496,7 @@ fn run_meta_command(
             schema,
             table,
         } => {
+            let started = std::time::Instant::now();
             let definitions: Vec<NamedDefinition> =
                 get_json(client, options, "/v1/catalog/definitions")?;
             let catalog = definitions
@@ -640,7 +517,6 @@ fn run_meta_command(
                 .ok_or_else(|| "table definition is not available for DESCRIBE".to_owned())?;
             let response = StatementResponse {
                 id: String::new(),
-                state: String::new(),
                 error: None,
                 elapsed_ms: 0,
                 columns: vec![
@@ -677,6 +553,15 @@ fn run_meta_command(
             };
             let mut output = format_result(&response, options.output_format)?;
             if is_human_format(options.output_format) {
+                let summary = crate::render::summary::Summary::metadata(
+                    started.elapsed().as_millis() as u64,
+                    response.data.len(),
+                    "columns",
+                );
+                output.push_str(&styled_or_plain(&crate::render::summary::lines(
+                    &summary,
+                    &human_theme(options),
+                )));
                 output.push('\n');
             }
             Ok(output)
@@ -1077,10 +962,33 @@ fn is_human_format(format: OutputFormat) -> bool {
     )
 }
 
-fn metadata_to_string(header: &str, names: Vec<String>, options: &Options) -> String {
+fn metadata_to_string(
+    header: &str,
+    noun: &'static str,
+    names: Vec<String>,
+    elapsed: Duration,
+    options: &Options,
+) -> String {
+    if is_human_format(options.output_format) {
+        // A one-column list, not a grid: names copy cleanly.
+        let mut output = String::new();
+        for name in &names {
+            output.push_str(&format!("  {name}\n"));
+        }
+        let summary = crate::render::summary::Summary::metadata(
+            elapsed.as_millis() as u64,
+            names.len(),
+            noun,
+        );
+        output.push_str(&styled_or_plain(&crate::render::summary::lines(
+            &summary,
+            &human_theme(options),
+        )));
+        output.push('\n');
+        return output;
+    }
     let response = StatementResponse {
         id: String::new(),
-        state: String::new(),
         columns: vec![Column {
             name: header.to_owned(),
             _data_type: "varchar".to_owned(),
@@ -1117,7 +1025,6 @@ mod tests {
     fn response() -> StatementResponse {
         StatementResponse {
             id: "query-1".to_owned(),
-            state: "FINISHED".to_owned(),
             columns: vec![
                 Column {
                     name: "name".to_owned(),
@@ -1331,78 +1238,6 @@ mod tests {
     }
 
     #[test]
-    fn telemetry_footer_deduplicates_task_nodes_and_reports_scan_metrics() {
-        let telemetry = QueryTelemetry {
-            scan_metrics_complete: None,
-            stages: vec![
-                StageTelemetry {
-                    task_count: 3,
-                    completed_tasks: 3,
-                    tasks: vec![
-                        TaskTelemetry {
-                            node_id: "worker-a".to_owned(),
-                        },
-                        TaskTelemetry {
-                            node_id: "worker-b".to_owned(),
-                        },
-                    ],
-                },
-                StageTelemetry {
-                    task_count: 1,
-                    completed_tasks: 1,
-                    tasks: vec![TaskTelemetry {
-                        node_id: "worker-a".to_owned(),
-                    }],
-                },
-            ],
-            scans: vec![ScanTelemetry {
-                rows_emitted: None,
-                rows_selected: 12,
-                compressed_bytes_selected: 34,
-            }],
-        };
-        let footer = format_query_telemetry(&telemetry, &response());
-        assert!(footer.contains("Nodes: 2  Tasks: 4 total, 4 done (100.00%)"));
-        assert!(footer.contains("Scan selected: 12 rows, 34 compressed bytes"));
-        assert!(footer.ends_with('\n'));
-    }
-
-    #[test]
-    fn telemetry_footer_handles_missing_metrics_and_zero_elapsed() {
-        let mut result = response();
-        result.elapsed_ms = 0;
-        let footer = format_query_telemetry(
-            &QueryTelemetry {
-                scan_metrics_complete: None,
-                stages: Vec::new(),
-                scans: Vec::new(),
-            },
-            &result,
-        );
-        assert!(footer.contains("Nodes: N/A  Tasks: N/A"));
-        assert!(footer.contains("Scan metrics: not reported"));
-        assert!(footer.contains("Rates: N/A"));
-    }
-
-    #[test]
-    fn table_footer_has_a_trailing_blank_line() {
-        let footer = format_query_telemetry(
-            &QueryTelemetry {
-                scan_metrics_complete: None,
-                stages: Vec::new(),
-                scans: Vec::new(),
-            },
-            &response(),
-        );
-        let rendered = format!(
-            "{}Query summary\n{}\n",
-            format_result(&response(), OutputFormat::Table).unwrap(),
-            footer
-        );
-        assert!(rendered.ends_with("\n\n"));
-    }
-
-    #[test]
     fn metadata_http_paths_work_and_failed_use_preserves_context() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -1412,7 +1247,6 @@ mod tests {
                 "/v1/catalog/medallion/schema/test/table",
                 "/v1/catalog/medallion/schema",
                 "/v1/catalog/medallion/schema",
-                "/v1/query/query%2F1",
             ];
             for path in expected {
                 let (mut stream, _) = listener.accept().unwrap();
@@ -1424,9 +1258,7 @@ mod tests {
                     .next()
                     .unwrap();
                 assert_eq!(line, format!("GET {path} HTTP/1.1"));
-                let body = if path.starts_with("/v1/query/") {
-                    r#"{"stages":[{"task_count":1,"completed_tasks":1,"tasks":[{"node_id":"worker"}]}],"scans":[]}"#
-                } else if path.ends_with("/table") {
+                let body = if path.ends_with("/table") {
                     r#"{"tables":["orders"]}"#
                 } else {
                     r#"{"schemas":["test"]}"#
@@ -1484,8 +1316,6 @@ mod tests {
         assert!(error.contains("not found"));
         assert_eq!(options.catalog, "medallion");
         assert_eq!(options.schema, "test");
-        let telemetry = get_query_telemetry(&client, &options, "query/1").unwrap();
-        assert_eq!(telemetry.stages[0].tasks[0].node_id, "worker");
         server.join().unwrap();
     }
 
@@ -1500,16 +1330,5 @@ mod tests {
             endpoint(&options, "/v1/statement"),
             "http://localhost:8080/v1/statement"
         );
-    }
-    #[test]
-    fn scan_counts_are_separate_from_returned_rows_and_mark_partial_coverage() {
-        let telemetry: QueryTelemetry = serde_json::from_value(serde_json::json!({
-            "scan_metrics_complete": false,
-            "scans": [{"rows_selected": 10000, "rows_emitted": 8192, "compressed_bytes_selected": 2048}]
-        })).unwrap();
-        let text = format_query_telemetry(&telemetry, &response());
-        assert!(text.contains("Scanned: 8192 rows from storage readers"));
-        assert!(text.contains("partial worker metrics"));
-        assert!(text.contains("Scan selected: 10000 rows"));
     }
 }

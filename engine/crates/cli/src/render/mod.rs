@@ -2,6 +2,7 @@
 //! for output that is not a terminal.
 pub mod cluster;
 pub mod help;
+pub mod summary;
 
 use ratatui::text::Line;
 

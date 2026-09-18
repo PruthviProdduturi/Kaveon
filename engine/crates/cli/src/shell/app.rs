@@ -12,7 +12,7 @@ use crossterm::event::{self, Event, KeyEventKind};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout};
-use ratatui::text::{Line, Text};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Widget};
 use ratatui::{Terminal, TerminalOptions, Viewport};
 use std::io;
@@ -198,7 +198,17 @@ fn event_loop(
                 let [editor_area, status_area] =
                     Layout::vertical([Constraint::Length(editor_height), Constraint::Length(1)])
                         .areas(frame.area());
-                frame.render_widget(app.editor.widget(&title, &app.theme, false), editor_area);
+                let [prompt_area, text_area] =
+                    Layout::horizontal([Constraint::Length(2), Constraint::Min(1)])
+                        .areas(editor_area);
+                frame.render_widget(app.editor.widget(&title, &app.theme, false), text_area);
+                // The prompt glyph sits on the first text row, under the rule.
+                let prompt = ratatui::layout::Rect {
+                    y: (prompt_area.y + 1).min(editor_area.bottom().saturating_sub(1)),
+                    height: 1,
+                    ..prompt_area
+                };
+                frame.render_widget(Paragraph::new(Span::styled("›", app.theme.accent)), prompt);
                 frame.render_widget(
                     Paragraph::new(status_line(&app.status_facts(&host), &app.theme)),
                     status_area,
