@@ -258,6 +258,7 @@ fn execute_script(
     let mut first_error = None;
     for statement in input::split_statements(script)? {
         if let Err(error) = execute(client, options, &statement) {
+            let error = humanize(&error, &statement);
             if !ignore_errors {
                 return Err(error);
             }
@@ -266,6 +267,15 @@ fn execute_script(
         }
     }
     first_error.map_or(Ok(()), Err)
+}
+
+/// A statement's failure as one line for scripts: the kind, the message
+/// once, the query id when known.
+fn humanize(error: &str, sql: &str) -> String {
+    let error = crate::client::error::CliError::from_message(error, Some(sql));
+    crate::render::error::plain(&error)
+        .trim_start_matches("error: ")
+        .to_owned()
 }
 
 fn handle_meta_command(
