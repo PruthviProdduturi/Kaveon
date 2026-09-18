@@ -517,7 +517,7 @@ mod tests {
 │ id     │ bigint  │ 22.9 MiB │ 0.0 % │ —        │ 1      │ 3000000 │\n\
 │ city   │ varchar │ 17.3 MiB │ 1.3 % │      412 │ Aachen │ Zürich  │\n\
 └────────┴─────────┴──────────┴───────┴──────────┴────────┴─────────┘\n\
- distinct values are counted for 1 of 2 columns — ANALYZE lake.sales.orders WITH (distinct = true) counts every column, WITH (columns = ARRAY['a', 'b']) some\n"
+\x20distinct values are counted for 1 of 2 columns — ANALYZE lake.sales.orders WITH (distinct = true) counts every column, WITH (columns = ARRAY['a', 'b']) some\n"
         );
     }
 
