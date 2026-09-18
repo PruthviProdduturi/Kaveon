@@ -2067,7 +2067,7 @@ async fn submit_statement(
         match distributed {
             Ok((result, stages, planning_us)) => {
                 let mut result = result;
-                keep_result(&state, &cache_key, &result, start, &query_id);
+                keep_result(&state, &cache_key, &result, start, &query_id, paged);
                 let next_uri = if paged {
                     match spool_rows(&state, &query_id, &identity.principal, &mut result.data) {
                         Ok(uri) => Some(uri),
@@ -2179,7 +2179,7 @@ async fn submit_statement(
         match distributed {
             Ok((result, stage)) => {
                 let mut result = result;
-                keep_result(&state, &cache_key, &result, start, &query_id);
+                keep_result(&state, &cache_key, &result, start, &query_id, paged);
                 let next_uri = if paged {
                     match spool_rows(&state, &query_id, &identity.principal, &mut result.data) {
                         Ok(uri) => Some(uri),
@@ -2285,7 +2285,7 @@ async fn submit_statement(
         match distributed {
             Ok((result, stage)) => {
                 let mut result = result;
-                keep_result(&state, &cache_key, &result, start, &query_id);
+                keep_result(&state, &cache_key, &result, start, &query_id, paged);
                 let next_uri = if paged {
                     match spool_rows(&state, &query_id, &identity.principal, &mut result.data) {
                         Ok(uri) => Some(uri),
@@ -2647,14 +2647,20 @@ async fn submit_statement(
 
 /// Keeps a finished distributed result in the cache, when the statement
 /// allowed it. Elapsed is measured at this point: what it took to produce
-/// the rows, before any paging.
+/// the rows, before any paging. A paged statement's rows went to the page
+/// store, not `result.data`, so it is never kept — the coordinator-local
+/// path makes the same choice.
 fn keep_result(
     state: &AppState,
     cache_key: &Option<crate::result_cache::ResultCacheKey>,
     result: &TaskResponse,
     start: Instant,
     query_id: &str,
+    paged: bool,
 ) {
+    if paged {
+        return;
+    }
     if let Some(key) = cache_key {
         state.result_cache.insert(
             key.clone(),
@@ -6820,6 +6826,16 @@ mod tests {
         query: &str,
         settings: serde_json::Value,
     ) -> (axum::http::StatusCode, serde_json::Value) {
+        submit_with_delivery(state, identity, query, settings, None).await
+    }
+
+    async fn submit_with_delivery(
+        state: &Arc<crate::AppState>,
+        identity: &crate::security::Identity,
+        query: &str,
+        settings: serde_json::Value,
+        result_delivery: Option<&str>,
+    ) -> (axum::http::StatusCode, serde_json::Value) {
         let response = super::submit_statement(
             axum::extract::State(state.clone()),
             axum::Extension(identity.clone()),
@@ -6832,7 +6848,7 @@ mod tests {
                 user: None,
                 time_zone: None,
                 client_tags: vec![],
-                result_delivery: None,
+                result_delivery: result_delivery.map(str::to_owned),
                 settings: settings.as_object().cloned(),
             }),
         )
@@ -6968,6 +6984,37 @@ mod tests {
         assert_eq!(body["code"], "SYNTAX_ERROR");
         assert!(body["error"].as_str().unwrap().contains("format"));
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_paged_statement_is_not_kept_in_the_result_cache() {
+        let (state, _commit, _directory) = analyze_test_state().await;
+        let analyst = crate::security::Identity {
+            principal: "analyst".into(),
+            display_identity: None,
+            role: Role::Analyst,
+        };
+        let sql = "SELECT id FROM orders WHERE id > 1 ORDER BY id";
+        let (status, paged) = submit_with_delivery(
+            &state,
+            &analyst,
+            sql,
+            serde_json::Value::Null,
+            Some("paged"),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{paged}");
+        assert!(paged["next_uri"].is_string(), "{paged}");
+        assert_eq!(state.result_cache.stats().entries, 0);
+
+        // The same statement inline afterwards is computed, with its rows.
+        let (status, inline) = submit(&state, &analyst, sql, serde_json::Value::Null).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{inline}");
+        assert_eq!(inline["data"], serde_json::json!([[2], [3]]));
+        assert_eq!(
+            record(inline["id"].as_str().unwrap(), &analyst).await["execution"]["mode"],
+            "coordinator"
+        );
     }
 
     #[tokio::test]
