@@ -257,15 +257,18 @@ DESCRIBE DETAIL [catalog.][schema.]table
   runs. Each selected column is one statement, `SELECT COUNT(DISTINCT
   "column") FROM catalog.schema.table`, run through the coordinator's own
   statement path — admitted, recorded, planned and executed exactly as a
-  client statement is, on the workers when the cluster has them — one
-  after another, with the result cache off, under the `ANALYZE`
-  statement's cancellation: cancelling the `ANALYZE` cancels the count it
-  is running, no further count starts, and no document is written. The
-  count is the number of distinct non-null values, exact; the cost is one
-  scan of the column per selected column, so an `ANALYZE` with `distinct
-  = true` over a wide table is as long as that many aggregates. A count
-  that fails fails the `ANALYZE` with that statement's status, code and
-  message, the column named. The counts are read after the first metadata
+  client statement is, on the workers when the cluster has them — four
+  at a time (fewer when `KAVEON_PRINCIPAL_QUERY_LIMIT` is lower, so no
+  count is refused admission), with the result cache off, under the
+  `ANALYZE` statement's cancellation: cancelling the `ANALYZE` cancels the
+  counts running, no further count starts, and no document is written.
+  The count is the number of distinct non-null values, exact; the cost is
+  one scan of the column per selected column, so an `ANALYZE` with
+  `distinct = true` over a wide table is that many aggregates, four
+  abreast (the local Compose stack counts the 21 columns of the 504M-row
+  table in about a minute; a single run, not a claim). A count that fails
+  fails the `ANALYZE` with that statement's status, code and message, the
+  column named, and cancels the counts still running. The counts are read after the first metadata
   read and before the second, so a source that changes under the scans
   is the same 409 `SOURCE_CHANGED`. The sub-statements are ordinary query
   records: `GET /v1/query` lists them under the admin who ran the
