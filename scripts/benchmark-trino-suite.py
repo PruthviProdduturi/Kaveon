@@ -100,7 +100,7 @@ def declare_tables(trino, tables, account):
             # A Delta table is registered by its log through the `lake`
             # Delta catalog (delta.register-table-procedure.enabled).
             trino.query(f"CREATE SCHEMA IF NOT EXISTS lake.{table['schema']}")
-            existing, _ = trino.query(
+            existing = trino.query(
                 f"SELECT count(*) FROM lake.information_schema.tables "
                 f"WHERE table_schema = '{table['schema']}' AND table_name = '{table['name']}'")
             if existing[0][0] == 0:
