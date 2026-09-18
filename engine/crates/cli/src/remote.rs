@@ -321,7 +321,11 @@ fn execute_script(
     let mut first_error = None;
     for statement in input::split_statements(script)? {
         if let Err(error) = execute(client, options, &statement) {
-            let error = humanize(&error, &statement);
+            let error = if statement.trim_start().starts_with('.') {
+                humanize_meta(&error)
+            } else {
+                humanize(&error, &statement)
+            };
             if !ignore_errors {
                 return Err(error);
             }
@@ -337,6 +341,20 @@ fn execute_script(
 fn humanize(error: &str, sql: &str) -> String {
     let error = crate::client::error::CliError::from_message(error, Some(sql));
     crate::render::error::plain(&error)
+        .trim_start_matches("error: ")
+        .to_owned()
+}
+
+/// A dot command's failure: the kind when the message carries one (a
+/// connection refused, a catalog not found); the message alone otherwise —
+/// an unknown command or a missing `--api` is the client's, not the
+/// coordinator's.
+fn humanize_meta(error: &str) -> String {
+    let parsed = crate::client::error::CliError::from_message(error, None);
+    if matches!(parsed.kind, crate::client::error::ErrorKind::Coordinator) {
+        return error.trim().to_owned();
+    }
+    crate::render::error::plain(&parsed)
         .trim_start_matches("error: ")
         .to_owned()
 }
@@ -372,6 +390,20 @@ pub(crate) fn meta_command_to_string(
             text.push('\n');
             return Ok(text);
         }
+        [".ask"] => {
+            return Err(
+                ".ask <question> — a question in plain language, answered through the Kaveon DLM"
+                    .to_owned(),
+            );
+        }
+        [".ask", ..] => {
+            let question = command
+                .trim()
+                .strip_prefix(".ask")
+                .unwrap_or_default()
+                .trim();
+            return ask_once(client, options, question);
+        }
         [".catalogs"] => MetaCommand::Catalogs { like: None },
         [".schemas"] => MetaCommand::Schemas {
             catalog: options.catalog.clone(),
@@ -393,7 +425,8 @@ pub(crate) fn meta_command_to_string(
                 .ok_or_else(|| "invalid table reference".to_owned())?
         }
         [unknown, ..] => {
-            const DOT_COMMANDS: [&str; 8] = [
+            const DOT_COMMANDS: [&str; 9] = [
+                ".ask",
                 ".catalogs",
                 ".schemas",
                 ".tables",
@@ -413,6 +446,59 @@ pub(crate) fn meta_command_to_string(
         [] => return Ok(String::new()),
     };
     run_meta_command(client, options, meta)
+}
+
+/// `.ask <question>` outside the shell: one question, one answer. A `Live`
+/// answer over a native catalog runs its SQL on the coordinator and the
+/// result follows; a clarification lists its choices, which only the shell
+/// can answer (`.ask <n>`), since there is no session to keep them in.
+fn ask_once(client: &Session, options: &mut Options, question: &str) -> Result<String, String> {
+    use crate::client::dlm::{AskAnswer, DlmClient};
+    let Some(api_url) = options.api_url.clone() else {
+        return Err(
+            ".ask needs the Kaveon platform API: start with --api <url> (or set KAVEON_API_URL); the DLM runs there, not on the coordinator"
+                .to_owned(),
+        );
+    };
+    let token = std::env::var("KAVEON_API_TOKEN")
+        .ok()
+        .filter(|token| !token.is_empty());
+    let dlm = DlmClient::new(&api_url, token, Duration::from_secs(60))
+        .map_err(|failure| failure.message)?;
+    let answer = dlm
+        .ask(question, 50, None, None)
+        .map_err(|failure| failure.message)?;
+    let theme = crate::theme::Theme::detect(&options.theme, io::stdout().is_terminal());
+    let mut lines = crate::render::ask::answer_lines(&answer, &theme);
+    let mut output = String::new();
+    if let AskAnswer::Live {
+        catalog,
+        schema,
+        sql,
+        engine: true,
+        ..
+    } = answer
+    {
+        if (options.catalog.as_str(), options.schema.as_str())
+            != (catalog.as_str(), schema.as_str())
+        {
+            options.catalog = catalog;
+            options.schema = schema;
+            options.context_explicit = true;
+        }
+        output = execute_to_string(client, options, &sql)?.output;
+    } else if let AskAnswer::Clarify { .. } = answer
+        && let Some(last) = lines.last_mut()
+    {
+        *last = ratatui::text::Line::from(ratatui::text::Span::styled(
+            "choose in the shell with .ask <number>; here, ask again with the choice in the question",
+            theme.dim,
+        ));
+    }
+    let mut text = crate::render::to_ansi(&lines);
+    text.push('\n');
+    text.push_str(&output);
+    Ok(text)
 }
 
 fn is_repl_alias(input: &str, first: &str, second: &str) -> bool {

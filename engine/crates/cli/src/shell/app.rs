@@ -516,6 +516,11 @@ impl App {
     /// Rows the inline viewport needs: the editor, the status line, the
     /// running line above the editor while a statement runs, and the paging
     /// hint (or the watch line) under it while one is active.
+    /// Nothing runs, pages or watches: keys go to the editor.
+    fn is_idle(&self) -> bool {
+        self.running.is_none() && self.paging.is_none() && self.watch.is_none()
+    }
+
     fn viewport_rows(&self) -> u16 {
         self.editor.height(EDITOR_MAX_ROWS)
             + 1
@@ -583,7 +588,14 @@ pub fn run_local(engine: LocalEngine, options: &mut Options) -> Result<(), Strin
 
 fn start(mut app: App, options: &mut Options, host: String) -> Result<(), String> {
     enable_raw_mode().map_err(|error| format!("cannot enter raw mode: {error}"))?;
+    // Bracketed paste where the event reader understands it; the Windows
+    // console reader does not, and a paste there arrives as a burst of keys
+    // (see `is_paste_burst`).
+    #[cfg(not(windows))]
+    let _ = crossterm::execute!(io::stdout(), event::EnableBracketedPaste);
     let result = event_loop(&mut app, options, &host);
+    #[cfg(not(windows))]
+    let _ = crossterm::execute!(io::stdout(), event::DisableBracketedPaste);
     let _ = disable_raw_mode();
     println!();
     save_history(&app);
@@ -792,6 +804,10 @@ fn event_loop(app: &mut App, options: &mut Options, host: &str) -> Result<(), St
             }
         });
         let hint_line = match (&app.paging, &app.watch) {
+            _ if app.editor.search_view().is_some() => app
+                .editor
+                .search_view()
+                .map(|view| search_hint(&view, &app.theme)),
             (Some(paging), _) => Some(Line::styled(format!(" {}", paging.hint()), app.theme.dim)),
             (None, Some(watch)) => Some(Line::styled(
                 format!(
@@ -827,7 +843,8 @@ fn event_loop(app: &mut App, options: &mut Options, host: &str) -> Result<(), St
                 let [prompt_area, text_area] =
                     Layout::horizontal([Constraint::Length(prompt_width()), Constraint::Min(1)])
                         .areas(editor_area);
-                let running_now = running_line.is_some() || hint_line.is_some();
+                let running_now =
+                    running_line.is_some() || app.paging.is_some() || app.watch.is_some();
                 if !running_now && app.editor.line_count() <= usize::from(EDITOR_MAX_LINES) {
                     // Highlighted text with the cursor placed by hand; the
                     // text area keeps the buffer and the cursor.
@@ -835,7 +852,19 @@ fn event_loop(app: &mut App, options: &mut Options, host: &str) -> Result<(), St
                         .borders(Borders::TOP | Borders::BOTTOM)
                         .border_style(app.theme.dim);
                     let inner = block.inner(text_area);
-                    let lines = crate::shell::highlight::highlight(&app.editor.lines(), &app.theme);
+                    let mut lines =
+                        crate::shell::highlight::highlight(&app.editor.lines(), &app.theme);
+                    if let Some(rest) = app.editor.suggestion()
+                        && let Some(last) = lines.last_mut()
+                    {
+                        // The rest of the matching history entry, dimmed
+                        // after the cursor; a later line of it is only hinted.
+                        let mut shown = rest.lines().next().unwrap_or_default().to_owned();
+                        if rest.contains('\n') {
+                            shown.push_str(" …");
+                        }
+                        last.spans.push(Span::styled(shown, app.theme.dim));
+                    }
                     frame.render_widget(Paragraph::new(lines).block(block), text_area);
                     let (row, column) = app.editor.cursor();
                     let line = app.editor.current_line();
@@ -895,19 +924,56 @@ fn event_loop(app: &mut App, options: &mut Options, host: &str) -> Result<(), St
             }
             continue;
         }
-        let Event::Key(key) = event::read().map_err(|error| error.to_string())? else {
-            continue;
+        let first = match event::read().map_err(|error| error.to_string())? {
+            Event::Key(key) if key.kind == KeyEventKind::Press => key,
+            Event::Paste(text) => {
+                if app.is_idle() {
+                    app.editor.paste(&text);
+                }
+                continue;
+            }
+            _ => continue,
         };
-        if key.kind != KeyEventKind::Press {
+        let mut batch = vec![first];
+        while event::poll(Duration::ZERO).map_err(|error| error.to_string())? {
+            if let Event::Key(key) = event::read().map_err(|error| error.to_string())?
+                && key.kind == KeyEventKind::Press
+            {
+                batch.push(key);
+            }
+        }
+        if app.is_idle() && is_paste_burst(&batch) {
+            app.editor.paste(&burst_text(&batch));
             continue;
         }
+        for key in batch {
+            if let Flow::Quit = handle_key(app, terminal, options, key)? {
+                return Ok(());
+            }
+        }
+    }
+}
+
+enum Flow {
+    Continue,
+    Quit,
+}
+
+/// One key while the shell is idle, paging, watching or running.
+fn handle_key(
+    app: &mut App,
+    terminal: &mut Screen,
+    options: &mut Options,
+    key: event::KeyEvent,
+) -> Result<Flow, String> {
+    {
         if app.watch.take().is_some() {
             // Any key ends the watch; a running statement finishes (or is
             // cancelled by Ctrl-C below) and nothing follows it.
             emit_text(terminal, "watch stopped", &app.theme, true)?;
             if app.running.is_none() {
                 emit_blank(terminal)?;
-                continue;
+                return Ok(Flow::Continue);
             }
         }
         if app.paging.is_some() {
@@ -928,18 +994,18 @@ fn event_loop(app: &mut App, options: &mut Options, host: &str) -> Result<(), St
                     _ => {}
                 }
             }
-            continue;
+            return Ok(Flow::Continue);
         }
         if app.running.is_some() {
             // Only Ctrl-C means anything while a statement runs.
             if is_ctrl_c(&key) {
                 interrupt_running(app, terminal, options)?;
             }
-            continue;
+            return Ok(Flow::Continue);
         }
         if key.code == KeyCode::Tab {
             complete_at_cursor(app, terminal, options)?;
-            continue;
+            return Ok(Flow::Continue);
         }
         // `\G` ends a statement like `;` does, which the editor does not
         // know; Enter on such a line submits here.
@@ -960,7 +1026,7 @@ fn event_loop(app: &mut App, options: &mut Options, host: &str) -> Result<(), St
                     .terminal
                     .clear()
                     .map_err(|error| error.to_string())?;
-                return Ok(());
+                return Ok(Flow::Quit);
             }
             EditorAction::Clear => {
                 terminal.reset(app.viewport_rows())?;
@@ -999,7 +1065,7 @@ fn event_loop(app: &mut App, options: &mut Options, host: &str) -> Result<(), St
                         .terminal
                         .clear()
                         .map_err(|error| error.to_string())?;
-                    return Ok(());
+                    return Ok(Flow::Quit);
                 }
                 let (text, vertical) = split_vertical_marker(&text);
                 app.vertical_once = vertical;
@@ -1007,6 +1073,53 @@ fn event_loop(app: &mut App, options: &mut Options, host: &str) -> Result<(), St
             }
         }
     }
+    Ok(Flow::Continue)
+}
+
+/// Keys that arrived together and read like text — characters, Enter, Tab
+/// — are a paste from a terminal that does not bracket one: inserted as
+/// they are, never run, never completed.
+fn is_paste_burst(batch: &[event::KeyEvent]) -> bool {
+    if batch.len() < 2 {
+        return false;
+    }
+    let textual = batch.iter().all(|key| {
+        !key.modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            && matches!(key.code, KeyCode::Char(_) | KeyCode::Enter | KeyCode::Tab)
+    });
+    let breaks = batch
+        .iter()
+        .any(|key| matches!(key.code, KeyCode::Enter | KeyCode::Tab));
+    textual && (breaks || batch.len() >= 8)
+}
+
+fn burst_text(batch: &[event::KeyEvent]) -> String {
+    batch
+        .iter()
+        .filter_map(|key| match key.code {
+            KeyCode::Char(ch) => Some(ch),
+            KeyCode::Enter => Some('\n'),
+            KeyCode::Tab => Some('\t'),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The line under the editor while Ctrl-R searches the history.
+fn search_hint(view: &crate::shell::editor::SearchView, theme: &Theme) -> Line<'static> {
+    let mut spans = vec![
+        Span::styled(" reverse search ", theme.dim),
+        Span::styled(format!("‹{}›", view.query), theme.accent),
+    ];
+    if view.failing {
+        spans.push(Span::styled(" no match", theme.warning));
+    }
+    spans.push(Span::styled(
+        " · Ctrl-R older · Enter keep · Esc cancel",
+        theme.dim,
+    ));
+    Line::from(spans)
 }
 
 /// `SELECT … \G`: the statement ends with the vertical marker instead of
@@ -2999,5 +3112,34 @@ mod tests {
             StatementEvent::Finished(_) => panic!("a missing table is not a result"),
         }
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_burst_of_text_keys_is_a_paste_and_typing_is_not() {
+        let plain = |code| event::KeyEvent::new(code, KeyModifiers::NONE);
+        let pasted: Vec<_> = "SELECT 1\n\tFROM t;"
+            .chars()
+            .map(|ch| match ch {
+                '\n' => plain(KeyCode::Enter),
+                '\t' => plain(KeyCode::Tab),
+                ch => plain(KeyCode::Char(ch)),
+            })
+            .collect();
+        assert!(is_paste_burst(&pasted));
+        assert_eq!(burst_text(&pasted), "SELECT 1\n\tFROM t;");
+        let two_chars = vec![plain(KeyCode::Char('S')), plain(KeyCode::Char('E'))];
+        assert!(
+            !is_paste_burst(&two_chars),
+            "two quick characters are typing"
+        );
+        let long_line: Vec<_> = (0..8).map(|_| plain(KeyCode::Char('x'))).collect();
+        assert!(is_paste_burst(&long_line));
+        let with_ctrl = vec![
+            plain(KeyCode::Char('a')),
+            plain(KeyCode::Enter),
+            event::KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        ];
+        assert!(!is_paste_burst(&with_ctrl), "a control key is never pasted");
+        assert!(!is_paste_burst(&[plain(KeyCode::Enter)]));
     }
 }

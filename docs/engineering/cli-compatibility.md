@@ -21,7 +21,9 @@ describes.
 | Unknown names | `did you mean` for SHOW kinds, dot commands, `.settings` keys, `USE` targets; a missing table is located across catalogs and the `USE` to reach it is given |
 | `.catalogs`, `.schemas`, `.tables`, `.describe`, `.use` | Metadata shortcuts without a semicolon |
 | `help`, `exit`, `quit`, `clear` | Shell commands, optional semicolon; `clear` needs an interactive terminal |
-| Multi-line editing | Enter submits only a statement ending in `;` (Ctrl-Enter forces), Up/Down history with the draft kept, Tab completion of keywords, dot commands and catalog names, SQL highlighting |
+| Multi-line editing | Enter submits only a statement ending in `;` (Ctrl-Enter forces), Up/Down history filtered by the typed prefix with the draft kept, Ctrl-R reverse history search, an inline suggestion from history taken with Right, readline keys (Ctrl-A/E/K/U/W, Alt-B/F, Alt-Z/Y undo and redo), Tab completion of keywords, dot commands and catalog names, SQL highlighting, pasted text inserted verbatim and never run |
+| `.ask` | A plain-language question through the Kaveon DLM on the platform API (`--api`); Live answers over a native catalog run on the coordinator; clarifications are answered with `.ask <n>`. Trino has no equivalent |
+| `.source`, `.tee`, `.edit`, `\G`, `.watch` | Run a file through the shell, copy the scrollback to a file, edit the last statement in `$EDITOR`, vertical output for one statement, re-run on an interval |
 | `--editing-mode VI` | Accepted; applies to the line-editor fallback when stdout is not a terminal, not to the shell's editor |
 | Live progress | Supported: the running line shows state (`Submitting`, `Queued … for memory admission · N ahead`, `Running`, `Cancelling`), elapsed time, admission wait, tasks done/total, distinct workers and rows scanned exactly as the coordinator's query record reports them, polled every 250 ms by the statement's client tag |
 | Cancel | Ctrl-C sends `DELETE /v1/query/{id}` and waits for the coordinator; a second press abandons the wait. `.queries` lists live statements and `.kill <id>` cancels any of them |
