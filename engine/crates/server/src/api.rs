@@ -1885,14 +1885,14 @@ async fn submit_statement(
         Err(e) => {
             let message = format!("SQL parse error: {e}");
             finish_failed_query(&query_id, message.clone(), start, None, None, None).await;
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": message,
-                    "code": "SYNTAX_ERROR"
-                })),
-            )
-                .into_response();
+            let mut body = serde_json::json!({
+                "error": message,
+                "code": "SYNTAX_ERROR"
+            });
+            if let Some((line, column)) = parse_error_position(&message) {
+                body["position"] = serde_json::json!({ "line": line, "column": column });
+            }
+            return (StatusCode::BAD_REQUEST, Json(body)).into_response();
         }
     };
     crate::planner::qualify_tables(&mut plan, &context.catalog, &context.schema);
@@ -5960,6 +5960,16 @@ fn duration_ns(duration: std::time::Duration) -> u64 {
     duration.as_nanos().try_into().unwrap_or(u64::MAX)
 }
 
+/// The one-based line and column a parser error names. `sqlparser` ends
+/// its messages with ` at Line: N, Column: M` when the failing token has a
+/// location; the error reaches the API as text, so the position is read
+/// back from the message. A message without one yields `None`.
+fn parse_error_position(message: &str) -> Option<(u64, u64)> {
+    let (_, location) = message.rsplit_once(" at Line: ")?;
+    let (line, column) = location.split_once(", Column: ")?;
+    Some((line.parse().ok()?, column.parse().ok()?))
+}
+
 async fn finish_failed_query(
     query_id: &str,
     error: String,
@@ -6822,6 +6832,53 @@ mod tests {
         assert!(super::refresh_catalog_snapshot(&state).await.is_ok());
         assert_eq!(state.result_cache.stats().entries, 0);
         let _ = std::fs::remove_dir_all(directory);
+    }
+
+    /// A parse error is a 400 whose body names the failing token's
+    /// position next to the unchanged error text.
+    #[tokio::test]
+    async fn a_parse_error_carries_its_position() {
+        let (state, _commit, directory) = analyze_test_state().await;
+        let analyst = crate::security::Identity {
+            principal: "analyst".into(),
+            display_identity: None,
+            role: Role::Analyst,
+        };
+        let (status, body) =
+            submit(&state, &analyst, "SELECT FROM t", serde_json::Value::Null).await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["code"], "SYNTAX_ERROR");
+        let error = body["error"].as_str().unwrap();
+        assert!(error.starts_with("SQL parse error: "), "{error}");
+        let (_, reported) = error.rsplit_once(" at Line: 1, Column: ").expect(error);
+        assert_eq!(body["position"]["line"], 1);
+        assert_eq!(body["position"]["column"], reported.parse::<u64>().unwrap());
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn parse_error_positions_are_read_from_the_message() {
+        assert_eq!(
+            super::parse_error_position(
+                "SQL parse error: sql parser error: Expected: an expression, found: FROM at Line: 1, Column: 8"
+            ),
+            Some((1, 8))
+        );
+        assert_eq!(
+            super::parse_error_position("SQL parse error: only single statements are supported"),
+            None
+        );
+        assert_eq!(super::parse_error_position("at Line: x, Column: 2"), None);
+        // An error at end of input carries no location, so no position.
+        let at_eof = kaveon_sql::logical_plan::sql_to_logical_plan("SELECT 1\nFROM").unwrap_err();
+        assert_eq!(super::parse_error_position(&at_eof.to_string()), None);
+        let on_line_two =
+            kaveon_sql::logical_plan::sql_to_logical_plan("SELECT 1\nFROM t WHERE 'abc")
+                .unwrap_err();
+        assert_eq!(
+            super::parse_error_position(&on_line_two.to_string()).map(|(line, _)| line),
+            Some(2)
+        );
     }
 
     fn analyze_context() -> super::QueryContext {
