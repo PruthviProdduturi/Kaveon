@@ -426,6 +426,12 @@ const NULL_PROPAGATING_FUNCTIONS: &[&str] = &[
 /// four hundred values is four hundred regular expressions. A text result
 /// stays dictionary-encoded over the transformed values, so no bytes are
 /// copied per row; every other result is gathered by key.
+///
+/// The same holds for `REGEXP_REPLACE` over a plain text column: the
+/// batch's distinct values are found first and the pattern runs once per
+/// distinct value, since a regular expression with captures costs
+/// hundreds of nanoseconds a row where a hash costs tens. The result is
+/// plain text, as the input was.
 fn eval_function_through_dictionary(
     name: &str,
     args: &[Expr],
@@ -459,6 +465,10 @@ fn eval_function_through_dictionary(
             };
             used_dictionary_values(dictionary, compact_dictionary_above(dictionary.len(), cost))?
         }
+        DataType::Utf8 if regex => match distinct_text_values(array.as_string::<i32>()) {
+            Some((values, keys)) => (Arc::new(values) as ArrayRef, keys),
+            None => return Ok(None),
+        },
         _ => return Ok(None),
     };
     let evaluated: Vec<ArrayRef> = args
@@ -476,7 +486,14 @@ fn eval_function_through_dictionary(
         })
         .collect::<Result<_>>()?;
     let over_values = eval_scalar_function(name, &evaluated, values.len())?;
-    rewrap_dictionary(&keys, over_values).map(Some)
+    if matches!(array.data_type(), DataType::Dictionary(_, _)) {
+        return rewrap_dictionary(&keys, over_values).map(Some);
+    }
+    // Plain in, plain out: the rows gather their distinct value's result.
+    if let DataType::Utf8 | DataType::LargeUtf8 = over_values.data_type() {
+        reserve_string_expansion(array.get_array_memory_size() as u64, keys.len())?;
+    }
+    Ok(Some(compute::take(&over_values, &keys, None)?))
 }
 
 /// What one evaluation over one dictionary value costs, for deciding
@@ -588,6 +605,47 @@ fn rewrap_dictionary(keys: &Int32Array, values: ArrayRef) -> Result<ArrayRef> {
         }
         _ => Ok(compute::take(&values, keys, None)?),
     }
+}
+
+/// The first rows a batch is judged on before its distinct values are
+/// collected in full: a batch whose values are mostly distinct is left to
+/// the row path, where the hash would be pure overhead.
+const DISTINCT_PROBE_ROWS: usize = 1024;
+
+/// A plain text column's distinct values in first-seen order, with the
+/// rows as keys into them; None when the batch is mostly distinct (more
+/// than three quarters of its first `DISTINCT_PROBE_ROWS` rows).
+fn distinct_text_values(array: &StringArray) -> Option<(StringArray, Int32Array)> {
+    let rows = array.len();
+    let hasher = ahash::RandomState::new();
+    let mut table = hashbrown::HashTable::<u32>::with_capacity(rows.min(DISTINCT_PROBE_ROWS));
+    let mut distinct: Vec<&str> = Vec::new();
+    let mut keys: Vec<i32> = Vec::with_capacity(rows);
+    for row in 0..rows {
+        if row == DISTINCT_PROBE_ROWS && distinct.len() * 4 > row * 3 {
+            return None;
+        }
+        if array.is_null(row) {
+            keys.push(0);
+            continue;
+        }
+        let value = array.value(row);
+        let hash = hasher.hash_one(value);
+        let index = match table.find(hash, |&index| distinct[index as usize] == value) {
+            Some(&index) => index,
+            None => {
+                let index = distinct.len() as u32;
+                table.insert_unique(hash, index, |&index| {
+                    hasher.hash_one(distinct[index as usize])
+                });
+                distinct.push(value);
+                index
+            }
+        };
+        keys.push(index as i32);
+    }
+    let keys = Int32Array::new(keys.into(), array.nulls().cloned());
+    Some((StringArray::from_iter_values(distinct), keys))
 }
 
 /// A dictionary column as its plain values; every other array unchanged.
@@ -2580,6 +2638,69 @@ mod tests {
     }
 
     #[test]
+    fn regexp_replace_over_plain_text_runs_once_per_distinct_value() {
+        // Eight thousand rows over fifty values, nulls and empty strings
+        // among them, multi-byte hosts included: the distinct-value path
+        // must answer exactly as the row path does, as plain text.
+        let value = |i: usize| -> Option<String> {
+            match i % 50 {
+                0 => None,
+                1 => Some(String::new()),
+                2 => Some("https://пример.рф/путь/к/странице".into()),
+                3 => Some("https://no-path.example.com".into()),
+                k => Some(format!("http://www.site-{k}.example.com/a/{}", k % 3)),
+            }
+        };
+        let rows = (0..8_192).map(value).collect::<StringArray>();
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, true)]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(rows)]).unwrap();
+        let expr = Expr::Function {
+            name: "REGEXP_REPLACE".into(),
+            args: vec![
+                Expr::Column("s".into()),
+                Expr::Literal(ScalarValue::Utf8(r"^https?://(?:www\.)?([^/]+)/.*$".into())),
+                Expr::Literal(ScalarValue::Utf8("$1".into())),
+            ],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        assert_eq!(result.data_type(), &DataType::Utf8);
+        let result = result.as_string::<i32>();
+        let expected = |i: usize| -> Option<String> {
+            match i % 50 {
+                0 => None,
+                1 => Some(String::new()),
+                2 => Some("пример.рф".into()),
+                3 => Some("https://no-path.example.com".into()),
+                k => Some(format!("site-{k}.example.com")),
+            }
+        };
+        for i in 0..8_192 {
+            assert_eq!(
+                (!result.is_null(i)).then(|| result.value(i).to_owned()),
+                expected(i),
+                "row {i}"
+            );
+        }
+        assert_eq!(
+            distinct_text_values(batch.column(0).as_string::<i32>())
+                .map(|(values, _)| values.len()),
+            Some(49)
+        );
+
+        // A batch that is mostly distinct is left to the row path and
+        // answers the same.
+        let rows = (0..2_048)
+            .map(|i| Some(format!("https://site-{i}.example.com/{}", i % 2)))
+            .collect::<StringArray>();
+        assert!(distinct_text_values(&rows).is_none());
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(rows)]).unwrap();
+        let result = evaluate(&expr, &batch).unwrap();
+        let result = result.as_string::<i32>();
+        assert_eq!(result.value(0), "site-0.example.com");
+        assert_eq!(result.value(2_047), "site-2047.example.com");
+    }
+
+    #[test]
     fn regexp_replace_rejects_invalid_patterns_by_name() {
         let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, true)]));
         let batch = RecordBatch::try_new(
@@ -2733,7 +2854,8 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        // Every row its own value: no repetition to exploit.
+        // Every row its own value: the shape the distinct-value path must
+        // step aside for.
         let unique = (0..batches)
             .map(|batch| {
                 let values = (0..BATCH_ROWS)
