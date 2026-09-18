@@ -75,6 +75,60 @@ class ProductReplayTests(unittest.TestCase):
             events[1]["event_id"], events[1]["payload_sha256"], "reconciliation_failed"
         )
 
+    def test_record_replay_applies_the_ordered_prefix_through_the_record(self):
+        # Two older events of other records precede the dataset's create and
+        # update; all four replay in source order, nothing newer is touched.
+        events = [event(sequence=1), event(sequence=2), event(sequence=3), event("update", sequence=4)]
+        newest = iter([4, None])
+        with patch.object(product_replay.product_outbox, "newest_pending_sequence",
+                          side_effect=lambda family, record_id: next(newest)) as pending_for, \
+             patch.object(product_replay.product_outbox, "pending", return_value=events) as pending, \
+             patch.object(product_replay, "apply_event", side_effect=[1, 2, 3, 4]) as apply, \
+             patch.object(product_replay.product_outbox, "mark_applied") as mark:
+            self.assertEqual(product_replay.replay_record("datasets", "42"), 4)
+        self.assertEqual(pending_for.call_args_list, [call("datasets", "42"), call("datasets", "42")])
+        pending.assert_called_once_with(100, 4)
+        self.assertEqual(apply.call_count, 4)
+        self.assertEqual([entry.args[2] for entry in mark.call_args_list], [1, 2, 3, 4])
+
+    def test_record_replay_is_a_no_op_when_the_record_has_no_pending_event(self):
+        with patch.object(product_replay.product_outbox, "newest_pending_sequence", return_value=None), \
+             patch.object(product_replay.product_outbox, "pending") as pending:
+            self.assertEqual(product_replay.replay_record("datasets", "42"), 0)
+        pending.assert_not_called()
+
+    def test_record_replay_fails_closed_on_a_blocking_older_event(self):
+        events = [event(sequence=1), event(sequence=2)]
+        with patch.object(product_replay.product_outbox, "newest_pending_sequence", return_value=2), \
+             patch.object(product_replay.product_outbox, "pending", return_value=events), \
+             patch.object(product_replay, "apply_event", side_effect=RuntimeError("blocked")), \
+             patch.object(product_replay.product_outbox, "mark_applied") as mark, \
+             patch.object(product_replay.product_outbox, "record_failure") as failure:
+            with self.assertRaisesRegex(RuntimeError, "blocked"):
+                product_replay.replay_record("datasets", "42")
+        mark.assert_not_called()
+        failure.assert_called_once_with(events[0]["event_id"], events[0]["payload_sha256"], "reconciliation_failed")
+
+    def test_record_replay_is_bounded_and_tolerates_a_concurrent_worker(self):
+        # A worker that acknowledged the prefix between the two reads leaves an
+        # empty batch; the record then reads as applied and the call returns.
+        with patch.object(product_replay.product_outbox, "newest_pending_sequence", side_effect=[6, None]), \
+             patch.object(product_replay.product_outbox, "pending", return_value=[]):
+            self.assertEqual(product_replay.replay_record("datasets", "42"), 0)
+        # An event that stays pending while nothing is replayable is a fault.
+        with patch.object(product_replay.product_outbox, "newest_pending_sequence", return_value=6), \
+             patch.object(product_replay.product_outbox, "pending", return_value=[]):
+            with self.assertRaisesRegex(RuntimeError, "pending but was not replayable"):
+                product_replay.replay_record("datasets", "42")
+        # The request-path bound stops a runaway backlog before the record.
+        batches = [[event(sequence=index) for index in range(start, start + 100)] for start in range(1, 1001, 100)]
+        with patch.object(product_replay.product_outbox, "newest_pending_sequence", return_value=5000), \
+             patch.object(product_replay.product_outbox, "pending", side_effect=batches), \
+             patch.object(product_replay, "apply_event", return_value=1), \
+             patch.object(product_replay.product_outbox, "mark_applied"):
+            with self.assertRaisesRegex(RuntimeError, "exceeds the request bound"):
+                product_replay.replay_record("datasets", "42")
+
     def test_already_deleted_target_is_an_idempotent_success(self):
         source = event("delete", document={"id": "42", "deleted": True})
         with patch.object(product_replay.product_store, "read", return_value=None), \

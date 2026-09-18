@@ -22,7 +22,14 @@ processes when Docker is unavailable, see
 | API | http://localhost:8082 | FastAPI + DLM; `GET /api/health` |
 | Engine coordinator | http://localhost:8081 | `/health`, `/ui`, `/v1/...`; insecure-development security profile |
 | Engine workers ×2 | internal only | reached through the coordinator |
-| PostgreSQL 17 | localhost:5433 | databases `kaveonmeta` and `kaveon`, role `kaveon` / `kaveon-local-only` |
+| PostgreSQL 17 | localhost:5433 | databases `kaveonmeta` and `kaveon`, role `kaveon` / `kaveon-local-only`; `KAVEON_POSTGRES_PORT` in `.env` moves it when a host PostgreSQL service already holds 5433 |
+
+The API runs its product-catalog replay worker in this profile
+(`KAVEON_PRODUCT_REPLAY_ENABLED=true`): every dataset, chart, dashboard and
+source write in PostgreSQL is applied in order to the coordinator's KaveonDB
+product catalog on the `catalog-data` volume, which DLM generation and serving
+consult. `GET /api/health` shows it as `checks.product_replay` with
+`enabled` and `running` both true.
 
 Local-only development tokens are baked into `docker-compose.yml` defaults
 (`kaveon-local-admin-token-not-for-production`, `kaveon-local-catalog-admin`,
@@ -202,6 +209,68 @@ http://localhost:8081/ui.
 
 Studio: open http://localhost:3000, and SQL Lab lists `OpenSource` as a
 source.
+
+## 6. Ask the DLM
+
+The catalog registered in step 4 is an Engine-side definition; the platform
+also needs a **catalog source** record (so datasets can name the catalog) and a
+**dataset** over the table. Both are ordinary API calls against
+`http://localhost:8082/api/v1`; the local development identity is an Admin, so
+no token is needed. Columns follow the platform's column contract
+(`table_name`, `column_name`, `data_type`, `is_dimension`, `is_metric`); a
+flat table has an empty `dimensions` list and marks its groupable columns
+`is_dimension: true`.
+
+```python
+import json, urllib.request
+API = "http://localhost:8082/api/v1"
+def call(method, path, body=None):
+    request = urllib.request.Request(API + path, method=method,
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=1800) as response:
+        return json.loads(response.read())
+
+source = call("POST", "/catalog-sources", {
+    "name": "OpenSource", "engine_catalog": "OpenSource", "adapter_type": "native",
+    "storage_type": "local", "data_format": "parquet",
+    "storage_config": {"base_path": "/data"}})["catalogSource"]
+call("POST", f"/catalog-sources/{source['id']}/transition", {"lifecycle": "active"})
+
+table = "kaveon_events_users"
+dimensions = ("platform", "license", "segment", "industry", "region", "country",
+              "deployment", "acquisition_channel", "team_size")
+dataset = call("POST", "/datasets", {
+    "name": "Product users", "database_name": "OpenSource",
+    "schema_name": "kaveon_product", "table_name": table, "visibility": "published",
+    "columns": [{"table_name": table, "column_name": "user_id", "data_type": "bigint",
+                 "is_dimension": False, "is_metric": False},
+                {"table_name": table, "column_name": "locale", "data_type": "varchar",
+                 "is_dimension": False, "is_metric": False}]
+               + [{"table_name": table, "column_name": d, "data_type": "varchar",
+                   "is_dimension": True, "is_metric": False} for d in dimensions],
+    "dimensions": [],
+    "metrics": [{"name": "Users", "expression": "COUNT(*)", "metric_type": "count"},
+                {"name": "Locales", "expression": "COUNT(DISTINCT locale)",
+                 "metric_type": "count_distinct"}]})
+print(call("POST", f"/datasets/{dataset['id']}/dlm/generate?force=true", {}))
+```
+
+Generation scans the table on the coordinator (about half a minute for the
+3M-row table on a laptop) and reports `status: ready`, the values it indexed
+and the answers it precomputed. Then ask, from the CLI or from Studio:
+
+```powershell
+$env:KAVEON_TOKEN = "kaveon-local-admin-token-not-for-production"
+kaveon --server http://localhost:8081 --api http://localhost:8082 -e ".ask users by platform in Europe"
+kaveon --server http://localhost:8081 --api http://localhost:8082 -e ".ask locales by platform in Europe"
+```
+
+The first answers from the precomputed context (`from context · no scan`);
+the second is not materialized, so the DLM hands back the SQL and the CLI runs
+it on the coordinator and prints the rows with the usual summary line. An
+ambiguous question returns a numbered clarification list; in the shell, answer
+it with `.ask <number>`.
 
 ## Day to day
 

@@ -44,6 +44,22 @@ All paths below are relative to the FastAPI origin.
   currently implemented.
 - Authorization differs by route. Do not infer write permission merely from an
   authenticated session; inspect the generated OpenAPI schema and router dependency.
+- **Product records and the KaveonDB catalog.** PostgreSQL is the read authority
+  for datasets, charts, dashboards and the other product families unless
+  `KAVEONDB_READ_AUTHORITY_FAMILIES` moves a family. Every product write also
+  appends one event to the PostgreSQL outbox, and the API's replay worker
+  (`KAVEON_PRODUCT_REPLAY_ENABLED=true`, batch and interval settings alongside
+  it) applies those events in source order to the coordinator's product
+  catalog (`POST /v1/transaction/sql` under the bridge token); `GET /api/health`
+  reports it under `checks.product_replay`. DLM generation binds its definition
+  to the dataset's KaveonDB revision, so `POST /api/v1/datasets/{id}/dlm/generate`
+  first replays the dataset's own pending events in order and then reads the
+  record: a dataset created a moment earlier publishes without waiting for the
+  worker's next pass, and a backlog that cannot replay fails the generate
+  request with the replay error rather than an incomplete artifact. DLM
+  serving (`/api/v1/dlm/*`) reads the legacy PostgreSQL DLM tables until
+  `KAVEON_POSTGRESQL_RETIREMENT_MODE` requests the PostgreSQL-free runtime;
+  only then does an authenticated caller serve from compiled KaveonDB context.
 - **Streaming pages (Engine).** A statement submitted with
   `result_delivery: "paged"` registers its pages the moment its record becomes
   `RUNNING`, and its record (`GET /v1/query/{id}`, the `GET /v1/query` list)
