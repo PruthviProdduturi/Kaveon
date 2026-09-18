@@ -244,6 +244,47 @@ client reports `Connection: coordinator request timed out`; it does not stop
 the statement on the coordinator. Metadata calls (`/v1/cluster`, `/v1/query`,
 the catalog API) keep a fixed 30 s bound.
 
+## Analyzing a run
+
+```text
+kaveon OpenSource.kaveon_product › EXPLAIN ANALYZE SELECT region, count(*) AS users
+                                   FROM kaveon_events_enriched WHERE country = 'India'
+                                   GROUP BY region ORDER BY users DESC;
+  Sort order_by=[(Column("users"), false)]
+  └─ Project expressions=[Column("region"), Alias { … name: "users" }]
+     └─ Aggregate aggregates=[Count { expr: Star, distinct: false }] group_by=[Column("region")]
+        └─ Filter predicate=BinaryOp { left: Column("country"), op: Eq, right: Literal(Utf8("India")) }
+           └─ Scan columns=country, region table=OpenSource.kaveon_product.kaveon_events_enriched
+
+  Execution  distributed · fragments   analysis 86 µs · planning 52 µs · execution 15.93 s
+
+  Stage 0  FINISHED · 2/2 tasks · 15.93 s · 2 nodes
+  ┌──────┬──────────┬─────────┬────────┬─────────────┬──────────────┬───────────────┬──────────┬─────────────┬──────────────┬─────────┐
+  │ task │ node     │ elapsed │    cpu │ peak memory │ rows scanned │ bytes scanned │ rows out │ exchange in │ exchange out │ spilled │
+  ├──────┼──────────┼─────────┼────────┼─────────────┼──────────────┼───────────────┼──────────┼─────────────┼──────────────┼─────────┤
+  │ 0.0  │ worker-1 │ 15.82 s │ 4.45 s │   929.8 KiB │   16,300,620 │     234.1 MiB │        0 │         0 B │      4.5 KiB │ —       │
+  │ 0.1  │ worker-2 │ 15.84 s │ 4.44 s │   929.8 KiB │   16,300,620 │     234.1 MiB │        0 │         0 B │      4.5 KiB │ —       │
+  └──────┴──────────┴─────────┴────────┴─────────────┴──────────────┴───────────────┴──────────┴─────────────┴──────────────┴─────────┘
+
+  Stage 1  FINISHED · 2/2 tasks · 92 ms · 2 nodes
+  …
+ ✓ 15.93 s · 1 row · 2 workers · 32.6M rows scanned at 2.0M rows/s · 468.2 MiB read   19163173
+```
+
+`EXPLAIN ANALYZE` runs the statement (result cache off, rows discarded) and
+reads its query record: the optimized plan, the execution mode
+(`distributed · fragments`, or the coordinator-local modes), the phase
+timings, then each stage with its state, tasks done, elapsed time and node
+count, and a table with one row per task. The columns are the record's task
+counters: `elapsed` and `cpu` (compute CPU time), `peak memory`, `rows
+scanned` and `bytes scanned` (the task's Parquet reader: rows emitted and
+compressed bytes selected), `rows out` and the exchange bytes it received and
+sent, `spilled` (bytes written to disk, `—` when none). A leaf stage's tasks
+send their partial results through the exchange, so their `rows out` is 0 and
+`exchange out` carries the volume. A statement answered on the coordinator has
+no stages and says so. Nothing is estimated: a counter the coordinator did not
+record shows as `—`.
+
 ## Results
 
 In the shell, `ALIGNED`, `AUTO` and the legacy `table` format render a styled
@@ -341,7 +382,8 @@ a coordinator statement; everything else is SQL for `POST /v1/statement`.
 | `SHOW STATS FOR [catalog.][schema.]table` | Coordinator statement: the column statistics of the last `ANALYZE`, one row per column plus a summary row with the table's row count. The shell shows a header line (`catalog.schema.table · 3,000,000 rows · 40.2 MiB`) over the columns with nulls as a percentage and sizes humanised; `SHOW STAT FOR` is accepted. A table never analyzed answers `Not found: no statistics for …; run ANALYZE …`. |
 | `DESCRIBE DETAIL [catalog.][schema.]table` | Coordinator statement: format, location, created and modified times, file count, size, row count, Delta version, partition columns, when it was analyzed and the catalog snapshot, shown in the shell as a `field \| value` list |
 | `USE [catalog.]schema`, `USE catalog` | Validates the target before switching. A bare name is the schema in the current catalog when it exists, else the catalog of that name (keeping the current schema when it has it, or its only schema). |
-| `EXPLAIN <statement>` | Runs the statement with the result cache off, discards the rows and prints `plan.logical` as an indented tree with the summary |
+| `EXPLAIN <statement>` | Runs the statement with the result cache off, discards the rows and prints the logical plan as an indented tree, then the summary |
+| `EXPLAIN ANALYZE <statement>` | The same over the optimized plan (pruned columns, pushed filters), followed by what the run cost: the coordinator's analysis, planning and execution times and, per stage, one row per task — node, elapsed, CPU, peak memory, rows and bytes scanned, rows out, exchange bytes in and out, bytes spilled — exactly as the query record reports them. See [Analyzing a run](#analyzing-a-run) |
 | `SET SESSION key = value; <statement>` | Passed through to the coordinator unchanged |
 | `.catalogs`, `.schemas [catalog]`, `.tables [[catalog.]schema]`, `.describe <table>`, `.use <target>` | The metadata statements without a semicolon |
 | `.limit [n]` | Show or set the interactive row limit |
@@ -624,8 +666,9 @@ for the SQL surface.
 ## Not yet
 
 Everything `.help` lists is implemented. What the client does not do yet:
-`EXPLAIN ANALYZE`; spooling to object storage; Kerberos, JWT and HTTP-proxy
-options; package-manager installs (winget, Homebrew). Rows appear while a
+per-operator statistics inside a plan (`EXPLAIN ANALYZE` is per task);
+spooling to object storage; Kerberos, JWT and HTTP-proxy options;
+package-manager installs (winget, Homebrew). Rows appear while a
 statement runs only where the coordinator receives them early: today a worker
 ships a root task's rows when that task completes, so a scan split into few
 tasks still shows its rows at the end — see

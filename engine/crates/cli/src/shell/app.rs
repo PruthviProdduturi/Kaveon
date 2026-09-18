@@ -236,8 +236,9 @@ struct Running {
     /// The statement as typed (without the appended limit), for the error
     /// panel's excerpt and the history.
     sql: String,
-    /// `EXPLAIN <statement>`: render the plan instead of the rows.
-    explain: bool,
+    /// `EXPLAIN <statement>`: render the plan instead of the rows;
+    /// `EXPLAIN ANALYZE` adds what the run cost.
+    explain: Option<Explain>,
     /// The interactive row limit appended to the statement, for the
     /// summary's note when the result fills it.
     preview_limit: Option<usize>,
@@ -1397,8 +1398,8 @@ fn start_pending(
     use crate::shell::rowlimit::{Limited, inspect};
     while let Some(statement) = app.pending.pop_front() {
         let (statement, explain) = match strip_explain(&statement) {
-            Some(inner) => (inner, true),
-            None => (statement, false),
+            Some((inner, explain)) => (inner, Some(explain)),
+            None => (statement, None),
         };
         let (sql, preview_limit) = match inspect(&statement, options.row_limit) {
             Limited::Appended(sql) => (sql, options.row_limit),
@@ -1432,7 +1433,7 @@ fn start_pending(
                     Ok(None) => {
                         let mut request = StatementRequest::new(&sql, options);
                         let mut settings = app.settings.as_map().unwrap_or_default();
-                        if explain {
+                        if explain.is_some() {
                             settings.insert("result_cache".into(), serde_json::Value::Bool(false));
                         }
                         request.settings = (!settings.is_empty()).then_some(settings);
@@ -1456,7 +1457,7 @@ fn start_pending(
                 }
             }
             Backend::Local(engine) => {
-                if explain {
+                if explain.is_some() {
                     app.pending.clear();
                     emit_error(terminal, &format!("EXPLAIN is {EMBEDDED_ONLY}"), &app.theme)?;
                     return emit_blank(terminal);
@@ -1470,7 +1471,7 @@ fn start_pending(
                     continue;
                 }
                 let handle = submit_local(engine, sql);
-                set_running(app, handle, statement, false, preview_limit);
+                set_running(app, handle, statement, None, preview_limit);
                 return Ok(());
             }
         }
@@ -1482,7 +1483,7 @@ fn set_running(
     app: &mut App,
     handle: Handle,
     statement: String,
-    explain: bool,
+    explain: Option<Explain>,
     preview_limit: Option<usize>,
 ) {
     app.editor.set_text(&statement);
@@ -1675,7 +1676,7 @@ fn poll_running(app: &mut App, terminal: &mut Screen, options: &mut Options) -> 
             // read them from here on. EXPLAIN renders the plan, not rows,
             // and a watch shows its first page once the run is done.
             if matches!(running.stream, Stream::Off)
-                && !running.explain
+                && running.explain.is_none()
                 && app.watch.is_none()
                 && !record.columns.is_empty()
                 && let Some(next_uri) = record.next_uri.as_deref()
@@ -1830,15 +1831,29 @@ fn finish(
                 {
                     truncated = *cut;
                 }
-            } else if running.explain {
+            } else if let Some(explain) = running.explain {
                 let session = app.session().expect("EXPLAIN runs against a coordinator");
                 let record = api::fetch_query(&lock(session), &options.server, &result.id).ok();
+                let analyze = explain == Explain::Analyze;
                 let plan = record
                     .as_ref()
-                    .and_then(|record| record.plan.as_ref())
-                    .and_then(|plan| plan.get("logical").cloned())
+                    .map(|record| render::plan::plan_of(record, analyze))
                     .unwrap_or(serde_json::Value::Null);
                 emit(terminal, render::plan::tree(&plan, &app.theme))?;
+                if analyze {
+                    match record.as_ref() {
+                        Some(record) => {
+                            let width = table_width(options).map(|width| width.saturating_sub(2));
+                            emit(terminal, render::plan::analyzed(record, width, &app.theme))?;
+                        }
+                        None => emit_text(
+                            terminal,
+                            "the query record could not be read; nothing to analyze",
+                            &app.theme,
+                            true,
+                        )?,
+                    }
+                }
             } else {
                 // Paged delivery: the response carries no rows, the first
                 // page does. Any rows sent inline lead it.
@@ -2283,8 +2298,17 @@ fn interrupt_running(
     emit_blank(terminal)
 }
 
-/// `EXPLAIN <statement>` → the statement, when the first word is EXPLAIN.
-fn strip_explain(statement: &str) -> Option<String> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Explain {
+    /// The plan.
+    Plan,
+    /// The optimized plan and the run's cost.
+    Analyze,
+}
+
+/// `EXPLAIN [ANALYZE] <statement>` → the statement and which, when the
+/// first word is EXPLAIN.
+pub(crate) fn strip_explain(statement: &str) -> Option<(String, Explain)> {
     let trimmed = statement.trim_start();
     let mut words = trimmed.splitn(2, char::is_whitespace);
     let first = words.next()?;
@@ -2292,7 +2316,15 @@ fn strip_explain(statement: &str) -> Option<String> {
         return None;
     }
     let rest = words.next()?.trim();
-    (!rest.is_empty()).then(|| rest.to_owned())
+    let mut words = rest.splitn(2, char::is_whitespace);
+    if words
+        .next()
+        .is_some_and(|word| word.eq_ignore_ascii_case("ANALYZE"))
+    {
+        let rest = words.next()?.trim();
+        return (!rest.is_empty()).then(|| (rest.to_owned(), Explain::Analyze));
+    }
+    (!rest.is_empty()).then(|| (rest.to_owned(), Explain::Plan))
 }
 
 /// Tab: complete the word before the cursor from keywords and the
