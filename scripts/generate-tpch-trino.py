@@ -16,7 +16,8 @@ TPCH_GENERATE line; the manifest is written to TPCH_OUTPUT.
 
 Environment: TRINO_URL, /trino-tls/ca.crt, /trino-auth/client-password,
 TRINO_ACCOUNT, TPCH_SCALE (default 100), TPCH_ROOT (container-relative,
-default benchmarks/tpch/sf<N>), TPCH_OUTPUT.
+default benchmarks/tpch/sf<N>), TPCH_REPLACE=1 to drop an earlier
+generation's table definitions first, TPCH_OUTPUT.
 """
 import base64
 import json
@@ -28,6 +29,11 @@ import urllib.request
 from pathlib import Path
 
 TABLES = ["region", "nation", "supplier", "part", "partsupp", "customer", "orders", "lineitem"]
+# Trino's tpch connector names columns without the specification's table
+# prefixes (`orderkey`, not `l_orderkey`); the generated tables carry the
+# standard names so the 22 queries run verbatim on both engines.
+PREFIX = {"region": "r_", "nation": "n_", "supplier": "s_", "part": "p_", "partsupp": "ps_",
+          "customer": "c_", "orders": "o_", "lineitem": "l_"}
 
 
 def validated_next_uri(base_url, candidate):
@@ -87,14 +93,23 @@ def main():
     manifest = []
     for table in TABLES:
         started = time.time()
+        if os.environ.get("TPCH_REPLACE") == "1":
+            # A registered table from an earlier generation: the definition
+            # goes, the files at its old location stay (the location is
+            # explicit, so Trino leaves them).
+            trino.query(f"DROP TABLE IF EXISTS lake.{schema}.{table}")
         existing, _ = trino.query(
             f"SELECT count(*) FROM lake.information_schema.tables "
             f"WHERE table_schema = '{schema}' AND table_name = '{table}'")
         if existing[0][0] == 0:
+            source_columns, _ = trino.query(
+                f"SELECT column_name FROM tpch.information_schema.columns "
+                f"WHERE table_schema = 'sf{scale}' AND table_name = '{table}' ORDER BY ordinal_position")
+            projection = ", ".join(f"{name} AS {PREFIX[table]}{name}" for (name,) in source_columns)
             trino.query(
                 f"CREATE TABLE lake.{schema}.{table} "
                 f"WITH (location = '{root}/{table}') "
-                f"AS SELECT * FROM tpch.sf{scale}.{table}")
+                f"AS SELECT {projection} FROM tpch.sf{scale}.{table}")
         rows, _ = trino.query(f"SELECT count(*) FROM lake.{schema}.{table}")
         described, _ = trino.query(
             f"SELECT column_name, data_type FROM lake.information_schema.columns "
