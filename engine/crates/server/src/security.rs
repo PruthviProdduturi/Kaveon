@@ -51,6 +51,17 @@ pub enum Role {
     Analyst,
     Admin,
 }
+/// How a request was authenticated. Attached next to `Identity` so a handler
+/// can report it without widening `Identity`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthSource {
+    Static,
+    Bridge,
+    Entra,
+    Development,
+    Internal,
+}
 #[derive(Clone, Debug)]
 pub struct Identity {
     pub principal: String,
@@ -156,6 +167,13 @@ impl SecurityConfig {
         Ok(())
     }
     pub fn authenticate(&self, headers: &HeaderMap) -> Result<Identity, StatusCode> {
+        self.authenticate_with_source(headers)
+            .map(|(identity, _)| identity)
+    }
+    pub fn authenticate_with_source(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<(Identity, AuthSource), StatusCode> {
         let token = bearer(headers);
         if token_matches(token, self.bridge_token.as_deref()) {
             let principal = headers
@@ -169,27 +187,36 @@ impl SecurityConfig {
                 Some("admin") => Role::Admin,
                 _ => return Err(StatusCode::FORBIDDEN),
             };
-            return Ok(Identity {
-                principal: principal.into(),
-                display_identity: None,
-                role,
-            });
+            return Ok((
+                Identity {
+                    principal: principal.into(),
+                    display_identity: None,
+                    role,
+                },
+                AuthSource::Bridge,
+            ));
         }
         for credential in &self.principals {
             if token_matches(token, Some(&credential.token)) {
-                return Ok(Identity {
-                    principal: credential.principal.clone(),
-                    display_identity: None,
-                    role: credential.role,
-                });
+                return Ok((
+                    Identity {
+                        principal: credential.principal.clone(),
+                        display_identity: None,
+                        role: credential.role,
+                    },
+                    AuthSource::Static,
+                ));
             }
         }
         if self.insecure_development && token.is_none() {
-            return Ok(Identity {
-                principal: "development".into(),
-                display_identity: None,
-                role: Role::Admin,
-            });
+            return Ok((
+                Identity {
+                    principal: "development".into(),
+                    display_identity: None,
+                    role: Role::Admin,
+                },
+                AuthSource::Development,
+            ));
         }
         Err(StatusCode::UNAUTHORIZED)
     }
@@ -227,6 +254,7 @@ pub async fn authorize(
             display_identity: None,
             role: Role::Admin,
         });
+        request.extensions_mut().insert(AuthSource::Internal);
         return next.run(request).await;
     }
     // The catalog service credential is confined to the metadata API.
@@ -238,8 +266,12 @@ pub async fn authorize(
     {
         return next.run(request).await;
     }
-    let identity = match state.config.security.authenticate(request.headers()) {
-        Ok(identity) => identity,
+    let (identity, source) = match state
+        .config
+        .security
+        .authenticate_with_source(request.headers())
+    {
+        Ok(authenticated) => authenticated,
         Err(status) => {
             let Some(entra) = &state.config.security.entra else {
                 return status.into_response();
@@ -248,7 +280,7 @@ pub async fn authorize(
                 return status.into_response();
             };
             match entra.authenticate(token).await {
-                Ok(identity) => identity,
+                Ok(identity) => (identity, AuthSource::Entra),
                 Err(status) => return status.into_response(),
             }
         }
@@ -259,6 +291,7 @@ pub async fn authorize(
         return StatusCode::FORBIDDEN.into_response();
     }
     request.extensions_mut().insert(identity);
+    request.extensions_mut().insert(source);
     next.run(request).await
 }
 
