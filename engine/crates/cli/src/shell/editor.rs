@@ -3,7 +3,6 @@
 use crate::theme::Theme;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Style;
-use ratatui::text::Span;
 use ratatui::widgets::{Block, Borders};
 use sqlparser::dialect::GenericDialect;
 use sqlparser::tokenizer::{Token, Tokenizer};
@@ -170,19 +169,12 @@ impl Editor {
         EditorAction::None
     }
 
-    /// The widget, boxed and titled; dimmed while a statement runs.
-    pub fn widget(&mut self, title: &str, theme: &Theme, running: bool) -> &TextArea<'static> {
-        let (label, rule) = if running {
-            (theme.dim, theme.dim)
-        } else {
-            (theme.title, theme.accent)
-        };
-        // A rule above and below the input, the context label on the top one.
+    /// The widget between two thin rules; dimmed while a statement runs.
+    pub fn widget(&mut self, theme: &Theme, running: bool) -> &TextArea<'static> {
         self.area.set_block(
             Block::new()
                 .borders(Borders::TOP | Borders::BOTTOM)
-                .border_style(rule)
-                .title(Span::styled(format!(" {title} "), label)),
+                .border_style(theme.dim),
         );
         self.area
             .set_style(if running { theme.dim } else { Style::default() });
