@@ -43,13 +43,14 @@ pub fn status_line(facts: &StatusFacts<'_>, theme: &Theme) -> Line<'static> {
 /// `context › ` in front of the input.
 pub fn prompt(context: &str, theme: &Theme) -> Line<'static> {
     Line::from(vec![
-        Span::styled(format!(" {context} "), theme.accent),
+        Span::styled(" KAVEON", theme.title),
+        Span::raw(format!(": {context} ")),
         Span::styled("› ", theme.accent),
     ])
 }
 
 pub fn prompt_width(context: &str) -> u16 {
-    (context.chars().count() + 4) as u16
+    (" KAVEON: ".len() + context.chars().count() + 3) as u16
 }
 
 pub fn host_of(server: &str) -> String {
