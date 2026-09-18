@@ -1,0 +1,72 @@
+{
+ "kind": "throughput",
+ "suite": "ClickBench",
+ "title": "ClickBench concurrency",
+ "engine": "Kaveon",
+ "duration_seconds": 300.0,
+ "warmup_seconds": 30.0,
+ "cluster": {
+  "workers": 3,
+  "node_sku": "Standard_D4s_v3",
+  "memory_per_query_per_worker": "3 GiB"
+ },
+ "date": "2026-09-17",
+ "engine_digests": [
+  "sha256:8580e4ea3728fbf749249ef4922a302985bc6dda7f22db73d88cc472fb78f26d"
+ ],
+ "record_path": "docs/qualification/clickbench/runs/rounds-2026-09-17",
+ "groups": [
+  {
+   "clients": 4,
+   "rounds": [
+    {
+     "round": 1,
+     "executions_per_second": 0.1329,
+     "successful": 41,
+     "failures": 0,
+     "rejections": 0,
+     "ties": 0
+    },
+    {
+     "round": 2,
+     "executions_per_second": 0.0741,
+     "successful": 24,
+     "failures": 0,
+     "rejections": 0,
+     "ties": 0
+    },
+    {
+     "round": 3,
+     "executions_per_second": 0.117,
+     "successful": 43,
+     "failures": 0,
+     "rejections": 0,
+     "ties": 1
+    }
+   ],
+   "median_executions_per_second": 0.117
+  },
+  {
+   "clients": 8,
+   "rounds": [
+    {
+     "round": 1,
+     "executions_per_second": 0.0852,
+     "successful": 28,
+     "failures": 7,
+     "rejections": 255,
+     "ties": 0
+    },
+    {
+     "round": 2,
+     "executions_per_second": 0.2215,
+     "successful": 82,
+     "failures": 0,
+     "rejections": 248,
+     "ties": 2
+    }
+   ],
+   "median_executions_per_second": 0.1533
+  }
+ ]
+}
