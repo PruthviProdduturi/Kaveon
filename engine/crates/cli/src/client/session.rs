@@ -146,6 +146,14 @@ pub struct QueryRecord {
     pub plan: Option<serde_json::Value>,
     #[serde(default)]
     pub cached_from: Option<String>,
+    /// The result's columns; the coordinator fills them once the statement
+    /// is planned, so a running paged statement can be read by its pages.
+    #[serde(default)]
+    pub columns: Vec<crate::client::statement::Column>,
+    /// `/v1/query/{id}/results/0` while a paged statement runs and its
+    /// pages can be read; absent for inline delivery and once finished.
+    #[serde(default)]
+    pub next_uri: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -300,16 +308,48 @@ pub(crate) mod test_server {
     use std::io::{Read, Write};
     use std::net::TcpListener;
 
+    /// One canned response: the request-line prefix it expects, and what
+    /// it answers.
+    pub(crate) struct Reply {
+        pub(crate) expected: &'static str,
+        pub(crate) status: u16,
+        pub(crate) headers: Vec<(&'static str, String)>,
+        pub(crate) body: String,
+    }
+
     /// Serves `responses` in order: (expected request-line prefix, status, body).
     /// Returns the base URL and a handle yielding the request bodies seen.
     pub(crate) fn fixture(
         responses: Vec<(&'static str, u16, String)>,
     ) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        fixture_with(
+            responses
+                .into_iter()
+                .map(|(expected, status, body)| Reply {
+                    expected,
+                    status,
+                    headers: Vec::new(),
+                    body,
+                })
+                .collect(),
+        )
+    }
+
+    /// `fixture` with extra response headers per reply.
+    pub(crate) fn fixture_with(
+        responses: Vec<Reply>,
+    ) -> (String, std::thread::JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let thread = std::thread::spawn(move || {
             let mut bodies = Vec::new();
-            for (expected, status, body) in responses {
+            for Reply {
+                expected,
+                status,
+                headers,
+                body,
+            } in responses
+            {
                 let (mut stream, _) = listener.accept().unwrap();
                 let mut bytes = Vec::new();
                 loop {
@@ -337,9 +377,13 @@ pub(crate) mod test_server {
                     "got {line}, expected {expected}"
                 );
                 bodies.push(text.split("\r\n\r\n").nth(1).unwrap_or_default().to_owned());
+                let extra: String = headers
+                    .iter()
+                    .map(|(name, value)| format!("{name}: {value}\r\n"))
+                    .collect();
                 write!(
                     stream,
-                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{extra}Connection: close\r\n\r\n{body}",
                     body.len()
                 )
                 .unwrap();
@@ -394,6 +438,22 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(record.id, "q1");
+        thread.join().unwrap();
+    }
+
+    #[test]
+    fn a_running_paged_record_carries_its_columns_and_next_uri() {
+        let body = r#"{"id":"q1","state":"RUNNING","elapsed_ms":5,"columns":[{"name":"n","type":"Int64"}],"next_uri":"/v1/query/q1/results/0"}"#;
+        let (url, thread) = fixture(vec![("GET /v1/query/q1 ", 200, body.into())]);
+        let (session, options) = session(&url);
+        let record = fetch_query(&session, &options.server, "q1").unwrap();
+        assert_eq!(record.next_uri.as_deref(), Some("/v1/query/q1/results/0"));
+        assert_eq!(record.columns.len(), 1);
+        assert_eq!(record.columns[0].name, "n");
+        assert_eq!(record.columns[0].data_type, "Int64");
+        let finished: QueryRecord =
+            serde_json::from_str(r#"{"id":"q2","state":"FINISHED"}"#).unwrap();
+        assert!(finished.next_uri.is_none() && finished.columns.is_empty());
         thread.join().unwrap();
     }
 

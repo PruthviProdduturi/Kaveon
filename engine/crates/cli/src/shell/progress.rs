@@ -35,6 +35,9 @@ pub struct Progress {
     pub tasks_total: usize,
     pub workers: usize,
     pub rows_scanned: u64,
+    /// Result rows the coordinator has written so far, for a paged
+    /// statement whose pages are being read while it runs.
+    pub rows_so_far: Option<usize>,
 }
 
 impl Progress {
@@ -67,6 +70,7 @@ impl Progress {
                 .iter()
                 .filter_map(|scan| scan.rows_emitted)
                 .sum(),
+            rows_so_far: None,
         }
     }
 }
@@ -109,6 +113,12 @@ pub fn line(progress: &Progress, tick: usize, theme: &Theme) -> Line<'static> {
             parts.push(format!(
                 "waited {} ms for admission",
                 progress.admission_wait_ms
+            ));
+        }
+        if let Some(rows) = progress.rows_so_far {
+            parts.push(format!(
+                "{} rows so far",
+                crate::render::thousands(rows as i128)
             ));
         }
     }
@@ -215,6 +225,44 @@ mod tests {
         let text = to_plain(&[line(&cancelling, 0, &theme)]);
         assert!(text.contains("Cancelling 4.0 s"), "{text}");
         assert!(!text.contains("Ctrl-C"), "{text}");
+    }
+
+    #[test]
+    fn rows_written_so_far_close_the_running_line() {
+        let theme = Theme::mono();
+        let streaming = Progress {
+            phase: Phase::Running,
+            elapsed: Duration::from_millis(1800),
+            workers: 2,
+            rows_scanned: 12_000_000,
+            rows_so_far: Some(12_000),
+            ..Progress::default()
+        };
+        let text = to_plain(&[line(&streaming, 0, &theme)]);
+        assert!(
+            text.contains("Running 1.8 s · 2 workers · 12.0M rows scanned · 12,000 rows so far"),
+            "{text}"
+        );
+        let nothing_yet = Progress {
+            phase: Phase::Running,
+            elapsed: Duration::from_millis(300),
+            rows_so_far: Some(0),
+            ..Progress::default()
+        };
+        let text = to_plain(&[line(&nothing_yet, 0, &theme)]);
+        assert!(text.contains("Running 0.3 s · 0 rows so far"), "{text}");
+        let inline = Progress {
+            phase: Phase::Running,
+            elapsed: Duration::from_millis(300),
+            ..Progress::default()
+        };
+        let text = to_plain(&[line(&inline, 0, &theme)]);
+        assert!(!text.contains("so far"), "{text}");
+        let record: QueryRecord = serde_json::from_str(r#"{"id":"q","state":"RUNNING"}"#).unwrap();
+        assert_eq!(
+            Progress::from_record(&record, Duration::ZERO).rows_so_far,
+            None
+        );
     }
 
     #[test]
