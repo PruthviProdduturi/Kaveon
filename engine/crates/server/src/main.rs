@@ -218,7 +218,10 @@ async fn main() {
     );
     let state = Arc::new(AppState {
         disk_exchange_store,
-        results: results::ResultStore::default(),
+        results: results::ResultStore::with_limits(
+            config.result_query_disk_limit_bytes,
+            config.result_disk_limit_bytes,
+        ),
         result_cache,
         principal_admission: security::PrincipalAdmission::default(),
         config,

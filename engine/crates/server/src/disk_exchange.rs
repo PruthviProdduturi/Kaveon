@@ -241,10 +241,25 @@ impl DiskExchangeStore {
 /// live coordinator's spool when tests or operators intentionally share a
 /// parent directory. Result spools and unrelated files use different names and
 /// are never traversed.
+/// A directory another store is removing while this one lists the root —
+/// a second coordinator in local development, or the tests — is not an
+/// error: it is simply no longer there to reconcile.
+fn vanished<T>(result: std::io::Result<T>) -> Result<Option<T>, String> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 fn reconcile_stale_directories(root: &Path, stale_before: SystemTime) -> Result<(), String> {
     for item in fs::read_dir(root).map_err(|error| error.to_string())? {
-        let item = item.map_err(|error| error.to_string())?;
-        let file_type = item.file_type().map_err(|error| error.to_string())?;
+        let Some(item) = vanished(item)? else {
+            continue;
+        };
+        let Some(file_type) = vanished(item.file_type())? else {
+            continue;
+        };
         if !file_type.is_dir() {
             continue;
         }
@@ -258,19 +273,26 @@ fn reconcile_stale_directories(root: &Path, stale_before: SystemTime) -> Result<
         if uuid::Uuid::parse_str(identifier).is_err() {
             continue;
         }
-        let mut modified = item
-            .metadata()
-            .and_then(|metadata| metadata.modified())
-            .map_err(|error| error.to_string())?;
+        let Some(mut modified) =
+            vanished(item.metadata().and_then(|metadata| metadata.modified()))?
+        else {
+            continue;
+        };
         // Directory mtime behavior differs across supported filesystems. Chunk
         // files are immutable, so their newest mtime is the authoritative last
         // write without decoding or trusting their contents.
-        for child in fs::read_dir(item.path()).map_err(|error| error.to_string())? {
-            let child = child.map_err(|error| error.to_string())?;
-            let child_modified = child
-                .metadata()
-                .and_then(|metadata| metadata.modified())
-                .map_err(|error| error.to_string())?;
+        let Some(children) = vanished(fs::read_dir(item.path()))? else {
+            continue;
+        };
+        for child in children {
+            let Some(child) = vanished(child)? else {
+                continue;
+            };
+            let Some(child_modified) =
+                vanished(child.metadata().and_then(|metadata| metadata.modified()))?
+            else {
+                continue;
+            };
             modified = modified.max(child_modified);
         }
         if modified <= stale_before {
@@ -325,6 +347,40 @@ mod tests {
         drop(body);
         assert_eq!(store.quota.state.lock().unwrap().total, 0);
         assert!(store.body(&chunk.identity).unwrap().is_none());
+    }
+
+    #[test]
+    fn reconcile_ignores_a_directory_that_vanishes_under_it() {
+        let root = std::env::temp_dir().join(format!("kaveon-reconcile-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        // A sibling store's directory whose chunk file goes away between the
+        // listing and the metadata read reads as "no longer there".
+        let sibling = root.join(format!("kaveon-exchange-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&sibling).unwrap();
+        std::fs::write(sibling.join("chunk"), b"x").unwrap();
+        assert!(
+            vanished(std::fs::metadata(root.join("missing")))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            vanished(std::fs::metadata(sibling.join("chunk")))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            vanished(std::fs::read_dir(root.join("missing-dir")))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            vanished(std::fs::File::open(root.join("missing")).map(|_| ()))
+                .unwrap()
+                .is_none()
+        );
+        reconcile_stale_directories(&root, SystemTime::now() - TTL).unwrap();
+        assert!(sibling.exists(), "a live sibling is left alone");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

@@ -58,6 +58,9 @@ pub struct ServerConfig {
     pub process_memory_limit_bytes: Option<u64>,
     /// The coordinator's result cache budget; zero disables it.
     pub result_cache_bytes: u64,
+    /// One paged result's disk, and every paged result's together.
+    pub result_query_disk_limit_bytes: u64,
+    pub result_disk_limit_bytes: u64,
     /// How long a cached result may be served.
     pub result_cache_ttl_seconds: u64,
     pub product_transactions: ProductTransactionsConfig,
@@ -135,6 +138,8 @@ impl Default for ServerConfig {
             memory_admission_wait_seconds: DEFAULT_MEMORY_ADMISSION_WAIT_SECONDS,
             process_memory_limit_bytes: None,
             result_cache_bytes: DEFAULT_RESULT_CACHE_BYTES,
+            result_query_disk_limit_bytes: crate::results::DEFAULT_QUERY_BYTES,
+            result_disk_limit_bytes: crate::results::DEFAULT_PROCESS_BYTES,
             result_cache_ttl_seconds: DEFAULT_RESULT_CACHE_TTL_SECONDS,
             product_transactions: ProductTransactionsConfig::default(),
         }
@@ -504,6 +509,21 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     anyhow::ensure!(
         config.exchange_disk_limit_bytes > 0 && config.exchange_query_disk_limit_bytes > 0,
         "exchange disk limits must be positive"
+    );
+    if let Ok(value) = std::env::var("KAVEON_RESULT_QUERY_DISK_LIMIT_BYTES") {
+        config.result_query_disk_limit_bytes = value.parse().map_err(|_| {
+            anyhow::anyhow!("KAVEON_RESULT_QUERY_DISK_LIMIT_BYTES must be an unsigned integer")
+        })?;
+    }
+    if let Ok(value) = std::env::var("KAVEON_RESULT_DISK_LIMIT_BYTES") {
+        config.result_disk_limit_bytes = value.parse().map_err(|_| {
+            anyhow::anyhow!("KAVEON_RESULT_DISK_LIMIT_BYTES must be an unsigned integer")
+        })?;
+    }
+    anyhow::ensure!(
+        config.result_query_disk_limit_bytes > 0
+            && config.result_disk_limit_bytes >= config.result_query_disk_limit_bytes,
+        "result disk limits must be positive and the process limit at least the query limit"
     );
     if let Ok(value) = std::env::var("KAVEON_RESULT_CACHE_BYTES") {
         config.result_cache_bytes = value.parse().map_err(|_| {
