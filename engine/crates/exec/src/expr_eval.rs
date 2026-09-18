@@ -1,6 +1,6 @@
 use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, Decimal128Array, Float64Array, Int32Array, Int64Array,
-    StringArray, StringBuilder,
+    Array, ArrayRef, AsArray, BooleanArray, Decimal128Array, Float64Array, Int32Array,
+    Int32DictionaryArray, Int64Array, StringArray, StringBuilder,
 };
 use arrow::compute;
 use arrow::datatypes::{DataType, Float64Type, Int32Type, Int64Type};
@@ -71,7 +71,9 @@ fn compiled_regex(pattern: &str) -> Result<regex::Regex> {
         return Ok(regex.clone());
     }
     let regex = regex::Regex::new(pattern).map_err(|error| {
-        KaveonError::Execution(format!("REGEXP_REPLACE pattern is invalid: {error}"))
+        KaveonError::Execution(format!(
+            "REGEXP_REPLACE pattern {pattern:?} is invalid: {error}"
+        ))
     })?;
     let mut cache = cache
         .lock()
@@ -418,14 +420,19 @@ const NULL_PROPAGATING_FUNCTIONS: &[&str] = &[
 ];
 
 /// A function over one dictionary column and literals runs once per
-/// dictionary value, not once per row: `UPPER(surface)` over a batch is a
-/// handful of string operations followed by a key gather.
+/// dictionary value the batch uses, not once per row: `UPPER(surface)`
+/// over a batch is a handful of string operations, and
+/// `REGEXP_REPLACE(Referer, …)` over a batch of 8192 rows that repeat
+/// four hundred values is four hundred regular expressions. A text result
+/// stays dictionary-encoded over the transformed values, so no bytes are
+/// copied per row; every other result is gathered by key.
 fn eval_function_through_dictionary(
     name: &str,
     args: &[Expr],
     batch: &RecordBatch,
 ) -> Result<Option<ArrayRef>> {
-    if !NULL_PROPAGATING_FUNCTIONS.contains(&name.to_uppercase().as_str()) {
+    let function = name.to_uppercase();
+    if !NULL_PROPAGATING_FUNCTIONS.contains(&function.as_str()) {
         return Ok(None);
     }
     let mut column = None;
@@ -433,12 +440,7 @@ fn eval_function_through_dictionary(
         match arg {
             Expr::Literal(_) => {}
             Expr::Column(name) if column.is_none() => {
-                let array = resolve_column(name, batch)?;
-                if !matches!(array.data_type(), DataType::Dictionary(key, _) if key.as_ref() == &DataType::Int32)
-                {
-                    return Ok(None);
-                }
-                column = Some((index, array));
+                column = Some((index, resolve_column(name, batch)?));
             }
             _ => return Ok(None),
         }
@@ -446,14 +448,25 @@ fn eval_function_through_dictionary(
     let Some((position, array)) = column else {
         return Ok(None);
     };
-    let dictionary = array.as_dictionary::<Int32Type>();
-    let values = dictionary.values();
+    let regex = function == "REGEXP_REPLACE";
+    let (values, keys) = match array.data_type() {
+        DataType::Dictionary(key, _) if key.as_ref() == &DataType::Int32 => {
+            let dictionary = array.as_dictionary::<Int32Type>();
+            let cost = if regex {
+                ValueCost::Regex
+            } else {
+                ValueCost::StringFunction
+            };
+            used_dictionary_values(dictionary, compact_dictionary_above(dictionary.len(), cost))?
+        }
+        _ => return Ok(None),
+    };
     let evaluated: Vec<ArrayRef> = args
         .iter()
         .enumerate()
         .map(|(index, arg)| {
             if index == position {
-                Ok(Arc::clone(values))
+                Ok(Arc::clone(&values))
             } else {
                 match arg {
                     Expr::Literal(value) => literal_to_array(value, values.len()),
@@ -463,7 +476,118 @@ fn eval_function_through_dictionary(
         })
         .collect::<Result<_>>()?;
     let over_values = eval_scalar_function(name, &evaluated, values.len())?;
-    Ok(Some(compute::take(&over_values, dictionary.keys(), None)?))
+    rewrap_dictionary(&keys, over_values).map(Some)
+}
+
+/// What one evaluation over one dictionary value costs, for deciding
+/// whether a pass over the keys to skip the unused values pays.
+#[derive(Clone, Copy)]
+enum ValueCost {
+    /// A regular expression with captures: hundreds of nanoseconds.
+    Regex,
+    /// LIKE or a string function: tens of nanoseconds.
+    StringFunction,
+}
+
+/// Dictionaries this small are used whole whatever the function: a
+/// compaction pass over the keys would cost more than the evaluations it
+/// saves.
+const SMALL_DICTIONARY: usize = 64;
+
+/// The dictionary size above which a batch of `rows` compacts the
+/// dictionary to the values it uses before a function runs over them.
+/// Compaction is a pass over the keys at a couple of nanoseconds a row;
+/// it pays once the values it skips would cost more. A regular expression
+/// costs hundreds of nanoseconds a value, so a dictionary of more than a
+/// few dozen values is compacted; a string function or LIKE costs tens,
+/// so the dictionary must hold more than an eighth of the rows — a
+/// row group's dictionary handed to an 8192-row batch, not a batch's own
+/// few hundred values.
+fn compact_dictionary_above(rows: usize, cost: ValueCost) -> usize {
+    match cost {
+        ValueCost::Regex => SMALL_DICTIONARY,
+        ValueCost::StringFunction => (rows / 8).max(SMALL_DICTIONARY),
+    }
+}
+
+/// A batch's dictionary column reduced to the values its keys use, with
+/// the keys renumbered to match. The dictionary a row group decodes to is
+/// shared by every batch of the row group — the reader hands each batch
+/// the whole dictionary page — so a function evaluated over the values as
+/// they come runs over the row group's distinct values once per batch,
+/// several times the row count. Nulls stay null; a key at a null row is
+/// not read, since the reader leaves those slots arbitrary. The values and
+/// keys come back as they are when every value is used, or the dictionary
+/// holds no more than `compact_above` values.
+fn used_dictionary_values(
+    dictionary: &Int32DictionaryArray,
+    compact_above: usize,
+) -> Result<(ArrayRef, Int32Array)> {
+    let values = dictionary.values();
+    let keys = dictionary.keys();
+    if values.len() <= compact_above {
+        return Ok((Arc::clone(values), keys.clone()));
+    }
+    let nulls = keys.nulls();
+    let mut renumbered = vec![-1_i32; values.len()];
+    let mut used: Vec<i32> = Vec::new();
+    for (row, &code) in keys.values().iter().enumerate() {
+        if nulls.is_some_and(|nulls| nulls.is_null(row)) {
+            continue;
+        }
+        let index = usize::try_from(code)
+            .ok()
+            .filter(|&index| index < values.len())
+            .ok_or_else(|| {
+                KaveonError::Execution(format!(
+                    "dictionary key {code} is outside its {} values",
+                    values.len()
+                ))
+            })?;
+        if renumbered[index] < 0 {
+            renumbered[index] = used.len() as i32;
+            used.push(code);
+        }
+    }
+    if used.len() == values.len() {
+        return Ok((Arc::clone(values), keys.clone()));
+    }
+    let compact_values = compute::take(values, &Int32Array::from(used), None)?;
+    let compact_keys = keys
+        .values()
+        .iter()
+        .enumerate()
+        .map(|(row, &code)| {
+            if nulls.is_some_and(|nulls| nulls.is_null(row)) {
+                0
+            } else {
+                renumbered[code as usize]
+            }
+        })
+        .collect::<Vec<_>>();
+    let compact_keys = Int32Array::new(compact_keys.into(), nulls.cloned());
+    Ok((compact_values, compact_keys))
+}
+
+/// A function's result over a dictionary's values, back as the batch's
+/// rows. Text stays a dictionary over the transformed values — the rows
+/// are the keys, and no bytes are copied per row; anything else is
+/// gathered by key. A null result is a null key, so the result's nulls are
+/// exact without consulting its values.
+fn rewrap_dictionary(keys: &Int32Array, values: ArrayRef) -> Result<ArrayRef> {
+    match values.data_type() {
+        DataType::Utf8 | DataType::LargeUtf8 => {
+            let keys = if values.null_count() == 0 {
+                keys.clone()
+            } else {
+                keys.iter()
+                    .map(|key| key.filter(|&key| !values.is_null(key as usize)))
+                    .collect::<Int32Array>()
+            };
+            Ok(Arc::new(Int32DictionaryArray::try_new(keys, values)?))
+        }
+        _ => Ok(compute::take(&values, keys, None)?),
+    }
 }
 
 /// A dictionary column as its plain values; every other array unchanged.
@@ -942,16 +1066,20 @@ fn eval_like(
     if let (DataType::Dictionary(key, _), Expr::Literal(literal)) = (values.data_type(), pattern)
         && key.as_ref() == &DataType::Int32
     {
-        // Match the dictionary's values once and gather by key.
+        // Match the dictionary values the batch uses once and gather by key.
         let dictionary = values.as_dictionary::<Int32Type>();
-        let patterns = literal_to_array(literal, dictionary.values().len())?;
+        let (values, keys) = used_dictionary_values(
+            dictionary,
+            compact_dictionary_above(dictionary.len(), ValueCost::StringFunction),
+        )?;
+        let patterns = literal_to_array(literal, values.len())?;
         let verdicts = like_arrays(
-            as_string_array(dictionary.values())?,
+            as_string_array(&values)?,
             as_string_array(&patterns)?,
             negated,
             case_insensitive,
         )?;
-        return Ok(compute::take(&verdicts, dictionary.keys(), None)?);
+        return Ok(compute::take(&verdicts, &keys, None)?);
     }
     let values = decode_dictionary(&values)?;
     let patterns = evaluate(pattern, batch)?;
@@ -2096,19 +2224,27 @@ mod tests {
         let batch =
             RecordBatch::try_new(schema, vec![Arc::new(surfaces), Arc::new(regions)]).unwrap();
         let strings = |array: ArrayRef| -> Vec<Option<String>> {
+            let array = compute::cast(&array, &DataType::Utf8).unwrap();
             let array = array.as_string::<i32>();
             (0..array.len())
                 .map(|i| (!array.is_null(i)).then(|| array.value(i).to_owned()))
                 .collect()
         };
 
-        // A unary function with a literal argument runs on the dictionary's values.
+        // A unary function with a literal argument runs on the dictionary's
+        // values, and its text result stays a dictionary over them.
         let upper = Expr::Function {
             name: "UPPER".into(),
             args: vec![Expr::Column("surface".into())],
         };
+        let uppercased = evaluate(&upper, &batch).unwrap();
         assert_eq!(
-            strings(evaluate(&upper, &batch).unwrap()),
+            uppercased.data_type(),
+            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+        );
+        assert_eq!(uppercased.as_dictionary::<Int32Type>().values().len(), 3);
+        assert_eq!(
+            strings(uppercased),
             vec![
                 Some("CHAT".into()),
                 Some("EXPORT".into()),
@@ -2116,6 +2252,58 @@ mod tests {
                 Some("API".into()),
                 Some("EXPORT".into())
             ]
+        );
+        // The dictionary result composes: a comparison, an IN list, a
+        // concatenation and a nested function read it as its text.
+        let uppercased_is_chat = Expr::BinaryOp {
+            left: Box::new(upper.clone()),
+            op: BinaryOp::Eq,
+            right: Box::new(Expr::Literal(ScalarValue::Utf8("CHAT".into()))),
+        };
+        let mask = evaluate_predicate(&uppercased_is_chat, &batch).unwrap();
+        assert_eq!(
+            mask.iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(false), None, Some(false), Some(false)]
+        );
+        let uppercased_in = Expr::InList {
+            expr: Box::new(upper.clone()),
+            list: vec![
+                Expr::Literal(ScalarValue::Utf8("API".into())),
+                Expr::Literal(ScalarValue::Utf8("EXPORT".into())),
+            ],
+            negated: false,
+        };
+        let mask = evaluate_predicate(&uppercased_in, &batch).unwrap();
+        assert_eq!(
+            mask.iter().collect::<Vec<_>>(),
+            vec![Some(false), Some(true), None, Some(true), Some(true)]
+        );
+        let uppercased_concat = Expr::BinaryOp {
+            left: Box::new(upper.clone()),
+            op: BinaryOp::StringConcat,
+            right: Box::new(Expr::Literal(ScalarValue::Utf8("!".into()))),
+        };
+        assert_eq!(
+            strings(evaluate(&uppercased_concat, &batch).unwrap()),
+            vec![
+                Some("CHAT!".into()),
+                Some("EXPORT!".into()),
+                None,
+                Some("API!".into()),
+                Some("EXPORT!".into())
+            ]
+        );
+        let uppercased_length = Expr::Function {
+            name: "LENGTH".into(),
+            args: vec![upper.clone()],
+        };
+        let lengths = evaluate(&uppercased_length, &batch).unwrap();
+        assert_eq!(
+            lengths
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(4), Some(6), None, Some(3), Some(6)]
         );
         let left = Expr::Function {
             name: "LEFT".into(),
@@ -2271,6 +2459,363 @@ mod tests {
             );
         }
         assert!(compiled_regex("(").is_err());
+    }
+
+    #[test]
+    fn regexp_replace_over_a_row_group_dictionary_runs_on_the_values_the_batch_uses() {
+        use arrow::array::{DictionaryArray, Int32Array};
+        // The dictionary a row group decodes to: two hundred values, of
+        // which this batch's keys use four. The key under a null row is
+        // arbitrary, as the reader leaves it, and must not be read.
+        let values = (0..200)
+            .map(|i| Some(format!("https://www.host-{i}.example.com/p/{i}")))
+            .collect::<StringArray>();
+        let keys = Int32Array::from(vec![
+            Some(7),
+            Some(150),
+            None,
+            Some(7),
+            Some(199),
+            Some(0),
+            Some(150),
+        ]);
+        let keys = Int32Array::new(
+            {
+                let mut raw = keys.values().to_vec();
+                raw[2] = 123_456;
+                raw.into()
+            },
+            keys.nulls().cloned(),
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "referer",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        )]));
+        let column = DictionaryArray::<Int32Type>::new(keys, Arc::new(values));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(column)]).unwrap();
+        let expr = Expr::Function {
+            name: "REGEXP_REPLACE".into(),
+            args: vec![
+                Expr::Column("referer".into()),
+                Expr::Literal(ScalarValue::Utf8(r"^https?://(?:www\.)?([^/]+)/.*$".into())),
+                Expr::Literal(ScalarValue::Utf8("$1".into())),
+            ],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        let dictionary = result.as_dictionary::<Int32Type>();
+        // Four regular expressions ran, not two hundred: the result's
+        // dictionary holds the used values in first-seen order.
+        assert_eq!(
+            dictionary
+                .values()
+                .as_string::<i32>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![
+                Some("host-7.example.com"),
+                Some("host-150.example.com"),
+                Some("host-199.example.com"),
+                Some("host-0.example.com"),
+            ]
+        );
+        let text = compute::cast(&result, &DataType::Utf8).unwrap();
+        assert_eq!(
+            text.as_string::<i32>().iter().collect::<Vec<_>>(),
+            vec![
+                Some("host-7.example.com"),
+                Some("host-150.example.com"),
+                None,
+                Some("host-7.example.com"),
+                Some("host-199.example.com"),
+                Some("host-0.example.com"),
+                Some("host-150.example.com"),
+            ]
+        );
+        assert!(result.is_null(2));
+
+        // LENGTH over the same column gathers a plain integer column.
+        let length = Expr::Function {
+            name: "LENGTH".into(),
+            args: vec![Expr::Column("referer".into())],
+        };
+        let lengths = evaluate(&length, &batch).unwrap();
+        assert_eq!(lengths.data_type(), &DataType::Int64);
+        assert_eq!(
+            lengths
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![
+                Some(34),
+                Some(38),
+                None,
+                Some(34),
+                Some(38),
+                Some(34),
+                Some(38)
+            ]
+        );
+
+        // LIKE takes the same compaction.
+        let like = Expr::Like {
+            expr: Box::new(Expr::Column("referer".into())),
+            pattern: Box::new(Expr::Literal(ScalarValue::Utf8("%host-1%".into()))),
+            negated: false,
+            case_insensitive: false,
+        };
+        let mask = evaluate_predicate(&like, &batch).unwrap();
+        assert_eq!(
+            mask.iter().collect::<Vec<_>>(),
+            vec![
+                Some(false),
+                Some(true),
+                None,
+                Some(false),
+                Some(true),
+                Some(false),
+                Some(true)
+            ]
+        );
+    }
+
+    #[test]
+    fn regexp_replace_rejects_invalid_patterns_by_name() {
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, true)]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(StringArray::from(vec![Some("a"), Some("a")]))],
+        )
+        .unwrap();
+        for pattern in ["(unclosed", r"(?-u)\xFF"] {
+            let expr = Expr::Function {
+                name: "REGEXP_REPLACE".into(),
+                args: vec![
+                    Expr::Column("s".into()),
+                    Expr::Literal(ScalarValue::Utf8(pattern.into())),
+                    Expr::Literal(ScalarValue::Utf8("x".into())),
+                ],
+            };
+            let error = evaluate(&expr, &batch).unwrap_err().to_string();
+            assert!(
+                error.contains("REGEXP_REPLACE pattern") && error.contains(pattern),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn rewrap_dictionary_moves_null_values_into_the_keys() {
+        let keys = Int32Array::from(vec![Some(0), Some(1), None, Some(1)]);
+        let values: ArrayRef = Arc::new(StringArray::from(vec![Some("a"), None]));
+        let wrapped = rewrap_dictionary(&keys, values).unwrap();
+        assert_eq!(
+            (0..4).map(|i| wrapped.is_null(i)).collect::<Vec<_>>(),
+            vec![false, true, true, true]
+        );
+        let text = compute::cast(&wrapped, &DataType::Utf8).unwrap();
+        assert_eq!(
+            text.as_string::<i32>().iter().collect::<Vec<_>>(),
+            vec![Some("a"), None, None, None]
+        );
+        // Anything but text gathers by key.
+        let keys = Int32Array::from(vec![Some(1), None, Some(0)]);
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![10, 20]));
+        let gathered = rewrap_dictionary(&keys, values).unwrap();
+        assert_eq!(
+            gathered
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(20), None, Some(10)]
+        );
+    }
+
+    /// The per-row cost of REGEXP_REPLACE and LIKE on the shape ClickBench
+    /// q29 hands the projection: four million Referer-like URLs in 8192-row
+    /// batches, about five percent of a batch distinct, as plain UTF-8, as
+    /// the dictionary a fallback (plain-encoded) page decodes to — one
+    /// dictionary per batch holding the batch's own values — and as the
+    /// dictionary a dictionary-encoded row group decodes to — one values
+    /// array shared by every batch of the row group. Ignored by default;
+    /// run it as `cargo test --release -p kaveon-exec regex_rate -- --ignored
+    /// --nocapture`.
+    #[test]
+    #[ignore = "benchmark: prints the per-row regex figures, run explicitly in release"]
+    fn regex_rate_over_referer_like_strings() {
+        use arrow::array::{DictionaryArray, Int32Array};
+        const ROWS: usize = 4_000_000;
+        const BATCH_ROWS: usize = 8_192;
+        const DISTINCT_PER_BATCH: usize = 410;
+        const ROW_GROUP_BATCHES: usize = 122;
+        const HOSTS: usize = 4_000;
+        let batches = ROWS / BATCH_ROWS;
+        let rows_total = batches * BATCH_ROWS;
+        // A URL shaped like a Referer: scheme, an optional `www.`, a host
+        // from a pool, a path with a query; one in twelve has no path and
+        // does not match q29's pattern, one in forty is empty.
+        let url = |seed: usize| -> String {
+            let host = seed % HOSTS;
+            let scheme = if seed.is_multiple_of(3) {
+                "http"
+            } else {
+                "https"
+            };
+            let www = if seed.is_multiple_of(2) { "www." } else { "" };
+            if seed.is_multiple_of(40) {
+                String::new()
+            } else if seed.is_multiple_of(12) {
+                format!("{scheme}://{www}site-{host}.example.com")
+            } else {
+                format!(
+                    "{scheme}://{www}site-{host}.example.com/section/{}/page-{}.html?ref={}&q=kaveon",
+                    seed % 97,
+                    seed % 1_013,
+                    seed % 7
+                )
+            }
+        };
+        // Row `i` of batch `b` takes value `b * 410 + (i * 7919) % 410`:
+        // each batch draws on 410 values of its own, each used about twenty
+        // times, spread over the batch.
+        let value_of = |batch: usize, row: usize| {
+            batch * DISTINCT_PER_BATCH + (row * 7_919) % DISTINCT_PER_BATCH
+        };
+        let schema_plain = Arc::new(Schema::new(vec![Field::new(
+            "referer",
+            DataType::Utf8,
+            true,
+        )]));
+        let schema_dictionary = Arc::new(Schema::new(vec![Field::new(
+            "referer",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        )]));
+        let build_started = std::time::Instant::now();
+        let plain = (0..batches)
+            .map(|batch| {
+                let values = (0..BATCH_ROWS)
+                    .map(|row| Some(url(value_of(batch, row))))
+                    .collect::<StringArray>();
+                RecordBatch::try_new(schema_plain.clone(), vec![Arc::new(values)]).unwrap()
+            })
+            .collect::<Vec<_>>();
+        let per_batch = (0..batches)
+            .map(|batch| {
+                let values = (0..DISTINCT_PER_BATCH)
+                    .map(|slot| Some(url(batch * DISTINCT_PER_BATCH + slot)))
+                    .collect::<StringArray>();
+                let keys = (0..BATCH_ROWS)
+                    .map(|row| Some((value_of(batch, row) - batch * DISTINCT_PER_BATCH) as i32))
+                    .collect::<Int32Array>();
+                let column = DictionaryArray::<Int32Type>::new(keys, Arc::new(values));
+                RecordBatch::try_new(schema_dictionary.clone(), vec![Arc::new(column)]).unwrap()
+            })
+            .collect::<Vec<_>>();
+        let shared = (0..batches)
+            .scan(None::<(usize, ArrayRef)>, |group, batch| {
+                let first = batch - batch % ROW_GROUP_BATCHES;
+                if group.as_ref().is_none_or(|(start, _)| *start != first) {
+                    let last = (first + ROW_GROUP_BATCHES).min(batches);
+                    let values = (first * DISTINCT_PER_BATCH..last * DISTINCT_PER_BATCH)
+                        .map(|seed| Some(url(seed)))
+                        .collect::<StringArray>();
+                    *group = Some((first, Arc::new(values) as ArrayRef));
+                }
+                let (first, values) = group.as_ref().expect("set above");
+                let keys = (0..BATCH_ROWS)
+                    .map(|row| Some((value_of(batch, row) - first * DISTINCT_PER_BATCH) as i32))
+                    .collect::<Int32Array>();
+                let column = DictionaryArray::<Int32Type>::new(keys, Arc::clone(values));
+                Some(
+                    RecordBatch::try_new(schema_dictionary.clone(), vec![Arc::new(column)])
+                        .unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        // Every row its own value: no repetition to exploit.
+        let unique = (0..batches)
+            .map(|batch| {
+                let values = (0..BATCH_ROWS)
+                    .map(|row| Some(url(batch * BATCH_ROWS + row)))
+                    .collect::<StringArray>();
+                RecordBatch::try_new(schema_plain.clone(), vec![Arc::new(values)]).unwrap()
+            })
+            .collect::<Vec<_>>();
+        println!(
+            "built {} rows in {} batches ({} distinct per batch) in {:.2?}",
+            rows_total,
+            batches,
+            DISTINCT_PER_BATCH,
+            build_started.elapsed()
+        );
+        let regexp_replace = Expr::Function {
+            name: "REGEXP_REPLACE".into(),
+            args: vec![
+                Expr::Column("referer".into()),
+                Expr::Literal(ScalarValue::Utf8(r"^https?://(?:www\.)?([^/]+)/.*$".into())),
+                Expr::Literal(ScalarValue::Utf8("$1".into())),
+            ],
+        };
+        let like = Expr::Like {
+            expr: Box::new(Expr::Column("referer".into())),
+            pattern: Box::new(Expr::Literal(ScalarValue::Utf8("%site-1%".into()))),
+            negated: false,
+            case_insensitive: false,
+        };
+        // Hits: hosts extracted (no `/` left) for REGEXP_REPLACE, true rows
+        // for LIKE; every shape must agree with the plain rows.
+        let hits = |expr: &Expr, input: &[RecordBatch]| -> usize {
+            input
+                .iter()
+                .map(|batch| {
+                    let result = evaluate(expr, batch).unwrap();
+                    match result.data_type() {
+                        DataType::Boolean => result.as_boolean().true_count(),
+                        _ => compute::cast(&result, &DataType::Utf8)
+                            .unwrap()
+                            .as_string::<i32>()
+                            .iter()
+                            .filter(|value| value.is_some_and(|value| !value.contains('/')))
+                            .count(),
+                    }
+                })
+                .sum()
+        };
+        for (label, expr) in [("REGEXP_REPLACE", &regexp_replace), ("LIKE", &like)] {
+            let expected = hits(expr, &plain);
+            for (shape, input) in [
+                ("plain Utf8", &plain),
+                ("dictionary per batch", &per_batch),
+                ("dictionary per row group", &shared),
+                ("plain Utf8, rows distinct", &unique),
+            ] {
+                if shape.ends_with("distinct") {
+                    // Its own values: nothing to agree with.
+                    assert!(hits(expr, input) > 0, "{label} over {shape}");
+                } else {
+                    assert_eq!(hits(expr, input), expected, "{label} over {shape}");
+                }
+                // Three rounds over the same batches: the first warms the
+                // allocator, the best is the figure to record.
+                let mut best = std::time::Duration::MAX;
+                for _ in 0..3 {
+                    let started = std::time::Instant::now();
+                    let mut rows = 0;
+                    for batch in input {
+                        rows += evaluate(expr, batch).unwrap().len();
+                    }
+                    assert_eq!(rows, rows_total);
+                    best = best.min(started.elapsed());
+                }
+                println!(
+                    "{label:<15} {shape:<26} {:>7.1} ns/row  ({:.2?} for {} rows)",
+                    best.as_nanos() as f64 / rows_total as f64,
+                    best,
+                    rows_total,
+                );
+            }
+        }
     }
 
     #[test]
