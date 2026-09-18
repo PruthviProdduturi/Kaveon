@@ -42,8 +42,9 @@ pub struct App {
 }
 
 impl App {
-    fn status_facts<'a>(&'a self, host: &'a str) -> StatusFacts<'a> {
+    fn status_facts<'a>(&'a self, context: &'a str, host: &'a str) -> StatusFacts<'a> {
         StatusFacts {
+            context,
             host,
             workers_ready: self
                 .cluster
@@ -208,7 +209,7 @@ fn event_loop(app: &mut App, session: &Session, options: &mut Options) -> Result
                 let [prompt_area, text_area] =
                     Layout::horizontal([Constraint::Length(2), Constraint::Min(1)])
                         .areas(editor_area);
-                frame.render_widget(app.editor.widget(&title, &app.theme, false), text_area);
+                frame.render_widget(app.editor.widget(&app.theme, false), text_area);
                 // The prompt glyph sits on the first text row, under the rule.
                 let prompt = ratatui::layout::Rect {
                     y: (prompt_area.y + 1).min(editor_area.bottom().saturating_sub(1)),
@@ -217,7 +218,7 @@ fn event_loop(app: &mut App, session: &Session, options: &mut Options) -> Result
                 };
                 frame.render_widget(Paragraph::new(Span::styled("›", app.theme.accent)), prompt);
                 frame.render_widget(
-                    Paragraph::new(status_line(&app.status_facts(&host), &app.theme)),
+                    Paragraph::new(status_line(&app.status_facts(&title, &host), &app.theme)),
                     status_area,
                 );
             })
