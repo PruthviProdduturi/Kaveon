@@ -15,6 +15,8 @@ pub enum ErrorKind {
     Connection,
     Authentication,
     NotFound,
+    /// The object exists, is not empty, or changed under the statement.
+    Conflict,
     Coordinator,
 }
 
@@ -30,6 +32,7 @@ impl ErrorKind {
             ErrorKind::Connection => "Connection",
             ErrorKind::Authentication => "Authentication",
             ErrorKind::NotFound => "Not found",
+            ErrorKind::Conflict => "Conflict",
             ErrorKind::Coordinator => "Coordinator",
         }
     }
@@ -40,9 +43,10 @@ impl ErrorKind {
             "PLANNING_ERROR" | "ANALYSIS_ERROR" => ErrorKind::Planning,
             "MEMORY_ADMISSION_REJECTED" => ErrorKind::Admission,
             "QUERY_CANCELED" => ErrorKind::Cancelled,
-            "QUERY_NOT_FOUND" | "CATALOG_NOT_FOUND" | "SCHEMA_NOT_FOUND" | "TABLE_NOT_FOUND" => {
-                ErrorKind::NotFound
-            }
+            "QUERY_NOT_FOUND" | "CATALOG_NOT_FOUND" | "SCHEMA_NOT_FOUND" | "TABLE_NOT_FOUND"
+            | "TABLE_NOT_READABLE" => ErrorKind::NotFound,
+            "CATALOG_CONFLICT" => ErrorKind::Conflict,
+            "CATALOG_INVALID" => ErrorKind::Planning,
             "FORBIDDEN" => ErrorKind::Authentication,
             _ => return None,
         })
@@ -52,7 +56,7 @@ impl ErrorKind {
         Some(match status {
             401 | 403 => ErrorKind::Authentication,
             429 => ErrorKind::Admission,
-            409 => ErrorKind::Cancelled,
+            409 => ErrorKind::Conflict,
             404 => ErrorKind::NotFound,
             _ => return None,
         })
@@ -130,12 +134,16 @@ impl CliError {
             query_id = Some(id);
             message = rest;
         }
-        if let Some((http_status, rest)) = coordinator_prefix(&message) {
+        let mut code = code.map(str::to_owned);
+        if let Some((http_status, bracketed, rest)) = coordinator_prefix(&message) {
             status = status.or(Some(http_status));
+            if code.is_none() {
+                code = bracketed;
+            }
             message = rest;
         }
 
-        let mut kind = code.and_then(ErrorKind::from_code);
+        let mut kind = code.as_deref().and_then(ErrorKind::from_code);
         let mut workers = Vec::new();
         if let Some((names, messages)) = worker_failures(&message) {
             workers = names;
@@ -197,15 +205,19 @@ fn query_failed_prefix(message: &str) -> Option<(String, String)> {
     Some((id.to_owned(), rest.trim().to_owned()))
 }
 
-/// `coordinator returned HTTP <n> <text>: <detail>` → (n, detail).
-fn coordinator_prefix(message: &str) -> Option<(u16, String)> {
+/// `coordinator returned HTTP <n> <text> [<CODE>]: <detail>` → (n, code, detail).
+fn coordinator_prefix(message: &str) -> Option<(u16, Option<String>, String)> {
     let rest = message.strip_prefix("coordinator returned HTTP ")?;
     let (status_text, detail) = rest.split_once(": ")?;
     let status = status_text
         .split_whitespace()
         .next()
         .and_then(|digits| digits.parse::<u16>().ok())?;
-    Some((status, detail.trim().to_owned()))
+    let code = status_text
+        .rsplit_once('[')
+        .and_then(|(_, tail)| tail.strip_suffix(']'))
+        .map(str::to_owned);
+    Some((status, code, detail.trim().to_owned()))
 }
 
 /// `worker '<name>' failed task with <status>: <body>` pieces joined by
@@ -404,6 +416,9 @@ mod tests {
         for (status, code, kind) in [
             (429, Some("MEMORY_ADMISSION_REJECTED"), ErrorKind::Admission),
             (409, Some("QUERY_CANCELED"), ErrorKind::Cancelled),
+            (409, Some("CATALOG_CONFLICT"), ErrorKind::Conflict),
+            (409, None, ErrorKind::Conflict),
+            (400, Some("TABLE_NOT_READABLE"), ErrorKind::NotFound),
             (401, None, ErrorKind::Authentication),
             (403, None, ErrorKind::Authentication),
             (404, None, ErrorKind::NotFound),

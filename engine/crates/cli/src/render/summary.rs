@@ -87,13 +87,15 @@ impl Summary {
             );
             summary.partial_metrics = record.scan_metrics_complete == Some(false);
         }
-        summary.placement = record.execution.as_ref().map(|execution| {
+        summary.placement = record.execution.as_ref().and_then(|execution| {
             match (execution.mode.as_str(), execution.detail.as_deref()) {
-                ("cache", _) => "from cache".to_owned(),
-                ("coordinator", Some(reason)) => format!("on the coordinator: {reason}"),
-                ("coordinator", None) => "on the coordinator".to_owned(),
-                ("distributed", Some(path)) => format!("distributed ({path})"),
-                (mode, _) => mode.to_owned(),
+                ("cache", _) => Some("from cache".to_owned()),
+                ("coordinator", Some(reason)) => Some(format!("on the coordinator: {reason}")),
+                ("coordinator", None) => Some("on the coordinator".to_owned()),
+                ("distributed", Some(path)) => Some(format!("distributed ({path})")),
+                // A catalog statement answers without executing; nothing to say.
+                ("pending", _) => None,
+                (mode, _) => Some(mode.to_owned()),
             }
         });
         summary.admission_wait_ms = record.admission_wait_ms;

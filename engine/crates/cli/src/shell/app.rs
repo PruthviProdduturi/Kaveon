@@ -1637,6 +1637,20 @@ fn render_rows(
     rows: &[Vec<serde_json::Value>],
     format: OutputFormat,
 ) -> Result<(OutputFormat, bool), String> {
+    if let Some(text) = single_text_cell(names, rows)
+        && matches!(
+            format,
+            OutputFormat::Table | OutputFormat::Aligned | OutputFormat::Auto
+        )
+    {
+        // `SHOW CREATE TABLE` and the like: the statement itself, not a
+        // one-cell table with escaped newlines.
+        emit(
+            terminal,
+            crate::shell::highlight::highlight(&text, &app.theme),
+        )?;
+        return Ok((format, false));
+    }
     match format {
         OutputFormat::Table | OutputFormat::Aligned | OutputFormat::Auto => {
             let (lines, cut) = render::table::styled(names, rows, table_width(options), &app.theme);
@@ -2232,6 +2246,15 @@ fn ask(
         }
         AskAnswer::OutOfScope { .. } | AskAnswer::Refused { .. } => Ok(()),
     }
+}
+
+/// A one-column, one-row result whose value spans lines: shown as text.
+fn single_text_cell(names: &[String], rows: &[Vec<serde_json::Value>]) -> Option<String> {
+    if names.len() != 1 || rows.len() != 1 {
+        return None;
+    }
+    let value = rows[0].first()?.as_str()?;
+    value.contains('\n').then(|| value.to_owned())
 }
 
 #[cfg(test)]
