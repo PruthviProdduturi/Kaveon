@@ -1,0 +1,1315 @@
+{
+ "engine": "kaveon",
+ "engine_digest": "sha256:8580e4ea3728fbf749249ef4922a302985bc6dda7f22db73d88cc472fb78f26d",
+ "suite": "ClickBench on KaveonDB",
+ "duration_seconds": 300.0,
+ "rounds": null,
+ "warmup_seconds": 30.0,
+ "clients": 8,
+ "elapsed_seconds": 328.496,
+ "successful": 28,
+ "failures": 7,
+ "rejections": 255,
+ "executions_per_second": 0.0852,
+ "per_client": [
+  {
+   "executions": 3,
+   "failures": 2,
+   "rejections": 8
+  },
+  {
+   "executions": 6,
+   "failures": 1,
+   "rejections": 8
+  },
+  {
+   "executions": 4,
+   "failures": 2,
+   "rejections": 0
+  },
+  {
+   "executions": 4,
+   "failures": 2,
+   "rejections": 8
+  },
+  {
+   "executions": 0,
+   "failures": 0,
+   "rejections": 61
+  },
+  {
+   "executions": 4,
+   "failures": 0,
+   "rejections": 58
+  },
+  {
+   "executions": 3,
+   "failures": 0,
+   "rejections": 64
+  },
+  {
+   "executions": 4,
+   "failures": 0,
+   "rejections": 48
+  }
+ ],
+ "warmup": {
+  "executions": 41,
+  "failures": 0,
+  "rejections": 20
+ },
+ "failed_everywhere": [
+  "q04",
+  "q31",
+  "q33",
+  "q39",
+  "q40",
+  "q41"
+ ],
+ "statements": [
+  {
+   "id": "q01",
+   "executions": 1,
+   "failures": 0,
+   "rejections": 0,
+   "p50_seconds": 3.089,
+   "p95_seconds": 3.089,
+   "max_seconds": 3.089,
+   "result_sha256": "351a749cfaf1ce79f7e3ef576d4391f7874eee8436c66867bf1f18a7fca9e89d",
+   "rows": 1,
+   "sample": [
+    [
+     "99997497"
+    ]
+   ],
+   "errors": []
+  },
+  {
+   "id": "q02",
+   "executions": 2,
+   "failures": 0,
+   "rejections": 0,
+   "p50_seconds": 8.841,
+   "p95_seconds": 16.599,
+   "max_seconds": 16.599,
+   "result_sha256": "15bec0bae1f47a8fb92cba765fef9f2650865638a3dff6c0017109b567f4fdcd",
+   "rows": 1,
+   "sample": [
+    [
+     "630500"
+    ]
+   ],
+   "errors": []
+  },
+  {
+   "id": "q03",
+   "executions": 1,
+   "failures": 0,
+   "rejections": 0,
+   "p50_seconds": 187.724,
+   "p95_seconds": 187.724,
+   "max_seconds": 187.724,
+   "result_sha256": "eed1e14ec9887433cc459385c52bd45c131a0c20d068483de8392d61f9fdaf09",
+   "rows": 1,
+   "sample": [
+    [
+     "7280088",
+     "99997497",
+     "1513.4879349030107"
+    ]
+   ],
+   "errors": []
+  },
+  {
+   "id": "q04",
+   "executions": 0,
+   "failures": 1,
+   "rejections": 0,
+   "p50_seconds": null,
+   "p95_seconds": null,
+   "max_seconds": null,
+   "result_sha256": "cf13c1fce709e48b44266ef7b37c6b44cf74577c8a27034b8467998047b393da",
+   "rows": 1,
+   "sample": [
+    [
+     "2.5289530297897155e+18"
+    ]
+   ],
+   "errors": [
+    {
+     "kind": "mismatch",
+     "client": 3,
+     "phase": "measured",
+     "seconds": 31.594,
+     "message": "digest a7e7db8d3fd4 differs from the first-seen cf13c1fce709 (1 rows)"
+    }
+   ]
+  },
+  {
+   "id": "q05",
+   "executions": 1,
+   "failures": 0,
+   "rejections": 0,
+   "p50_seconds": 25.183,
+   "p95_seconds": 25.183,
+   "max_seconds": 25.183,
+   "result_sha256": "0ef4a8cf11d91b896e38523d5142914e8a91da68319173b1995bd049b4530ff5",
+   "rows": 1,
+   "sample": [
+    [
+     "17630976"
+    ]
+   ],
+   "errors": []
+  },
+  {
+   "id": "q06",
+   "executions": 3,
+   "failures": 0,
+   "rejections": 48,
+   "p50_seconds": 1.966,
+   "p95_seconds": 31.775,
+   "max_seconds": 31.775,
+   "result_sha256": "73bdd41b0a736ebc34188dbe250c36e2058d18d121113faacf36eaf004421687",
+   "rows": 1,
+   "sample": [
+    [
+     "6019103"
+    ]
+   ],
+   "errors": []
+  },
+  {
+   "id": "q07",
+   "executions": 2,
+   "failures": 0,
+   "rejections": 0,
+   "p50_seconds": 1.859,
+   "p95_seconds": 3.306,
+   "max_seconds": 3.306,
+   "result_sha256": "42aa9fb3d4686a3cee58de27553b7722198f26803b3b965f5fed83e9cbdd1e16",
+   "rows": 1,
+   "sample": [
+    [
+     "15888",
+     "15917"
+    ]
+   ],
+   "errors": []
+  },
+  {
+   "id": "q08",
+   "executions": 1,
+   "failures": 0,
+   "rejections": 0,
+   "p50_seconds": 217.622,
+   "p95_seconds": 217.622,
+   "max_seconds": 217.622,
+   "result_sha256": "938c8fa5ed1df3aa16c887c983258fb3b69b9f1ac88619b2a6d5b7f86012ec97",
+   "rows": 18,
+   "sample": [
+    [
+     "2",
+     "404602"
+    ],
+    [
+     "27",
+     "113167"
+    ],
+    [
+     "13",
+     "45631"
+    ]
+   ],
+   "errors": []
+  },
+  {
+   "id": "q09",
+   "executions": 0,
+   "failures": 0,
+   "rejections": 0,
+   "p50_seconds": null,
+   "p95_seconds": null,
+   "max_seconds": null,
+   "result_sha256": null,
+   "errors": []
+  },
+  {
+   "id": "q10",
+   "executions": 0,
+   "failures": 0,
+   "rejections": 8,
+   "p50_seconds": null,
+   "p95_seconds": null,
+   "max_seconds": null,
+   "result_sha256": null,
+   "errors": []
+  },
+  {
+   "id": "q11",
+   "executions": 0,
+   "failures": 0,
+   "rejections": 0,
+   "p50_seconds": null,
+   "p95_seconds": null,
+   "max_seconds": null,
+   "result_sha256": null,
+   "errors": []
+  },
+  {
+   "id": "q12",
+   "executions": 2,
+   "failures": 0,
+   "rejections": 0,
+   "p50_seconds": 16.342,
+   "p95_seconds": 16.794,
+   "max_seconds": 16.794,
+   "result_sha256": "77aa79ecacdd1513abc4da32ba451b38b6fad7d9c0ac27483abc3bf05ffeef04",
+   "rows": 10,
+   "sample": [
+    [
+     "1",
+     "iPad",
+     "931038"
+    ],
+    [
+     "5",
+     "iPad",
+     "48385"
+    ],
+    [
+     "6",
+     "iPad",
+     "29710"
+    ]
+   ],
+   "errors": []
+  },
+  {
+   "id": "q13",
+   "executions": 0,
+   "failures": 0,
+   "rejections": 0,
+   "p50_seconds": null,
+   "p95_seconds": null,
+   "max_seconds": null,
+   "result_sha256": null,
+   "errors": []
+  },
+  {
+   "id": "q14",
+   "executions": 1,
+   "failures": 0,
+   "rejections": 0,
+   "p50_seconds": 25.915,
+   "p95_seconds": 25.915,
+   "max_seconds": 25.915,
+   "result_sha256": "b9f4d5bf0135230c11cde9563986b7eab1a893c12cf77ffc4e890fe6f0b69ffa",
+   "rows": 10,
+   "sample": [
+    [
+     "\u043a\u0430\u0440\u0435\u043b\u043a\u0438",
+     "23673"
+    ],
+    [
+     "\u0441\u043c\u043e\u0442\u0440\u0435\u0442\u044c \u043e\u043d\u043b\u0430\u0439\u043d",
+     "19747"
+    ],
+    [
+     "\u0430\u043b\u0431\u0430\u0442\u0440\u0443\u0442\u0434\u0438\u043d",
+     "18394"
+    ]
+   ],
+   "errors": []
+  },
+  {
+   "id": "q15",
+   "executions": 1,
+   "failures": 0,
+   "rejections": 0,
+   "p50_seconds": 2.497,
+   "p95_seconds": 2.497,
+   "max_seconds": 2.497,
+   "result_sha256": "3ce038a6ec9648fdd244123b2ce7a37300136f95933de6f5c32e84dc54e1e909",
+   "rows": 10,
+   "sample": [
+    [
+     "2",
+     "\u043a\u0430\u0440\u0435\u043b\u043a\u0438",
+     "46258"
+    ],
+    [
+     "2",
+     "\u043c\u0430\u043d\u0433\u0443 \u0432 \u0437\u0430\u0440\u0430\u0431\u0435\u0439 \u0433\u0440\u0430\u043c\u0430",
+     "18871"
+    ],
+    [
+     "2",
+     "\u0441\u043c\u043e\u0442\u0440\u0435\u0442\u044c \u043e\u043d\u043b\u0430\u0439\u043d",
+     "16905"
+    ]
+   ],
+   "errors": []
+  },
+  {
+   "id": "q16",
+   "executions": 0,
+   "failures": 0,
+   "rejections": 0,
+   "p50_seconds": null,
+   "p95_seconds": null,
+   "max_seconds": null,
+   "result_sha256": null,
+   "errors": []
+  },
+  {
+   "id": "q17",
+   "executions": 0,
+   "failures": 0,
+   "rejections": 0,
+   "p50_seconds": null,
+   "p95_seconds": null,
+   "max_seconds": null,
+   "result_sha256": null,
+   "errors": []
+  },
+  {
+   "id": "q18",
+   "executions": 0,
+   "failures": 0,
+   "rejections": 0,
+   "p50_seconds": null,
+   "p95_seconds": null,
+   "max_seconds": null,
+   "result_sha256": null,
+   "errors": []
+  },
+  {
+   "id": "q19",
+   "executions": 0,
+   "failures": 0,
+   "rejections": 0,
+   "p50_seconds": null,
+   "p95_seconds": null,
+   "max_seconds": null,
+   "result_sha256": null,
+   "errors": []
+  },
+  {
+   "id": "q20",
+   "executions": 1,
+   "failures": 0,
+   "rejections": 0,
+   "p50_seconds": 59.08,
+   "p95_seconds": 59.08,
+   "max_seconds": 59.08,
+   "result_sha256": "1005e9c488d0ec2b287ce4eb9f85df973f74e52edb739a360118635cac1769e5",
+   "rows": 4,
+   "sample": [
+    [
+     "435090932899640449"
+    ],
+    [
+     "435090932899640449"
+    ],
+    [
+     "435090932899640449"
+    ]
+   ],
+   "errors": []
+  },
+  {
+   "id": "q21",
+   "executions": 1,
+   "failures": 0,
+   "rejections": 61,
+   "p50_seconds": 1.965,
+   "p95_seconds": 1.965,
+   "max_seconds": 1.965,
+   "result_sha256": "3a59862b546e20deb6022ed90109ce3d24de79c2c94aa903f86d81d723bd8f84",
+   "rows": 1,
+   "sample": [
+    [
+     "15911"
+    ]
+   ],
+   "errors": []
+  },
+  {
+   "id": "q22",
+   "executions": 0,
+   "failures": 0,
+   "rejections": 0,
+   "p50_seconds": null,
+   "p95_seconds": null,
+   "max_seconds": null,
+   "result_sha256": null,
+   "errors": []
+  },
+  {
+   "id": "q23",
+   "executions": 0,
+   "failures": 0,
+   "rejections": 0,
+   "p50_seconds": null,
+   "p95_seconds": null,
+   "max_seconds": null,
+   "result_sha256": null,
+   "errors": []
+  },
+  {
+   "id": "q24",
+   "executions": 1,
+   "failures": 0,
+   "rejections": 8,
+   "p50_seconds": 57.295,
+   "p95_seconds": 57.295,
+   "max_seconds": 57.295,
+   "result_sha256": "1fb19084b6285a581b907b2a314731cd44baa98926d509ae773e2f520c7501d8",
+   "rows": 10,
+   "sample": [
+    [
+     "7675678523794456216",
+     "1",
+     "Glavnaya gorand. \u0426\u0432\u0435\u0442\u043d\u044b\u0435 \u043e\u0431\u044a\u044f\u0432\u043b\u0435\u043d\u0438\u0439 \u0440\u0430\u0439\u043e\u043d\u0435, \u0432\u0435\u0440\u043e\u043c",
+     "1",
+     "1372708869",
+     "15888",
+     "64469",
+     "1840073959",
+     "2",
+     "3714843517822510735",
+     "0",
+     "44",
+     "5",
+     "http://e96.ru/search/page.googleTBR%26ad%3D0%26rnd%3D158197%26anbietersburg",
+     "http://bdsmpeople.ru/obrazom_position/?page",
+     "0",
+     "13593",
+     "158",
+     "13606",
+     "216",
+     "1638",
+     "1658",
+     "22",
+     "15",
+     "7",
+     "700",
+     "0",
+     "0",
+     "22",
+     "nA",
+     "1",
+     "1",
+     "0",
+     "0",
+     "",
+     "",
+     "4005373",
+     "-1",
+     "0",
+     "",
+     "0",
+     "0",
+     "1052",
+     "775",
+     "135",
+     "1372760422",
+     "0",
+     "0",
+     "0",
+     "0",
+     "windows",
+     "1601",
+     "0",
+     "0",
+     "0",
+     "0",
+     "",
+     "213893614",
+     "0",
+     "0",
+     "0",
+     "0",
+     "0",
+     "6",
+     "1372766291",
+     "0",
+     "0",
+     "0",
+     "0",
+     "0",
+     "1412515749",
+     "63522",
+     "-1",
+     "12",
+     "S0",
+     "\ufffd\f",
+     "",
+     "",
+     "0",
+     "0",
+     "0",
+     "0",
+     "445",
+     "1234",
+     "0",
+     "0",
+     "",
+     "0",
+     "",
+     "NH\u001c",
+     "0",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "0",
+     "5972490271588207794",
+     "1369713899219085694",
+     "0"
+    ],
+    [
+     "6147260061318473746",
+     "1",
+     "Glavnaya gorand. \u0426\u0432\u0435\u0442\u043d\u044b\u0435 \u043e\u0431\u044a\u044f\u0432\u043b\u0435\u043d\u0438\u0439 \u0440\u0430\u0439\u043e\u043d\u0435, \u0432\u0435\u0440\u043e\u043c",
+     "1",
+     "1372708889",
+     "15888",
+     "64469",
+     "1840073959",
+     "2",
+     "3714843517822510735",
+     "0",
+     "44",
+     "5",
+     "http://e96.ru/search/page.googleTBR%26ad%3D0%26rnd%3D158197%26anbietersburg",
+     "http://bdsmpeople.ru/obrazom_position/?page",
+     "0",
+     "13593",
+     "158",
+     "13606",
+     "216",
+     "1638",
+     "1658",
+     "22",
+     "15",
+     "7",
+     "700",
+     "0",
+     "0",
+     "22",
+     "D\ufffd",
+     "1",
+     "1",
+     "0",
+     "0",
+     "",
+     "",
+     "4005373",
+     "-1",
+     "0",
+     "",
+     "0",
+     "0",
+     "1052",
+     "775",
+     "135",
+     "1372760442",
+     "0",
+     "0",
+     "0",
+     "0",
+     "windows",
+     "1601",
+     "0",
+     "0",
+     "0",
+     "0",
+     "",
+     "810892658",
+     "0",
+     "0",
+     "0",
+     "0",
+     "0",
+     "6",
+     "1372766305",
+     "0",
+     "0",
+     "0",
+     "0",
+     "0",
+     "1412515749",
+     "63522",
+     "-1",
+     "13",
+     "S0",
+     "\ufffd\f",
+     "",
+     "",
+     "0",
+     "0",
+     "0",
+     "0",
+     "0",
+     "16",
+     "0",
+     "0",
+     "",
+     "0",
+     "",
+     "NH\u001c",
+     "0",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "0",
+     "5972490271588207794",
+     "1369713899219085694",
+     "0"
+    ],
+    [
+     "5972689683963797854",
+     "1",
+     "Glavnaya gorand. \u0426\u0432\u0435\u0442\u043d\u044b\u0435 \u043e\u0431\u044a\u044f\u0432\u043b\u0435\u043d\u0438\u0439 \u0440\u0430\u0439\u043e\u043d\u0435, \u0432\u0435\u0440\u043e\u043c",
+     "1",
+     "1372708931",
+     "15888",
+     "64469",
+     "1840073959",
+     "2",
+     "3714843517822510735",
+     "0",
+     "44",
+     "5",
+     "http://e96.ru/search/page.googleTBR%26ad%3D0%26rnd%3D158197%26anbietersburg",
+     "http://bdsmpeople.ru/obrazom_position/?page",
+     "0",
+     "13593",
+     "158",
+     "13606",
+     "216",
+     "1638",
+     "1658",
+     "22",
+     "15",
+     "7",
+     "700",
+     "0",
+     "0",
+     "22",
+     "D\ufffd",
+     "1",
+     "1",
+     "0",
+     "0",
+     "",
+     "",
+     "4005373",
+     "-1",
+     "0",
+     "",
+     "0",
+     "0",
+     "1052",
+     "775",
+     "135",
+     "1372760476",
+     "0",
+     "0",
+     "0",
+     "0",
+     "windows",
+     "1601",
+     "0",
+     "0",
+     "0",
+     "0",
+     "",
+     "47015096",
+     "0",
+     "0",
+     "0",
+     "0",
+     "0",
+     "6",
+     "1372766330",
+     "0",
+     "0",
+     "0",
+     "0",
+     "0",
+     "1412515749",
+     "63522",
+     "-1",
+     "13",
+     "S0",
+     "h1",
+     "",
+     "",
+     "0",
+     "0",
+     "0",
+     "0",
+     "0",
+     "0",
+     "0",
+     "0",
+     "",
+     "0",
+     "",
+     "NH\u001c",
+     "0",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "",
+     "0",
+     "5972490271588207794",
+     "1369713899219085694",
+     "0"
+    ]
+   ],
+   "errors": []
+  },
+  {
+   "id": "q25",
+   "executions": 0,
+   "failures": 0,
+   "rejections": 0,
+   "p50_seconds": null,
+   "p95_seconds": null,
+   "max_seconds": null,
+   "result_sha256": null,
+   "errors": []
+  },
+  {
+   "id": "q26",
+   "executions": 2,
+   "failures": 0,
+   "rejections": 7,
+   "p50_seconds": 14.794,
+   "p95_seconds": 28.635,
+   "max_seconds": 28.635,
+   "result_sha256": "615d64e45f3a1ef141a7ce45c0b62272f565764459bc32e9212bf77067e72d1a",
+   "rows": 10,
+   "sample": [
+    [
+     " \u0431\u0435\u0440\u0435\u0436"
+    ],
+    [
+     " \u0437\u0430 \u0440\u0443\u0441\u0441\u043a\u0438\u0439 \u0441\u0442\u0438\u043b \u0432\u0438\u0434\u0435\u043e \u043a\u0430\u043a\u043e\u0439"
+    ],
+    [
+     " \u0437\u0430\u0432\u043e\u0434 \u0442\u0430\u043d\u0434\u0430\u043b\u0438\u0449\u043d\u044b\u0435 \u043f\u0440\u043e\u0434\u0430"
+    ]
+   ],
+   "errors": []
+  },
+  {
+   "id": "q27",
+   "executions": 0,
+   "failures": 0,
+   "rejections": 0,
+   "p50_seconds": null,
+   "p95_seconds": null,
+   "max_seconds": null,
+   "result_sha256": null,
+   "errors": []
+  },
+  {
+   "id": "q28",
+   "executions": 1,
+   "failures": 0,
+   "rejections": 0,
+   "p50_seconds": 31.101,
+   "p95_seconds": 31.101,
+   "max_seconds": 31.101,
+   "result_sha256": "81b5388e9bba3bb306fc14b5032bc563c8dc3eb8184aac66204cbeb246f75279",
+   "rows": 25,
+   "sample": [
+    [
+     "233773",
+     "469.14923754578723",
+     "2938865"
+    ],
+    [
+     "245438",
+     "271.7841243964889",
+     "2510103"
+    ],
+    [
+     "122612",
+     "238.63801917567594",
+     "3574007"
+    ]
+   ],
+   "errors": []
+  },
+  {
+   "id": "q29",
+   "executions": 0,
+   "failures": 0,
+   "rejections": 0,
+   "p50_seconds": null,
+   "p95_seconds": null,
+   "max_seconds": null,
+   "result_sha256": "1dd224838a7c44967f7ff560782e10288d8d1f02ff28b22ad947a0e21dc94417",
+   "rows": 25,
+   "sample": [
+    [
+     "svpressa.ru",
+     "307.8648835914462",
+     "242465",
+     "http://svpressa.ru/"
+    ],
+    [
+     "msuzie-showforumdisplay",
+     "263.31170358753184",
+     "183636",
+     "http://msuzie-showforumdisplay/63/~2/?name=&cost_neu%3D400%26retpath=default777T"
+    ],
+    [
+     "saint-peters-total=\u043c\u0435\u043d\u044c\u0448\u0435 80",
+     "242.51707971531314",
+     "200501",
+     "http://saint-peters-total=\u043c\u0435\u043d\u044c\u0448\u0435 80/cash/station=search&input_age1=&int[2274/tra"
+    ]
+   ],
+   "errors": []
+  },
+  {
+   "id": "q30",
+   "executions": 0,
+   "failures": 0,
+   "rejections": 0,
+   "p50_seconds": null,
+   "p95_seconds": null,
+   "max_seconds": null,
+   "result_sha256": null,
+   "errors": []
+  },
+  {
+   "id": "q31",
+   "executions": 0,
+   "failures": 1,
+   "rejections": 0,
+   "p50_seconds": null,
+   "p95_seconds": null,
+   "max_seconds": null,
+   "result_sha256": "832c38a25c47b566d6f3cc9c63e0fc248fdba1849ddf308c89789ecb9272de85",
+   "rows": 10,
+   "sample": [
+    [
+     "2",
+     "1138507705",
+     "1633",
+     "35",
+     "1408.0122473974282"
+    ],
+    [
+     "2",
+     "1740861572",
+     "1331",
+     "28",
+     "1577.945905334335"
+    ],
+    [
+     "2",
+     "-807147100",
+     "1144",
+     "35",
+     "1553.1984265734266"
+    ]
+   ],
+   "errors": [
+    {
+     "kind": "mismatch",
+     "client": 2,
+     "phase": "measured",
+     "seconds": 65.006,
+     "message": "digest 92ef847297af differs from the first-seen 832c38a25c47 (10 rows)"
+    }
+   ]
+  },
+  {
+   "id": "q32",
+   "executions": 0,
+   "failures": 0,
+   "rejections": 0,
+   "p50_seconds": null,
+   "p95_seconds": null,
+   "max_seconds": null,
+   "result_sha256": null,
+   "errors": []
+  },
+  {
+   "id": "q33",
+   "executions": 0,
+   "failures": 1,
+   "rejections": 0,
+   "p50_seconds": null,
+   "p95_seconds": null,
+   "max_seconds": null,
+   "result_sha256": "8a7fab1caf13c83cd3a693406f44feda9bb8293ffc81c4dd2e3423897564ddcb",
+   "rows": 10,
+   "sample": [
+    [
+     "6655575552203051303",
+     "1611957945",
+     "2",
+     "0",
+     "1638.0"
+    ],
+    [
+     "8566928176839891583",
+     "-1402644643",
+     "2",
+     "0",
+     "1368.0"
+    ],
+    [
+     "7224410078130478461",
+     "-776509581",
+     "2",
+     "0",
+     "1368.0"
+    ]
+   ],
+   "errors": [
+    {
+     "kind": "mismatch",
+     "client": 3,
+     "phase": "measured",
+     "seconds": 191.27,
+     "message": "digest 255ea18fb4f7 differs from the first-seen 8a7fab1caf13 (10 rows)"
+    }
+   ]
+  },
+  {
+   "id": "q34",
+   "executions": 1,
+   "failures": 0,
+   "rejections": 0,
+   "p50_seconds": 2.553,
+   "p95_seconds": 2.553,
+   "max_seconds": 2.553,
+   "result_sha256": "63683b61a9620b079dee7a38bdd0ed48f65ef766b2d64c8e879055cf7df0969d",
+   "rows": 10,
+   "sample": [
+    [
+     "http://liver.ru/belgorod/page/1006.j\u043a\u0438/\u0434\u043e\u043f_\u043f\u0440\u0438\u0431\u043e\u0440\u044b",
+     "3288173"
+    ],
+    [
+     "http://kinopoisk.ru",
+     "1625250"
+    ],
+    [
+     "http://bdsm_po_yers=0&with_video",
+     "791465"
+    ]
+   ],
+   "errors": []
+  },
+  {
+   "id": "q35",
+   "executions": 1,
+   "failures": 0,
+   "rejections": 48,
+   "p50_seconds": 2.043,
+   "p95_seconds": 2.043,
+   "max_seconds": 2.043,
+   "result_sha256": "2f455e74c9cdafe27669b84252950bd7b2f79aad4b007aba64e6844b1a1772f3",
+   "rows": 10,
+   "sample": [
+    [
+     "1",
+     "http://liver.ru/belgorod/page/1006.j\u043a\u0438/\u0434\u043e\u043f_\u043f\u0440\u0438\u0431\u043e\u0440\u044b",
+     "3288173"
+    ],
+    [
+     "1",
+     "http://kinopoisk.ru",
+     "1625250"
+    ],
+    [
+     "1",
+     "http://bdsm_po_yers=0&with_video",
+     "791465"
+    ]
+   ],
+   "errors": []
+  },
+  {
+   "id": "q36",
+   "executions": 2,
+   "failures": 0,
+   "rejections": 48,
+   "p50_seconds": 2.083,
+   "p95_seconds": 2.636,
+   "max_seconds": 2.636,
+   "result_sha256": "6288909f254539c04aadf95c8f4b2d61a600a4cc369aec7cb1dbf56f600ce628",
+   "rows": 10,
+   "sample": [
+    [
+     "-39921974",
+     "-39921975",
+     "-39921976",
+     "-39921977",
+     "47008"
+    ],
+    [
+     "-1698104457",
+     "-1698104458",
+     "-1698104459",
+     "-1698104460",
+     "29121"
+    ],
+    [
+     "-1175819552",
+     "-1175819553",
+     "-1175819554",
+     "-1175819555",
+     "25333"
+    ]
+   ],
+   "errors": []
+  },
+  {
+   "id": "q37",
+   "executions": 1,
+   "failures": 0,
+   "rejections": 3,
+   "p50_seconds": 58.755,
+   "p95_seconds": 58.755,
+   "max_seconds": 58.755,
+   "result_sha256": "322a62b85b1fe1ac0368ff14e218eacdfcd27f00a21e0824e3c8a8f00b8cc541",
+   "rows": 10,
+   "sample": [
+    [
+     "http://irr.ru/index.php?showalbum/login-leniya7777294,938303130",
+     "102341"
+    ],
+    [
+     "http://komme%2F27.0.1453.116",
+     "51218"
+    ],
+    [
+     "http://irr.ru/index.php?showalbum/login-kapusta-advert2668]=0&order_by=0",
+     "18315"
+    ]
+   ],
+   "errors": []
+  },
+  {
+   "id": "q38",
+   "executions": 1,
+   "failures": 0,
+   "rejections": 8,
+   "p50_seconds": 15.772,
+   "p95_seconds": 15.772,
+   "max_seconds": 15.772,
+   "result_sha256": "cce985cc676dae9cb194e8a1f7becf2ff34bfca7483a57a4efa8345b3db8ad41",
+   "rows": 10,
+   "sample": [
+    [
+     "\u0422\u0435\u0441\u0442 (\u0420\u043e\u0441\u0441\u0438\u044f) - \u042f\u043d\u0434\u0435\u043a\u0441",
+     "122407"
+    ],
+    [
+     "\u0428\u0430\u0440\u0430\u0440\u0430\u0439), \u0412\u044b\u0431\u0440\u0430\u0442\u044c! - \u043e\u0431\u0441\u0443\u0436\u0434\u0430\u044e\u0442\u0441\u044f \u043d\u0430 \u0433\u043e\u043b\u0434: \u0428\u043e\u0443\u0431\u0438\u0437 - \u0421\u0432\u043e\u0431\u043e\u0434\u043d\u0430\u044f \u0438\u0441\u0442\u043e\u0440\u0438\u0441",
+     "82935"
+    ],
+    [
+     "\u041f\u0440\u0438\u043c\u043e\u0440\u0441\u043a - IRR.ru",
+     "80958"
+    ]
+   ],
+   "errors": []
+  },
+  {
+   "id": "q39",
+   "executions": 0,
+   "failures": 1,
+   "rejections": 0,
+   "p50_seconds": null,
+   "p95_seconds": null,
+   "max_seconds": null,
+   "result_sha256": "2f07ddd54b97b44710d01785e9f2770e10b054df45edecc6f55408884635f669",
+   "rows": 10,
+   "sample": [
+    [
+     "http://video.yandex.html",
+     "2"
+    ],
+    [
+     "http:%2F%2Fwwwww&where=all&film",
+     "2"
+    ],
+    [
+     "http://love.ru/?p=1#countpage4/#65",
+     "2"
+    ]
+   ],
+   "errors": [
+    {
+     "kind": "mismatch",
+     "client": 0,
+     "phase": "measured",
+     "seconds": 216.846,
+     "message": "digest 2eeb7785531f differs from the first-seen 2f07ddd54b97 (10 rows)"
+    }
+   ]
+  },
+  {
+   "id": "q40",
+   "executions": 0,
+   "failures": 1,
+   "rejections": 8,
+   "p50_seconds": null,
+   "p95_seconds": null,
+   "max_seconds": null,
+   "result_sha256": "26b2e4b4d8f9b3864d8bb610db0d9732d25cf11e7bcb9ba6953bd8dcf314fa65",
+   "rows": 10,
+   "sample": [
+    [
+     "-1",
+     "0",
+     "0",
+     "http://state=19945206/foto-4/login-2006/makumirostova.ru/washes/built-in_two_cha",
+     "http://irr.ru/index.php?showalbum/login-leniya7777294,938303130",
+     "15"
+    ],
+    [
+     "5",
+     "0",
+     "0",
+     "http://kinopoisk.ru/?state",
+     "http:%2F%2Fwwwwww.bonprix.ru/mymail/?folders/secondary",
+     "15"
+    ],
+    [
+     "-1",
+     "0",
+     "0",
+     "http://state=19945206/foto-4/login-2006/makumiroshoowbiz/down%2Fholodilnik.ru/76",
+     "http://irr.ru/index.php?showalbum/login-leniya7777294,938303130",
+     "15"
+    ]
+   ],
+   "errors": [
+    {
+     "kind": "mismatch",
+     "client": 0,
+     "phase": "measured",
+     "seconds": 3.21,
+     "message": "digest e1ee8f89d2d2 differs from the first-seen 26b2e4b4d8f9 (10 rows)"
+    }
+   ]
+  },
+  {
+   "id": "q41",
+   "executions": 0,
+   "failures": 2,
+   "rejections": 0,
+   "p50_seconds": null,
+   "p95_seconds": null,
+   "max_seconds": null,
+   "result_sha256": "15fcab89234d3c96280d93521a93929f14dad177ef5f500084000ee47c81b3f0",
+   "rows": 10,
+   "sample": [
+    [
+     "-7935301293059993474",
+     "15901",
+     "27"
+    ],
+    [
+     "1191678692164887503",
+     "15901",
+     "27"
+    ],
+    [
+     "-8505838588544217213",
+     "15901",
+     "26"
+    ]
+   ],
+   "errors": [
+    {
+     "kind": "mismatch",
+     "client": 1,
+     "phase": "measured",
+     "seconds": 3.303,
+     "message": "digest 911627859569 differs from the first-seen 15fcab89234d (10 rows)"
+    },
+    {
+     "kind": "mismatch",
+     "client": 2,
+     "phase": "measured",
+     "seconds": 4.499,
+     "message": "digest ed272c2a8dfb differs from the first-seen 15fcab89234d (10 rows)"
+    }
+   ]
+  },
+  {
+   "id": "q42",
+   "executions": 0,
+   "failures": 0,
+   "rejections": 0,
+   "p50_seconds": null,
+   "p95_seconds": null,
+   "max_seconds": null,
+   "result_sha256": null,
+   "errors": []
+  },
+  {
+   "id": "q43",
+   "executions": 1,
+   "failures": 0,
+   "rejections": 8,
+   "p50_seconds": 1.71,
+   "p95_seconds": 1.71,
+   "max_seconds": 1.71,
+   "result_sha256": "aebb32c8137a34399806a8624d4cec44625e35161e9d65979b028ae0192ed568",
+   "rows": 10,
+   "sample": [
+    [
+     "1373892000",
+     "513"
+    ],
+    [
+     "1373892060",
+     "457"
+    ],
+    [
+     "1373892120",
+     "470"
+    ]
+   ],
+   "errors": []
+  }
+ ],
+ "round": 1,
+ "job_succeeded": true
+}
