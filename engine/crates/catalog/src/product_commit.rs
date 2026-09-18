@@ -467,6 +467,27 @@ impl ProductCatalogCommit {
         Ok(Some(object.bytes))
     }
 
+    /// Reads and verifies one immutable file a snapshot references by path
+    /// and digest — a statistics document, for one — bounded like a product
+    /// document.
+    pub async fn fetch_immutable_file(
+        &self,
+        file: &crate::product_manifest::ImmutableFileRef,
+    ) -> Result<Vec<u8>, CommitErrorKind> {
+        let object = self
+            .storage
+            .read_bounded(
+                &format!("{}/{}", self.prefix, file.path),
+                MAX_PRODUCT_DOCUMENT_BYTES,
+            )
+            .await
+            .map_err(|error| error.kind)?;
+        if digest(&object.bytes) != file.sha256 {
+            return Err(CommitErrorKind::Invalid);
+        }
+        Ok(object.bytes)
+    }
+
     /// Searches a bounded parent chain. Missing history and an exhausted budget
     /// are deliberately `Unresolved`, never proof that an operation is absent.
     pub async fn resolve_operation(

@@ -22,6 +22,37 @@ pub struct DeltaSnapshot {
     pub version: u64,
     pub files: Vec<Path>,
     pub schema: Option<SchemaRef>,
+    /// What the add action recorded about each active file, in the order
+    /// of `files`.
+    pub details: Vec<DeltaFileDetail>,
+}
+
+/// The facts a Delta add action carries about one data file besides its
+/// path; each is absent when the writer did not record it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeltaFileDetail {
+    pub size: Option<u64>,
+    pub modification_time_ms: Option<i64>,
+    /// The action's `stats` JSON text (`numRecords`, `minValues`,
+    /// `maxValues`, `nullCount`).
+    pub stats: Option<String>,
+}
+
+impl DeltaFileDetail {
+    fn from_add(add: &Value) -> Self {
+        Self {
+            size: add.get("size").and_then(Value::as_u64),
+            modification_time_ms: add.get("modificationTime").and_then(Value::as_i64),
+            stats: match add.get("stats") {
+                Some(Value::String(text)) => Some(text.clone()),
+                Some(Value::Object(parsed)) => Some(Value::Object(parsed.clone()).to_string()),
+                _ => match add.get("stats_parsed") {
+                    Some(Value::Object(parsed)) => Some(Value::Object(parsed.clone()).to_string()),
+                    _ => None,
+                },
+            },
+        }
+    }
 }
 
 fn join_path(root: &Path, relative: &str) -> Result<Path> {
@@ -35,7 +66,7 @@ fn join_path(root: &Path, relative: &str) -> Result<Path> {
 
 #[derive(Default)]
 struct SnapshotState {
-    files: BTreeSet<Path>,
+    files: BTreeMap<Path, DeltaFileDetail>,
     path_bytes: usize,
     schema: Option<SchemaRef>,
 }
@@ -118,7 +149,10 @@ impl SnapshotState {
                 ));
             }
             let path = action_path(add)?;
-            if !self.files.contains(&path) {
+            let detail = DeltaFileDetail::from_add(add);
+            if let Some(existing) = self.files.get_mut(&path) {
+                *existing = detail;
+            } else {
                 let bytes = path
                     .as_ref()
                     .len()
@@ -131,12 +165,12 @@ impl SnapshotState {
                     ));
                 }
                 self.path_bytes = bytes;
-                self.files.insert(path);
+                self.files.insert(path, detail);
             }
         }
         if let Some(remove) = action.get("remove").filter(|v| !v.is_null()) {
             let path = action_path(remove)?;
-            if self.files.remove(&path) {
+            if self.files.remove(&path).is_some() {
                 self.path_bytes -= path.as_ref().len() + 128;
             }
         }
@@ -387,14 +421,17 @@ pub async fn resolve_snapshot(
             state.apply(&serde_json::from_slice::<Value>(line).map_err(storage_error)?)?;
         }
     }
+    let mut files = Vec::with_capacity(state.files.len());
+    let mut details = Vec::with_capacity(state.files.len());
+    for (path, detail) in state.files {
+        files.push(join_path(root, path.as_ref())?);
+        details.push(detail);
+    }
     Ok(DeltaSnapshot {
         version: latest,
         schema: state.schema,
-        files: state
-            .files
-            .into_iter()
-            .map(|path| join_path(root, path.as_ref()))
-            .collect::<Result<_>>()?,
+        files,
+        details,
     })
 }
 
@@ -445,7 +482,7 @@ mod tests {
         state
             .apply(&serde_json::json!({"add":{"path":"data%20file.parquet"}}))
             .unwrap();
-        assert!(state.files.contains(&Path::from("data file.parquet")));
+        assert!(state.files.contains_key(&Path::from("data file.parquet")));
     }
     #[tokio::test]
     async fn reconciles_versions_and_rejects_gaps() {

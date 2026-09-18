@@ -183,6 +183,8 @@ impl ObjectParquetReader {
             .head(&self.location.path)
             .await
             .map_err(storage_error)?;
+        let file_bytes = meta.size as u64;
+        let last_modified_ms = meta.last_modified.timestamp_millis();
         let reader = ParquetObjectReader::new(self.location.store.clone(), meta);
         let builder = ParquetRecordBatchStreamBuilder::new(reader)
             .await
@@ -192,6 +194,11 @@ impl ObjectParquetReader {
             row_count: u64::try_from(builder.metadata().file_metadata().num_rows())
                 .map_err(storage_error)?,
             row_group_count: builder.metadata().num_row_groups(),
+            profile: crate::FooterProfile::from_parquet(
+                builder.metadata(),
+                file_bytes,
+                Some(last_modified_ms),
+            ),
         })
     }
 

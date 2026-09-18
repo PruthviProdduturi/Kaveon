@@ -125,6 +125,7 @@ impl ObjectDeltaReader {
                     .ok_or_else(|| error("empty Delta snapshot has no logical schema"))?,
                 row_count: 0,
                 row_group_count: 0,
+                profile: crate::FooterProfile::default(),
             });
         }
         let store = self.location.store.clone();
@@ -151,6 +152,7 @@ impl ObjectDeltaReader {
                     .row_group_count
                     .checked_add(next.row_group_count)
                     .ok_or_else(|| error("Delta row-group count overflow"))?;
+                combined.profile.merge(next.profile);
             }
             if let Some(schema) = snapshot.schema {
                 crate::delta_snapshot::validate_physical_schema(&schema, &combined.schema)?;
