@@ -1154,7 +1154,8 @@ mod tests {
             Field::new("amount", DataType::Int64, false),
             Field::new("label", DataType::Utf8, false),
         ]));
-        assert!(RowFilterPlan::new(&predicate, &arrow_schema).is_some());
+        let plan = RowFilterPlan::new(&predicate, &arrow_schema).unwrap();
+        assert_eq!(plan.columns(), vec![0, 1]);
 
         let metrics = ScanMetrics::default();
         let mut reader = ParquetReader::new(&file.0)
@@ -1242,7 +1243,12 @@ mod tests {
             compare("amount", CompareOp::Eq, ScalarValue::Int64(1)),
             compare("amount", CompareOp::Eq, ScalarValue::Int64(6)),
         ]);
-        assert!(RowFilterPlan::new(&disjunction, &arrow_schema).is_some());
+        assert_eq!(
+            RowFilterPlan::new(&disjunction, &arrow_schema)
+                .unwrap()
+                .columns(),
+            vec![1]
+        );
         let half_opaque = StoragePredicate::Or(vec![
             compare("amount", CompareOp::Eq, ScalarValue::Int64(1)),
             StoragePredicate::IsNull {
