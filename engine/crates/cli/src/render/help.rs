@@ -123,7 +123,7 @@ const GROUPS: &[Group] = &[
             },
             Entry {
                 command: "Space, Enter  q",
-                description: "next page of a large result; stop paging",
+                description: "next page of a result, as soon as it is written; stop",
             },
             Entry {
                 command: "<statement>\\G",
@@ -138,14 +138,6 @@ const GROUPS: &[Group] = &[
                 description: "page large results in -e, -f and piped mode instead of the inline limit",
             },
         ],
-    },
-    Group {
-        title: "Coming soon",
-        coming_soon: true,
-        entries: &[Entry {
-            command: "streaming rows",
-            description: "rows shown while a statement runs",
-        }],
     },
 ];
 
@@ -188,22 +180,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn help_is_grouped_and_lists_what_is_coming() {
+    fn help_is_grouped_and_nothing_is_still_coming() {
         let text = crate::render::to_plain(&help(&Theme::mono()));
         assert!(text.contains("  Catalog\n    SHOW CATALOGS"));
         assert!(text.contains("  Shell\n"));
         assert!(text.contains("  Output\n"));
-        assert!(text.contains("  Coming soon\n    streaming rows"));
+        assert!(!text.contains("Coming soon"), "{text}");
+        assert!(!text.contains("streaming rows"), "{text}");
         assert!(text.contains("    .ask <question>"));
         assert!(text.contains("    .source <file>"));
         assert!(text.contains("    .tee <file>  .tee off"));
         assert!(text.contains("    .edit "));
         assert!(text.contains("    .watch [seconds] <statement>"));
         assert!(text.contains("    <statement>\\G"));
-        let coming = text.split("  Coming soon\n").nth(1).unwrap_or_default();
+        let paging = text
+            .lines()
+            .find(|line| line.starts_with("    Space, Enter  q"))
+            .unwrap_or_default();
         assert!(
-            !coming.contains(".edit") && !coming.contains("paged"),
-            "{coming}"
+            paging.ends_with("next page of a result, as soon as it is written; stop"),
+            "{paging}"
         );
         assert!(text.lines().count() <= 40, "{}", text.lines().count());
         assert!(text.lines().all(|line| line.chars().count() <= 118));

@@ -8,6 +8,11 @@
 //! cancel. With `--local` the worker thread runs the embedded engine and
 //! the running line shows elapsed time only.
 //!
+//! A paged statement's rows are read while it runs: once the record carries
+//! a `next_uri`, page 0 is tried every `STREAM_POLL` until the coordinator
+//! has written it, then shown under the running line and paged from there
+//! (`client::pages`), the summary following when the POST returns.
+//!
 //! `.source` feeds a file through the submit path, `.tee` copies scrollback
 //! to a file, `.edit` hands the last statement to `$VISUAL`/`$EDITOR`,
 //! `\G` asks for the vertical format once, and `.watch` re-runs a
@@ -16,8 +21,8 @@ use crate::args::Options;
 use crate::auth::Session;
 use crate::client::error::{CliError, ErrorKind};
 use crate::client::metadata::NameCache;
-use crate::client::pages::PageCursor;
-use crate::client::session::{self as api, CliHttp, Cluster, Whoami};
+use crate::client::pages::{Fetched, Page, PageCursor, UNSAFE_NEXT_URI};
+use crate::client::session::{self as api, CliHttp, Cluster, METADATA_TIMEOUT, Whoami};
 use crate::client::statement::{
     self, Column, Handle, SharedSession, StatementEvent, StatementRequest, StatementResult,
 };
@@ -58,6 +63,12 @@ const TAG_POLLS: u32 = 240;
 /// While queued for admission the cluster payload is refreshed this often
 /// for the queue depth.
 const QUEUED_CLUSTER_POLL: Duration = Duration::from_secs(1);
+/// While a paged statement runs, page 0 is tried this often at most, and a
+/// page the coordinator has not written yet is retried this often.
+const STREAM_POLL: Duration = Duration::from_millis(500);
+/// Page fetches while the statement runs are bounded short, so a slow
+/// answer never holds the running line for long.
+const STREAM_TIMEOUT: Duration = Duration::from_secs(5);
 /// One spinner frame per this many milliseconds.
 const SPINNER_FRAME_MS: u128 = 80;
 const EMBEDDED_ONLY: &str = "not available in embedded mode";
@@ -234,6 +245,33 @@ struct Running {
     polls: u32,
     last_poll: Instant,
     cancel_requested: bool,
+    /// The rows read while the statement runs, for paged delivery.
+    stream: Stream,
+}
+
+/// The pages of a running paged statement, read as the coordinator writes
+/// them.
+enum Stream {
+    /// The record has not offered a `next_uri`: inline delivery, or not
+    /// planned yet.
+    Off,
+    /// Page 0 is tried every `STREAM_POLL` until the coordinator has
+    /// written it.
+    Pending {
+        cursor: PageCursor,
+        names: Vec<String>,
+        next_try: Instant,
+    },
+    /// The rows come with the POST as they always did: the URI was refused,
+    /// or the pages went away while the statement ran.
+    Abandoned,
+    /// Page 0 was shown. The pages continue through `App::paging` while
+    /// the reader wants them; these are the counts once that has ended.
+    Started {
+        shown: usize,
+        total: Option<usize>,
+        truncated: bool,
+    },
 }
 
 /// A result with more pages on the coordinator: the editor waits until the
@@ -246,19 +284,102 @@ struct Paging {
     /// The format the first page was rendered with (AUTO resolved), so
     /// every page reads the same.
     format: OutputFormat,
+    /// The next page was asked for before the coordinator wrote it: when
+    /// to ask again.
+    waiting: Option<Instant>,
+    /// A page narrowed a column; the summary says so.
+    truncated: bool,
+    /// The statement finished while its pages were being read: its
+    /// summary, shown once the paging ends.
+    summary: Option<render::summary::Summary>,
 }
 
 impl Paging {
-    /// `1,000 of 84,312 rows · Space or Enter for more · q to stop`.
+    fn new(cursor: PageCursor, names: Vec<String>, shown: usize, format: OutputFormat) -> Paging {
+        Paging {
+            cursor,
+            names,
+            shown,
+            format,
+            waiting: None,
+            truncated: false,
+            summary: None,
+        }
+    }
+
+    /// `1,000 of 84,312 rows · Space or Enter for more · q to stop`, or
+    /// `1,000 rows so far · waiting for the next page… · q to stop` while
+    /// the coordinator is still writing the page asked for.
     fn hint(&self) -> String {
         let shown = render::thousands(self.shown as i128);
-        match self.cursor.total_rows {
-            Some(total) => format!(
-                "{shown} of {} rows · Space or Enter for more · q to stop",
-                render::thousands(total as i128)
-            ),
-            None => format!("{shown} rows so far · Space or Enter for more · q to stop"),
+        let count = match self.cursor.total_rows {
+            Some(total) => format!("{shown} of {} rows", render::thousands(total as i128)),
+            None => format!("{shown} rows so far"),
+        };
+        if self.waiting.is_some() {
+            format!("{count} · waiting for the next page… · q to stop")
+        } else {
+            format!("{count} · Space or Enter for more · q to stop")
         }
+    }
+
+    /// Rows for the summary: the total once a page said the writer was
+    /// complete, else what was shown.
+    fn rows(&self) -> usize {
+        self.cursor.total_rows.unwrap_or(self.shown)
+    }
+}
+
+/// What the shell does with what the page cursor answered. While the
+/// statement still runs its POST is the arbiter of failure: transport
+/// trouble is retried, and a page gone (404, 410) means the statement
+/// failed or was cancelled, which the POST reports.
+#[derive(Debug)]
+enum PageStep {
+    Show(Page),
+    /// Not written yet: ask again later.
+    Wait {
+        rows_so_far: usize,
+    },
+    /// Ask again later, nothing to say.
+    Retry,
+    /// Every page shown.
+    Done,
+    /// The pages went away while the statement runs.
+    Gone,
+    /// An error to show; the paging stops.
+    Fail(CliHttp),
+}
+
+fn page_step(fetched: Result<Fetched, CliHttp>, running: bool) -> PageStep {
+    match fetched {
+        Ok(Fetched::Page(page)) => PageStep::Show(page),
+        Ok(Fetched::NotYet { rows_so_far, .. }) => PageStep::Wait { rows_so_far },
+        Ok(Fetched::Exhausted) => PageStep::Done,
+        Err(failure) if running && matches!(failure.status, Some(404 | 410)) => PageStep::Gone,
+        Err(failure)
+            if running && failure.status.is_none() && failure.message != UNSAFE_NEXT_URI =>
+        {
+            PageStep::Retry
+        }
+        Err(failure) => PageStep::Fail(failure),
+    }
+}
+
+/// Whether `finish` renders the rows itself: not once the stream showed
+/// page 0, which is already on screen with whatever followed it.
+fn renders_rows_on_finish(stream: &Stream) -> bool {
+    !matches!(stream, Stream::Started { .. })
+}
+
+/// Rows for the summary of a statement whose pages were read while it ran:
+/// what the live paging knows, else what the stream counted when the
+/// paging ended (the total once a page said the writer was complete).
+fn streamed_rows(stream: &Stream, paging: Option<&Paging>) -> usize {
+    match (paging, stream) {
+        (Some(paging), _) => paging.rows(),
+        (None, Stream::Started { shown, total, .. }) => total.unwrap_or(*shown),
+        (None, _) => 0,
     }
 }
 
@@ -760,6 +881,13 @@ fn event_loop(app: &mut App, options: &mut Options, host: &str) -> Result<(), St
         if app.running.is_some() {
             poll_running(app, terminal, options)?;
         }
+        if app
+            .paging
+            .as_ref()
+            .is_some_and(|paging| paging.waiting.is_some_and(|due| Instant::now() >= due))
+        {
+            next_page(app, terminal, options)?;
+        }
 
         if !event::poll(Duration::from_millis(66)).map_err(|error| error.to_string())? {
             if app.last_cluster_poll.elapsed() >= CLUSTER_POLL {
@@ -782,23 +910,30 @@ fn event_loop(app: &mut App, options: &mut Options, host: &str) -> Result<(), St
                 continue;
             }
         }
-        if app.running.is_some() {
-            // Only Ctrl-C means anything while a statement runs.
-            if is_ctrl_c(&key) {
-                interrupt_running(app, terminal, options)?;
-            }
-            continue;
-        }
         if app.paging.is_some() {
+            // Pages are read while the statement may still run: Ctrl-C then
+            // cancels it (the failure ends the paging), otherwise it stops
+            // the paging and drops what was pending.
             if is_ctrl_c(&key) {
-                app.pending.clear();
-                stop_paging(app, terminal, options)?;
+                if app.running.is_some() {
+                    interrupt_running(app, terminal, options)?;
+                } else {
+                    app.pending.clear();
+                    stop_paging(app, terminal, options)?;
+                }
             } else {
                 match key.code {
                     KeyCode::Char(' ') | KeyCode::Enter => next_page(app, terminal, options)?,
                     KeyCode::Char('q') | KeyCode::Esc => stop_paging(app, terminal, options)?,
                     _ => {}
                 }
+            }
+            continue;
+        }
+        if app.running.is_some() {
+            // Only Ctrl-C means anything while a statement runs.
+            if is_ctrl_c(&key) {
+                interrupt_running(app, terminal, options)?;
             }
             continue;
         }
@@ -1247,6 +1382,7 @@ fn set_running(
         polls: 0,
         last_poll: Instant::now(),
         cancel_requested: false,
+        stream: Stream::Off,
     });
 }
 
@@ -1394,6 +1530,7 @@ fn poll_running(app: &mut App, terminal: &mut Screen, options: &mut Options) -> 
         };
         if let Some(record) = record {
             let mut progress = Progress::from_record(&record, elapsed);
+            progress.rows_so_far = running.progress.rows_so_far;
             if running.cancel_requested {
                 progress.phase = Phase::Cancelling;
             }
@@ -1413,8 +1550,43 @@ fn poll_running(app: &mut App, terminal: &mut Screen, options: &mut Options) -> 
                     .filter(|ahead| *ahead > 0);
             }
             running.progress = progress;
+            // A paged statement's record offers its pages once planned:
+            // read them from here on. EXPLAIN renders the plan, not rows,
+            // and a watch shows its first page once the run is done.
+            if matches!(running.stream, Stream::Off)
+                && !running.explain
+                && app.watch.is_none()
+                && !record.columns.is_empty()
+                && let Some(next_uri) = record.next_uri.as_deref()
+            {
+                running.stream = match PageCursor::new(&options.server, next_uri) {
+                    Ok(cursor) => Stream::Pending {
+                        cursor,
+                        names: record
+                            .columns
+                            .iter()
+                            .map(|column| column.name.clone())
+                            .collect(),
+                        next_try: Instant::now(),
+                    },
+                    Err(failure) => {
+                        emit_error(terminal, &failure.message, &app.theme)?;
+                        Stream::Abandoned
+                    }
+                };
+            }
         }
     }
+    let page_due = matches!(
+        &running.stream,
+        Stream::Pending { next_try, .. } if Instant::now() >= *next_try
+    );
+    if page_due {
+        try_first_page(app, terminal, options)?;
+    }
+    let Some(running) = app.running.as_mut() else {
+        return Ok(());
+    };
     let event = match running.handle.events.try_recv() {
         Ok(event) => event,
         Err(mpsc::TryRecvError::Empty) => return Ok(()),
@@ -1427,6 +1599,78 @@ fn poll_running(app: &mut App, terminal: &mut Screen, options: &mut Options) -> 
         .take()
         .expect("the running statement is present while its event is handled");
     finish(app, terminal, options, running, event)
+}
+
+/// Page 0 of the running statement, tried once: shown under the running
+/// line when the coordinator has written it, with the paging taking over
+/// from there; the running line's `rows so far` otherwise.
+fn try_first_page(
+    app: &mut App,
+    terminal: &mut Screen,
+    options: &mut Options,
+) -> Result<(), String> {
+    let Some(session) = app.session().map(Arc::clone) else {
+        return Ok(());
+    };
+    let Some(running) = app.running.as_mut() else {
+        return Ok(());
+    };
+    let Stream::Pending {
+        cursor, next_try, ..
+    } = &mut running.stream
+    else {
+        return Ok(());
+    };
+    let fetched = cursor.fetch_next_within(&lock(&session), STREAM_TIMEOUT);
+    match page_step(fetched, true) {
+        PageStep::Show(page) => {
+            let started = Stream::Started {
+                shown: page.rows.len(),
+                total: cursor.total_rows,
+                truncated: false,
+            };
+            let Stream::Pending { cursor, names, .. } =
+                std::mem::replace(&mut running.stream, started)
+            else {
+                unreachable!("the stream was pending a moment ago");
+            };
+            running.progress.rows_so_far = Some(page.row_count);
+            let format = app.result_format(options);
+            let (format, cut) = render_rows(app, terminal, options, &names, &page.rows, format)?;
+            if cursor.exhausted() {
+                // Page 0 was the whole result; the summary follows the POST.
+                if let Some(Running {
+                    stream: Stream::Started { truncated, .. },
+                    ..
+                }) = app.running.as_mut()
+                {
+                    *truncated = cut;
+                }
+            } else {
+                let mut paging = Paging::new(cursor, names, page.rows.len(), format);
+                paging.truncated = cut;
+                app.paging = Some(paging);
+            }
+            Ok(())
+        }
+        PageStep::Wait { rows_so_far } => {
+            running.progress.rows_so_far = Some(rows_so_far);
+            *next_try = Instant::now() + STREAM_POLL;
+            Ok(())
+        }
+        PageStep::Retry => {
+            *next_try = Instant::now() + STREAM_POLL;
+            Ok(())
+        }
+        PageStep::Done | PageStep::Gone => {
+            running.stream = Stream::Abandoned;
+            Ok(())
+        }
+        PageStep::Fail(failure) => {
+            running.stream = Stream::Abandoned;
+            emit_error(terminal, &failure_message(&failure), &app.theme)
+        }
+    }
 }
 
 /// The worker thread reported: the result and its summary, or the error,
@@ -1445,7 +1689,18 @@ fn finish(
             let mut truncated = false;
             let mut rows = result.data.len();
             let mut paging = None;
-            if running.explain {
+            let streamed = !renders_rows_on_finish(&running.stream);
+            if streamed {
+                // Page 0 and whatever followed are on screen already; the
+                // paging, when still live, keeps going and shows the
+                // summary once it ends.
+                rows = streamed_rows(&running.stream, app.paging.as_ref());
+                if let (None, Stream::Started { truncated: cut, .. }) =
+                    (app.paging.as_ref(), &running.stream)
+                {
+                    truncated = *cut;
+                }
+            } else if running.explain {
                 let session = app.session().expect("EXPLAIN runs against a coordinator");
                 let record = api::fetch_query(&lock(session), &options.server, &result.id).ok();
                 let plan = record
@@ -1468,9 +1723,12 @@ fn finish(
                     _ => None,
                 };
                 if let (Some(cursor), Some(session)) = (cursor.as_mut(), app.session()) {
+                    // The statement is finished, so page 0 is written; a
+                    // coordinator still saying otherwise leaves it to the
+                    // paging, which asks again.
                     match cursor.fetch_next(&lock(session)) {
-                        Ok(Some(page)) => result.data.extend(page.rows),
-                        Ok(None) => {}
+                        Ok(Fetched::Page(page)) => result.data.extend(page.rows),
+                        Ok(Fetched::NotYet { .. } | Fetched::Exhausted) => {}
                         Err(failure) => {
                             emit_error(terminal, &failure_message(&failure), &app.theme)?
                         }
@@ -1491,12 +1749,12 @@ fn finish(
                         rows = total.max(rows);
                     }
                     if !cursor.exhausted() {
-                        paging = Some(Paging {
+                        paging = Some(Paging::new(
                             cursor,
-                            names: names.clone(),
-                            shown: result.data.len(),
+                            names.clone(),
+                            result.data.len(),
                             format,
-                        });
+                        ));
                     }
                 }
             }
@@ -1527,11 +1785,7 @@ fn finish(
                 }),
             };
             if truncated && let Some(summary) = summary.as_mut() {
-                let note = "some columns truncated · .format VERTICAL to see them whole";
-                summary.message = Some(match summary.message.take() {
-                    Some(existing) => format!("{existing} · {note}"),
-                    None => note.to_owned(),
-                });
+                add_truncation_note(summary);
             }
             app.last_elapsed_ms = Some(result.elapsed_ms);
             app.last_scanned_rows = summary.as_ref().and_then(|summary| summary.rows_scanned);
@@ -1540,6 +1794,12 @@ fn finish(
                 elapsed_ms: Some(result.elapsed_ms),
                 ok: true,
             });
+            let timing = app.timing;
+            if streamed && let Some(live) = app.paging.as_mut() {
+                // The reader is still on the pages: the summary waits.
+                live.summary = summary.filter(|_| timing);
+                return Ok(());
+            }
             if app.timing
                 && let Some(summary) = summary
             {
@@ -1576,6 +1836,8 @@ fn finish(
         }
         StatementEvent::Failed(failure) => {
             app.pending.clear();
+            // Pages read while it ran end here; the failure is the verdict.
+            app.paging = None;
             if app.watch.take().is_some() {
                 emit_text(terminal, "watch stopped", &app.theme, true)?;
             }
@@ -1671,33 +1933,72 @@ fn render_rows(
     }
 }
 
-/// Space or Enter while paging: the next page, rendered with its header;
-/// the last page ends the paging and runs whatever statement is pending.
+/// Space or Enter while paging (or the retry after `waiting for the next
+/// page…`): the next page, rendered with its header; the last page ends
+/// the paging and runs whatever statement is pending. While the statement
+/// still runs, a page the coordinator has not written yet is asked for
+/// again every `STREAM_POLL` until it arrives or the reader stops.
 fn next_page(app: &mut App, terminal: &mut Screen, options: &mut Options) -> Result<(), String> {
     let Some(session) = app.session().map(Arc::clone) else {
         return finish_paging(app, terminal, options);
     };
+    let running = app.running.is_some();
     let Some(paging) = app.paging.as_mut() else {
         return Ok(());
     };
-    let fetched = paging.cursor.fetch_next(&lock(&session));
-    let page = match fetched {
-        Ok(Some(page)) => page,
-        Ok(None) => return finish_paging(app, terminal, options),
-        Err(failure) => {
-            emit_error(terminal, &failure_message(&failure), &app.theme)?;
-            return stop_paging(app, terminal, options);
-        }
-    };
-    let names = paging.names.clone();
-    let format = paging.format;
-    paging.shown += page.rows.len();
-    let exhausted = paging.cursor.exhausted();
-    render_rows(app, terminal, options, &names, &page.rows, format)?;
-    if exhausted {
-        finish_paging(app, terminal, options)
+    paging.waiting = None;
+    let timeout = if running {
+        STREAM_TIMEOUT
     } else {
-        Ok(())
+        METADATA_TIMEOUT
+    };
+    let fetched = paging.cursor.fetch_next_within(&lock(&session), timeout);
+    match page_step(fetched, running) {
+        PageStep::Show(page) => {
+            let names = paging.names.clone();
+            let format = paging.format;
+            paging.shown += page.rows.len();
+            let exhausted = paging.cursor.exhausted();
+            let (_, cut) = render_rows(app, terminal, options, &names, &page.rows, format)?;
+            if let Some(paging) = app.paging.as_mut() {
+                paging.truncated |= cut;
+            }
+            if let Some(running) = app.running.as_mut() {
+                running.progress.rows_so_far = Some(page.row_count);
+            }
+            if exhausted {
+                finish_paging(app, terminal, options)
+            } else {
+                Ok(())
+            }
+        }
+        PageStep::Wait { rows_so_far } => {
+            paging.waiting = Some(Instant::now() + STREAM_POLL);
+            if let Some(running) = app.running.as_mut() {
+                running.progress.rows_so_far = Some(rows_so_far);
+            }
+            Ok(())
+        }
+        PageStep::Retry => {
+            paging.waiting = Some(Instant::now() + STREAM_POLL);
+            Ok(())
+        }
+        PageStep::Done => finish_paging(app, terminal, options),
+        PageStep::Gone => {
+            // The statement failed or was cancelled: its POST says so.
+            if let (Some(paging), Some(running)) = (app.paging.take(), app.running.as_mut()) {
+                running.stream = Stream::Started {
+                    shown: paging.shown,
+                    total: paging.cursor.total_rows,
+                    truncated: paging.truncated,
+                };
+            }
+            Ok(())
+        }
+        PageStep::Fail(failure) => {
+            emit_error(terminal, &failure_message(&failure), &app.theme)?;
+            stop_paging(app, terminal, options)
+        }
     }
 }
 
@@ -1710,18 +2011,8 @@ fn finish_paging(
     let Some(paging) = app.paging.take() else {
         return Ok(());
     };
-    emit(
-        terminal,
-        vec![Line::styled(
-            format!(
-                "   all {} rows shown",
-                render::thousands(paging.shown as i128)
-            ),
-            app.theme.dim,
-        )],
-    )?;
-    emit_blank(terminal)?;
-    start_next(app, terminal, options)
+    let note = format!("all {} rows shown", render::thousands(paging.shown as i128));
+    end_paging(app, terminal, options, paging, &note)
 }
 
 /// `q`, Esc or Ctrl-C while paging: `stopped after N rows`. The remaining
@@ -1730,18 +2021,54 @@ fn stop_paging(app: &mut App, terminal: &mut Screen, options: &mut Options) -> R
     let Some(paging) = app.paging.take() else {
         return Ok(());
     };
+    let note = format!(
+        "stopped after {} rows",
+        render::thousands(paging.shown as i128)
+    );
+    end_paging(app, terminal, options, paging, &note)
+}
+
+/// The paging's closing line, then what follows it: the statement's
+/// summary when it finished while its pages were read, and the next
+/// pending statement. A statement still running keeps the counts and does
+/// both once its POST returns.
+fn end_paging(
+    app: &mut App,
+    terminal: &mut Screen,
+    options: &mut Options,
+    paging: Paging,
+    note: &str,
+) -> Result<(), String> {
     emit(
         terminal,
-        vec![Line::styled(
-            format!(
-                "   stopped after {} rows",
-                render::thousands(paging.shown as i128)
-            ),
-            app.theme.dim,
-        )],
+        vec![Line::styled(format!("   {note}"), app.theme.dim)],
     )?;
+    if let Some(running) = app.running.as_mut() {
+        running.stream = Stream::Started {
+            shown: paging.shown,
+            total: paging.cursor.total_rows,
+            truncated: paging.truncated,
+        };
+        return Ok(());
+    }
+    let rows = paging.rows();
+    if let Some(mut summary) = paging.summary {
+        summary.rows = rows;
+        if paging.truncated {
+            add_truncation_note(&mut summary);
+        }
+        emit(terminal, render::summary::lines(&summary, &app.theme))?;
+    }
     emit_blank(terminal)?;
     start_next(app, terminal, options)
+}
+
+fn add_truncation_note(summary: &mut render::summary::Summary) {
+    let note = "some columns truncated · .format VERTICAL to see them whole";
+    summary.message = Some(match summary.message.take() {
+        Some(existing) => format!("{existing} · {note}"),
+        None => note.to_owned(),
+    });
 }
 
 /// Ctrl-C while a statement runs: cancel it on the coordinator when its
@@ -2317,23 +2644,184 @@ mod tests {
         assert_eq!(seconds(Duration::from_millis(4100)), "4.10 s");
     }
 
+    fn cursor(page: usize) -> PageCursor {
+        PageCursor::new(
+            "http://127.0.0.1:8080",
+            &format!("/v1/query/q/results/{page}"),
+        )
+        .unwrap()
+    }
+
+    fn page(rows: usize, row_count: usize, complete: bool) -> Page {
+        Page {
+            rows: (0..rows).map(|n| vec![serde_json::json!(n)]).collect(),
+            next_uri: Some("/v1/query/q/results/1".into()),
+            index: 0,
+            row_count,
+            complete,
+        }
+    }
+
+    fn http(status: u16) -> CliHttp {
+        CliHttp {
+            status: Some(status),
+            code: None,
+            message: format!("HTTP {status}"),
+            timed_out: false,
+            connect: false,
+        }
+    }
+
     #[test]
     fn paging_hint_counts_rows_shown_against_the_total() {
-        let mut paging = Paging {
-            cursor: PageCursor::new("http://127.0.0.1:8080", "/v1/query/q/results/1").unwrap(),
-            names: vec!["n".into()],
-            shown: 1_000,
-            format: OutputFormat::Table,
-        };
+        let mut paging = Paging::new(cursor(1), vec!["n".into()], 1_000, OutputFormat::Table);
         assert_eq!(
             paging.hint(),
             "1,000 rows so far · Space or Enter for more · q to stop"
         );
+        assert_eq!(paging.rows(), 1_000);
+        paging.waiting = Some(Instant::now());
+        assert_eq!(
+            paging.hint(),
+            "1,000 rows so far · waiting for the next page… · q to stop"
+        );
+        paging.waiting = None;
         paging.cursor.total_rows = Some(84_312);
         assert_eq!(
             paging.hint(),
             "1,000 of 84,312 rows · Space or Enter for more · q to stop"
         );
+        assert_eq!(paging.rows(), 84_312);
+    }
+
+    #[test]
+    fn a_page_answer_is_shown_waited_for_retried_or_given_up_on() {
+        // What the cursor found, regardless of the statement's state.
+        assert!(matches!(
+            page_step(Ok(Fetched::Page(page(3, 3, true))), true),
+            PageStep::Show(page) if page.rows.len() == 3 && page.complete
+        ));
+        assert!(matches!(
+            page_step(
+                Ok(Fetched::NotYet {
+                    retry_after: Duration::from_secs(1),
+                    rows_so_far: 12_000
+                }),
+                true
+            ),
+            PageStep::Wait {
+                rows_so_far: 12_000
+            }
+        ));
+        assert!(matches!(
+            page_step(Ok(Fetched::Exhausted), false),
+            PageStep::Done
+        ));
+        // While the statement runs its POST is the arbiter: a page gone is
+        // the failure the POST will report, transport trouble is retried.
+        for status in [404, 410] {
+            assert!(matches!(page_step(Err(http(status)), true), PageStep::Gone));
+            assert!(matches!(
+                page_step(Err(http(status)), false),
+                PageStep::Fail(failure) if failure.status == Some(status)
+            ));
+        }
+        let timed_out = CliHttp {
+            timed_out: true,
+            ..CliHttp::local("operation timed out")
+        };
+        assert!(matches!(
+            page_step(Err(timed_out.clone()), true),
+            PageStep::Retry
+        ));
+        assert!(matches!(
+            page_step(Err(timed_out), false),
+            PageStep::Fail(failure) if failure.timed_out
+        ));
+        // An unsafe next URI is never retried: the cursor is exhausted.
+        assert!(matches!(
+            page_step(Err(CliHttp::local(UNSAFE_NEXT_URI)), true),
+            PageStep::Fail(failure) if failure.message == UNSAFE_NEXT_URI
+        ));
+        assert!(matches!(
+            page_step(Err(http(500)), true),
+            PageStep::Fail(failure) if failure.status == Some(500)
+        ));
+    }
+
+    #[test]
+    fn a_finished_statement_does_not_render_page_zero_again() {
+        assert!(renders_rows_on_finish(&Stream::Off));
+        assert!(renders_rows_on_finish(&Stream::Abandoned));
+        assert!(renders_rows_on_finish(&Stream::Pending {
+            cursor: cursor(0),
+            names: vec!["n".into()],
+            next_try: Instant::now(),
+        }));
+        assert!(!renders_rows_on_finish(&Stream::Started {
+            shown: 1_000,
+            total: None,
+            truncated: false,
+        }));
+    }
+
+    #[test]
+    fn the_streamed_summary_counts_the_total_once_known_else_what_was_shown() {
+        // The reader is still on the pages: the live paging knows best.
+        let mut live = Paging::new(cursor(1), vec!["n".into()], 2_000, OutputFormat::Table);
+        let started = Stream::Started {
+            shown: 1_000,
+            total: None,
+            truncated: false,
+        };
+        assert_eq!(streamed_rows(&started, Some(&live)), 2_000);
+        live.cursor.total_rows = Some(84_312);
+        assert_eq!(streamed_rows(&started, Some(&live)), 84_312);
+        // The reader stopped before the POST returned: what the stream kept.
+        assert_eq!(streamed_rows(&started, None), 1_000);
+        let complete = Stream::Started {
+            shown: 3_000,
+            total: Some(84_312),
+            truncated: false,
+        };
+        assert_eq!(streamed_rows(&complete, None), 84_312);
+        assert_eq!(streamed_rows(&Stream::Off, None), 0);
+    }
+
+    #[test]
+    fn a_page_not_written_yet_updates_the_running_line_and_waits() {
+        // The 202 carries the writer's count; the paging asks again after
+        // STREAM_POLL and says so on its hint line.
+        let mut paging = Paging::new(cursor(1), vec!["n".into()], 1_000, OutputFormat::Table);
+        let mut progress = Progress::default();
+        let step = page_step(
+            Ok(Fetched::NotYet {
+                retry_after: Duration::from_secs(1),
+                rows_so_far: 1_500,
+            }),
+            true,
+        );
+        if let PageStep::Wait { rows_so_far } = step {
+            paging.waiting = Some(Instant::now() + STREAM_POLL);
+            progress.rows_so_far = Some(rows_so_far);
+        }
+        assert!(paging.hint().contains("waiting for the next page…"));
+        assert_eq!(progress.rows_so_far, Some(1_500));
+        assert!(
+            paging
+                .waiting
+                .is_some_and(|due| due > Instant::now() && due <= Instant::now() + STREAM_POLL)
+        );
+        let text = render::to_plain(&[progress::line(
+            &Progress {
+                phase: Phase::Running,
+                rows_so_far: Some(1_500),
+                ..Progress::default()
+            },
+            0,
+            &Theme::mono(),
+        )]);
+        assert!(text.contains("1,500 rows so far"), "{text}");
     }
 
     #[test]

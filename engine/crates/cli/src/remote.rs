@@ -507,9 +507,23 @@ fn stream_pages(
     response: &mut StatementResponse,
     next_uri: &str,
 ) -> Result<usize, String> {
-    use crate::client::pages::PageCursor;
+    use crate::client::pages::{Fetched, PageCursor};
     let mut cursor =
         PageCursor::new(&options.server, next_uri).map_err(|failure| failure.message)?;
+    // The POST has returned, so every page is written; a page the
+    // coordinator has not served yet is waited for as it asks.
+    let next_page = |cursor: &mut PageCursor| -> Result<Option<Vec<Vec<Value>>>, String> {
+        loop {
+            match cursor
+                .fetch_next(client)
+                .map_err(|failure| failure.message)?
+            {
+                Fetched::Page(page) => return Ok(Some(page.rows)),
+                Fetched::NotYet { retry_after, .. } => std::thread::sleep(retry_after),
+                Fetched::Exhausted => return Ok(None),
+            }
+        }
+    };
     let names: Vec<String> = response
         .columns
         .iter()
@@ -518,11 +532,8 @@ fn stream_pages(
     let format = options.output_format;
     let streams = !is_human_format(format) && format != OutputFormat::Json;
     if !streams {
-        while let Some(page) = cursor
-            .fetch_next(client)
-            .map_err(|failure| failure.message)?
-        {
-            response.data.extend(page.rows);
+        while let Some(rows) = next_page(&mut cursor)? {
+            response.data.extend(rows);
         }
         return Ok(response.data.len());
     }
@@ -549,12 +560,9 @@ fn stream_pages(
         write(&response.data)?;
         response.data.clear();
     }
-    while let Some(page) = cursor
-        .fetch_next(client)
-        .map_err(|failure| failure.message)?
-    {
-        rows += page.rows.len();
-        write(&page.rows)?;
+    while let Some(page_rows) = next_page(&mut cursor)? {
+        rows += page_rows.len();
+        write(&page_rows)?;
     }
     response.next_uri = Some(next_uri.to_owned());
     Ok(rows)
