@@ -64,6 +64,14 @@ pub enum AdminCommand {
     TableShowCreate {
         name: String,
     },
+    /// `SHOW STATS FOR t`: the column statistics of the last ANALYZE.
+    TableStats {
+        name: String,
+    },
+    /// `DESCRIBE DETAIL t`: format, location, files, size and versions.
+    TableDetail {
+        name: String,
+    },
 }
 
 /// Whether `word` opens an administration command.
@@ -213,7 +221,7 @@ fn build(
         ],
         ("table", "drop") => &["--if-exists"],
         ("table", "relocate") => &["--if-exists", "--location"],
-        ("table", "describe") | ("table", "show-create") => &[],
+        ("table", "describe" | "show-create" | "stats" | "detail") => &[],
         _ => &[],
     };
     if let Some((key, _)) = flags
@@ -319,6 +327,12 @@ fn build(
         ("table", "show-create") => AdminCommand::TableShowCreate {
             name: require_name("a [catalog.][schema.]table name")?,
         },
+        ("table", "stats") => AdminCommand::TableStats {
+            name: require_name("a [catalog.][schema.]table name")?,
+        },
+        ("table", "detail") => AdminCommand::TableDetail {
+            name: require_name("a [catalog.][schema.]table name")?,
+        },
         _ => unreachable!("verbs are validated above"),
     })
 }
@@ -334,15 +348,28 @@ fn verbs_for(noun: &str) -> &'static [&'static str] {
             "relocate",
             "describe",
             "show-create",
+            "stats",
+            "detail",
         ],
         _ => &[],
     }
 }
 
 impl AdminCommand {
-    /// The catalog statement this command submits, or `None` for commands
-    /// that read the catalog API instead.
+    /// The statement this command submits, or `None` for commands that
+    /// read the catalog API instead.
     pub fn statement(&self) -> Result<Option<String>, String> {
+        // The statistics statements are the coordinator's, not catalog
+        // statements; `qualified` has already checked the only argument.
+        match self {
+            Self::TableStats { name } => {
+                return Ok(Some(format!("SHOW STATS FOR {}", qualified(name, 3)?)));
+            }
+            Self::TableDetail { name } => {
+                return Ok(Some(format!("DESCRIBE DETAIL {}", qualified(name, 3)?)));
+            }
+            _ => {}
+        }
         let sql = match self {
             Self::CatalogList { like } => format!("SHOW CATALOGS{}", like_clause(like)),
             Self::CatalogShow { .. } => return Ok(None),
@@ -449,6 +476,9 @@ impl AdminCommand {
             Self::TableShowCreate { name } => {
                 format!("SHOW CREATE TABLE {}", qualified(name, 3)?)
             }
+            Self::TableStats { .. } | Self::TableDetail { .. } => {
+                unreachable!("the statistics statements return above")
+            }
         };
         // The statement is checked here so a mistake is reported by the
         // client, naming the option, before anything reaches the coordinator.
@@ -550,6 +580,14 @@ pub fn print_usage() {
     println!("  kaveon table drop <name> [--if-exists]");
     println!("  kaveon table describe <name>");
     println!("  kaveon table show-create <name>");
+    println!(
+        "  kaveon table stats <name>                        Column statistics from the last ANALYZE"
+    );
+    println!(
+        "  kaveon table detail <name>                       Format, location, files, size, versions"
+    );
+    println!("      Statistics come from ANALYZE <name> in the shell (admin role); a table");
+    println!("      that was never analyzed answers 'no statistics'.");
 }
 
 #[cfg(test)]
@@ -670,10 +708,22 @@ mod tests {
 
     #[test]
     fn drop_relocate_describe_and_lists_render_their_statements() {
-        let cases: [(&[&str], &str); 8] = [
+        let cases: [(&[&str], &str); 11] = [
             (
                 &["schema", "add", "lake.sales", "--if-not-exists"],
                 "CREATE SCHEMA IF NOT EXISTS lake.sales",
+            ),
+            (
+                &["table", "stats", "lake.sales.orders"],
+                "SHOW STATS FOR lake.sales.orders",
+            ),
+            (
+                &["table", "stats", "\"Gold Orders\""],
+                "SHOW STATS FOR \"Gold Orders\"",
+            ),
+            (
+                &["table", "detail", "sales.orders"],
+                "DESCRIBE DETAIL sales.orders",
             ),
             (
                 &["schema", "drop", "sales", "--cascade", "--if-exists"],
@@ -728,9 +778,15 @@ mod tests {
                 "--format",
             ),
             (&["table", "describe"][..], "requires a"),
+            (&["table", "stats"][..], "requires a"),
+            (&["table", "detail", "a.b.c.d"][..], "at most 3"),
             (
                 &["table", "describe", "orders", "--cascade"][..],
                 "--cascade does not apply",
+            ),
+            (
+                &["table", "stats", "orders", "--like", "x"][..],
+                "--like does not apply",
             ),
             (&["catalog", "add", "c"][..], "--storage"),
             (

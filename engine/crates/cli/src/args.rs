@@ -718,6 +718,38 @@ mod tests {
             parse(&strings(&["kaveon", "table", "list", "--help"])).unwrap(),
             Command::Help
         ));
+        let Command::Admin(options, command) = parse(&strings(&[
+            "kaveon",
+            "table",
+            "stats",
+            "orders",
+            "--server",
+            "https://engine.example",
+            "--output-format",
+            "json",
+        ]))
+        .unwrap() else {
+            panic!("expected an administration command");
+        };
+        assert_eq!(options.server, "https://engine.example");
+        assert_eq!(options.output_format, OutputFormat::Json);
+        assert_eq!(
+            command.statement().unwrap().unwrap(),
+            "SHOW STATS FOR orders"
+        );
+        let Command::Admin(_, command) = parse(&strings(&[
+            "kaveon",
+            "table",
+            "detail",
+            "lake.sales.orders",
+        ]))
+        .unwrap() else {
+            panic!("expected an administration command");
+        };
+        assert_eq!(
+            command.statement().unwrap().unwrap(),
+            "DESCRIBE DETAIL lake.sales.orders"
+        );
     }
 
     #[test]
