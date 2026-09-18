@@ -48,6 +48,7 @@ use uuid::Uuid;
 use tokio::sync::RwLock;
 
 use crate::orchestrator::{CoordinatorOrchestrator, TaskDispatch};
+use crate::planner::SourcePins;
 
 struct QueryStore {
     queries: HashMap<String, QueryRecord>,
@@ -2023,7 +2024,7 @@ async fn submit_statement(
         &context,
         &plan,
         &catalog_snapshot,
-        &planning_source_pins.delta_versions,
+        &planning_source_pins,
         &mut placement_reason,
     )
     .await
@@ -2364,10 +2365,11 @@ async fn submit_statement(
         let mut local_columns = Vec::new();
         let planned_execution = {
             let planning_start = Instant::now();
-            crate::planner::plan_query_with_memory(
+            crate::planner::plan_query_with_pins(
                 &plan,
                 &local_catalog_snapshot,
                 query_memory.pool(),
+                &planning_source_pins,
             )
             .map(|planned| {
                 let planning_us = elapsed_us(planning_start);
@@ -3057,11 +3059,11 @@ async fn optimize_with_durable_statistics(
     state: &AppState,
     plan: LogicalPlan,
     catalog: &crate::PublishedCatalog,
-) -> (LogicalPlan, PlanningSourcePins) {
+) -> (LogicalPlan, SourcePins) {
     let mut tables = std::collections::BTreeSet::new();
     collect_join_statistics_tables(&plan, &mut tables);
     if tables.is_empty() {
-        return (plan, PlanningSourcePins::default());
+        return (plan, SourcePins::default());
     }
     let durable = match state.product_transactions.catalog() {
         Some(commit) => commit.read_current().await.ok(),
@@ -3086,13 +3088,19 @@ async fn optimize_with_durable_statistics(
     }
     let catalog_digest = format!("{:x}", Sha256::digest(catalog.snapshot_id.as_bytes()));
     let mut cache = HashMap::new();
-    let mut pins = PlanningSourcePins::default();
+    let mut pins = SourcePins::default();
     while let Some(loaded) = loads.join_next().await {
         let Ok((table, qualified, location, current)) = loaded else {
             continue;
         };
         if let Some(version) = current.as_ref().and_then(|value| value.delta_version) {
-            pins.delta_versions.insert(location, version);
+            pins.delta_versions.insert(location.clone(), version);
+        }
+        if let Some(listing) = current
+            .as_ref()
+            .and_then(|value| value.parquet_listing.clone())
+        {
+            pins.parquet_directories.insert(location, listing);
         }
         let value = current.map(|current| {
             let rows = durable
@@ -3116,11 +3124,6 @@ async fn optimize_with_durable_statistics(
         }),
         pins,
     )
-}
-
-#[derive(Default)]
-struct PlanningSourcePins {
-    delta_versions: BTreeMap<String, u64>,
 }
 
 /// Collects only relations for which the statistics optimizer will request
@@ -4552,7 +4555,7 @@ async fn execute_distributed_fragments(
     context: &QueryContext,
     plan: &LogicalPlan,
     catalog_snapshot: &kaveon_core::CatalogManager,
-    analyzed_delta_versions: &BTreeMap<String, u64>,
+    pins: &SourcePins,
     placement_reason: &mut Option<String>,
 ) -> Option<Result<(TaskResponse, Vec<StageTelemetry>, u64), String>> {
     if exact_metadata_count_plan(plan) {
@@ -4600,12 +4603,12 @@ async fn execute_distributed_fragments(
             return None;
         }
     };
-    let fragments = match crate::planner::build_executable_fragments_with_delta_versions(
+    let fragments = match crate::planner::build_executable_fragments_with_pins(
         query_id,
         plan,
         catalog_snapshot,
         workers.len(),
-        analyzed_delta_versions,
+        pins,
     ) {
         Ok(fragments) => fragments,
         Err(error) => {
@@ -7193,7 +7196,7 @@ mod tests {
     #[tokio::test]
     async fn coordinator_placement_names_its_reason() {
         use super::{ExecutionPlacement, QueryContext, execute_distributed_fragments};
-        use std::collections::BTreeMap;
+        use crate::planner::SourcePins;
         // A cluster with no workers cannot distribute: the fragments path
         // declines and says why, and the record carries it.
         let state = Arc::new(catalog_test_state());
@@ -7222,7 +7225,7 @@ mod tests {
             &context,
             &plan,
             &snapshot,
-            &BTreeMap::new(),
+            &SourcePins::default(),
             &mut reason,
         )
         .await;
