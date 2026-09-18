@@ -4,6 +4,8 @@ pub mod cluster;
 #[allow(dead_code)]
 pub mod error;
 pub mod help;
+#[allow(dead_code)]
+pub mod plan;
 pub mod summary;
 #[allow(dead_code)]
 pub mod table;
