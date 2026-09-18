@@ -2,7 +2,7 @@
 use crate::theme::Theme;
 use ratatui::text::{Line, Span};
 
-const COLUMN: usize = 42;
+const COLUMN: usize = 72;
 
 struct Entry {
     command: &'static str,
@@ -18,28 +18,24 @@ struct Group {
 
 const GROUPS: &[Group] = &[
     Group {
-        title: "Catalog",
+        title: "Browse",
         coming_soon: false,
         entries: &[
             Entry {
-                command: "SHOW CATALOGS",
-                description: "list catalogs",
+                command: "SHOW CATALOGS | SCHEMAS [IN catalog] | TABLES [IN [catalog.]schema]",
+                description: "list; add LIKE 'pattern'; singular forms work too",
             },
             Entry {
-                command: "SHOW SCHEMAS [IN catalog]",
-                description: "list schemas",
-            },
-            Entry {
-                command: "SHOW TABLES [IN [catalog.]schema]",
-                description: "list tables; add LIKE 'pattern' to filter",
-            },
-            Entry {
-                command: "DESCRIBE [catalog.][schema.]table",
+                command: "DESCRIBE table  ·  SHOW COLUMNS FROM table",
                 description: "columns, types and nullability",
             },
             Entry {
-                command: "USE [catalog.]schema",
-                description: "switch the session catalog and schema",
+                command: "SHOW CREATE TABLE table",
+                description: "the full definition: columns, location, format, access",
+            },
+            Entry {
+                command: "USE [catalog.]schema  ·  USE catalog",
+                description: "switch the session context (a bare catalog name works)",
             },
             Entry {
                 command: ".catalogs  .schemas  .tables  .describe  .use",
@@ -48,64 +44,92 @@ const GROUPS: &[Group] = &[
         ],
     },
     Group {
-        title: "Shell",
+        title: "Define",
         coming_soon: false,
         entries: &[
             Entry {
-                command: "help",
-                description: "this text",
+                command: "CREATE CATALOG c WITH (storage = 'local' | 'adls' | 's3', ...)",
+                description: "admin; a directory, ADLS container or bucket",
             },
             Entry {
-                command: ".ask <question>",
-                description: "a question in plain language through the Kaveon DLM (--api)",
+                command: "CREATE SCHEMA [catalog.]schema",
+                description: "analyst or admin",
             },
             Entry {
-                command: "clear",
-                description: "clear the screen",
+                command: "ANALYZE [catalog.][schema.]table",
+                description: "exact row count and source identity for the planner (admin)",
             },
             Entry {
-                command: "exit, quit, Ctrl-D",
-                description: "leave",
+                command: "CREATE TABLE t [(cols)] WITH (location = '...', format = '...')",
+                description: "parquet, delta, iceberg; columns read from the data; probed first",
             },
             Entry {
-                command: "Ctrl-C",
-                description: "cancel the running statement, or clear the input",
+                command: "ALTER TABLE t SET LOCATION '...'  ·  DROP TABLE | SCHEMA | CATALOG",
+                description: "relocate (probed); remove — RESTRICT by default, or CASCADE",
             },
             Entry {
-                command: ".limit [n | off]",
-                description: "rows a query without LIMIT shows (default 1,000); off pages every row",
+                command: "CALL system.register_table(schema_name => ..., table_name => ..., ...)",
+                description: "Trino-style CREATE TABLE; unregister_table drops",
+            },
+            Entry {
+                command: "kaveon catalog|schema|table <command>",
+                description: "the same from the command line; kaveon --help lists them",
+            },
+        ],
+    },
+    Group {
+        title: "Run",
+        coming_soon: false,
+        entries: &[
+            Entry {
+                command: "<sql>;",
+                description: "ends with ; and may span lines; Ctrl-Enter forces a run",
             },
             Entry {
                 command: "EXPLAIN <statement>",
                 description: "the logical plan as a tree",
             },
             Entry {
-                command: ".cluster  .queries  .kill <id>",
-                description: "nodes and admission; statements running now; cancel one",
+                command: "SET SESSION key = value; <statement>",
+                description: "per-statement settings, or .settings for the session",
             },
             Entry {
                 command: ".settings [key value | reset]",
-                description: "memory, parallelism, cache, admission_wait for this session",
+                description: "memory, parallelism, cache, admission_wait for every statement",
             },
             Entry {
-                command: ".format <name>  .timing  .history [n]",
-                description: "result format; summary on/off; recent statements",
+                command: ".limit [n | off]",
+                description: "rows a query without LIMIT shows (1,000); off pages every row",
             },
             Entry {
-                command: "Tab",
-                description: "complete keywords, tables, columns, schemas and catalogs",
+                command: "Ctrl-C",
+                description: "cancel the running statement, or clear the input",
             },
             Entry {
-                command: ".source <file>",
-                description: "run the statements in a file, as if typed",
+                command: ".ask <question>  ·  .ask <n>",
+                description: "a question in plain language via the DLM (--api); n answers",
             },
             Entry {
-                command: ".edit",
-                description: "the last statement in $VISUAL or $EDITOR, back into the editor",
+                command: ".cluster  .queries  .kill <id>",
+                description: "nodes and admission; statements running now; cancel one",
+            },
+        ],
+    },
+    Group {
+        title: "Shell",
+        coming_soon: false,
+        entries: &[
+            Entry {
+                command: "Tab  ·  Up/Down  ·  --editing-mode vi",
+                description: "complete keywords and names; history; vi keys",
             },
             Entry {
-                command: ".watch [seconds] <statement>",
-                description: "re-run every N seconds (default 2) until a key is pressed",
+                command: ".history [n]  .timing  .clear  help  exit",
+                description: "recent statements; summary on/off; clear; this; leave (Ctrl-D)",
+            },
+            Entry {
+                command: ".source <file>  .edit  .watch [seconds] <statement>",
+                description: "run a file; last statement in $EDITOR; re-run until a key",
             },
         ],
     },
@@ -114,12 +138,8 @@ const GROUPS: &[Group] = &[
         coming_soon: false,
         entries: &[
             Entry {
-                command: "--output-format <NAME>",
+                command: ".format <name>  ·  --output-format",
                 description: "ALIGNED, VERTICAL, AUTO, MARKDOWN, CSV, TSV, JSON, NULL",
-            },
-            Entry {
-                command: "--theme <NAME>",
-                description: "dark, light, or mono; NO_COLOR is honoured",
             },
             Entry {
                 command: "Space, Enter  q",
@@ -130,12 +150,12 @@ const GROUPS: &[Group] = &[
                 description: "end with \\G instead of ; for the vertical format once",
             },
             Entry {
-                command: ".tee <file>  .tee off",
-                description: "append everything shown to a file; stop",
+                command: ".tee <file>  .tee off  ·  --paged",
+                description: "copy everything shown to a file; page results in scripts",
             },
             Entry {
-                command: "--paged",
-                description: "page large results in -e, -f and piped mode instead of the inline limit",
+                command: "--theme dark | light | mono",
+                description: "NO_COLOR is honoured",
             },
         ],
     },
@@ -182,16 +202,19 @@ mod tests {
     #[test]
     fn help_is_grouped_and_nothing_is_still_coming() {
         let text = crate::render::to_plain(&help(&Theme::mono()));
-        assert!(text.contains("  Catalog\n    SHOW CATALOGS"));
+        assert!(text.contains("  Browse\n    SHOW CATALOGS"));
+        assert!(text.contains("    SHOW CREATE TABLE table"));
+        assert!(text.contains("  Define\n    CREATE CATALOG"));
+        assert!(text.contains("CALL system.register_table"));
+        assert!(text.contains("  Run\n"));
+        assert!(text.contains("    SET SESSION key = value"));
         assert!(text.contains("  Shell\n"));
         assert!(text.contains("  Output\n"));
         assert!(!text.contains("Coming soon"), "{text}");
         assert!(!text.contains("streaming rows"), "{text}");
         assert!(text.contains("    .ask <question>"));
-        assert!(text.contains("    .source <file>"));
+        assert!(text.contains("    .source <file>  .edit  .watch [seconds] <statement>"));
         assert!(text.contains("    .tee <file>  .tee off"));
-        assert!(text.contains("    .edit "));
-        assert!(text.contains("    .watch [seconds] <statement>"));
         assert!(text.contains("    <statement>\\G"));
         let paging = text
             .lines()
@@ -201,7 +224,11 @@ mod tests {
             paging.ends_with("next page of a result, as soon as it is written; stop"),
             "{paging}"
         );
-        assert!(text.lines().count() <= 40, "{}", text.lines().count());
-        assert!(text.lines().all(|line| line.chars().count() <= 118));
+        assert!(text.lines().count() <= 44, "{}", text.lines().count());
+        assert!(
+            text.lines().all(|line| line.chars().count() <= 142),
+            "{}",
+            text.lines().map(|l| l.chars().count()).max().unwrap_or(0)
+        );
     }
 }
