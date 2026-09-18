@@ -41,16 +41,27 @@ pub fn status_line(facts: &StatusFacts<'_>, theme: &Theme) -> Line<'static> {
 }
 
 /// `context › ` in front of the input.
-pub fn prompt(context: &str, theme: &Theme) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(" KAVEON", theme.title),
-        Span::raw(format!(": {context} ")),
-        Span::styled("› ", theme.accent),
-    ])
+/// `KAVEON: catalog.schema › ` — the catalog plain, the schema dimmed so the
+/// two read apart — or just `KAVEON › ` until a context is chosen.
+pub fn prompt(context: Option<(&str, &str)>, theme: &Theme) -> Line<'static> {
+    let mut spans = vec![Span::styled(" KAVEON", theme.title)];
+    match context {
+        Some((catalog, schema)) => {
+            spans.push(Span::raw(format!(": {catalog}")));
+            spans.push(Span::styled(format!(".{schema} "), theme.dim));
+        }
+        None => spans.push(Span::raw(" ")),
+    }
+    spans.push(Span::styled("› ", theme.accent));
+    Line::from(spans)
 }
 
-pub fn prompt_width(context: &str) -> u16 {
-    (" KAVEON: ".len() + context.chars().count() + 3) as u16
+pub fn prompt_width(context: Option<(&str, &str)>) -> u16 {
+    let context_width = match context {
+        Some((catalog, schema)) => 2 + catalog.chars().count() + 1 + schema.chars().count(),
+        None => 0,
+    };
+    (" KAVEON".len() + context_width + 3) as u16
 }
 
 pub fn host_of(server: &str) -> String {
@@ -84,10 +95,17 @@ mod tests {
         );
         assert_eq!(host_of("http://localhost:8081/"), "localhost:8081");
         assert_eq!(
-            crate::render::to_plain(&[prompt("kaveon.default", &Theme::mono())]),
-            " kaveon.default › \n"
+            crate::render::to_plain(&[prompt(Some(("OpenSource", "nyc")), &Theme::mono())]),
+            " KAVEON: OpenSource.nyc › 
+"
         );
-        assert_eq!(prompt_width("kaveon.default"), 18);
+        assert_eq!(prompt_width(Some(("OpenSource", "nyc"))), 26);
+        assert_eq!(
+            crate::render::to_plain(&[prompt(None, &Theme::mono())]),
+            " KAVEON › 
+"
+        );
+        assert_eq!(prompt_width(None), 10);
         assert_eq!(
             box_title("OpenSource", "kaveon_product"),
             "OpenSource.kaveon_product"

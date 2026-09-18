@@ -89,7 +89,7 @@ pub fn run(session: &Session, options: &mut Options) -> Result<(), String> {
         app.editor.set_history(
             text.lines()
                 .filter(|line| !line.trim().is_empty())
-                .map(str::to_owned)
+                .map(|line| line.replace("\\n", "\n"))
                 .collect(),
         );
     }
@@ -138,14 +138,14 @@ fn save_history(app: &App) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let tail: Vec<&str> = app
+    let tail: Vec<String> = app
         .editor
         .history()
         .iter()
         .rev()
         .take(1000)
         .rev()
-        .map(String::as_str)
+        .map(|statement| statement.replace('\n', "\\n"))
         .collect();
     let _ = std::fs::write(path, tail.join("\n") + "\n");
 }
@@ -199,6 +199,9 @@ fn event_loop(app: &mut App, session: &Session, options: &mut Options) -> Result
         }
         let terminal = &mut owned;
         let title = box_title(&options.catalog, &options.schema);
+        let context = options
+            .context_explicit
+            .then_some((options.catalog.as_str(), options.schema.as_str()));
         terminal
             .draw(|frame| {
                 let editor_height = app.editor.height(EDITOR_MAX_ROWS);
@@ -206,7 +209,7 @@ fn event_loop(app: &mut App, session: &Session, options: &mut Options) -> Result
                     Layout::vertical([Constraint::Length(editor_height), Constraint::Length(1)])
                         .areas(frame.area());
                 let [prompt_area, text_area] = Layout::horizontal([
-                    Constraint::Length(prompt_width(&title)),
+                    Constraint::Length(prompt_width(context)),
                     Constraint::Min(1),
                 ])
                 .areas(editor_area);
@@ -232,7 +235,7 @@ fn event_loop(app: &mut App, session: &Session, options: &mut Options) -> Result
                     height: 1,
                     ..prompt_area
                 };
-                frame.render_widget(Paragraph::new(prompt(&title, &app.theme)), prompt_row);
+                frame.render_widget(Paragraph::new(prompt(context, &app.theme)), prompt_row);
                 frame.render_widget(
                     Paragraph::new(status_line(&app.status_facts(&host), &app.theme)),
                     status_area,
@@ -272,7 +275,9 @@ fn event_loop(app: &mut App, session: &Session, options: &mut Options) -> Result
                 }
             }
             EditorAction::Submit(text) => {
-                app.editor.push_history(text.clone());
+                if !is_quit(&text) {
+                    app.editor.push_history(text.clone());
+                }
                 let echo = text
                     .lines()
                     .enumerate()
@@ -290,8 +295,14 @@ fn event_loop(app: &mut App, session: &Session, options: &mut Options) -> Result
                     terminal.clear().map_err(|error| error.to_string())?;
                     return Ok(());
                 }
+                let before = (options.catalog.clone(), options.schema.clone());
                 match run_statement(session, options, &text) {
                     Ok(executed) => {
+                        if (options.catalog.as_str(), options.schema.as_str())
+                            != (before.0.as_str(), before.1.as_str())
+                        {
+                            options.context_explicit = true;
+                        }
                         emit_text(
                             terminal,
                             executed.output.trim_end_matches('\n'),
