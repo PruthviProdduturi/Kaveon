@@ -126,7 +126,7 @@ pub fn run(options: &mut Options) -> Result<(), String> {
     }
 
     if io::stdout().is_terminal() {
-        return crate::shell::run(&client, options);
+        return crate::shell::run(client, options);
     }
     print_header(&client, options);
     repl(&client, options)
@@ -377,19 +377,67 @@ pub(crate) fn execute_to_string(
 
 /// `preview_limit` is the interactive row limit the shell appended, so the
 /// summary can say the result is a preview when it fills.
+///
+/// Three parts, so the shell can run them on different threads: the
+/// metadata check and the summary on the UI thread, the POST on a worker.
 pub(crate) fn execute_with_limit(
     client: &Session,
     options: &mut Options,
     sql: &str,
     preview_limit: Option<usize>,
 ) -> Result<Executed, String> {
-    if let Some(meta) = parse_sql_metadata(sql, options)? {
-        return Ok(Executed {
-            output: run_meta_command(client, options, meta)?,
-            elapsed_ms: None,
-            scanned_rows: None,
-        });
+    if let Some(executed) = run_metadata_statement(client, options, sql)? {
+        return Ok(executed);
     }
+    let response = post_statement(client, options, sql)?;
+    let mut output = format_result(&response, options.output_format)?;
+    let mut scanned_rows = None;
+    if let Some(summary) = statement_summary(
+        client,
+        options,
+        &response.id,
+        response.data.len(),
+        response.elapsed_ms,
+        preview_limit,
+    ) {
+        scanned_rows = summary.rows_scanned;
+        output.push_str(&styled_or_plain(&crate::render::summary::lines(
+            &summary,
+            &human_theme(options),
+        )));
+        output.push('\n');
+    }
+    Ok(Executed {
+        output,
+        elapsed_ms: Some(response.elapsed_ms),
+        scanned_rows,
+    })
+}
+
+/// SHOW, USE and DESCRIBE are answered over the catalog API without a
+/// statement; `None` when `sql` is a statement for the coordinator.
+pub(crate) fn run_metadata_statement(
+    client: &Session,
+    options: &mut Options,
+    sql: &str,
+) -> Result<Option<Executed>, String> {
+    let Some(meta) = parse_sql_metadata(sql, options)? else {
+        return Ok(None);
+    };
+    Ok(Some(Executed {
+        output: run_meta_command(client, options, meta)?,
+        elapsed_ms: None,
+        scanned_rows: None,
+    }))
+}
+
+/// The blocking POST, inline delivery. The shell does the same on a worker
+/// thread through `client::statement::submit`.
+fn post_statement(
+    client: &Session,
+    options: &Options,
+    sql: &str,
+) -> Result<StatementResponse, String> {
     let url = endpoint(options, "/v1/statement");
     let request = StatementRequest {
         query: sql,
@@ -410,34 +458,31 @@ pub(crate) fn execute_with_limit(
     if let Some(error) = response.error {
         return Err(format!("query {} failed: {error}", response.id));
     }
-    let mut output = format_result(&response, options.output_format)?;
-    let mut scanned_rows = None;
-    if is_human_format(options.output_format) {
-        let record =
-            crate::client::session::fetch_query(client, &options.server, &response.id).ok();
-        let mut summary = crate::render::summary::Summary::from_record(
-            response.elapsed_ms,
-            response.data.len(),
-            &response.id,
-            record.as_ref(),
-        );
-        if let Some(limit) = preview_limit
-            && response.data.len() >= limit
-        {
-            summary.message = Some(crate::shell::rowlimit::note(limit));
-        }
-        scanned_rows = summary.rows_scanned;
-        output.push_str(&styled_or_plain(&crate::render::summary::lines(
-            &summary,
-            &human_theme(options),
-        )));
-        output.push('\n');
+    Ok(response)
+}
+
+/// The summary under a result, with the query record fetched for its
+/// provenance; `None` for machine formats, which carry no summary.
+pub(crate) fn statement_summary(
+    client: &Session,
+    options: &Options,
+    id: &str,
+    rows: usize,
+    elapsed_ms: u64,
+    preview_limit: Option<usize>,
+) -> Option<crate::render::summary::Summary> {
+    if !is_human_format(options.output_format) {
+        return None;
     }
-    Ok(Executed {
-        output,
-        elapsed_ms: Some(response.elapsed_ms),
-        scanned_rows,
-    })
+    let record = crate::client::session::fetch_query(client, &options.server, id).ok();
+    let mut summary =
+        crate::render::summary::Summary::from_record(elapsed_ms, rows, id, record.as_ref());
+    if let Some(limit) = preview_limit
+        && rows >= limit
+    {
+        summary.message = Some(crate::shell::rowlimit::note(limit));
+    }
+    Some(summary)
 }
 
 fn human_theme(options: &Options) -> crate::theme::Theme {
