@@ -5,6 +5,10 @@ use crate::theme::Theme;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
+/// The same rule as `Cluster::ready_workers`: the coordinator drops a
+/// worker after 30 s without a heartbeat, so this only guards against
+/// clock skew between the client and the coordinator.
+const STALE_HEARTBEAT_SECS: u64 = 90;
 const RULE: &str = "─────────────────────────────────────────────────────────────";
 
 /// What the header needs beyond the coordinator's payloads.
@@ -113,6 +117,59 @@ pub fn header(facts: &HeaderFacts<'_>, theme: &Theme) -> Vec<Line<'static>> {
     lines
 }
 
+/// The `.cluster` panel: one line per node, then the coordinator's
+/// admission state. A node whose heartbeat is stale is in the warning colour.
+pub fn panel(cluster: &Cluster, now_unix: u64, theme: &Theme) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let nodes = std::iter::once((&cluster.coordinator, "coordinator"))
+        .chain(cluster.workers.iter().map(|worker| (worker, "worker")));
+    for (node, default_role) in nodes {
+        let role = if node.role.is_empty() {
+            default_role
+        } else {
+            node.role.as_str()
+        };
+        let age = now_unix.saturating_sub(node.last_heartbeat);
+        let mut facts = vec![
+            role.to_owned(),
+            format!("v{}", node.version),
+            if node.last_heartbeat == 0 {
+                "no heartbeat".to_owned()
+            } else {
+                format!("heartbeat {age} s ago")
+            },
+            format!("rss {}", human_bytes(node.memory_rss_bytes)),
+        ];
+        if let Some(limit) = node.memory_limit_bytes {
+            facts.push(format!("limit {}", human_bytes(limit)));
+        }
+        let stale = node.last_heartbeat == 0 || age > STALE_HEARTBEAT_SECS;
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(node.node_id.clone(), theme.accent),
+            Span::styled(
+                format!(" · {}", facts.join(" · ")),
+                if stale {
+                    theme.warning
+                } else {
+                    Style::default()
+                },
+            ),
+        ]));
+    }
+    let admission = match &cluster.coordinator.admission {
+        Some(admission) => format!(
+            "  admission {} / {} admitted · queue depth {}",
+            human_bytes(admission.admitted_bytes),
+            human_bytes(admission.limit_bytes),
+            admission.queue_depth
+        ),
+        None => "  admission unavailable".to_owned(),
+    };
+    lines.push(Line::from(Span::styled(admission, theme.dim)));
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,5 +259,59 @@ mod tests {
         };
         let text = crate::render::to_plain(&header(&facts(Some(&cluster), None), &Theme::mono()));
         assert!(text.contains("no workers — statements run on the coordinator"));
+    }
+
+    #[test]
+    fn panel_lists_nodes_and_admission() {
+        let mut coordinator = node("coordinator-1", 997);
+        coordinator.role = "coordinator".into();
+        coordinator.memory_rss_bytes = 22 * 1024 * 1024 + 104_858;
+        coordinator.memory_limit_bytes = Some(4 * 1024 * 1024 * 1024);
+        coordinator.admission = Some(Admission {
+            limit_bytes: 4 * 1024 * 1024 * 1024,
+            admitted_bytes: 512 * 1024 * 1024,
+            queue_depth: 2,
+        });
+        let mut w1 = node("w1", 999);
+        w1.role = "worker".into();
+        w1.memory_rss_bytes = 96 * 1024 * 1024;
+        w1.memory_limit_bytes = Some(2 * 1024 * 1024 * 1024);
+        let mut w2 = node("w2", 800);
+        w2.memory_rss_bytes = 1024 * 1024;
+        let cluster = Cluster {
+            environment: "docker".into(),
+            coordinator,
+            workers: vec![w1, w2],
+        };
+        let lines = panel(&cluster, 1000, &Theme::mono());
+        let text = crate::render::to_plain(&lines);
+        assert_eq!(
+            text,
+            "  coordinator-1 · coordinator · v0.1.0 · heartbeat 3 s ago · rss 22.1 MiB · limit 4.0 GiB\n  \
+             w1 · worker · v0.1.0 · heartbeat 1 s ago · rss 96.0 MiB · limit 2.0 GiB\n  \
+             w2 · worker · v0.1.0 · heartbeat 200 s ago · rss 1.0 MiB\n  \
+             admission 512.0 MiB / 4.0 GiB admitted · queue depth 2\n"
+        );
+        let theme = Theme {
+            warning: ratatui::style::Style::default().fg(ratatui::style::Color::Yellow),
+            ..Theme::mono()
+        };
+        let lines = panel(&cluster, 1000, &theme);
+        assert_eq!(lines[1].spans[2].style, Style::default());
+        assert_eq!(lines[2].spans[2].style, theme.warning);
+    }
+
+    #[test]
+    fn panel_without_admission_says_so() {
+        let cluster = Cluster {
+            environment: String::new(),
+            coordinator: node("c", 0),
+            workers: vec![],
+        };
+        let text = crate::render::to_plain(&panel(&cluster, 1000, &Theme::mono()));
+        assert_eq!(
+            text,
+            "  c · coordinator · v0.1.0 · no heartbeat · rss 0 B\n  admission unavailable\n"
+        );
     }
 }
