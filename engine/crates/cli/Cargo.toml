@@ -1,7 +1,7 @@
 [package]
 name = "kaveon-cli"
-description = "Kaveon Engine CLI — interactive SQL shell"
-version = "0.2.0"
+description = "Kaveon client — interactive SQL shell for a Kaveon coordinator"
+version = "0.3.0"
 rust-version = "1.88"
 edition.workspace = true
 license.workspace = true
@@ -23,3 +23,8 @@ serde_json = { workspace = true }
 sqlparser = { workspace = true }
 rustyline = "15"
 terminal_size = "0.4"
+uuid = { workspace = true }
+ratatui = "0.29"
+crossterm = "0.28"
+tui-textarea = "0.7"
+unicode-width = "0.2"
