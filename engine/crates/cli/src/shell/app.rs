@@ -6,7 +6,7 @@ use crate::auth::Session;
 use crate::client::session::{self as api, Cluster, Whoami};
 use crate::render;
 use crate::shell::editor::{Editor, EditorAction};
-use crate::shell::status::{StatusFacts, box_title, host_of, status_line};
+use crate::shell::status::{StatusFacts, box_title, host_of, prompt, prompt_width, status_line};
 use crate::theme::Theme;
 use crossterm::event::{self, Event, KeyEventKind};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
@@ -42,9 +42,8 @@ pub struct App {
 }
 
 impl App {
-    fn status_facts<'a>(&'a self, context: &'a str, host: &'a str) -> StatusFacts<'a> {
+    fn status_facts<'a>(&'a self, host: &'a str) -> StatusFacts<'a> {
         StatusFacts {
-            context,
             host,
             workers_ready: self
                 .cluster
@@ -206,19 +205,36 @@ fn event_loop(app: &mut App, session: &Session, options: &mut Options) -> Result
                 let [editor_area, status_area] =
                     Layout::vertical([Constraint::Length(editor_height), Constraint::Length(1)])
                         .areas(frame.area());
-                let [prompt_area, text_area] =
-                    Layout::horizontal([Constraint::Length(2), Constraint::Min(1)])
-                        .areas(editor_area);
+                let [prompt_area, text_area] = Layout::horizontal([
+                    Constraint::Length(prompt_width(&title)),
+                    Constraint::Min(1),
+                ])
+                .areas(editor_area);
                 frame.render_widget(app.editor.widget(&app.theme, false), text_area);
-                // The prompt glyph sits on the first text row, under the rule.
-                let prompt = ratatui::layout::Rect {
+                // The rules span the whole width; the prompt sits on the first
+                // text row between them.
+                for y in [editor_area.y, editor_area.bottom().saturating_sub(1)] {
+                    let rule = ratatui::layout::Rect {
+                        y,
+                        height: 1,
+                        ..prompt_area
+                    };
+                    frame.render_widget(
+                        Paragraph::new(Span::styled(
+                            "─".repeat(prompt_area.width as usize),
+                            app.theme.dim,
+                        )),
+                        rule,
+                    );
+                }
+                let prompt_row = ratatui::layout::Rect {
                     y: (prompt_area.y + 1).min(editor_area.bottom().saturating_sub(1)),
                     height: 1,
                     ..prompt_area
                 };
-                frame.render_widget(Paragraph::new(Span::styled("›", app.theme.accent)), prompt);
+                frame.render_widget(Paragraph::new(prompt(&title, &app.theme)), prompt_row);
                 frame.render_widget(
-                    Paragraph::new(status_line(&app.status_facts(&title, &host), &app.theme)),
+                    Paragraph::new(status_line(&app.status_facts(&host), &app.theme)),
                     status_area,
                 );
             })
