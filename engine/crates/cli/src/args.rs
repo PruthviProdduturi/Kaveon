@@ -5,7 +5,9 @@ const DEFAULT_SERVER: &str = "http://localhost:8080";
 const DEFAULT_CATALOG: &str = "kaveon";
 const DEFAULT_SCHEMA: &str = "default";
 const DEFAULT_SOURCE: &str = "kaveon-cli";
-const DEFAULT_TIMEOUT_SECONDS: u64 = 30;
+/// Statements run for as long as they take; the timeout guards the
+/// request itself. Metadata calls use `client::session::METADATA_TIMEOUT`.
+const DEFAULT_TIMEOUT_SECONDS: u64 = 24 * 60 * 60;
 
 pub use crate::output::OutputFormat;
 
@@ -467,6 +469,7 @@ mod tests {
         };
         assert!(!options.local);
         assert_eq!(options.server, DEFAULT_SERVER);
+        assert_eq!(options.timeout, Duration::from_secs(24 * 60 * 60));
     }
 
     #[test]
