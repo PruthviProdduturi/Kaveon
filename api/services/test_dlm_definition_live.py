@@ -7,6 +7,13 @@ from services import product_shadow_read as shadow
 
 
 class DlmDefinitionMutationTests(unittest.TestCase):
+    def setUp(self):
+        # publish_ready replays the dataset's own pending source events before
+        # it binds the revision; the tests below cover that contract explicitly.
+        replay = patch.object(mutations.product_replay, "replay_record", return_value=0)
+        self.replay_record = replay.start()
+        self.addCleanup(replay.stop)
+
     def test_ready_publication_binds_owner_and_exact_dataset_revision(self):
         transaction = Mock()
         transaction.query_one.return_value = {"created_by": "owner@example.test", "status": "ready"}
@@ -16,6 +23,7 @@ class DlmDefinitionMutationTests(unittest.TestCase):
             publication = mutations.publish_ready(transaction, "42", "actor@example.test")
             self.assertEqual((publication.event, publication.owner, publication.revision),
                              ("event", "owner@example.test", 1))
+        self.replay_record.assert_called_once_with("datasets", "42")
         self.assertEqual(enqueue.call_args.kwargs, {
             "family": "dlm_definitions", "operation": "create", "record_id": "42",
             "payload": {"dataset_id": "42", "dataset_revision": 7},
@@ -37,6 +45,35 @@ class DlmDefinitionMutationTests(unittest.TestCase):
                      self.assertRaisesRegex(RuntimeError, message):
                     mutations.publish_ready(transaction, "42", "actor")
                 enqueue.assert_not_called()
+
+    def test_publication_replays_the_dataset_source_events_before_binding_its_revision(self):
+        # A dataset created moments ago exists only in PostgreSQL and the
+        # outbox until replay; publication must not depend on the worker's
+        # schedule, so it replays the record first and then reads it.
+        transaction = Mock()
+        transaction.query_one.return_value = {"created_by": "owner", "status": "ready"}
+        dataset = {"revision": 1, "document": {"created_by": "owner"}}
+        order = []
+        self.replay_record.side_effect = lambda family, record_id: order.append(("replay", family, record_id)) or 1
+        def read(kind, record_id, actor, role):
+            order.append(("read", kind, record_id))
+            return dataset if kind == "dataset" else None
+        with patch.object(mutations.product_store, "read", side_effect=read), \
+             patch.object(mutations.product_outbox, "enqueue", return_value="event"):
+            publication = mutations.publish_ready(transaction, "42", "actor")
+        self.assertEqual(order[:2], [("replay", "datasets", "42"), ("read", "dataset", "42")])
+        self.assertEqual(publication.revision, 1)
+
+    def test_publication_fails_closed_when_the_dataset_replay_is_blocked(self):
+        transaction = Mock()
+        transaction.query_one.return_value = {"created_by": "owner", "status": "ready"}
+        self.replay_record.side_effect = RuntimeError("Product outbox event is pending but was not replayable")
+        with patch.object(mutations.product_store, "read") as read, \
+             patch.object(mutations.product_outbox, "enqueue") as enqueue, \
+             self.assertRaisesRegex(RuntimeError, "not replayable"):
+            mutations.publish_ready(transaction, "42", "actor")
+        read.assert_not_called()
+        enqueue.assert_not_called()
 
     def test_existing_definition_emits_revision_checked_update_event(self):
         transaction = Mock()

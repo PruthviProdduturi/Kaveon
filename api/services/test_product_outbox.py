@@ -41,6 +41,37 @@ class ProductOutboxTests(unittest.TestCase):
         self.assertIn("WHERE event_id = @param0", query.call_args.args[0])
         self.assertEqual(query.call_args.args[1], [event_id.lower()])
 
+    def test_pending_reads_the_ordered_prefix_optionally_bounded_by_sequence(self):
+        with patch.object(product_outbox.db, "query", return_value={"rows": []}) as query:
+            product_outbox.pending(50)
+            self.assertNotIn("@param1", query.call_args.args[0])
+            self.assertEqual(query.call_args.args[1], [50])
+            product_outbox.pending(20, through=17)
+        self.assertIn("AND source_sequence <= @param1", query.call_args.args[0])
+        self.assertIn("ORDER BY source_sequence", query.call_args.args[0])
+        self.assertEqual(query.call_args.args[1], [20, 17])
+        with patch.object(product_outbox.db, "query") as query:
+            for bound in (0, -1, "17", 1.5):
+                with self.assertRaisesRegex(ValueError, "positive source sequence"):
+                    product_outbox.pending(20, through=bound)
+        query.assert_not_called()
+
+    def test_newest_pending_sequence_is_scoped_to_one_unapplied_record(self):
+        with patch.object(product_outbox.db, "query_one", return_value={"source_sequence": 9}) as query:
+            self.assertEqual(product_outbox.newest_pending_sequence("datasets", "42"), 9)
+        sql = query.call_args.args[0]
+        self.assertIn("MAX(source_sequence)", sql)
+        self.assertIn("applied_at IS NULL AND family = @param0 AND record_id = @param1", sql)
+        self.assertEqual(query.call_args.args[1], ["datasets", "42"])
+        with patch.object(product_outbox.db, "query_one", return_value={"source_sequence": None}):
+            self.assertIsNone(product_outbox.newest_pending_sequence("datasets", "42"))
+        with patch.object(product_outbox.db, "query_one") as query:
+            with self.assertRaisesRegex(ValueError, "unsupported product outbox family"):
+                product_outbox.newest_pending_sequence("widgets", "42")
+            with self.assertRaisesRegex(ValueError, "record ID is required"):
+                product_outbox.newest_pending_sequence("datasets", "")
+        query.assert_not_called()
+
     def test_status_rejects_invalid_id_before_database_read(self):
         with patch.object(product_outbox.db, "query_one") as query:
             with self.assertRaisesRegex(ValueError, "must be a UUID"):
