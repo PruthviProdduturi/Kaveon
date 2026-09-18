@@ -44,6 +44,9 @@ pub struct Options {
     pub theme: String,
     pub no_header: bool,
     pub width: Option<u16>,
+    /// The catalog or schema came from a flag, the URL path, a config
+    /// default, or a later USE — not the built-in `kaveon.default`.
+    pub context_explicit: bool,
 }
 
 fn normalize_args(args: &[String]) -> Vec<String> {
@@ -115,6 +118,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         theme: "dark".to_owned(),
         no_header: false,
         width: None,
+        context_explicit: false,
     };
     let mut positional_server = false;
     let mut explicit_server = false;
@@ -287,6 +291,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         }
         options.schema = decode_segment(schema)?;
     }
+    options.context_explicit = explicit_catalog || explicit_schema || !segments.is_empty();
     url.set_path("");
     options.server = url.to_string().trim_end_matches('/').to_owned();
     if options.file.is_some() && options.execute.is_some() {
