@@ -51,7 +51,7 @@ The Rust server exposes these routes:
 
 | Method | Path | Current behavior |
 |---|---|---|
-| `POST` | `/v1/statement` | Parse, bind, plan, execute and retain a query result; inline (up to 16 MiB) or `result_delivery: "paged"` with `next_uri` pages; accepts per-request `settings` and leading `SET SESSION` statements |
+| `POST` | `/v1/statement` | Parse, bind, plan, execute and retain a query result; inline (up to 16 MiB) or `result_delivery: "paged"` with `next_uri` pages; accepts per-request `settings` and leading `SET SESSION` statements. Also runs [catalog statements](#catalog-statements) (`CREATE`/`DROP`/`ALTER` on the durable catalog, `SHOW`, `DESCRIBE`, `CALL system.register_table`) |
 | `GET` | `/v1/query` | Return up to 100 newest process-local query records, queued and running ones included |
 | `GET` | `/v1/query/{query_id}` | Return retained lifecycle, context, structured logical plan, result, and scan telemetry |
 | `DELETE` | `/v1/query/{query_id}` | Cancel the query: a queued statement leaves the admission queue at once; a running one propagates cancellation to active worker tasks |
@@ -74,13 +74,91 @@ The Rust server exposes these routes:
 | `POST`, `GET` | `/v1/task`, `/v1/exchange`, `/v1/internal/exchange/*`, `/v1/internal/query/{query_id}/finish`, `/v1/internal/catalog/snapshot` | Worker task submission, exchange partition upload/download, query finish and cancellation, catalog replica; exchange-token authenticated, not client routes |
 | `GET` | `/health`, `/ready`, `/ui` | Liveness, catalog readiness, and operational UI |
 
-Catalog mutations require the configured catalog-admin bearer token, an actor header, and optimistic `If-Match` revisions for replacement. Internal task/exchange routes use a separate shared bearer token. Statement clients authenticate with a principal token from `KAVEON_SECURITY_JSON` (roles `reader`, `analyst`, `admin`), an Entra bearer token, or the API bridge token with delegated `x-kaveon-principal`/`x-kaveon-role` headers; the server serves native TLS, applies a per-principal concurrent-statement limit, resource groups and memory admission, and scopes query records and paged results to their owner (`docs/engineering/engine-security-integration.md`). This is a credential boundary, not production identity federation: rotation without restart, tenant isolation and row/column policies remain gates, so keep the Engine on a private network during alpha.
+Catalog mutations through `/v1/catalog/*` require the configured catalog-admin bearer token, an actor header, and optimistic `If-Match` revisions for replacement; the same definitions are also created and dropped by [catalog statements](#catalog-statements) on `/v1/statement` under the submitting principal's role. Internal task/exchange routes use a separate shared bearer token. Statement clients authenticate with a principal token from `KAVEON_SECURITY_JSON` (roles `reader`, `analyst`, `admin`), an Entra bearer token, or the API bridge token with delegated `x-kaveon-principal`/`x-kaveon-role` headers; the server serves native TLS, applies a per-principal concurrent-statement limit, resource groups and memory admission, and scopes query records and paged results to their owner (`docs/engineering/engine-security-integration.md`). This is a credential boundary, not production identity federation: rotation without restart, tenant isolation and row/column policies remain gates, so keep the Engine on a private network during alpha.
 
 The statement JSON body requires `query`. Clients may also provide `source`,
 `client`, `time_zone`, `client_tags`, `result_delivery` and `settings`. `source`,
 `client` and `client_tags` identify the submitting application and session; they
 are not trusted user identity. The record's `principal` comes from the
 authenticated identity; `client_address` is not recorded.
+
+### Catalog statements
+
+`POST /v1/statement` accepts the Trino-shaped catalog DDL below. A catalog
+statement lowers onto the same durable definitions `/v1/catalog/*` manages —
+the same identifiers (`catalog:<name>`, `schema:<catalog>:<name>`,
+`table:<catalog>:<schema>:<name>`), revisions, lifecycle and audit trail —
+and republishes the planning snapshot, so the table answers queries on the
+next statement. It leaves a query record like any statement (`FINISHED`
+with the result, or `FAILED` with the reason) and returns a one-row result:
+`(catalog|schema|table, result)` with `created`, `exists`, `dropped`,
+`absent`, `relocated` or `unchanged`. One statement per request; the
+session `catalog` and `schema` of the request resolve unqualified names.
+
+```sql
+CREATE CATALOG [IF NOT EXISTS] name WITH (storage = 'adls', account = '…', container = '…' [, root = '…'] [, credential = 'workload-identity:<reference>'])
+CREATE CATALOG [IF NOT EXISTS] name WITH (storage = 'local', base_path = '<absolute path on the coordinator>')
+CREATE CATALOG [IF NOT EXISTS] name WITH (storage = 's3', bucket = '…', region = '…' [, prefix = '…'])
+DROP CATALOG [IF EXISTS] name [CASCADE | RESTRICT]
+CREATE SCHEMA [IF NOT EXISTS] [catalog.]schema
+DROP SCHEMA [IF EXISTS] [catalog.]schema [CASCADE | RESTRICT]
+CREATE TABLE [IF NOT EXISTS] [catalog.][schema.]table [(column type [NOT NULL], …)]
+    WITH (location = '<path within the catalog root>', format = 'parquet' | 'delta' | 'iceberg' [, access = 'shortcut' | 'optimized'])
+CALL [catalog.]system.register_table(schema_name => '…', table_name => '…', table_location => '…' [, format => 'delta'])
+CALL [catalog.]system.unregister_table(schema_name => '…', table_name => '…')
+ALTER TABLE [IF EXISTS] [catalog.][schema.]table SET LOCATION '<path>'
+DROP TABLE [IF EXISTS] [catalog.][schema.]table
+SHOW CATALOGS [LIKE 'pattern']
+SHOW SCHEMAS [FROM | IN catalog] [LIKE 'pattern']
+SHOW TABLES [FROM | IN [catalog.]schema] [LIKE 'pattern']
+SHOW CREATE TABLE [catalog.][schema.]table
+DESCRIBE [TABLE] [catalog.][schema.]table
+SHOW COLUMNS FROM [catalog.][schema.]table
+```
+
+- **Roles.** `CREATE CATALOG` and `DROP CATALOG` require `admin`; schema and
+  table statements require `analyst` or `admin`; `SHOW` and `DESCRIBE` any
+  statement-capable role (`reader` cannot submit statements at all). The
+  submitting principal is the audit actor. The `/v1/catalog/*` service
+  credential is not involved.
+- **Columns.** `CREATE TABLE` without a column list reads the columns from
+  the table itself — the Delta log, the Iceberg metadata pointer or the
+  Parquet footers (the first file of a directory) — with a metadata-only
+  read, and stores them. A declared column list is stored as declared once
+  every declared column is found in the source by name. Column types accept
+  the SQL spellings (`bigint`, `integer`, `smallint`, `tinyint`, `boolean`,
+  `double`, `real`, `varchar`, `varbinary`, `date`, `timestamp`,
+  `decimal(p, s)`) and the Arrow names (`Int64`, `Utf8`, …), which is what
+  `SHOW CREATE TABLE` and `DESCRIBE` present, so their output registers the
+  same table again.
+- **Verification.** A table is created as a `Draft` (revision 1), its
+  location is probed, and only a readable location becomes `Active`
+  (revision 2). A failed probe deletes the draft and the statement fails with
+  HTTP 400, code `TABLE_NOT_READABLE`, and the storage error — a missing
+  object, a Parquet file registered as Delta, a declared column the source
+  does not have. Nothing is left half-registered. `ALTER TABLE … SET
+  LOCATION` probes the new location the same way, requires every stored
+  column to be present there, and publishes the next revision.
+- **`CREATE CATALOG`.** `storage = 'local'` requires an absolute directory
+  that exists on the coordinator. ADLS and S3 catalogs store the account or
+  bucket and an optional credential *reference* (`kind:reference`, kinds
+  `managed-identity`, `workload-identity`, `environment`, `secret-store`);
+  never a secret. Their tables are probed when they are created.
+- **`DROP … RESTRICT`** (the default) refuses a schema or catalog that still
+  holds objects with HTTP 409; `CASCADE` removes the children with it.
+- **Errors.** HTTP 400 `SYNTAX_ERROR` for a malformed statement, naming the
+  missing option; 400 `CATALOG_NOT_FOUND` / `SCHEMA_NOT_FOUND` /
+  `TABLE_NOT_FOUND`; 409 `CATALOG_CONFLICT` for an object that already exists,
+  is not empty, or changed revision while the statement ran; 403 `FORBIDDEN`
+  for a role that may not make the change; 400 `CATALOG_INVALID` for an
+  invalid definition; 500 `CATALOG_UNAVAILABLE` when the store or the snapshot
+  publication fails. A failure after the statement was admitted leaves a
+  `FAILED` record and its body carries the query `id`; a syntax error is
+  refused before a record exists.
+
+A catalog statement does not need an existing session context: `CREATE
+CATALOG` on an empty coordinator, or `CREATE SCHEMA` in a catalog with no
+schema, runs with whatever `catalog`/`schema` the request names.
 
 ### Per-request settings
 

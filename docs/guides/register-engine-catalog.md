@@ -69,13 +69,40 @@ recreate a live catalog to suppress it.
 
 ## Register schemas and tables
 
+The shortest path is the CLI or a SQL script, which registers each table
+only after the coordinator has read its metadata:
+
+```bash
+kaveon schema add ExampleLake.sales --server https://engine.example --ca-cert ./kaveon-ca.crt
+kaveon table register ExampleLake.sales.orders --location sales/orders --format delta
+kaveon table describe ExampleLake.sales.orders
+```
+
+or, in the shell or with `-f`:
+
+```sql
+CREATE SCHEMA IF NOT EXISTS ExampleLake.sales;
+CREATE TABLE IF NOT EXISTS ExampleLake.sales.orders WITH (location = 'sales/orders', format = 'delta');
+SHOW CREATE TABLE ExampleLake.sales.orders;
+```
+
+The columns come from the table's own metadata (a column list may be
+declared instead); an unreadable location fails the statement and registers
+nothing. The catalog itself can be created the same way (`kaveon catalog add`
+or `CREATE CATALOG … WITH (storage = 'adls', …)`, admin role) when it is not
+bootstrapped or synchronized from the platform. See the
+[CLI guide](engine-cli.md#catalog-administration) and the
+[API reference](../reference/api.md#catalog-statements).
+
+
 From Studio, open Catalog and use **Add schema** and **Add table**; from the
 platform API, `POST /api/v1/engine/catalog/definitions/{catalog_id}/schemas`
 and `POST /api/v1/engine/catalog/tables` with names and Trino column types
 (Editor role). Both register as Draft, activate, and verify the table with a
 read before keeping it; see [Connectors](../reference/connector-capabilities.md#registering-catalogs-schemas-and-tables).
 
-Or use the Engine catalog API directly with the catalog-admin credential:
+The manifest scripts below use the authenticated Engine catalog API directly
+with the catalog-admin credential, which the same definitions also accept:
 
 1. `POST /v1/catalog/definitions/{catalog_id}/schemas` creates each schema.
 2. `POST /v1/catalog/schemas/{schema_id}/tables` creates each table, including
@@ -121,7 +148,7 @@ rebuild was recovered this way, in this order:
 ## Verify
 
 Use CLI 0.2.0 or newer to check `SHOW CATALOGS`, `SHOW SCHEMAS`, `SHOW TABLES`,
-and `DESCRIBE`. Run row counts and selected aggregates against source-system
+`DESCRIBE` and `SHOW CREATE TABLE` (or `kaveon table show-create`). Run row counts and selected aggregates against source-system
 expectations. In SQL Lab, select the catalog and verify all schema groups,
 column types, and a real query.
 
