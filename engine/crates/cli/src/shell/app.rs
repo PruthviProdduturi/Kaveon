@@ -7,9 +7,12 @@
 //! tag and polls it for the running line, and turns Ctrl-C into a cancel.
 use crate::args::Options;
 use crate::auth::Session;
+use crate::client::error::{CliError, ErrorKind};
+use crate::client::metadata::NameCache;
 use crate::client::session::{self as api, CliHttp, Cluster, Whoami};
 use crate::client::statement::{self, Handle, SharedSession, StatementEvent, StatementRequest};
 use crate::render;
+use crate::shell::commands::{self, Command, SessionSettings};
 use crate::shell::editor::{Editor, EditorAction};
 use crate::shell::progress::{self, Phase, Progress};
 use crate::shell::status::{StatusFacts, host_of, prompt, prompt_width, status_line};
@@ -19,12 +22,13 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Paragraph, Widget};
+use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 use ratatui::{Terminal, TerminalOptions, Viewport};
 use std::collections::VecDeque;
 use std::io;
 use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use unicode_width::UnicodeWidthStr;
 
 /// The editor shows up to this many SQL lines before scrolling inside.
 const EDITOR_MAX_LINES: u16 = 6;
@@ -78,10 +82,22 @@ fn lock(session: &SharedSession) -> MutexGuard<'_, Session> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// One line of `.history`: what ran, how it went.
+struct HistoryEntry {
+    statement: String,
+    elapsed_ms: Option<u64>,
+    ok: bool,
+}
+
 /// A statement on the coordinator.
 struct Running {
     handle: Handle,
     progress: Progress,
+    /// The statement as typed (without the appended limit), for the error
+    /// panel's excerpt and the history.
+    sql: String,
+    /// `EXPLAIN <statement>`: render the plan instead of the rows.
+    explain: bool,
     /// The interactive row limit appended to the statement, for the
     /// summary's note when the result fills it.
     preview_limit: Option<usize>,
@@ -104,6 +120,11 @@ pub struct App {
     running: Option<Running>,
     /// Statements from one submission still to run, in order.
     pending: VecDeque<String>,
+    settings: SessionSettings,
+    names: NameCache,
+    history_log: Vec<HistoryEntry>,
+    /// `.timing`: whether the summary lines are shown.
+    timing: bool,
 }
 
 impl App {
@@ -162,6 +183,10 @@ pub fn run(session: Session, options: &mut Options) -> Result<(), String> {
         last_cluster_poll: Instant::now(),
         running: None,
         pending: VecDeque::new(),
+        settings: SessionSettings::default(),
+        names: NameCache::default(),
+        history_log: Vec::new(),
+        timing: true,
     };
     if let Some(path) = &app.history_path
         && let Ok(text) = std::fs::read_to_string(path)
@@ -257,11 +282,39 @@ fn emit_text(terminal: &mut Term, text: &str, theme: &Theme, dim: bool) -> Resul
     emit(terminal, lines)
 }
 
+/// Any error, as the panel. Messages the shell composed itself (a
+/// resolved missing table, a refused limit) are already for people and
+/// keep their wording under a "Not found" or "Shell" heading.
 fn emit_error(terminal: &mut Term, message: &str, theme: &Theme) -> Result<(), String> {
-    emit(
-        terminal,
-        vec![Line::styled(format!("error: {message}"), theme.error)],
-    )
+    let error = error_from_message(message, None);
+    emit(terminal, render::error::panel(&error, theme))
+}
+
+fn error_from_message(message: &str, sql: Option<&str>) -> CliError {
+    if message.starts_with("table '")
+        || message.starts_with("no catalog.schema")
+        || message.starts_with("catalog '")
+        || message.starts_with("schema '")
+    {
+        return CliError {
+            kind: ErrorKind::NotFound,
+            message: message.to_owned(),
+            query_id: None,
+            workers: Vec::new(),
+            position: None,
+            sql: None,
+        };
+    }
+    CliError::from_message(message, sql)
+}
+
+/// The width result tables may use: `--width`, else the terminal's.
+fn table_width(options: &Options) -> Option<usize> {
+    options.width.map(usize::from).or_else(|| {
+        crossterm::terminal::size()
+            .ok()
+            .map(|(columns, _)| usize::from(columns))
+    })
 }
 
 fn emit_blank(terminal: &mut Term) -> Result<(), String> {
@@ -356,10 +409,27 @@ fn event_loop(app: &mut App, options: &mut Options) -> Result<(), String> {
                 let [prompt_area, text_area] =
                     Layout::horizontal([Constraint::Length(prompt_width()), Constraint::Min(1)])
                         .areas(editor_area);
-                frame.render_widget(
-                    app.editor.widget(&app.theme, running_line.is_some()),
-                    text_area,
-                );
+                let running_now = running_line.is_some();
+                if !running_now && app.editor.line_count() <= usize::from(EDITOR_MAX_LINES) {
+                    // Highlighted text with the cursor placed by hand; the
+                    // text area keeps the buffer and the cursor.
+                    let block = Block::new()
+                        .borders(Borders::TOP | Borders::BOTTOM)
+                        .border_style(app.theme.dim);
+                    let inner = block.inner(text_area);
+                    let lines = crate::shell::highlight::highlight(&app.editor.lines(), &app.theme);
+                    frame.render_widget(Paragraph::new(lines).block(block), text_area);
+                    let (row, column) = app.editor.cursor();
+                    let line = app.editor.current_line();
+                    let prefix: String = line.chars().take(column).collect();
+                    let x = inner.x + prefix.width() as u16;
+                    let y = inner.y + row as u16;
+                    if y < inner.bottom() {
+                        frame.set_cursor_position((x.min(inner.right().saturating_sub(1)), y));
+                    }
+                } else {
+                    frame.render_widget(app.editor.widget(&app.theme, running_now), text_area);
+                }
                 // The rules span the whole width; the prompt sits on the first
                 // text row between them.
                 for y in [editor_area.y, editor_area.bottom().saturating_sub(1)] {
@@ -410,6 +480,10 @@ fn event_loop(app: &mut App, options: &mut Options) -> Result<(), String> {
             if is_ctrl_c(&key) {
                 interrupt_running(app, terminal, options)?;
             }
+            continue;
+        }
+        if key.code == KeyCode::Tab {
+            complete_at_cursor(app, terminal, options)?;
             continue;
         }
         match app.editor.handle(&key) {
@@ -468,6 +542,17 @@ fn submit(
     options: &mut Options,
     text: &str,
 ) -> Result<(), String> {
+    match commands::parse(text) {
+        Some(Ok(command)) => {
+            run_command(app, terminal, options, command)?;
+            return emit_blank(terminal);
+        }
+        Some(Err(error)) => {
+            emit_error(terminal, &error, &app.theme)?;
+            return emit_blank(terminal);
+        }
+        None => {}
+    }
     if let Some(rest) = text.strip_prefix(".limit") {
         let argument = rest.trim();
         let argument = (!argument.is_empty()).then_some(argument);
@@ -525,6 +610,10 @@ fn submit(
 fn start_next(app: &mut App, terminal: &mut Term, options: &mut Options) -> Result<(), String> {
     use crate::shell::rowlimit::{HARD_ROW_LIMIT, Limited, inspect, refusal};
     while let Some(statement) = app.pending.pop_front() {
+        let (statement, explain) = match strip_explain(&statement) {
+            Some(inner) => (inner, true),
+            None => (statement, false),
+        };
         let (sql, preview_limit) = match inspect(&statement, options.row_limit) {
             Limited::Appended(sql) => (sql, Some(options.row_limit)),
             Limited::Explicit(explicit) if explicit > HARD_ROW_LIMIT => {
@@ -556,16 +645,24 @@ fn start_next(app: &mut App, terminal: &mut Term, options: &mut Options) -> Resu
                 emit_blank(terminal)?;
             }
             Ok(None) => {
+                let mut request = StatementRequest::new(&sql, options);
+                let mut settings = app.settings.as_map().unwrap_or_default();
+                if explain {
+                    settings.insert("result_cache".into(), serde_json::Value::Bool(false));
+                }
+                request.settings = (!settings.is_empty()).then_some(settings);
                 let handle = statement::submit(
                     Arc::clone(&app.session),
                     options.server.clone(),
-                    StatementRequest::new(&sql, options),
+                    request,
                     options.timeout,
                 );
                 app.editor.set_text(&statement);
                 app.running = Some(Running {
                     handle,
                     progress: Progress::default(),
+                    sql: statement.clone(),
+                    explain,
                     preview_limit,
                     polls: 0,
                     last_poll: Instant::now(),
@@ -656,9 +753,45 @@ fn finish(
     match event {
         StatementEvent::Finished(result) => {
             let names = result.column_names();
-            let table = crate::output::format_rows(&names, &result.data, options.output_format);
-            emit_text(terminal, table.trim_end_matches('\n'), &app.theme, false)?;
-            let summary = crate::remote::statement_summary(
+            let mut truncated = false;
+            if running.explain {
+                let record =
+                    api::fetch_query(&lock(&app.session), &options.server, &result.id).ok();
+                let plan = record
+                    .as_ref()
+                    .and_then(|record| record.plan.as_ref())
+                    .and_then(|plan| plan.get("logical").cloned())
+                    .unwrap_or(serde_json::Value::Null);
+                emit(terminal, render::plan::tree(&plan, &app.theme))?;
+            } else {
+                use crate::output::OutputFormat;
+                match options.output_format {
+                    OutputFormat::Table | OutputFormat::Aligned | OutputFormat::Auto => {
+                        let (lines, cut) = render::table::styled(
+                            &names,
+                            &result.data,
+                            table_width(options),
+                            &app.theme,
+                        );
+                        if cut && options.output_format == OutputFormat::Auto {
+                            let text = crate::output::format_rows(
+                                &names,
+                                &result.data,
+                                OutputFormat::Vertical,
+                            );
+                            emit_text(terminal, text.trim_end_matches('\n'), &app.theme, false)?;
+                        } else {
+                            truncated = cut;
+                            emit(terminal, lines)?;
+                        }
+                    }
+                    format => {
+                        let text = crate::output::format_rows(&names, &result.data, format);
+                        emit_text(terminal, text.trim_end_matches('\n'), &app.theme, false)?;
+                    }
+                }
+            }
+            let mut summary = crate::remote::statement_summary(
                 &lock(&app.session),
                 options,
                 &result.id,
@@ -666,9 +799,23 @@ fn finish(
                 result.elapsed_ms,
                 running.preview_limit,
             );
+            if truncated && let Some(summary) = summary.as_mut() {
+                let note = "some columns truncated · .format vertical to see them whole";
+                summary.message = Some(match summary.message.take() {
+                    Some(existing) => format!("{existing} · {note}"),
+                    None => note.to_owned(),
+                });
+            }
             app.last_elapsed_ms = Some(result.elapsed_ms);
             app.last_scanned_rows = summary.as_ref().and_then(|summary| summary.rows_scanned);
-            if let Some(summary) = summary {
+            app.history_log.push(HistoryEntry {
+                statement: running.sql.clone(),
+                elapsed_ms: Some(result.elapsed_ms),
+                ok: true,
+            });
+            if app.timing
+                && let Some(summary) = summary
+            {
                 emit(terminal, render::summary::lines(&summary, &app.theme))?;
             }
             emit_blank(terminal)?;
@@ -690,11 +837,27 @@ fn finish(
                 emit(terminal, render::summary::lines(&summary, &app.theme))?;
             } else {
                 let message = failure_message(&failure);
-                let message =
-                    crate::remote::explain_missing_table(&lock(&app.session), options, &message)
-                        .unwrap_or(message);
-                emit_error(terminal, &message, &app.theme)?;
+                let error = match crate::remote::explain_missing_table(
+                    &lock(&app.session),
+                    options,
+                    &message,
+                ) {
+                    Some(resolved) => error_from_message(&resolved, None),
+                    None => {
+                        let mut error = CliError::from_message(&message, Some(&running.sql));
+                        if error.query_id.is_none() {
+                            error.query_id = running.progress.query_id.clone();
+                        }
+                        error
+                    }
+                };
+                emit(terminal, render::error::panel(&error, &app.theme))?;
             }
+            app.history_log.push(HistoryEntry {
+                statement: running.sql.clone(),
+                elapsed_ms: None,
+                ok: false,
+            });
             emit_blank(terminal)
         }
     }
@@ -746,6 +909,217 @@ fn interrupt_running(
         ])],
     )?;
     emit_blank(terminal)
+}
+
+/// `EXPLAIN <statement>` → the statement, when the first word is EXPLAIN.
+fn strip_explain(statement: &str) -> Option<String> {
+    let trimmed = statement.trim_start();
+    let mut words = trimmed.splitn(2, char::is_whitespace);
+    let first = words.next()?;
+    if !first.eq_ignore_ascii_case("EXPLAIN") {
+        return None;
+    }
+    let rest = words.next()?.trim();
+    (!rest.is_empty()).then(|| rest.to_owned())
+}
+
+/// Tab: complete the word before the cursor from keywords and the
+/// catalog's names; several candidates are listed above the editor.
+fn complete_at_cursor(app: &mut App, terminal: &mut Term, options: &Options) -> Result<(), String> {
+    let line = app.editor.current_line();
+    let (_, column) = app.editor.cursor();
+    let byte_cursor = line
+        .char_indices()
+        .nth(column)
+        .map_or(line.len(), |(index, _)| index);
+    let head = &line[..byte_cursor];
+    let word_start = head
+        .rfind(|c: char| c.is_whitespace() || c == '(' || c == ',')
+        .map_or(0, |index| index + 1);
+    let prefix = head[word_start..]
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_owned();
+    let names = if prefix.is_empty() {
+        Vec::new()
+    } else {
+        app.names.candidates(
+            &lock(&app.session),
+            &options.server,
+            &options.catalog,
+            &options.schema,
+            &prefix,
+        )
+    };
+    let (from, candidates) = crate::shell::complete::complete(&line, byte_cursor, &names);
+    let typed_chars = line[from..byte_cursor].chars().count();
+    match candidates.as_slice() {
+        [] => Ok(()),
+        [only] => {
+            app.editor.replace_before_cursor(typed_chars, only);
+            Ok(())
+        }
+        many => {
+            let common = crate::shell::complete::common_prefix(many);
+            if common.chars().count() > typed_chars {
+                app.editor.replace_before_cursor(typed_chars, &common);
+            }
+            let shown: Vec<&str> = many.iter().take(12).map(String::as_str).collect();
+            let more = many.len().saturating_sub(shown.len());
+            let mut text = format!("  {}", shown.join("  "));
+            if more > 0 {
+                text.push_str(&format!("  … {more} more"));
+            }
+            emit(terminal, vec![Line::styled(text, app.theme.dim)])
+        }
+    }
+}
+
+fn run_command(
+    app: &mut App,
+    terminal: &mut Term,
+    options: &mut Options,
+    command: Command,
+) -> Result<(), String> {
+    match command {
+        Command::Cluster => {
+            refresh_cluster(app, options);
+            match &app.cluster {
+                Some(cluster) => emit(
+                    terminal,
+                    render::cluster::panel(cluster, now_unix(), &app.theme),
+                ),
+                None => emit_error(terminal, "the cluster payload is unavailable", &app.theme),
+            }
+        }
+        Command::Settings(None) => {
+            if app.settings.is_empty() {
+                emit_text(
+                    terminal,
+                    "no session settings; .settings <key> <value> with memory, parallelism, cache, admission_wait",
+                    &app.theme,
+                    true,
+                )
+            } else {
+                emit(terminal, app.settings.lines(&app.theme))
+            }
+        }
+        Command::Settings(Some((key, value))) => match app.settings.set(&key, &value) {
+            Ok(()) => emit(terminal, app.settings.lines(&app.theme)),
+            Err(error) => emit_error(terminal, &error, &app.theme),
+        },
+        Command::SettingsReset => {
+            app.settings.reset();
+            emit_text(terminal, "session settings cleared", &app.theme, true)
+        }
+        Command::Format(name) => match crate::output::OutputFormat::parse(&name) {
+            Ok(format) => {
+                options.output_format = format;
+                emit_text(terminal, &format!("result format {name}"), &app.theme, true)
+            }
+            Err(error) => emit_error(terminal, &error, &app.theme),
+        },
+        Command::History(count) => {
+            let entries: Vec<&HistoryEntry> =
+                app.history_log.iter().rev().take(count).collect::<Vec<_>>();
+            if entries.is_empty() {
+                return emit_text(terminal, "no statements yet", &app.theme, true);
+            }
+            let lines = entries
+                .into_iter()
+                .rev()
+                .map(|entry| {
+                    let (glyph, style) = if entry.ok {
+                        ("✓", app.theme.ok)
+                    } else {
+                        ("✗", app.theme.error)
+                    };
+                    let when = entry.elapsed_ms.map_or("      —".to_owned(), |ms| {
+                        format!("{:>7}", seconds(Duration::from_millis(ms)))
+                    });
+                    let statement = entry.statement.replace('\n', " ");
+                    let statement: String = statement.chars().take(100).collect();
+                    Line::from(vec![
+                        Span::styled(format!(" {glyph} "), style),
+                        Span::styled(format!("{when}  "), app.theme.dim),
+                        Span::raw(statement),
+                    ])
+                })
+                .collect();
+            emit(terminal, lines)
+        }
+        Command::Queries => {
+            let records: Vec<api::QueryRecord> = api::get(
+                &lock(&app.session),
+                &api::endpoint(&options.server, "/v1/query"),
+            )
+            .map_err(|failure| failure.message)?;
+            let live: Vec<&api::QueryRecord> = records
+                .iter()
+                .filter(|record| matches!(record.state.as_str(), "QUEUED" | "RUNNING"))
+                .collect();
+            if live.is_empty() {
+                return emit_text(
+                    terminal,
+                    "no statements running on the coordinator",
+                    &app.theme,
+                    true,
+                );
+            }
+            let lines = live
+                .into_iter()
+                .map(|record| {
+                    Line::from(vec![
+                        Span::styled(
+                            format!(" {}  ", &record.id[..record.id.len().min(8)]),
+                            app.theme.accent,
+                        ),
+                        Span::styled(format!("{:<8} ", record.state), app.theme.dim),
+                        Span::styled(
+                            format!("{:>8}  ", seconds(Duration::from_millis(record.elapsed_ms))),
+                            app.theme.dim,
+                        ),
+                        Span::raw(
+                            record
+                                .context
+                                .client_tags
+                                .iter()
+                                .find(|t| !t.starts_with("kaveon-cli:"))
+                                .cloned()
+                                .unwrap_or_default(),
+                        ),
+                    ])
+                })
+                .collect();
+            emit(terminal, lines)
+        }
+        Command::Kill(id) => match api::cancel_query(&lock(&app.session), &options.server, &id) {
+            Ok(()) => emit_text(
+                terminal,
+                &format!("cancel requested for {id}"),
+                &app.theme,
+                true,
+            ),
+            Err(failure) => emit_error(terminal, &failure.message, &app.theme),
+        },
+        Command::Timing => {
+            app.timing = !app.timing;
+            emit_text(
+                terminal,
+                if app.timing {
+                    "summary on"
+                } else {
+                    "summary off"
+                },
+                &app.theme,
+                true,
+            )
+        }
+        Command::Help => emit(terminal, render::help::help(&app.theme)),
+        Command::Clear => terminal.clear().map_err(|error| error.to_string()),
+        Command::Quit => Ok(()),
+    }
 }
 
 #[cfg(test)]

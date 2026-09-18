@@ -509,6 +509,7 @@ fn get_json<T: for<'de> Deserialize<'de>>(
 fn get_json_url<T: for<'de> Deserialize<'de>>(client: &Session, url: &str) -> Result<T, String> {
     let response = client
         .request(reqwest::Method::GET, url)?
+        .timeout(crate::client::session::METADATA_TIMEOUT)
         .send()
         .map_err(connection_error)?;
     decode_response(response)
@@ -747,6 +748,7 @@ fn resolve_use(
         let url = metadata_url(options, &[catalog, "schema"])?;
         match client
             .request(reqwest::Method::GET, &url)?
+            .timeout(crate::client::session::METADATA_TIMEOUT)
             .send()
             .map_err(connection_error)
         {

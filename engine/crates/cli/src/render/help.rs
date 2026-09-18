@@ -71,6 +71,26 @@ const GROUPS: &[Group] = &[
                 command: ".limit [n]",
                 description: "rows a query without LIMIT shows (default 1,000, up to 10,000)",
             },
+            Entry {
+                command: "EXPLAIN <statement>",
+                description: "the logical plan as a tree",
+            },
+            Entry {
+                command: ".cluster  .queries  .kill <id>",
+                description: "nodes and admission; statements running now; cancel one",
+            },
+            Entry {
+                command: ".settings [key value | reset]",
+                description: "memory, parallelism, cache, admission_wait for this session",
+            },
+            Entry {
+                command: ".format <name>  .timing  .history [n]",
+                description: "result format; summary on/off; recent statements",
+            },
+            Entry {
+                command: "Tab",
+                description: "complete keywords, tables, columns, schemas and catalogs",
+            },
         ],
     },
     Group {
@@ -96,32 +116,8 @@ const GROUPS: &[Group] = &[
                 description: "answer a question in plain language through the Kaveon DLM",
             },
             Entry {
-                command: "EXPLAIN <statement>",
-                description: "the plan as a tree, with stage placement",
-            },
-            Entry {
-                command: "live progress, Ctrl-C cancel",
-                description: "state, elapsed, tasks and rows scanned while a statement runs",
-            },
-            Entry {
                 command: "paged results",
-                description: "large results page on demand instead of failing at 16 MiB",
-            },
-            Entry {
-                command: ".queries  .kill <id>",
-                description: "statements running on the coordinator; cancel one",
-            },
-            Entry {
-                command: ".cluster",
-                description: "nodes, heartbeats, memory and admission",
-            },
-            Entry {
-                command: ".settings  SET SESSION",
-                description: "memory limit, parallelism, result cache, admission wait",
-            },
-            Entry {
-                command: ".format  .timing  .history",
-                description: "result format, elapsed-time toggle, recent statements",
+                description: "large results page on demand instead of the 10,000 ceiling",
             },
             Entry {
                 command: ".edit  .source <file>  .tee <file>",
@@ -130,10 +126,6 @@ const GROUPS: &[Group] = &[
             Entry {
                 command: "\\G  .watch <seconds>",
                 description: "vertical output for one statement; re-run on an interval",
-            },
-            Entry {
-                command: "Tab completion of names",
-                description: "catalogs, schemas, tables and columns from the catalog",
             },
         ],
     },

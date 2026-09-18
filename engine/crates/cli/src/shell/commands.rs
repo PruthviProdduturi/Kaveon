@@ -121,8 +121,13 @@ fn parse_settings(arguments: &[&str]) -> Result<Command, String> {
     match arguments {
         [] => Ok(Command::Settings(None)),
         [word] if word.eq_ignore_ascii_case("reset") => Ok(Command::SettingsReset),
-        [assignment] if let Some((key, value)) = assignment.split_once('=') => validate(key, value)
-            .map(|(key, _)| Command::Settings(Some((key, value.trim().to_owned())))),
+        [assignment] if assignment.contains('=') => {
+            let (key, value) = assignment
+                .split_once('=')
+                .expect("the assignment contains '='");
+            validate(key, value)
+                .map(|(key, _)| Command::Settings(Some((key, value.trim().to_owned()))))
+        }
         [key, value] => {
             validate(key, value).map(|(key, _)| Command::Settings(Some((key, (*value).to_owned()))))
         }
