@@ -1946,6 +1946,7 @@ dependencies = [
  "kaveon-optim",
  "kaveon-sql",
  "kaveon-storage",
+ "parquet",
  "ratatui",
  "reqwest",
  "rustyline",

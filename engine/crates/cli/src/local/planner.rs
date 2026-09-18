@@ -268,19 +268,27 @@ fn plan_with_predicate(
             right,
             left_key,
             right_key,
+            residual,
         }
         | LogicalPlan::AntiJoin {
             left,
             right,
             left_key,
             right_key,
-        } => Ok(Box::new(SemiJoinOperator::new(
-            plan_to_operator(left, catalog)?,
-            plan_to_operator(right, catalog)?,
-            left_key.clone(),
-            right_key.clone(),
-            matches!(plan, LogicalPlan::AntiJoin { .. }),
-        )?)),
+            residual,
+        } => {
+            let operator = SemiJoinOperator::new(
+                plan_to_operator(left, catalog)?,
+                plan_to_operator(right, catalog)?,
+                left_key.clone(),
+                right_key.clone(),
+                matches!(plan, LogicalPlan::AntiJoin { .. }),
+            )?;
+            Ok(Box::new(match residual {
+                Some(residual) => operator.with_residual(residual.clone())?,
+                None => operator,
+            }))
+        }
     }
 }
 

@@ -2,7 +2,8 @@
 //! `docs/qualification/tpch/trino-queries.sql`, run against a tiny
 //! deterministic TPC-H (every table, Trino's column names and types) through
 //! the node-local planner and, separately, through the distributed stage
-//! planner. The test prints a coverage table and holds the recorded truth:
+//! planner's fragments executed in this process as two workers would run
+//! them. The test prints a coverage table and holds the recorded truth:
 //! every statement outside `KNOWN_UNSUPPORTED` must parse, plan and execute,
 //! and every statement inside it must still fail, so the list cannot go
 //! stale in either direction. `docs/qualification/tpch/coverage.md` is the
@@ -23,6 +24,7 @@ use kaveon_core::{
     AccessPattern, BatchOperator, CatalogManager, CatalogProvider, DataFormat, MemoryCatalog,
     QueryMemoryPool, StorageType, TableMeta,
 };
+use kaveon_sql::logical_plan::LogicalPlan;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 
@@ -31,12 +33,9 @@ const QUERIES: &str = include_str!("../../../../docs/qualification/tpch/trino-qu
 /// Statements that do not run today, with the reason. A statement listed
 /// here must still fail at some stage; one that starts working must be
 /// removed from the list.
-const KNOWN_UNSUPPORTED: &[(&str, &str)] = &[(
-    "q21",
-    "parse: correlated subqueries are unsupported: l1.l_orderkey (the SQL layer refuses a qualified outer reference before the binder; behind it, l2.l_suppkey <> l1.l_suppkey is a correlated non-equality, which the single-key semi join cannot carry)",
-)];
+const KNOWN_UNSUPPORTED: &[(&str, &str)] = &[];
 
-/// Statements without a distributed plan today, with the reason.
+/// Statements whose fragments do not plan or execute today, with the reason.
 const KNOWN_NO_DISTRIBUTED_PLAN: &[(&str, &str)] = &[];
 
 const REGIONS: [&str; 5] = ["AFRICA", "AMERICA", "ASIA", "EUROPE", "MIDDLE EAST"];
@@ -99,6 +98,9 @@ const SHIP_INSTRUCTIONS: [&str; 4] = [
 const SHIP_MODES: [&str; 7] = ["REG AIR", "AIR", "RAIL", "SHIP", "TRUCK", "MAIL", "FOB"];
 
 const SUPPLIERS: i64 = 10;
+/// The supplier in SAUDI ARABIA (nation 20, the third of
+/// `NAMED_SUPPLIER_NATIONS`), who keeps every fifth order waiting (Q21).
+const WAITING_SUPPLIER: i64 = 3;
 const PARTS: i64 = 40;
 const CUSTOMERS: i64 = 30;
 const ORDERS: i64 = 150;
@@ -529,7 +531,15 @@ fn orders(rows: &OrderRows, totals: &[f64]) -> Table {
                 "o_orderstatus",
                 Column::Utf8(
                     keys.iter()
-                        .map(|k| ["F", "O", "P"][pick(*k as u64, 63, 3)].to_owned())
+                        .map(|k| {
+                            // Every fifth order was kept waiting and has
+                            // finished (Q21).
+                            if k % 5 == 0 {
+                                "F".to_owned()
+                            } else {
+                                ["F", "O", "P"][pick(*k as u64, 63, 3)].to_owned()
+                            }
+                        })
                         .collect(),
                 ),
             ),
@@ -591,15 +601,42 @@ fn lineitem(rows: &OrderRows, retail: &[f64]) -> (Table, Vec<f64>) {
     for (order, (key, orderdate)) in rows.keys.iter().zip(&rows.dates).enumerate() {
         // Every twenty-fifth order is a large one (seven full lines, Q18).
         let large = key % 25 == 0;
+        // Every fifth order is one the SAUDI ARABIA supplier kept waiting
+        // (Q21): its first line is supplier 3's, received after its
+        // commit date, and its other lines (at least one, from other
+        // suppliers) are received on time. Its status is F (orders()).
+        let waiting = key % 5 == 0;
         let lines = if large {
             7
+        } else if waiting {
+            pick(*key as u64, 71, 6) + 2
         } else {
             pick(*key as u64, 71, 7) + 1
         };
         let mut total = 0.0;
         for line in 1..=lines {
             let seed = (order * 8 + line) as u64;
-            let part = pick(seed, 72, PARTS as usize) as i64 + 1;
+            let kept_waiting = waiting && line == 1;
+            // Supplier 3 supplies parts 3, 13, 23 and 33 (part_supplier
+            // with ordinal 0).
+            let part = if kept_waiting {
+                3 + 10 * pick(seed, 84, 4) as i64
+            } else {
+                pick(seed, 72, PARTS as usize) as i64 + 1
+            };
+            let supplier = if kept_waiting {
+                WAITING_SUPPLIER
+            } else if waiting {
+                let ordinal = pick(seed, 75, 4) as i64;
+                let candidate = part_supplier(part, ordinal);
+                if candidate == WAITING_SUPPLIER {
+                    part_supplier(part, (ordinal + 1) % 4)
+                } else {
+                    candidate
+                }
+            } else {
+                part_supplier(part, pick(seed, 75, 4) as i64)
+            };
             let qty = if large {
                 50.0
             } else {
@@ -607,9 +644,17 @@ fn lineitem(rows: &OrderRows, retail: &[f64]) -> (Table, Vec<f64>) {
             };
             let price = qty * retail[(part - 1) as usize];
             let ship = orderdate + pick(seed, 74, 121) as i32 + 1;
+            let commit = orderdate + pick(seed, 79, 61) as i32 + 30;
+            let receipt = if kept_waiting {
+                commit + pick(seed, 80, 30) as i32 + 1
+            } else if waiting {
+                commit - pick(seed, 80, 30) as i32
+            } else {
+                ship + pick(seed, 80, 30) as i32 + 1
+            };
             orderkey.push(*key);
             partkey.push(part);
-            suppkey.push(part_supplier(part, pick(seed, 75, 4) as i64));
+            suppkey.push(supplier);
             linenumber.push(line as i32);
             quantity.push(qty);
             extendedprice.push(price);
@@ -618,8 +663,8 @@ fn lineitem(rows: &OrderRows, retail: &[f64]) -> (Table, Vec<f64>) {
             returnflag.push(["R", "A", "N"][pick(seed, 78, 3)].to_owned());
             linestatus.push(if ship > days("1995-06-17") { "O" } else { "F" }.to_owned());
             shipdate.push(ship);
-            commitdate.push(orderdate + pick(seed, 79, 61) as i32 + 30);
-            receiptdate.push(ship + pick(seed, 80, 30) as i32 + 1);
+            commitdate.push(commit);
+            receiptdate.push(receipt);
             // Branded parts (Q19) ship by air, in person, half the time.
             let branded = matches!(part, 6..=15 | 21..=25) && pick(seed, 83, 2) == 0;
             shipinstruct.push(if branded {
@@ -761,8 +806,16 @@ fn statements() -> Vec<(String, String)> {
 
 /// Rows as text, one string per row.
 fn rows(operator: &mut dyn BatchOperator) -> kaveon_core::Result<Vec<String>> {
-    let mut rows = Vec::new();
+    let mut batches = Vec::new();
     while let Some(batch) = operator.next_batch()? {
+        batches.push(batch);
+    }
+    batch_rows(&batches)
+}
+
+fn batch_rows(batches: &[RecordBatch]) -> kaveon_core::Result<Vec<String>> {
+    let mut rows = Vec::new();
+    for batch in batches {
         let columns = batch
             .columns()
             .iter()
@@ -843,21 +896,51 @@ impl Fixture {
 }
 
 impl Fixture {
-    /// Execute one statement through the node-local planner, rows as
-    /// text.
-    fn run(&self, statement: &str) -> kaveon_core::Result<Vec<String>> {
-        let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(statement)?;
+    /// One statement as the API pipelines take it: lowered for the
+    /// binder, qualified, bound, filters and projections pushed down.
+    fn optimized(&self, statement: &str) -> kaveon_core::Result<LogicalPlan> {
+        let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan_for_binder(statement)?;
         crate::planner::qualify_tables(&mut plan, "tpch", "tiny");
         let plan = kaveon_optim::binder::bind(plan, &self.manager)?;
         let plan = kaveon_optim::rules::push_filter_down(plan);
-        let plan = kaveon_optim::rules::push_projection_down(plan);
+        Ok(kaveon_optim::rules::push_projection_down(plan))
+    }
+
+    /// Execute one statement through the node-local planner and through
+    /// its distributed fragments run in this process as two workers; the
+    /// rows of each come back as text.
+    fn run(&self, statement: &str) -> kaveon_core::Result<Answers> {
+        let plan = self.optimized(statement)?;
         let pool = QueryMemoryPool::new("tpch", 256 * 1024 * 1024)?;
         let mut planned = crate::planner::plan_query_with_memory(&plan, &self.manager, &pool)?;
-        let rows = rows(planned.operator.as_mut())?;
+        let local = rows(planned.operator.as_mut())?;
         drop(planned);
         assert_eq!(pool.snapshot().current_bytes, 0, "leaked reservations");
-        Ok(rows)
+        let pool = QueryMemoryPool::new("tpch-distributed", 256 * 1024 * 1024)?;
+        let distributed = batch_rows(&crate::differential_tests::execute_distributed(
+            "tpch",
+            &plan,
+            &self.manager,
+            2,
+            &pool,
+        )?)?;
+        assert_eq!(
+            pool.snapshot().current_bytes,
+            0,
+            "leaked distributed reservations"
+        );
+        Ok(Answers { local, distributed })
     }
+}
+
+/// One statement's rows as text from the node-local planner and from the
+/// distributed fragments; doubles may differ in their last digits between
+/// the two (the partial sums fold in another order), so each is checked
+/// against the expected answer to the tolerance rather than against the
+/// other.
+struct Answers {
+    local: Vec<String>,
+    distributed: Vec<String>,
 }
 
 impl Drop for Fixture {
@@ -934,9 +1017,19 @@ fn date_text(days: i64) -> String {
     format!("{year:04}-{month:02}-{day:02}")
 }
 
-/// The Engine's rows against the expected ones: integers and text
-/// exactly, doubles to a relative tolerance, dates by their text.
-fn assert_answers(query: &str, actual: &[String], expected: &[Vec<Cell>]) {
+/// The Engine's rows, from both paths, against the expected ones:
+/// integers and text exactly, doubles to a relative tolerance, dates by
+/// their text.
+fn assert_answers(query: &str, answers: &Answers, expected: &[Vec<Cell>]) {
+    assert_rows(query, &answers.local, expected);
+    assert_rows(
+        &format!("{query} (distributed)"),
+        &answers.distributed,
+        expected,
+    );
+}
+
+fn assert_rows(query: &str, actual: &[String], expected: &[Vec<Cell>]) {
     assert_eq!(
         actual.len(),
         expected.len(),
@@ -1346,6 +1439,141 @@ fn the_tpch_answers_match_an_independent_computation() {
             .collect::<Vec<_>>();
         assert_answers("q22", &fixture.run(&statement("q22")).unwrap(), &expected);
     }
+
+    // Q21: suppliers who kept orders waiting — a line of a SAUDI ARABIA
+    // supplier received after its commit date, in a finished order that
+    // another supplier also shipped, where no other supplier's line in
+    // that order was late.
+    {
+        let o_orderstatus = data.texts("orders", "o_orderstatus");
+        let status = |orderkey: i64| {
+            o_orderstatus[o_orderkey.iter().position(|key| *key == orderkey).unwrap()].as_str()
+        };
+        let mut waits: BTreeMap<String, i64> = BTreeMap::new();
+        for line in 0..l_orderkey.len() {
+            let supplier = (l_suppkey[line] - 1) as usize;
+            if n_name[s_nationkey[supplier] as usize] != "SAUDI ARABIA"
+                || l_receiptdate[line] <= l_commitdate[line]
+                || status(l_orderkey[line]) != "F"
+            {
+                continue;
+            }
+            let others = (0..l_orderkey.len())
+                .filter(|other| {
+                    l_orderkey[*other] == l_orderkey[line] && l_suppkey[*other] != l_suppkey[line]
+                })
+                .collect::<Vec<_>>();
+            let another_supplier = !others.is_empty();
+            let another_late = others
+                .iter()
+                .any(|other| l_receiptdate[*other] > l_commitdate[*other]);
+            if another_supplier && !another_late {
+                *waits.entry(s_name[supplier].clone()).or_default() += 1;
+            }
+        }
+        let mut rows = waits.into_iter().collect::<Vec<_>>();
+        rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        assert!(!rows.is_empty());
+        let expected = rows
+            .into_iter()
+            .take(100)
+            .map(|(name, count)| vec![Cell::Text(name), Cell::Int(count)])
+            .collect::<Vec<_>>();
+        assert_answers("q21", &fixture.run(&statement("q21")).unwrap(), &expected);
+    }
+}
+
+/// Q21's shape: the NOT EXISTS is an anti join over the EXISTS's semi
+/// join, each keyed on `l_orderkey` with the supplier inequality as its
+/// residual (the lateness test of `l3` references only the subquery and
+/// stays its own filter), over the four-way hash join; distributed, both
+/// residuals ride in the broadcast join specs of the probe stage.
+#[test]
+fn q21_is_an_anti_join_over_a_semi_join_each_with_a_residual() {
+    let fixture = Fixture::new("q21-shape");
+    let statement = statements()
+        .into_iter()
+        .find(|(id, _)| id == "q21")
+        .map(|(_, sql)| sql)
+        .unwrap();
+    let plan = fixture.optimized(&statement).unwrap();
+    fn semi_joins(plan: &LogicalPlan, into: &mut Vec<(bool, String, String, Option<String>)>) {
+        match plan {
+            LogicalPlan::SemiJoin {
+                left,
+                right,
+                left_key,
+                right_key,
+                residual,
+            }
+            | LogicalPlan::AntiJoin {
+                left,
+                right,
+                left_key,
+                right_key,
+                residual,
+            } => {
+                into.push((
+                    matches!(plan, LogicalPlan::AntiJoin { .. }),
+                    format!("{left_key:?}"),
+                    format!("{right_key:?}"),
+                    residual.as_ref().map(|residual| format!("{residual:?}")),
+                ));
+                semi_joins(left, into);
+                semi_joins(right, into);
+            }
+            LogicalPlan::Join { left, right, .. } => {
+                semi_joins(left, into);
+                semi_joins(right, into);
+            }
+            LogicalPlan::Filter { input, .. }
+            | LogicalPlan::Project { input, .. }
+            | LogicalPlan::Aggregate { input, .. }
+            | LogicalPlan::Sort { input, .. }
+            | LogicalPlan::Limit { input, .. }
+            | LogicalPlan::Offset { input, .. }
+            | LogicalPlan::Distinct { input }
+            | LogicalPlan::Window { input, .. } => semi_joins(input, into),
+            _ => {}
+        }
+    }
+    let mut joins = Vec::new();
+    semi_joins(&plan, &mut joins);
+    let [anti, semi] = joins.as_slice() else {
+        panic!("an anti join over a semi join: {joins:?}");
+    };
+    assert!(anti.0 && !semi.0);
+    for (_, left_key, _, residual) in [anti, semi] {
+        assert_eq!(left_key, "Column(\"l1.l_orderkey\")");
+        let residual = residual.as_deref().expect("a residual");
+        assert!(residual.contains("Column(\"l1.l_suppkey\")"), "{residual}");
+        assert!(residual.contains("op: Ne"), "{residual}");
+    }
+    assert_eq!(anti.2, "Column(\"l3.l_orderkey\")");
+    assert_eq!(semi.2, "Column(\"l2.l_orderkey\")");
+    let fragments =
+        crate::planner::build_executable_fragments("q21", &plan, &fixture.manager, 2).unwrap();
+    let residuals = fragments
+        .values()
+        .flat_map(|fragment| fragment.nodes.iter())
+        .filter_map(|node| match &node.operator {
+            kaveon_core::FragmentOperator::HashJoin(spec)
+                if matches!(
+                    spec.join_type,
+                    kaveon_core::JoinType::Semi | kaveon_core::JoinType::Anti
+                ) =>
+            {
+                assert!(spec.broadcast);
+                Some(
+                    spec.residual
+                        .clone()
+                        .expect("the spec carries the residual"),
+                )
+            }
+            _ => None,
+        })
+        .count();
+    assert_eq!(residuals, 2);
 }
 
 /// The time one statement may take to plan and execute; a statement over
@@ -1357,7 +1585,7 @@ fn cover(fixture: &Arc<Fixture>, id: &str, statement: &str) -> Coverage {
         id: id.to_owned(),
         ..Default::default()
     };
-    let mut plan = match kaveon_sql::logical_plan::sql_to_logical_plan(statement) {
+    let mut plan = match kaveon_sql::logical_plan::sql_to_logical_plan_for_binder(statement) {
         Ok(plan) => plan,
         Err(error) => {
             coverage.parsed = Some(error.to_string());
@@ -1380,10 +1608,12 @@ fn cover(fixture: &Arc<Fixture>, id: &str, statement: &str) -> Coverage {
     coverage.distributed = crate::planner::build_stage_graph(id, &plan, 2)
         .and_then(|_| crate::planner::build_executable_fragments(id, &plan, &fixture.manager, 2))
         .err()
-        .map(|error| error.to_string());
+        .map(|error| format!("plan: {error}"));
+    let planned_distributed = coverage.distributed.is_none();
 
     // Planning and execution run on their own thread so a statement whose
-    // plan is a runaway product is recorded as over budget, not hung.
+    // plan is a runaway product is recorded as over budget, not hung. The
+    // fragments run after the node-local plan, as two in-process workers.
     let (sender, receiver) = mpsc::channel();
     let fixture = Arc::clone(fixture);
     let query = id.to_owned();
@@ -1402,14 +1632,43 @@ fn cover(fixture: &Arc<Fixture>, id: &str, statement: &str) -> Coverage {
                 );
                 rows
             });
-        let _ = sender.send(outcome);
+        let distributed = planned_distributed.then(|| {
+            let pool = QueryMemoryPool::new("tpch-distributed", 256 * 1024 * 1024).unwrap();
+            let rows = crate::differential_tests::execute_distributed(
+                &query,
+                &plan,
+                &fixture.manager,
+                2,
+                &pool,
+            )
+            .and_then(|batches| batch_rows(&batches))
+            .map_err(|error| error.to_string());
+            assert_eq!(
+                pool.snapshot().current_bytes,
+                0,
+                "{query} leaked distributed reservations"
+            );
+            rows
+        });
+        let _ = sender.send((outcome, distributed));
     });
     match receiver.recv_timeout(STATEMENT_BUDGET) {
-        Ok(Ok(rows)) => {
+        Ok((Ok(rows), distributed)) => {
             coverage.row_count = rows.len();
             coverage.first_row = rows.first().cloned().unwrap_or_default();
+            match distributed {
+                Some(Ok(distributed)) if distributed.len() != rows.len() => {
+                    coverage.distributed = Some(format!(
+                        "execute: {} rows, the node-local plan returned {}",
+                        distributed.len(),
+                        rows.len()
+                    ));
+                }
+                Some(Ok(_)) | None => {}
+                Some(Err(error)) => coverage.distributed = Some(format!("execute: {error}")),
+            }
         }
-        Ok(Err((planning, error))) => {
+        Ok((Err((planning, error)), _)) => {
             if planning {
                 coverage.planned = Some(error);
             } else {
@@ -1478,10 +1737,10 @@ fn the_tpch_statements_cover_what_the_record_says() {
             .any(|(query, _)| *query == id);
         match (coverage.distributed.is_none(), expected_no_distributed) {
             (true, true) => problems.push(format!(
-                "{id} now has a distributed plan: remove it from KNOWN_NO_DISTRIBUTED_PLAN"
+                "{id} now plans and executes distributed: remove it from KNOWN_NO_DISTRIBUTED_PLAN"
             )),
             (false, false) if coverage.local_ok() => problems.push(format!(
-                "{id} lost its distributed plan: {}",
+                "{id} stopped planning or executing distributed: {}",
                 coverage.distributed.clone().unwrap_or_default()
             )),
             _ => {}
@@ -1493,6 +1752,8 @@ fn the_tpch_statements_cover_what_the_record_says() {
         .iter()
         .filter(|coverage| coverage.local_ok() && coverage.distributed.is_none())
         .count();
-    println!("\n{running} of 22 run locally; {distributed} of those have a distributed plan");
+    println!(
+        "\n{running} of 22 run locally; {distributed} of those plan and execute as fragments on two in-process workers"
+    );
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
