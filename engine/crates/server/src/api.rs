@@ -1975,7 +1975,10 @@ fn task_failure_response(status: StatusCode, message: &str) -> Response {
 
 // Release the bounded query registry on every statement exit, including
 // parser/planner errors and dropped HTTP futures. Active blocking operators
-// retain a token clone and observe cancellation cooperatively.
+// retain a token clone and observe cancellation cooperatively. A record the
+// handler never finalised — the client went away while the statement was
+// queued or running — is marked CANCELED so it does not read as RUNNING
+// forever in `GET /v1/query`.
 struct StatementLifecycleGuard {
     state: Arc<AppState>,
     query_id: String,
@@ -1984,6 +1987,22 @@ impl Drop for StatementLifecycleGuard {
     fn drop(&mut self) {
         let _ = self.state.lifecycle.cancellations.cancel(&self.query_id);
         let _ = self.state.lifecycle.finish_query(&self.query_id);
+        let query_id = self.query_id.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                if let Some(record) = QUERY_STORE.write().await.queries.get_mut(&query_id)
+                    && matches!(record.state, QueryState::Queued | QueryState::Running)
+                {
+                    record.state = QueryState::Canceled;
+                    record.error =
+                        Some("client disconnected before the statement finished".to_owned());
+                    record.completed_at_ms = unix_time_ms();
+                    record.elapsed_ms = record
+                        .completed_at_ms
+                        .saturating_sub(record.submitted_at_ms);
+                }
+            });
+        }
     }
 }
 
@@ -10412,6 +10431,77 @@ mod tests {
             }
             assert!(token.is_cancelled());
         }
+    }
+
+    #[tokio::test]
+    async fn a_dropped_statement_future_marks_its_running_record_canceled() {
+        let state = std::sync::Arc::new(catalog_test_state());
+        let query_id = format!("abandoned-{}", uuid::Uuid::new_v4());
+        let context = analyze_context();
+        super::QUERY_STORE.write().await.queries.insert(
+            query_id.clone(),
+            super::pending_query_record(
+                &query_id,
+                "SELECT 1",
+                &crate::settings::QuerySettings::default(),
+                super::unix_time_ms() - 5,
+                &context,
+                super::QueryState::Running,
+                0,
+            ),
+        );
+        let _ = state.lifecycle.cancellations.token(&query_id).unwrap();
+        drop(super::StatementLifecycleGuard {
+            state: state.clone(),
+            query_id: query_id.clone(),
+        });
+        // The record is marked on the runtime, not inside Drop.
+        for _ in 0..50 {
+            tokio::task::yield_now().await;
+            if let Some(record) = super::QUERY_STORE.read().await.queries.get(&query_id)
+                && matches!(record.state, super::QueryState::Canceled)
+            {
+                break;
+            }
+        }
+        let store = super::QUERY_STORE.read().await;
+        let record = store.queries.get(&query_id).expect("the record stays");
+        assert!(matches!(record.state, super::QueryState::Canceled));
+        assert_eq!(
+            record.error.as_deref(),
+            Some("client disconnected before the statement finished")
+        );
+        assert!(record.completed_at_ms > 0 && record.elapsed_ms >= 5);
+        drop(store);
+        // A finished record is left alone.
+        let finished = format!("finished-{}", uuid::Uuid::new_v4());
+        let mut record = super::pending_query_record(
+            &finished,
+            "SELECT 1",
+            &crate::settings::QuerySettings::default(),
+            super::unix_time_ms(),
+            &context,
+            super::QueryState::Running,
+            0,
+        );
+        record.state = super::QueryState::Finished;
+        super::QUERY_STORE
+            .write()
+            .await
+            .queries
+            .insert(finished.clone(), record);
+        let _ = state.lifecycle.cancellations.token(&finished).unwrap();
+        drop(super::StatementLifecycleGuard {
+            state,
+            query_id: finished.clone(),
+        });
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert!(matches!(
+            super::QUERY_STORE.read().await.queries[&finished].state,
+            super::QueryState::Finished
+        ));
     }
 
     #[tokio::test]
