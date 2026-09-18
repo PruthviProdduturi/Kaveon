@@ -1,3 +1,5 @@
+#[allow(dead_code)]
+pub mod dlm;
 pub mod error;
 pub mod metadata;
 #[allow(dead_code)]
