@@ -4736,20 +4736,28 @@ async fn execute_distributed_fragments(
                             }
                         }
                     }
-                    stage_tasks
-                        .entry(task_id.stage_id)
-                        .or_default()
-                        .push(TaskTelemetry {
-                            task_id: task_id.to_string(),
-                            node_id: worker.node_id,
-                            partition_index: task_id.partition,
-                            elapsed_us,
-                            output_rows,
-                            output_batches,
-                            output_bytes,
-                            execution,
-                            scan,
-                        });
+                    let task = TaskTelemetry {
+                        task_id: task_id.to_string(),
+                        node_id: worker.node_id,
+                        partition_index: task_id.partition,
+                        elapsed_us,
+                        output_rows,
+                        output_batches,
+                        output_bytes,
+                        execution,
+                        scan,
+                    };
+                    publish_task_completion(
+                        query_id,
+                        task_id.stage_id.0,
+                        dispatch.execution_partition.count,
+                        stage_started
+                            .get(&task_id.stage_id)
+                            .map_or(0, |started| self::elapsed_us(*started)),
+                        task.clone(),
+                    )
+                    .await;
+                    stage_tasks.entry(task_id.stage_id).or_default().push(task);
                     if let Err(error) = orchestrator.finish_task(task_id) {
                         return Some(Err(format!("cannot finish distributed task: {error}")));
                     }
@@ -4798,23 +4806,16 @@ async fn execute_distributed_fragments(
         ));
     };
     let execution_us = elapsed_us(execution_start);
-    let mut stages = stage_tasks
-        .into_iter()
-        .map(|(stage_id, mut tasks)| {
-            tasks.sort_unstable_by_key(|task| task.partition_index);
-            StageTelemetry {
-                stage_id: stage_id.0,
-                state: "FINISHED",
-                task_count: tasks.len(),
-                completed_tasks: tasks.len(),
-                elapsed_us: stage_started
-                    .get(&stage_id)
-                    .map_or(0, |started| elapsed_us(*started)),
-                tasks,
-            }
-        })
-        .collect::<Vec<_>>();
-    stages.sort_unstable_by_key(|stage| stage.stage_id);
+    let mut stages = Vec::with_capacity(stage_tasks.len());
+    for (stage_id, tasks) in stage_tasks {
+        let task_count = tasks.len();
+        let stage_elapsed_us = stage_started
+            .get(&stage_id)
+            .map_or(0, |started| elapsed_us(*started));
+        for task in tasks {
+            record_stage_task(&mut stages, stage_id.0, task_count, stage_elapsed_us, task);
+        }
+    }
     let data = if let Some(writer) = result_writer {
         if let Err(error) = state.results.publish(
             query_id,
@@ -5112,6 +5113,14 @@ async fn execute_distributed_top_n(
                 }
                 schema.get_or_insert(worker_schema);
                 partial_batches.extend(batches);
+                publish_task_completion(
+                    query_id,
+                    0,
+                    partition_count,
+                    elapsed_us(started),
+                    telemetry.clone(),
+                )
+                .await;
                 task_metrics.push(telemetry);
             }
             Ok(Err(error)) => return Some(Err(error)),
@@ -5287,6 +5296,14 @@ async fn execute_distributed_aggregate(
         match result {
             Ok(Ok((response, telemetry))) => {
                 partials.push(response);
+                publish_task_completion(
+                    query_id,
+                    0,
+                    partition_count,
+                    elapsed_us(started),
+                    telemetry.clone(),
+                )
+                .await;
                 task_metrics.push(telemetry);
             }
             Ok(Err(error)) => return Some(Err(error)),
@@ -5777,6 +5794,87 @@ fn merge_task_scan_metrics<'a>(
     })
 }
 
+/// Folds one finished task into the stage list, kept ordered by stage: the
+/// stage is created on first sight, its tasks stay in partition order and
+/// its counters are refreshed. The final record and the live record while
+/// the statement runs both go through this, so the numbers a client polls
+/// are the ones it reads once the statement finishes.
+fn record_stage_task(
+    stages: &mut Vec<StageTelemetry>,
+    stage_id: u32,
+    task_count: usize,
+    elapsed_us: u64,
+    task: TaskTelemetry,
+) {
+    let index = match stages.binary_search_by_key(&stage_id, |stage| stage.stage_id) {
+        Ok(index) => index,
+        Err(index) => {
+            stages.insert(
+                index,
+                StageTelemetry {
+                    stage_id,
+                    state: "RUNNING",
+                    task_count,
+                    completed_tasks: 0,
+                    elapsed_us,
+                    tasks: Vec::new(),
+                },
+            );
+            index
+        }
+    };
+    let stage = &mut stages[index];
+    stage.tasks.push(task);
+    stage
+        .tasks
+        .sort_unstable_by_key(|task| task.partition_index);
+    stage.completed_tasks = stage.tasks.len();
+    stage.task_count = task_count;
+    stage.elapsed_us = elapsed_us;
+    stage.state = if stage.completed_tasks >= stage.task_count {
+        "FINISHED"
+    } else {
+        "RUNNING"
+    };
+}
+
+/// A finished task lands on the record while the statement runs: its
+/// stage's counters, its telemetry, and the scan totals over every task
+/// finished so far by the aggregation the final record uses.
+/// `scan_metrics_complete` stays false until the statement finishes.
+fn merge_task_into_record(
+    record: &mut QueryRecord,
+    stage_id: u32,
+    task_count: usize,
+    stage_elapsed_us: u64,
+    task: TaskTelemetry,
+) {
+    record_stage_task(
+        &mut record.stages,
+        stage_id,
+        task_count,
+        stage_elapsed_us,
+        task,
+    );
+    record.scans = distributed_scan_telemetry(&record.stages).0;
+}
+
+/// A record that is no longer running (canceled, failed, or already
+/// committed) is left alone.
+async fn publish_task_completion(
+    query_id: &str,
+    stage_id: u32,
+    task_count: usize,
+    stage_elapsed_us: u64,
+    task: TaskTelemetry,
+) {
+    if let Some(record) = QUERY_STORE.write().await.queries.get_mut(query_id)
+        && matches!(record.state, QueryState::Running)
+    {
+        merge_task_into_record(record, stage_id, task_count, stage_elapsed_us, task);
+    }
+}
+
 fn distributed_scan_telemetry(stages: &[StageTelemetry]) -> (Vec<ScanTelemetry>, bool) {
     let tasks = stages
         .iter()
@@ -5882,6 +5980,7 @@ async fn finish_failed_query(
         record.timings.planning_us = planning_us;
         record.plan.logical = logical_plan;
         record.scans.clear();
+        record.stages.clear();
     }
 }
 
@@ -7658,6 +7757,101 @@ mod tests {
             ..stages[0].clone()
         }];
         assert!(!super::distributed_scan_telemetry(&incomplete).1);
+    }
+
+    /// Tasks land on the running record one at a time: the stage counters
+    /// and scan totals rise with each, the stage finishes with its last
+    /// task, and the totals equal what the final aggregation reports.
+    #[test]
+    fn a_running_record_reports_each_finished_task() {
+        let task = |partition_index, rows_emitted| super::TaskTelemetry {
+            task_id: format!("task-{partition_index}"),
+            node_id: "worker".into(),
+            partition_index,
+            elapsed_us: 1,
+            output_rows: 0,
+            output_batches: 0,
+            output_bytes: 0,
+            execution: None,
+            scan: Some(super::TaskScanMetrics {
+                rows_emitted,
+                rows_selected: rows_emitted + 10,
+                ..Default::default()
+            }),
+        };
+        let mut record = super::pending_query_record(
+            "q",
+            "SELECT 1",
+            &super::QuerySettings::default(),
+            0,
+            &super::QueryContext {
+                engine_version: String::new(),
+                environment: String::new(),
+                principal: None,
+                user: None,
+                source: None,
+                client: None,
+                catalog: "lake".into(),
+                schema: "sales".into(),
+                time_zone: None,
+                client_address: None,
+                client_tags: vec![],
+                result_delivery: None,
+                catalog_snapshot_id: String::new(),
+                settings: super::QuerySettings::default(),
+            },
+            super::QueryState::Running,
+            0,
+        );
+        assert!(record.stages.is_empty() && record.scans.is_empty());
+
+        super::merge_task_into_record(&mut record, 1, 2, 5, task(1, 30));
+        assert_eq!(record.stages.len(), 1);
+        assert_eq!(
+            (
+                record.stages[0].stage_id,
+                record.stages[0].state,
+                record.stages[0].task_count,
+                record.stages[0].completed_tasks,
+            ),
+            (1, "RUNNING", 2, 1)
+        );
+        assert_eq!(record.scans[0].rows_emitted, 30);
+        assert!(!record.scan_metrics_complete);
+
+        super::merge_task_into_record(&mut record, 0, 1, 7, task(0, 5));
+        assert_eq!(
+            record
+                .stages
+                .iter()
+                .map(|stage| (stage.stage_id, stage.state))
+                .collect::<Vec<_>>(),
+            vec![(0, "FINISHED"), (1, "RUNNING")]
+        );
+        assert_eq!(record.scans[0].rows_emitted, 35);
+
+        super::merge_task_into_record(&mut record, 1, 2, 9, task(0, 40));
+        assert_eq!(
+            (
+                record.stages[1].state,
+                record.stages[1].completed_tasks,
+                record.stages[1].elapsed_us,
+            ),
+            ("FINISHED", 2, 9)
+        );
+        assert_eq!(
+            record.stages[1]
+                .tasks
+                .iter()
+                .map(|task| task.partition_index)
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+        let (scans, complete) = super::distributed_scan_telemetry(&record.stages);
+        assert!(complete);
+        assert_eq!(scans[0].rows_emitted, 75);
+        assert_eq!(record.scans[0].rows_emitted, scans[0].rows_emitted);
+        assert_eq!(record.scans[0].rows_selected, scans[0].rows_selected);
     }
 
     #[test]
