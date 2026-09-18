@@ -1059,7 +1059,15 @@ fn parse_sql_metadata(sql: &str, options: &Options) -> Result<Option<MetaCommand
         };
     }
     if first.0.eq_ignore_ascii_case("DESCRIBE") || first.0.eq_ignore_ascii_case("DESC") {
-        let tokens = if matches!(tokens.get(1), Some(Token::Word(word)) if word.quote_style.is_none() && word.value.eq_ignore_ascii_case("TABLE"))
+        // `DESCRIBE DETAIL t` is the coordinator's: the table's format,
+        // location, files and versions. A table named `detail` is still
+        // described by the client when nothing follows the word.
+        if tokens.len() > 2 && is_keyword(&tokens[1], "DETAIL") {
+            return Ok(None);
+        }
+        let tokens = if tokens
+            .get(1)
+            .is_some_and(|token| is_keyword(token, "TABLE"))
         {
             &tokens[2..]
         } else {
@@ -1074,6 +1082,11 @@ fn parse_sql_metadata(sql: &str, options: &Options) -> Result<Option<MetaCommand
         });
     }
     Ok(None)
+}
+
+/// Whether `token` is the bare (unquoted) keyword `word`, in any case.
+fn is_keyword(token: &Token, word: &str) -> bool {
+    matches!(token, Token::Word(token) if token.quote_style.is_none() && token.value.eq_ignore_ascii_case(word))
 }
 
 fn definition_url(options: &Options, segments: &[&str]) -> Result<String, String> {
@@ -1117,12 +1130,13 @@ fn parse_table_reference(
     }
 }
 
-/// `Ok(None)` hands the statement to the coordinator: `SHOW CREATE TABLE`
-/// and any other SHOW form the client does not answer from the catalog API.
+/// `Ok(None)` hands the statement to the coordinator: `SHOW CREATE TABLE`,
+/// `SHOW STATS FOR` and any other SHOW form the client does not answer
+/// from the catalog API.
 fn parse_show(tokens: &[Token], options: &Options) -> Result<Option<MetaCommand>, String> {
     let Some((kind, quote_style)) = tokens.first().and_then(word) else {
         return Err(
-            "usage: SHOW CATALOGS | SHOW SCHEMAS [IN catalog] | SHOW TABLES [IN [catalog.]schema] | SHOW CREATE TABLE table"
+            "usage: SHOW CATALOGS | SHOW SCHEMAS [IN catalog] | SHOW TABLES [IN [catalog.]schema] | SHOW CREATE TABLE table | SHOW STATS FOR table"
                 .to_owned(),
         );
     };
@@ -1217,11 +1231,15 @@ fn parse_show_metadata(
 }
 
 const SHOW_KINDS: [&str; 4] = ["CATALOGS", "SCHEMAS", "TABLES", "COLUMNS"];
+/// SHOW forms the coordinator answers — `SHOW CREATE TABLE t`, `SHOW STATS
+/// FOR t` (`SHOW STAT FOR` too) — never refused as a near miss of a
+/// client kind.
+const COORDINATOR_SHOW_KINDS: [&str; 3] = ["CREATE", "STATS", "STAT"];
 
 /// `CATALOG`/`CATALOGS`, `SCHEMA`/`SCHEMAS`, ... in any case are the
 /// client's; a near miss is refused with the closest kind as a suggestion;
-/// anything else (`SHOW CREATE TABLE`, and whatever the coordinator adds)
-/// is `None`: the coordinator's statement.
+/// anything else (`SHOW CREATE TABLE`, `SHOW STATS FOR`, and whatever the
+/// coordinator adds) is `None`: the coordinator's statement.
 fn canonical_show_kind(word: &str) -> Result<Option<&'static str>, String> {
     let upper = word.to_ascii_uppercase();
     for kind in SHOW_KINDS {
@@ -1229,7 +1247,7 @@ fn canonical_show_kind(word: &str) -> Result<Option<&'static str>, String> {
             return Ok(Some(kind));
         }
     }
-    if upper == "CREATE" {
+    if COORDINATOR_SHOW_KINDS.contains(&upper.as_str()) {
         return Ok(None);
     }
     match closest(&upper, &SHOW_KINDS) {
@@ -1625,6 +1643,41 @@ mod tests {
                 schema: "gold".to_owned(),
                 table: "orders".to_owned(),
             })
+        );
+    }
+
+    #[test]
+    fn statistics_statements_pass_through_to_the_coordinator() {
+        let options = options();
+        for sql in [
+            "SHOW STATS FOR lake.gold.orders",
+            "show stats for orders;",
+            "SHOW STAT FOR orders",
+            "SHOW CREATE TABLE orders",
+            "DESCRIBE DETAIL lake.gold.orders",
+            "desc detail orders;",
+            "DESCRIBE DETAIL \"Gold Orders\"",
+        ] {
+            assert_eq!(parse_sql_metadata(sql, &options).unwrap(), None, "{sql}");
+        }
+        // A table called `detail` is still the client's DESCRIBE.
+        assert_eq!(
+            parse_sql_metadata("DESCRIBE detail", &options).unwrap(),
+            Some(MetaCommand::Describe {
+                catalog: options.catalog.clone(),
+                schema: options.schema.clone(),
+                table: "detail".to_owned(),
+            })
+        );
+        assert!(
+            parse_sql_metadata("SHOW TABLE", &options)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            parse_sql_metadata("SHOW TABELS", &options)
+                .unwrap_err()
+                .contains("did you mean SHOW TABLES")
         );
     }
 

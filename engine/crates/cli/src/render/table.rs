@@ -15,13 +15,24 @@ const DEFAULT_WIDTH: usize = 120;
 const MIN_COLUMN_WIDTH: usize = 8;
 const ELLIPSIS: char = '…';
 
-enum Cell {
+/// One cell of a styled table. `stats.rs` builds these itself for values it
+/// has already humanised; the result renderer builds them from JSON.
+pub enum Cell {
+    /// A SQL NULL: `NULL`, dimmed.
     Null,
+    /// Not known: `—`, dimmed.
+    Missing,
+    /// Right-aligned.
     Number(String),
     Text(String),
 }
 
 impl Cell {
+    /// A left-aligned text cell, with control characters escaped.
+    pub fn plain(value: &str) -> Cell {
+        Cell::Text(terminal_text(value))
+    }
+
     fn from_value(value: Option<&Value>) -> Cell {
         match value.unwrap_or(&Value::Null) {
             Value::Null => Cell::Null,
@@ -40,12 +51,17 @@ impl Cell {
     fn text(&self) -> &str {
         match self {
             Cell::Null => "NULL",
+            Cell::Missing => "—",
             Cell::Number(text) | Cell::Text(text) => text,
         }
     }
 
     fn width(&self) -> usize {
         self.text().width()
+    }
+
+    fn is_dim(&self) -> bool {
+        matches!(self, Cell::Null | Cell::Missing)
     }
 }
 
@@ -60,12 +76,33 @@ pub fn styled(
     if names.is_empty() {
         return (vec![Line::raw(format!("({} rows)", rows.len()))], false);
     }
-    let names: Vec<String> = names.iter().map(|name| terminal_text(name)).collect();
     let cells: Vec<Vec<Cell>> = rows
         .iter()
         .map(|row| {
             (0..names.len())
                 .map(|index| Cell::from_value(row.get(index)))
+                .collect()
+        })
+        .collect();
+    styled_cells(names, &cells, width, theme)
+}
+
+/// The same table over cells the caller has already formatted. Every row
+/// is expected to have one cell per name; a shorter row is padded with
+/// `Missing`.
+pub fn styled_cells(
+    names: &[String],
+    rows: &[Vec<Cell>],
+    width: Option<usize>,
+    theme: &Theme,
+) -> (Vec<Line<'static>>, bool) {
+    let names: Vec<String> = names.iter().map(|name| terminal_text(name)).collect();
+    let missing = Cell::Missing;
+    let cells: Vec<Vec<&Cell>> = rows
+        .iter()
+        .map(|row| {
+            (0..names.len())
+                .map(|index| row.get(index).unwrap_or(&missing))
                 .collect()
         })
         .collect();
@@ -100,7 +137,7 @@ pub fn styled(
                 (
                     cell.text(),
                     matches!(cell, Cell::Number(_)),
-                    if matches!(cell, Cell::Null) {
+                    if cell.is_dim() {
                         theme.dim
                     } else {
                         Style::default()
