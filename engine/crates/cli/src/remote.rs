@@ -194,9 +194,13 @@ pub fn run_admin(options: &Options, command: &crate::admin::AdminCommand) -> Res
         println!("{rendered}");
         return Ok(());
     };
-    let response = submit_statement(&client, options, &sql)?;
+    let response =
+        submit_statement(&client, options, &sql).map_err(|error| humanize(&error, &sql))?;
     if let Some(error) = response.error {
-        return Err(format!("query {} failed: {error}", response.id));
+        return Err(humanize(
+            &format!("query {} failed: {error}", response.id),
+            &sql,
+        ));
     }
     let mut output = format_result(&response, options.output_format)?;
     if is_human_format(options.output_format) {
@@ -974,16 +978,20 @@ fn decode_response<T: for<'de> Deserialize<'de>>(response: Response) -> Result<T
         .text()
         .map_err(|error| format!("cannot read coordinator response: {error}"))?;
     if !status.is_success() {
-        let detail = serde_json::from_str::<Value>(&body)
-            .ok()
-            .and_then(|value| {
-                value
-                    .get("error")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            })
-            .unwrap_or(body);
-        return Err(format!("coordinator returned HTTP {status}: {detail}"));
+        let parsed = serde_json::from_str::<Value>(&body).ok();
+        let detail = parsed
+            .as_ref()
+            .and_then(|value| value.get("error").and_then(Value::as_str))
+            .map(str::to_owned)
+            .unwrap_or(body.clone());
+        let code = parsed
+            .as_ref()
+            .and_then(|value| value.get("code").and_then(Value::as_str))
+            .map(|code| format!(" [{code}]"))
+            .unwrap_or_default();
+        return Err(format!(
+            "coordinator returned HTTP {status}{code}: {detail}"
+        ));
     }
     serde_json::from_str(&body).map_err(|error| format!("invalid coordinator response: {error}"))
 }
@@ -1026,7 +1034,7 @@ fn parse_sql_metadata(sql: &str, options: &Options) -> Result<Option<MetaCommand
         return Ok(None);
     }
     if first.0.eq_ignore_ascii_case("SHOW") {
-        return parse_show(&tokens[1..], options).map(Some);
+        return parse_show(&tokens[1..], options);
     }
     if first.0.eq_ignore_ascii_case("USE") {
         let names = parse_names(&tokens[1..])?;
@@ -1101,18 +1109,30 @@ fn parse_table_reference(
     }
 }
 
-fn parse_show(tokens: &[Token], options: &Options) -> Result<MetaCommand, String> {
+/// `Ok(None)` hands the statement to the coordinator: `SHOW CREATE TABLE`
+/// and any other SHOW form the client does not answer from the catalog API.
+fn parse_show(tokens: &[Token], options: &Options) -> Result<Option<MetaCommand>, String> {
     let Some((kind, quote_style)) = tokens.first().and_then(word) else {
         return Err(
-            "usage: SHOW CATALOGS | SHOW SCHEMAS [IN catalog] | SHOW TABLES [IN [catalog.]schema]"
+            "usage: SHOW CATALOGS | SHOW SCHEMAS [IN catalog] | SHOW TABLES [IN [catalog.]schema] | SHOW CREATE TABLE table"
                 .to_owned(),
         );
     };
     if quote_style.is_some() {
         return Err("unsupported SHOW statement".to_owned());
     }
-    let kind = canonical_show_kind(kind)?;
-    let (scope, like) = split_like(&tokens[1..])?;
+    let Some(kind) = canonical_show_kind(kind)? else {
+        return Ok(None);
+    };
+    parse_show_metadata(kind, &tokens[1..], options).map(Some)
+}
+
+fn parse_show_metadata(
+    kind: &'static str,
+    tokens: &[Token],
+    options: &Options,
+) -> Result<MetaCommand, String> {
+    let (scope, like) = split_like(tokens)?;
     if kind == "COLUMNS" {
         let [Token::Word(connector), rest @ ..] = scope else {
             return Err("usage: SHOW COLUMNS FROM [catalog.]schema.table".to_owned());
@@ -1190,22 +1210,25 @@ fn parse_show(tokens: &[Token], options: &Options) -> Result<MetaCommand, String
 
 const SHOW_KINDS: [&str; 4] = ["CATALOGS", "SCHEMAS", "TABLES", "COLUMNS"];
 
-/// `CATALOG`/`CATALOGS`, `SCHEMA`/`SCHEMAS`, ... in any case; anything else
-/// is refused with the closest kind as a suggestion.
-fn canonical_show_kind(word: &str) -> Result<&'static str, String> {
+/// `CATALOG`/`CATALOGS`, `SCHEMA`/`SCHEMAS`, ... in any case are the
+/// client's; a near miss is refused with the closest kind as a suggestion;
+/// anything else (`SHOW CREATE TABLE`, and whatever the coordinator adds)
+/// is `None`: the coordinator's statement.
+fn canonical_show_kind(word: &str) -> Result<Option<&'static str>, String> {
     let upper = word.to_ascii_uppercase();
     for kind in SHOW_KINDS {
         if upper == kind || upper == kind.trim_end_matches('S') {
-            return Ok(kind);
+            return Ok(Some(kind));
         }
+    }
+    if upper == "CREATE" {
+        return Ok(None);
     }
     match closest(&upper, &SHOW_KINDS) {
         Some(kind) => Err(format!(
             "unsupported SHOW {upper}; did you mean SHOW {kind}?"
         )),
-        None => Err(format!(
-            "unsupported SHOW {upper}; use SHOW CATALOGS, SHOW SCHEMAS [IN catalog], SHOW TABLES [IN [catalog.]schema] or SHOW COLUMNS FROM table"
-        )),
+        None => Ok(None),
     }
 }
 
@@ -1342,6 +1365,15 @@ fn format_result(response: &StatementResponse, format: OutputFormat) -> Result<S
         .iter()
         .map(|column| column.name.clone())
         .collect::<Vec<_>>();
+    if is_human_format(format)
+        && names.len() == 1
+        && response.data.len() == 1
+        && let Some(text) = response.data[0].first().and_then(Value::as_str)
+        && text.contains('\n')
+    {
+        // `SHOW CREATE TABLE`: the statement itself, not a one-cell table.
+        return Ok(format!("{text}\n"));
+    }
     Ok(crate::output::format_rows(&names, &response.data, format))
 }
 
