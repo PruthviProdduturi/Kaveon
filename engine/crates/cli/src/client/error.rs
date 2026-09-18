@@ -8,6 +8,8 @@ pub enum ErrorKind {
     Parse,
     Planning,
     Worker,
+    /// The embedded engine failed while running a statement.
+    Execution,
     Admission,
     Cancelled,
     Connection,
@@ -22,6 +24,7 @@ impl ErrorKind {
             ErrorKind::Parse => "SQL parse error",
             ErrorKind::Planning => "Planning error",
             ErrorKind::Worker => "Worker failure",
+            ErrorKind::Execution => "Execution error",
             ErrorKind::Admission => "Memory admission",
             ErrorKind::Cancelled => "Cancelled",
             ErrorKind::Connection => "Connection",

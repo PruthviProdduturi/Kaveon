@@ -8,4 +8,4 @@ pub mod progress;
 pub mod rowlimit;
 pub mod status;
 
-pub use app::run;
+pub use app::{run, run_local};

@@ -34,8 +34,24 @@ fn main() {
     }
 }
 
-fn run_local(options: args::Options) {
-    if let Err(error) = local::run(options) {
+/// `--local`: the shell over the embedded engine on a terminal; `-e` and
+/// piped input keep the batch path.
+fn run_local(mut options: args::Options) {
+    use std::io::IsTerminal;
+    let interactive = options.execute.is_none()
+        && std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal();
+    let result = if interactive {
+        local::LocalEngine::open(&options).and_then(|engine| {
+            if let Some(format) = options.output_format_interactive {
+                options.output_format = format;
+            }
+            shell::run_local(engine, &mut options)
+        })
+    } else {
+        local::run(options)
+    };
+    if let Err(error) = result {
         eprintln!("error: {error}");
         std::process::exit(1);
     }
@@ -92,7 +108,7 @@ fn print_usage() {
     println!("  .catalogs              List catalogs");
     println!("  .schemas               List schemas in current catalog");
     println!("  .tables                List tables in current schema");
-    println!("  .describe <table>      Show table schema (local mode)");
+    println!("  .describe <table>      Show table schema");
     println!("  .use <catalog.schema>  Switch default catalog/schema");
     println!("  .quit                  Exit");
 }
