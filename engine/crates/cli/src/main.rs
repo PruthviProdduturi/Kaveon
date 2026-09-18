@@ -143,7 +143,7 @@ fn print_usage() {
     println!("      --auth <MODE>           auto (default), azure-cli, microsoft, or none");
     println!("      --ca-cert <PATH>        Trusted PEM CA (or KAVEON_CA_CERT)");
     println!("      KAVEON_ACCESS_TOKEN     Engine bearer token for unattended use");
-    println!("      --timeout <SECONDS>     HTTP request timeout (default: 30)");
+    println!("      --timeout <SECONDS>     HTTP request timeout (default: 24h)");
     println!("      --local                 Use the embedded local engine");
     println!("  -d, --data-dir <PATH>       Local Parquet/Delta directory (requires --local)");
     println!("  -c, --config <PATH>         Local catalog config (requires --local)");
