@@ -76,6 +76,16 @@ jobs:
       - name: Build release
         run: cargo build --release --package kaveon-cli --target ${{ matrix.target }}
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: CLI workflows against the built binary
+        working-directory: ${{ github.workspace }}
+        env:
+          PYTHONUTF8: "1"
+        run: python engine/qualification/cli_workflows.py --cli engine/target/${{ matrix.target }}/release/${{ matrix.artifact }}
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
