@@ -206,6 +206,8 @@ leave a query record like any statement.
 
 ```sql
 ANALYZE [catalog.][schema.]table
+ANALYZE [catalog.][schema.]table WITH (distinct = true)
+ANALYZE [catalog.][schema.]table WITH (columns = ARRAY['a', 'b'])
 SHOW STATS FOR [catalog.][schema.]table
 DESCRIBE DETAIL [catalog.][schema.]table
 ```
@@ -216,9 +218,49 @@ DESCRIBE DETAIL [catalog.][schema.]table
   page — refuses with 409 `SOURCE_CHANGED` when the immutable identity
   moved between the reads, and commits one statistics document at
   `statistics/<operation>.json` under the catalog head, bound to the catalog
-  snapshot and the source identity. Its result is unchanged: one row,
-  `table (VARCHAR), row_count (BIGINT)`. The planner keeps using the
-  committed row count alone.
+  snapshot and the source identity. Its result is one row, `table
+  (VARCHAR), row_count (BIGINT), distinct_columns (BIGINT)` — the last is
+  how many columns this statement counted distinct values for, `0` for the
+  metadata-only form. The planner keeps using the committed row count
+  alone.
+- **`ANALYZE … WITH (…)`** adds exact distinct counts, which take a scan.
+  `distinct = true` counts every column; `columns = ARRAY['a', 'b']`
+  (Trino's spelling; single-quoted names, case-sensitive as the source
+  spells them, `''` for a quote) counts the columns listed. The keys and
+  the values are case-insensitive; whitespace inside the parentheses is
+  free; `distinct = false` is the plain form. The two keys together, an
+  unknown key, or a malformed list is 400 `SYNTAX_ERROR`; a column the
+  table does not have is 400 `ANALYSIS_ERROR` naming it, before any count
+  runs. Each selected column is one statement, `SELECT COUNT(DISTINCT
+  "column") FROM catalog.schema.table`, run through the coordinator's own
+  statement path — admitted, recorded, planned and executed exactly as a
+  client statement is, on the workers when the cluster has them — one
+  after another, with the result cache off, under the `ANALYZE`
+  statement's cancellation: cancelling the `ANALYZE` cancels the count it
+  is running, no further count starts, and no document is written. The
+  count is the number of distinct non-null values, exact; the cost is one
+  scan of the column per selected column, so an `ANALYZE` with `distinct
+  = true` over a wide table is as long as that many aggregates. A count
+  that fails fails the `ANALYZE` with that statement's status, code and
+  message, the column named. The counts are read after the first metadata
+  read and before the second, so a source that changes under the scans
+  is the same 409 `SOURCE_CHANGED`. The sub-statements are ordinary query
+  records: `GET /v1/query` lists them under the admin who ran the
+  `ANALYZE`, with the statement's own tags plus `analyze:<id of the
+  ANALYZE record>` in `client_tags`, so they are never anonymous. The
+  `ANALYZE` record itself stays `RUNNING`, and cancellable by its id, for
+  the whole run. `ANALYZE` holds no memory, principal or resource-group
+  admission of its own while the counts run — each count is admitted in
+  its own right — so a coordinator that admits one statement at a time
+  does not wait on itself.
+- **Keeping counts across runs.** A column not counted by a statement
+  keeps the `distinct` of the previous document when the source identity
+  (`source_identity_sha256`) is unchanged; when the source changed, the
+  columns not counted are null. So a nightly plain `ANALYZE t` after a
+  one-off `ANALYZE t WITH (distinct = true)` keeps the counts as long as
+  the table's files do not move, and `ANALYZE t WITH (columns =
+  ARRAY['a'])` refreshes one column without losing the others. A count is
+  only ever as current as the source identity it was measured under.
 - **`SHOW STATS FOR`** (any statement-capable role) presents the stored
   document, never a fresh read: Trino's columns plus `row_count` and
   `analyzed_at`, one row per column and a final summary row whose
@@ -233,7 +275,7 @@ DESCRIBE DETAIL [catalog.][schema.]table
   | `data_type` | `VARCHAR` | The SQL spelling `DESCRIBE` uses (`bigint`, `varchar`, `decimal(10, 2)`, …) |
   | `data_size` | `BIGINT` | Compressed bytes of the column's chunks; on the summary row the data files' bytes as stored; null when the source does not record it |
   | `nulls_fraction` | `DOUBLE` | `nulls / row_count`; null when the null count is unknown or the table is empty |
-  | `distinct_values_count` | `BIGINT` | Always null in this round (no scan) |
+  | `distinct_values_count` | `BIGINT` | The exact count of distinct non-null values from the last `ANALYZE … WITH (…)` that counted the column under the current source identity; null when none did |
   | `low_value` / `high_value` | `VARCHAR` | The bounds as text: numbers as digits, dates and timestamps as ISO 8601, decimals exact; null when any file or row group lacks the bound |
   | `row_count` | `BIGINT` | Null on column rows; the exact row count on the summary row |
   | `analyzed_at` | `TIMESTAMP` | ISO 8601 UTC text (`2026-09-18T18:17:56.667Z`), the same on every row |
@@ -263,7 +305,8 @@ from the manifests and its column facts from the live files' footers,
 matched by field id. `min`/`max` are JSON of the logical type — numbers as
 numbers, strings as strings, dates and timestamps as ISO 8601 strings,
 decimals as exact decimal text, booleans as booleans; binary and INT96
-columns carry no bounds. `distinct` is null in this round.
+columns carry no bounds. `distinct` is the exact distinct count when an
+`ANALYZE … WITH (…)` measured the column (see above), else null.
 
 ```json
 {"version": 2, "table": "lake.sales.orders", "analyzed_at_ms": 1789841876667,
