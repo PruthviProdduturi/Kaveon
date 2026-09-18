@@ -4527,6 +4527,85 @@ main.main-wide {
   position: relative;
 }
 
+/* A KaveonDB statement streaming its rows: the running line sits above the
+   grid and the grid takes the rest of the height while pages land. */
+.results-container--streaming {
+  display: flex;
+  flex-direction: column;
+}
+
+.results-container--streaming .results-table-container {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+
+.lab-stream-line {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-shrink: 0;
+  padding: 0.45rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.lab-stream-line__pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: sql-runtime-pulse 1.4s ease-out infinite;
+}
+
+.lab-stream-line__state {
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 0.01em;
+}
+
+.lab-stream-line__facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0;
+  min-width: 0;
+}
+
+.lab-stream-line__facts > span + span::before {
+  content: "·";
+  margin: 0 0.5rem;
+  color: var(--text-muted);
+}
+
+.lab-stream-line__cancel {
+  margin-left: auto;
+  padding: 0.2rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--error);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.lab-stream-line__cancel:hover {
+  background: var(--bg-hover);
+  border-color: var(--error);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lab-stream-line__pulse {
+    animation: none;
+  }
+}
+
 .results-container .empty-state {
   position: absolute;
   inset: 0;

@@ -313,6 +313,128 @@ def execute_sql(data: LabExecuteBody, response: Response, ctx=Depends(require_mi
             "rowCount": result.get("row_count", 0)}
 
 
+# ── Streamed Engine statements ────────────────────────────────────────────────
+# `POST /lab/query` with `stream: true` submits the statement with paged
+# delivery and answers with its id as soon as the coordinator has a record
+# for it. The Studio then reads the record (`GET /lab/query/{id}`) and the
+# pages (`GET /lab/query/{id}/results/{n}`) while the statement runs, and
+# cancels with `DELETE /lab/query/{id}`. Every read goes to the coordinator
+# under the caller's identity, which is the identity that submitted, so the
+# coordinator's owner scoping is what binds a record to its reader; nothing
+# is held in this process. The background thread that holds the statement's
+# POST writes the history row when it returns.
+
+# The record fields the Studio is given. `rows` is the coordinator's preview,
+# `plan` and `sql` are diagnostics the console shows; none belong on the
+# polling path.
+RECORD_FIELDS = (
+    "id", "state", "elapsed_ms", "admission_wait_ms", "columns", "stages", "scans",
+    "scan_metrics_complete", "error", "execution", "next_uri", "timings", "cached_from",
+    "cached_elapsed_ms", "submitted_at_ms", "completed_at_ms",
+)
+
+
+def _record_view(record: dict) -> dict:
+    view = {key: record[key] for key in RECORD_FIELDS if key in record}
+    view["columns"] = [
+        column.get("name", "") if isinstance(column, dict) else str(column)
+        for column in (record.get("columns") or [])
+    ]
+    workers = set()
+    for stage in record.get("stages") or []:
+        for task in (stage.get("tasks") or []) if isinstance(stage, dict) else []:
+            node = task.get("node_id") if isinstance(task, dict) else None
+            if node:
+                workers.add(str(node))
+    view["workers"] = len(workers)
+    return view
+
+
+def _streamed_history(summary: dict, scoped_sql: str, catalog: str, dataset_id, started_at: int, user: str) -> None:
+    """The history row for a streamed statement, from the final record."""
+    state = str(summary.get("state") or "").upper()
+    status = {"FINISHED": "success", "CANCELED": "cancelled"}.get(state, "error")
+    record = summary.get("record") if isinstance(summary.get("record"), dict) else None
+    try:
+        history_svc.create_history({
+            "sql_text": scoped_sql, "duration_ms": summary.get("elapsed_ms") or 0,
+            "database_name": "engine:" + catalog,
+            "row_count": summary.get("row_count") if status == "success" else 0,
+            "status": status,
+            "error_message": summary.get("error") if status != "success" else None,
+            "dataset_id": int(dataset_id) if dataset_id else None,
+            "trigger_source": "lab", "run_context": None, "tables_used": None,
+            "started_at": started_at,
+            "engine_query_id": summary.get("query_id"),
+            **({"engine_details": record} if record else {}),
+        }, user)
+    except Exception as error:
+        print(f"[History] Failed to record streamed Engine lab query: {error}")
+
+
+async def _submit_streamed(data: LabQueryBody, source: dict, scoped_sql: str, user: str, role: str,
+                           engine_schema, started_at: int):
+    from services import engine_bridge
+    catalog = source["engine_catalog"]
+    dataset_id = data.datasetId
+
+    def on_finish(summary):
+        _streamed_history(summary, scoped_sql, catalog, dataset_id, started_at, user)
+
+    submitted = await asyncio.to_thread(
+        engine_bridge.submit_streamed, scoped_sql, catalog, user, role, engine_schema, None, on_finish,
+    )
+    record = submitted.get("record") if isinstance(submitted.get("record"), dict) else {}
+    return {
+        "success": True,
+        "queryId": submitted["query_id"],
+        "tag": submitted["tag"],
+        "state": record.get("state"),
+        "nextUri": record.get("next_uri"),
+    }
+
+
+@router.get("/lab/query/{query_id}")
+async def get_lab_query(query_id: str, response: Response, ctx=Depends(require_min_role("Analyst"))):
+    """The coordinator's record of one statement the caller submitted: state,
+    elapsed time, columns once planned, stage and scan counters while it runs,
+    execution placement and error once it finished, `next_uri` for its pages."""
+    from services import engine_bridge
+    response.headers.update(NO_CACHE)
+    record = await asyncio.to_thread(engine_bridge.query, query_id, ctx.email, ctx.role)
+    if not isinstance(record, dict):
+        raise HTTPException(404, "Query not found")
+    return {"success": True, "query": _record_view(record)}
+
+
+@router.get("/lab/query/{query_id}/results/{page}")
+async def get_lab_query_page(query_id: str, page: int, response: Response,
+                             ctx=Depends(require_min_role("Analyst"))):
+    """One page of a streamed statement's rows, with the coordinator's status
+    passed through: 200 with the page, 202 (`Retry-After`) while the page is
+    not yet written, 404 past the end or for another owner's statement, 410
+    once the statement failed or was cancelled."""
+    from services import engine_bridge
+    if page < 0:
+        raise HTTPException(404, "Page not found")
+    status, body = await asyncio.to_thread(engine_bridge.result_page, query_id, page, ctx.email, ctx.role)
+    headers = dict(NO_CACHE)
+    if status == 202:
+        headers["Retry-After"] = "1"
+    content = body if isinstance(body, dict) else {"id": query_id}
+    return Response(content=json.dumps(content, separators=(",", ":")), status_code=status,
+                    media_type="application/json", headers=headers)
+
+
+@router.delete("/lab/query/{query_id}", status_code=204)
+async def cancel_lab_query(query_id: str, ctx=Depends(require_min_role("Analyst"))):
+    """Cancel one statement the caller submitted. Cancelling releases its pages."""
+    from services import engine_bridge
+    if not await asyncio.to_thread(engine_bridge.cancel, query_id, ctx.email, ctx.role):
+        raise HTTPException(404, "Query not found")
+    return Response(status_code=204)
+
+
 @router.post("/lab/query")
 async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_min_role("Analyst"))):
     user = ctx.email
@@ -327,6 +449,8 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
         source = _engine_source(engine_source_id)
         scoped_sql = _engine_query(sql, source["engine_catalog"])
         start_time = int(time.time() * 1000)
+        if data.stream:
+            return await _submit_streamed(data, source, scoped_sql, user, ctx.role, engine_schema, start_time)
         result = await asyncio.to_thread(
             engine_bridge.execute,
             scoped_sql, source["engine_catalog"], user, ctx.role, engine_schema,

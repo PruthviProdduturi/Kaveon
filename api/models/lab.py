@@ -50,6 +50,9 @@ class LabQueryBody(BaseModel):
     datasetId: Optional[int] = None
     runContext: Optional[str] = Field(default=None, max_length=64)
     tablesUsed: Optional[list[str]] = None
+    # Engine sources only: submit with paged delivery and return the query id
+    # at once, so the rows can be read page by page while the statement runs.
+    stream: bool = False
 
     @field_validator("query")
     @classmethod

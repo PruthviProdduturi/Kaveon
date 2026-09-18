@@ -66,6 +66,20 @@ export default function SqlLabDocs() {
         <code>204 No Content</code>. Executed queries are also recorded in Query History.
       </p>
 
+      <h3>KaveonDB sources stream their rows</h3>
+      <p>
+        On a KaveonDB catalog the Run button submits the statement with <code>stream: true</code>, and rows appear
+        in the grid while the statement is still running, the way the <code>kaveon</code> shell shows them. A running
+        line above the grid reports the coordinator&rsquo;s state, the elapsed time, tasks completed, rows scanned and
+        the workers involved, with a Cancel action that stops the statement on the coordinator and keeps the rows that
+        had arrived. Which rows appear early is a property of the plan: a scan, filter, projection or join streams from
+        its first batch, while a statement whose result is only known at the end — <code>ORDER BY</code>,{" "}
+        <code>GROUP BY</code>, <code>DISTINCT</code> — lands its rows when it finishes. The grid holds at most the
+        selected row limit; the summary still reports the statement&rsquo;s full row count and where it was answered
+        from. The routes behind this are listed in the{" "}
+        <a href="/docs/api-reference">API reference</a>.
+      </p>
+
       <h3>Synchronous helper</h3>
       <p>
         <code>POST /api/v1/lab/execute</code> — a plain synchronous endpoint used internally for side queries such as

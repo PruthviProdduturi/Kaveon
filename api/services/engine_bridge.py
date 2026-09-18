@@ -1,6 +1,8 @@
 """Opt-in Engine control/data plane client. No secrets enter catalog definitions."""
 import json
 import re
+import threading
+import time
 import uuid
 import os
 import ssl
@@ -157,20 +159,15 @@ def execute(sql, catalog, actor, role, schema=None, timeout=60, settings=None):
     everyone else. `settings` is the Engine's per-request settings object
     (`query_memory_limit_bytes`, `local_parallelism`, `result_cache`); it is
     sent only when given, so callers that do not pass it are unchanged."""
-    roles = {"Analyst": "analyst", "Editor": "analyst", "Admin": "admin"}
-    if role not in roles:
-        raise HTTPException(403, "A recognized Kaveon role is required for Engine SQL")
+    engine_role = _sql_role(role)
     tag = "kaveon-api:" + uuid.uuid4().hex
-    payload = {"query": sql, "catalog": catalog, "schema": schema,
-               "source": "studio", "client": "kaveon-api", "client_tags": [tag]}
-    if settings is not None:
-        payload["settings"] = dict(settings)
+    payload = _statement_payload(sql, catalog, schema, tag, settings)
     try:
         result = _request("POST", "/v1/statement", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
-                          payload=payload, role=roles[role], timeout=timeout)
+                          payload=payload, role=engine_role, timeout=timeout)
     except HTTPException as error:
         if error.status_code == 504:
-            cancel_tagged(tag, actor, roles[role])
+            cancel_tagged(tag, actor, engine_role)
         raise
     if result is None:
         raise HTTPException(422, "Engine query failed")
@@ -180,7 +177,7 @@ def execute(sql, catalog, actor, role, schema=None, timeout=60, settings=None):
         try:
             details = _request(
                 "GET", "/v1/query/" + quote(str(query_id), safe=""),
-                "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=roles[role],
+                "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=engine_role,
             )
         except HTTPException:
             # Telemetry enrichment is best effort after a successful statement;
@@ -198,6 +195,217 @@ def execute(sql, catalog, actor, role, schema=None, timeout=60, settings=None):
             **({"engine_details": details} if isinstance(details, dict) else {}),
         })
     return result
+
+
+def _sql_role(role):
+    roles = {"Analyst": "analyst", "Editor": "analyst", "Admin": "admin"}
+    if role not in roles:
+        raise HTTPException(403, "A recognized Kaveon role is required for Engine SQL")
+    return roles[role]
+
+
+def _statement_payload(sql, catalog, schema, tag, settings):
+    payload = {"query": sql, "catalog": catalog, "schema": schema,
+               "source": "studio", "client": "kaveon-api", "client_tags": [tag]}
+    if settings is not None:
+        payload["settings"] = dict(settings)
+    return payload
+
+
+# ── Streamed statements ───────────────────────────────────────────────────────
+# A statement submitted with `result_delivery: "paged"` writes its rows to
+# pages on the coordinator while it runs (1,000 rows or 4 MiB each), and its
+# record carries `next_uri` for page 0 from the moment it is RUNNING. The
+# Studio reads the record and the pages through the routes below while the
+# POST that holds the statement waits on a background thread here; when that
+# POST returns the thread reads the final record and the row total and hands
+# them to `on_finish`, which is where the platform's query history is written.
+# Every read is scoped by the coordinator to the actor that submitted, so the
+# same actor must stamp the submit and the reads.
+
+TERMINAL_STATES = {"FINISHED", "FAILED", "CANCELED"}
+# How long a submit waits for the coordinator to register the statement's
+# record before giving up; the statement is cancelled by its tag when it does.
+SUBMIT_WAIT_SECONDS = 30.0
+# How long the background thread holds the statement's POST. The coordinator
+# applies its own statement limits; this only bounds a lost connection.
+STREAM_HOLD_SECONDS = 4 * 3600
+
+
+def find_tagged(tag, actor, role):
+    """The query record carrying *tag* among those this principal can see, or None."""
+    queries = _request("GET", "/v1/query", "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=role)
+    for record in queries if isinstance(queries, list) else []:
+        tags = record.get("client_tags") or (record.get("context") or {}).get("client_tags") or []
+        if tag in tags:
+            return record
+    return None
+
+
+class StreamedStatement:
+    """A paged statement in flight: its tag, its record id once known, and
+    the outcome of the POST that holds it."""
+
+    def __init__(self, tag):
+        self.tag = tag
+        self.query_id = None
+        self.record = None
+        self.done = threading.Event()
+        self.status = None
+        self.body = None
+        self.error = None
+        self.wall_ms = None
+
+
+def _submit_error(statement):
+    """The refusal to return when the POST failed before the record existed."""
+    if statement.error is not None:
+        return statement.error
+    status, body = statement.status, statement.body if isinstance(statement.body, dict) else {}
+    message = body.get("error") if isinstance(body.get("error"), str) and body.get("error").strip() else None
+    if status == 429:
+        return HTTPException(429, "Engine query capacity is temporarily exhausted", headers={"Retry-After": "1"})
+    if status == 400:
+        return HTTPException(400, message or "Engine refused the statement")
+    return HTTPException(502, message or "Engine rejected the request")
+
+
+def _hold(statement, payload, actor, role, timeout, on_finish):
+    """Body of the background thread: post the statement, wait for it, then
+    resolve its record and row total and report through `on_finish`."""
+    engine_role = _sql_role(role)
+    started = time.monotonic()
+    try:
+        try:
+            response = _send("POST", "/v1/statement", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
+                             payload=payload, role=engine_role, timeout=timeout)
+        except HTTPException as error:
+            if error.status_code == 504:
+                cancel_tagged(statement.tag, actor, engine_role)
+            statement.error = error
+        else:
+            statement.status = response.status_code
+            try:
+                statement.body = response.json()
+            except ValueError:
+                statement.body = {}
+        statement.wall_ms = int((time.monotonic() - started) * 1000)
+        if statement.query_id is None:
+            query_id = statement.body.get("id") if isinstance(statement.body, dict) else None
+            if not query_id:
+                try:
+                    record = find_tagged(statement.tag, actor, engine_role)
+                except HTTPException:
+                    record = None
+                query_id = record.get("id") if isinstance(record, dict) else None
+            statement.query_id = str(query_id) if query_id else None
+    finally:
+        statement.done.set()
+    if on_finish is not None and statement.query_id:
+        on_finish(finish_summary(statement, actor, role))
+
+
+def finish_summary(statement, actor, role):
+    """The final record and row total of a finished streamed statement, for
+    the history row. Every read here is best effort: a coordinator that has
+    already expired the result still leaves a usable summary."""
+    record = None
+    try:
+        record = query(statement.query_id, actor, role)
+    except HTTPException:
+        record = None
+    record = record if isinstance(record, dict) else {}
+    row_count = None
+    if str(record.get("state", "")).upper() == "FINISHED":
+        try:
+            status, page = result_page(statement.query_id, 0, actor, role)
+        except HTTPException:
+            status, page = None, None
+        if status == 200 and isinstance(page, dict) and isinstance(page.get("row_count"), int):
+            row_count = page["row_count"]
+    elapsed = record.get("elapsed_ms")
+    state = str(record.get("state") or ("FINISHED" if statement.status == 200 else "FAILED")).upper()
+    error = record.get("error")
+    if not error and statement.error is not None:
+        error = statement.error.detail if isinstance(statement.error.detail, str) else "Engine statement failed"
+    if not error and isinstance(statement.body, dict) and isinstance(statement.body.get("error"), str):
+        error = statement.body["error"]
+    return {
+        "query_id": statement.query_id, "state": state,
+        "error": error if isinstance(error, str) else None,
+        "elapsed_ms": int(elapsed) if isinstance(elapsed, (int, float)) and elapsed > 0 else statement.wall_ms,
+        "row_count": row_count, "record": record or None,
+    }
+
+
+def submit_streamed(sql, catalog, actor, role, schema=None, settings=None, on_finish=None,
+                    wait=SUBMIT_WAIT_SECONDS, hold=STREAM_HOLD_SECONDS):
+    """Submit one statement with paged delivery and return once its record
+    exists: `{"query_id", "tag", "record"}`. The POST that holds the
+    statement runs on a daemon thread; `on_finish(summary)` is called from
+    that thread when it returns (see `finish_summary`). A statement the
+    coordinator refuses before it has a record — a parse error, exhausted
+    capacity — raises the refusal here instead."""
+    engine_role = _sql_role(role)
+    tag = "kaveon-api:stream:" + uuid.uuid4().hex
+    payload = {**_statement_payload(sql, catalog, schema, tag, settings), "result_delivery": "paged"}
+    statement = StreamedStatement(tag)
+    thread = threading.Thread(target=_hold, args=(statement, payload, actor, role, hold, on_finish),
+                              name="kaveon-stream-" + tag[-12:], daemon=True)
+    thread.start()
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            record = find_tagged(tag, actor, engine_role)
+        except HTTPException:
+            record = None
+        if isinstance(record, dict) and record.get("id"):
+            if statement.query_id is None:
+                statement.query_id = str(record["id"])
+            statement.record = record
+            return {"query_id": statement.query_id, "tag": tag, "record": record}
+        if statement.done.is_set():
+            if statement.query_id:
+                record = query(statement.query_id, actor, role)
+                if isinstance(record, dict):
+                    return {"query_id": statement.query_id, "tag": tag, "record": record}
+            raise _submit_error(statement)
+        if time.monotonic() >= deadline:
+            cancel_tagged(tag, actor, engine_role)
+            raise HTTPException(504, "Engine did not register the statement within the submit bound")
+        statement.done.wait(0.1)
+
+
+def result_page(query_id, page, actor, role):
+    """One page of a paged result: `(status, body)` with the coordinator's
+    status passed through — 200 with the rows, 202 while the page is not yet
+    written, 404 past the end or unknown, 410 once the statement failed or
+    was cancelled. Only transport failures raise."""
+    response = _send("GET", "/v1/query/" + quote(str(query_id), safe="") + "/results/" + str(int(page)),
+                     "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role))
+    if response.status_code == 429:
+        raise HTTPException(429, "Engine query capacity is temporarily exhausted", headers={"Retry-After": "1"})
+    if response.status_code in {200, 202, 404, 410}:
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+        return response.status_code, body
+    if response.status_code in {401, 403}:
+        raise HTTPException(502, "Engine rejected the bridge credential")
+    raise HTTPException(502, "Engine rejected the request")
+
+
+def cancel(query_id, actor, role):
+    """Cancel one statement by id. True when the coordinator accepted the
+    cancellation, False when it no longer knows the statement."""
+    result = _send("DELETE", "/v1/query/" + quote(str(query_id), safe=""),
+                   "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role))
+    if result.status_code == 404:
+        return False
+    if result.is_success:
+        return True
+    raise HTTPException(502, "Engine rejected the request")
 
 
 def native_analyze_supported():
