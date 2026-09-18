@@ -557,14 +557,15 @@ products; Iceberg, ADLS Gen2 and S3 locations, and `ANALYZE`, need the
 server. See [Engine SQL compatibility](../reference/engine-sql-compatibility.md)
 for the SQL surface.
 
-## Coming soon
+## Not yet
 
-Listed in `.help` and rendered dimmed until each one ships:
-
-- `.ask <question>` — answer a question in plain language through the Kaveon DLM.
-- Paged results — large results page on demand instead of the 10,000-row ceiling.
-- `.edit`, `.source <file>`, `.tee <file>` — edit in `$EDITOR`, run a script, copy output to a file.
-- `\G` and `.watch <seconds>` — vertical output for one statement; re-run on an interval.
+Everything `.help` lists is implemented. What the client does not do yet:
+`EXPLAIN ANALYZE`; spooling to object storage; Kerberos, JWT and HTTP-proxy
+options; package-manager installs (winget, Homebrew). Rows appear while a
+statement runs only where the coordinator receives them early: today a worker
+ships a root task's rows when that task completes, so a scan split into few
+tasks still shows its rows at the end — see
+[Running a statement](#running-a-statement).
 
 ## Troubleshooting
 
