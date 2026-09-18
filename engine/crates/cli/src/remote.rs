@@ -369,6 +369,17 @@ pub(crate) fn execute_to_string(
     options: &mut Options,
     sql: &str,
 ) -> Result<Executed, String> {
+    execute_with_limit(client, options, sql, None)
+}
+
+/// `preview_limit` is the interactive row limit the shell appended, so the
+/// summary can say the result is a preview when it fills.
+pub(crate) fn execute_with_limit(
+    client: &Session,
+    options: &mut Options,
+    sql: &str,
+    preview_limit: Option<usize>,
+) -> Result<Executed, String> {
     if let Some(meta) = parse_sql_metadata(sql, options)? {
         return Ok(Executed {
             output: run_meta_command(client, options, meta)?,
@@ -401,12 +412,20 @@ pub(crate) fn execute_to_string(
     if is_human_format(options.output_format) {
         let record =
             crate::client::session::fetch_query(client, &options.server, &response.id).ok();
-        let summary = crate::render::summary::Summary::from_record(
+        let mut summary = crate::render::summary::Summary::from_record(
             response.elapsed_ms,
             response.data.len(),
             &response.id,
             record.as_ref(),
         );
+        if let Some(limit) = preview_limit
+            && response.data.len() >= limit
+        {
+            summary.message = Some(format!(
+                "first {} rows only · .limit <n> or .limit off to change",
+                crate::render::thousands(limit as i128)
+            ));
+        }
         scanned_rows = summary.rows_scanned;
         output.push_str(&styled_or_plain(&crate::render::summary::lines(
             &summary,

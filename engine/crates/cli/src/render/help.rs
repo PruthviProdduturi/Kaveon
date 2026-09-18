@@ -67,6 +67,10 @@ const GROUPS: &[Group] = &[
                 command: "Ctrl-C",
                 description: "cancel the running statement, or clear the input",
             },
+            Entry {
+                command: ".limit [n | off]",
+                description: "rows a query without LIMIT shows (default 1,000); never for scripts",
+            },
         ],
     },
     Group {

@@ -338,6 +338,20 @@ fn run_statement(
         elapsed_ms: None,
         scanned_rows: None,
     };
+    if let Some(rest) = text.strip_prefix(".limit") {
+        let argument = rest.trim();
+        let argument = (!argument.is_empty()).then_some(argument);
+        if let Some(limit) = crate::shell::rowlimit::parse_command(argument)? {
+            options.row_limit = limit;
+        }
+        return Ok(plain(match options.row_limit {
+            Some(limit) => format!(
+                "row limit {} (interactive queries without LIMIT)\n",
+                render::thousands(limit as i128)
+            ),
+            None => "row limit off\n".to_owned(),
+        }));
+    }
     if text.starts_with('.') {
         return crate::remote::meta_command_to_string(session, options, text).map(plain);
     }
@@ -356,7 +370,15 @@ fn run_statement(
         scanned_rows: None,
     };
     for statement in crate::input::split_statements(text)? {
-        let executed = crate::remote::execute_to_string(session, options, &statement)?;
+        let limited = options
+            .row_limit
+            .and_then(|limit| crate::shell::rowlimit::apply(&statement, limit));
+        let executed = match &limited {
+            Some(sql) => {
+                crate::remote::execute_with_limit(session, options, sql, options.row_limit)?
+            }
+            None => crate::remote::execute_to_string(session, options, &statement)?,
+        };
         merged.output.push_str(&executed.output);
         if executed.elapsed_ms.is_some() {
             merged.elapsed_ms = executed.elapsed_ms;

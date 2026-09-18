@@ -47,6 +47,9 @@ pub struct Options {
     /// The catalog or schema came from a flag, the URL path, a config
     /// default, or a later USE — not the built-in `kaveon.default`.
     pub context_explicit: bool,
+    /// Interactive queries without a LIMIT show at most this many rows;
+    /// `None` is off. Never applied to `-e`, `-f` or piped input.
+    pub row_limit: Option<usize>,
 }
 
 fn normalize_args(args: &[String]) -> Vec<String> {
@@ -119,6 +122,7 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         no_header: false,
         width: None,
         context_explicit: false,
+        row_limit: Some(1_000),
     };
     let mut positional_server = false;
     let mut explicit_server = false;
@@ -157,6 +161,17 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
                 if !matches!(options.theme.as_str(), "dark" | "light" | "mono") {
                     return Err("--theme expects dark, light, or mono".to_owned());
                 }
+            }
+            "--row-limit" => {
+                let value = take_value(args, &mut index, option)?;
+                options.row_limit =
+                    if value.eq_ignore_ascii_case("off") || value == "0" {
+                        None
+                    } else {
+                        Some(value.parse::<usize>().ok().filter(|limit| *limit > 0).ok_or_else(
+                        || format!("invalid row limit '{value}': expected a positive count or off"),
+                    )?)
+                    };
             }
             "--width" => {
                 let value = take_value(args, &mut index, option)?;
@@ -392,6 +407,7 @@ fn config_arguments(text: &str) -> Result<Vec<String>, String> {
                 | "pager"
                 | "theme"
                 | "width"
+                | "row-limit"
         ) {
             return Err(format!(
                 "unsupported CLI config key '{key}' on line {}",
@@ -585,6 +601,12 @@ mod tests {
         assert_eq!(options.theme, "mono");
         assert!(options.no_header);
         assert_eq!(options.width, Some(100));
+        assert_eq!(options.row_limit, Some(1_000));
+        let Command::Run(options) = parse(&strings(&["kaveon", "--row-limit", "off"])).unwrap()
+        else {
+            panic!("run");
+        };
+        assert_eq!(options.row_limit, None);
         assert!(parse(&strings(&["kaveon", "--theme", "neon"])).is_err());
         assert!(parse(&strings(&["kaveon", "--width", "0"])).is_err());
     }
