@@ -69,7 +69,13 @@ recreate a live catalog to suppress it.
 
 ## Register schemas and tables
 
-Use the authenticated Engine catalog API:
+From Studio, open Catalog and use **Add schema** and **Add table**; from the
+platform API, `POST /api/v1/engine/catalog/definitions/{catalog_id}/schemas`
+and `POST /api/v1/engine/catalog/tables` with names and Trino column types
+(Editor role). Both register as Draft, activate, and verify the table with a
+read before keeping it; see [Connectors](../reference/connector-capabilities.md#registering-catalogs-schemas-and-tables).
+
+Or use the Engine catalog API directly with the catalog-admin credential:
 
 1. `POST /v1/catalog/definitions/{catalog_id}/schemas` creates each schema.
 2. `POST /v1/catalog/schemas/{schema_id}/tables` creates each table, including
