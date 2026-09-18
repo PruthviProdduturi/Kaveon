@@ -2,6 +2,8 @@
 //! for output that is not a terminal.
 pub mod cluster;
 pub mod help;
+#[allow(dead_code)]
+pub mod plan;
 pub mod summary;
 
 use ratatui::text::Line;
