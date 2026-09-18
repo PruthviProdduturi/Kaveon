@@ -154,6 +154,11 @@ services:
       KAVEON_ENGINE_PRIVATE_HTTP: "true"
       KAVEON_ENGINE_BRIDGE_TOKEN: ${KAVEON_ENGINE_BRIDGE_TOKEN:-kaveon-local-bridge-token-not-for-production}
       KAVEON_ENGINE_CATALOG_TOKEN: ${KAVEON_CATALOG_ADMIN_TOKEN:-kaveon-local-catalog-admin}
+      # PostgreSQL stays the read authority here; every product write also
+      # lands in the coordinator's KaveonDB product catalog through the
+      # ordered outbox replay. DLM publication binds each definition to the
+      # dataset's catalog revision, so the replay worker is part of this profile.
+      KAVEON_PRODUCT_REPLAY_ENABLED: "true"
       KAVEON_CREDENTIAL_KEYS: ${KAVEON_CREDENTIAL_KEYS:-}
       KAVEON_CREDENTIAL_ACTIVE_KEY: ${KAVEON_CREDENTIAL_ACTIVE_KEY:-}
     depends_on:

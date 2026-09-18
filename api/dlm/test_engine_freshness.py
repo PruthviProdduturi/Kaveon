@@ -43,7 +43,8 @@ class ChartFreshnessTests(unittest.TestCase):
                    "schema_name": "public", "fact_table": "events",
                    "columns": [{"column_name": "country", "is_dimension": True}],
                    "metrics": [{"name": "Sessions", "expression": "SUM(sessions)"}]}
-        with patch.object(engine, "get_dlm", return_value=artifact), \
+        with patch("services.postgresql_retirement_runtime.requested", return_value=True), \
+             patch.object(engine, "get_dlm", return_value=artifact), \
              patch("services.product_store.list_records", return_value=[{"id": "7", "document": {}}]), \
              patch.object(engine.datasets_svc, "get_dataset_by_id", return_value=dataset), \
              patch.object(engine.meta, "query", side_effect=AssertionError("PostgreSQL read reached")), \
@@ -58,6 +59,25 @@ class ChartFreshnessTests(unittest.TestCase):
         self.assertEqual(values["values"], [{"key": "Canada", "value": "Canada"}])
         self.assertTrue(answer["ok"], answer)
         self.assertTrue(answer.get("from_context"), answer)
+
+    def test_authenticated_serving_uses_the_legacy_tables_until_retirement_is_requested(self):
+        # PostgreSQL remains the DLM authority until the PostgreSQL-free
+        # runtime is requested: an authenticated caller must not install the
+        # compiled-context serving state, whose artifact reader would consult
+        # the KaveonDB product list and re-enter get_dlm through _value_count.
+        row = {"dataset_id": "7", "version": 1, "manifest": "{}", "stats_rollup": "{}",
+               "usage_rollup": "{}", "source_hash": "s", "built_at": "now", "status": "ready"}
+        with patch("services.postgresql_retirement_runtime.requested", return_value=False), \
+             patch.object(engine, "ensure_tables", lambda: None), \
+             patch.object(engine.meta, "query_one", side_effect=[row, {"n": 3}]), \
+             patch("services.product_store.list_records",
+                   side_effect=AssertionError("KaveonDB product list reached")):
+            artifact = engine.get_dlm("7", actor="viewer", role="Viewer")
+            self.assertEqual(artifact["values_indexed"], 3)
+            self.assertIsNone(engine._RETIREMENT_SERVING.get())
+            with patch.object(engine.meta, "query", return_value={"rows_objects": []}):
+                self.assertEqual(engine.route("sessions by country", actor="viewer", role="Viewer"), [])
+            self.assertIsNone(engine._RETIREMENT_SERVING.get())
 
     def test_retirement_curation_creates_new_immutable_generation_without_metadata_write(self):
         artifact = {

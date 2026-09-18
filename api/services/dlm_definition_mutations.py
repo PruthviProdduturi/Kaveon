@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from services import product_outbox, product_store
+from services import product_outbox, product_replay, product_store
 
 
 @dataclass(frozen=True)
@@ -29,6 +29,10 @@ def publish_ready(transaction, dataset_id: str, actor: str):
     owner = str(source.get("created_by") or "")
     if not owner:
         raise RuntimeError("DLM definition source owner is missing")
+    # The row lock above fences further dataset events. Replay the dataset's
+    # own pending source events first so the revision bound below is the one
+    # PostgreSQL committed, not whatever the background worker has reached.
+    product_replay.replay_record("datasets", dataset_id)
     dataset = product_store.read("dataset", dataset_id, owner, "Admin")
     if not dataset or not isinstance(dataset.get("document"), dict):
         raise RuntimeError("KaveonDB dataset is missing before DLM definition publication")

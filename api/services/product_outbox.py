@@ -29,19 +29,40 @@ class OutboxEvent:
     owner_principal: str
 
 
-def pending(limit: int = 50) -> list[dict]:
-    """Read the oldest unapplied events; source order is the replay contract."""
+def pending(limit: int = 50, through: int | None = None) -> list[dict]:
+    """Read the oldest unapplied events; source order is the replay contract.
+
+    *through* bounds the read to events at or before one source sequence so a
+    caller can replay exactly the prefix that precedes a record it needs.
+    """
     if not 1 <= limit <= 100:
         raise ValueError("product outbox read limit must be between 1 and 100")
-    return db.query("""
+    if through is not None and (type(through) is not int or through < 1):
+        raise ValueError("product outbox read bound must be a positive source sequence")
+    return db.query(f"""
         SELECT source_sequence, event_id, family, operation, record_id,
                payload_json, payload_sha256, actor_principal, owner_principal,
                created_at, apply_attempts
         FROM product_migration_outbox
-        WHERE applied_at IS NULL
+        WHERE applied_at IS NULL{" AND source_sequence <= @param1" if through is not None else ""}
         ORDER BY source_sequence
         LIMIT @param0
-    """, [limit])["rows"]
+    """, [limit] if through is None else [limit, through])["rows"]
+
+
+def newest_pending_sequence(family: str, record_id: str) -> int | None:
+    """The source sequence of one record's newest unapplied event, if any."""
+    if family not in SUPPORTED_FAMILIES:
+        raise ValueError("unsupported product outbox family")
+    if not record_id:
+        raise ValueError("product outbox record ID is required")
+    row = db.query_one("""
+        SELECT MAX(source_sequence) AS source_sequence
+        FROM product_migration_outbox
+        WHERE applied_at IS NULL AND family = @param0 AND record_id = @param1
+    """, [family, record_id])
+    value = row.get("source_sequence") if row else None
+    return None if value is None else int(value)
 
 
 def status(event_id: str) -> dict | None:

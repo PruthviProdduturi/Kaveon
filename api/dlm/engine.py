@@ -80,7 +80,15 @@ _RETIREMENT_SERVING: ContextVar[Optional[_RetirementServingState]] = ContextVar(
 
 
 def _with_serving_identity(actor: Optional[str], role: str, invoke):
+    """Serve from compiled KaveonDB context under the caller's identity when the
+    PostgreSQL-free runtime is requested, the same gate the build state uses.
+    Otherwise the legacy DLM tables serve and no serving state is installed:
+    a PostgreSQL artifact carries no compiled context, so the serving-state
+    branches would read nothing from it and re-enter its own value count."""
     if not actor or _RETIREMENT_SERVING.get() is not None:
+        return invoke()
+    from services import postgresql_retirement_runtime
+    if not postgresql_retirement_runtime.requested():
         return invoke()
     token = _RETIREMENT_SERVING.set(_RetirementServingState(actor, role))
     try:
