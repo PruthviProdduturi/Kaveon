@@ -183,22 +183,26 @@ pub fn optimize_with_statistics(
             right,
             left_key,
             right_key,
+            residual,
         } => LogicalPlan::SemiJoin {
             left: Box::new(optimize_with_statistics(*left, statistics)),
             right: Box::new(optimize_with_statistics(*right, statistics)),
             left_key,
             right_key,
+            residual,
         },
         LogicalPlan::AntiJoin {
             left,
             right,
             left_key,
             right_key,
+            residual,
         } => LogicalPlan::AntiJoin {
             left: Box::new(optimize_with_statistics(*left, statistics)),
             right: Box::new(optimize_with_statistics(*right, statistics)),
             left_key,
             right_key,
+            residual,
         },
         scan @ LogicalPlan::Scan { .. } => scan,
     }
