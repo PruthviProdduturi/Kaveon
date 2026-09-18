@@ -22,6 +22,7 @@
     {
      "round": 1,
      "executions_per_second": 0.1329,
+     "elapsed_seconds": 308.441,
      "successful": 41,
      "failures": 0,
      "rejections": 0,
@@ -30,6 +31,7 @@
     {
      "round": 2,
      "executions_per_second": 0.0741,
+     "elapsed_seconds": 323.9,
      "successful": 24,
      "failures": 0,
      "rejections": 0,
@@ -38,6 +40,7 @@
     {
      "round": 3,
      "executions_per_second": 0.117,
+     "elapsed_seconds": 367.607,
      "successful": 43,
      "failures": 0,
      "rejections": 0,
@@ -52,6 +55,7 @@
     {
      "round": 1,
      "executions_per_second": 0.0852,
+     "elapsed_seconds": 328.496,
      "successful": 28,
      "failures": 7,
      "rejections": 255,
@@ -60,6 +64,7 @@
     {
      "round": 2,
      "executions_per_second": 0.2215,
+     "elapsed_seconds": 370.198,
      "successful": 82,
      "failures": 0,
      "rejections": 248,

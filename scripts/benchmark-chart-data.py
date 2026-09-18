@@ -18,8 +18,9 @@ defaults.
 
 Throughput (`--throughput`): per client count, every round's successful
 exact executions per second with its successes, failures, admission
-rejections and ties, and the median over rounds, from
-kaveon-throughput-<clients>-round<N>.json.
+rejections, ties and the measured span it was divided by (the window plus
+the time the statements in flight at its end took to return), and the
+median over rounds, from kaveon-throughput-<clients>-round<N>.json.
 
     python scripts/benchmark-chart-data.py docs/qualification/clickbench/runs/rounds-2026-09-17 \
         studio/public/benchmarks/clickbench-2026-09.json
@@ -240,6 +241,7 @@ def throughput(args, directory):
             entries.append({
                 "round": record.get("round", number),
                 "executions_per_second": record.get("executions_per_second"),
+                "elapsed_seconds": record.get("elapsed_seconds"),
                 "successful": record.get("successful", 0),
                 "failures": record.get("failures", 0),
                 "rejections": record.get("rejections", 0),

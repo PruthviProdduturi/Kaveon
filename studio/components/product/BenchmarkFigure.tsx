@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
-import type { ClickBenchFigure, ClickBenchStatement } from "../../utils/clickbench";
+import type { LatencyFigure, LatencyStatement } from "../../utils/benchmarkTypes";
 import styles from "./BenchmarkFigure.module.css";
 
 /**
- * Per-statement time for the 43 ClickBench statements, in upstream order,
- * on a log time axis. Hand-built SVG: 43 marks, two reference lines and four
+ * Per-statement time for a suite's statements (ClickBench's 43, TPC-H's 22)
+ * in suite order on a log time axis. Hand-built SVG: 43 marks, two reference lines and four
  * ticks need no charting runtime, stay crisp at any width, and every mark can
  * be a real focusable element with its own description. Wide containers draw
  * statements as columns; below 640 px the figure turns into rows so all 43
@@ -64,7 +64,7 @@ function useRevealOnce(ref: React.RefObject<HTMLDivElement | null>): boolean {
 
 interface Tip { index: number; x: number; y: number }
 
-export function BenchmarkFigure({ figure }: { figure: ClickBenchFigure }) {
+export function BenchmarkFigure({ figure }: { figure: LatencyFigure }) {
   const [containerRef, width] = useContainerWidth();
   const revealed = useRevealOnce(containerRef);
   const [tip, setTip] = useState<Tip | null>(null);
@@ -90,7 +90,7 @@ export function BenchmarkFigure({ figure }: { figure: ClickBenchFigure }) {
   }, [tip, containerRef]);
 
   const statements = figure.statements;
-  const timed = statements.filter((s): s is ClickBenchStatement & { seconds: number } => s.seconds !== null);
+  const timed = statements.filter((s): s is LatencyStatement & { seconds: number } => s.seconds !== null);
   const max = timed.reduce((m, s) => Math.max(m, s.seconds), 1);
   const top = max * 1.5;
   const logFloor = Math.log10(FLOOR_SECONDS);
@@ -130,12 +130,12 @@ export function BenchmarkFigure({ figure }: { figure: ClickBenchFigure }) {
         <div className={styles.placeholder} aria-hidden="true" />
       ) : columns ? (
         <ColumnsChart
-          width={width} statements={statements} fraction={fraction} ticks={ticks} counts={counts}
+          width={width} suite={figure.suite} statements={statements} fraction={fraction} ticks={ticks} counts={counts}
           revealed={revealed} active={tip?.index ?? null} setTip={setTip} onKey={onKey} describedBy={describedBy}
         />
       ) : (
         <RowsChart
-          width={width} statements={statements} fraction={fraction} ticks={ticks} counts={counts}
+          width={width} suite={figure.suite} statements={statements} fraction={fraction} ticks={ticks} counts={counts}
           revealed={revealed} active={tip?.index ?? null} setTip={setTip} onKey={onKey} describedBy={describedBy}
         />
       )}
@@ -157,7 +157,8 @@ export function BenchmarkFigure({ figure }: { figure: ClickBenchFigure }) {
 
 interface ChartProps {
   width: number;
-  statements: ClickBenchStatement[];
+  suite: string;
+  statements: LatencyStatement[];
   fraction: (seconds: number) => number;
   ticks: number[];
   counts: { t: number; n: number }[];
@@ -168,13 +169,13 @@ interface ChartProps {
   describedBy: string;
 }
 
-function itemLabel(s: ClickBenchStatement): string {
+function itemLabel(s: LatencyStatement): string {
   return s.seconds === null
     ? `${s.id}, did not finish in every round. ${s.label}`
     : `${s.id}, ${spokenSeconds(s.seconds)}. ${s.label}`;
 }
 
-function ColumnsChart({ width, statements, fraction, ticks, counts, revealed, active, setTip, onKey, describedBy }: ChartProps) {
+function ColumnsChart({ width, suite, statements, fraction, ticks, counts, revealed, active, setTip, onKey, describedBy }: ChartProps) {
   const ml = 46, mr = 14, mt = 26, mb = 34;
   const height = 340;
   const plotW = width - ml - mr;
@@ -189,7 +190,7 @@ function ColumnsChart({ width, statements, fraction, ticks, counts, revealed, ac
     <svg
       className={`${styles.svg} ${styles.columns} ${revealed ? styles.revealed : styles.pending}`}
       viewBox={`0 0 ${width} ${height}`} width={width} height={height}
-      role="list" aria-label="Seconds per ClickBench statement, upstream order, log scale" aria-describedby={describedBy}
+      role="list" aria-label={`Seconds per ${suite} statement, suite order, log scale`} aria-describedby={describedBy}
     >
       {ticks.map((t) => (
         <g key={t}>
@@ -227,12 +228,12 @@ function ColumnsChart({ width, statements, fraction, ticks, counts, revealed, ac
           </g>
         );
       })}
-      <text className={styles.axisTitle} x={ml} y={height - 4} aria-hidden="true">ClickBench statement, upstream order</text>
+      <text className={styles.axisTitle} x={ml} y={height - 4} aria-hidden="true">{suite} statement, suite order</text>
     </svg>
   );
 }
 
-function RowsChart({ width, statements, fraction, ticks, counts, revealed, active, setTip, onKey, describedBy }: ChartProps) {
+function RowsChart({ width, suite, statements, fraction, ticks, counts, revealed, active, setTip, onKey, describedBy }: ChartProps) {
   const ml = 38, mr = 10, mt = 44, mb = 10;
   const rowH = 17;
   const height = mt + rowH * statements.length + mb;
@@ -245,7 +246,7 @@ function RowsChart({ width, statements, fraction, ticks, counts, revealed, activ
     <svg
       className={`${styles.svg} ${styles.rows} ${revealed ? styles.revealed : styles.pending}`}
       viewBox={`0 0 ${width} ${height}`} width={width} height={height}
-      role="list" aria-label="Seconds per ClickBench statement, upstream order, log scale" aria-describedby={describedBy}
+      role="list" aria-label={`Seconds per ${suite} statement, suite order, log scale`} aria-describedby={describedBy}
     >
       {ticks.map((t) => (
         <g key={t}>
