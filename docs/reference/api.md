@@ -44,7 +44,7 @@ All paths below are relative to the FastAPI origin.
   currently implemented.
 - Authorization differs by route. Do not infer write permission merely from an
   authenticated session; inspect the generated OpenAPI schema and router dependency.
-- <a id="streaming-pages"></a>**Streaming pages (Engine).** A statement submitted with
+- **Streaming pages (Engine).** A statement submitted with
   `result_delivery: "paged"` registers its pages the moment its record becomes
   `RUNNING`, and its record (`GET /v1/query/{id}`, the `GET /v1/query` list)
   carries `next_uri: "/v1/query/{id}/results/0"` from then on, kept once it
@@ -87,7 +87,7 @@ The Rust server exposes these routes:
 | `GET`, `PUT`, `DELETE` | `/v1/catalog/tables/{table_id}` | Read, revision-replace, or delete a durable table definition |
 | `GET` | `/v1/catalog/{catalog}/schema` | List schemas |
 | `GET` | `/v1/catalog/{catalog}/schema/{schema}/table` | List tables |
-| `GET` | `/v1/query/{query_id}/results/{page}` | One page of a paged result, served while the statement still runs (owner-scoped, immutable once written, 15 min TTL): `200` with the rows, `202` + `Retry-After: 1` for the next page not yet flushed, `404` past the end or unknown, `410` when the statement failed or was cancelled — see [Streaming pages](#streaming-pages) |
+| `GET` | `/v1/query/{query_id}/results/{page}` | One page of a paged result, served while the statement still runs (owner-scoped, immutable once written, 15 min TTL): `200` with the rows, `202` + `Retry-After: 1` for the next page not yet flushed, `404` past the end or unknown, `410` when the statement failed or was cancelled — see "Streaming pages" under [Important behavior](#important-behavior) |
 | `GET` | `/v1/whoami` | The identity the security layer attached to the request: `principal`, `display` (null unless a validated sign-in supplied one), `role` (`reader`, `analyst`, `admin`) and `auth` (`static`, `bridge`, `entra`, `development`, `internal`). The client shows it in its session header; older coordinators answer 404 and the client hides the line |
 | `GET` | `/v1/capabilities`, `/v1/statistics`, `/v1/auth/config` | What the coordinator supports (native `ANALYZE`, transactions), published exact statistics, and the Entra sign-in configuration for the UI |
 | `POST` | `/v1/transaction`, `/v1/transaction/sql`, `/v1/transaction/{id}/stage`, `…/commit`, `…/rollback`, `…/recovery`; `GET` `/v1/transaction/metrics`, `/v1/products/{kind}`, `/v1/product/{kind}/{id}` | The bounded product-record transaction protocol and typed product reads; see the [SQL compatibility reference](engine-sql-compatibility.md#transaction-api-boundary) |
