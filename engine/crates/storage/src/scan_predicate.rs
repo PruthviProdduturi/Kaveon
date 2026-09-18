@@ -27,6 +27,19 @@ use parquet::schema::types::SchemaDescriptor;
 
 use crate::ScanMetrics;
 
+/// Over object storage a row filter fetches the predicate's columns and
+/// the rest of the projection in two rounds per row group. That pays when
+/// the rest is large: the rows the filter rejects are never decoded for
+/// those columns, and a row group it empties is never fetched for them.
+/// For a narrow projection the second round costs more than the decode it
+/// saves (measured on the cluster: 1.7x slower on aggregate shapes whose
+/// predicate column was one of two projected; on the wide benchmark in
+/// `scan_bench`, a two-column projection over an in-memory store 42 → 54 ms
+/// with the filter, 100 columns of plain text 467 → 331 ms), so the filter
+/// is applied only when the remaining projection carries at least this many
+/// times the predicate columns' compressed bytes.
+pub(crate) const LATE_MATERIALISATION_RATIO: u64 = 4;
+
 /// One comparison, match, or null test over a column of a batch, or a
 /// boolean composition of them. Column indices address the batch the
 /// predicate is compiled against.
@@ -370,6 +383,18 @@ impl RowFilterPlan {
         (!stages.is_empty()).then_some(Self { stages })
     }
 
+    /// Every column a stage reads, each once, in file order.
+    pub(crate) fn columns(&self) -> Vec<usize> {
+        let mut columns = self
+            .stages
+            .iter()
+            .flat_map(|stage| stage.columns.iter().copied())
+            .collect::<Vec<_>>();
+        columns.sort_unstable();
+        columns.dedup();
+        columns
+    }
+
     /// Order the stages by the compressed bytes their columns hold in the
     /// selected row groups, smallest first.
     pub(crate) fn order_by_bytes(&mut self, metadata: &ParquetMetaData, groups: &[usize]) {
@@ -468,6 +493,79 @@ fn column_bytes(metadata: &ParquetMetaData, groups: &[usize], column: usize) -> 
                 .max(0) as u64
         })
         .sum()
+}
+
+/// Whether a row filter over `filter_columns` pays for a projection of
+/// `projected` (None: every column) over the selected row groups, by
+/// `LATE_MATERIALISATION_RATIO`.
+pub(crate) fn late_materialisation_pays(
+    metadata: &ParquetMetaData,
+    groups: &[usize],
+    projected: Option<&[usize]>,
+    filter_columns: &[usize],
+) -> bool {
+    let width = metadata.file_metadata().schema_descr().num_columns();
+    let filter_bytes = filter_columns
+        .iter()
+        .map(|column| column_bytes(metadata, groups, *column))
+        .sum::<u64>();
+    let rest_bytes = (0..width)
+        .filter(|column| projected.is_none_or(|projected| projected.contains(column)))
+        .filter(|column| !filter_columns.contains(column))
+        .map(|column| column_bytes(metadata, groups, column))
+        .sum::<u64>();
+    rest_bytes >= filter_bytes.saturating_mul(LATE_MATERIALISATION_RATIO)
+}
+
+/// The operator's choice for decoder-side filtering, `KAVEON_LATE_MATERIALISATION`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LateMaterialisation {
+    /// By the byte ratio of the projection (`late_materialisation_pays`),
+    /// and always for an object held in memory, where the second round
+    /// reads memory.
+    Auto,
+    /// Whenever the predicate has an evaluable part.
+    Always,
+    /// Never: the lanes filter decoded batches instead.
+    Never,
+}
+
+impl LateMaterialisation {
+    /// The process-wide default from `KAVEON_LATE_MATERIALISATION`
+    /// (`auto`, `always`, `never`; unset or unrecognised is `auto`).
+    pub fn from_environment() -> Self {
+        match std::env::var("KAVEON_LATE_MATERIALISATION")
+            .ok()
+            .as_deref()
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("always" | "on") => Self::Always,
+            Some("never" | "off") => Self::Never,
+            _ => Self::Auto,
+        }
+    }
+
+    /// Whether the row filter runs for this scan: `in_memory` says the
+    /// object's bytes are held in the process, so a second fetch round
+    /// costs nothing.
+    pub(crate) fn applies(
+        self,
+        metadata: &ParquetMetaData,
+        groups: &[usize],
+        projected: Option<&[usize]>,
+        filter_columns: &[usize],
+        in_memory: bool,
+    ) -> bool {
+        match self {
+            Self::Always => true,
+            Self::Never => false,
+            Self::Auto => {
+                in_memory || late_materialisation_pays(metadata, groups, projected, filter_columns)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -630,6 +728,7 @@ mod tests {
         assert_eq!(plan.stages.len(), 2);
         assert_eq!(plan.stages[0].columns, vec![1]);
         assert_eq!(plan.stages[1].columns, vec![0, 2]);
+        assert_eq!(plan.columns(), vec![0, 1, 2]);
         // Each stage evaluates against a batch of its own columns only.
         let batch = batch();
         let second = batch.project(&[0, 2]).unwrap();

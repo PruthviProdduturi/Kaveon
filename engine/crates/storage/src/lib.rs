@@ -32,6 +32,7 @@ pub use parquet_directory::{
     ParquetLocation, assign_files, list_parquet_directory,
 };
 pub use parquet_reader::{ParquetBatchIterator, ParquetFileMetadata, ParquetReader};
+pub use scan_predicate::LateMaterialisation;
 pub use source_statistics::{SourceStatistics, analyze_source};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

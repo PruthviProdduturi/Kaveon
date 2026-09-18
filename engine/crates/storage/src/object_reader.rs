@@ -4,6 +4,7 @@ use crate::{
     parquet_reader::{
         matching_row_groups, projection_indices, record_selection_metrics, validate_predicate,
     },
+    scan_predicate::{LateMaterialisation, RowFilterPlan},
 };
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use futures::StreamExt;
@@ -96,6 +97,7 @@ pub struct ObjectParquetReader {
     predicate: Option<StoragePredicate>,
     partition: Option<ScanPartition>,
     metrics: ScanMetrics,
+    late_materialisation: LateMaterialisation,
 }
 
 pub struct ObjectBatchSource {
@@ -137,6 +139,7 @@ impl ObjectParquetReader {
             predicate: None,
             partition: None,
             metrics: ScanMetrics::default(),
+            late_materialisation: LateMaterialisation::from_environment(),
         }
     }
     pub fn from_uri(uri: &str) -> Result<Self> {
@@ -164,6 +167,12 @@ impl ObjectParquetReader {
     }
     pub fn with_metrics(mut self, value: ScanMetrics) -> Self {
         self.metrics = value;
+        self
+    }
+    /// Whether the predicate's evaluable part runs inside the decoder
+    /// (see [`LateMaterialisation`]); the process default otherwise.
+    pub fn with_late_materialisation(mut self, mode: LateMaterialisation) -> Self {
+        self.late_materialisation = mode;
         self
     }
 
@@ -222,7 +231,11 @@ impl ObjectParquetReader {
                     let built = async {
                         let started = std::time::Instant::now();
                         self.metrics.files_considered(1);
-                        let reader = ParquetObjectReader::new(self.location.store, meta);
+                        // With a predicate the decoder may run a row
+                        // filter, which reads only the pages the selection
+                        // touches when the offset index is at hand.
+                        let reader = ParquetObjectReader::new(self.location.store, meta)
+                            .with_preload_offset_index(self.predicate.is_some());
                         let mut builder = ParquetRecordBatchStreamBuilder::new(reader)
                             .await
                             .map_err(storage_error)?
@@ -241,10 +254,13 @@ impl ObjectParquetReader {
                             builder = builder.with_projection(mask);
                         }
                         let considered = builder.metadata().num_row_groups();
-                        let mut groups = if let Some(predicate) = &self.predicate {
-                            let predicate = predicate.coerced_for(&schema);
-                            validate_predicate(&predicate, &schema)?;
-                            matching_row_groups(builder.metadata().as_ref(), &schema, &predicate)
+                        let coerced = self
+                            .predicate
+                            .as_ref()
+                            .map(|predicate| predicate.coerced_for(&schema));
+                        let mut groups = if let Some(predicate) = &coerced {
+                            validate_predicate(predicate, &schema)?;
+                            matching_row_groups(builder.metadata().as_ref(), &schema, predicate)
                         } else {
                             (0..considered).collect()
                         };
@@ -257,6 +273,28 @@ impl ObjectParquetReader {
                             projection.as_deref(),
                             &self.metrics,
                         );
+                        // Late materialisation on the same terms as the
+                        // ADLS reader: the predicate's evaluable part runs
+                        // inside the decoder when the rest of the
+                        // projection outweighs its columns.
+                        let row_filter_plan = coerced
+                            .as_ref()
+                            .and_then(|predicate| RowFilterPlan::new(predicate, &schema))
+                            .filter(|plan| {
+                                self.late_materialisation.applies(
+                                    builder.metadata().as_ref(),
+                                    &groups,
+                                    projection.as_deref(),
+                                    &plan.columns(),
+                                    false,
+                                )
+                            });
+                        if let Some(mut plan) = row_filter_plan {
+                            plan.order_by_bytes(builder.metadata().as_ref(), &groups);
+                            let row_filter =
+                                plan.row_filter(builder.parquet_schema(), &self.metrics);
+                            builder = builder.with_row_filter(row_filter);
+                        }
                         builder
                             .with_row_groups(groups)
                             .build()
@@ -429,5 +467,91 @@ mod tests {
                 .read_blocking()
                 .is_err()
         );
+    }
+
+    /// The row filter over an object store: a LIKE over a text column
+    /// admits exactly its rows, whether it runs inside the decoder or on
+    /// the decoded batches, and the statistics still drop row groups first.
+    #[test]
+    fn row_filter_over_an_object_store_admits_exactly_the_matching_rows() {
+        use arrow::array::StringArray;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("url", DataType::Utf8, false),
+        ]));
+        let ids = (0..400).collect::<Vec<i64>>();
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(ids.clone())),
+                Arc::new(StringArray::from_iter_values(ids.iter().map(|id| {
+                    if id % 25 == 0 {
+                        format!("http://www.google.com/{id}")
+                    } else {
+                        format!("http://site-{id}.example")
+                    }
+                }))),
+            ],
+        )
+        .unwrap();
+        let mut bytes = Vec::new();
+        let properties = parquet::file::properties::WriterProperties::builder()
+            .set_max_row_group_size(100)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut bytes, schema, Some(properties)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let path = Path::from("table/urls.parquet");
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(store.put(&path, bytes.into()))
+            .unwrap();
+        let predicate = StoragePredicate::And(vec![
+            StoragePredicate::Like {
+                column: "url".into(),
+                pattern: "%google%".into(),
+                negated: false,
+                case_insensitive: false,
+            },
+            StoragePredicate::Compare {
+                column: "id".into(),
+                op: kaveon_core::CompareOp::Ge,
+                value: kaveon_core::ScalarValue::Int64(200),
+            },
+        ]);
+        for (mode, examined) in [
+            (LateMaterialisation::Always, 200),
+            (LateMaterialisation::Never, 0),
+        ] {
+            let metrics = ScanMetrics::default();
+            let mut source = ObjectParquetReader::new(store.clone(), path.clone())
+                .with_predicate(predicate.clone())
+                .with_late_materialisation(mode)
+                .with_metrics(metrics.clone())
+                .read_blocking()
+                .unwrap();
+            let mut seen = Vec::new();
+            while let Some(batch) = source.next_batch().unwrap() {
+                let column = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap();
+                seen.extend(column.values().iter().copied());
+            }
+            let snapshot = metrics.snapshot();
+            assert_eq!(snapshot.row_groups_selected, 2, "{mode:?}");
+            assert_eq!(snapshot.row_filter_rows_examined, examined, "{mode:?}");
+            match mode {
+                LateMaterialisation::Always => {
+                    assert_eq!(seen, vec![200, 225, 250, 275, 300, 325, 350, 375]);
+                    assert_eq!(snapshot.row_filter_rows_admitted, 8);
+                }
+                // Without a row filter the object reader emits the selected
+                // row groups whole; the executor filters them.
+                _ => assert_eq!(seen, (200..400).collect::<Vec<_>>()),
+            }
+        }
     }
 }
