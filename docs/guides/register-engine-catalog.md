@@ -79,7 +79,10 @@ Use the authenticated Engine catalog API:
 
 Schema object updates use `/v1/catalog/schemas/{schema_id}`; table updates use
 `/v1/catalog/tables/{table_id}`. Table locations are relative to the catalog's
-container/root path. The current OpenSource bootstrap is registered by
+container/root path. A Parquet location may name one object or a directory
+of Parquet files (the layout Trino and Spark write): the directory is listed
+at query time, hidden `_`/`.` entries are skipped, and every file must carry
+the first file's schema. See the Engine storage documentation for the rule. The current OpenSource bootstrap is registered by
 [`register-curated-catalog.py`](../../scripts/register-curated-catalog.py) from
 curation manifests. It contains `silver.yellow_trips`, `silver.green_trips`,
 and `nyc_taxi.daily_trips`; the last has `pickup_date`, `service_type`,

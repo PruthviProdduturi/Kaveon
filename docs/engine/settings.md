@@ -75,7 +75,7 @@ attempted at most 3 times.
 
 | Name | Config key | Default | Unit | What it bounds | Applies to | AKS qualification value |
 |---|---|---|---|---|---|---|
-| `KAVEON_DATA_DIR` | `storage.data_dir` | none | directory path | A local directory whose Parquet and Delta tables bootstrap the `kaveon` catalog on first start. | coordinator, worker | not set |
+| `KAVEON_DATA_DIR` | `storage.data_dir` | none | directory path | A local directory whose Parquet files, directories of Parquet files and Delta tables bootstrap the `kaveon` catalog on first start. | coordinator, worker | not set |
 | `KAVEON_CATALOG_DIR` | `storage.catalog_dir` | none | directory path | A directory of `<name>.toml` catalog files bootstrapped on first start. | coordinator, worker | not set |
 | `KAVEON_CATALOG_DATABASE_PATH` | `storage.catalog_database_path`, `catalog.database_path` | `kaveon-catalog.db` in the working directory | file path | The durable catalog store (SQLite). Its parent directory is created. | coordinator, worker | `/state/catalog/kaveon-catalog.db` |
 | `KAVEON_CATALOG_ADMIN_TOKEN` | `catalog.admin_token` | none | bearer token | The service credential confined to `/v1/catalog/*` definition writes. Nonempty and distinct when set. | coordinator | from the `kaveon-engine-auth` secret |
