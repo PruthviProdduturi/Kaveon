@@ -371,6 +371,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/ui/msal-browser.min.js", get(crate::ui::msal_script))
         .route("/v1/auth/config", get(crate::entra::public_config))
         .route("/v1/capabilities", get(capabilities))
+        .route("/v1/whoami", get(whoami))
         .route("/v1/statistics", get(statistics_diagnostics))
         .route("/health", get(health))
         .route("/ready", get(ready))
@@ -2986,6 +2987,39 @@ fn transaction_api_guidance(
 struct EngineCapabilities {
     native_analyze: bool,
     transactions: TransactionCapabilities,
+}
+
+#[derive(Serialize)]
+struct WhoamiResponse<'a> {
+    principal: &'a str,
+    display: Option<&'a str>,
+    role: &'static str,
+    auth: crate::security::AuthSource,
+}
+
+/// The identity the security layer attached to this request. Clients use it
+/// for their session header; nothing here grants or changes access.
+async fn whoami(
+    Extension(identity): Extension<Identity>,
+    source: Option<Extension<crate::security::AuthSource>>,
+) -> Json<serde_json::Value> {
+    let role = match identity.role {
+        crate::security::Role::Reader => "reader",
+        crate::security::Role::Analyst => "analyst",
+        crate::security::Role::Admin => "admin",
+    };
+    let auth = source.map_or(crate::security::AuthSource::Static, |Extension(source)| {
+        source
+    });
+    Json(
+        serde_json::to_value(WhoamiResponse {
+            principal: &identity.principal,
+            display: identity.display_identity.as_deref(),
+            role,
+            auth,
+        })
+        .expect("whoami serializes"),
+    )
 }
 
 async fn capabilities(State(state): State<Arc<AppState>>) -> Json<EngineCapabilities> {
@@ -6969,6 +7003,47 @@ mod tests {
             product_transactions: crate::transaction_api::TransactionRegistry::disabled(),
             config,
         }
+    }
+
+    #[tokio::test]
+    async fn whoami_reports_the_authenticated_identity_and_source() {
+        let mut state = catalog_test_state();
+        state.config.security.principals = vec![crate::security::PrincipalCredential {
+            token: "analyst-token-0123456789abcdef0123".into(),
+            principal: "ana".into(),
+            role: crate::security::Role::Analyst,
+        }];
+        state.config.security.insecure_development = true;
+        let app = super::build_router(Arc::new(state));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = reqwest::Client::new();
+        let body: serde_json::Value = client
+            .get(format!("http://{address}/v1/whoami"))
+            .bearer_auth("analyst-token-0123456789abcdef0123")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(body["principal"], "ana");
+        assert_eq!(body["role"], "analyst");
+        assert_eq!(body["auth"], "static");
+        assert!(body["display"].is_null());
+        let development: serde_json::Value = client
+            .get(format!("http://{address}/v1/whoami"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(development["principal"], "development");
+        assert_eq!(development["role"], "admin");
+        assert_eq!(development["auth"], "development");
+        server.abort();
     }
 
     #[tokio::test]
