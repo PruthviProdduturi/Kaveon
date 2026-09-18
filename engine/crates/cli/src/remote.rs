@@ -160,18 +160,39 @@ pub fn run(options: &mut Options) -> Result<(), String> {
         options.output_format = format;
     }
 
-    println!(
-        "Kaveon CLI v{} — {}.{}",
-        env!("CARGO_PKG_VERSION"),
-        options.catalog,
-        options.schema
-    );
-    println!(
-        "Connected to {}. Type .help for commands; terminate SQL with ;",
-        options.server
-    );
-    println!();
+    print_header(&client, options);
     repl(&client, options)
+}
+
+/// The session header: what the coordinator says about itself and about us.
+fn print_header(client: &Session, options: &Options) {
+    if options.no_header {
+        return;
+    }
+    let theme = crate::theme::Theme::detect(&options.theme, io::stdout().is_terminal());
+    let cluster = crate::client::session::fetch_cluster(client, &options.server).ok();
+    let whoami = crate::client::session::fetch_whoami(client, &options.server)
+        .ok()
+        .flatten();
+    let insecure_development = whoami.as_ref().is_some_and(|who| who.auth == "development")
+        || (whoami.is_none() && options.auth == "none");
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs());
+    let lines = crate::render::cluster::header(
+        &crate::render::cluster::HeaderFacts {
+            cli_version: env!("CARGO_PKG_VERSION"),
+            server: &options.server,
+            cluster: cluster.as_ref(),
+            whoami: whoami.as_ref(),
+            auth_mode: &options.auth,
+            insecure_development,
+            user: &options.user,
+            now_unix,
+        },
+        &theme,
+    );
+    print!("{}", crate::render::to_ansi(&lines));
 }
 
 fn repl(client: &Session, options: &mut Options) -> Result<(), String> {

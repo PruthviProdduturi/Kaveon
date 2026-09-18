@@ -9,6 +9,8 @@ mod output;
 mod planner;
 mod remote;
 #[allow(dead_code)]
+mod render;
+#[allow(dead_code)]
 mod theme;
 
 use kaveon_core::{
@@ -130,6 +132,9 @@ fn print_usage() {
     println!("      --pager <PROGRAM>       Optional pager; empty disables pagination");
     println!("      --output-format-interactive <TYPE>  Override interactive result format");
     println!("      --disable-auto-suggestion  Disable history suggestions");
+    println!("      --theme <NAME>          dark (default), light, or mono");
+    println!("      --no-header             Skip the session header");
+    println!("      --width <COLS>          Terminal width for result tables (default: detected)");
     println!("      --access-token <TOKEN>  Explicit Engine token (prefer KAVEON_ACCESS_TOKEN)");
     println!("      --auth <MODE>           auto (default), azure-cli, microsoft, or none");
     println!("      --ca-cert <PATH>        Trusted PEM CA (or KAVEON_CA_CERT)");
