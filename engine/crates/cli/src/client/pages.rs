@@ -1,9 +1,18 @@
 //! Paged results: a cursor over `GET /v1/query/{id}/results/{page}`.
 //!
 //! A statement submitted with `result_delivery: "paged"` answers with a
-//! `next_uri`; every page the coordinator returns is
-//! `{"id", "data": [[value, …], …], "next_uri": "/v1/query/{id}/results/{n}" | null,
-//! "row_count": <rows in the whole result>}` (`server/src/results.rs`).
+//! `next_uri`, and while it runs its query record carries one too, so the
+//! pages can be read as the coordinator writes them (1,000 rows or 4 MiB
+//! each). A written page is
+//! `{"id", "data": [[value, …], …], "next_uri": "/v1/query/{id}/results/{n+1}" | null,
+//! "row_count": <rows written so far; the total once complete>, "complete": bool}`
+//! (`server/src/results.rs`); `next_uri` stays non-null while the writer is
+//! in progress even when the next page is not written yet. A page the
+//! writer has not reached answers `202 Accepted` with `Retry-After` and
+//! `{"id", "row_count", "complete": false}`; a page past the end (or an
+//! unknown or expired result) is a 404; a statement that failed or was
+//! cancelled mid-read answers 410 (or 404).
+//!
 //! `next_uri` is a server-relative path on today's coordinator; an absolute
 //! URI is accepted only when it points at the same origin as the session's
 //! server, so a compromised or misconfigured coordinator cannot redirect the
@@ -12,9 +21,12 @@ use crate::auth::Session;
 use crate::client::session::{CliHttp, METADATA_TIMEOUT, decode, endpoint};
 use serde::Deserialize;
 use serde_json::Value;
+use std::time::Duration;
 
 pub const UNSAFE_NEXT_URI: &str = "coordinator returned an unsafe next URI";
 const RESULTS_PREFIX: &str = "/v1/query/";
+/// `Retry-After` when a 202 carries none, or an unreadable one.
+const DEFAULT_RETRY_AFTER: Duration = Duration::from_secs(1);
 
 /// One fetched page. `index` counts pages as this cursor fetched them,
 /// starting at zero, independent of the page number in the URI.
@@ -23,6 +35,25 @@ pub struct Page {
     pub rows: Vec<Vec<Value>>,
     pub next_uri: Option<String>,
     pub index: usize,
+    /// Rows the coordinator had written when it answered: the whole
+    /// result's count once `complete`.
+    pub row_count: usize,
+    /// The writer has finished; `row_count` is the total.
+    pub complete: bool,
+}
+
+/// What one `fetch_next` found.
+#[derive(Debug, Clone)]
+pub enum Fetched {
+    Page(Page),
+    /// The writer has not reached this page yet (202): try again after
+    /// `retry_after`; `rows_so_far` is what it had written.
+    NotYet {
+        retry_after: Duration,
+        rows_so_far: usize,
+    },
+    /// Every page has been fetched.
+    Exhausted,
 }
 
 #[derive(Deserialize)]
@@ -33,6 +64,10 @@ struct PageBody {
     next_uri: Option<String>,
     #[serde(default)]
     row_count: Option<usize>,
+    /// Absent on a coordinator that publishes only complete results; its
+    /// last page (no `next_uri`) is then the complete one.
+    #[serde(default)]
+    complete: Option<bool>,
 }
 
 /// Fetches pages on demand and keeps the ones it has fetched.
@@ -43,8 +78,8 @@ pub struct PageCursor {
     next: Option<String>,
     fetched: Vec<Page>,
     rows: usize,
-    /// The result's row count as the coordinator reports it on every page;
-    /// `None` until the first page arrives.
+    /// The result's row count, known once a page said the writer was
+    /// complete; `None` until then.
     pub total_rows: Option<usize>,
 }
 
@@ -63,20 +98,40 @@ impl PageCursor {
         })
     }
 
-    /// Fetches the next page, `Ok(None)` once the result is exhausted. An
-    /// HTTP or transport failure leaves the cursor where it was, so the
-    /// same page can be retried; a page carrying an unsafe `next_uri` is
-    /// discarded and the cursor is exhausted.
-    pub fn fetch_next(&mut self, session: &Session) -> Result<Option<Page>, CliHttp> {
+    /// Fetches the next page with the metadata timeout; see
+    /// [`PageCursor::fetch_next_within`].
+    pub fn fetch_next(&mut self, session: &Session) -> Result<Fetched, CliHttp> {
+        self.fetch_next_within(session, METADATA_TIMEOUT)
+    }
+
+    /// Fetches the next page, `Fetched::Exhausted` once the result is,
+    /// `Fetched::NotYet` while the coordinator has not written it. An HTTP
+    /// or transport failure (a 410 for a statement that failed mid-read
+    /// surfaces as `status: Some(410)`) leaves the cursor where it was, so
+    /// the same page can be retried; a page carrying an unsafe `next_uri`
+    /// is discarded and the cursor is exhausted.
+    pub fn fetch_next_within(
+        &mut self,
+        session: &Session,
+        timeout: Duration,
+    ) -> Result<Fetched, CliHttp> {
         let Some(url) = self.next.clone() else {
-            return Ok(None);
+            return Ok(Fetched::Exhausted);
         };
         let response = session
             .request(reqwest::Method::GET, &url)
             .map_err(CliHttp::local)?
-            .timeout(METADATA_TIMEOUT)
+            .timeout(timeout)
             .send()
             .map_err(CliHttp::transport)?;
+        if response.status() == reqwest::StatusCode::ACCEPTED {
+            let retry_after = retry_after(response.headers());
+            let body: PageBody = decode(response)?;
+            return Ok(Fetched::NotYet {
+                retry_after,
+                rows_so_far: body.row_count.unwrap_or(0),
+            });
+        }
         let body: PageBody = decode(response)?;
         let next = match &body.next_uri {
             Some(next_uri) => match resolve(&self.server, next_uri) {
@@ -88,18 +143,22 @@ impl PageCursor {
             },
             None => None,
         };
-        if body.row_count.is_some() {
-            self.total_rows = body.row_count;
+        let complete = body.complete.unwrap_or(body.next_uri.is_none());
+        let row_count = body.row_count.unwrap_or(0);
+        if complete {
+            self.total_rows = Some(row_count);
         }
         let page = Page {
             rows: body.data,
             next_uri: body.next_uri,
             index: self.fetched.len(),
+            row_count,
+            complete,
         };
         self.rows += page.rows.len();
         self.next = next;
         self.fetched.push(page.clone());
-        Ok(Some(page))
+        Ok(Fetched::Page(page))
     }
 
     pub fn fetched(&self) -> &[Page] {
@@ -118,6 +177,16 @@ impl PageCursor {
     pub fn next_url(&self) -> Option<&str> {
         self.next.as_deref()
     }
+}
+
+/// `Retry-After` in seconds (the delay form; a date is not expected from
+/// the coordinator), `DEFAULT_RETRY_AFTER` when absent or unreadable.
+fn retry_after(headers: &reqwest::header::HeaderMap) -> Duration {
+    headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map_or(DEFAULT_RETRY_AFTER, Duration::from_secs)
 }
 
 /// Turns a `next_uri` into an absolute URL on the session's server, or
@@ -153,13 +222,22 @@ fn resolve(server: &reqwest::Url, next_uri: &str) -> Result<String, CliHttp> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::session::test_server::{fixture, session};
+    use crate::client::session::test_server::{Reply, fixture, fixture_with, session};
 
     const SERVER: &str = "http://127.0.0.1:8080";
 
-    fn page(rows: &str, next: Option<&str>, total: usize) -> String {
+    fn page(rows: &str, next: Option<&str>, count: usize, complete: bool) -> String {
         let next = next.map_or("null".to_owned(), |next| format!("\"{next}\""));
-        format!(r#"{{"id":"q","data":{rows},"next_uri":{next},"row_count":{total}}}"#)
+        format!(
+            r#"{{"id":"q","data":{rows},"next_uri":{next},"row_count":{count},"complete":{complete}}}"#
+        )
+    }
+
+    fn expect_page(fetched: Result<Fetched, CliHttp>) -> Page {
+        match fetched {
+            Ok(Fetched::Page(page)) => page,
+            other => panic!("expected a page, got {other:?}"),
+        }
     }
 
     #[test]
@@ -168,12 +246,17 @@ mod tests {
             (
                 "GET /v1/query/q/results/1 ",
                 200,
-                page(r#"[[1,"a"],[2,"b"]]"#, Some("/v1/query/q/results/2"), 3),
+                page(
+                    r#"[[1,"a"],[2,"b"]]"#,
+                    Some("/v1/query/q/results/2"),
+                    2,
+                    false,
+                ),
             ),
             (
                 "GET /v1/query/q/results/2 ",
                 200,
-                page(r#"[[3,null]]"#, None, 3),
+                page(r#"[[3,null]]"#, None, 3, true),
             ),
         ]);
         let (session, options) = session(&url);
@@ -185,25 +268,137 @@ mod tests {
         assert!(!cursor.exhausted());
         assert_eq!(cursor.total_rows, None);
 
-        let first = cursor.fetch_next(&session).unwrap().unwrap();
+        let first = expect_page(cursor.fetch_next(&session));
         assert_eq!(first.index, 0);
         assert_eq!(first.rows.len(), 2);
         assert_eq!(first.rows[1][1], Value::from("b"));
         assert_eq!(first.next_uri.as_deref(), Some("/v1/query/q/results/2"));
+        assert_eq!(first.row_count, 2);
+        assert!(!first.complete);
         assert_eq!(cursor.rows_so_far(), 2);
-        assert_eq!(cursor.total_rows, Some(3));
+        // Rows so far, not a total: the writer was still going.
+        assert_eq!(cursor.total_rows, None);
         assert!(!cursor.exhausted());
 
-        let second = cursor.fetch_next(&session).unwrap().unwrap();
+        let second = expect_page(cursor.fetch_next(&session));
         assert_eq!(second.index, 1);
         assert_eq!(second.rows, vec![vec![Value::from(3), Value::Null]]);
         assert_eq!(second.next_uri, None);
+        assert!(second.complete);
+        assert_eq!(second.row_count, 3);
         assert!(cursor.exhausted());
         assert_eq!(cursor.rows_so_far(), 3);
+        assert_eq!(cursor.total_rows, Some(3));
 
-        assert!(cursor.fetch_next(&session).unwrap().is_none());
+        assert!(matches!(
+            cursor.fetch_next(&session).unwrap(),
+            Fetched::Exhausted
+        ));
         assert_eq!(cursor.fetched().len(), 2);
         assert_eq!(cursor.fetched()[0].rows.len(), 2);
+        thread.join().unwrap();
+    }
+
+    #[test]
+    fn a_complete_page_with_more_pages_sets_the_total() {
+        // The writer finished while the reader was on page 0: the page is
+        // complete, the total is known, and page 1 is still to fetch.
+        let (url, thread) = fixture(vec![(
+            "GET /v1/query/q/results/0 ",
+            200,
+            page(r#"[[1]]"#, Some("/v1/query/q/results/1"), 1_500, true),
+        )]);
+        let (session, options) = session(&url);
+        let mut cursor = PageCursor::new(&options.server, "/v1/query/q/results/0").unwrap();
+        let first = expect_page(cursor.fetch_next(&session));
+        assert!(first.complete);
+        assert_eq!(cursor.total_rows, Some(1_500));
+        assert!(!cursor.exhausted());
+        thread.join().unwrap();
+    }
+
+    #[test]
+    fn a_coordinator_without_complete_is_complete_on_its_last_page() {
+        let (url, thread) = fixture(vec![
+            (
+                "GET /v1/query/q/results/0 ",
+                200,
+                r#"{"id":"q","data":[[1]],"next_uri":"/v1/query/q/results/1","row_count":2}"#
+                    .to_owned(),
+            ),
+            (
+                "GET /v1/query/q/results/1 ",
+                200,
+                r#"{"id":"q","data":[[2]],"next_uri":null,"row_count":2}"#.to_owned(),
+            ),
+        ]);
+        let (session, options) = session(&url);
+        let mut cursor = PageCursor::new(&options.server, "/v1/query/q/results/0").unwrap();
+        assert!(!expect_page(cursor.fetch_next(&session)).complete);
+        assert_eq!(cursor.total_rows, None);
+        assert!(expect_page(cursor.fetch_next(&session)).complete);
+        assert_eq!(cursor.total_rows, Some(2));
+        thread.join().unwrap();
+    }
+
+    #[test]
+    fn a_page_not_written_yet_says_when_to_retry_and_keeps_the_cursor() {
+        let (url, thread) = fixture_with(vec![
+            Reply {
+                expected: "GET /v1/query/q/results/0 ",
+                status: 202,
+                headers: vec![("Retry-After", "3".to_owned())],
+                body: r#"{"id":"q","row_count":12000,"complete":false}"#.to_owned(),
+            },
+            Reply {
+                expected: "GET /v1/query/q/results/0 ",
+                status: 202,
+                headers: Vec::new(),
+                body: r#"{"id":"q","row_count":12500,"complete":false}"#.to_owned(),
+            },
+            Reply {
+                expected: "GET /v1/query/q/results/0 ",
+                status: 200,
+                headers: Vec::new(),
+                body: page(r#"[[1]]"#, Some("/v1/query/q/results/1"), 13_000, false),
+            },
+        ]);
+        let (session, options) = session(&url);
+        let mut cursor = PageCursor::new(&options.server, "/v1/query/q/results/0").unwrap();
+        match cursor
+            .fetch_next_within(&session, Duration::from_secs(5))
+            .unwrap()
+        {
+            Fetched::NotYet {
+                retry_after,
+                rows_so_far,
+            } => {
+                assert_eq!(retry_after, Duration::from_secs(3));
+                assert_eq!(rows_so_far, 12_000);
+            }
+            other => panic!("expected NotYet, got {other:?}"),
+        }
+        assert_eq!(
+            cursor.next_url(),
+            Some(format!("{url}/v1/query/q/results/0").as_str())
+        );
+        assert!(cursor.fetched().is_empty());
+        assert_eq!(cursor.total_rows, None);
+        // No Retry-After: a second by default.
+        match cursor.fetch_next(&session).unwrap() {
+            Fetched::NotYet {
+                retry_after,
+                rows_so_far,
+            } => {
+                assert_eq!(retry_after, DEFAULT_RETRY_AFTER);
+                assert_eq!(rows_so_far, 12_500);
+            }
+            other => panic!("expected NotYet, got {other:?}"),
+        }
+        let page = expect_page(cursor.fetch_next(&session));
+        assert_eq!(page.index, 0);
+        assert_eq!(page.row_count, 13_000);
+        assert_eq!(cursor.rows_so_far(), 1);
         thread.join().unwrap();
     }
 
@@ -293,6 +488,22 @@ mod tests {
     }
 
     #[test]
+    fn a_statement_gone_mid_read_surfaces_the_410() {
+        let (url, thread) = fixture(vec![(
+            "GET /v1/query/q/results/2 ",
+            410,
+            r#"{"error":"query q failed: division by zero","code":"QUERY_FAILED"}"#.to_owned(),
+        )]);
+        let (session, options) = session(&url);
+        let mut cursor = PageCursor::new(&options.server, "/v1/query/q/results/2").unwrap();
+        let failure = cursor.fetch_next(&session).unwrap_err();
+        assert_eq!(failure.status, Some(410));
+        assert_eq!(failure.code.as_deref(), Some("QUERY_FAILED"));
+        assert!(!cursor.exhausted());
+        thread.join().unwrap();
+    }
+
+    #[test]
     fn a_page_with_an_unsafe_next_uri_fails_and_exhausts_the_cursor() {
         let (url, thread) = fixture(vec![(
             "GET /v1/query/q/results/0 ",
@@ -301,6 +512,7 @@ mod tests {
                 r#"[[1]]"#,
                 Some("http://evil.example/v1/query/q/results/1"),
                 2,
+                false,
             ),
         )]);
         let (session, options) = session(&url);

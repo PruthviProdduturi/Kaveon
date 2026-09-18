@@ -196,6 +196,35 @@ counts, worker count, rows scanned and `waited N ms for admission` are shown
 only when the record reports them; a coordinator that publishes counters
 only at completion shows elapsed time and state until then.
 
+Rows appear while the statement is still running. The shell asks for paged
+delivery, and the coordinator writes the result a page at a time — 1,000
+rows or 4 MiB, whichever comes first. Once the query record carries the
+result's `next_uri`, the shell asks for page 0 every 500 ms
+(`GET /v1/query/{id}/results/0`, bounded at 5 s per request); until the
+page is written the coordinator answers `202 Accepted` with the rows it has
+so far, and the running line says `· 12,000 rows so far`. When the page
+arrives it is rendered under the running line, above the editor, with its
+header, and paging takes over: the hint reads `1,000 rows so far · Space or
+Enter for more · q to stop` (`1,000 of 84,312 rows` once the writer is
+complete), the running line stays above it and Ctrl-C still cancels. Space
+or Enter for a page the coordinator has not written yet shows `waiting for
+the next page…` and asks again every 500 ms until it arrives or `q` stops.
+When the statement finishes, page 0 is not rendered again; the summary
+follows the paging's closing line (`all 84,312 rows shown`, `stopped after
+2,000 rows`), or comes at once if the reader already stopped. A failure or
+cancel while the pages are being read ends the paging with the error or
+cancel summary.
+
+What arrives early depends on the plan. A scan, a filter, a projection and
+a `LIMIT` emit rows as each input batch is processed, so the first page
+shows within moments of the first 1,000 rows. `ORDER BY`, `GROUP BY` and
+`DISTINCT` emit nothing until the last input batch has been consumed, so
+their pages are written only at the end and the running line's `rows so
+far` stays at 0 until then. A result within the row limit (the default
+`.limit 1000`) is a single page, written when the statement completes.
+Scripts (`-e`, `-f`, piped input) and inline delivery are unchanged: the
+rows come when the statement finishes.
+
 **Ctrl-C** while a statement runs sends `DELETE /v1/query/{id}`; the line
 reads `Cancelling …` until the coordinator lets go, and the summary then
 says `✗ cancelled after 4.10 s`. A second Ctrl-C, or a first one before the
@@ -248,8 +277,11 @@ rows: the shell appends `LIMIT 1000` before sending and the summary says
 `showing the first 1,000 rows of a query without LIMIT`. `.limit <n>` or
 `.limit off` changes that for the session, and `--row-limit <n>` (or
 `row-limit=` in the defaults file) sets it at startup. Results longer than a
-page are shown a page at a time: Space or Enter for the next 1,000 rows, `q`
-to stop. Scripts (`-e`, `-f`, piped input) are never limited; a script whose
+page are shown a page at a time, each page as soon as the coordinator has
+written it (see Running a statement): Space or Enter for the next 1,000
+rows, `q` to stop. The summary counts the whole result once a page has said
+the writer is complete; a reader who stops earlier sees the rows shown.
+Scripts (`-e`, `-f`, piped input) are never limited; a script whose
 result would exceed the coordinator's 16 MiB inline ceiling should run with
 `--paged`, which fetches result pages instead of failing.
 
