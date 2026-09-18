@@ -6,7 +6,7 @@ import Link from "next/link";
 import { KaveonMark } from "../components/KaveonMark";
 import { PublicHeader } from "../components/PublicHeader";
 import { BenchmarkSection } from "../components/product/BenchmarkSection";
-import type { ClickBenchFigure } from "../utils/clickbench";
+import { hasAnyFigure, type BenchmarkFigures } from "../utils/benchmarkTypes";
 
 type AnimDirection = "up" | "down" | "left" | "right" | "scale" | "none";
 
@@ -49,7 +49,7 @@ function Section({ children, style }: { children: React.ReactNode; style?: React
   return <Anim dir="up">{(() => { return <div style={style}>{children}</div>; })()}</Anim>;
 }
 
-export default function ProductPage({ benchmark = null }: { benchmark?: ClickBenchFigure | null }) {
+export default function ProductPage({ benchmarks = null }: { benchmarks?: BenchmarkFigures | null }) {
   const r1 = useFadeIn(0);
   const r2 = useFadeIn(100);
   const r3 = useFadeIn(0);
@@ -976,7 +976,7 @@ export default function ProductPage({ benchmark = null }: { benchmark?: ClickBen
       </Section>
 
       {/* ─── Benchmark — rendered only when the generated figure exists ─── */}
-      {benchmark && <BenchmarkSection figure={benchmark} />}
+      {hasAnyFigure(benchmarks) && <BenchmarkSection figures={benchmarks} />}
 
       {/* ─── Features Grid ─── */}
       <section id="features" ref={r4} style={{ padding: "100px 24px", background: "#0a0a0a", scrollMarginTop: 72 }}>
