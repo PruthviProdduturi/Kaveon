@@ -224,10 +224,14 @@ a `LIMIT` emit rows as each input batch is processed, so the first page
 shows within moments of the first 1,000 rows. `ORDER BY`, `GROUP BY` and
 `DISTINCT` emit nothing until the last input batch has been consumed, so
 their pages are written only at the end and the running line's `rows so
-far` stays at 0 until then. A result within the row limit (the default
-`.limit 1000`) is a single page, written when the statement completes.
-Scripts (`-e`, `-f`, piped input) and inline delivery are unchanged: the
-rows come when the statement finishes.
+far` stays at 0 until then. This holds on a cluster as it does on one
+node: a worker streams a root task's rows to the coordinator while the
+task runs, batch by batch, and the coordinator pages them as they arrive —
+a scan split over two workers shows its first page while both are still
+scanning. A result within the row limit (the default `.limit 1000`) is a
+single page, written when the statement completes. Scripts (`-e`, `-f`,
+piped input) and inline delivery are unchanged: the rows come when the
+statement finishes.
 
 **Ctrl-C** while a statement runs sends `DELETE /v1/query/{id}`; the line
 reads `Cancelling …` until the coordinator lets go, and the summary then
@@ -669,10 +673,12 @@ Everything `.help` lists is implemented. What the client does not do yet:
 per-operator statistics inside a plan (`EXPLAIN ANALYZE` is per task);
 spooling to object storage; Kerberos, JWT and HTTP-proxy options;
 package-manager installs (winget, Homebrew). Rows appear while a
-statement runs only where the coordinator receives them early: today a worker
-ships a root task's rows when that task completes, so a scan split into few
-tasks still shows its rows at the end — see
-[Running a statement](#running-a-statement).
+statement runs only where the plan's root emits them early: a scan, a
+filter, a projection, a `LIMIT` without `ORDER BY` and a join's probe
+output stream from their first batch, on one node and across workers
+alike; a root that is an `ORDER BY`, `GROUP BY` or `DISTINCT` holds
+everything until its last input batch, so its rows still show at the end —
+see [Running a statement](#running-a-statement).
 
 ## Troubleshooting
 

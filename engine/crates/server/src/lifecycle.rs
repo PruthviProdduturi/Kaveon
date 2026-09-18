@@ -89,6 +89,15 @@ pub enum TaskClaim<T> {
     Completed(TaskOutcome<T>),
 }
 
+/// What the registry knows about a task without claiming it.
+pub enum TaskStatus<T> {
+    /// Never submitted here, or already removed with its query.
+    Unknown,
+    /// Claimed and still without a terminal outcome.
+    Running,
+    Completed(TaskOutcome<T>),
+}
+
 pub struct TaskOwner<T> {
     entry: Arc<TaskEntry<T>>,
     completed: bool,
@@ -175,6 +184,21 @@ impl<T> TaskRegistry<T> {
             entry,
             completed: false,
         }))
+    }
+
+    /// The task's outcome, if any, without registering interest in it.
+    pub fn status(&self, task_id: &TaskId) -> Result<TaskStatus<T>, LifecycleError> {
+        let tasks = self
+            .tasks
+            .lock()
+            .map_err(|_| LifecycleError::RegistryPoisoned)?;
+        match tasks.get(task_id) {
+            None => Ok(TaskStatus::Unknown),
+            Some(entry) => Ok(match entry.outcome()? {
+                Some(outcome) => TaskStatus::Completed(outcome),
+                None => TaskStatus::Running,
+            }),
+        }
     }
 
     pub fn remove_query(&self, query_id: &str) -> Result<usize, LifecycleError> {

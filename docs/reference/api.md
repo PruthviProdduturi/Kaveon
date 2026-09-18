@@ -62,6 +62,28 @@ All paths below are relative to the FastAPI origin.
   The final `POST /v1/statement` response is unchanged: it carries `next_uri`
   for page 0 once the result is complete. Catalog statements and `ANALYZE`
   answer inline regardless of the requested delivery.
+  On a distributed statement the root tasks — the tasks with no exchange
+  output, whose batches are the statement's rows — stream those rows to the
+  pages as they produce them: the coordinator submits a paged statement's
+  root tasks with `stream_result: true` in the task request, the worker
+  answers `200` as soon as the result schema is known with an Arrow IPC
+  stream that carries each batch when it is produced, and the coordinator
+  decodes the body as it arrives and pushes the rows into the pages; rows
+  from several root tasks running at once interleave. Which rows appear
+  early is a property of the plan: a scan, filter, projection, `LIMIT`
+  without `ORDER BY` and a join's probe output emit from their first batch,
+  while a root whose operator holds everything until the end — `ORDER BY`,
+  `GROUP BY`, `DISTINCT`, a `TopN` — emits only when the task finishes,
+  and its pages still land at the end. A streamed task's metrics are not in
+  its response headers; the coordinator reads them from the worker's
+  `/v1/task/{query_id}/{stage_id}/{partition}/{attempt}/metrics` once the
+  body ends (the worker records the outcome before it ends the body). A
+  root task that fails after any of its rows reached the pages is not
+  retried — a retry would deliver those rows twice — and the statement
+  fails with the worker's message followed by
+  `(rows already delivered; the statement is not retried)`; a root task
+  that fails before any row is retried as any task. Inline delivery keeps
+  the collected path: each root task answers once with its whole result.
 
 ## Engine HTTP path — alpha
 
@@ -91,7 +113,8 @@ The Rust server exposes these routes:
 | `GET` | `/v1/whoami` | The identity the security layer attached to the request: `principal`, `display` (null unless a validated sign-in supplied one), `role` (`reader`, `analyst`, `admin`) and `auth` (`static`, `bridge`, `entra`, `development`, `internal`). The client shows it in its session header; older coordinators answer 404 and the client hides the line |
 | `GET` | `/v1/capabilities`, `/v1/statistics`, `/v1/auth/config` | What the coordinator supports (native `ANALYZE`, transactions), published exact statistics, and the Entra sign-in configuration for the UI |
 | `POST` | `/v1/transaction`, `/v1/transaction/sql`, `/v1/transaction/{id}/stage`, `…/commit`, `…/rollback`, `…/recovery`; `GET` `/v1/transaction/metrics`, `/v1/products/{kind}`, `/v1/product/{kind}/{id}` | The bounded product-record transaction protocol and typed product reads; see the [SQL compatibility reference](engine-sql-compatibility.md#transaction-api-boundary) |
-| `POST`, `GET` | `/v1/task`, `/v1/exchange`, `/v1/internal/exchange/*`, `/v1/internal/query/{query_id}/finish`, `/v1/internal/catalog/snapshot` | Worker task submission, exchange partition upload/download, query finish and cancellation, catalog replica; exchange-token authenticated, not client routes |
+| `POST`, `GET` | `/v1/task`, `/v1/exchange`, `/v1/internal/exchange/*`, `/v1/internal/query/{query_id}/finish`, `/v1/internal/catalog/snapshot` | Worker task submission, exchange partition upload/download, query finish and cancellation, catalog replica; exchange-token authenticated, not client routes. A task request with `stream_result: true` (a root task of a paged statement) is answered with its Arrow IPC stream as the fragment runs, marked `x-kaveon-task-streamed: 1`, its metrics omitted from the headers; a second submission of a streamed task is refused with `409 TASK_RESULT_NOT_RETAINED` |
+| `GET` | `/v1/task/{query_id}/{stage_id}/{partition}/{attempt}/metrics` | A task's outcome on its worker, exchange-token authenticated: `200` `{"elapsed_us", "scan", "execution"}` once it finished (`scan` and `execution` are the task's scan and execution metrics, `null` when it carries none), `202` `{"state": "RUNNING"}` while it runs, `500` `{"error"}` when it failed, `404` for a task the worker does not know or has already forgotten with its finished query |
 | `GET` | `/health`, `/ready`, `/ui` | Liveness, catalog readiness, and operational UI |
 
 Catalog mutations through `/v1/catalog/*` require the configured catalog-admin bearer token, an actor header, and optimistic `If-Match` revisions for replacement; the same definitions are also created and dropped by [catalog statements](#catalog-statements) on `/v1/statement` under the submitting principal's role. Internal task/exchange routes use a separate shared bearer token. Statement clients authenticate with a principal token from `KAVEON_SECURITY_JSON` (roles `reader`, `analyst`, `admin`), an Entra bearer token, or the API bridge token with delegated `x-kaveon-principal`/`x-kaveon-role` headers; the server serves native TLS, applies a per-principal concurrent-statement limit, resource groups and memory admission, and scopes query records and paged results to their owner (`docs/engineering/engine-security-integration.md`). This is a credential boundary, not production identity federation: rotation without restart, tenant isolation and row/column policies remain gates, so keep the Engine on a private network during alpha.
