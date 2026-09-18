@@ -319,11 +319,25 @@ pub(crate) fn meta_command_to_string(
             parse_sql_metadata(&format!("DESCRIBE {target}"), options)?
                 .ok_or_else(|| "invalid table reference".to_owned())?
         }
-        _ => {
-            return Err(format!(
-                "unknown command '{command}'; type .help for commands"
-            ));
+        [unknown, ..] => {
+            const DOT_COMMANDS: [&str; 8] = [
+                ".catalogs",
+                ".schemas",
+                ".tables",
+                ".describe",
+                ".use",
+                ".help",
+                ".clear",
+                ".quit",
+            ];
+            return Err(match closest(unknown, &DOT_COMMANDS) {
+                Some(suggestion) => {
+                    format!("unknown command '{unknown}'; did you mean {suggestion}?")
+                }
+                None => format!("unknown command '{unknown}'; type .help for commands"),
+            });
         }
+        [] => return Ok(String::new()),
     };
     run_meta_command(client, options, meta)
 }
@@ -567,21 +581,106 @@ fn run_meta_command(
             Ok(output)
         }
         MetaCommand::Use { catalog, schema } => {
-            let url = metadata_url(options, &[&catalog, "schema"])?;
-            let response: SchemaList = get_json_url(client, &url)?;
-            if !response.schemas.iter().any(|name| name == &schema) {
-                return Err(format!(
-                    "schema '{schema}' not found in catalog '{catalog}'"
-                ));
-            }
+            let (catalog, schema) = resolve_use(client, options, catalog, schema)?;
             options.catalog = catalog;
             options.schema = schema;
             if is_human_format(options.output_format) {
-                Ok(format!("Using {}.{}\n\n", options.catalog, options.schema))
+                let theme = human_theme(options);
+                let line = ratatui::text::Line::from(vec![
+                    ratatui::text::Span::styled(" ✓ ", theme.ok),
+                    ratatui::text::Span::raw(format!(
+                        "session is {}.{}",
+                        options.catalog, options.schema
+                    )),
+                ]);
+                Ok(format!("{}\n", styled_or_plain(&[line])))
             } else {
                 Ok(String::new())
             }
         }
+    }
+}
+
+/// `USE x` means the schema `x` in the current catalog when it exists,
+/// else the catalog `x` (keeping the current schema when that catalog has
+/// it, or its only schema). Anything else is an error that lists what is
+/// available.
+fn resolve_use(
+    client: &Session,
+    options: &Options,
+    catalog: String,
+    schema: String,
+) -> Result<(String, String), String> {
+    let schemas_of = |catalog: &str| -> Result<Option<Vec<String>>, String> {
+        let url = metadata_url(options, &[catalog, "schema"])?;
+        match client
+            .request(reqwest::Method::GET, &url)?
+            .send()
+            .map_err(connection_error)
+        {
+            Ok(response) if response.status() == reqwest::StatusCode::NOT_FOUND => Ok(None),
+            Ok(response) => decode_response::<SchemaList>(response).map(|list| Some(list.schemas)),
+            Err(error) => Err(error),
+        }
+    };
+    let current = schemas_of(&catalog)?;
+    if let Some(schemas) = &current
+        && schemas.iter().any(|name| name == &schema)
+    {
+        return Ok((catalog, schema));
+    }
+    let explicit_catalog = catalog != options.catalog;
+    if !explicit_catalog && let Some(schemas) = schemas_of(&schema)? {
+        // `USE <catalog>`: keep the session schema if the catalog has it.
+        if schemas.iter().any(|name| name == &options.schema) {
+            return Ok((schema, options.schema.clone()));
+        }
+        return match schemas.as_slice() {
+            [only] => Ok((schema, only.clone())),
+            [] => Err(format!("catalog '{schema}' has no schemas")),
+            many => Err(format!(
+                "catalog '{schema}' has {} schemas; choose one: USE {schema}.{}",
+                many.len(),
+                many.join(" | ")
+            )),
+        };
+    }
+    match current {
+        None => {
+            let catalogs: CatalogList = get_json(client, options, "/v1/catalog")?;
+            Err(
+                match closest(
+                    &catalog,
+                    &catalogs
+                        .catalogs
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>(),
+                ) {
+                    Some(suggestion) => {
+                        format!("catalog '{catalog}' not found; did you mean {suggestion}?")
+                    }
+                    None => format!(
+                        "catalog '{catalog}' not found; catalogs: {}",
+                        catalogs.catalogs.join(", ")
+                    ),
+                },
+            )
+        }
+        Some(schemas) => Err(
+            match closest(
+                &schema,
+                &schemas.iter().map(String::as_str).collect::<Vec<_>>(),
+            ) {
+                Some(suggestion) => format!(
+                    "schema '{schema}' not found in catalog '{catalog}'; did you mean {suggestion}?"
+                ),
+                None => format!(
+                    "schema '{schema}' not found in catalog '{catalog}'; schemas: {}",
+                    schemas.join(", ")
+                ),
+            },
+        ),
     }
 }
 
@@ -728,8 +827,9 @@ fn parse_show(tokens: &[Token], options: &Options) -> Result<MetaCommand, String
     if quote_style.is_some() {
         return Err("unsupported SHOW statement".to_owned());
     }
+    let kind = canonical_show_kind(kind)?;
     let (scope, like) = split_like(&tokens[1..])?;
-    if kind.eq_ignore_ascii_case("COLUMNS") {
+    if kind == "COLUMNS" {
         let [Token::Word(connector), rest @ ..] = scope else {
             return Err("usage: SHOW COLUMNS FROM [catalog.]schema.table".to_owned());
         };
@@ -746,14 +846,11 @@ fn parse_show(tokens: &[Token], options: &Options) -> Result<MetaCommand, String
             table,
         });
     }
-    if kind.eq_ignore_ascii_case("CATALOGS") {
+    if kind == "CATALOGS" {
         if scope.is_empty() {
             return Ok(MetaCommand::Catalogs { like });
         }
-        return Err("unsupported SHOW CATALOGS clause".to_owned());
-    }
-    if !(kind.eq_ignore_ascii_case("SCHEMAS") || kind.eq_ignore_ascii_case("TABLES")) {
-        return Err("unsupported SHOW statement".to_owned());
+        return Err("SHOW CATALOGS takes no scope; use SHOW CATALOGS [LIKE 'pattern']".to_owned());
     }
     let names = match scope {
         [] => Vec::new(),
@@ -764,14 +861,17 @@ fn parse_show(tokens: &[Token], options: &Options) -> Result<MetaCommand, String
         {
             parse_names(rest)?
         }
-        _ => {
+        [Token::Word(connector), ..] if connector.quote_style.is_none() => {
             return Err(format!(
-                "unsupported SHOW {} clause",
-                kind.to_ascii_uppercase()
+                "SHOW {kind} does not take '{}'; did you mean SHOW {kind} IN ...?",
+                connector.value
             ));
         }
+        _ => {
+            return Err(format!("usage: SHOW {kind} [IN scope] [LIKE 'pattern']"));
+        }
     };
-    if kind.eq_ignore_ascii_case("SCHEMAS") {
+    if kind == "SCHEMAS" {
         return match names.as_slice() {
             [] => Ok(MetaCommand::Schemas {
                 catalog: options.catalog.clone(),
@@ -802,6 +902,58 @@ fn parse_show(tokens: &[Token], options: &Options) -> Result<MetaCommand, String
         }),
         _ => Err("usage: SHOW TABLES [IN [catalog.]schema]".to_owned()),
     }
+}
+
+const SHOW_KINDS: [&str; 4] = ["CATALOGS", "SCHEMAS", "TABLES", "COLUMNS"];
+
+/// `CATALOG`/`CATALOGS`, `SCHEMA`/`SCHEMAS`, ... in any case; anything else
+/// is refused with the closest kind as a suggestion.
+fn canonical_show_kind(word: &str) -> Result<&'static str, String> {
+    let upper = word.to_ascii_uppercase();
+    for kind in SHOW_KINDS {
+        if upper == kind || upper == kind.trim_end_matches('S') {
+            return Ok(kind);
+        }
+    }
+    match closest(&upper, &SHOW_KINDS) {
+        Some(kind) => Err(format!(
+            "unsupported SHOW {upper}; did you mean SHOW {kind}?"
+        )),
+        None => Err(format!(
+            "unsupported SHOW {upper}; use SHOW CATALOGS, SHOW SCHEMAS [IN catalog], SHOW TABLES [IN [catalog.]schema] or SHOW COLUMNS FROM table"
+        )),
+    }
+}
+
+/// The candidate within a small edit distance of `word`, if one stands out.
+pub(crate) fn closest<'a>(word: &str, candidates: &[&'a str]) -> Option<&'a str> {
+    let word = word.to_ascii_uppercase();
+    candidates
+        .iter()
+        .map(|candidate| {
+            (
+                edit_distance(&word, &candidate.to_ascii_uppercase()),
+                *candidate,
+            )
+        })
+        .filter(|(distance, candidate)| *distance <= (candidate.len() / 3).max(2))
+        .min_by_key(|(distance, _)| *distance)
+        .map(|(_, candidate)| candidate)
+}
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut previous: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.iter().enumerate() {
+        let mut current = vec![i + 1];
+        for (j, cb) in b.iter().enumerate() {
+            let substitute = previous[j] + usize::from(ca != cb);
+            current.push(substitute.min(previous[j + 1] + 1).min(current[j] + 1));
+        }
+        previous = current;
+    }
+    previous[b.len()]
 }
 
 fn split_like(tokens: &[Token]) -> Result<(&[Token], Option<String>), String> {
@@ -1094,7 +1246,7 @@ mod tests {
         assert!(
             parse_sql_metadata("SHOW TABLES WHERE name = 'orders'", &options)
                 .unwrap_err()
-                .contains("unsupported")
+                .contains("did you mean SHOW TABLES IN")
         );
         assert!(
             parse_sql_metadata("SHOW CATALOGS; USE other", &options)
@@ -1247,6 +1399,7 @@ mod tests {
                 "/v1/catalog/medallion/schema/test/table",
                 "/v1/catalog/medallion/schema",
                 "/v1/catalog/medallion/schema",
+                "/v1/catalog/missing/schema",
             ];
             for path in expected {
                 let (mut stream, _) = listener.accept().unwrap();
@@ -1258,14 +1411,19 @@ mod tests {
                     .next()
                     .unwrap();
                 assert_eq!(line, format!("GET {path} HTTP/1.1"));
-                let body = if path.ends_with("/table") {
-                    r#"{"tables":["orders"]}"#
+                let (status, body) = if path.ends_with("/table") {
+                    ("200 OK", r#"{"tables":["orders"]}"#)
+                } else if path.contains("/missing/") {
+                    (
+                        "404 Not Found",
+                        r#"{"error":"catalog 'missing' not found","code":"CATALOG_NOT_FOUND"}"#,
+                    )
                 } else {
-                    r#"{"schemas":["test"]}"#
+                    ("200 OK", r#"{"schemas":["test"]}"#)
                 };
                 write!(
                     stream,
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
                     body.len(), body
                 )
                 .unwrap();

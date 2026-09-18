@@ -173,9 +173,10 @@ impl Editor {
     /// The widget, boxed and titled; dimmed while a statement runs.
     pub fn widget(&mut self, title: &str, theme: &Theme, running: bool) -> &TextArea<'static> {
         let label = if running { theme.dim } else { theme.title };
+        // A rule above and below the input, the context label on the top one.
         self.area.set_block(
             Block::new()
-                .borders(Borders::TOP)
+                .borders(Borders::TOP | Borders::BOTTOM)
                 .border_style(theme.dim)
                 .title(Span::styled(format!(" {title} "), label)),
         );
@@ -184,10 +185,10 @@ impl Editor {
         &self.area
     }
 
-    /// Rows the editor needs: the rule plus the lines, within `max`.
+    /// Rows the editor needs: the two rules plus the lines, within `max`.
     pub fn height(&self, max: u16) -> u16 {
         let lines = self.area.lines().len() as u16;
-        (lines + 1).clamp(2, max.max(2))
+        (lines + 2).clamp(3, max.max(3))
     }
 }
 
@@ -289,6 +290,6 @@ mod tests {
             editor.handle(&KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL)),
             EditorAction::None
         ));
-        assert_eq!(editor.height(8), 2);
+        assert_eq!(editor.height(8), 3);
     }
 }

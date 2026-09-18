@@ -151,20 +151,18 @@ impl Summary {
         parts
     }
 
-    fn provenance(&self) -> Vec<String> {
+    /// What deserves a second line: only the exceptional.
+    fn notes(&self) -> Vec<String> {
         let mut parts = Vec::new();
-        if let Some(id) = &self.query_id {
-            parts.push(id.chars().take(8).collect());
-        }
-        if let Some(placement) = &self.placement {
+        if let Some(placement) = &self.placement
+            && !placement.starts_with("distributed")
+        {
             parts.push(placement.clone());
         }
-        if let Some((done, total)) = self.tasks {
-            parts.push(if done == total {
-                format!("{total} task{}", if total == 1 { "" } else { "s" })
-            } else {
-                format!("{done}/{total} tasks")
-            });
+        if let Some((done, total)) = self.tasks
+            && done != total
+        {
+            parts.push(format!("{done}/{total} tasks"));
         }
         if self.admission_wait_ms > 0 {
             parts.push(format!(
@@ -182,20 +180,30 @@ impl Summary {
     }
 }
 
+/// One line in the common case — the verdict, then the query id dimmed —
+/// and a second, dimmed line only when something exceptional happened
+/// (admission wait, cache hit, coordinator fallback, partial metrics).
 pub fn lines(summary: &Summary, theme: &Theme) -> Vec<Line<'static>> {
     let (glyph, style) = if summary.ok && !summary.cancelled {
         ("✓", theme.ok)
     } else {
         ("✗", theme.error)
     };
-    let mut lines = vec![Line::from(vec![
+    let mut first = vec![
         Span::styled(format!(" {glyph} "), style),
         Span::raw(summary.verdict().join(" · ")),
-    ])];
-    let provenance = summary.provenance();
-    if !provenance.is_empty() {
+    ];
+    if let Some(id) = &summary.query_id {
+        first.push(Span::styled(
+            format!("   {}", id.chars().take(8).collect::<String>()),
+            theme.dim,
+        ));
+    }
+    let mut lines = vec![Line::from(first)];
+    let notes = summary.notes();
+    if !notes.is_empty() {
         lines.push(Line::from(Span::styled(
-            format!("   {}", provenance.join(" · ")),
+            format!("   {}", notes.join(" · ")),
             theme.dim,
         )));
     }
@@ -222,8 +230,12 @@ mod tests {
         let summary = Summary::from_record(1096, 5, "66aea874-dd02", Some(&record));
         assert_eq!(
             plain(&summary),
-            " ✓ 1.10 s · 5 rows · 2 workers · 18.0M rows scanned at 16.4M rows/s · 6.2 MiB read\n   66aea874 · distributed (fragments) · 5 tasks · waited 12 ms for admission\n"
+            " ✓ 1.10 s · 5 rows · 2 workers · 18.0M rows scanned at 16.4M rows/s · 6.2 MiB read   66aea874\n   waited 12 ms for admission\n"
         );
+        let mut plain_run = record.clone();
+        plain_run.admission_wait_ms = 0;
+        let summary = Summary::from_record(1096, 5, "66aea874-dd02", Some(&plain_run));
+        assert_eq!(plain(&summary).lines().count(), 1, "{}", plain(&summary));
     }
 
     #[test]
@@ -245,7 +257,11 @@ mod tests {
         )
         .unwrap();
         let summary = Summary::from_record(2, 6, "q", Some(&record));
-        assert!(plain(&summary).contains("   q · from cache\n"));
+        assert!(
+            plain(&summary).ends_with("   q\n   from cache\n"),
+            "{}",
+            plain(&summary)
+        );
         let cancelled = Summary {
             ok: false,
             cancelled: true,

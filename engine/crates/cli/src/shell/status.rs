@@ -28,10 +28,14 @@ pub fn status_line(facts: &StatusFacts<'_>, theme: &Theme) -> Line<'static> {
         None => {}
     }
     if let Some(ms) = facts.last_elapsed_ms {
-        parts.push(format!("last {:.2} s", ms as f64 / 1000.0));
-    }
-    if let Some(rows) = facts.last_scanned_rows {
-        parts.push(format!("{} rows scanned", crate::render::human_count(rows)));
+        let mut last = format!("last query {:.2} s", ms as f64 / 1000.0);
+        if let Some(rows) = facts.last_scanned_rows {
+            last.push_str(&format!(
+                ", {} rows scanned",
+                crate::render::human_count(rows)
+            ));
+        }
+        parts.push(last);
     }
     Line::from(Span::styled(format!(" {}", parts.join(" · ")), style))
 }
@@ -63,7 +67,7 @@ mod tests {
         let line = status_line(&facts, &Theme::mono());
         assert_eq!(
             crate::render::to_plain(&[line]),
-            " localhost:8081 · 2 workers · last 1.10 s · 18.0M rows scanned\n"
+            " localhost:8081 · 2 workers · last query 1.10 s, 18.0M rows scanned\n"
         );
         assert_eq!(host_of("http://localhost:8081/"), "localhost:8081");
         assert_eq!(
