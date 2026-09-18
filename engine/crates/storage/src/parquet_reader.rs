@@ -24,6 +24,9 @@ pub struct ParquetFileMetadata {
     pub schema: SchemaRef,
     pub row_count: u64,
     pub row_group_count: usize,
+    /// Column-chunk statistics and sizes from the footer(s), merged over
+    /// row groups and files.
+    pub profile: crate::FooterProfile,
 }
 
 /// Streaming adapter over parquet-rs that implements the shared execution
@@ -326,10 +329,21 @@ impl ParquetReader {
         let builder = self.open_builder()?;
         let row_count = u64::try_from(builder.metadata().file_metadata().num_rows())
             .map_err(|_| storage_error("Parquet metadata contains a negative row count"))?;
+        let file = std::fs::metadata(&self.path)?;
         Ok(ParquetFileMetadata {
             schema: Arc::clone(builder.schema()),
             row_count,
             row_group_count: builder.metadata().num_row_groups(),
+            profile: crate::FooterProfile::from_parquet(
+                builder.metadata(),
+                file.len(),
+                file.modified().ok().and_then(|modified| {
+                    modified
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .ok()
+                        .and_then(|since| i64::try_from(since.as_millis()).ok())
+                }),
+            ),
         })
     }
 
@@ -360,6 +374,7 @@ impl ParquetReader {
                     .row_group_count
                     .checked_add(next.row_group_count)
                     .ok_or_else(|| storage_error("Parquet directory row-group count overflow"))?;
+            combined.profile.merge(next.profile);
         }
         Ok(combined)
     }

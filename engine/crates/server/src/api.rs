@@ -1703,20 +1703,28 @@ async fn submit_statement(
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64;
+    // `SHOW STATS FOR` and `DESCRIBE DETAIL` are the statistics statements;
+    // they need the session context a catalog statement does not, and the
+    // catalog parser must not read `DESCRIBE DETAIL t` as `DESCRIBE detail`.
+    let statistics_statement = parse_statistics_statement(&sql);
     // A catalog statement is recognised before the session context is
     // checked: `CREATE CATALOG` on an empty coordinator, or `CREATE SCHEMA`
     // in a catalog with no schema yet, has no valid context to validate.
-    let catalog_statement = match kaveon_sql::ddl::parse_catalog_statement(&sql) {
-        Ok(statement) => statement,
-        Err(error) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": format!("SQL parse error: {error}"),
-                    "code": "SYNTAX_ERROR"
-                })),
-            )
-                .into_response();
+    let catalog_statement = if statistics_statement.is_some() {
+        None
+    } else {
+        match kaveon_sql::ddl::parse_catalog_statement(&sql) {
+            Ok(statement) => statement,
+            Err(error) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!("SQL parse error: {error}"),
+                        "code": "SYNTAX_ERROR"
+                    })),
+                )
+                    .into_response();
+            }
         }
     };
     // Pin one immutable catalog manager for validation, optimization and
@@ -1959,6 +1967,9 @@ async fn submit_statement(
     }
     if let Some(table) = parse_analyze_table(&sql) {
         return execute_analyze(&state, &identity, &query_id, &context, table, start).await;
+    }
+    if let Some(statement) = statistics_statement {
+        return execute_statistics_statement(&state, &query_id, &context, statement, start).await;
     }
 
     let analysis_start = Instant::now();
@@ -2788,6 +2799,13 @@ fn parse_analyze_table(sql: &str) -> Option<String> {
         .strip_prefix("ANALYZE ")
         .or_else(|| sql.strip_prefix("analyze "))?
         .trim();
+    bounded_table_name(rest)
+}
+
+/// `[catalog.][schema.]table` of plain or double-quoted identifier parts,
+/// the form `ANALYZE` and the statistics statements accept; `None` for
+/// anything else.
+fn bounded_table_name(rest: &str) -> Option<String> {
     if rest.is_empty() || rest.bytes().any(|b| b.is_ascii_whitespace() || b == b';') {
         return None;
     }
@@ -2803,6 +2821,448 @@ fn parse_analyze_table(sql: &str) -> Option<String> {
         return None;
     }
     Some(parts.join("."))
+}
+
+/// The statements that read a table's statistics.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum StatisticsStatement {
+    /// `SHOW STATS FOR [catalog.][schema.]table`
+    ShowStats(String),
+    /// `DESCRIBE DETAIL [catalog.][schema.]table`
+    DescribeDetail(String),
+}
+
+fn parse_statistics_statement(sql: &str) -> Option<StatisticsStatement> {
+    let words = sql.split_whitespace().collect::<Vec<_>>();
+    let keyword = |index: usize, expected: &str| {
+        words
+            .get(index)
+            .is_some_and(|word| word.eq_ignore_ascii_case(expected))
+    };
+    if words.len() == 4 && keyword(0, "SHOW") && keyword(1, "STATS") && keyword(2, "FOR") {
+        return bounded_table_name(words[3]).map(StatisticsStatement::ShowStats);
+    }
+    if words.len() == 3 && (keyword(0, "DESCRIBE") || keyword(0, "DESC")) && keyword(1, "DETAIL") {
+        return bounded_table_name(words[2]).map(StatisticsStatement::DescribeDetail);
+    }
+    None
+}
+
+/// The session-qualified `catalog.schema.table` of a bounded table name.
+fn qualify_table(context: &QueryContext, table: &str) -> String {
+    match table.split('.').count() {
+        1 => format!("{}.{}.{}", context.catalog, context.schema, table),
+        2 => format!("{}.{}", context.catalog, table),
+        _ => table.to_owned(),
+    }
+}
+
+/// The version of the statistics document `ANALYZE` writes.
+const STATISTICS_DOCUMENT_VERSION: u64 = 2;
+
+/// The statistics document for a profiled source: what `ANALYZE` stores at
+/// `statistics/<operation>.json` and `SHOW STATS FOR` / `DESCRIBE DETAIL`
+/// read back.
+fn statistics_document(
+    qualified: &str,
+    catalog_snapshot_sha256: &str,
+    location: &str,
+    profile: &kaveon_storage::SourceProfile,
+) -> serde_json::Value {
+    let columns = profile
+        .columns
+        .iter()
+        .map(|column| {
+            serde_json::json!({
+                "name": column.name,
+                "type": kaveon_sql::ddl::sql_type_name(&column.data_type),
+                "nulls": column.nulls,
+                "min": column.min,
+                "max": column.max,
+                "compressed_bytes": column.compressed_bytes,
+                "distinct": serde_json::Value::Null,
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "version": STATISTICS_DOCUMENT_VERSION,
+        "table": qualified,
+        "analyzed_at_ms": unix_time_ms(),
+        "catalog_snapshot_sha256": catalog_snapshot_sha256,
+        "source_identity_sha256": profile.statistics.identity_sha256,
+        "format": format_name(profile.format),
+        "location": location,
+        "delta_version": profile.statistics.delta_version,
+        "row_count": profile.statistics.row_count,
+        "file_count": profile.file_count,
+        "row_group_count": profile.row_group_count,
+        "compressed_bytes": profile.compressed_bytes,
+        "uncompressed_bytes": profile.uncompressed_bytes,
+        "last_modified_ms": profile.last_modified_ms,
+        "partition_columns": profile.partition_columns,
+        "columns": columns,
+    })
+}
+
+fn format_name(format: kaveon_core::DataFormat) -> &'static str {
+    match format {
+        kaveon_core::DataFormat::Parquet => "parquet",
+        kaveon_core::DataFormat::Delta => "delta",
+        kaveon_core::DataFormat::Iceberg => "iceberg",
+    }
+}
+
+/// Milliseconds since the epoch as ISO 8601 UTC text, for the timestamp
+/// columns of `DESCRIBE DETAIL`.
+fn iso_utc_ms(value: Option<i64>) -> serde_json::Value {
+    value
+        .map(|value| {
+            kaveon_storage::StatValue::Timestamp {
+                value,
+                unit: arrow::datatypes::TimeUnit::Millisecond,
+                utc: true,
+            }
+            .to_json()
+        })
+        .unwrap_or(serde_json::Value::Null)
+}
+
+/// A statistics bound as `SHOW STATS FOR` presents it: text.
+fn bound_text(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Null => serde_json::Value::Null,
+        serde_json::Value::String(text) => serde_json::Value::String(text.clone()),
+        other => serde_json::Value::String(other.to_string()),
+    }
+}
+
+fn varchar(name: &str) -> ColumnInfo {
+    ColumnInfo {
+        name: name.into(),
+        data_type: "VARCHAR".into(),
+    }
+}
+
+fn bigint(name: &str) -> ColumnInfo {
+    ColumnInfo {
+        name: name.into(),
+        data_type: "BIGINT".into(),
+    }
+}
+
+/// A timestamp column whose values are ISO 8601 UTC text (see
+/// [`iso_utc_ms`]).
+fn timestamp(name: &str) -> ColumnInfo {
+    ColumnInfo {
+        name: name.into(),
+        data_type: "TIMESTAMP".into(),
+    }
+}
+
+/// `SHOW STATS FOR` over a stored statistics document: Trino's columns, one
+/// row per column and a summary row whose `column_name` is null and which
+/// carries the table's `row_count` and total `data_size`; `analyzed_at` is
+/// the same on every row. A version 1 document (row count and column names
+/// only) yields name-only rows and no `analyzed_at`.
+fn show_stats_result(
+    document: &serde_json::Value,
+) -> (Vec<ColumnInfo>, Vec<Vec<serde_json::Value>>) {
+    let columns = vec![
+        varchar("column_name"),
+        varchar("data_type"),
+        bigint("data_size"),
+        ColumnInfo {
+            name: "nulls_fraction".into(),
+            data_type: "DOUBLE".into(),
+        },
+        bigint("distinct_values_count"),
+        varchar("low_value"),
+        varchar("high_value"),
+        bigint("row_count"),
+        timestamp("analyzed_at"),
+    ];
+    let row_count = document["row_count"].as_u64();
+    let analyzed_at = iso_utc_ms(document["analyzed_at_ms"].as_i64());
+    let mut rows = document["columns"]
+        .as_array()
+        .map(|columns| {
+            columns
+                .iter()
+                .map(|column| {
+                    let (name, column) = match column {
+                        serde_json::Value::String(name) => (name.clone(), None),
+                        other => (
+                            other["name"].as_str().unwrap_or_default().to_owned(),
+                            Some(other),
+                        ),
+                    };
+                    let nulls = column.and_then(|column| column["nulls"].as_u64());
+                    let nulls_fraction = match (nulls, row_count) {
+                        (Some(nulls), Some(rows)) if rows > 0 => {
+                            serde_json::json!(nulls as f64 / rows as f64)
+                        }
+                        _ => serde_json::Value::Null,
+                    };
+                    let field = |key: &str| {
+                        column
+                            .map(|column| column[key].clone())
+                            .unwrap_or(serde_json::Value::Null)
+                    };
+                    vec![
+                        serde_json::json!(name),
+                        field("type"),
+                        field("compressed_bytes"),
+                        nulls_fraction,
+                        field("distinct"),
+                        bound_text(&field("min")),
+                        bound_text(&field("max")),
+                        serde_json::Value::Null,
+                        analyzed_at.clone(),
+                    ]
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    rows.push(vec![
+        serde_json::Value::Null,
+        serde_json::Value::Null,
+        document["compressed_bytes"].clone(),
+        serde_json::Value::Null,
+        serde_json::Value::Null,
+        serde_json::Value::Null,
+        serde_json::Value::Null,
+        serde_json::json!(row_count),
+        analyzed_at,
+    ]);
+    (columns, rows)
+}
+
+/// `DESCRIBE DETAIL`: the table-level facts, from the stored document when
+/// the table was analyzed and from a fresh metadata read otherwise.
+fn describe_detail_result(
+    format: kaveon_core::DataFormat,
+    location: &str,
+    document: Option<&serde_json::Value>,
+    fresh: Option<&kaveon_storage::SourceProfile>,
+) -> (Vec<ColumnInfo>, Vec<Vec<serde_json::Value>>) {
+    let columns = vec![
+        varchar("format"),
+        varchar("location"),
+        timestamp("created_at"),
+        timestamp("last_modified"),
+        bigint("num_files"),
+        bigint("size_in_bytes"),
+        bigint("row_count"),
+        bigint("delta_version"),
+        varchar("partition_columns"),
+        timestamp("analyzed_at"),
+        varchar("catalog_snapshot"),
+    ];
+    let row = match (document, fresh) {
+        (Some(document), _) => vec![
+            serde_json::json!(format_name(format)),
+            serde_json::json!(location),
+            serde_json::Value::Null,
+            iso_utc_ms(document["last_modified_ms"].as_i64()),
+            document["file_count"].clone(),
+            document["compressed_bytes"].clone(),
+            document["row_count"].clone(),
+            document["delta_version"].clone(),
+            document["partition_columns"]
+                .as_array()
+                .map(|names| {
+                    serde_json::json!(
+                        names
+                            .iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    )
+                })
+                .unwrap_or(serde_json::Value::Null),
+            iso_utc_ms(document["analyzed_at_ms"].as_i64()),
+            document["catalog_snapshot_sha256"].clone(),
+        ],
+        (None, Some(profile)) => vec![
+            serde_json::json!(format_name(format)),
+            serde_json::json!(location),
+            serde_json::Value::Null,
+            iso_utc_ms(profile.last_modified_ms),
+            serde_json::json!(profile.file_count),
+            serde_json::json!(profile.compressed_bytes),
+            serde_json::Value::Null,
+            serde_json::json!(profile.statistics.delta_version),
+            serde_json::json!(profile.partition_columns.join(",")),
+            serde_json::Value::Null,
+            serde_json::Value::Null,
+        ],
+        (None, None) => Vec::new(),
+    };
+    (columns, vec![row])
+}
+
+/// Runs `SHOW STATS FOR` or `DESCRIBE DETAIL` for any statement-capable
+/// role and answers inline like `ANALYZE`.
+async fn execute_statistics_statement(
+    state: &Arc<AppState>,
+    query_id: &str,
+    context: &QueryContext,
+    statement: StatisticsStatement,
+    started: Instant,
+) -> Response {
+    let (table, show_stats) = match statement {
+        StatisticsStatement::ShowStats(table) => (table, true),
+        StatisticsStatement::DescribeDetail(table) => (table, false),
+    };
+    let qualified = qualify_table(context, &table);
+    let resolved = match state
+        .catalog
+        .read()
+        .await
+        .resolve_table(&kaveon_core::TableReference::parse(&qualified))
+    {
+        Ok(value) => value,
+        Err(error) => {
+            return analyze_failure(
+                query_id,
+                started,
+                StatusCode::BAD_REQUEST,
+                "TABLE_NOT_FOUND",
+                error.to_string(),
+            )
+            .await;
+        }
+    };
+    let location = resolved.full_path();
+    let format = resolved.table.format;
+    let stored = match state.product_transactions.catalog() {
+        Some(commit) => match stored_statistics_document(&commit, &qualified).await {
+            Ok(document) => document,
+            Err((status, code, message)) => {
+                return analyze_failure(query_id, started, status, code, message).await;
+            }
+        },
+        None if show_stats => {
+            return analyze_failure(
+                query_id,
+                started,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "STATISTICS_DISABLED",
+                "durable statistics are disabled".into(),
+            )
+            .await;
+        }
+        None => None,
+    };
+    let (columns, rows) = if show_stats {
+        let Some(document) = stored else {
+            return analyze_failure(
+                query_id,
+                started,
+                StatusCode::BAD_REQUEST,
+                "STATISTICS_UNAVAILABLE",
+                format!("no statistics for {qualified}; run ANALYZE {qualified}"),
+            )
+            .await;
+        };
+        show_stats_result(&document)
+    } else {
+        let fresh = if stored.is_none() {
+            let read = tokio::task::spawn_blocking({
+                let location = location.clone();
+                move || kaveon_storage::profile_source(&location, format)
+            })
+            .await;
+            match read {
+                Ok(Ok(profile)) => Some(profile),
+                Ok(Err(error)) => {
+                    return analyze_failure(
+                        query_id,
+                        started,
+                        StatusCode::BAD_REQUEST,
+                        "DESCRIBE_FAILED",
+                        error.to_string(),
+                    )
+                    .await;
+                }
+                Err(_) => {
+                    return analyze_failure(
+                        query_id,
+                        started,
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "DESCRIBE_FAILED",
+                        "metadata read did not complete".into(),
+                    )
+                    .await;
+                }
+            }
+        } else {
+            None
+        };
+        describe_detail_result(format, &location, stored.as_ref(), fresh.as_ref())
+    };
+    finish_inline_statement(query_id, started, columns, rows).await
+}
+
+/// The table's stored statistics document, parsed; `None` when the table
+/// was never analyzed.
+async fn stored_statistics_document(
+    commit: &kaveon_catalog::product_commit::ProductCatalogCommit,
+    qualified: &str,
+) -> Result<Option<serde_json::Value>, (StatusCode, &'static str, String)> {
+    let snapshot = commit.read_current().await.map_err(|_| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "CATALOG_UNAVAILABLE",
+            "cannot read product catalog head".to_owned(),
+        )
+    })?;
+    let Some(stored) = snapshot.table_statistics.get(qualified) else {
+        return Ok(None);
+    };
+    let unreadable = || {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "STATISTICS_INVALID",
+            format!("stored statistics for {qualified} are not readable"),
+        )
+    };
+    let bytes = commit
+        .fetch_immutable_file(&stored.document)
+        .await
+        .map_err(|_| unreadable())?;
+    serde_json::from_slice::<serde_json::Value>(&bytes)
+        .map(Some)
+        .map_err(|_| unreadable())
+}
+
+/// Finishes a statement that answered on the coordinator: the record and
+/// the response carry the same columns and rows.
+async fn finish_inline_statement(
+    query_id: &str,
+    started: Instant,
+    columns: Vec<ColumnInfo>,
+    rows: Vec<Vec<serde_json::Value>>,
+) -> Response {
+    let elapsed = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+    if let Some(record) = QUERY_STORE.write().await.queries.get_mut(query_id) {
+        record.state = QueryState::Finished;
+        record.next_uri = None;
+        record.columns = columns.clone();
+        record.rows = rows.clone();
+        record.elapsed_ms = elapsed;
+        record.completed_at_ms = unix_time_ms();
+    }
+    Json(StatementResponse {
+        next_uri: None,
+        id: query_id.into(),
+        state: QueryState::Finished,
+        columns: Some(columns),
+        data: Some(rows),
+        error: None,
+        elapsed_ms: elapsed,
+    })
+    .into_response()
 }
 
 async fn execute_analyze(
@@ -2847,11 +3307,7 @@ async fn execute_analyze(
         )
             .into_response();
     };
-    let qualified = match table.split('.').count() {
-        1 => format!("{}.{}.{}", context.catalog, context.schema, table),
-        2 => format!("{}.{}", context.catalog, table),
-        _ => table,
-    };
+    let qualified = qualify_table(context, &table);
     let resolved = match state
         .catalog
         .read()
@@ -2870,7 +3326,8 @@ async fn execute_analyze(
             .await;
         }
     };
-    let first = match kaveon_storage::analyze_source(&resolved.full_path(), resolved.table.format) {
+    let location = resolved.full_path();
+    let first = match kaveon_storage::profile_source(&location, resolved.table.format) {
         Ok(value) => value,
         Err(error) => {
             return analyze_failure(
@@ -2883,9 +3340,8 @@ async fn execute_analyze(
             .await;
         }
     };
-    let second = match kaveon_storage::analyze_source(&resolved.full_path(), resolved.table.format)
-    {
-        Ok(value) if value.identity_sha256 == first.identity_sha256 => value,
+    let second = match kaveon_storage::profile_source(&location, resolved.table.format) {
+        Ok(value) if value.statistics.identity_sha256 == first.statistics.identity_sha256 => value,
         Ok(_) => {
             return analyze_failure(
                 query_id,
@@ -2911,7 +3367,15 @@ async fn execute_analyze(
         "{:x}",
         Sha256::digest(context.catalog_snapshot_id.as_bytes())
     );
-    let document = serde_json::to_vec(&serde_json::json!({"version":1,"table":qualified,"catalog_snapshot_sha256":catalog_snapshot_sha256,"source_identity_sha256":second.identity_sha256,"row_count":second.row_count,"columns":second.columns})).unwrap();
+    let document = serde_json::to_vec(&statistics_document(
+        &qualified,
+        &catalog_snapshot_sha256,
+        &location,
+        &second,
+    ))
+    .unwrap();
+    let row_count = second.statistics.row_count;
+    let source_identity_sha256 = second.statistics.identity_sha256;
     let document_sha = format!("{:x}", Sha256::digest(&document));
     let current = match commit.read_current().await {
         Ok(v) => v,
@@ -2938,19 +3402,19 @@ async fn execute_analyze(
                 table: qualified.clone(),
                 source: RuntimeTableSourceRef {
                     catalog_snapshot_sha256: catalog_snapshot_sha256.clone(),
-                    source_identity_sha256: second.identity_sha256.clone(),
+                    source_identity_sha256: source_identity_sha256.clone(),
                 },
             },
             CatalogChange::PutStatistics {
                 table: qualified.clone(),
                 statistics: TableStatisticsRef {
                     catalog_snapshot_sha256,
-                    source_identity_sha256: second.identity_sha256,
+                    source_identity_sha256,
                     document: ImmutableFileRef {
                         path: path.clone(),
                         sha256: document_sha,
                     },
-                    row_count: second.row_count,
+                    row_count,
                 },
             },
         ],
@@ -3004,7 +3468,7 @@ async fn execute_analyze(
     ];
     let rows = vec![vec![
         serde_json::json!(qualified),
-        serde_json::json!(second.row_count),
+        serde_json::json!(row_count),
     ]];
     if let Some(record) = QUERY_STORE.write().await.queries.get_mut(query_id) {
         record.state = QueryState::Finished;
@@ -3091,7 +3555,7 @@ async fn analyze_failure(
     finish_failed_query(query_id, message.clone(), started, None, None, None).await;
     (
         status,
-        Json(serde_json::json!({"error":message,"code":code})),
+        Json(serde_json::json!({"id":query_id,"error":message,"code":code})),
     )
         .into_response()
 }
@@ -6513,17 +6977,19 @@ mod tests {
     }
 
     use super::{
-        ColumnInfo, MergeOperation, TaskRequest, TaskResponse, aggregate_merge_contract,
-        await_task_memory, capabilities, catalog_test_state, collect_join_statistics_tables,
-        decode_arrow_stream, durable_relation_statistics, encode_arrow_stream,
-        exact_metadata_count_plan, exact_source_statistics, execute_analyze,
-        general_distributed_eligible, merge_partial_aggregates, mutation_actor,
-        parse_analyze_table, statistics_diagnostics, task_request_from_dispatch,
-        top_n_merge_contract, transaction_api_guidance, validate_replacement,
+        ColumnInfo, MergeOperation, StatisticsStatement, TaskRequest, TaskResponse,
+        aggregate_merge_contract, await_task_memory, capabilities, catalog_test_state,
+        collect_join_statistics_tables, decode_arrow_stream, durable_relation_statistics,
+        encode_arrow_stream, exact_metadata_count_plan, exact_source_statistics, execute_analyze,
+        general_distributed_eligible, iso_utc_ms, merge_partial_aggregates, mutation_actor,
+        parse_analyze_table, parse_statistics_statement, statistics_diagnostics,
+        task_request_from_dispatch, top_n_merge_contract, transaction_api_guidance,
+        validate_replacement,
     };
     use crate::security::Role;
     use arrow::array::{Int64Array, StringArray};
     use axum::http::StatusCode;
+    use sha2::{Digest, Sha256};
 
     #[test]
     fn analyze_parser_accepts_bounded_table_names_only() {
@@ -6537,6 +7003,268 @@ mod tests {
         );
         assert_eq!(parse_analyze_table("ANALYZE orders WHERE true"), None);
         assert_eq!(parse_analyze_table("ANALYZE a.b.c.d"), None);
+    }
+
+    #[test]
+    fn statistics_statement_parser_accepts_bounded_table_names_only() {
+        assert_eq!(
+            parse_statistics_statement("SHOW STATS FOR lake.sales.orders"),
+            Some(StatisticsStatement::ShowStats("lake.sales.orders".into()))
+        );
+        assert_eq!(
+            parse_statistics_statement("show stats for \"sales\".\"orders\""),
+            Some(StatisticsStatement::ShowStats("sales.orders".into()))
+        );
+        assert_eq!(
+            parse_statistics_statement("DESCRIBE DETAIL orders"),
+            Some(StatisticsStatement::DescribeDetail("orders".into()))
+        );
+        assert_eq!(
+            parse_statistics_statement("desc detail lake.sales.orders"),
+            Some(StatisticsStatement::DescribeDetail(
+                "lake.sales.orders".into()
+            ))
+        );
+        assert_eq!(
+            parse_statistics_statement("SHOW STATS FOR (SELECT 1)"),
+            None
+        );
+        assert_eq!(parse_statistics_statement("SHOW STATS orders"), None);
+        assert_eq!(parse_statistics_statement("DESCRIBE orders"), None);
+        assert_eq!(parse_statistics_statement("DESCRIBE DETAIL a.b.c.d"), None);
+        assert_eq!(
+            parse_statistics_statement("SHOW STATS FOR orders WHERE x"),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn statistics_statements_read_the_published_document() {
+        let (state, commit, directory) = analyze_test_state().await;
+        let admin = crate::security::Identity {
+            principal: "admin".into(),
+            display_identity: None,
+            role: Role::Admin,
+        };
+        let analyst = crate::security::Identity {
+            principal: "analyst".into(),
+            display_identity: None,
+            role: Role::Analyst,
+        };
+        let file_bytes = std::fs::metadata(directory.join("orders.parquet"))
+            .unwrap()
+            .len();
+
+        // Before ANALYZE: no statistics to show, but the detail answers from
+        // a fresh metadata read.
+        let (status, body) = submit(
+            &state,
+            &analyst,
+            "SHOW STATS FOR orders",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["code"], "STATISTICS_UNAVAILABLE");
+        assert_eq!(
+            body["error"],
+            "no statistics for lake.sales.orders; run ANALYZE lake.sales.orders"
+        );
+        let failed = record(body["id"].as_str().unwrap(), &analyst).await;
+        assert_eq!(failed["state"], "FAILED");
+
+        let (status, body) = submit(
+            &state,
+            &analyst,
+            "DESCRIBE DETAIL orders",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let names = body["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|column| column["name"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            [
+                "format",
+                "location",
+                "created_at",
+                "last_modified",
+                "num_files",
+                "size_in_bytes",
+                "row_count",
+                "delta_version",
+                "partition_columns",
+                "analyzed_at",
+                "catalog_snapshot"
+            ]
+        );
+        let row = &body["data"][0];
+        assert_eq!(row[0], "parquet");
+        assert!(row[1].as_str().unwrap().ends_with("orders.parquet"));
+        assert!(row[2].is_null());
+        assert!(row[3].as_str().unwrap().ends_with('Z'));
+        assert_eq!(row[4], 1);
+        assert_eq!(row[5], file_bytes);
+        assert!(row[6].is_null());
+        assert!(row[7].is_null());
+        assert_eq!(row[8], "");
+        assert!(row[9].is_null());
+        assert!(row[10].is_null());
+        assert_eq!(body["data"].as_array().unwrap().len(), 1);
+
+        // ANALYZE keeps its result and writes the version 2 document.
+        let (status, body) =
+            submit(&state, &analyst, "ANALYZE orders", serde_json::Value::Null).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        let (status, body) =
+            submit(&state, &admin, "ANALYZE orders", serde_json::Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["data"], serde_json::json!([["lake.sales.orders", 3]]));
+        let snapshot = commit.read_current().await.unwrap();
+        let stored = &snapshot.table_statistics["lake.sales.orders"];
+        assert_eq!(stored.row_count, 3);
+        assert!(stored.document.path.starts_with("statistics/"));
+        let document: serde_json::Value =
+            serde_json::from_slice(&commit.fetch_immutable_file(&stored.document).await.unwrap())
+                .unwrap();
+        assert_eq!(document["version"], 2);
+        assert_eq!(document["table"], "lake.sales.orders");
+        assert!(document["analyzed_at_ms"].as_i64().unwrap() > 0);
+        assert_eq!(
+            document["catalog_snapshot_sha256"],
+            format!("{:x}", Sha256::digest(b"sha256:catalog-one"))
+        );
+        assert_eq!(
+            document["source_identity_sha256"],
+            stored.source_identity_sha256
+        );
+        assert_eq!(document["format"], "parquet");
+        assert!(
+            document["location"]
+                .as_str()
+                .unwrap()
+                .ends_with("orders.parquet")
+        );
+        assert!(document["delta_version"].is_null());
+        assert_eq!(document["row_count"], 3);
+        assert_eq!(document["file_count"], 1);
+        assert_eq!(document["row_group_count"], 1);
+        assert_eq!(document["compressed_bytes"], file_bytes);
+        assert!(document["uncompressed_bytes"].as_u64().unwrap() > 0);
+        assert!(document["last_modified_ms"].as_i64().unwrap() > 0);
+        assert_eq!(document["partition_columns"], serde_json::json!([]));
+        let column = &document["columns"][0];
+        assert_eq!(column["name"], "id");
+        assert_eq!(column["type"], "bigint");
+        assert_eq!(column["nulls"], 0);
+        assert_eq!(column["min"], 1);
+        assert_eq!(column["max"], 3);
+        assert!(column["compressed_bytes"].as_u64().unwrap() > 0);
+        assert!(column["distinct"].is_null());
+        assert_eq!(document["columns"].as_array().unwrap().len(), 1);
+
+        // SHOW STATS FOR: one row per column and the summary row.
+        let (status, body) = submit(
+            &state,
+            &analyst,
+            "SHOW STATS FOR lake.sales.orders",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let columns = body["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|column| {
+                (
+                    column["name"].as_str().unwrap().to_owned(),
+                    column["type"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            columns,
+            [
+                ("column_name".to_owned(), "VARCHAR".to_owned()),
+                ("data_type".into(), "VARCHAR".into()),
+                ("data_size".into(), "BIGINT".into()),
+                ("nulls_fraction".into(), "DOUBLE".into()),
+                ("distinct_values_count".into(), "BIGINT".into()),
+                ("low_value".into(), "VARCHAR".into()),
+                ("high_value".into(), "VARCHAR".into()),
+                ("row_count".into(), "BIGINT".into()),
+                ("analyzed_at".into(), "TIMESTAMP".into()),
+            ]
+        );
+        let analyzed_at = iso_utc_ms(document["analyzed_at_ms"].as_i64());
+        assert!(analyzed_at.as_str().unwrap().ends_with('Z'));
+        assert_eq!(
+            body["data"],
+            serde_json::json!([
+                [
+                    "id",
+                    "bigint",
+                    column["compressed_bytes"],
+                    0.0,
+                    null,
+                    "1",
+                    "3",
+                    null,
+                    analyzed_at
+                ],
+                [
+                    null,
+                    null,
+                    file_bytes,
+                    null,
+                    null,
+                    null,
+                    null,
+                    3,
+                    analyzed_at
+                ]
+            ])
+        );
+        let finished = record(body["id"].as_str().unwrap(), &analyst).await;
+        assert_eq!(finished["state"], "FINISHED");
+        assert_eq!(finished["columns"][8]["name"], "analyzed_at");
+        assert_eq!(finished["rows"], body["data"]);
+
+        // DESCRIBE DETAIL after ANALYZE answers from the document.
+        let (status, body) = submit(
+            &state,
+            &analyst,
+            "DESCRIBE DETAIL lake.sales.orders",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let row = &body["data"][0];
+        assert_eq!(row[0], "parquet");
+        assert_eq!(row[4], 1);
+        assert_eq!(row[5], file_bytes);
+        assert_eq!(row[6], 3);
+        assert!(row[7].is_null());
+        assert_eq!(row[8], "");
+        assert_eq!(row[9], analyzed_at);
+        assert_eq!(row[10], document["catalog_snapshot_sha256"]);
+
+        let (status, body) = submit(
+            &state,
+            &analyst,
+            "SHOW STATS FOR lake.sales.missing",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["code"], "TABLE_NOT_FOUND");
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

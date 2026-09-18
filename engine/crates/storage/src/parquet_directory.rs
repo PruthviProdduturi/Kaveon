@@ -514,6 +514,7 @@ impl ObjectDirectoryReader {
         let schema = Arc::clone(head.schema());
         let mut row_count = head.row_count()?;
         let mut row_group_count = head.row_group_count();
+        let mut profile = head.profile();
         while let Some(next) = opened.next().await {
             let (path, next) = next?;
             check_file_schema(
@@ -529,11 +530,13 @@ impl ObjectDirectoryReader {
             row_group_count = row_group_count
                 .checked_add(next.row_group_count())
                 .ok_or_else(|| error("Parquet directory row-group count overflow"))?;
+            profile.merge(next.profile());
         }
         Ok(ParquetFileMetadata {
             schema,
             row_count,
             row_group_count,
+            profile,
         })
     }
 

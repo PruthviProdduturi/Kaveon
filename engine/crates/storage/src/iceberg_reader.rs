@@ -29,6 +29,10 @@ pub struct IcebergSnapshot {
     pub schema: SchemaRef,
     pub files: Vec<String>,
     pub row_count: u64,
+    /// The manifests' `file_size_in_bytes` summed over the live data files.
+    pub total_bytes: u64,
+    /// The field names of the table's default partition spec.
+    pub partition_columns: Vec<String>,
 }
 
 pub struct IcebergReader {
@@ -90,6 +94,32 @@ impl IcebergReader {
         let id = self.snapshot_id;
         let io = self.io();
         blocking(async move { resolve_snapshot(&uri, id, &io).await })
+    }
+
+    /// The footers of the snapshot's live data files, merged: column facts
+    /// keyed by the files' own column names and field ids. No data page is
+    /// read.
+    pub fn footer_profile(&self, snapshot: &IcebergSnapshot) -> Result<crate::FooterProfile> {
+        let io = self.io();
+        let mut merged: Option<crate::FooterProfile> = None;
+        for file in &snapshot.files {
+            let profile = if is_object(file) {
+                let location = io.location(file)?;
+                blocking(async move {
+                    ObjectParquetReader::new(location.store, location.path)
+                        .metadata()
+                        .await
+                })?
+                .profile
+            } else {
+                ParquetReader::new(local_path(file)?).metadata()?.profile
+            };
+            match merged.as_mut() {
+                Some(merged) => merged.merge(profile),
+                None => merged = Some(profile),
+            }
+        }
+        Ok(merged.unwrap_or_default())
     }
     pub fn read_blocking(self) -> Result<IcebergSource> {
         if self.batch_size == 0 {
@@ -277,8 +307,10 @@ async fn resolve_snapshot(
         None => return Err(error("missing Iceberg schemas")),
     };
     let schema = parse_schema(schema)?;
+    let partition_columns = partition_field_names(&metadata);
     let mut files = BTreeSet::new();
     let mut row_count = 0u64;
+    let mut total_bytes = 0u64;
     if let Some(snapshot) = snapshot {
         let manifests = if let Some(list) = snapshot["manifest-list"].as_str() {
             let list = resolve_path(location, list)?;
@@ -366,6 +398,11 @@ async fn resolve_snapshot(
                 row_count = row_count
                     .checked_add(count)
                     .ok_or_else(|| error("Iceberg row count overflow"))?;
+                let size = avro_field(data, "file_size_in_bytes")
+                    .and_then(avro_i64)
+                    .filter(|n| *n >= 0)
+                    .unwrap_or(0) as u64;
+                total_bytes = total_bytes.saturating_add(size);
             }
         }
     }
@@ -375,7 +412,37 @@ async fn resolve_snapshot(
         schema,
         files: files.into_iter().collect(),
         row_count,
+        total_bytes,
+        partition_columns,
     })
+}
+
+/// The field names of the default partition spec (`partition-specs` with
+/// `default-spec-id`, or the v1 `partition-spec`); empty when unpartitioned
+/// or absent.
+fn partition_field_names(metadata: &Value) -> Vec<String> {
+    let fields = metadata
+        .get("partition-specs")
+        .and_then(Value::as_array)
+        .and_then(|specs| {
+            let default = metadata.get("default-spec-id").and_then(Value::as_i64);
+            specs
+                .iter()
+                .find(|spec| default.is_none() || spec["spec-id"].as_i64() == default)
+                .or(specs.first())
+        })
+        .and_then(|spec| spec.get("fields"))
+        .or_else(|| metadata.get("partition-spec"))
+        .and_then(Value::as_array);
+    fields
+        .map(|fields| {
+            fields
+                .iter()
+                .filter_map(|field| field.get("name").and_then(Value::as_str))
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn parse_schema(schema: &Value) -> Result<SchemaRef> {

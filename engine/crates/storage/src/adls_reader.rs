@@ -822,6 +822,14 @@ impl OpenedObject {
     pub(crate) fn row_group_count(&self) -> usize {
         self.metadata.metadata().num_row_groups()
     }
+
+    pub(crate) fn profile(&self) -> crate::FooterProfile {
+        crate::FooterProfile::from_parquet(
+            self.metadata.metadata(),
+            self.object_metadata.size as u64,
+            Some(self.object_metadata.last_modified.timestamp_millis()),
+        )
+    }
 }
 
 /// Why an object could not be opened: the location holds no object (a
