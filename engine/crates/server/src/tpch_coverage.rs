@@ -2,7 +2,8 @@
 //! `docs/qualification/tpch/trino-queries.sql`, run against a tiny
 //! deterministic TPC-H (every table, Trino's column names and types) through
 //! the node-local planner and, separately, through the distributed stage
-//! planner. The test prints a coverage table and holds the recorded truth:
+//! planner's fragments executed in this process as two workers would run
+//! them. The test prints a coverage table and holds the recorded truth:
 //! every statement outside `KNOWN_UNSUPPORTED` must parse, plan and execute,
 //! and every statement inside it must still fail, so the list cannot go
 //! stale in either direction. `docs/qualification/tpch/coverage.md` is the
@@ -34,7 +35,7 @@ const QUERIES: &str = include_str!("../../../../docs/qualification/tpch/trino-qu
 /// removed from the list.
 const KNOWN_UNSUPPORTED: &[(&str, &str)] = &[];
 
-/// Statements without a distributed plan today, with the reason.
+/// Statements whose fragments do not plan or execute today, with the reason.
 const KNOWN_NO_DISTRIBUTED_PLAN: &[(&str, &str)] = &[];
 
 const REGIONS: [&str; 5] = ["AFRICA", "AMERICA", "ASIA", "EUROPE", "MIDDLE EAST"];
@@ -805,8 +806,16 @@ fn statements() -> Vec<(String, String)> {
 
 /// Rows as text, one string per row.
 fn rows(operator: &mut dyn BatchOperator) -> kaveon_core::Result<Vec<String>> {
-    let mut rows = Vec::new();
+    let mut batches = Vec::new();
     while let Some(batch) = operator.next_batch()? {
+        batches.push(batch);
+    }
+    batch_rows(&batches)
+}
+
+fn batch_rows(batches: &[RecordBatch]) -> kaveon_core::Result<Vec<String>> {
+    let mut rows = Vec::new();
+    for batch in batches {
         let columns = batch
             .columns()
             .iter()
@@ -897,17 +906,41 @@ impl Fixture {
         Ok(kaveon_optim::rules::push_projection_down(plan))
     }
 
-    /// Execute one statement through the node-local planner, rows as
-    /// text.
-    fn run(&self, statement: &str) -> kaveon_core::Result<Vec<String>> {
+    /// Execute one statement through the node-local planner and through
+    /// its distributed fragments run in this process as two workers; the
+    /// rows of each come back as text.
+    fn run(&self, statement: &str) -> kaveon_core::Result<Answers> {
         let plan = self.optimized(statement)?;
         let pool = QueryMemoryPool::new("tpch", 256 * 1024 * 1024)?;
         let mut planned = crate::planner::plan_query_with_memory(&plan, &self.manager, &pool)?;
-        let rows = rows(planned.operator.as_mut())?;
+        let local = rows(planned.operator.as_mut())?;
         drop(planned);
         assert_eq!(pool.snapshot().current_bytes, 0, "leaked reservations");
-        Ok(rows)
+        let pool = QueryMemoryPool::new("tpch-distributed", 256 * 1024 * 1024)?;
+        let distributed = batch_rows(&crate::differential_tests::execute_distributed(
+            "tpch",
+            &plan,
+            &self.manager,
+            2,
+            &pool,
+        )?)?;
+        assert_eq!(
+            pool.snapshot().current_bytes,
+            0,
+            "leaked distributed reservations"
+        );
+        Ok(Answers { local, distributed })
     }
+}
+
+/// One statement's rows as text from the node-local planner and from the
+/// distributed fragments; doubles may differ in their last digits between
+/// the two (the partial sums fold in another order), so each is checked
+/// against the expected answer to the tolerance rather than against the
+/// other.
+struct Answers {
+    local: Vec<String>,
+    distributed: Vec<String>,
 }
 
 impl Drop for Fixture {
@@ -984,9 +1017,19 @@ fn date_text(days: i64) -> String {
     format!("{year:04}-{month:02}-{day:02}")
 }
 
-/// The Engine's rows against the expected ones: integers and text
-/// exactly, doubles to a relative tolerance, dates by their text.
-fn assert_answers(query: &str, actual: &[String], expected: &[Vec<Cell>]) {
+/// The Engine's rows, from both paths, against the expected ones:
+/// integers and text exactly, doubles to a relative tolerance, dates by
+/// their text.
+fn assert_answers(query: &str, answers: &Answers, expected: &[Vec<Cell>]) {
+    assert_rows(query, &answers.local, expected);
+    assert_rows(
+        &format!("{query} (distributed)"),
+        &answers.distributed,
+        expected,
+    );
+}
+
+fn assert_rows(query: &str, actual: &[String], expected: &[Vec<Cell>]) {
     assert_eq!(
         actual.len(),
         expected.len(),
@@ -1565,10 +1608,12 @@ fn cover(fixture: &Arc<Fixture>, id: &str, statement: &str) -> Coverage {
     coverage.distributed = crate::planner::build_stage_graph(id, &plan, 2)
         .and_then(|_| crate::planner::build_executable_fragments(id, &plan, &fixture.manager, 2))
         .err()
-        .map(|error| error.to_string());
+        .map(|error| format!("plan: {error}"));
+    let planned_distributed = coverage.distributed.is_none();
 
     // Planning and execution run on their own thread so a statement whose
-    // plan is a runaway product is recorded as over budget, not hung.
+    // plan is a runaway product is recorded as over budget, not hung. The
+    // fragments run after the node-local plan, as two in-process workers.
     let (sender, receiver) = mpsc::channel();
     let fixture = Arc::clone(fixture);
     let query = id.to_owned();
@@ -1587,14 +1632,43 @@ fn cover(fixture: &Arc<Fixture>, id: &str, statement: &str) -> Coverage {
                 );
                 rows
             });
-        let _ = sender.send(outcome);
+        let distributed = planned_distributed.then(|| {
+            let pool = QueryMemoryPool::new("tpch-distributed", 256 * 1024 * 1024).unwrap();
+            let rows = crate::differential_tests::execute_distributed(
+                &query,
+                &plan,
+                &fixture.manager,
+                2,
+                &pool,
+            )
+            .and_then(|batches| batch_rows(&batches))
+            .map_err(|error| error.to_string());
+            assert_eq!(
+                pool.snapshot().current_bytes,
+                0,
+                "{query} leaked distributed reservations"
+            );
+            rows
+        });
+        let _ = sender.send((outcome, distributed));
     });
     match receiver.recv_timeout(STATEMENT_BUDGET) {
-        Ok(Ok(rows)) => {
+        Ok((Ok(rows), distributed)) => {
             coverage.row_count = rows.len();
             coverage.first_row = rows.first().cloned().unwrap_or_default();
+            match distributed {
+                Some(Ok(distributed)) if distributed.len() != rows.len() => {
+                    coverage.distributed = Some(format!(
+                        "execute: {} rows, the node-local plan returned {}",
+                        distributed.len(),
+                        rows.len()
+                    ));
+                }
+                Some(Ok(_)) | None => {}
+                Some(Err(error)) => coverage.distributed = Some(format!("execute: {error}")),
+            }
         }
-        Ok(Err((planning, error))) => {
+        Ok((Err((planning, error)), _)) => {
             if planning {
                 coverage.planned = Some(error);
             } else {
@@ -1663,10 +1737,10 @@ fn the_tpch_statements_cover_what_the_record_says() {
             .any(|(query, _)| *query == id);
         match (coverage.distributed.is_none(), expected_no_distributed) {
             (true, true) => problems.push(format!(
-                "{id} now has a distributed plan: remove it from KNOWN_NO_DISTRIBUTED_PLAN"
+                "{id} now plans and executes distributed: remove it from KNOWN_NO_DISTRIBUTED_PLAN"
             )),
             (false, false) if coverage.local_ok() => problems.push(format!(
-                "{id} lost its distributed plan: {}",
+                "{id} stopped planning or executing distributed: {}",
                 coverage.distributed.clone().unwrap_or_default()
             )),
             _ => {}
@@ -1678,6 +1752,8 @@ fn the_tpch_statements_cover_what_the_record_says() {
         .iter()
         .filter(|coverage| coverage.local_ok() && coverage.distributed.is_none())
         .count();
-    println!("\n{running} of 22 run locally; {distributed} of those have a distributed plan");
+    println!(
+        "\n{running} of 22 run locally; {distributed} of those plan and execute as fragments on two in-process workers"
+    );
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }

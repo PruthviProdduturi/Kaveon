@@ -1,14 +1,17 @@
 //! The differential sweep as a gate: the statements of
 //! `scripts/differential-cases.py`, run against the same rows held in two
 //! Parquet encodings — an Arrow dictionary schema for every text column,
-//! and plain UTF-8 — through the node-local planner, and again against the
-//! plain rows held as one file and as a directory of three files. Any
-//! divergence is an Engine defect, whatever the cluster later says. The
-//! encodings exercise different operator paths (dictionary-aware predicates,
-//! coded folds, the columnar aggregate's arena keys) against one truth; the
-//! layouts exercise the directory reader (listing, file assignment, per-file
-//! pruning) against the single-file reader.
-use std::collections::BTreeMap;
+//! and plain UTF-8 — through the node-local planner, again against the
+//! plain rows held as one file and as a directory of three files, and
+//! through the distributed planner's fragments executed in this process as
+//! a two-worker cluster would run them. Any divergence is an Engine
+//! defect, whatever the cluster later says. The encodings exercise
+//! different operator paths (dictionary-aware predicates, coded folds, the
+//! columnar aggregate's arena keys) against one truth; the layouts exercise
+//! the directory reader (listing, file assignment, per-file pruning)
+//! against the single-file reader; the fragment path exercises the stage
+//! planner, the exchanges and the fragment compiler.
+use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -20,11 +23,134 @@ use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field, Int32Type, Schema};
 use arrow::record_batch::RecordBatch;
 use kaveon_core::{
-    AccessPattern, BatchOperator, CatalogManager, CatalogProvider, DataFormat, MemoryCatalog,
-    QueryMemoryPool, StorageType, TableMeta,
+    AccessPattern, BatchOperator, CatalogManager, CatalogProvider, DataFormat, ExchangeId,
+    MemoryCatalog, Partitioning, QueryMemoryPool, Result, StageId, StorageType, TableMeta,
 };
+use kaveon_sql::logical_plan::LogicalPlan;
+use kaveon_storage::ScanPartition;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
+
+use crate::fragment_exec::{
+    ExchangeBatches, ExchangeInputProvider, ExchangeOutputBatches, execute_fragment_with_memory,
+};
+
+/// The exchange inputs of one task: the batches every producer task
+/// wrote to the partition this task consumes.
+struct TaskInputs {
+    inputs: HashMap<ExchangeId, ExchangeBatches>,
+}
+
+impl ExchangeInputProvider for TaskInputs {
+    fn read(&self, exchange_id: &ExchangeId) -> Result<ExchangeBatches> {
+        self.inputs
+            .get(exchange_id)
+            .map(|input| ExchangeBatches {
+                schema: input.schema.clone(),
+                batches: input.batches.clone(),
+            })
+            .ok_or_else(|| {
+                kaveon_core::KaveonError::Execution(format!(
+                    "exchange {exchange_id} was not produced before its consumer ran"
+                ))
+            })
+    }
+}
+
+/// Execute `plan` as a coordinator would across `workers` workers, in
+/// this process: every stage's tasks run through the fragment executor
+/// in dependency order, and each task's exchange outputs are routed to
+/// the consuming tasks as the orchestrator routes them — output
+/// partition `p` of every producer to consumer task `p`, a broadcast or
+/// single output to every consumer. The root stage's result batches come
+/// back. This is the fragment path without the network: the stage
+/// planner, the fragment compiler and every operator a worker runs.
+pub(crate) fn execute_distributed(
+    query: &str,
+    plan: &LogicalPlan,
+    manager: &CatalogManager,
+    workers: usize,
+    pool: &QueryMemoryPool,
+) -> Result<Vec<RecordBatch>> {
+    let graph = crate::planner::build_stage_graph(query, plan, workers)?;
+    let fragments = crate::planner::build_executable_fragments(query, plan, manager, workers)?;
+    let mut produced: HashMap<ExchangeId, Vec<ExchangeOutputBatches>> = HashMap::new();
+    let mut done: Vec<StageId> = Vec::new();
+    let mut results = Vec::new();
+    while done.len() < graph.stages.len() {
+        let stage = graph
+            .stages
+            .iter()
+            .find(|stage| {
+                !done.contains(&stage.id)
+                    && graph
+                        .exchanges
+                        .iter()
+                        .filter(|exchange| exchange.target_stage == stage.id)
+                        .all(|exchange| done.contains(&exchange.source_stage))
+            })
+            .ok_or_else(|| {
+                kaveon_core::KaveonError::Execution("the stage graph has a cycle".into())
+            })?;
+        let fragment = fragments
+            .get(&stage.id)
+            .ok_or_else(|| kaveon_core::KaveonError::Execution("stage without fragment".into()))?;
+        for task in 0..stage.task_count {
+            let mut inputs = HashMap::new();
+            for exchange in graph
+                .exchanges
+                .iter()
+                .filter(|exchange| exchange.target_stage == stage.id)
+            {
+                let partition = match exchange.partitioning {
+                    Partitioning::Single | Partitioning::Broadcast => 0,
+                    Partitioning::Hash { .. } | Partitioning::RoundRobin { .. } => task,
+                };
+                let outputs = produced.get(&exchange.id).ok_or_else(|| {
+                    kaveon_core::KaveonError::Execution(format!(
+                        "exchange {} has no producer output",
+                        exchange.id
+                    ))
+                })?;
+                let schema = outputs
+                    .first()
+                    .map(|output| output.schema.clone())
+                    .ok_or_else(|| {
+                        kaveon_core::KaveonError::Execution(format!(
+                            "exchange {} has no producer",
+                            exchange.id
+                        ))
+                    })?;
+                let batches = outputs
+                    .iter()
+                    .flat_map(|output| {
+                        output
+                            .partitions
+                            .get(partition)
+                            .cloned()
+                            .unwrap_or_default()
+                    })
+                    .collect();
+                inputs.insert(exchange.id.clone(), ExchangeBatches { schema, batches });
+            }
+            let execution = execute_fragment_with_memory(
+                fragment,
+                manager,
+                &TaskInputs { inputs },
+                ScanPartition::new(task, stage.task_count)?,
+                Some(pool),
+            )?;
+            for (exchange, output) in execution.exchange_outputs {
+                produced.entry(exchange).or_default().push(output);
+            }
+            if stage.id == graph.root_stage {
+                results.extend(execution.result_batches);
+            }
+        }
+        done.push(stage.id);
+    }
+    Ok(results)
+}
 
 /// (name, statement with {T} for the events table and {U} for users,
 /// whether the statement orders its output).
@@ -148,6 +274,19 @@ const CASES: &[(&str, &str, bool)] = &[
         "subquery_in",
         "SELECT COUNT(*) AS n FROM {T} WHERE country IN (SELECT country FROM {U} WHERE locale = 'ja-JP' GROUP BY country)",
         false,
+    ),
+    // A correlated EXISTS with a residual (Q21's shape): an event whose
+    // user also has an event on the same day from another country, and
+    // (NOT EXISTS) with no such event of more actions.
+    (
+        "exists_residual",
+        "SELECT t.country, COUNT(*) AS n FROM {T} t WHERE t.event_date = '2026-07-04' AND EXISTS (SELECT * FROM {T} o WHERE o.user_id = t.user_id AND o.event_date = '2026-07-04' AND o.country <> t.country) GROUP BY t.country ORDER BY n DESC, t.country",
+        true,
+    ),
+    (
+        "not_exists_residual",
+        "SELECT t.country, COUNT(*) AS n FROM {T} t WHERE t.event_date = '2026-07-04' AND NOT EXISTS (SELECT * FROM {T} o WHERE o.user_id = t.user_id AND o.event_date = '2026-07-04' AND o.country <> t.country AND o.actions > t.actions) GROUP BY t.country ORDER BY n DESC, t.country",
+        true,
     ),
     (
         "arith_projection",
@@ -415,10 +554,11 @@ fn write_directory(
     }
 }
 
-/// Rows as text, one string per row, so both encodings compare alike.
-fn canonical_rows(operator: &mut dyn BatchOperator, ordered: bool) -> Vec<String> {
+/// Rows as text, one string per row, so both encodings, both layouts and
+/// both paths compare alike.
+pub(crate) fn canonical_rows(batches: &[RecordBatch], ordered: bool) -> Vec<String> {
     let mut rows = Vec::new();
-    while let Some(batch) = operator.next_batch().unwrap() {
+    for batch in batches {
         let columns = batch
             .columns()
             .iter()
@@ -445,8 +585,16 @@ fn canonical_rows(operator: &mut dyn BatchOperator, ordered: bool) -> Vec<String
     rows
 }
 
+fn drain(operator: &mut dyn BatchOperator) -> Vec<RecordBatch> {
+    let mut batches = Vec::new();
+    while let Some(batch) = operator.next_batch().unwrap() {
+        batches.push(batch);
+    }
+    batches
+}
+
 #[test]
-fn the_differential_sweep_matches_across_parquet_encodings() {
+fn the_differential_sweep_matches_across_parquet_encodings_and_execution_paths() {
     let directory =
         std::env::temp_dir().join(format!("kaveon-differential-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&directory).unwrap();
@@ -472,17 +620,20 @@ fn the_differential_sweep_matches_across_parquet_encodings() {
     let mut manager = CatalogManager::new("lake", "events");
     manager.register_catalog(Box::new(catalog));
 
-    let run = |statement: &str, ordered: bool| -> Vec<String> {
+    let optimized = |statement: &str| -> LogicalPlan {
         let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan_for_binder(statement).unwrap();
         crate::planner::qualify_tables(&mut plan, "lake", "events");
         let plan = kaveon_optim::binder::bind(plan, &manager)
             .unwrap_or_else(|error| panic!("{statement}: {error}"));
         let plan = kaveon_optim::rules::push_filter_down(plan);
-        let plan = kaveon_optim::rules::push_projection_down(plan);
+        kaveon_optim::rules::push_projection_down(plan)
+    };
+    let local = |statement: &str, ordered: bool| -> Vec<String> {
+        let plan = optimized(statement);
         let pool = QueryMemoryPool::new("differential", 256 * 1024 * 1024).unwrap();
         let mut planned = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
             .unwrap_or_else(|error| panic!("{statement}: {error}"));
-        let rows = canonical_rows(planned.operator.as_mut(), ordered);
+        let rows = canonical_rows(&drain(planned.operator.as_mut()), ordered);
         drop(planned);
         assert_eq!(
             pool.snapshot().current_bytes,
@@ -491,26 +642,25 @@ fn the_differential_sweep_matches_across_parquet_encodings() {
         );
         rows
     };
+    let distributed = |statement: &str, ordered: bool| -> Vec<String> {
+        let plan = optimized(statement);
+        let pool = QueryMemoryPool::new("differential-distributed", 256 * 1024 * 1024).unwrap();
+        let batches = execute_distributed("differential", &plan, &manager, 2, &pool)
+            .unwrap_or_else(|error| panic!("{statement} (distributed): {error}"));
+        assert_eq!(
+            pool.snapshot().current_bytes,
+            0,
+            "{statement} (distributed) leaked reservations"
+        );
+        canonical_rows(&batches, ordered)
+    };
     let mut mismatches = Vec::new();
     for (name, template, ordered) in CASES {
-        let dictionary = run(
-            &template
-                .replace("{T}", "events_dictionary")
-                .replace("{U}", "users"),
-            *ordered,
-        );
-        let plain = run(
-            &template
-                .replace("{T}", "events_plain")
-                .replace("{U}", "users"),
-            *ordered,
-        );
-        let parts = run(
-            &template
-                .replace("{T}", "events_parts")
-                .replace("{U}", "users"),
-            *ordered,
-        );
+        let statement = |table: &str| template.replace("{T}", table).replace("{U}", "users");
+        let dictionary = local(&statement("events_dictionary"), *ordered);
+        let plain = local(&statement("events_plain"), *ordered);
+        let parts = local(&statement("events_parts"), *ordered);
+        let fragments = distributed(&statement("events_dictionary"), *ordered);
         assert!(!dictionary.is_empty(), "{name} returned no rows");
         if dictionary != plain {
             mismatches.push(format!(
@@ -524,6 +674,13 @@ fn the_differential_sweep_matches_across_parquet_encodings() {
                 "{name}: directory of three files {:?} versus one file {:?}",
                 parts.iter().take(3).collect::<Vec<_>>(),
                 plain.iter().take(3).collect::<Vec<_>>()
+            ));
+        }
+        if dictionary != fragments {
+            mismatches.push(format!(
+                "{name}: local {:?} versus distributed {:?}",
+                dictionary.iter().take(3).collect::<Vec<_>>(),
+                fragments.iter().take(3).collect::<Vec<_>>()
             ));
         }
     }
