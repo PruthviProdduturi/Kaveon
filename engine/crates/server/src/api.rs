@@ -1069,20 +1069,81 @@ where
 /// charged three producers' spools at once against the budget of a task
 /// that never held them — the final stage of a 100 M-group aggregate was
 /// refused for memory it did not use.)
+///
+/// What is reserved is what the batch's rows occupy: an IPC batch is one
+/// message body that every column's buffers point into, and its Arrow
+/// memory size counts that body once per buffer — four times over for the
+/// two-column grouped-state batch.
+///
+/// A batch whose reservation the budget refuses is kept: the refusal is
+/// reported, and the next call offers the same batch again, its
+/// reservation tried first — the IPC reader has moved on, so nothing else
+/// could bring the batch back.
 struct DiskExchangeInput {
     schema: arrow::datatypes::SchemaRef,
     payloads: std::collections::VecDeque<crate::transport::ArrowPayload>,
     memory: kaveon_core::OperatorMemoryAccount,
+    /// The batch handed out last, held until the next call.
     decoded: Option<kaveon_core::MemoryReservation>,
+    /// A decoded batch whose reservation was refused, with its size,
+    /// offered again on the next call.
+    pending: Option<(arrow::record_batch::RecordBatch, u64)>,
     metrics: Arc<ExchangeDecodeMetrics>,
 }
-impl kaveon_core::BatchOperator for DiskExchangeInput {
-    fn schema(&self) -> &arrow::datatypes::SchemaRef {
-        &self.schema
+impl DiskExchangeInput {
+    fn new(
+        schema: arrow::datatypes::SchemaRef,
+        payloads: std::collections::VecDeque<crate::transport::ArrowPayload>,
+        memory: kaveon_core::OperatorMemoryAccount,
+        metrics: Arc<ExchangeDecodeMetrics>,
+    ) -> Self {
+        Self {
+            schema,
+            payloads,
+            memory,
+            decoded: None,
+            pending: None,
+            metrics,
+        }
     }
-    fn next_batch(&mut self) -> kaveon_core::Result<Option<arrow::record_batch::RecordBatch>> {
-        self.decoded = None;
+
+    /// The next batch with the reservation holding it: the pending batch
+    /// first, then the spool's next.
+    fn decode_next(
+        &mut self,
+    ) -> kaveon_core::Result<
+        Option<(
+            arrow::record_batch::RecordBatch,
+            Option<kaveon_core::MemoryReservation>,
+        )>,
+    > {
         self.memory.check_cancelled()?;
+        let (batch, bytes) = match self.pending.take() {
+            Some(pending) => pending,
+            None => {
+                let Some(batch) = self.decode()? else {
+                    return Ok(None);
+                };
+                let bytes = kaveon_exec::local_parallel::occupied_bytes(&batch)?;
+                (batch, bytes)
+            }
+        };
+        let reservation = if bytes > 0 {
+            match self.memory.reserve(bytes) {
+                Ok(reservation) => Some(reservation),
+                Err(error) => {
+                    self.pending = Some((batch, bytes));
+                    return Err(error);
+                }
+            }
+        } else {
+            None
+        };
+        Ok(Some((batch, reservation)))
+    }
+
+    /// The spool's next batch, counted once.
+    fn decode(&mut self) -> kaveon_core::Result<Option<arrow::record_batch::RecordBatch>> {
         while let Some(payload) = self.payloads.front_mut() {
             let decode_started = Instant::now();
             if let Some(batch) = payload
@@ -1093,16 +1154,28 @@ impl kaveon_core::BatchOperator for DiskExchangeInput {
                     .elapsed_us
                     .fetch_add(elapsed_us(decode_started), Ordering::AcqRel);
                 self.metrics.batches.fetch_add(1, Ordering::AcqRel);
-                let bytes = batch.get_array_memory_size() as u64;
-                self.metrics.bytes.fetch_add(bytes, Ordering::AcqRel);
-                if bytes > 0 {
-                    self.decoded = Some(self.memory.reserve(bytes)?);
-                }
+                self.metrics.bytes.fetch_add(
+                    kaveon_exec::local_parallel::occupied_bytes(&batch)?,
+                    Ordering::AcqRel,
+                );
                 return Ok(Some(batch));
             }
             self.payloads.pop_front();
         }
         Ok(None)
+    }
+}
+impl kaveon_core::BatchOperator for DiskExchangeInput {
+    fn schema(&self) -> &arrow::datatypes::SchemaRef {
+        &self.schema
+    }
+    fn next_batch(&mut self) -> kaveon_core::Result<Option<arrow::record_batch::RecordBatch>> {
+        self.decoded = None;
+        let Some((batch, reservation)) = self.decode_next()? else {
+            return Ok(None);
+        };
+        self.decoded = reservation;
+        Ok(Some(batch))
     }
 }
 impl crate::fragment_exec::ExchangeInputProvider for PrefetchedExchangeInputs {
@@ -1131,13 +1204,12 @@ impl crate::fragment_exec::ExchangeInputProvider for PrefetchedExchangeInputs {
             .iter()
             .map(|payload| payload.fork().map_err(kaveon_core::KaveonError::Execution))
             .collect::<kaveon_core::Result<_>>()?;
-        Ok(Box::new(DiskExchangeInput {
+        Ok(Box::new(DiskExchangeInput::new(
             schema,
             payloads,
-            memory: self.memory.clone(),
-            decoded: None,
-            metrics: Arc::clone(&self.decode_metrics),
-        }))
+            self.memory.clone(),
+            Arc::clone(&self.decode_metrics),
+        )))
     }
 
     /// One source per producer payload, each decoding its spool on the
@@ -1165,13 +1237,12 @@ impl crate::fragment_exec::ExchangeInputProvider for PrefetchedExchangeInputs {
                 let memory = self.memory.clone();
                 let metrics = Arc::clone(&self.decode_metrics);
                 Ok(Box::new(move || {
-                    Ok(Box::new(DiskExchangeInput {
+                    Ok(Box::new(DiskExchangeInput::new(
                         schema,
-                        payloads: std::collections::VecDeque::from([payload]),
+                        std::collections::VecDeque::from([payload]),
                         memory,
-                        decoded: None,
                         metrics,
-                    })
+                    ))
                         as Box<dyn kaveon_core::BatchOperator>)
                 })
                     as kaveon_exec::local_parallel::SourceOpener)
@@ -6752,13 +6823,12 @@ mod tests {
         assert!(payload.bytes() > 3 * batch_bytes);
         let pool = kaveon_core::QueryMemoryPool::new("spooled-input", (batch_bytes * 3 / 2) as u64)
             .unwrap();
-        let mut input = super::DiskExchangeInput {
-            schema: payload.schema(),
-            payloads: std::collections::VecDeque::from([payload]),
-            memory: pool.operator("prefetched-exchanges").unwrap(),
-            decoded: None,
-            metrics: Arc::new(super::ExchangeDecodeMetrics::default()),
-        };
+        let mut input = super::DiskExchangeInput::new(
+            payload.schema(),
+            std::collections::VecDeque::from([payload]),
+            pool.operator("prefetched-exchanges").unwrap(),
+            Arc::new(super::ExchangeDecodeMetrics::default()),
+        );
         let mut rows = 0;
         while let Some(batch) = input.next_batch().unwrap() {
             rows += batch.num_rows();
@@ -6769,6 +6839,111 @@ mod tests {
             );
         }
         assert_eq!(rows, 4 * 16_384);
+        drop(input);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    /// A spool of three batches, the first a quarter the size of the other
+    /// two: the payload, the bytes of a large batch, of the small one, and
+    /// each batch's first value.
+    fn three_batch_spool() -> (crate::transport::ArrowPayload, u64, u64, Vec<i64>) {
+        use arrow::array::Int64Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+        let mut bytes = Vec::new();
+        let mut firsts = Vec::new();
+        {
+            let mut writer =
+                arrow::ipc::writer::StreamWriter::try_new(&mut bytes, &schema).unwrap();
+            for round in 0..3i64 {
+                let rows = if round == 0 { 4_096 } else { 16_384 };
+                let values = (0..rows).map(|i| i + round * 100_000).collect::<Vec<_>>();
+                firsts.push(values[0]);
+                let batch = RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(Int64Array::from(values))],
+                )
+                .unwrap();
+                writer.write(&batch).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        (
+            crate::transport::ArrowPayload::from_ipc_bytes(&bytes).unwrap(),
+            16_384 * 8,
+            4_096 * 8,
+            firsts,
+        )
+    }
+
+    fn first_value(batch: &arrow::record_batch::RecordBatch) -> i64 {
+        batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow::array::Int64Array>()
+            .unwrap()
+            .value(0)
+    }
+
+    /// A batch whose reservation the budget refuses is offered again on
+    /// the next call — once: the IPC reader has moved past it, and the
+    /// batch is neither lost with the error nor handed out twice. Read as
+    /// a `BatchOperator`, which holds each batch until the next call.
+    #[test]
+    fn a_spooled_exchange_input_offers_a_refused_batch_again_exactly_once() {
+        use kaveon_core::BatchOperator;
+        let (payload, batch_bytes, first_bytes, firsts) = three_batch_spool();
+        let budget = batch_bytes * 2;
+        let pool = kaveon_core::QueryMemoryPool::new("re-offered", budget).unwrap();
+        let metrics = Arc::new(super::ExchangeDecodeMetrics::default());
+        let mut input = super::DiskExchangeInput::new(
+            payload.schema(),
+            std::collections::VecDeque::from([payload]),
+            pool.operator("prefetched-exchanges").unwrap(),
+            Arc::clone(&metrics),
+        );
+        let first = input.next_batch().unwrap().unwrap();
+        assert_eq!(first_value(&first), firsts[0]);
+        assert_eq!(pool.snapshot().current_bytes, first_bytes);
+        // Something else takes all that is left beside the small first
+        // batch: once that is released, what is free is a quarter of the
+        // next batch, decoded and refused.
+        let ballast = pool
+            .operator("ballast")
+            .unwrap()
+            .reserve(budget - first_bytes)
+            .unwrap();
+        let refused = input.next_batch().unwrap_err();
+        assert!(
+            matches!(&refused, kaveon_core::KaveonError::MemoryLimit(message)
+                if message.contains("operator 'prefetched-exchanges' cannot reserve")),
+            "{refused}"
+        );
+        assert_eq!(
+            metrics.batches.load(std::sync::atomic::Ordering::Acquire),
+            2,
+            "decoded once"
+        );
+        // Refused again while the ballast holds; the batch is still kept.
+        let refused = input.next_batch().unwrap_err();
+        assert!(matches!(refused, kaveon_core::KaveonError::MemoryLimit(_)));
+        assert_eq!(
+            metrics.batches.load(std::sync::atomic::Ordering::Acquire),
+            2
+        );
+        drop(ballast);
+        // The kept batch, then the third, then the end: three in all.
+        let second = input.next_batch().unwrap().unwrap();
+        assert_eq!(first_value(&second), firsts[1]);
+        assert_eq!(pool.snapshot().current_bytes, batch_bytes);
+        let third = input.next_batch().unwrap().unwrap();
+        assert_eq!(first_value(&third), firsts[2]);
+        assert!(input.next_batch().unwrap().is_none());
+        assert_eq!(
+            metrics.batches.load(std::sync::atomic::Ordering::Acquire),
+            3
+        );
         drop(input);
         assert_eq!(pool.snapshot().current_bytes, 0);
     }

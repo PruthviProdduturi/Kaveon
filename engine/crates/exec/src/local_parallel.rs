@@ -1024,8 +1024,9 @@ fn send_bounded<T>(
 /// The bytes a batch's rows occupy: its columns' data, not the capacity
 /// of the buffers behind them — a batch decoded from one IPC message has
 /// every column's buffers pointing at that whole message, and the
-/// capacity would count it once per buffer.
-fn occupied_bytes(batch: &RecordBatch) -> Result<u64> {
+/// capacity would count it once per buffer. What a source reserves for a
+/// decoded batch, and what the queue charges for one.
+pub fn occupied_bytes(batch: &RecordBatch) -> Result<u64> {
     batch
         .columns()
         .iter()
