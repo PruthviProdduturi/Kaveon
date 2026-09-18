@@ -18,6 +18,7 @@ are planned rather than executable.
 
 - [Engine technical manual](engine/README.md)
 - [Engineer 2 continuation brief](engineering/codex-continuation.md)
+- [Run the full stack locally with Docker](guides/local-stack.md)
 - [Use the Engine CLI](guides/engine-cli.md)
 - [Deploy and connect to the Engine on AKS](engineering/azure-deployment-guide.md)
 - [Build cached Engine images in ACR](engineering/engine-acr-build-cache.md)
