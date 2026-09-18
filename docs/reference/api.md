@@ -25,7 +25,7 @@ All paths below are relative to the FastAPI origin.
 | Dashboards | `/api/v1/dashboards` | Dashboard CRUD, summaries, favorites, DLM curation |
 | Data sources | `/api/v1/data-sources` | Registration, metadata, favorites; connection test is currently a stub |
 | SQL | `/api/v1/sql/*` | SQL generation, execution, detached jobs, result cache, filter values |
-| SQL Lab | `/api/v1/lab/*` | Discovery, saved queries, execution, CTAS, history, distinct values |
+| SQL Lab | `/api/v1/lab/*` | Discovery, saved queries, execution, CTAS, history, distinct values; on a KaveonDB source, streamed execution with `stream: true` — see [Streamed SQL Lab statements](#streamed-sql-lab-statements-kaveondb) |
 | Engine catalog | `/api/v1/engine/catalog/*` | Register catalogs (Admin), schemas and tables (Editor) on KaveonDB by name; tables are verified by a read before they are kept. Routes and roles in [Connectors](connector-capabilities.md#from-the-platform-api) |
 | Engine console | `/api/v1/engine/console/*` | Cluster, query history and statistics diagnostics, read-only |
 | DLM | `/api/v1/dlm/*` | Routing, ask, chart serving, filter values, coverage, cache and freshness operations |
@@ -100,6 +100,39 @@ All paths below are relative to the FastAPI origin.
   `(rows already delivered; the statement is not retried)`; a root task
   that fails before any row is retried as any task. Inline delivery keeps
   the collected path: each root task answers once with its whole result.
+
+### Streamed SQL Lab statements (KaveonDB)
+
+SQL Lab on a KaveonDB source submits every statement this way, so the grid
+shows rows while the statement runs. Every route is bound to the caller
+(Analyst or above) and every read goes to the coordinator under that
+caller's identity — the same actor the submit was stamped with — so the
+coordinator's owner scoping is what binds a record to its reader. The API
+holds no state of its own: a second replica serves the same routes.
+
+| Method | Path | Behavior |
+|---|---|---|
+| `POST` | `/api/v1/lab/query` with `"stream": true` (and `engineSourceId`) | Submits with `result_delivery: "paged"` on a background thread and answers as soon as the coordinator has a record for it: `{"success", "queryId", "tag", "state", "nextUri"}`. A statement the coordinator refuses before it has a record — a parse error, exhausted capacity — is the refusal itself (400 with the Engine's message, 429 with `Retry-After`). Without `stream` the route is unchanged: it waits for the statement and answers with its rows |
+| `GET` | `/api/v1/lab/query/{id}` | `{"success", "query"}`: the record view — `id`, `state`, `elapsed_ms` (final once finished), `columns` as names once planned, `stages[]` and `scans[]` counters while it runs, `workers` (distinct nodes its tasks ran on), `execution` placement (`pending` until it finished), `error`, `next_uri`, `timings`, `cached_from`, `submitted_at_ms`, `completed_at_ms`. The record's preview rows, plan and SQL are not served here. 404 for an unknown or another owner's statement |
+| `GET` | `/api/v1/lab/query/{id}/results/{n}` | Page `n`, with the coordinator's status and body passed through: `200` `{"id", "data", "next_uri", "row_count", "complete"}`, `202` with `Retry-After: 1` and `{"id", "row_count", "complete": false}` while page `n` is not yet written, `404` past the end or for another owner's, `410 Gone` once the statement failed or was cancelled |
+| `DELETE` | `/api/v1/lab/query/{id}` | Cancels; `204`, or `404` when the coordinator no longer knows the statement or it is another owner's. Cancelling releases the statement's pages |
+
+The background thread that holds the statement's `POST /v1/statement`
+writes the query-history row when it returns: `status` `success`, `error`
+or `cancelled` from the record's final state, `duration_ms` from its
+`elapsed_ms`, `row_count` from the writer's total (a page read once the
+statement finished), the Engine's error message, and the record as
+`engine_details`.
+
+Studio reads the record every 250 ms while the statement runs and follows
+the pages from `results/0`, appending each page to the grid as it lands and
+honouring `Retry-After` on a 202; once the writer is ahead of the reader it
+requests up to four consecutive pages together. It holds at most the
+selected row limit and stops reading pages there while the statement runs
+to completion, so the summary still carries the true row count. Which rows
+appear early is the plan's property described above: a scan, filter or
+join from its first batch, an `ORDER BY`, `GROUP BY` or `DISTINCT` root at
+the end.
 
 ## Engine HTTP path — alpha
 

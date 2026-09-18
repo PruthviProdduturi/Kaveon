@@ -57,7 +57,10 @@ curl -s http://kaveon-api:8080/api/v1/datasets \\
       <tr><td>GET / DELETE</td><td><code>/api/v1/sql/async/{`{job_id}`}</code></td><td>Poll for results, or cancel.</td></tr>
       <tr><td>POST</td><td><code>/api/v1/sql/generate</code></td><td>Generate SQL from a dataset and chart definition.</td></tr>
       <tr><td>DELETE</td><td><code>/api/v1/sql/cache</code></td><td>Invalidate cached results.</td></tr>
-      <tr><td>POST</td><td><code>/api/v1/lab/query</code></td><td>SQL Lab execution — cancellable, recorded in history.</td></tr>
+      <tr><td>POST</td><td><code>/api/v1/lab/query</code></td><td>SQL Lab execution — cancellable, recorded in history. On a KaveonDB source, <code>{`"stream": true`}</code> submits with paged delivery and answers at once with the query id.</td></tr>
+      <tr><td>GET</td><td><code>/api/v1/lab/query/{`{id}`}</code></td><td>A streamed statement&rsquo;s record: state, elapsed time, columns, stage and scan counters, execution placement, error.</td></tr>
+      <tr><td>GET</td><td><code>/api/v1/lab/query/{`{id}`}/results/{`{n}`}</code></td><td>Page <code>n</code> of its rows: 200 with the page, 202 with <code>Retry-After</code> while it is being written, 404 past the end, 410 once the statement failed or was cancelled.</td></tr>
+      <tr><td>DELETE</td><td><code>/api/v1/lab/query/{`{id}`}</code></td><td>Cancel a streamed statement.</td></tr>
       <tr><td>POST</td><td><code>/api/v1/lab/ctas</code></td><td>Create a table from a query.</td></tr>
       <tr><td>GET</td><td><code>/api/v1/lab/query-history</code></td><td>Your own query history.</td></tr>
     </tbody></table>
