@@ -356,6 +356,10 @@ fn clear_terminal() -> Result<(), String> {
 }
 
 fn execute(client: &Session, options: &mut Options, sql: &str) -> Result<(), String> {
+    if sql.trim_start().starts_with('.') {
+        let output = meta_command_to_string(client, options, sql.trim())?;
+        return write_output(options, &output);
+    }
     let executed = execute_to_string(client, options, sql)?;
     write_output(options, &executed.output)
 }
