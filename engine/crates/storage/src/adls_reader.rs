@@ -25,9 +25,9 @@ use parquet::{errors::ParquetError, file::metadata::ParquetMetaData};
 use crate::{
     ScanMetrics, ScanPartition,
     parquet_reader::{
-        BatchPredicate, matching_row_groups, projection_indices, record_selection_metrics,
-        validate_predicate,
+        matching_row_groups, projection_indices, record_selection_metrics, validate_predicate,
     },
+    scan_predicate::BatchPredicate,
 };
 
 const DEFAULT_BATCH_SIZE: usize = 8_192;

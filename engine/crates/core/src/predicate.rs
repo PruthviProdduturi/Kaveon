@@ -42,6 +42,15 @@ pub enum StoragePredicate {
         column: String,
         values: Vec<ScalarValue>,
     },
+    /// `column [NOT] [I]LIKE pattern` with a literal pattern: SQL `%` and
+    /// `_` wildcards, evaluated by the storage layer with the same Arrow
+    /// kernel the executor uses.
+    Like {
+        column: String,
+        pattern: String,
+        negated: bool,
+        case_insensitive: bool,
+    },
     And(Vec<StoragePredicate>),
     Or(Vec<StoragePredicate>),
     Not(Box<StoragePredicate>),
@@ -115,6 +124,34 @@ impl ScalarValue {
 }
 
 impl StoragePredicate {
+    /// The columns the predicate reads, each once, in first-mention order.
+    pub fn columns(&self) -> Vec<&str> {
+        let mut columns = Vec::new();
+        self.collect_columns(&mut columns);
+        columns
+    }
+
+    fn collect_columns<'a>(&'a self, out: &mut Vec<&'a str>) {
+        let mut push = |column: &'a str| {
+            if !out.contains(&column) {
+                out.push(column);
+            }
+        };
+        match self {
+            StoragePredicate::Compare { column, .. }
+            | StoragePredicate::IsNull { column }
+            | StoragePredicate::IsNotNull { column }
+            | StoragePredicate::In { column, .. }
+            | StoragePredicate::Like { column, .. } => push(column),
+            StoragePredicate::And(children) | StoragePredicate::Or(children) => {
+                for child in children {
+                    child.collect_columns(out);
+                }
+            }
+            StoragePredicate::Not(inner) => inner.collect_columns(out),
+        }
+    }
+
     /// The predicate with every literal coerced for its column's type.
     #[must_use]
     pub fn coerced_for(&self, schema: &arrow::datatypes::SchemaRef) -> StoragePredicate {
