@@ -335,7 +335,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
             {[
               { name: "Kaveon Studio", status: "Available", color: B, body: "Questions, SQL Lab, governed dashboards, chart building, and operational exploration." },
               { name: "Data Language Model", status: "Available", color: "#8b5cf6", body: "Compiled dataset semantics and deterministic NL→SQL for supported question classes." },
-              { name: "Kaveon Engine", status: "Alpha", color: "#f59e0b", body: "Arrow batch execution with local Parquet and Delta reads today; cloud object storage and distributed execution are targets." },
+              { name: "Kaveon Engine", status: "Alpha", color: "#f59e0b", body: "Distributed Arrow execution over Parquet, Delta and Iceberg tables on ADLS Gen2 and local storage, with exact memory accounting. Qualified on a cluster, not yet a general release." },
             ].map((pillar, index) => (
               <Anim key={pillar.name} dir="up" delay={index * 120} style={{ padding: "30px 28px", borderRadius: 16, background: "rgba(255,255,255,0.022)", border: "1px solid rgba(255,255,255,0.07)", minHeight: 220 }} className="about-card">
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 28 }}>
