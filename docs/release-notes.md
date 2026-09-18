@@ -5,7 +5,7 @@ The repository does not yet maintain a canonical historical changelog. Git histo
 release notes: status is current capability state, while the handshake is an
 engineering coordination log.
 
-## September 8, 2026 — CLI 0.2.0 and dashboard refinement
+## September 8, 2026 ï¿½ CLI 0.2.0 and dashboard refinement
 
 CLI 0.2.0 adds editable history, history suggestions, keyword completion, EMACS/VI
 bindings, and a gray/white active-schema prompt that respects `NO_COLOR`. Remote
@@ -82,6 +82,9 @@ from the shipping Studio/API path.
 - Platform CI/CD follows `dev`; workflow success does not itself create a versioned
   platform release note.
 - Engine CI creates a moving `engine-dev` prerelease after successful `dev` builds.
+- CLI releases are tagged `cli-vX.Y.Z` and published with `SHA256SUMS`, winget
+  manifests and a Homebrew formula by the CLI release workflow
+  ([procedure](engineering/cli-release.md)).
 - There is no declared stable support channel or deprecation window yet.
 
 Future tagged releases should add dated entries to this file (newest first) or adopt

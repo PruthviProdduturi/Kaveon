@@ -17,22 +17,106 @@ and is not covered relative to the Trino CLI.
 
 ## Install
 
+Versioned releases are tagged `cli-vX.Y.Z` on the
+[releases page](https://github.com/PruthviProdduturi/Kaveon/releases) and
+built by the [CLI release workflow](../../.github/workflows/cli-release.yml)
+for Windows x64, macOS (Apple Silicon and Intel) and Linux x64. Each release
+carries a `SHA256SUMS` file; the install scripts and the package managers
+verify against it. The moving `engine-dev` preview is built from every push
+to `dev` by the [Engine workflow](../../.github/workflows/engine.yml) and is
+not checksummed. The release procedure is in
+[Cutting a CLI release](../engineering/cli-release.md).
+
+### winget (Windows)
+
+Once the manifest is accepted in
+[microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs):
+
+```powershell
+winget install PruthviProdduturi.Kaveon
+kaveon --version
+```
+
+winget verifies the archive against the hash in the manifest and puts
+`kaveon` on the PATH as a portable command. Upgrade with
+`winget upgrade PruthviProdduturi.Kaveon`.
+
+### Homebrew (macOS and Linux)
+
+Once the tap is published:
+
+```bash
+brew install PruthviProdduturi/kaveon/kaveon
+kaveon --version
+```
+
+The formula installs the release binary for Apple Silicon, Intel macOS or
+Linux x64 and verifies its SHA-256. Upgrade with `brew upgrade kaveon`.
+
+### Install scripts
+
+The scripts install the `engine-dev` preview by default. With a version they
+install that tagged release instead and refuse to install anything whose
+SHA-256 does not match the release's `SHA256SUMS` or whose `--version` does
+not report the tag's version.
+
 Windows x64, in PowerShell:
 
 ```powershell
+# preview
 irm https://raw.githubusercontent.com/PruthviProdduturi/Kaveon/dev/scripts/install.ps1 | iex
+# a tagged release, verified
+$env:KAVEON_VERSION = "0.3.0"; irm https://raw.githubusercontent.com/PruthviProdduturi/Kaveon/dev/scripts/install.ps1 | iex
 $env:PATH = "$env:LOCALAPPDATA\kaveon\bin;$env:PATH"
 kaveon --version
 ```
 
-Linux x64 or Apple Silicon macOS:
+A checked-out copy also takes `.\scripts\install.ps1 -Version 0.3.0`.
+
+Linux x64 or macOS:
 
 ```bash
+# preview (Linux x64 and Apple Silicon only)
 curl -fsSL https://raw.githubusercontent.com/PruthviProdduturi/Kaveon/dev/scripts/install.sh | bash
+# a tagged release, verified (adds Intel macOS)
+curl -fsSL https://raw.githubusercontent.com/PruthviProdduturi/Kaveon/dev/scripts/install.sh | KAVEON_VERSION=0.3.0 bash
 ```
 
-Both scripts download the `engine-dev` preview build published by the
-[Engine workflow](../../.github/workflows/engine.yml). From source:
+A checked-out copy also takes `./scripts/install.sh --version 0.3.0`. Both
+scripts honour `KAVEON_INSTALL_DIR` (default `~/.local/bin` or
+`%LOCALAPPDATA%\kaveon\bin`) and `KAVEON_DOWNLOAD_BASE` for a mirror of the
+GitHub release downloads.
+
+### Release archives by hand
+
+Each release has one archive per platform, each containing the binary and
+`LICENSE`:
+
+| Platform | Asset |
+|---|---|
+| Windows x64 | `kaveon-X.Y.Z-x86_64-pc-windows-msvc.zip` |
+| macOS Apple Silicon | `kaveon-X.Y.Z-aarch64-apple-darwin.tar.gz` |
+| macOS Intel | `kaveon-X.Y.Z-x86_64-apple-darwin.tar.gz` |
+| Linux x64 | `kaveon-X.Y.Z-x86_64-unknown-linux-gnu.tar.gz` |
+
+Download the archive and `SHA256SUMS`, verify, then extract:
+
+```bash
+V=0.3.0; T=x86_64-unknown-linux-gnu
+B=https://github.com/PruthviProdduturi/Kaveon/releases/download/cli-v$V
+curl -fsSLO "$B/kaveon-$V-$T.tar.gz" && curl -fsSLO "$B/SHA256SUMS"
+sha256sum --ignore-missing -c SHA256SUMS      # shasum -a 256 --ignore-missing -c on macOS
+tar -xzf "kaveon-$V-$T.tar.gz" kaveon && install -m 755 kaveon ~/.local/bin/kaveon
+```
+
+```powershell
+$v = "0.3.0"; $b = "https://github.com/PruthviProdduturi/Kaveon/releases/download/cli-v$v"
+irm "$b/kaveon-$v-x86_64-pc-windows-msvc.zip" -OutFile kaveon.zip; irm "$b/SHA256SUMS" -OutFile SHA256SUMS
+(Get-FileHash kaveon.zip).Hash -eq ((Get-Content SHA256SUMS | Select-String "x86_64-pc-windows-msvc.zip") -split '\s+')[0].ToUpper()
+Expand-Archive kaveon.zip -DestinationPath "$env:LOCALAPPDATA\kaveon\bin"
+```
+
+### From source
 
 ```bash
 cd engine
@@ -667,8 +751,10 @@ for the SQL surface.
 
 Everything `.help` lists is implemented. What the client does not do yet:
 per-operator statistics inside a plan (`EXPLAIN ANALYZE` is per task);
-spooling to object storage; Kerberos, JWT and HTTP-proxy options;
-package-manager installs (winget, Homebrew). Rows appear while a
+spooling to object storage; Kerberos, JWT and HTTP-proxy options. The
+winget manifest and Homebrew formula are rendered with every tagged release
+(see [Install](#install)) but are not yet accepted in winget-pkgs or
+published in a tap. Rows appear while a
 statement runs only where the coordinator receives them early: today a worker
 ships a root task's rows when that task completes, so a scan split into few
 tasks still shows its rows at the end — see
