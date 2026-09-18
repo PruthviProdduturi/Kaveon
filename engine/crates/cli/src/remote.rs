@@ -41,6 +41,8 @@ struct StatementRequest<'a> {
     client: &'static str,
     client_tags: &'a [String],
     result_delivery: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    settings: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Deserialize)]
@@ -224,6 +226,7 @@ fn submit_statement(
         client: "kaveon-cli",
         client_tags: &options.client_tags,
         result_delivery: "inline",
+        settings: None,
     };
     let response = client
         .request(reqwest::Method::POST, &url)?
@@ -548,6 +551,9 @@ pub(crate) fn execute_with_limit(
     if let Some(executed) = run_metadata_statement(client, options, sql)? {
         return Ok(executed);
     }
+    if let Some((inner, explain)) = crate::shell::app::strip_explain(sql) {
+        return explain_statement(client, options, &inner, explain);
+    }
     let mut response = post_statement(client, options, sql)?;
     let rows = match response.next_uri.take() {
         Some(next_uri) => stream_pages(client, options, &mut response, &next_uri)?,
@@ -673,10 +679,77 @@ pub(crate) fn run_metadata_statement(
 
 /// The blocking POST: inline delivery, or paged with `--paged`. The shell
 /// does the same on a worker thread through `client::statement::submit`.
+/// `EXPLAIN [ANALYZE] <statement>` in a script: the statement runs with the
+/// result cache off and its rows are discarded; the plan is printed as a
+/// tree, `ANALYZE` adds the run's cost (`render::plan`), the summary follows.
+fn explain_statement(
+    client: &Session,
+    options: &mut Options,
+    sql: &str,
+    explain: crate::shell::app::Explain,
+) -> Result<Executed, String> {
+    let mut settings = serde_json::Map::new();
+    settings.insert("result_cache".into(), serde_json::Value::Bool(false));
+    let response = post_statement_with(client, options, sql, Some(settings))?;
+    let record = crate::client::session::fetch_query(client, &options.server, &response.id).ok();
+    let analyze = explain == crate::shell::app::Explain::Analyze;
+    let theme = human_theme(options);
+    let plan = record
+        .as_ref()
+        .map(|record| crate::render::plan::plan_of(record, analyze))
+        .unwrap_or(serde_json::Value::Null);
+    let mut lines = crate::render::plan::tree(&plan, &theme);
+    if analyze {
+        match record.as_ref() {
+            Some(record) => lines.extend(crate::render::plan::analyzed(
+                record,
+                options
+                    .width
+                    .map(|width| usize::from(width).saturating_sub(2)),
+                &theme,
+            )),
+            None => lines.push(ratatui::text::Line::styled(
+                "  the query record could not be read; nothing to analyze",
+                theme.dim,
+            )),
+        }
+    }
+    let mut output = styled_or_plain(&lines);
+    let mut scanned_rows = None;
+    if let Some(summary) = statement_summary(
+        client,
+        options,
+        &response.id,
+        response.data.len(),
+        response.elapsed_ms,
+        None,
+    ) {
+        scanned_rows = summary.rows_scanned;
+        output.push_str(&styled_or_plain(&crate::render::summary::lines(
+            &summary, &theme,
+        )));
+        output.push('\n');
+    }
+    Ok(Executed {
+        output,
+        elapsed_ms: Some(response.elapsed_ms),
+        scanned_rows,
+    })
+}
+
 fn post_statement(
     client: &Session,
     options: &Options,
     sql: &str,
+) -> Result<StatementResponse, String> {
+    post_statement_with(client, options, sql, None)
+}
+
+fn post_statement_with(
+    client: &Session,
+    options: &Options,
+    sql: &str,
+    settings: Option<serde_json::Map<String, serde_json::Value>>,
 ) -> Result<StatementResponse, String> {
     let url = endpoint(options, "/v1/statement");
     let request = StatementRequest {
@@ -688,6 +761,7 @@ fn post_statement(
         client: "kaveon-cli",
         client_tags: &options.client_tags,
         result_delivery: if options.paged { "paged" } else { "inline" },
+        settings,
     };
     let response = client
         .request(reqwest::Method::POST, &url)?

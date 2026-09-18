@@ -94,8 +94,8 @@ const GROUPS: &[Group] = &[
                 description: "ends with ; and may span lines; Ctrl-Enter forces a run",
             },
             Entry {
-                command: "EXPLAIN <statement>",
-                description: "the logical plan as a tree",
+                command: "EXPLAIN [ANALYZE] <statement>",
+                description: "the plan as a tree; ANALYZE runs it and adds each task's cost",
             },
             Entry {
                 command: "SET SESSION key = value; <statement>",

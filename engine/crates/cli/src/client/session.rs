@@ -145,6 +145,8 @@ pub struct QueryRecord {
     #[serde(default)]
     pub plan: Option<serde_json::Value>,
     #[serde(default)]
+    pub timings: Option<Timings>,
+    #[serde(default)]
     pub cached_from: Option<String>,
     /// The result's columns; the coordinator fills them once the statement
     /// is planned, so a running paged statement can be read by its pages.
@@ -164,12 +166,30 @@ pub struct Execution {
     pub detail: Option<String>,
 }
 
+/// The coordinator's phase timings, microseconds; each absent until the
+/// phase ran.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct Timings {
+    #[serde(default)]
+    pub analysis_us: Option<u64>,
+    #[serde(default)]
+    pub planning_us: Option<u64>,
+    #[serde(default)]
+    pub execution_us: Option<u64>,
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Stage {
+    #[serde(default)]
+    pub stage_id: u64,
+    #[serde(default)]
+    pub state: String,
     #[serde(default)]
     pub task_count: usize,
     #[serde(default)]
     pub completed_tasks: usize,
+    #[serde(default)]
+    pub elapsed_us: u64,
     #[serde(default)]
     pub tasks: Vec<Task>,
 }
@@ -178,6 +198,47 @@ pub struct Stage {
 pub struct Task {
     #[serde(default)]
     pub node_id: String,
+    #[serde(default)]
+    pub partition_index: u64,
+    #[serde(default)]
+    pub elapsed_us: u64,
+    #[serde(default)]
+    pub output_rows: u64,
+    #[serde(default)]
+    pub output_bytes: u64,
+    #[serde(default)]
+    pub execution: Option<TaskExecution>,
+    #[serde(default)]
+    pub scan: Option<TaskScan>,
+}
+
+/// A task's execution counters, the ones `EXPLAIN ANALYZE` shows.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct TaskExecution {
+    #[serde(default)]
+    pub compute_cpu_us: u64,
+    #[serde(default)]
+    pub compute_wall_us: u64,
+    #[serde(default)]
+    pub memory_peak_bytes: u64,
+    #[serde(default)]
+    pub spill_bytes_written: u64,
+    #[serde(default)]
+    pub exchange_input_bytes: u64,
+    #[serde(default)]
+    pub exchange_output_bytes: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct TaskScan {
+    #[serde(default)]
+    pub rows_selected: u64,
+    #[serde(default)]
+    pub rows_emitted: u64,
+    #[serde(default)]
+    pub compressed_bytes_selected: u64,
+    #[serde(default)]
+    pub read_ns: u64,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
