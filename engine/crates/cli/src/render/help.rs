@@ -1,0 +1,186 @@
+//! `.help` and `help`: the commands the shell accepts, grouped, one screen.
+use crate::theme::Theme;
+use ratatui::text::{Line, Span};
+
+const COLUMN: usize = 42;
+
+struct Entry {
+    command: &'static str,
+    description: &'static str,
+}
+
+struct Group {
+    title: &'static str,
+    entries: &'static [Entry],
+    /// Listed so the surface is known; rendered dim until each one ships.
+    coming_soon: bool,
+}
+
+const GROUPS: &[Group] = &[
+    Group {
+        title: "Catalog",
+        coming_soon: false,
+        entries: &[
+            Entry {
+                command: "SHOW CATALOGS",
+                description: "list catalogs",
+            },
+            Entry {
+                command: "SHOW SCHEMAS [IN catalog]",
+                description: "list schemas",
+            },
+            Entry {
+                command: "SHOW TABLES [IN [catalog.]schema]",
+                description: "list tables; add LIKE 'pattern' to filter",
+            },
+            Entry {
+                command: "DESCRIBE [catalog.][schema.]table",
+                description: "columns, types and nullability",
+            },
+            Entry {
+                command: "USE [catalog.]schema",
+                description: "switch the session catalog and schema",
+            },
+            Entry {
+                command: ".catalogs  .schemas  .tables  .describe  .use",
+                description: "the same, without a semicolon",
+            },
+        ],
+    },
+    Group {
+        title: "Shell",
+        coming_soon: false,
+        entries: &[
+            Entry {
+                command: "help",
+                description: "this text",
+            },
+            Entry {
+                command: "clear",
+                description: "clear the screen",
+            },
+            Entry {
+                command: "exit, quit, Ctrl-D",
+                description: "leave",
+            },
+            Entry {
+                command: "Ctrl-C",
+                description: "cancel the running statement, or clear the input",
+            },
+        ],
+    },
+    Group {
+        title: "Output",
+        coming_soon: false,
+        entries: &[
+            Entry {
+                command: "--output-format <NAME>",
+                description: "ALIGNED, VERTICAL, AUTO, MARKDOWN, CSV, TSV, JSON, NULL",
+            },
+            Entry {
+                command: "--theme <NAME>",
+                description: "dark, light, or mono; NO_COLOR is honoured",
+            },
+        ],
+    },
+    Group {
+        title: "Coming soon",
+        coming_soon: true,
+        entries: &[
+            Entry {
+                command: ".ask <question>",
+                description: "answer a question in plain language through the Kaveon DLM",
+            },
+            Entry {
+                command: "EXPLAIN <statement>",
+                description: "the plan as a tree, with stage placement",
+            },
+            Entry {
+                command: "live progress, Ctrl-C cancel",
+                description: "state, elapsed, tasks and rows scanned while a statement runs",
+            },
+            Entry {
+                command: "paged results",
+                description: "large results page on demand instead of failing at 16 MiB",
+            },
+            Entry {
+                command: ".queries  .kill <id>",
+                description: "statements running on the coordinator; cancel one",
+            },
+            Entry {
+                command: ".cluster",
+                description: "nodes, heartbeats, memory and admission",
+            },
+            Entry {
+                command: ".settings  SET SESSION",
+                description: "memory limit, parallelism, result cache, admission wait",
+            },
+            Entry {
+                command: ".format  .timing  .history",
+                description: "result format, elapsed-time toggle, recent statements",
+            },
+            Entry {
+                command: ".edit  .source <file>  .tee <file>",
+                description: "edit in $EDITOR, run a script, copy output to a file",
+            },
+            Entry {
+                command: "\\G  .watch <seconds>",
+                description: "vertical output for one statement; re-run on an interval",
+            },
+            Entry {
+                command: "Tab completion of names",
+                description: "catalogs, schemas, tables and columns from the catalog",
+            },
+        ],
+    },
+];
+
+pub fn help(theme: &Theme) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    for (index, group) in GROUPS.iter().enumerate() {
+        if index > 0 {
+            lines.push(Line::raw(""));
+        }
+        lines.push(Line::from(Span::styled(
+            format!("  {}", group.title),
+            theme.title,
+        )));
+        for entry in group.entries {
+            let padding = COLUMN.saturating_sub(entry.command.chars().count()).max(2);
+            let command_style = if group.coming_soon {
+                theme.dim
+            } else {
+                theme.accent
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!("    {}", entry.command), command_style),
+                Span::styled(
+                    format!("{}{}", " ".repeat(padding), entry.description),
+                    theme.dim,
+                ),
+            ]));
+        }
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        "  SQL statements end with ; and may span lines. Metadata commands run in the client over the catalog API.",
+        theme.dim,
+    )));
+    lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn help_is_grouped_and_lists_what_is_coming() {
+        let text = crate::render::to_plain(&help(&Theme::mono()));
+        assert!(text.contains("  Catalog\n    SHOW CATALOGS"));
+        assert!(text.contains("  Shell\n"));
+        assert!(text.contains("  Output\n"));
+        assert!(text.contains("  Coming soon\n    .ask <question>"));
+        assert!(text.lines().count() <= 40, "{}", text.lines().count());
+        assert!(text.lines().all(|line| line.chars().count() <= 118));
+    }
+}

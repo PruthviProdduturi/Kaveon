@@ -1,6 +1,7 @@
 //! Everything the client prints. `to_plain` strips styling for tests and
 //! for output that is not a terminal.
 pub mod cluster;
+pub mod help;
 
 use ratatui::text::Line;
 

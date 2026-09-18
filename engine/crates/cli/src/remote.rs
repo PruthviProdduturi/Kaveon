@@ -1055,14 +1055,10 @@ fn print_metadata(header: &str, names: Vec<String>, options: &Options) {
 }
 
 fn print_remote_help() {
-    println!(
-        "SQL metadata: SHOW CATALOGS|SCHEMAS|TABLES [IN scope] [LIKE 'pattern']; USE [catalog.]schema;"
-    );
-    println!("DESCRIBE [TABLE] [catalog.]schema.table; SHOW COLUMNS FROM [catalog.]schema.table;");
-    println!(
-        ".catalogs  .schemas [catalog]  .tables [[catalog.]schema]  .describe <table>  .use [catalog.]schema  .clear  .quit"
-    );
-    println!("Aliases: HELP, CLEAR, EXIT, QUIT (a trailing ; is accepted).");
+    let theme = crate::theme::Theme::detect("dark", io::stdout().is_terminal());
+    let lines = crate::render::help::help(&theme);
+    print!("{}", crate::render::to_ansi(&lines));
+    println!();
 }
 
 #[cfg(test)]
