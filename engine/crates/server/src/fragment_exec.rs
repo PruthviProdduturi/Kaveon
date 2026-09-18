@@ -2421,7 +2421,10 @@ mod tests {
                     let schema = schema.clone();
                     let chunk = chunk.to_vec();
                     Box::new(move || {
-                        Ok(Box::new(BatchInput::new(schema, chunk)) as Box<dyn BatchOperator>)
+                        Ok(Box::new(kaveon_exec::local_parallel::Unreserved(Box::new(
+                            BatchInput::new(schema, chunk),
+                        )))
+                            as Box<dyn kaveon_exec::local_parallel::ThreadSource>)
                     }) as kaveon_exec::local_parallel::SourceOpener
                 })
                 .collect(),
