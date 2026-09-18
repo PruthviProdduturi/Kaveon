@@ -117,6 +117,8 @@ replay reads at most 64 MiB of commit JSON; Iceberg metadata is capped at
 
 | Name | Config key | Default | Unit | What it bounds | Applies to | AKS qualification value |
 |---|---|---|---|---|---|---|
+| `KAVEON_RESULT_QUERY_DISK_LIMIT_BYTES` | none | 268435456 (256 MiB) | bytes | One paged result's disk on the coordinator (`result_delivery: paged`: the CLI's `--paged` and the shell's page reads, SQL Lab's streamed statements). A statement whose pages would exceed it fails with `query result disk quota exceeded (… MiB); raise KAVEON_RESULT_QUERY_DISK_LIMIT_BYTES on the coordinator, or narrow the result`. Must be positive. | coordinator | not set (default); the local Compose stack sets 2 GiB for its 504M-row lake |
+| `KAVEON_RESULT_DISK_LIMIT_BYTES` | none | 1073741824 (1 GiB) | bytes | Every paged result's disk together, on the coordinator; a page that would exceed it fails the statement naming the setting. Must be at least the query limit. Results expire after the store TTL (below). | coordinator | not set (default); the local Compose stack sets 4 GiB |
 | `KAVEON_RESULT_CACHE_BYTES` | `result_cache.bytes` | 268435456 (256 MiB); `0` disables the cache | bytes | The coordinator's budget for complete results of finished statements, evicted least-recently-used by bytes. A result larger than an eighth of the budget is never kept. Workers keep nothing whatever the value. | coordinator | not set (default) |
 | `KAVEON_RESULT_CACHE_TTL_SECONDS` | `result_cache.ttl_seconds` | 600 | seconds | How long a cached result may be served. Must be positive when the cache is enabled. | coordinator | not set (default) |
 
@@ -169,8 +171,8 @@ so that an operator knows what bounds a run. Changing one is a code change.
 | Resource group `queue_timeout_ms` | per group, in `KAVEON_SECURITY_JSON` | `security.rs` | How long a statement waits in its resource group's queue before HTTP 429. A statement passes its resource group before it reaches memory admission, so the two waits add. |
 
 Other fixed limits: query history keeps 100 records; inline (unpaged)
-results are capped at 16 MiB; the paged result store holds 256 MiB per
-query and 1 GiB per process in 4 MiB pages of at most 1000 rows; the
+results are capped at 16 MiB; the paged result store writes 4 MiB pages of
+at most 1000 rows (its per-query and per-process disk are settings, above); the
 catalog replica a worker downloads is at most 16 MiB; the worker task-reply
 cache holds 512 MiB per process; the in-memory exchange buffer (when no
 node spools) holds 512 MiB and 1024 exchanges.

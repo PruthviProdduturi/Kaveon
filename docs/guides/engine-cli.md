@@ -660,7 +660,9 @@ with the same kinds as the panel and the query id when the coordinator
 assigned one. Nothing is decorated: no header, no colour, no summary for
 machine formats, and the interactive row limit is not applied. Results are
 requested inline, which the coordinator caps at 16 MiB; pass `--paged` for a
-script whose result may exceed that.
+script whose result may exceed that. A paged result spools on the
+coordinator under `KAVEON_RESULT_QUERY_DISK_LIMIT_BYTES` (256 MiB unless the
+operator raised it; the failure names the setting).
 
 ## History
 

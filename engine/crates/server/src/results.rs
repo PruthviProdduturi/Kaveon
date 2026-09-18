@@ -23,8 +23,10 @@ use std::{
 
 const PAGE_ROWS: usize = 1_000;
 const PAGE_BYTES: usize = 4 * 1024 * 1024;
-const QUERY_BYTES: u64 = 256 * 1024 * 1024;
-const PROCESS_BYTES: u64 = 1024 * 1024 * 1024;
+/// The defaults of `KAVEON_RESULT_QUERY_DISK_LIMIT_BYTES` and
+/// `KAVEON_RESULT_DISK_LIMIT_BYTES`.
+pub const DEFAULT_QUERY_BYTES: u64 = 256 * 1024 * 1024;
+pub const DEFAULT_PROCESS_BYTES: u64 = 1024 * 1024 * 1024;
 const TTL: Duration = Duration::from_secs(900);
 const RETAINED_RESULTS: usize = 100;
 
@@ -32,10 +34,18 @@ const IN_PROGRESS: u8 = 0;
 const COMPLETE: u8 = 1;
 const ABORTED: u8 = 2;
 
-#[derive(Default)]
 pub struct ResultStore {
     results: Mutex<HashMap<String, Entry>>,
     used: Arc<AtomicU64>,
+    /// One result's disk, and the process's across results.
+    query_bytes: u64,
+    process_bytes: u64,
+}
+
+impl Default for ResultStore {
+    fn default() -> Self {
+        Self::with_limits(DEFAULT_QUERY_BYTES, DEFAULT_PROCESS_BYTES)
+    }
 }
 struct Entry {
     owner: String,
@@ -49,6 +59,8 @@ struct Entry {
 struct Pages {
     directory: PathBuf,
     used: Arc<AtomicU64>,
+    query_bytes: u64,
+    process_bytes: u64,
     bytes: AtomicU64,
     pages: AtomicUsize,
     rows: AtomicUsize,
@@ -71,6 +83,18 @@ pub enum ResultPage {
     Pending(Value),
 }
 impl ResultStore {
+    /// A store whose results may take `query_bytes` each and
+    /// `process_bytes` together (`KAVEON_RESULT_QUERY_DISK_LIMIT_BYTES`,
+    /// `KAVEON_RESULT_DISK_LIMIT_BYTES`).
+    pub fn with_limits(query_bytes: u64, process_bytes: u64) -> Self {
+        Self {
+            results: Mutex::new(HashMap::new()),
+            used: Arc::new(AtomicU64::new(0)),
+            query_bytes,
+            process_bytes,
+        }
+    }
+
     /// Removes a result. A complete result is forgotten outright; an
     /// in-progress one becomes a tombstone (`410 Gone` for the TTL) and its
     /// disk is released now, so a still-running writer fails on its next
@@ -127,6 +151,8 @@ impl ResultStore {
         let shared = Arc::new(Pages {
             directory,
             used: self.used.clone(),
+            query_bytes: self.query_bytes,
+            process_bytes: self.process_bytes,
             bytes: AtomicU64::new(0),
             pages: AtomicUsize::new(0),
             rows: AtomicUsize::new(0),
@@ -283,18 +309,24 @@ impl ResultWriter {
         }
         let encoded = serde_json::to_vec(&self.page)?;
         let bytes = encoded.len() as u64;
-        if shared.bytes.load(Ordering::Acquire) + bytes > QUERY_BYTES {
-            return Err(std::io::Error::other(
-                "query result disk quota exceeded (256 MiB)",
-            ));
+        if shared.bytes.load(Ordering::Acquire) + bytes > shared.query_bytes {
+            return Err(std::io::Error::other(format!(
+                "query result disk quota exceeded ({}); raise KAVEON_RESULT_QUERY_DISK_LIMIT_BYTES on the coordinator, or narrow the result",
+                mebibytes(shared.query_bytes)
+            )));
         }
         shared
             .used
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
                 used.checked_add(bytes)
-                    .filter(|total| *total <= PROCESS_BYTES)
+                    .filter(|total| *total <= shared.process_bytes)
             })
-            .map_err(|_| std::io::Error::other("process result disk quota exceeded (1 GiB)"))?;
+            .map_err(|_| {
+                std::io::Error::other(format!(
+                    "process result disk quota exceeded ({}); raise KAVEON_RESULT_DISK_LIMIT_BYTES on the coordinator, or wait for results to expire",
+                    mebibytes(shared.process_bytes)
+                ))
+            })?;
         shared.bytes.fetch_add(bytes, Ordering::AcqRel);
         fs::write(shared.directory.join(format!("{flushed}.json")), encoded)?;
         // Rows before pages: a reader that sees the new count sees at least
@@ -314,9 +346,55 @@ impl Drop for ResultWriter {
     }
 }
 
+/// `256 MiB`, `1.5 GiB`: the quota as people set it.
+fn mebibytes(bytes: u64) -> String {
+    const GIB: u64 = 1024 * 1024 * 1024;
+    const MIB: u64 = 1024 * 1024;
+    if bytes >= GIB && bytes.is_multiple_of(GIB / 2) {
+        let whole = bytes / GIB;
+        let half = (bytes % GIB) / (GIB / 2);
+        if half == 0 {
+            format!("{whole} GiB")
+        } else {
+            format!("{whole}.5 GiB")
+        }
+    } else {
+        format!("{} MiB", bytes / MIB)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_result_over_its_query_quota_fails_the_writer_and_names_the_setting() {
+        let store = ResultStore::with_limits(64, 1024);
+        let mut writer = store.begin("small", "owner").unwrap();
+        // The first page is bigger than 64 bytes: the flush that carries
+        // it fails, on push or on publish.
+        let mut failure = None;
+        for index in 0..PAGE_ROWS {
+            if let Err(error) = writer.push(vec![Value::from(index)]) {
+                failure = Some(error);
+                break;
+            }
+        }
+        let error = match failure {
+            Some(error) => error,
+            None => store.publish("small", writer).unwrap_err(),
+        }
+        .to_string();
+        assert!(
+            error.contains("query result disk quota exceeded (0 MiB)")
+                && error.contains("KAVEON_RESULT_QUERY_DISK_LIMIT_BYTES"),
+            "{error}"
+        );
+        assert_eq!(mebibytes(256 * 1024 * 1024), "256 MiB");
+        assert_eq!(mebibytes(1024 * 1024 * 1024), "1 GiB");
+        assert_eq!(mebibytes(3 * 512 * 1024 * 1024), "1.5 GiB");
+        assert_eq!(mebibytes(1000 * 1024 * 1024), "1000 MiB");
+    }
     use crate::security::Role;
 
     fn analyst(principal: &str) -> Identity {

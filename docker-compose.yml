@@ -65,6 +65,12 @@ services:
       # over the 504M-row local lake; these match the AKS coordinator.
       KAVEON_EXCHANGE_DISK_LIMIT_BYTES: ${KAVEON_EXCHANGE_DISK_LIMIT_BYTES:-25769803776}
       KAVEON_EXCHANGE_QUERY_DISK_LIMIT_BYTES: ${KAVEON_EXCHANGE_QUERY_DISK_LIMIT_BYTES:-17179869184}
+      # Paged results (the shell's pages, --paged scripts, SQL Lab streaming)
+      # spool on the coordinator too: 2 GiB per statement, 4 GiB together,
+      # so a script asking the 504M-row lake for a wide filter is not cut
+      # off at the 256 MiB default.
+      KAVEON_RESULT_QUERY_DISK_LIMIT_BYTES: ${KAVEON_RESULT_QUERY_DISK_LIMIT_BYTES:-2147483648}
+      KAVEON_RESULT_DISK_LIMIT_BYTES: ${KAVEON_RESULT_DISK_LIMIT_BYTES:-4294967296}
       # The durable product catalog on the coordinator's state volume: the
       # transaction API and native ANALYZE (exact statistics for the planner),
       # the same profile docker-compose.kavedb.yml runs standalone.
