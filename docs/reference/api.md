@@ -44,6 +44,24 @@ All paths below are relative to the FastAPI origin.
   currently implemented.
 - Authorization differs by route. Do not infer write permission merely from an
   authenticated session; inspect the generated OpenAPI schema and router dependency.
+- <a id="streaming-pages"></a>**Streaming pages (Engine).** A statement submitted with
+  `result_delivery: "paged"` registers its pages the moment its record becomes
+  `RUNNING`, and its record (`GET /v1/query/{id}`, the `GET /v1/query` list)
+  carries `next_uri: "/v1/query/{id}/results/0"` from then on, kept once it
+  finishes; inline statements' records have no `next_uri`. Pages are written
+  every 1,000 rows or 4 MiB and are readable as soon as their file is complete,
+  while execution continues. `GET /v1/query/{id}/results/{n}` answers `200`
+  with `{"id", "data": [...rows], "next_uri", "row_count", "complete"}` when
+  page `n` is written — `row_count` is the rows written so far (the total once
+  `complete` is true) and `next_uri` is non-null whenever page `n + 1` exists or
+  the statement is still running, so a client follows it until it is `null`;
+  `202 Accepted` with `Retry-After: 1` and `{"id", "row_count", "complete":
+  false}` when `n` is exactly the next page not yet written; `404` for a page
+  past the end, an unknown or expired result, or another owner's; `410 Gone`
+  when the statement failed or was cancelled after its pages were registered.
+  The final `POST /v1/statement` response is unchanged: it carries `next_uri`
+  for page 0 once the result is complete. Catalog statements and `ANALYZE`
+  answer inline regardless of the requested delivery.
 
 ## Engine HTTP path — alpha
 
@@ -69,7 +87,7 @@ The Rust server exposes these routes:
 | `GET`, `PUT`, `DELETE` | `/v1/catalog/tables/{table_id}` | Read, revision-replace, or delete a durable table definition |
 | `GET` | `/v1/catalog/{catalog}/schema` | List schemas |
 | `GET` | `/v1/catalog/{catalog}/schema/{schema}/table` | List tables |
-| `GET` | `/v1/query/{query_id}/results/{page}` | One page of a paged result (owner-scoped, immutable, 15 min TTL) |
+| `GET` | `/v1/query/{query_id}/results/{page}` | One page of a paged result, served while the statement still runs (owner-scoped, immutable once written, 15 min TTL): `200` with the rows, `202` + `Retry-After: 1` for the next page not yet flushed, `404` past the end or unknown, `410` when the statement failed or was cancelled — see [Streaming pages](#streaming-pages) |
 | `GET` | `/v1/whoami` | The identity the security layer attached to the request: `principal`, `display` (null unless a validated sign-in supplied one), `role` (`reader`, `analyst`, `admin`) and `auth` (`static`, `bridge`, `entra`, `development`, `internal`). The client shows it in its session header; older coordinators answer 404 and the client hides the line |
 | `GET` | `/v1/capabilities`, `/v1/statistics`, `/v1/auth/config` | What the coordinator supports (native `ANALYZE`, transactions), published exact statistics, and the Entra sign-in configuration for the UI |
 | `POST` | `/v1/transaction`, `/v1/transaction/sql`, `/v1/transaction/{id}/stage`, `…/commit`, `…/rollback`, `…/recovery`; `GET` `/v1/transaction/metrics`, `/v1/products/{kind}`, `/v1/product/{kind}/{id}` | The bounded product-record transaction protocol and typed product reads; see the [SQL compatibility reference](engine-sql-compatibility.md#transaction-api-boundary) |

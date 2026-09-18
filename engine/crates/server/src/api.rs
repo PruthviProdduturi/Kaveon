@@ -111,6 +111,11 @@ struct QueryRecord {
     /// zero when it was admitted on arrival. Not part of `elapsed_ms`,
     /// which starts at admission.
     admission_wait_ms: u64,
+    /// Where a paged statement's first page is served, from the moment it
+    /// runs: pages stream while the statement executes. Absent for inline
+    /// delivery.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_uri: Option<String>,
     id: String,
     sql: String,
     state: QueryState,
@@ -1575,6 +1580,13 @@ fn admission_rejected_response(error: String, admission_wait_ms: u64) -> Respons
         .into_response()
 }
 
+/// The record's `next_uri` for a paged statement: its first page, served
+/// while the statement runs. `None` for inline delivery.
+fn paged_next_uri(query_id: &str, context: &QueryContext) -> Option<String> {
+    (context.result_delivery.as_deref() == Some("paged"))
+        .then(|| format!("/v1/query/{query_id}/results/0"))
+}
+
 /// A statement's record before it has produced anything: queued for
 /// admission, or admitted and running.
 fn pending_query_record(
@@ -1594,6 +1606,9 @@ fn pending_query_record(
         cached_from: None,
         cached_elapsed_ms: None,
         admission_wait_ms,
+        next_uri: matches!(state, QueryState::Running)
+            .then(|| paged_next_uri(query_id, context))
+            .flatten(),
         id: query_id.to_owned(),
         sql: sql.to_owned(),
         state,
@@ -1876,7 +1891,7 @@ async fn submit_statement(
         return lifecycle_error_response(error.to_string());
     }
 
-    {
+    let mut result_writer = {
         // A cancellation that landed while the statement was queued keeps
         // its record; the same lock `cancel_query` takes, so neither side
         // overwrites the other.
@@ -1890,6 +1905,38 @@ async fn submit_statement(
             drop(store);
             return canceled_task_response();
         }
+        // A paged statement's pages are registered under the same lock that
+        // makes its record RUNNING with `next_uri`: a client following the
+        // link is told to wait (202) until the first page lands, never told
+        // the result is unknown, and the pages stream while the statement
+        // runs. Every early return below drops the writer, which turns the
+        // entry into a `410 Gone` tombstone.
+        let result_writer = if paged {
+            match state.results.begin(&query_id, &identity.principal) {
+                Ok(writer) => Some(writer),
+                Err(error) => {
+                    let mut record = pending_query_record(
+                        &query_id,
+                        &sql,
+                        &settings,
+                        submitted_at_ms,
+                        &context,
+                        QueryState::Failed,
+                        admission_wait_ms,
+                    );
+                    record.error = Some(error.to_string());
+                    record.completed_at_ms = unix_time_ms();
+                    store.queries.insert(query_id.clone(), record);
+                    drop(store);
+                    return task_failure_response(
+                        StatusCode::INSUFFICIENT_STORAGE,
+                        "result disk quota or write failure",
+                    );
+                }
+            }
+        } else {
+            None
+        };
         store.queries.insert(
             query_id.clone(),
             pending_query_record(
@@ -1902,8 +1949,11 @@ async fn submit_statement(
                 admission_wait_ms,
             ),
         );
-    }
+        result_writer
+    };
 
+    // Catalog and ANALYZE statements answer inline whatever the delivery;
+    // their finished record drops `next_uri` and the writer with it.
     if let Some(statement) = catalog_statement {
         return execute_catalog(&state, &identity, &query_id, &context, statement, start).await;
     }
@@ -1977,7 +2027,7 @@ async fn submit_statement(
     {
         let mut data = (*hit.rows).clone();
         let next_uri = if paged {
-            match spool_rows(&state, &query_id, &identity.principal, &mut data) {
+            match spool_rows(&state, &query_id, result_writer.take(), &mut data) {
                 Ok(uri) => Some(uri),
                 Err(error) => {
                     finish_failed_query(
@@ -2007,6 +2057,7 @@ async fn submit_statement(
             cached_from: Some(hit.query_id.clone()),
             cached_elapsed_ms: Some(hit.elapsed_ms),
             admission_wait_ms,
+            next_uri: paged_next_uri(&query_id, &context),
             id: query_id.clone(),
             sql,
             state: QueryState::Finished,
@@ -2057,7 +2108,10 @@ async fn submit_statement(
         &plan,
         &catalog_snapshot,
         &planning_source_pins,
-        &mut placement_reason,
+        DistributedSink {
+            placement_reason: &mut placement_reason,
+            result_writer: &mut result_writer,
+        },
     )
     .await
     {
@@ -2066,7 +2120,7 @@ async fn submit_statement(
                 let mut result = result;
                 keep_result(&state, &cache_key, &result, start, &query_id, paged);
                 let next_uri = if paged {
-                    match spool_rows(&state, &query_id, &identity.principal, &mut result.data) {
+                    match spool_rows(&state, &query_id, result_writer.take(), &mut result.data) {
                         Ok(uri) => Some(uri),
                         Err(error) => {
                             finish_failed_query(
@@ -2099,6 +2153,7 @@ async fn submit_statement(
                     cached_from: None,
                     cached_elapsed_ms: None,
                     admission_wait_ms,
+                    next_uri: paged_next_uri(&query_id, &context),
                     id: query_id.clone(),
                     sql,
                     state: QueryState::Finished,
@@ -2178,7 +2233,7 @@ async fn submit_statement(
                 let mut result = result;
                 keep_result(&state, &cache_key, &result, start, &query_id, paged);
                 let next_uri = if paged {
-                    match spool_rows(&state, &query_id, &identity.principal, &mut result.data) {
+                    match spool_rows(&state, &query_id, result_writer.take(), &mut result.data) {
                         Ok(uri) => Some(uri),
                         Err(error) => {
                             finish_failed_query(
@@ -2212,6 +2267,7 @@ async fn submit_statement(
                     cached_from: None,
                     cached_elapsed_ms: None,
                     admission_wait_ms,
+                    next_uri: paged_next_uri(&query_id, &context),
                     id: query_id.clone(),
                     sql,
                     state: QueryState::Finished,
@@ -2284,7 +2340,7 @@ async fn submit_statement(
                 let mut result = result;
                 keep_result(&state, &cache_key, &result, start, &query_id, paged);
                 let next_uri = if paged {
-                    match spool_rows(&state, &query_id, &identity.principal, &mut result.data) {
+                    match spool_rows(&state, &query_id, result_writer.take(), &mut result.data) {
                         Ok(uri) => Some(uri),
                         Err(error) => {
                             finish_failed_query(
@@ -2318,6 +2374,7 @@ async fn submit_statement(
                     cached_from: None,
                     cached_elapsed_ms: None,
                     admission_wait_ms,
+                    next_uri: paged_next_uri(&query_id, &context),
                     id: query_id.clone(),
                     sql,
                     state: QueryState::Finished,
@@ -2382,14 +2439,6 @@ async fn submit_statement(
         }
     }
 
-    let mut result_writer = if paged {
-        match state.results.writer() {
-            Ok(writer) => Some(writer),
-            Err(_) => return StatusCode::INSUFFICIENT_STORAGE.into_response(),
-        }
-    } else {
-        None
-    };
     let local_catalog_snapshot = Arc::clone(&catalog_snapshot);
     // Build non-Send operators inside the blocking task. Retain admission until
     // both execution and result publication complete, even if the HTTP future drops.
@@ -2498,6 +2547,7 @@ async fn submit_statement(
                 cached_from: None,
                 cached_elapsed_ms: None,
                 admission_wait_ms,
+                next_uri: paged_next_uri(&query_id, &context),
                 id: query_id.clone(),
                 sql: sql.clone(),
                 state: QueryState::Failed,
@@ -2568,11 +2618,7 @@ async fn submit_statement(
         );
     }
     let next_uri = if let Some(writer) = result_writer {
-        if state
-            .results
-            .publish(&query_id, &identity.principal, writer)
-            .is_err()
-        {
+        if state.results.publish(&query_id, writer).is_err() {
             finish_failed_query(
                 &query_id,
                 "result disk quota or write failure".into(),
@@ -2599,6 +2645,7 @@ async fn submit_statement(
         cached_from: None,
         cached_elapsed_ms: None,
         admission_wait_ms,
+        next_uri: paged_next_uri(&query_id, &context),
         id: query_id.clone(),
         sql,
         state: QueryState::Finished,
@@ -2938,6 +2985,7 @@ async fn execute_analyze(
     ]];
     if let Some(record) = QUERY_STORE.write().await.queries.get_mut(query_id) {
         record.state = QueryState::Finished;
+        record.next_uri = None;
         record.columns = columns.clone();
         record.rows = rows.clone();
         record.elapsed_ms = elapsed;
@@ -2992,6 +3040,7 @@ async fn execute_catalog(
     let elapsed = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
     if let Some(record) = QUERY_STORE.write().await.queries.get_mut(query_id) {
         record.state = QueryState::Finished;
+        record.next_uri = None;
         record.columns = result.columns.clone();
         record.rows = result.rows.clone();
         record.elapsed_ms = elapsed;
@@ -3380,21 +3429,28 @@ async fn prune_query_history() {
     }
 }
 
+/// Pages the rows a path collected in memory through the statement's writer
+/// and completes the result. Without a writer the path streamed the rows
+/// itself and already published; the result must then be registered.
 fn spool_rows(
     state: &AppState,
     id: &str,
-    principal: &str,
+    writer: Option<crate::results::ResultWriter>,
     rows: &mut Vec<Vec<serde_json::Value>>,
 ) -> std::io::Result<String> {
-    if state.results.contains(id) {
-        return Ok(format!("/v1/query/{id}/results/0"));
-    }
-    let mut writer = state.results.writer()?;
+    let uri = format!("/v1/query/{id}/results/0");
+    let Some(mut writer) = writer else {
+        return if state.results.contains(id) {
+            Ok(uri)
+        } else {
+            Err(std::io::Error::other("paged result was not published"))
+        };
+    };
     for row in rows.drain(..) {
         writer.push(row)?;
     }
-    state.results.publish(id, principal, writer)?;
-    Ok(format!("/v1/query/{id}/results/0"))
+    state.results.publish(id, writer)?;
+    Ok(uri)
 }
 
 fn spool_operator(
@@ -3434,7 +3490,13 @@ async fn get_result_page(
     Extension(identity): Extension<Identity>,
 ) -> Response {
     match state.results.page(&id, page, &identity) {
-        Ok(value) => Json(value).into_response(),
+        Ok(crate::results::ResultPage::Ready(value)) => Json(value).into_response(),
+        Ok(crate::results::ResultPage::Pending(value)) => (
+            StatusCode::ACCEPTED,
+            [(axum::http::header::RETRY_AFTER, "1")],
+            Json(value),
+        )
+            .into_response(),
         Err(status) => status.into_response(),
     }
 }
@@ -4671,6 +4733,14 @@ fn workers_for_catalog_snapshot(
     Ok(compatible)
 }
 
+/// What a distributed run writes back besides its result: why the
+/// coordinator ran the statement instead, and the paged writer its root
+/// tasks stream into (`None` for inline delivery; taken once published).
+struct DistributedSink<'a> {
+    placement_reason: &'a mut Option<String>,
+    result_writer: &'a mut Option<crate::results::ResultWriter>,
+}
+
 async fn execute_distributed_fragments(
     state: &Arc<AppState>,
     query_id: &str,
@@ -4678,8 +4748,12 @@ async fn execute_distributed_fragments(
     plan: &LogicalPlan,
     catalog_snapshot: &kaveon_core::CatalogManager,
     pins: &SourcePins,
-    placement_reason: &mut Option<String>,
+    sink: DistributedSink<'_>,
 ) -> Option<Result<(TaskResponse, Vec<StageTelemetry>, u64), String>> {
+    let DistributedSink {
+        placement_reason,
+        result_writer,
+    } = sink;
     if exact_metadata_count_plan(plan) {
         *placement_reason = Some("exact count answered from table metadata".to_owned());
         return None;
@@ -4764,14 +4838,6 @@ async fn execute_distributed_fragments(
     let mut result_schema = None;
     let mut result_batches = Vec::new();
     let mut result_bytes = 0usize;
-    let mut result_writer = if context.result_delivery.as_deref() == Some("paged") {
-        match state.results.writer() {
-            Ok(writer) => Some(writer),
-            Err(error) => return Some(Err(error.to_string())),
-        }
-    } else {
-        None
-    };
 
     while !orchestrator.is_terminal() {
         if cancellation.is_cancelled() {
@@ -4938,12 +5004,8 @@ async fn execute_distributed_fragments(
             record_stage_task(&mut stages, stage_id.0, task_count, stage_elapsed_us, task);
         }
     }
-    let data = if let Some(writer) = result_writer {
-        if let Err(error) = state.results.publish(
-            query_id,
-            context.principal.as_deref().unwrap_or("internal"),
-            writer,
-        ) {
+    let data = if let Some(writer) = result_writer.take() {
+        if let Err(error) = state.results.publish(query_id, writer) {
             return Some(Err(error.to_string()));
         }
         Vec::new()
@@ -7066,6 +7128,160 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_paged_statement_record_advertises_its_pages_while_running() {
+        // The record a paged statement gets the moment it runs links its
+        // first page; a queued record and an inline statement's do not.
+        let context = |delivery: Option<&str>| super::QueryContext {
+            engine_version: String::new(),
+            environment: String::new(),
+            principal: None,
+            user: None,
+            source: None,
+            client: None,
+            catalog: "lake".into(),
+            schema: "sales".into(),
+            time_zone: None,
+            client_address: None,
+            client_tags: vec![],
+            result_delivery: delivery.map(str::to_owned),
+            catalog_snapshot_id: String::new(),
+            settings: super::QuerySettings::default(),
+        };
+        let pending = |delivery: Option<&str>, state: super::QueryState| {
+            serde_json::to_value(super::pending_query_record(
+                "q",
+                "SELECT 1",
+                &super::QuerySettings::default(),
+                0,
+                &context(delivery),
+                state,
+                0,
+            ))
+            .unwrap()
+        };
+        assert_eq!(
+            pending(Some("paged"), super::QueryState::Running)["next_uri"],
+            "/v1/query/q/results/0"
+        );
+        assert!(
+            pending(Some("paged"), super::QueryState::Queued)
+                .get("next_uri")
+                .is_none()
+        );
+        assert!(
+            pending(None, super::QueryState::Running)
+                .get("next_uri")
+                .is_none()
+        );
+
+        // While the statement runs, the page it has not flushed yet is a 202
+        // the client retries; the record and its pages are owner-scoped.
+        let (state, _commit, _directory) = analyze_test_state().await;
+        let analyst = crate::security::Identity {
+            principal: "analyst".into(),
+            display_identity: None,
+            role: Role::Analyst,
+        };
+        let other = crate::security::Identity {
+            principal: "other".into(),
+            display_identity: None,
+            role: Role::Analyst,
+        };
+        let page = |state: &Arc<crate::AppState>,
+                    id: &str,
+                    index: usize,
+                    identity: &crate::security::Identity| {
+            let state = state.clone();
+            let id = id.to_owned();
+            let identity = identity.clone();
+            async move {
+                let response = super::get_result_page(
+                    axum::extract::State(state),
+                    axum::extract::Path((id, index)),
+                    axum::Extension(identity),
+                )
+                .await;
+                let status = response.status();
+                let retry_after = response
+                    .headers()
+                    .get(axum::http::header::RETRY_AFTER)
+                    .map(|value| value.to_str().unwrap().to_owned());
+                let body = if status == axum::http::StatusCode::OK
+                    || status == axum::http::StatusCode::ACCEPTED
+                {
+                    json_body(response).await
+                } else {
+                    serde_json::Value::Null
+                };
+                (status, retry_after, body)
+            }
+        };
+        let mut writer = state.results.begin("running", "analyst").unwrap();
+        writer.push(vec![serde_json::json!(1)]).unwrap();
+        let (status, retry_after, body) = page(&state, "running", 0, &analyst).await;
+        assert_eq!(status, axum::http::StatusCode::ACCEPTED, "{body}");
+        assert_eq!(retry_after.as_deref(), Some("1"));
+        assert_eq!(
+            body,
+            serde_json::json!({"id": "running", "row_count": 0, "complete": false})
+        );
+        assert_eq!(
+            page(&state, "running", 0, &other).await.0,
+            axum::http::StatusCode::NOT_FOUND
+        );
+        drop(writer);
+        assert_eq!(
+            page(&state, "running", 0, &analyst).await.0,
+            axum::http::StatusCode::GONE
+        );
+
+        // A finished paged statement keeps the link on its record and its
+        // last page says so.
+        let sql = "SELECT id FROM orders WHERE id > 1 ORDER BY id";
+        let (status, paged) = submit_with_delivery(
+            &state,
+            &analyst,
+            sql,
+            serde_json::Value::Null,
+            Some("paged"),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{paged}");
+        let id = paged["id"].as_str().unwrap().to_owned();
+        let first_page = format!("/v1/query/{id}/results/0");
+        assert_eq!(paged["next_uri"], first_page);
+        let finished = record(&id, &analyst).await;
+        assert_eq!(finished["state"], "FINISHED");
+        assert_eq!(finished["next_uri"], first_page);
+        let (status, _, body) = page(&state, &id, 0, &analyst).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "id": id,
+                "data": [[2], [3]],
+                "next_uri": null,
+                "row_count": 2,
+                "complete": true,
+            })
+        );
+        assert_eq!(
+            page(&state, &id, 1, &analyst).await.0,
+            axum::http::StatusCode::NOT_FOUND
+        );
+
+        // An inline statement's record never links pages.
+        let (status, inline) = submit(&state, &analyst, sql, serde_json::Value::Null).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{inline}");
+        assert!(
+            record(inline["id"].as_str().unwrap(), &analyst)
+                .await
+                .get("next_uri")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
     async fn a_repeated_statement_is_served_from_the_result_cache() {
         let (state, _commit, directory) = analyze_test_state().await;
         let analyst = crate::security::Identity {
@@ -7769,7 +7985,10 @@ mod tests {
             &plan,
             &snapshot,
             &SourcePins::default(),
-            &mut reason,
+            super::DistributedSink {
+                placement_reason: &mut reason,
+                result_writer: &mut None,
+            },
         )
         .await;
         assert!(outcome.is_none());
