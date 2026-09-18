@@ -59,11 +59,15 @@ cd Kaveon
 ```
 
 Create `.env` at the repository root (it is gitignored). The only value the
-stack needs is the host directory to mount at `/data` in every Engine container:
+stack needs is the host directory to mount at `/data` in every Engine
+container. Give it as an absolute path: Compose resolves a relative path
+against the directory it is started from, so a project started from another
+checkout or worktree would mount an empty directory and the catalog would
+register nothing.
 
 ```ini
-# Host directory mounted at /data in the Engine containers (relative to the repo root).
-KAVEON_DATA_PATH=./tmp/kaveon-events
+# Host directory mounted at /data in the Engine containers. Absolute path.
+KAVEON_DATA_PATH=D:/Repos/Kaveon/tmp/kaveon-events
 ```
 
 If your network blocks the public package CDNs (some corporate networks and
