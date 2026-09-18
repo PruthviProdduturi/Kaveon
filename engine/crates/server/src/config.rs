@@ -793,6 +793,23 @@ fn build_local_catalog(name: &str, dir: &Path) -> MemoryCatalog {
                         },
                     );
                 }
+            } else if path.is_dir() {
+                // A directory of Parquet files without a Delta log is a
+                // Parquet table; one that holds no data files is not.
+                if let Some(table_name) = path.file_name().and_then(|s| s.to_str())
+                    && let Ok(meta) = ParquetReader::new(&path).metadata()
+                {
+                    let _ = catalog.register_table(
+                        "default",
+                        TableMeta {
+                            name: table_name.to_owned(),
+                            arrow_schema: meta.schema,
+                            location: table_name.to_owned(),
+                            access: AccessPattern::Shortcut,
+                            format: DataFormat::Parquet,
+                        },
+                    );
+                }
             } else if path.extension().is_some_and(|e| e == "parquet")
                 && let Some(table_name) = path.file_stem().and_then(|s| s.to_str())
                 && let Ok(meta) = ParquetReader::new(&path).metadata()
@@ -980,6 +997,53 @@ mod tests {
         let path = std::env::temp_dir().join(format!("kaveon-server-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    /// A data directory registers `*.parquet` files, Delta directories and
+    /// directories of Parquet files; a directory holding no data files, or a
+    /// file that is not data, registers nothing.
+    #[test]
+    fn a_data_directory_registers_directory_parquet_tables() {
+        use kaveon_core::CatalogProvider;
+        let directory = temporary_directory();
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![Field::new(
+            "id",
+            DataType::Int64,
+            false,
+        )]));
+        let write = |path: &std::path::Path, values: Vec<i64>| {
+            let batch = arrow::record_batch::RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(arrow::array::Int64Array::from(values))],
+            )
+            .unwrap();
+            let mut writer = parquet::arrow::ArrowWriter::try_new(
+                std::fs::File::create(path).unwrap(),
+                Arc::clone(&schema),
+                None,
+            )
+            .unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+        };
+        write(&directory.join("single.parquet"), vec![1]);
+        std::fs::create_dir_all(directory.join("parts")).unwrap();
+        write(&directory.join("parts").join("part-0.parquet"), vec![2]);
+        write(&directory.join("parts").join("part-1.parquet"), vec![3]);
+        std::fs::write(directory.join("parts").join("_SUCCESS"), b"").unwrap();
+        std::fs::create_dir_all(directory.join("notes")).unwrap();
+        std::fs::write(directory.join("notes").join("readme.txt"), b"x").unwrap();
+        std::fs::create_dir_all(directory.join("empty")).unwrap();
+
+        let catalog = super::build_local_catalog("kaveon", &directory);
+        let mut tables = catalog.table_names("default").unwrap();
+        tables.sort();
+        assert_eq!(tables, ["parts", "single"]);
+        let parts = catalog.table("default", "parts").unwrap().unwrap();
+        assert_eq!(parts.location, "parts");
+        assert_eq!(parts.format, DataFormat::Parquet);
+        assert_eq!(parts.arrow_schema, schema);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
