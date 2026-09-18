@@ -31,7 +31,7 @@ pub fn highlight(text: &str, theme: &Theme) -> Vec<Line<'static>> {
 fn style_of(token: &Token, theme: &Theme) -> Style {
     match token {
         Token::Word(word) if word.quote_style.is_none() && word.keyword != Keyword::NoKeyword => {
-            theme.title
+            theme.keyword
         }
         Token::SingleQuotedString(_)
         | Token::DollarQuotedString(_)
@@ -171,13 +171,13 @@ mod tests {
                     .map(|span| (span.content.to_string(), span.style))
             })
             .collect();
-        assert_eq!(styles[0], ("SELECT".to_owned(), theme.title));
+        assert_eq!(styles[0], ("SELECT".to_owned(), theme.keyword));
         assert_eq!(styles[1], (" ".to_owned(), Style::default()));
         assert_eq!(styles[2], ("'x'".to_owned(), theme.ok));
         assert!(styles.contains(&("42".to_owned(), Style::default())));
         assert!(styles.contains(&("-- note".to_owned(), theme.dim)));
         assert_eq!(lines[1].spans[0].content, "FROM");
-        assert_eq!(lines[1].spans[0].style, theme.title);
+        assert_eq!(lines[1].spans[0].style, theme.keyword);
         assert_eq!(lines[1].spans[2].content, "t");
         assert_eq!(lines[1].spans[2].style, Style::default());
     }
@@ -205,7 +205,7 @@ mod tests {
         let theme = theme();
         let lines = highlight("SELECT 'open", &theme);
         assert_eq!(lines[0].spans[0].content, "SELECT");
-        assert_eq!(lines[0].spans[0].style, theme.title);
+        assert_eq!(lines[0].spans[0].style, theme.keyword);
         assert_eq!(lines[0].spans.last().unwrap().content, "'open");
         assert_eq!(lines[0].spans.last().unwrap().style, Style::default());
     }

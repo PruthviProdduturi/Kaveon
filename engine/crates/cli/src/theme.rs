@@ -10,9 +10,12 @@ pub const KAVEON_BLUE_DARK: Color = Color::Rgb(45, 125, 210);
 /// catalog, then the schema, each a shade lighter than the word before it.
 pub const KAVEON_BLUE_LIGHT: Color = Color::Rgb(128, 190, 240);
 pub const KAVEON_BLUE_LIGHTER: Color = Color::Rgb(184, 218, 247);
+/// SQL keywords in the editor: the lightest step, lighter than the schema.
+pub const KAVEON_BLUE_LIGHTEST: Color = Color::Rgb(214, 234, 251);
 /// On a light background the steps go darker instead.
 pub const KAVEON_BLUE_DARKER: Color = Color::Rgb(30, 95, 165);
 pub const KAVEON_BLUE_DARKEST: Color = Color::Rgb(20, 70, 125);
+pub const KAVEON_BLUE_INK: Color = Color::Rgb(12, 50, 95);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Theme {
@@ -26,6 +29,8 @@ pub struct Theme {
     pub catalog: Style,
     /// The session schema: a shade lighter than the catalog.
     pub schema: Style,
+    /// SQL keywords in the editor: lighter than the schema, bold.
+    pub keyword: Style,
     /// No colour: `--theme mono`, `NO_COLOR`, `TERM=dumb`, or not a TTY.
     pub plain: bool,
 }
@@ -39,10 +44,20 @@ impl Theme {
         if plain {
             return Theme::mono();
         }
-        let (accent, catalog, schema) = if flag == "light" {
-            (KAVEON_BLUE_DARK, KAVEON_BLUE_DARKER, KAVEON_BLUE_DARKEST)
+        let (accent, catalog, schema, keyword) = if flag == "light" {
+            (
+                KAVEON_BLUE_DARK,
+                KAVEON_BLUE_DARKER,
+                KAVEON_BLUE_DARKEST,
+                KAVEON_BLUE_INK,
+            )
         } else {
-            (KAVEON_BLUE, KAVEON_BLUE_LIGHT, KAVEON_BLUE_LIGHTER)
+            (
+                KAVEON_BLUE,
+                KAVEON_BLUE_LIGHT,
+                KAVEON_BLUE_LIGHTER,
+                KAVEON_BLUE_LIGHTEST,
+            )
         };
         Theme {
             accent: Style::default().fg(accent),
@@ -53,6 +68,7 @@ impl Theme {
             title: Style::default().fg(accent).add_modifier(Modifier::BOLD),
             catalog: Style::default().fg(catalog),
             schema: Style::default().fg(schema),
+            keyword: Style::default().fg(keyword).add_modifier(Modifier::BOLD),
             plain: false,
         }
     }
@@ -68,6 +84,7 @@ impl Theme {
             title: none,
             catalog: none,
             schema: none,
+            keyword: none,
             plain: true,
         }
     }
