@@ -210,8 +210,32 @@ pub fn stats(
             ]
         })
         .collect();
-    let (table, _) = styled_cells(&headings, &cells, width, theme);
-    lines.extend(table);
+    let (rendered, _) = styled_cells(&headings, &cells, width, theme);
+    lines.extend(rendered);
+    // Distinct counts are opt-in (a scan per column); say how to get the
+    // missing ones rather than leave a column of dashes to be wondered at.
+    let uncounted = columns
+        .iter()
+        .filter(|row| field(row, "distinct_values_count").is_none_or(|value| value.is_null()))
+        .count();
+    if uncounted > 0 && !columns.is_empty() {
+        let target = table.unwrap_or("<table>");
+        let what = if uncounted == columns.len() {
+            "distinct values are not counted".to_owned()
+        } else {
+            format!(
+                "distinct values are counted for {} of {} columns",
+                columns.len() - uncounted,
+                columns.len()
+            )
+        };
+        lines.push(Line::from(Span::styled(
+            format!(
+                " {what} — ANALYZE {target} WITH (distinct = true) counts every column, WITH (columns = ARRAY['a', 'b']) some"
+            ),
+            theme.dim,
+        )));
+    }
     lines
 }
 
@@ -492,7 +516,8 @@ mod tests {
 ├────────┼─────────┼──────────┼───────┼──────────┼────────┼─────────┤\n\
 │ id     │ bigint  │ 22.9 MiB │ 0.0 % │ —        │ 1      │ 3000000 │\n\
 │ city   │ varchar │ 17.3 MiB │ 1.3 % │      412 │ Aachen │ Zürich  │\n\
-└────────┴─────────┴──────────┴───────┴──────────┴────────┴─────────┘\n"
+└────────┴─────────┴──────────┴───────┴──────────┴────────┴─────────┘\n\
+ distinct values are counted for 1 of 2 columns — ANALYZE lake.sales.orders WITH (distinct = true) counts every column, WITH (columns = ARRAY['a', 'b']) some\n"
         );
     }
 
