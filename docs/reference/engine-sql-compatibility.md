@@ -27,7 +27,7 @@ by the selected database and Kaveon's API guardrails.
 | Window functions | Alpha | `ROW_NUMBER`, `RANK`, `DENSE_RANK`, `LAG`, `LEAD`, aggregates with `OVER (PARTITION BY … ORDER BY …)` and `ROWS`/`RANGE`/`GROUPS` frames |
 | Set operations | Alpha | `UNION [ALL]`, `INTERSECT`, `EXCEPT`, distributed (each side deduplicated on the workers) |
 | Date/time | Alpha | `EXTRACT`, `DATE_TRUNC`, `DATE_PART`, `TO_CHAR`, `NOW`, `CURRENT_DATE`, `CURRENT_TIMESTAMP`, `DATE '…'` literals, `date ± INTERVAL 'n' DAY`; `MONTH`/`YEAR` intervals only against a DATE literal |
-| Conditional, comparison and strings | Alpha | `CASE`, `COALESCE`, `BETWEEN`, `IN`, `LIKE`/`ILIKE` (Arrow kernels), `REGEXP_REPLACE`, `CAST`, concatenation, `UPPER`/`LOWER`/`LENGTH`/`TRIM`/`SUBSTR`/`REPEAT`/`REPLACE`/`LPAD`/`RPAD`; functions over dictionary columns run once per dictionary value |
+| Conditional, comparison and strings | Alpha | `CASE`, `COALESCE`, `BETWEEN`, `IN`, `LIKE`/`ILIKE` (Arrow kernels), `REGEXP_REPLACE`, `CAST`, concatenation, `UPPER`/`LOWER`/`LENGTH`/`TRIM`/`SUBSTR`/`REPEAT`/`REPLACE`/`LPAD`/`RPAD`; functions over dictionary columns run once per dictionary value the batch uses and keep a text result dictionary-encoded; `REGEXP_REPLACE` over plain text runs once per distinct value in the batch |
 | Literals against columns | Alpha | Integer literals push down to narrow integer and Date32 columns; integer and decimal literals meet double columns; text literals against Date32 columns are coerced on every reader |
 | `SUM(DISTINCT)`, `AVG(DISTINCT)` | Alpha | Exact mergeable distinct state |
 
