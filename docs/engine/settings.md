@@ -177,16 +177,30 @@ node spools) holds 512 MiB and 1024 exchanges.
 ## CLI variables
 
 These are read by the `kaveon` client (`engine/crates/cli/src/args.rs`,
-`auth.rs`), not by the server; the [CLI guide](../guides/engine-cli.md)
-describes them.
+`auth.rs`, `theme.rs`), not by the server; the
+[CLI guide](../guides/engine-cli.md) describes them. Each variable has a
+flag that overrides it; the defaults file (`KAVEON_CONFIG`) sits between
+the two: a flag beats the file, the file beats the built-in default.
 
 | Name | Default | What it sets |
 |---|---|---|
-| `KAVEON_CONFIG` | `~/.kaveon_config` | The `key=value` defaults file for the connection (coordinator URL, catalog, schema, options). |
-| `KAVEON_ACCESS_TOKEN` | none | The Engine bearer token for unattended use; `--access-token` overrides it, Azure login (`--auth`) is the interactive path. |
-| `KAVEON_CA_CERT` | none | A trusted PEM CA for the coordinator's TLS certificate (`--ca-cert`). |
-| `KAVEON_HISTORY_FILE` | the platform's default history location | The interactive history file (`--history-file`, `--no-history`). |
-| `KAVEON_PAGER` | none | An external pager for interactive output (`--pager`; empty disables). |
+| `KAVEON_CONFIG` | `~/.kaveon_config` when it exists | The `key=value` defaults file. Allowed keys: `server`, `catalog`, `schema`, `user`, `source`, `client-tags`, `auth`, `ca-cert`, `timeout`, `output-format`, `output-format-interactive`, `history-file`, `editing-mode`, `pager`, `theme`, `width`, `row-limit`. SQL and tokens are refused. |
+| `KAVEON_ACCESS_TOKEN` | none | The Engine bearer token for unattended use; `--access-token` overrides it. Without either, `--auth` decides (Azure CLI login, Microsoft device sign-in, or none). |
+| `KAVEON_CA_CERT` | none | A PEM CA bundle trusted for the coordinator's TLS certificate (`--ca-cert`). Never applied to Microsoft sign-in. |
+| `KAVEON_HISTORY_FILE` | `%APPDATA%\kaveon\history` on Windows, `~/.kaveon_history` elsewhere | The shell's history file (`--history-file`; `--no-history` disables it). |
+| `KAVEON_PAGER` | none | An external pager for human-readable output when a script or the line-editor fallback prints to a terminal (`--pager`; empty disables). The shell pages results itself. |
+| `NO_COLOR` | unset | Set to anything, the client prints without colour, the same as `--theme mono`; `TERM=dumb` and output that is not a terminal have the same effect. |
+
+Client flags without a variable, with the value the code applies:
+
+| Flag | Default | Bound | What it sets |
+|---|---|---|---|
+| `--timeout` | 24 h | greater than zero; seconds, `30s` or `2m` | The HTTP timeout of one statement request. `POST /v1/statement` returns when the statement finishes, so this is the longest a statement may take before the client reports a timeout; it does not stop the statement on the coordinator. Metadata calls keep a fixed 30 s. `--client-request-timeout` is an alias. |
+| `--row-limit` | 1000 | 1 to 10000 | Rows a shell query without a top-level `LIMIT` shows; `.limit` changes it in the session. Never applied to `-e`, `-f` or piped input. |
+| `--theme` | `dark` | `dark`, `light`, `mono` | The accent colour (Kaveon blue, darker on `light`) or no colour. |
+| `--no-header` | off | flag | Skips the session header the shell prints after connecting. |
+| `--width` | the terminal's width, else 120 | a positive column count | The width result tables are fitted to; string columns are narrowed with `…` to fit. |
+| `--paged` | off | flag | Scripts fetch results in pages from the coordinator's result store instead of inline, so a result over 16 MiB does not fail. |
 
 `KAVEON_PARALLEL_SQL_REGRESSION_CHILD` is set by one server test to mark
 its child process and is not a setting.
