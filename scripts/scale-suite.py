@@ -1,5 +1,5 @@
 """The scale suite: docs/qualification/scale-suite.json on KaveonDB, alone on
-the worker nodes, through the API bridge. One warm-up then three timed
+the worker nodes, through the API bridge. One warm-up then REPETITIONS (three) timed
 executions per statement, median reported beside the Trino column and the
 target. Runs inside the cluster (a Job built from the API pod contract, see
 scripts/aks-dlm-generate-job.py for the pattern) so the measurement sits on
@@ -20,6 +20,9 @@ sys.path.insert(0, "/app")
 import services.engine_bridge as eb  # noqa: E402
 
 NO_CACHE = {"result_cache": False}
+# Timed executions after the warm-up: three for a record (the default),
+# fewer only for a first coverage pass, and the record says how many.
+REPETITIONS = int(os.environ.get("REPETITIONS", "3"))
 
 
 def result_hash(rows, ordered):
@@ -55,7 +58,7 @@ def main():
             # Every execution bypasses the coordinator's result cache: a
             # benchmark measures the Engine, never a served result.
             eb.execute(sql, catalog, "scale-suite", "Admin", schema, timeout=900, settings=NO_CACHE)
-            for _ in range(3):
+            for _ in range(REPETITIONS):
                 t0 = time.time()
                 result = eb.execute(sql, catalog, "scale-suite", "Admin", schema, timeout=900, settings=NO_CACHE)
                 record["seconds"].append(round(time.time() - t0, 3))
@@ -76,6 +79,7 @@ def main():
     measured = [r for r in records if r.get("median_seconds") is not None]
     verdict = {
         "engine_digest": os.environ.get("ENGINE_DIGEST"),
+        "repetitions": REPETITIONS,
         "statements": len(records), "measured": len(measured),
         "meet_target": sum(1 for r in measured if r.get("meets_target")),
         "beat_trino": sum(1 for r in measured if r.get("beats_trino")),
