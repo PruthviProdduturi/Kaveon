@@ -56,6 +56,10 @@ const GROUPS: &[Group] = &[
                 description: "this text",
             },
             Entry {
+                command: ".ask <question>",
+                description: "a question in plain language through the Kaveon DLM (--api)",
+            },
+            Entry {
                 command: "clear",
                 description: "clear the screen",
             },
@@ -138,16 +142,10 @@ const GROUPS: &[Group] = &[
     Group {
         title: "Coming soon",
         coming_soon: true,
-        entries: &[
-            Entry {
-                command: ".ask <question>",
-                description: "answer a question in plain language through the Kaveon DLM",
-            },
-            Entry {
-                command: "streaming rows",
-                description: "rows shown while a statement runs",
-            },
-        ],
+        entries: &[Entry {
+            command: "streaming rows",
+            description: "rows shown while a statement runs",
+        }],
     },
 ];
 
@@ -195,7 +193,8 @@ mod tests {
         assert!(text.contains("  Catalog\n    SHOW CATALOGS"));
         assert!(text.contains("  Shell\n"));
         assert!(text.contains("  Output\n"));
-        assert!(text.contains("  Coming soon\n    .ask <question>"));
+        assert!(text.contains("  Coming soon\n    streaming rows"));
+        assert!(text.contains("    .ask <question>"));
         assert!(text.contains("    .source <file>"));
         assert!(text.contains("    .tee <file>  .tee off"));
         assert!(text.contains("    .edit "));

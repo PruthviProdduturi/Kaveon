@@ -284,7 +284,15 @@ pub struct App {
     history_log: Vec<HistoryEntry>,
     /// `.timing`: whether the summary lines are shown.
     timing: bool,
+    /// `.ask`: the previous answer's frame (a follow-up inherits its slots)
+    /// and the clarification the user may answer by number.
+    ask_frame: Option<serde_json::Value>,
+    ask_clarify: Option<Clarification>,
 }
+
+/// A pending `.ask` clarification: the slot kind and its (id, label,
+/// description) options, answered by number.
+type Clarification = (String, Vec<(String, String, String)>);
 
 impl App {
     fn new(backend: Backend, options: &Options) -> App {
@@ -298,7 +306,11 @@ impl App {
             .flatten();
         let mut app = App {
             backend,
-            editor: Editor::new(),
+            editor: {
+                let mut editor = Editor::new();
+                editor.set_vi(options.editing_mode.eq_ignore_ascii_case("VI"));
+                editor
+            },
             theme: Theme::detect(&options.theme, true),
             cluster: None,
             whoami: None,
@@ -315,6 +327,8 @@ impl App {
             names: NameCache::default(),
             history_log: Vec::new(),
             timing: true,
+            ask_frame: None,
+            ask_clarify: None,
         };
         if let Some(path) = &app.history_path
             && let Ok(text) = std::fs::read_to_string(path)
@@ -357,6 +371,7 @@ impl App {
                 .map(|cluster| cluster.ready_workers(now_unix())),
             last_elapsed_ms: self.last_elapsed_ms,
             last_scanned_rows: self.last_scanned_rows,
+            mode: self.editor.mode_label(),
         }
     }
 
@@ -1008,6 +1023,10 @@ fn submit(
     options: &mut Options,
     text: &str,
 ) -> Result<(), String> {
+    if let Some(question) = text.strip_prefix(".ask") {
+        ask(app, terminal, options, question.trim())?;
+        return emit_blank(terminal);
+    }
     match commands::parse(text) {
         Some(Ok(command)) => {
             run_command(app, terminal, options, command)?;
@@ -1508,7 +1527,7 @@ fn finish(
                 }),
             };
             if truncated && let Some(summary) = summary.as_mut() {
-                let note = "some columns truncated · .format vertical to see them whole";
+                let note = "some columns truncated · .format VERTICAL to see them whole";
                 summary.message = Some(match summary.message.take() {
                     Some(existing) => format!("{existing} · {note}"),
                     None => note.to_owned(),
@@ -2103,6 +2122,115 @@ fn run_command(
         Command::Help => emit(terminal, render::help::help(&app.theme)),
         Command::Clear => terminal.reset(app.viewport_rows()),
         Command::Quit => Ok(()),
+    }
+}
+
+/// `.ask <question>`: the platform's DLM answers in plain language — from
+/// its precomputed context, or with SQL the shell then runs on the
+/// coordinator when the dataset is a native catalog. `.ask <n>` answers a
+/// clarification; a follow-up inherits the previous answer's frame.
+fn ask(
+    app: &mut App,
+    terminal: &mut Screen,
+    options: &mut Options,
+    question: &str,
+) -> Result<(), String> {
+    use crate::client::dlm::{AskAnswer, DlmClient};
+    if question.is_empty() {
+        return emit_text(
+            terminal,
+            ".ask <question> — a question in plain language, answered through the Kaveon DLM",
+            &app.theme,
+            true,
+        );
+    }
+    let Some(api_url) = options.api_url.clone() else {
+        return emit_error(
+            terminal,
+            ".ask needs the Kaveon platform API: start with --api <url> (or set KAVEON_API_URL); the DLM runs there, not on the coordinator",
+            &app.theme,
+        );
+    };
+    let token = std::env::var("KAVEON_API_TOKEN")
+        .ok()
+        .filter(|t| !t.is_empty());
+    let client = DlmClient::new(&api_url, token, Duration::from_secs(60))
+        .map_err(|failure| failure.message)?;
+    // A number answers the pending clarification.
+    let mut choices = None;
+    let mut asked = question.to_owned();
+    if let Ok(number) = question.parse::<usize>()
+        && let Some((kind, options_list)) = app.ask_clarify.take()
+    {
+        match options_list.get(number.wrapping_sub(1)) {
+            Some((id, label, _)) => {
+                let mut map = serde_json::Map::new();
+                map.insert(kind, serde_json::Value::String(id.clone()));
+                choices = Some(map);
+                asked = label.clone();
+            }
+            None => {
+                app.ask_clarify = Some((kind, options_list));
+                return emit_error(
+                    terminal,
+                    &format!("choose a number from 1 to {}", number.max(1)),
+                    &app.theme,
+                );
+            }
+        }
+    }
+    let answer = client
+        .ask(&asked, 50, choices.as_ref(), app.ask_frame.as_ref())
+        .map_err(|failure| failure.message)?;
+    emit(terminal, render::ask::answer_lines(&answer, &app.theme))?;
+    match answer {
+        AskAnswer::Live {
+            catalog,
+            schema,
+            sql,
+            engine,
+            frame,
+            ..
+        } => {
+            app.ask_frame = frame;
+            app.ask_clarify = None;
+            if engine {
+                if (options.catalog.as_str(), options.schema.as_str())
+                    != (catalog.as_str(), schema.as_str())
+                {
+                    options.catalog = catalog;
+                    options.schema = schema;
+                    options.context_explicit = true;
+                    emit_text(
+                        terminal,
+                        &format!("session is now {}.{}", options.catalog, options.schema),
+                        &app.theme,
+                        true,
+                    )?;
+                }
+                app.pending.push_back(sql);
+                start_next(app, terminal, options)?;
+            }
+            Ok(())
+        }
+        AskAnswer::Context { frame, .. } => {
+            app.ask_frame = frame;
+            app.ask_clarify = None;
+            Ok(())
+        }
+        AskAnswer::Clarify {
+            kind,
+            options: choices,
+            frame,
+            ..
+        } => {
+            if frame.is_some() {
+                app.ask_frame = frame;
+            }
+            app.ask_clarify = Some((kind, choices));
+            Ok(())
+        }
+        AskAnswer::OutOfScope { .. } | AskAnswer::Refused { .. } => Ok(()),
     }
 }
 

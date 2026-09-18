@@ -87,6 +87,9 @@ fn print_usage() {
     println!("      --no-header             Skip the session header");
     println!("      --width <COLS>          Terminal width for result tables (default: detected)");
     println!(
+        "      --api <URL>             Kaveon platform API for .ask (or KAVEON_API_URL; token in KAVEON_API_TOKEN)"
+    );
+    println!(
         "      --row-limit <N|off>     Rows an interactive query without LIMIT shows (default: 1000; off for all, paged)"
     );
     println!(

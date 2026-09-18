@@ -9,6 +9,8 @@ pub struct StatusFacts<'a> {
     pub workers_ready: Option<(usize, usize)>,
     pub last_elapsed_ms: Option<u64>,
     pub last_scanned_rows: Option<u64>,
+    /// `NORMAL` / `INSERT` / `VISUAL` in vi editing; `None` in Emacs.
+    pub mode: Option<&'static str>,
 }
 
 /// `catalog.schema · host · workers · last query …`; the context leads in
@@ -43,6 +45,9 @@ pub fn status_line(facts: &StatusFacts<'_>, theme: &Theme) -> Line<'static> {
         spans.push(Span::styled(format!(".{schema} ·"), theme.dim));
     }
     spans.push(Span::styled(format!(" {}", parts.join(" · ")), style));
+    if let Some(mode) = facts.mode {
+        spans.push(Span::styled(format!(" · {mode}"), theme.accent));
+    }
     Line::from(spans)
 }
 
@@ -82,6 +87,7 @@ mod tests {
             workers_ready: Some((2, 0)),
             last_elapsed_ms: Some(1100),
             last_scanned_rows: Some(18_000_000),
+            mode: None,
         };
         let line = status_line(&facts, &Theme::mono());
         assert_eq!(
@@ -94,10 +100,11 @@ mod tests {
             workers_ready: None,
             last_elapsed_ms: None,
             last_scanned_rows: None,
+            mode: Some("NORMAL"),
         };
         assert_eq!(
             crate::render::to_plain(&[status_line(&bare, &Theme::mono())]),
-            " localhost:8081\n"
+            " localhost:8081 · NORMAL\n"
         );
         assert_eq!(host_of("http://localhost:8081/"), "localhost:8081");
         assert_eq!(
