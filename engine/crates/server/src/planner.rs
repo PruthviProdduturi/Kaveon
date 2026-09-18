@@ -903,16 +903,30 @@ fn fragment_project_expressions(expressions: &[Expr]) -> Vec<NamedExpr> {
 
 /// Above an aggregate, every aggregate call — at the top of an expression,
 /// under an alias, or nested in arithmetic, a CASE or a HAVING comparison —
-/// is the aggregate's output column, not a function to evaluate.
+/// is the aggregate's output column, not a function to evaluate. The
+/// column is named as the fragment names its aggregate outputs.
 fn bind_aggregate_references(expression: Expr) -> Expr {
-    let bind = |expr: Box<Expr>| Box::new(bind_aggregate_references(*expr));
+    bind_aggregate_references_as(expression, fragment_aggregate_output_name)
+}
+
+/// `bind_aggregate_references` with the aggregate output naming of the
+/// operator the expression sits over: the fragment's (`count_star`) or the
+/// node-local `HashAggregate`'s (`count_*`).
+fn bind_aggregate_references_as(
+    expression: Expr,
+    output_name: fn(&str, &[Expr]) -> String,
+) -> Expr {
+    let bind = |expr: Box<Expr>| Box::new(bind_aggregate_references_as(*expr, output_name));
     match expression {
         Expr::Function { name, args } if AGGREGATE_FUNCTIONS.contains(&name.as_str()) => {
-            Expr::Column(fragment_aggregate_output_name(&name, &args))
+            Expr::Column(output_name(&name, &args))
         }
         Expr::Function { name, args } => Expr::Function {
             name,
-            args: args.into_iter().map(bind_aggregate_references).collect(),
+            args: args
+                .into_iter()
+                .map(|arg| bind_aggregate_references_as(arg, output_name))
+                .collect(),
         },
         Expr::Alias { expr, name } => Expr::Alias {
             expr: bind(expr),
@@ -938,8 +952,8 @@ fn bind_aggregate_references(expression: Expr) -> Expr {
                 .into_iter()
                 .map(|(when, then)| {
                     (
-                        bind_aggregate_references(when),
-                        bind_aggregate_references(then),
+                        bind_aggregate_references_as(when, output_name),
+                        bind_aggregate_references_as(then, output_name),
                     )
                 })
                 .collect(),
@@ -973,7 +987,10 @@ fn bind_aggregate_references(expression: Expr) -> Expr {
             negated,
         } => Expr::InList {
             expr: bind(expr),
-            list: list.into_iter().map(bind_aggregate_references).collect(),
+            list: list
+                .into_iter()
+                .map(|item| bind_aggregate_references_as(item, output_name))
+                .collect(),
             negated,
         },
         Expr::Cast { expr, data_type } => Expr::Cast {
@@ -1687,10 +1704,12 @@ fn plan_query_with_predicate(
 
         LogicalPlan::Filter { input, predicate } => {
             // HAVING: the filter sits on the aggregate's output, where
-            // SUM(x) is a column, and nothing about it reaches the scan.
+            // SUM(x) is a column named as the node-local aggregate names
+            // it (`count_*`, not the fragment's `count_star`), and nothing
+            // about it reaches the scan.
             let over_aggregate = matches!(input.as_ref(), LogicalPlan::Aggregate { .. });
             let predicate = if over_aggregate {
-                bind_aggregate_references(predicate.clone())
+                bind_aggregate_references_as(predicate.clone(), agg_output_name)
             } else {
                 predicate.clone()
             };
@@ -2530,6 +2549,38 @@ mod tests {
                 }
             }
             drop(planned);
+        }
+    }
+
+    #[test]
+    fn having_count_star_binds_to_the_node_local_aggregate_output() {
+        // The node-local HashAggregate names COUNT(*) `count_*`; the
+        // fragment names it `count_star`. A HAVING on the local path binds
+        // to the former, at the top of the predicate and nested in it.
+        let fixture = fixture();
+        for (sql, expected_rows) in [
+            (
+                "SELECT id, COUNT(*) AS n FROM items GROUP BY id HAVING COUNT(*) > 0 ORDER BY id",
+                4,
+            ),
+            (
+                "SELECT id, COUNT(*) AS n FROM items GROUP BY id HAVING COUNT(*) > 1",
+                0,
+            ),
+            (
+                "SELECT id FROM items GROUP BY id HAVING COUNT(*) * 2 = 2 AND SUM(id) > 50 ORDER BY id",
+                2,
+            ),
+        ] {
+            let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(sql).unwrap();
+            qualify_tables(&mut plan, "test", "default");
+            let mut planned = plan_query(&plan, &fixture.catalog).unwrap();
+            let batches = collect_batches(&mut *planned.operator).unwrap();
+            assert_eq!(
+                batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+                expected_rows,
+                "{sql}"
+            );
         }
     }
 
