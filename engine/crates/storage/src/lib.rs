@@ -11,6 +11,7 @@ pub mod object_delta;
 pub mod object_reader;
 pub mod parquet_directory;
 pub mod parquet_reader;
+pub mod scan_predicate;
 pub mod source_statistics;
 
 pub use adls_commit::{

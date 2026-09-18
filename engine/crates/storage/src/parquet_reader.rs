@@ -1,12 +1,9 @@
-use arrow::array::Int64Array;
-use arrow::compute::kernels::cmp;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchReader as ArrowRecordBatchReader};
 use kaveon_core::{BatchSource, CompareOp, KaveonError, Result, ScalarValue, StoragePredicate};
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::{
-    ArrowPredicate, ArrowPredicateFn, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder,
-    RowFilter,
+    ArrowReaderOptions, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder,
 };
 use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use parquet::file::statistics::Statistics;
@@ -17,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::scan_predicate::RowFilterPlan;
 use crate::{ScanMetrics, ScanPartition};
 
 const DEFAULT_BATCH_SIZE: usize = 8_192;
@@ -370,7 +368,12 @@ impl ParquetReader {
         if self.batch_size == 0 {
             return Err(storage_error("batch size must be greater than zero"));
         }
-        ParquetRecordBatchReaderBuilder::try_new(File::open(&self.path)?).map_err(parquet_error)
+        // With a predicate the decoder runs a row filter; the offset index,
+        // when the file carries one, lets it skip whole pages the selection
+        // never touches instead of decompressing them.
+        let options = ArrowReaderOptions::new().with_page_index(self.predicate.is_some());
+        ParquetRecordBatchReaderBuilder::try_new_with_options(File::open(&self.path)?, options)
+            .map_err(parquet_error)
     }
 
     fn configure_builder(
@@ -397,13 +400,6 @@ impl ParquetReader {
             .predicate
             .as_ref()
             .map(|predicate| predicate.coerced_for(&schema));
-        if let Some(predicate) = coerced
-            .as_ref()
-            .and_then(|predicate| parquet_row_filter(builder.parquet_schema(), &schema, predicate))
-        {
-            builder = builder.with_row_filter(predicate);
-        }
-
         let mut groups = if let Some(predicate) = &coerced {
             validate_predicate(predicate, &schema)?;
             matching_row_groups(builder.metadata().as_ref(), &schema, predicate)
@@ -419,241 +415,23 @@ impl ParquetReader {
             projection.as_deref(),
             metrics,
         );
+        // The evaluable part of the predicate runs inside the decoder: the
+        // rows it rejects are never decoded for the other projected columns.
+        // A local file costs nothing to read twice, so every evaluable
+        // predicate is a row filter here.
+        if let Some(mut plan) = coerced
+            .as_ref()
+            .and_then(|predicate| RowFilterPlan::new(predicate, &schema))
+        {
+            plan.order_by_bytes(builder.metadata().as_ref(), &groups);
+            let row_filter = plan.row_filter(builder.parquet_schema(), metrics);
+            builder = builder.with_row_filter(row_filter);
+        }
         if self.predicate.is_some() || self.partition.is_some() {
             builder = builder.with_row_groups(groups);
         }
         Ok(builder)
     }
-}
-
-/// Build an exact decoder-level filter for the common single-column integer
-/// comparison. The logical filter remains in the execution plan as a
-/// correctness backstop; unsupported types and compound predicates continue
-/// to use conservative row-group pruning only.
-/// The part of a predicate the decoder can evaluate itself: every comparison
-/// of a column against a literal of its own type, conjoined. Each one reads
-/// only its column, and the rows it rejects are never decoded for the other
-/// projected columns — the filter runs inside the decoder lane, in parallel,
-/// on the narrowest possible input. Anything else (OR, NOT, IN, a type the
-/// kernels do not compare) is left to the executor, which evaluates the full
-/// predicate again on what survives.
-pub(crate) fn parquet_row_filter(
-    parquet_schema: &parquet::schema::types::SchemaDescriptor,
-    schema: &SchemaRef,
-    predicate: &StoragePredicate,
-) -> Option<RowFilter> {
-    let mut predicates: Vec<Box<dyn ArrowPredicate>> = Vec::new();
-    collect_decoder_predicates(parquet_schema, schema, predicate, &mut predicates);
-    (!predicates.is_empty()).then(|| RowFilter::new(predicates))
-}
-
-fn collect_decoder_predicates(
-    parquet_schema: &parquet::schema::types::SchemaDescriptor,
-    schema: &SchemaRef,
-    predicate: &StoragePredicate,
-    out: &mut Vec<Box<dyn ArrowPredicate>>,
-) {
-    match predicate {
-        StoragePredicate::And(children) => {
-            for child in children {
-                collect_decoder_predicates(parquet_schema, schema, child, out);
-            }
-        }
-        StoragePredicate::Compare { column, op, value } => {
-            if let Some(filter) = decoder_comparison(parquet_schema, schema, column, *op, value) {
-                out.push(filter);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// The same comparisons, evaluated on decoded batches instead of inside the
-/// decoder. Over object storage a decoder-side filter costs a second fetch
-/// round per row group (the predicate column first, the rest afterwards),
-/// which is more than the decode it saves; a lane decodes the projected
-/// columns in one round and drops the rejected rows before they leave it.
-/// One typed comparison against a projected batch: the column's index, the
-/// operator, and the literal as a one-element array of the column's type.
-type BatchComparison = (
-    usize,
-    CompareOp,
-    arrow::array::Scalar<Arc<dyn arrow::array::Array>>,
-);
-
-pub(crate) struct BatchPredicate {
-    comparisons: Vec<BatchComparison>,
-}
-
-impl BatchPredicate {
-    /// Every conjoined typed comparison whose column is in `schema` — the
-    /// projected batch's schema, so the indices address the batch directly.
-    pub(crate) fn new(schema: &SchemaRef, predicate: &StoragePredicate) -> Option<Self> {
-        let mut comparisons = Vec::new();
-        collect_batch_comparisons(schema, predicate, &mut comparisons);
-        (!comparisons.is_empty()).then_some(Self { comparisons })
-    }
-
-    pub(crate) fn apply(&self, batch: RecordBatch) -> parquet::errors::Result<RecordBatch> {
-        let mut mask: Option<arrow::array::BooleanArray> = None;
-        for (index, op, scalar) in &self.comparisons {
-            let column = batch.column(*index);
-            let this = compare_column(column, *op, scalar)
-                .map_err(|error| parquet::errors::ParquetError::External(Box::new(error)))?;
-            // SQL: a null comparison never selects the row.
-            let this = if arrow::array::Array::null_count(&this) > 0 {
-                arrow::compute::prep_null_mask_filter(&this)
-            } else {
-                this
-            };
-            mask = Some(match mask {
-                None => this,
-                Some(previous) => arrow::compute::and(&previous, &this)
-                    .map_err(|error| parquet::errors::ParquetError::External(Box::new(error)))?,
-            });
-        }
-        match mask {
-            Some(mask) if mask.true_count() == batch.num_rows() => Ok(batch),
-            Some(mask) => arrow::compute::filter_record_batch(&batch, &mask)
-                .map_err(|error| parquet::errors::ParquetError::External(Box::new(error))),
-            None => Ok(batch),
-        }
-    }
-}
-
-/// Compare a column with a literal. A dictionary column is compared through
-/// its dictionary — once per distinct value — and the verdicts are taken
-/// through the keys, so a 3 M-row batch of 26 countries costs 26 comparisons
-/// and one gather rather than 3 M string comparisons.
-fn compare_column(
-    column: &Arc<dyn arrow::array::Array>,
-    op: CompareOp,
-    scalar: &arrow::array::Scalar<Arc<dyn arrow::array::Array>>,
-) -> std::result::Result<arrow::array::BooleanArray, arrow::error::ArrowError> {
-    use arrow::array::{Array, AsArray};
-    let compare = |values: &dyn arrow::array::Datum| match op {
-        CompareOp::Eq => cmp::eq(values, scalar),
-        CompareOp::Ne => cmp::neq(values, scalar),
-        CompareOp::Lt => cmp::lt(values, scalar),
-        CompareOp::Le => cmp::lt_eq(values, scalar),
-        CompareOp::Gt => cmp::gt(values, scalar),
-        CompareOp::Ge => cmp::gt_eq(values, scalar),
-    };
-    if let DataType::Dictionary(key_type, _) = column.data_type()
-        && key_type.as_ref() == &DataType::Int32
-    {
-        let dictionary = column.as_dictionary::<arrow::datatypes::Int32Type>();
-        let verdicts = compare(dictionary.values())?;
-        let gathered = arrow::compute::take(&verdicts, dictionary.keys(), None)?;
-        return Ok(gathered.as_boolean().clone());
-    }
-    compare(column)
-}
-
-fn collect_batch_comparisons(
-    schema: &SchemaRef,
-    predicate: &StoragePredicate,
-    out: &mut Vec<BatchComparison>,
-) {
-    match predicate {
-        StoragePredicate::And(children) => {
-            for child in children {
-                collect_batch_comparisons(schema, child, out);
-            }
-        }
-        StoragePredicate::Compare { column, op, value } => {
-            if let Ok(index) = schema.index_of(column)
-                && let Some(literal) = comparison_literal(value, schema.field(index).data_type())
-            {
-                out.push((index, *op, arrow::array::Scalar::new(literal)));
-            }
-        }
-        _ => {}
-    }
-}
-
-/// The literal as a one-element array of the column's own type, or None when
-/// the kernels cannot compare the two. A dictionary column compares through
-/// its dictionary: once per distinct value, then an index lookup per row.
-fn comparison_literal(
-    value: &ScalarValue,
-    data_type: &DataType,
-) -> Option<Arc<dyn arrow::array::Array>> {
-    use arrow::array::{BooleanArray, Float64Array, LargeStringArray, StringArray};
-    Some(match (value, data_type) {
-        (ScalarValue::Int64(value), DataType::Int64) => Arc::new(Int64Array::from(vec![*value])),
-        // Narrower and unsigned integer columns, and day-number dates,
-        // compare against the literal cast to the column's own type; a
-        // literal outside that type's range is no pushdown at all.
-        (
-            ScalarValue::Int64(value),
-            DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Date32,
-        ) => {
-            let literal = Int64Array::from(vec![*value]);
-            arrow::compute::cast_with_options(
-                &literal,
-                data_type,
-                &arrow::compute::CastOptions {
-                    safe: false,
-                    ..Default::default()
-                },
-            )
-            .ok()?
-        }
-        (ScalarValue::Float64(value), DataType::Float64) => {
-            Arc::new(Float64Array::from(vec![*value]))
-        }
-        (ScalarValue::Bool(value), DataType::Boolean) => Arc::new(BooleanArray::from(vec![*value])),
-        (ScalarValue::Utf8(value), DataType::Utf8) => {
-            Arc::new(StringArray::from(vec![value.as_str()]))
-        }
-        (ScalarValue::Utf8(value), DataType::LargeUtf8) => {
-            Arc::new(LargeStringArray::from(vec![value.as_str()]))
-        }
-        (ScalarValue::Utf8(value), DataType::Dictionary(_, values))
-            if matches!(values.as_ref(), DataType::Utf8) =>
-        {
-            Arc::new(StringArray::from(vec![value.as_str()]))
-        }
-        (ScalarValue::Utf8(value), DataType::Dictionary(_, values))
-            if matches!(values.as_ref(), DataType::LargeUtf8) =>
-        {
-            Arc::new(LargeStringArray::from(vec![value.as_str()]))
-        }
-        _ => return None,
-    })
-}
-
-fn decoder_comparison(
-    parquet_schema: &parquet::schema::types::SchemaDescriptor,
-    schema: &SchemaRef,
-    column: &str,
-    op: CompareOp,
-    value: &ScalarValue,
-) -> Option<Box<dyn ArrowPredicate>> {
-    use arrow::array::Scalar;
-    let index = schema.index_of(column).ok()?;
-    let literal = comparison_literal(value, schema.field(index).data_type())?;
-    let scalar = Scalar::new(literal);
-    let projection = ProjectionMask::roots(parquet_schema, [index]);
-    Some(Box::new(ArrowPredicateFn::new(projection, move |batch| {
-        let column = batch.column(0);
-        match op {
-            CompareOp::Eq => cmp::eq(column, &scalar),
-            CompareOp::Ne => cmp::neq(column, &scalar),
-            CompareOp::Lt => cmp::lt(column, &scalar),
-            CompareOp::Le => cmp::lt_eq(column, &scalar),
-            CompareOp::Gt => cmp::gt(column, &scalar),
-            CompareOp::Ge => cmp::gt_eq(column, &scalar),
-        }
-    })))
 }
 
 pub(crate) fn record_selection_metrics(
@@ -723,9 +501,9 @@ pub(crate) fn validate_predicate(predicate: &StoragePredicate, schema: &SchemaRe
         StoragePredicate::Compare { column, value, .. } => {
             validate_column_value(column, value, schema)
         }
-        StoragePredicate::IsNull { column } | StoragePredicate::IsNotNull { column } => {
-            validate_column(column, schema).map(|_| ())
-        }
+        StoragePredicate::IsNull { column }
+        | StoragePredicate::IsNotNull { column }
+        | StoragePredicate::Like { column, .. } => validate_column(column, schema).map(|_| ()),
         StoragePredicate::In { column, values } => {
             validate_column(column, schema)?;
             for value in values {
@@ -808,6 +586,8 @@ fn predicate_can_match(
         // A "may match" result cannot be safely inverted. Retaining the row
         // group preserves correctness until exact domain reasoning is added.
         StoragePredicate::Not(_) => true,
+        // Statistics say nothing about a pattern match; the row filter does.
+        StoragePredicate::Like { .. } => true,
     }
 }
 
@@ -1369,24 +1149,18 @@ mod tests {
             compare("day", CompareOp::Lt, ScalarValue::Utf8("2026-09-01".into())),
             compare("amount", CompareOp::Gt, ScalarValue::Int64(2)),
         ]);
-        let parquet =
-            parquet::file::reader::SerializedFileReader::new(File::open(&file.0).unwrap()).unwrap();
-        let descriptor = parquet::file::reader::FileReader::metadata(&parquet)
-            .file_metadata()
-            .schema_descr_ptr();
         let arrow_schema = Arc::new(Schema::new(vec![
             Field::new("day", DataType::Utf8, false),
             Field::new("amount", DataType::Int64, false),
             Field::new("label", DataType::Utf8, false),
         ]));
-        let mut pushed = Vec::new();
-        collect_decoder_predicates(&descriptor, &arrow_schema, &predicate, &mut pushed);
-        assert_eq!(pushed.len(), 3);
-        assert!(parquet_row_filter(&descriptor, &arrow_schema, &predicate).is_some());
+        assert!(RowFilterPlan::new(&predicate, &arrow_schema).is_some());
 
+        let metrics = ScanMetrics::default();
         let mut reader = ParquetReader::new(&file.0)
             .with_columns(vec!["label".to_owned()])
             .with_predicate(predicate)
+            .with_metrics(metrics.clone())
             .read()
             .unwrap();
         let batches = reader.by_ref().collect::<Result<Vec<_>>>().unwrap();
@@ -1404,6 +1178,9 @@ mod tests {
             })
             .collect();
         assert_eq!(labels, vec!["c", "d", "e"]);
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.row_filter_rows_examined, 6);
+        assert_eq!(snapshot.row_filter_rows_admitted, 3);
 
         // A dictionary-typed column (the Arrow schema stored in the file)
         // takes the same path: the kernel compares the dictionary once.
@@ -1459,12 +1236,68 @@ mod tests {
             .collect();
         assert_eq!(amounts, vec![2, 4]);
 
-        // An OR is left to the executor: nothing pushed, nothing lost.
+        // An OR whose sides are both evaluable is one stage; one with a
+        // side the storage layer cannot evaluate is left to the executor.
         let disjunction = StoragePredicate::Or(vec![
             compare("amount", CompareOp::Eq, ScalarValue::Int64(1)),
             compare("amount", CompareOp::Eq, ScalarValue::Int64(6)),
         ]);
-        assert!(parquet_row_filter(&descriptor, &arrow_schema, &disjunction).is_none());
+        assert!(RowFilterPlan::new(&disjunction, &arrow_schema).is_some());
+        let half_opaque = StoragePredicate::Or(vec![
+            compare("amount", CompareOp::Eq, ScalarValue::Int64(1)),
+            StoragePredicate::IsNull {
+                column: "elsewhere".into(),
+            },
+        ]);
+        assert!(RowFilterPlan::new(&half_opaque, &arrow_schema).is_none());
+        let labels_of = |predicate: StoragePredicate| -> Vec<String> {
+            ParquetReader::new(&file.0)
+                .with_columns(vec!["label".to_owned()])
+                .with_predicate(predicate)
+                .read()
+                .unwrap()
+                .collect::<Result<Vec<_>>>()
+                .unwrap()
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<StringArray>()
+                        .unwrap()
+                        .iter()
+                        .map(|value| value.unwrap().to_owned())
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        };
+        assert_eq!(labels_of(disjunction), vec!["a", "f"]);
+        // LIKE, NOT LIKE and IN run inside the decoder too.
+        assert_eq!(
+            labels_of(StoragePredicate::Like {
+                column: "day".into(),
+                pattern: "2026-08%".into(),
+                negated: false,
+                case_insensitive: false,
+            }),
+            vec!["d", "e"]
+        );
+        assert_eq!(
+            labels_of(StoragePredicate::Like {
+                column: "day".into(),
+                pattern: "%-0_".into(),
+                negated: true,
+                case_insensitive: false,
+            }),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            labels_of(StoragePredicate::In {
+                column: "amount".into(),
+                values: vec![ScalarValue::Int64(2), ScalarValue::Int64(5)],
+            }),
+            vec!["b", "e"]
+        );
     }
 
     #[test]
@@ -1493,7 +1326,7 @@ mod tests {
             compare("region", CompareOp::Eq, ScalarValue::Utf8("Europe".into())),
             compare("amount", CompareOp::Lt, ScalarValue::Int64(5)),
         ]);
-        let filter = BatchPredicate::new(&schema, &predicate).unwrap();
+        let filter = crate::scan_predicate::BatchPredicate::new(&schema, &predicate).unwrap();
         let kept = filter.apply(batch).unwrap();
         let amounts = kept
             .column(1)
@@ -1505,6 +1338,10 @@ mod tests {
         assert_eq!(amounts, vec![1, 4]); // the null key never matches
     }
 
+    /// Every shape the storage layer evaluates comes back exact from the
+    /// local reader: the row groups statistics keep, then the decoder's row
+    /// filter within them (the fixture: ids 0..6, label null at id 2, row
+    /// groups of three).
     #[test]
     fn supports_boolean_composition_and_null_counts() {
         let file = fixture();
@@ -1522,7 +1359,7 @@ mod tests {
         };
         assert_eq!(
             row_count(&ParquetReader::new(&file.0).with_predicate(nulls)),
-            ROW_GROUP_SIZE
+            1
         );
 
         let non_nulls = StoragePredicate::IsNotNull {
@@ -1530,7 +1367,7 @@ mod tests {
         };
         assert_eq!(
             row_count(&ParquetReader::new(&file.0).with_predicate(non_nulls)),
-            6
+            5
         );
 
         let disjunction = StoragePredicate::Or(vec![
@@ -1539,7 +1376,7 @@ mod tests {
         ]);
         assert_eq!(
             row_count(&ParquetReader::new(&file.0).with_predicate(disjunction)),
-            6
+            2
         );
     }
 
@@ -1552,7 +1389,7 @@ mod tests {
         };
         assert_eq!(
             row_count(&ParquetReader::new(&file.0).with_predicate(values)),
-            ROW_GROUP_SIZE
+            1
         );
 
         assert!(!bounds_can_match(
