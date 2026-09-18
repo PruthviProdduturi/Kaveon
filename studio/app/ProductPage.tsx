@@ -45,8 +45,12 @@ function Anim({ dir = "up" as AnimDirection, delay = 0, duration = 0.8, children
 
 // Legacy compat
 function useFadeIn(delay = 0) { return useScrollAnim("up", delay); }
+
+/** The one rule between sections: every section after the hero carries it at its top, so no two ever meet. */
+const HAIRLINE = "1px solid rgba(255,255,255,0.05)";
+
 function Section({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
-  return <Anim dir="up">{(() => { return <div style={style}>{children}</div>; })()}</Anim>;
+  return <section style={{ borderTop: HAIRLINE, ...style }}><Anim dir="up">{children}</Anim></section>;
 }
 
 export default function ProductPage({ benchmarks = null }: { benchmarks?: BenchmarkFigures | null }) {
@@ -320,7 +324,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
       </section>
 
       {/* ─── Unified Platform ─── */}
-      <section style={{ padding: "96px 24px", background: "#0a0a0a", borderTop: "1px solid rgba(255,255,255,0.05)", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+      <section style={{ padding: "96px 24px", background: "#0a0a0a", borderTop: HAIRLINE }}>
         <div style={{ maxWidth: 1080, margin: "0 auto" }}>
           <Anim dir="up" style={{ textAlign: "center", marginBottom: 48 }}>
             <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: B, marginBottom: 12 }}>The Unified Data Intelligence Platform</div>
@@ -349,7 +353,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
 
 
       {/* ─── Chat Demo ─── */}
-      <section style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0a0a0a 0%, #0f1520 50%, #0a0a0a 100%)", overflow: "hidden" }}>
+      <section style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0a0a0a 0%, #0f1520 50%, #0a0a0a 100%)", borderTop: HAIRLINE, overflow: "hidden" }}>
         <div style={{ maxWidth: 920, margin: "0 auto" }}>
           <Anim dir="up" style={{ textAlign: "center", marginBottom: 48 }}>
             <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: "#8b5cf6", marginBottom: 12 }}>Conversational Analytics</div>
@@ -449,7 +453,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
 
       {/* ─── How It Works ─── */}
 
-      <section ref={r3} style={{ padding: "100px 24px", background: "#0a0a0a" }}>
+      <section ref={r3} style={{ padding: "100px 24px", background: "#0a0a0a", borderTop: HAIRLINE }}>
         <div style={{ maxWidth: 1000, margin: "0 auto" }}>
           <div style={{ textAlign: "center", marginBottom: 56 }}>
             <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: B, marginBottom: 12 }}>One Governed Path</div>
@@ -573,7 +577,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
       </Section>
 
       {/* ─── Data Language Model (DLM) ─── */}
-      <section style={{ padding: "100px 24px", background: "#0a0a0a", position: "relative", overflow: "hidden" }}>
+      <section style={{ padding: "100px 24px", background: "#0a0a0a", borderTop: HAIRLINE, position: "relative", overflow: "hidden" }}>
         <div style={{ position: "absolute", top: "30%", right: "-10%", width: 800, height: 800, borderRadius: "50%", background: "radial-gradient(circle, rgba(245,158,11,0.04) 0%, transparent 60%)", pointerEvents: "none" }} />
         <div style={{ maxWidth: 1000, margin: "0 auto", position: "relative" }}>
           <Anim dir="up" style={{ textAlign: "center", marginBottom: 56 }}>
@@ -643,7 +647,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
       </section>
 
       {/* ─── Freshness Algorithm ─── */}
-      <section style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0a0a0a 0%, #0f1520 50%, #0a0a0a 100%)", position: "relative", overflow: "hidden" }}>
+      <section style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0a0a0a 0%, #0f1520 50%, #0a0a0a 100%)", borderTop: HAIRLINE, position: "relative", overflow: "hidden" }}>
         <div style={{ position: "absolute", bottom: "10%", left: "-5%", width: 700, height: 700, borderRadius: "50%", background: "radial-gradient(circle, rgba(16,185,129,0.04) 0%, transparent 60%)", pointerEvents: "none" }} />
         <div style={{ maxWidth: 1000, margin: "0 auto", position: "relative" }}>
           <Anim dir="up" style={{ textAlign: "center", marginBottom: 56 }}>
@@ -805,7 +809,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
       </Section>
 
       {/* ─── Dashboard Showcase — Apple-style horizontal scroll ─────── */}
-      <section id="dashboards" ref={r7} style={{ padding: "60px 0 100px", background: "#0a0a0a", position: "relative", overflow: "hidden" }}>
+      <section id="dashboards" ref={r7} style={{ padding: "60px 0 100px", background: "#0a0a0a", borderTop: HAIRLINE, position: "relative", overflow: "hidden" }}>
         <div style={{ position: "absolute", top: "20%", left: "50%", transform: "translateX(-50%)", width: 1200, height: 600, borderRadius: "50%", background: `radial-gradient(circle, ${B}06 0%, transparent 60%)`, pointerEvents: "none" }} />
 
         <Anim dir="up" style={{ textAlign: "center", marginBottom: 40, position: "relative", padding: "0 24px" }}>
@@ -965,7 +969,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
             </div>
           </Anim>
           <Anim dir="right" delay={200}>
-            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "3px", color: "#8b5cf6", marginBottom: 16 }}>SQL Lab</div>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: "#8b5cf6", marginBottom: 12 }}>SQL Lab</div>
             <h3 style={{ fontSize: 32, fontWeight: 700, lineHeight: 1.2, marginBottom: 16, letterSpacing: "-0.5px", color: "#e2e8f0" }}>VS Code in your browser</h3>
             <p style={{ fontSize: 15, color: "#666", lineHeight: 1.8, marginBottom: 24 }}>
               Monaco editor with SQL autocomplete, syntax highlighting, multi-tab sessions, query history, and result caching across supported connectors.
@@ -979,7 +983,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
       {hasAnyFigure(benchmarks) && <BenchmarkSection figures={benchmarks} />}
 
       {/* ─── Features Grid ─── */}
-      <section id="features" ref={r4} style={{ padding: "100px 24px", background: "#0a0a0a", scrollMarginTop: 72 }}>
+      <section id="features" ref={r4} style={{ padding: "100px 24px", background: "#0a0a0a", borderTop: HAIRLINE, scrollMarginTop: 72 }}>
         <div style={{ maxWidth: 1100, margin: "0 auto" }}>
           <div style={{ textAlign: "center", marginBottom: 56 }}>
             <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: B, marginBottom: 12 }}>Platform</div>
@@ -1035,7 +1039,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
       </section>
 
       {/* ─── Tech Stack ─── */}
-      <section ref={r5} style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0a0a0a 0%, #0f1520 50%, #0a0a0a 100%)" }}>
+      <section ref={r5} style={{ padding: "100px 24px", background: "linear-gradient(180deg, #0a0a0a 0%, #0f1520 50%, #0a0a0a 100%)", borderTop: HAIRLINE }}>
         <div style={{ maxWidth: 900, margin: "0 auto" }}>
           <div style={{ textAlign: "center", marginBottom: 48 }}>
             <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: B, marginBottom: 12 }}>Stack</div>
@@ -1074,7 +1078,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
       </section>
 
       {/* ─── CTA ─── */}
-      <section ref={r6} style={{ textAlign: "center", padding: "80px 24px 60px", position: "relative" }}>
+      <section ref={r6} style={{ textAlign: "center", padding: "80px 24px 60px", borderTop: HAIRLINE, position: "relative" }}>
         <Anim dir="scale">
           <div style={{ position: "relative" }}>
             <KaveonMark size={44} useDirectColor />
