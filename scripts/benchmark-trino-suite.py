@@ -118,6 +118,10 @@ def declare_tables(trino, tables, account):
 def main():
     suite = json.load(open(os.environ["SUITE"], encoding="utf-8"))
     tables = json.load(open(os.environ["TRINO_TABLES"], encoding="utf-8"))
+    # The TPC-H generation Job prints {"scale": N, "tables": [...]}; the
+    # ClickBench manifest is the bare list.
+    if isinstance(tables, dict):
+        tables = tables["tables"]
     trino = Trino(suite["schema"], suite.get("trino_catalog", "opensource"))
     wait_ready(trino)
     declare_tables(trino, tables, os.environ["TRINO_ACCOUNT"])
