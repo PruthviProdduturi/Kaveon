@@ -23,15 +23,21 @@
 //! the planner to report.
 //!
 //! A subquery binds with the enclosing query's scope behind its own. A
-//! WHERE equality between one of its columns and one of the enclosing
-//! query's is a correlation: it leaves the subquery's filter and rides up
-//! through the subquery's projection (as an extra column) and aggregate
-//! (as a group key) to the node that joins the subquery in, where it
-//! becomes that join's key — `EXISTS (... WHERE l_orderkey = o_orderkey)`
-//! is a semi join on the key, and `x < (SELECT avg(y) FROM t WHERE t.k =
-//! q.k)` is an inner join on `k` with the aggregate grouped by `k`, which
-//! keeps exactly the rows whose comparison with the per-key aggregate can
-//! hold. Any other correlated predicate is refused with its text.
+//! WHERE conjunct that references the enclosing query is a correlation:
+//! it leaves the subquery's filter and rides up through the subquery's
+//! projection (as extra columns) to the node that joins the subquery in.
+//! An equality between one column of the subquery and one of the
+//! enclosing query becomes that join's key — `EXISTS (... WHERE
+//! l_orderkey = o_orderkey)` is a semi join on the key, and `x < (SELECT
+//! avg(y) FROM t WHERE t.k = q.k)` is an inner join on `k` with the
+//! aggregate grouped by `k` (the correlation rides through the aggregate
+//! as a group key), which keeps exactly the rows whose comparison with
+//! the per-key aggregate can hold. Any other conjunct — `l2.l_suppkey <>
+//! l1.l_suppkey` beside the equality in Q21's EXISTS — is a residual of
+//! the semi (or anti) join: evaluated over each pair of rows sharing the
+//! key, with the subquery's side of it projected out beside the key.
+//! Residuals ride only through projections, filters and sorts; under an
+//! aggregate, a join or an IN they are refused with their text.
 use std::cell::Cell;
 
 use kaveon_core::{BinaryOp, CatalogManager, Expr, KaveonError, Result, TableReference};
@@ -120,8 +126,9 @@ struct Bound {
     /// function references above it (`SUM(l_quantity)` in the projection
     /// or HAVING) bind the way the aggregate bound its arguments.
     aggregate_input: Option<Scope>,
-    /// Equalities with the enclosing query lifted out of a subquery's
-    /// WHERE, on their way to the node that joins the subquery in.
+    /// Conjuncts referencing the enclosing query lifted out of a
+    /// subquery's WHERE, on their way to the node that joins the subquery
+    /// in.
     correlations: Vec<Correlation>,
 }
 
@@ -135,15 +142,36 @@ impl Bound {
     }
 }
 
-/// `inner = outer`, lifted out of a subquery: `inner` names the
-/// subquery-side column at the current node's output, `outer` the
-/// enclosing query's column as written, `depth` the enclosing scope it
-/// resolved in (an index into the scope stack; the innermost is last).
+/// A conjunct lifted out of a subquery's WHERE because it references the
+/// enclosing query. `depth` is the enclosing scope the reference resolved
+/// in (an index into the scope stack; the innermost is last).
 #[derive(Clone, Debug)]
-struct Correlation {
-    inner: String,
-    outer: String,
-    depth: usize,
+enum Correlation {
+    /// `inner = outer`: `inner` names the subquery-side column at the
+    /// current node's output, `outer` the enclosing query's column as
+    /// written.
+    Key {
+        inner: String,
+        outer: String,
+        depth: usize,
+    },
+    /// Any other conjunct: `predicate` with the subquery's side bound
+    /// (and renamed as it rides up) and the enclosing query's side as
+    /// written; `inner` the subquery-side columns it reads, at the
+    /// current node's output.
+    Residual {
+        predicate: Expr,
+        inner: Vec<String>,
+        depth: usize,
+    },
+}
+
+impl Correlation {
+    fn depth(&self) -> usize {
+        match self {
+            Self::Key { depth, .. } | Self::Residual { depth, .. } => *depth,
+        }
+    }
 }
 
 /// A bound semi or anti join: its inputs, keys and residual, and the
@@ -205,19 +233,50 @@ impl Binder<'_> {
                     })
                     .collect::<Result<Vec<_>>>()?;
                 // A correlated column rides through the projection under a
-                // name of its own.
+                // name of its own; a residual's predicate follows the
+                // rename.
                 let correlations = input
                     .correlations
                     .into_iter()
                     .map(|correlation| {
-                        let name = self.fresh_name();
-                        columns.push(Expr::Alias {
-                            expr: Box::new(Expr::Column(correlation.inner)),
-                            name: name.clone(),
-                        });
-                        Correlation {
-                            inner: name,
-                            ..correlation
+                        let mut project = |inner: String| {
+                            let name = self.fresh_name();
+                            columns.push(Expr::Alias {
+                                expr: Box::new(Expr::Column(inner)),
+                                name: name.clone(),
+                            });
+                            name
+                        };
+                        match correlation {
+                            Correlation::Key {
+                                inner,
+                                outer,
+                                depth,
+                            } => Correlation::Key {
+                                inner: project(inner),
+                                outer,
+                                depth,
+                            },
+                            Correlation::Residual {
+                                mut predicate,
+                                inner,
+                                depth,
+                            } => {
+                                let inner = inner
+                                    .into_iter()
+                                    .map(|column| {
+                                        let name = project(column.clone());
+                                        predicate =
+                                            rename_column(predicate.clone(), &column, &name);
+                                        name
+                                    })
+                                    .collect();
+                                Correlation::Residual {
+                                    predicate,
+                                    inner,
+                                    depth,
+                                }
+                            }
                         }
                     })
                     .collect();
@@ -249,7 +308,9 @@ impl Binder<'_> {
                 // answers per value of the enclosing query's column, and
                 // the join above selects the row for its value. A COUNT
                 // has an answer (zero) for a value with no rows, which no
-                // join row can carry.
+                // join row can carry. A residual selects the rows the
+                // aggregate sees per enclosing row, which no grouping can
+                // express.
                 if !input.correlations.is_empty() {
                     if aggregates
                         .iter()
@@ -260,7 +321,15 @@ impl Binder<'_> {
                         ));
                     }
                     for correlation in &input.correlations {
-                        let key = Expr::Column(correlation.inner.clone());
+                        let inner = match correlation {
+                            Correlation::Key { inner, .. } => inner,
+                            Correlation::Residual { predicate, .. } => {
+                                return Err(KaveonError::Sql(format!(
+                                    "a correlated predicate other than an equality is not supported under an aggregate: {predicate:?}"
+                                )));
+                            }
+                        };
+                        let key = Expr::Column(inner.clone());
                         if !group_by.contains(&key) {
                             group_by.push(key);
                         }
@@ -393,19 +462,23 @@ impl Binder<'_> {
                 let (lateral, deeper): (Vec<_>, Vec<_>) = right
                     .correlations
                     .into_iter()
-                    .partition(|correlation| correlation.depth == outer.len());
+                    .partition(|correlation| correlation.depth() == outer.len());
                 let mut correlations = left.correlations;
                 correlations.extend(deeper);
-                let condition = conjoin(
-                    condition
-                        .into_iter()
-                        .chain(lateral.into_iter().map(|correlation| Expr::BinaryOp {
-                            left: Box::new(Expr::Column(correlation.outer)),
+                let keys = lateral
+                    .into_iter()
+                    .map(|correlation| match correlation {
+                        Correlation::Key { inner, outer, .. } => Ok(Expr::BinaryOp {
+                            left: Box::new(Expr::Column(outer)),
                             op: BinaryOp::Eq,
-                            right: Box::new(Expr::Column(correlation.inner)),
-                        }))
-                        .collect(),
-                );
+                            right: Box::new(Expr::Column(inner)),
+                        }),
+                        Correlation::Residual { predicate, .. } => Err(KaveonError::Sql(format!(
+                            "a correlated predicate other than an equality is supported only in EXISTS and NOT EXISTS: {predicate:?}"
+                        ))),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let condition = conjoin(condition.into_iter().chain(keys).collect());
                 let Some(condition) = condition else {
                     return Ok(Bound {
                         plan: LogicalPlan::Join {
@@ -477,8 +550,10 @@ impl Binder<'_> {
 
     /// The correlation a WHERE conjunct of a subquery expresses, if it
     /// references the enclosing query: an equality between one column of
-    /// the subquery and one of the enclosing query. A conjunct that
-    /// references the enclosing query any other way is refused.
+    /// the subquery and one of the enclosing query is a key; any other
+    /// conjunct is a residual, whose every column must belong to the
+    /// subquery or to one enclosing query. A conjunct over an aggregate
+    /// (a HAVING) is not a row predicate and is refused.
     fn correlation(
         &self,
         conjunct: &Expr,
@@ -494,12 +569,29 @@ impl Binder<'_> {
                 .then(|| outer.iter().rposition(|scope| scope.holds(reference)))
                 .flatten()
         };
-        if !references
-            .iter()
-            .any(|reference| enclosing(reference).is_some())
-        {
-            return Ok(None);
+        // Inside a subquery, a qualified reference that names neither the
+        // subquery's relations nor the enclosing query's is refused: an
+        // executor would resolve it by bare name against the subquery's
+        // own relation and answer as if it were uncorrelated.
+        if !outer.is_empty() && !scope.columns.is_empty() {
+            for reference in &references {
+                if reference.contains('.')
+                    && matches!(scope.resolve(reference), Resolution::Unresolved)
+                    && enclosing(reference).is_none()
+                {
+                    return Err(KaveonError::Sql(format!(
+                        "column '{reference}' belongs neither to the subquery nor to the enclosing query: {conjunct:?}"
+                    )));
+                }
+            }
         }
+        let depths = references
+            .iter()
+            .filter_map(|reference| enclosing(reference))
+            .collect::<Vec<_>>();
+        let Some(&depth) = depths.first() else {
+            return Ok(None);
+        };
         if let Expr::BinaryOp {
             left,
             op: BinaryOp::Eq,
@@ -509,16 +601,47 @@ impl Binder<'_> {
         {
             let (inner, outer_column) = if scope.holds(a) { (a, b) } else { (b, a) };
             if let (true, Some(depth)) = (scope.holds(inner), enclosing(outer_column)) {
-                return Ok(Some(Correlation {
+                return Ok(Some(Correlation::Key {
                     inner: self.bind_name(inner, scope)?,
                     outer: outer_column.clone(),
                     depth,
                 }));
             }
         }
-        Err(KaveonError::Sql(format!(
-            "a correlated predicate must be an equality between a column of the subquery and a column of the enclosing query: {conjunct:?}"
-        )))
+        if contains_aggregate(conjunct) {
+            return Err(KaveonError::Sql(format!(
+                "a correlated HAVING predicate is not supported: {conjunct:?}"
+            )));
+        }
+        if depths.iter().any(|candidate| *candidate != depth) {
+            return Err(KaveonError::Sql(format!(
+                "a correlated predicate referencing more than one enclosing query is not supported: {conjunct:?}"
+            )));
+        }
+        let mut inner = Vec::new();
+        for reference in &references {
+            match scope.resolve(reference) {
+                Resolution::Unique(_) => inner.push(self.bind_name(reference, scope)?),
+                Resolution::Ambiguous => {
+                    return Err(KaveonError::Sql(format!(
+                        "column '{reference}' is ambiguous"
+                    )));
+                }
+                Resolution::Unresolved if enclosing(reference).is_none() => {
+                    return Err(KaveonError::Sql(format!(
+                        "column '{reference}' belongs neither to the subquery nor to the enclosing query: {conjunct:?}"
+                    )));
+                }
+                Resolution::Unresolved => {}
+            }
+        }
+        inner.sort_unstable();
+        inner.dedup();
+        Ok(Some(Correlation::Residual {
+            predicate: self.bind_expr(conjunct.clone(), scope, None)?,
+            inner,
+            depth,
+        }))
     }
 
     /// An explicit ON condition: equalities between the two sides are the
@@ -595,12 +718,18 @@ impl Binder<'_> {
         Ok(Bound::plain(plan))
     }
 
-    /// IN and EXISTS subqueries. An EXISTS correlated on one equality
-    /// becomes the semi (or anti) join's key: the subquery projects its
-    /// side of the equality, and the enclosing query's side is the probe
-    /// key. NOT EXISTS matches nothing on a NULL key, so the anti join's
-    /// build side drops NULL keys first (NOT IN, which the same operator
-    /// serves, keeps them: a NULL there empties the result).
+    /// IN and EXISTS subqueries. A correlated EXISTS becomes a semi (or
+    /// anti) join keyed on its first equality with the enclosing query:
+    /// the subquery projects its side of the equality, and the enclosing
+    /// query's side is the probe key. Its other correlations — further
+    /// equalities, and any other conjunct — are the join's residual,
+    /// evaluated over the pairs sharing the key; the subquery projects
+    /// the columns the residual reads beside the key, under names of
+    /// their own, and the residual's enclosing-query side binds against
+    /// the left input. NOT EXISTS matches nothing on a NULL key, so the
+    /// anti join's build side drops NULL keys first (NOT IN, which the
+    /// same operator serves, keeps them: a NULL there empties the
+    /// result).
     #[allow(clippy::too_many_arguments)]
     fn bind_semi_join(
         &self,
@@ -620,7 +749,7 @@ impl Binder<'_> {
         let (lateral, deeper): (Vec<_>, Vec<_>) = right
             .correlations
             .into_iter()
-            .partition(|correlation| correlation.depth == outer.len());
+            .partition(|correlation| correlation.depth() == outer.len());
         if !deeper.is_empty() {
             return Err(KaveonError::Sql(
                 "a correlation reaching past an IN or EXISTS subquery is not supported".into(),
@@ -650,13 +779,64 @@ impl Binder<'_> {
                 "a correlated IN subquery is not supported".into(),
             ));
         }
-        let [correlation] = lateral.as_slice() else {
+        if let Some(residual) = residual {
             return Err(KaveonError::Sql(format!(
-                "EXISTS correlated on more than one column is not supported ({} equalities)",
-                lateral.len()
+                "a correlated EXISTS cannot carry a residual before binding: {residual:?}"
+            )));
+        }
+        let mut keys = Vec::new();
+        let mut residuals = Vec::new();
+        for correlation in lateral {
+            match correlation {
+                Correlation::Key { inner, outer, .. } => keys.push((inner, outer)),
+                Correlation::Residual {
+                    predicate, inner, ..
+                } => residuals.push((predicate, inner)),
+            }
+        }
+        let mut keys = keys.into_iter();
+        let Some((key_inner, key_outer)) = keys.next() else {
+            return Err(KaveonError::Sql(format!(
+                "EXISTS correlated without an equality between a column of the subquery and a column of the enclosing query is not supported: {:?}",
+                residuals[0].0
             )));
         };
-        let key = Expr::Column(correlation.inner.clone());
+        let key = Expr::Column(key_inner);
+        // The subquery's columns a residual reads, projected beside the
+        // key under names of their own; the residual reads them by those
+        // names, and the enclosing query's columns as the left names them.
+        let mut columns = vec![key.clone()];
+        let mut projected: Vec<(String, String)> = Vec::new();
+        let mut project = |inner: String| -> String {
+            if let Some((_, name)) = projected.iter().find(|(column, _)| *column == inner) {
+                return name.clone();
+            }
+            let name = self.fresh_name();
+            columns.push(Expr::Alias {
+                expr: Box::new(Expr::Column(inner.clone())),
+                name: name.clone(),
+            });
+            projected.push((inner, name.clone()));
+            name
+        };
+        let mut conjuncts = Vec::new();
+        for (inner, outer) in keys {
+            conjuncts.push(Expr::BinaryOp {
+                left: Box::new(Expr::Column(project(inner))),
+                op: BinaryOp::Eq,
+                right: Box::new(Expr::Column(outer)),
+            });
+        }
+        for (mut predicate, inner) in residuals {
+            for column in inner {
+                let name = project(column.clone());
+                predicate = rename_column(predicate, &column, &name);
+            }
+            conjuncts.push(predicate);
+        }
+        let residual = conjoin(conjuncts)
+            .map(|predicate| self.bind_expr(predicate, &left_scope, None))
+            .transpose()?;
         let mut subquery = right.plan;
         if anti {
             subquery = LogicalPlan::Filter {
@@ -664,16 +844,23 @@ impl Binder<'_> {
                 predicate: Expr::IsNotNull(Box::new(key.clone())),
             };
         }
+        // Alone, the key binds by position; beside residual columns, by
+        // name.
+        let right_key = if columns.len() == 1 {
+            Expr::Column("*".into())
+        } else {
+            key
+        };
         let subquery = LogicalPlan::Project {
             input: Box::new(subquery),
-            columns: vec![key],
+            columns,
         };
-        let left_key = Expr::Column(self.bind_name(&correlation.outer, &left_scope)?);
+        let left_key = Expr::Column(self.bind_name(&key_outer, &left_scope)?);
         Ok(BoundSemiJoin {
             left: Box::new(left.plan),
             right: Box::new(subquery),
             left_key,
-            right_key: Expr::Column("*".into()),
+            right_key,
             residual,
             correlations: left.correlations,
         })
@@ -1170,6 +1357,149 @@ fn placement(conjunct: &Expr, left: &Scope, right: &Scope) -> Placement {
     Placement::Above
 }
 
+/// Whether `expr` applies an aggregate function anywhere.
+fn contains_aggregate(expr: &Expr) -> bool {
+    match expr {
+        Expr::Function { name, args } => is_aggregate(name) || args.iter().any(contains_aggregate),
+        Expr::Column(_) | Expr::Literal(_) | Expr::Star | Expr::WindowFunction { .. } => false,
+        Expr::Alias { expr, .. }
+        | Expr::Not(expr)
+        | Expr::IsNull(expr)
+        | Expr::IsNotNull(expr)
+        | Expr::Cast { expr, .. }
+        | Expr::Extract { expr, .. } => contains_aggregate(expr),
+        Expr::BinaryOp { left, right, .. } | Expr::And(left, right) | Expr::Or(left, right) => {
+            contains_aggregate(left) || contains_aggregate(right)
+        }
+        Expr::Case {
+            operand,
+            when_then,
+            else_expr,
+        } => {
+            operand
+                .iter()
+                .chain(else_expr)
+                .any(|expr| contains_aggregate(expr))
+                || when_then
+                    .iter()
+                    .any(|(when, then)| contains_aggregate(when) || contains_aggregate(then))
+        }
+        Expr::Like { expr, pattern, .. } => contains_aggregate(expr) || contains_aggregate(pattern),
+        Expr::Between {
+            expr, low, high, ..
+        } => contains_aggregate(expr) || contains_aggregate(low) || contains_aggregate(high),
+        Expr::InList { expr, list, .. } => {
+            contains_aggregate(expr) || list.iter().any(contains_aggregate)
+        }
+    }
+}
+
+/// `expr` with every reference to the column `from` reading `to`.
+fn rename_column(expr: Expr, from: &str, to: &str) -> Expr {
+    let rename = |expr: Box<Expr>| Box::new(rename_column(*expr, from, to));
+    match expr {
+        Expr::Column(name) if name == from => Expr::Column(to.to_owned()),
+        Expr::Column(_) | Expr::Literal(_) | Expr::Star => expr,
+        Expr::Alias { expr, name } => Expr::Alias {
+            expr: rename(expr),
+            name,
+        },
+        Expr::Not(expr) => Expr::Not(rename(expr)),
+        Expr::IsNull(expr) => Expr::IsNull(rename(expr)),
+        Expr::IsNotNull(expr) => Expr::IsNotNull(rename(expr)),
+        Expr::Cast { expr, data_type } => Expr::Cast {
+            expr: rename(expr),
+            data_type,
+        },
+        Expr::Extract { field, expr } => Expr::Extract {
+            field,
+            expr: rename(expr),
+        },
+        Expr::BinaryOp { left, op, right } => Expr::BinaryOp {
+            left: rename(left),
+            op,
+            right: rename(right),
+        },
+        Expr::And(left, right) => Expr::And(rename(left), rename(right)),
+        Expr::Or(left, right) => Expr::Or(rename(left), rename(right)),
+        Expr::Function { name, args } => Expr::Function {
+            name,
+            args: args
+                .into_iter()
+                .map(|arg| rename_column(arg, from, to))
+                .collect(),
+        },
+        Expr::WindowFunction {
+            name,
+            args,
+            partition_by,
+            order_by,
+            frame,
+        } => Expr::WindowFunction {
+            name,
+            args: args
+                .into_iter()
+                .map(|arg| rename_column(arg, from, to))
+                .collect(),
+            partition_by: partition_by
+                .into_iter()
+                .map(|expr| rename_column(expr, from, to))
+                .collect(),
+            order_by: order_by
+                .into_iter()
+                .map(|(expr, ascending)| (rename_column(expr, from, to), ascending))
+                .collect(),
+            frame,
+        },
+        Expr::Case {
+            operand,
+            when_then,
+            else_expr,
+        } => Expr::Case {
+            operand: operand.map(rename),
+            when_then: when_then
+                .into_iter()
+                .map(|(when, then)| (rename_column(when, from, to), rename_column(then, from, to)))
+                .collect(),
+            else_expr: else_expr.map(rename),
+        },
+        Expr::Like {
+            expr,
+            pattern,
+            negated,
+            case_insensitive,
+        } => Expr::Like {
+            expr: rename(expr),
+            pattern: rename(pattern),
+            negated,
+            case_insensitive,
+        },
+        Expr::Between {
+            expr,
+            low,
+            high,
+            negated,
+        } => Expr::Between {
+            expr: rename(expr),
+            low: rename(low),
+            high: rename(high),
+            negated,
+        },
+        Expr::InList {
+            expr,
+            list,
+            negated,
+        } => Expr::InList {
+            expr: rename(expr),
+            list: list
+                .into_iter()
+                .map(|item| rename_column(item, from, to))
+                .collect(),
+            negated,
+        },
+    }
+}
+
 /// The column references of `expr` outside aggregate function arguments.
 fn free_column_references(expr: &Expr, into: &mut Vec<String>) {
     match expr {
@@ -1330,7 +1660,7 @@ mod tests {
     use kaveon_core::{
         AccessPattern, CatalogProvider, DataFormat, MemoryCatalog, StorageType, TableMeta,
     };
-    use kaveon_sql::logical_plan::sql_to_logical_plan;
+    use kaveon_sql::logical_plan::{sql_to_logical_plan, sql_to_logical_plan_for_binder};
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -1375,7 +1705,7 @@ mod tests {
     }
 
     fn bound(sql: &str) -> LogicalPlan {
-        let mut plan = sql_to_logical_plan(sql).unwrap();
+        let mut plan = sql_to_logical_plan_for_binder(sql).unwrap();
         qualify(&mut plan);
         bind(plan, &catalog()).unwrap()
     }
@@ -1844,7 +2174,7 @@ mod tests {
         for (sql, reason) in [
             (
                 "SELECT o_orderkey FROM orders WHERE EXISTS (SELECT * FROM lineitem WHERE l_orderkey <> o_orderkey)",
-                "must be an equality",
+                "EXISTS correlated without an equality",
             ),
             (
                 "SELECT o_orderkey FROM orders WHERE o_custkey > (SELECT count(*) FROM lineitem WHERE l_orderkey = o_orderkey)",
@@ -1855,19 +2185,166 @@ mod tests {
                 "LIMIT inside a correlated subquery",
             ),
             (
-                "SELECT o_orderkey FROM orders WHERE EXISTS (SELECT * FROM lineitem WHERE l_orderkey = o_orderkey AND l_quantity = o_custkey)",
-                "more than one column",
-            ),
-            (
                 "SELECT o_orderkey FROM orders WHERE o_custkey IN (SELECT l_quantity FROM lineitem WHERE l_orderkey = o_orderkey)",
                 "correlated IN subquery",
             ),
+            (
+                "SELECT o_orderkey FROM orders WHERE o_custkey > (SELECT avg(l_quantity) FROM lineitem WHERE l_orderkey = o_orderkey AND l_quantity > o_custkey)",
+                "not supported under an aggregate",
+            ),
+            (
+                "SELECT o_orderkey FROM orders WHERE EXISTS (SELECT * FROM lineitem GROUP BY l_orderkey HAVING sum(l_quantity) > o_custkey)",
+                "correlated HAVING",
+            ),
+            (
+                "SELECT o_orderkey FROM orders WHERE EXISTS (SELECT * FROM lineitem l WHERE l.l_orderkey = o_orderkey AND x.l_quantity > 1)",
+                "belongs neither to the subquery nor to the enclosing query",
+            ),
+            (
+                "SELECT c_custkey FROM customer WHERE EXISTS (SELECT * FROM orders WHERE o_custkey = c_custkey AND EXISTS (SELECT * FROM lineitem WHERE l_orderkey = o_orderkey AND l_quantity > c_custkey))",
+                "reaching past an IN or EXISTS subquery",
+            ),
         ] {
-            let mut plan = sql_to_logical_plan(sql).unwrap();
+            let mut plan = sql_to_logical_plan_for_binder(sql).unwrap();
             qualify(&mut plan);
             let error = bind(plan, &catalog()).unwrap_err().to_string();
             assert!(error.contains(reason), "{sql}: {error}");
         }
+    }
+
+    /// Q21's EXISTS: one equality is the key, the non-equality the
+    /// residual, whose subquery side is projected beside the key under a
+    /// name of its own and whose enclosing side binds against the left.
+    #[test]
+    fn a_correlated_exists_with_a_non_equality_is_a_semi_join_with_a_residual() {
+        let plan = bound(
+            "SELECT l1.l_orderkey FROM orders, lineitem l1 WHERE o_orderkey = l1.l_orderkey AND EXISTS (SELECT * FROM lineitem l2 WHERE l2.l_orderkey = l1.l_orderkey AND l2.l_quantity <> l1.l_quantity AND l2.l_shipdate > 5)",
+        );
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("projection");
+        };
+        let LogicalPlan::SemiJoin {
+            left,
+            right,
+            left_key,
+            right_key,
+            residual,
+        } = *input
+        else {
+            panic!("semi join");
+        };
+        assert_eq!(left_key, column("l1.l_orderkey"));
+        assert_eq!(right_key, column("l2.l_orderkey"));
+        assert_eq!(
+            residual,
+            Some(Expr::BinaryOp {
+                left: Box::new(column("__kaveon_corr_0")),
+                op: BinaryOp::Ne,
+                right: Box::new(column("l1.l_quantity")),
+            })
+        );
+        assert!(matches!(
+            *left,
+            LogicalPlan::Join {
+                join_type: JoinType::Inner,
+                ..
+            }
+        ));
+        let LogicalPlan::Project { input, columns } = *right else {
+            panic!("the subquery projects its key and the residual's column");
+        };
+        assert_eq!(
+            columns,
+            vec![
+                column("l2.l_orderkey"),
+                Expr::Alias {
+                    expr: Box::new(column("l2.l_quantity")),
+                    name: "__kaveon_corr_0".into()
+                }
+            ]
+        );
+        let LogicalPlan::Filter { predicate, .. } = *input else {
+            panic!("the subquery keeps its own predicate");
+        };
+        assert!(matches!(
+            predicate,
+            Expr::BinaryOp {
+                op: BinaryOp::Gt,
+                ..
+            }
+        ));
+        // NOT EXISTS: the anti join, NULL keys dropped beneath the
+        // projection; a second equality joins the residual.
+        let plan = bound(
+            "SELECT o_orderkey FROM orders WHERE NOT EXISTS (SELECT * FROM lineitem WHERE l_orderkey = o_orderkey AND l_quantity = o_custkey AND l_shipdate > o_orderdate)",
+        );
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("projection");
+        };
+        let LogicalPlan::AntiJoin {
+            right,
+            left_key,
+            right_key,
+            residual,
+            ..
+        } = *input
+        else {
+            panic!("anti join");
+        };
+        assert_eq!(left_key, column("o_orderkey"));
+        assert_eq!(right_key, column("l_orderkey"));
+        assert_eq!(
+            residual,
+            Some(Expr::And(
+                Box::new(equal("__kaveon_corr_0", "o_custkey")),
+                Box::new(Expr::BinaryOp {
+                    left: Box::new(column("__kaveon_corr_1")),
+                    op: BinaryOp::Gt,
+                    right: Box::new(column("o_orderdate")),
+                })
+            ))
+        );
+        let LogicalPlan::Project { input, columns } = *right else {
+            panic!("key projection");
+        };
+        assert_eq!(columns.len(), 3);
+        let LogicalPlan::Filter { predicate, .. } = *input else {
+            panic!("NULL keys filtered");
+        };
+        assert_eq!(predicate, Expr::IsNotNull(Box::new(column("l_orderkey"))));
+    }
+
+    /// A residual whose subquery column rides through a projection is
+    /// renamed with it.
+    #[test]
+    fn a_residual_follows_its_column_through_the_subquery_projection() {
+        let plan = bound(
+            "SELECT o_orderkey FROM orders WHERE o_orderkey IN (SELECT l_orderkey FROM lineitem) AND EXISTS (SELECT l_shipdate FROM lineitem WHERE l_orderkey = o_orderkey AND l_quantity > o_custkey)",
+        );
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("projection");
+        };
+        let LogicalPlan::SemiJoin {
+            right, residual, ..
+        } = *input
+        else {
+            panic!("the EXISTS semi join is outermost");
+        };
+        let Some(Expr::BinaryOp { left, .. }) = residual else {
+            panic!("residual");
+        };
+        let Expr::Column(renamed) = *left else {
+            panic!("the residual reads the projected column");
+        };
+        let LogicalPlan::Project { columns, .. } = *right else {
+            panic!("the semi join projects key and residual column");
+        };
+        // The residual's column was projected out of the subquery's own
+        // SELECT under a name, then again beside the key under another.
+        assert!(columns.iter().any(|column| matches!(
+            column,
+            Expr::Alias { expr, name } if name == &renamed && matches!(expr.as_ref(), Expr::Column(inner) if inner.starts_with("__kaveon_corr_"))
+        )));
     }
 
     #[test]
