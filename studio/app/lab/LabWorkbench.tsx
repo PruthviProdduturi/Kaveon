@@ -58,6 +58,93 @@ interface QueryResult {
   rowCount?: number;
   /** Where KaveonDB answered from, when the query ran on it: `cache` is a served result, anything else a live query. */
   execution?: { mode: string; detail?: string } | null;
+  /** A streamed statement the reader stopped: the rows above are what had arrived. */
+  cancelled?: boolean;
+}
+
+/**
+ * The coordinator's live view of a streamed KaveonDB statement, shown above
+ * the grid while its pages arrive. Elapsed time is measured here — the
+ * record's `elapsed_ms` is final only once the statement has finished.
+ */
+interface StreamProgress {
+  state: string;
+  /** The record's own elapsed time, known once the statement has finished. */
+  elapsedMs: number | null;
+  tasksDone: number;
+  tasksTotal: number;
+  rowsScanned: number;
+  workers: number;
+  /** Rows the coordinator has written to pages so far. */
+  rowsWritten: number;
+  /** Rows the grid holds. */
+  rowsReceived: number;
+}
+
+/** `GET /api/v1/lab/query/{id}` — the record view the API serves for a streamed statement. */
+interface StreamRecord {
+  state: string;
+  elapsed_ms: number;
+  columns: string[];
+  stages?: Array<{ state: string; task_count: number; completed_tasks: number }>;
+  scans?: Array<{ rows_selected: number; rows_emitted?: number | null }>;
+  workers?: number;
+  error?: string | null;
+  execution?: { mode: string; detail?: string } | null;
+  next_uri?: string | null;
+}
+
+/** `GET /api/v1/lab/query/{id}/results/{n}` — one page, `data` present only on a 200. */
+interface StreamPage {
+  id: string;
+  data?: unknown[][];
+  next_uri?: string | null;
+  row_count?: number;
+  complete?: boolean;
+}
+
+const STREAM_TERMINAL = new Set(["FINISHED", "FAILED", "CANCELED"]);
+/** How often the record is read while a streamed statement runs. */
+const STREAM_RECORD_POLL_MS = 250;
+/** The wait for a page the coordinator has not written yet, when its 202 names no `Retry-After`. */
+const STREAM_PAGE_RETRY_MS = 1000;
+/** Consecutive pages requested together once the writer is ahead of the reader. */
+const STREAM_PAGE_LOOKAHEAD = 4;
+
+/** A streamed statement in flight; the loops that read it stop when `active` is cleared. */
+interface StreamRun {
+  queryId: string;
+  active: boolean;
+  cancelled: boolean;
+}
+
+function readStageProgress(record: StreamRecord): Pick<StreamProgress, "tasksDone" | "tasksTotal" | "rowsScanned"> {
+  let tasksDone = 0;
+  let tasksTotal = 0;
+  for (const stage of record.stages ?? []) {
+    tasksDone += Number(stage.completed_tasks) || 0;
+    tasksTotal += Number(stage.task_count) || 0;
+  }
+  let rowsScanned = 0;
+  for (const scan of record.scans ?? []) rowsScanned += Number(scan.rows_selected) || 0;
+  return { tasksDone, tasksTotal, rowsScanned };
+}
+
+function retryAfterMs(res: Response): number {
+  const seconds = Number(res.headers.get("Retry-After"));
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : STREAM_PAGE_RETRY_MS;
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(done, ms);
+    function done() {
+      signal?.removeEventListener("abort", done);
+      window.clearTimeout(timer);
+      resolve();
+    }
+    signal?.addEventListener("abort", done, { once: true });
+  });
 }
 
 interface QueryTab {
@@ -232,6 +319,8 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
   const [results, setResults] = useState<QueryResult | null>(null);
   const [resultError, setResultError] = useState<string | null>(null);
   const [liveElapsedMs, setLiveElapsedMs] = useState<number | null>(null);
+  // A KaveonDB statement's live counters while its rows stream into the grid.
+  const [streamProgress, setStreamProgress] = useState<StreamProgress | null>(null);
   const [sortColumnIndex, setSortColumnIndex] = useState<number | null>(null);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [columnWidths, setColumnWidths] = useState<number[]>([]);
@@ -288,6 +377,7 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
   const completionProviderRef = useRef<{ dispose: () => void } | null>(null);
   const runCurrentQueryRef = useRef<() => void>(() => {});
   const abortControllerRef = useRef<AbortController | null>(null);
+  const streamRunRef = useRef<StreamRun | null>(null);
   const applySqlFormattingRef = useRef<() => void>(() => {});
   const contentAreaRef = useRef<HTMLElement | null>(null);
   const engineLoadRef = useRef(0);
@@ -1066,6 +1156,10 @@ return;
 
       const userEmail = account?.email || account?.username || null;
       abortControllerRef.current = new AbortController();
+      if (usingEngine && currentEngineSourceId) {
+        await executeEngineStreamed(text, currentEngineSourceId, abortControllerRef.current.signal);
+        return;
+      }
       const res = await msalFetch(`${API_BASE}/api/v1/lab/query`, {
         method: "POST",
         headers: {
@@ -1118,6 +1212,8 @@ return;
     } finally {
       setIsExecuting(false);
       abortControllerRef.current = null;
+      streamRunRef.current = null;
+      setStreamProgress(null);
       if (executionTimerRef.current !== null) {
         window.clearInterval(executionTimerRef.current);
         executionTimerRef.current = null;
@@ -1126,7 +1222,227 @@ return;
     }
   };
 
+  /**
+   * A KaveonDB statement, streamed: submit with `stream: true`, then read
+   * the record every STREAM_RECORD_POLL_MS for the running line and the
+   * pages from `results/0` on, appending each page's rows to the grid as the
+   * coordinator writes it. A scan, filter or join's pages land from its
+   * first batch; an ORDER BY, GROUP BY or DISTINCT root writes them when it
+   * finishes. The grid holds at most `rowLimit` rows (all when it is 0); the
+   * statement still runs to completion so the summary carries its true row
+   * count. Cancel sends DELETE and keeps what had arrived.
+   */
+  const executeEngineStreamed = async (text: string, sourceId: string, signal: AbortSignal) => {
+    const submitted = await msalFetch(`${API_BASE}/api/v1/lab/query`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal,
+      body: JSON.stringify({ query: text, engineSourceId: sourceId, engineSchema: currentDatabase, stream: true }),
+    });
+    const submission = await submitted.json().catch(() => ({}));
+    if (!submitted.ok || !submission.success || typeof submission.queryId !== "string") {
+      const detail = submission.detail;
+      const message = typeof detail === "string" ? detail
+        : detail && typeof detail.message === "string" ? detail.message
+        : submission.error || "Query execution failed";
+      throw new Error(message);
+    }
+    const run: StreamRun = { queryId: submission.queryId, active: true, cancelled: false };
+    streamRunRef.current = run;
+    const startedAt = performance.now();
+    const recordUrl = `${API_BASE}/api/v1/lab/query/${encodeURIComponent(run.queryId)}`;
+
+    let columns: string[] = [];
+    let columnsShown = false;
+    let received = 0;
+    let record: StreamRecord | null = null;
+    // Read through a call: the loops below assign `record` from closures, which the narrowing at this scope does not see.
+    const latestRecord = (): StreamRecord | null => record;
+    let pagesReady = false;
+    let gone = false;
+    let totalRows: number | null = null;
+    const progress: StreamProgress = {
+      state: "RUNNING", elapsedMs: null, tasksDone: 0, tasksTotal: 0, rowsScanned: 0, workers: 0, rowsWritten: 0, rowsReceived: 0,
+    };
+    const publishProgress = () => setStreamProgress({ ...progress });
+
+    const showColumns = (names: string[]) => {
+      if (columnsShown || names.length === 0) return;
+      columns = names;
+      columnsShown = true;
+      setResults((prev) => ({ columns: names, rows: prev?.rows ?? [], execution: null }));
+      setColumnWidths([]);
+      setCurrentPage(0);
+      setHiddenColumns(new Set());
+    };
+
+    const isAbort = (error: unknown) => error instanceof Error && error.name === "AbortError";
+
+    const pollRecord = async () => {
+      while (run.active) {
+        let res: Response;
+        try {
+          res = await msalFetch(recordUrl, { signal });
+        } catch (error) {
+          if (isAbort(error)) return;
+          throw error;
+        }
+        if (res.status === 404) throw new Error("The statement is no longer known to KaveonDB");
+        if (!res.ok) {
+          await sleep(STREAM_RECORD_POLL_MS, signal);
+          continue;
+        }
+        const body = await res.json();
+        const next: StreamRecord = body.query;
+        record = next;
+        showColumns(Array.isArray(next.columns) ? next.columns : []);
+        if (next.next_uri) pagesReady = true;
+        const stage = readStageProgress(next);
+        progress.state = next.state;
+        progress.elapsedMs = next.elapsed_ms > 0 ? next.elapsed_ms : null;
+        progress.tasksDone = stage.tasksDone;
+        progress.tasksTotal = stage.tasksTotal;
+        progress.rowsScanned = stage.rowsScanned;
+        progress.workers = Number(next.workers) || 0;
+        publishProgress();
+        if (STREAM_TERMINAL.has(next.state)) return;
+        await sleep(STREAM_RECORD_POLL_MS, signal);
+      }
+    };
+
+    const fetchPage = async (page: number): Promise<{ res: Response; body: StreamPage | null }> => {
+      const res = await msalFetch(`${recordUrl}/results/${page}`, { signal });
+      const body: StreamPage | null = res.status === 200 || res.status === 202
+        ? await res.json().catch(() => null)
+        : null;
+      return { res, body };
+    };
+
+    const readPages = async () => {
+      let page = 0;
+      // Pages are read in order; once the writer is ahead of the reader a
+      // few consecutive pages are requested together, so a large result is
+      // retrieved at the proxy's throughput rather than one round trip per
+      // 1,000 rows. A 202 or the end of the result drops back to one.
+      let lookahead = 1;
+      while (run.active) {
+        // Page 0 exists only once the schema is known, so waiting for the
+        // record's columns costs at most one poll and keeps the header first.
+        if (!pagesReady || !columnsShown) {
+          if (record && STREAM_TERMINAL.has(record.state)) return;
+          await sleep(STREAM_RECORD_POLL_MS, signal);
+          continue;
+        }
+        let batch: Array<{ res: Response; body: StreamPage | null }>;
+        try {
+          batch = await Promise.all(Array.from({ length: lookahead }, (_, offset) => fetchPage(page + offset)));
+        } catch (error) {
+          if (isAbort(error)) return;
+          throw error;
+        }
+        let landed = 0;
+        for (const { res, body } of batch) {
+          if (res.status === 202) {
+            progress.rowsWritten = Number(body?.row_count) || progress.rowsWritten;
+            publishProgress();
+            lookahead = 1;
+            await sleep(retryAfterMs(res), signal);
+            break;
+          }
+          if (res.status === 410) { gone = true; return; }
+          if (res.status === 404) return;
+          if (!res.ok || !body) {
+            lookahead = 1;
+            await sleep(STREAM_PAGE_RETRY_MS, signal);
+            break;
+          }
+          const rows = Array.isArray(body.data) ? body.data : [];
+          const room = rowLimit > 0 ? Math.max(0, rowLimit - received) : rows.length;
+          const kept = room < rows.length ? rows.slice(0, room) : rows;
+          if (kept.length > 0) {
+            received += kept.length;
+            // Append: the grid renders one PAGE_SIZE window of `rows`, so a
+            // page landing re-renders that window, never the whole result.
+            setResults((prev) => (prev ? { ...prev, rows: prev.rows.concat(kept) } : { columns, rows: kept, execution: null }));
+          }
+          progress.rowsWritten = Number(body.row_count) || progress.rowsWritten;
+          progress.rowsReceived = received;
+          publishProgress();
+          if (body.complete) totalRows = Number(body.row_count) || received;
+          if (!body.next_uri) return;
+          if (rowLimit > 0 && received >= rowLimit) return;   // hold no more than the limit
+          page += 1;
+          landed += 1;
+        }
+        if (landed === batch.length) lookahead = Math.min(STREAM_PAGE_LOOKAHEAD, lookahead * 2);
+      }
+    };
+
+    try {
+      await Promise.all([pollRecord(), readPages()]);
+    } catch (error) {
+      if (!isAbort(error)) {
+        run.active = false;
+        throw error;
+      }
+    }
+    run.active = false;
+
+    let finalRecord = latestRecord();
+    if (!run.cancelled && (gone || !finalRecord || !STREAM_TERMINAL.has(finalRecord.state))) {
+      // The pages ended before the poll saw the record settle: read it once
+      // more so the outcome and its error come from the record itself.
+      try {
+        const res = await msalFetch(recordUrl);
+        if (res.ok) finalRecord = (await res.json()).query as StreamRecord;
+      } catch {
+        // The outcome below falls back to what the pages said.
+      }
+    }
+    const state = run.cancelled ? "CANCELED" : finalRecord?.state ?? "FINISHED";
+    const elapsedSeconds = finalRecord && finalRecord.elapsed_ms > 0
+      ? finalRecord.elapsed_ms / 1000
+      : (performance.now() - startedAt) / 1000;
+
+    if (state === "FAILED" || (gone && state !== "CANCELED")) {
+      setResults(null);
+      setResultError(finalRecord?.error || "KaveonDB could not complete the statement");
+      return;
+    }
+    if (state === "CANCELED") {
+      setResults((prev) => prev
+        ? { ...prev, rowCount: prev.rows.length, executionTime: elapsedSeconds, execution: null, cancelled: true }
+        : null);
+      return;
+    }
+    if (totalRows === null && rowLimit > 0 && received >= rowLimit) {
+      // The grid stopped at its limit before the writer's last page; one
+      // page read after completion carries the statement's total.
+      try {
+        const res = await msalFetch(`${recordUrl}/results/0`);
+        if (res.ok) {
+          const body: StreamPage = await res.json();
+          if (body.complete && typeof body.row_count === "number") totalRows = body.row_count;
+        }
+      } catch {
+        // The summary falls back to the rows received.
+      }
+    }
+    setResults((prev) => ({
+      columns: prev?.columns.length ? prev.columns : columns,
+      rows: prev?.rows ?? [],
+      rowCount: totalRows ?? received,
+      executionTime: elapsedSeconds,
+      execution: finalRecord?.execution ?? null,
+    }));
+  };
+
   const cancelQuery = () => {
+    const run = streamRunRef.current;
+    if (run && run.active && !run.cancelled) {
+      run.cancelled = true;
+      void msalFetch(`${API_BASE}/api/v1/lab/query/${encodeURIComponent(run.queryId)}`, { method: "DELETE" });
+    }
     abortControllerRef.current?.abort();
   };
 
@@ -2454,10 +2770,14 @@ return;
                     />
                   )}
                   <span id="resultStats" className="result-stats">
-                    {isExecuting && (
+                    {isExecuting && streamProgress?.state === "FINISHED" && (
+                      <><i className="fas fa-spinner fa-spin" style={{ marginRight: "0.4rem" }} />{`Retrieving rows • ${streamProgress.rowsReceived.toLocaleString()} received`}</>
+                    )}
+                    {isExecuting && streamProgress?.state !== "FINISHED" && (
                       <><i className="fas fa-spinner fa-spin" style={{ marginRight: "0.4rem" }} />{`Running • ${formatExecutionTime((liveElapsedMs ?? 0) / 1000)}`}</>
                     )}
-                    {!isExecuting && rowCount > 0 && `${rowCount.toLocaleString()} rows • ${executionLabel}${formatExecutionTime(executionTime)}`}
+                    {!isExecuting && results?.cancelled && `Cancelled • ${rowCount.toLocaleString()} rows received • ${formatExecutionTime(executionTime)}`}
+                    {!isExecuting && !results?.cancelled && rowCount > 0 && `${rowCount.toLocaleString()} rows • ${executionLabel}${formatExecutionTime(executionTime)}`}
                   </span>
 
                   {results && !isExecuting && (
@@ -2528,7 +2848,39 @@ return;
                 </div>
               </div>
 
-              <div id="resultsContainer" className="results-container">
+              <div id="resultsContainer" className={`results-container${isExecuting && streamProgress ? " results-container--streaming" : ""}`}>
+                {/* ── A KaveonDB statement streaming its rows ── */}
+                {isExecuting && streamProgress && (
+                  <div className="lab-stream-line" role="status" aria-live="polite">
+                    <span className="lab-stream-line__pulse" aria-hidden="true" />
+                    <span className="lab-stream-line__state">
+                      {streamProgress.state === "QUEUED" ? "Queued" : streamProgress.state === "FINISHED" ? "Retrieving rows" : "Running"}
+                    </span>
+                    <span className="lab-stream-line__facts">
+                      <span>{formatExecutionTime((streamProgress.elapsedMs ?? liveElapsedMs ?? 0) / 1000)}</span>
+                      {streamProgress.tasksTotal > 0 && (
+                        <span>{streamProgress.tasksDone.toLocaleString()} of {streamProgress.tasksTotal.toLocaleString()} tasks</span>
+                      )}
+                      {streamProgress.rowsScanned > 0 && (
+                        <span>{streamProgress.rowsScanned.toLocaleString()} rows scanned</span>
+                      )}
+                      {streamProgress.workers > 0 && (
+                        <span>{streamProgress.workers} {streamProgress.workers === 1 ? "worker" : "workers"}</span>
+                      )}
+                      <span>
+                        {streamProgress.rowsReceived > 0
+                          ? `${streamProgress.rowsReceived.toLocaleString()} rows received`
+                          : streamProgress.rowsWritten > 0
+                          ? `${streamProgress.rowsWritten.toLocaleString()} rows ready`
+                          : "Waiting for the first page"}
+                      </span>
+                    </span>
+                    <button type="button" className="lab-stream-line__cancel" onClick={cancelQuery} title="Cancel the statement">
+                      Cancel
+                    </button>
+                  </div>
+                )}
+
                 {/* ── Multiple-statement results ── */}
                 {multiResults && !isExecuting && (
                   <div>
