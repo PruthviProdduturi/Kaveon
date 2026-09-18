@@ -31,6 +31,8 @@ fn joined(parts: &[String]) -> String {
 
 pub fn header(facts: &HeaderFacts<'_>, theme: &Theme) -> Vec<Line<'static>> {
     let mut lines = vec![
+        Line::raw(""),
+        Line::from(Span::styled(format!("  {RULE}"), theme.accent)),
         Line::from(vec![
             Span::styled("  KAVEON", theme.title),
             Span::styled(format!("  v{}", facts.cli_version), theme.dim),
@@ -166,7 +168,8 @@ mod tests {
             &facts(Some(&cluster), Some(&whoami)),
             &Theme::mono(),
         ));
-        assert!(text.starts_with("  KAVEON  v0.3.0\n"), "{text}");
+        assert!(text.starts_with("\n  ─"), "{text}");
+        assert!(text.contains("\n  KAVEON  v0.3.0\n"), "{text}");
         assert!(text.contains("Engine    http://localhost:8081  ·  v0.1.0  ·  docker"));
         assert!(text.contains(
             "Cluster   coordinator-1  ·  1 worker ready  ·  1 stale  ·  4.0 GiB admission"
