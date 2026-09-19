@@ -77,7 +77,7 @@ def update_dataset(
     payload = data.model_dump(exclude_none=True)
     if payload.get("visibility") == "published" and not can_publish(ctx):
         payload["visibility"] = "internal"
-    payload = engine_datasets.apply_binding(payload, ctx.email, ctx.role)
+    payload = engine_datasets.apply_binding(payload, ctx.email, ctx.role, existing=existing)
 
     result = svc.update_dataset(dataset_id, payload, ctx.email)
     if not result:
@@ -100,7 +100,7 @@ def patch_dataset(
     payload = data.model_dump(exclude_none=True)
     if payload.get("visibility") == "published" and not can_publish(ctx):
         payload["visibility"] = "internal"
-    payload = engine_datasets.apply_binding(payload, ctx.email, ctx.role)
+    payload = engine_datasets.apply_binding(payload, ctx.email, ctx.role, existing=existing)
 
     result = svc.update_dataset(dataset_id, payload, ctx.email)
     if not result:

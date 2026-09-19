@@ -165,28 +165,30 @@ def semantics(resolved: Dict[str, Any]) -> Dict[str, Any]:
     return {"columns": columns, "metrics": metrics, "date_column": date_column, "dimensions": []}
 
 
-def apply_binding(payload: Dict[str, Any], actor: str, role: str) -> Dict[str, Any]:
+def apply_binding(payload: Dict[str, Any], actor: str, role: str,
+                  existing: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Fill a dataset create/update payload from its Engine binding. The names
     always come from the Engine (a dataset cannot name one table and bind to
-    another); columns, metrics and the date column only when the caller did
-    not send them."""
+    another); columns, metrics and the date column only when neither the
+    caller nor the stored dataset (`existing`, on an update) has them."""
     source = payload.get("source") or {}
     if source.get("kind") != "engine":
         return payload
     resolved = resolve_table(str(source["table_id"]), actor, role)
     derived = semantics(resolved)
+    existing = existing or {}
     out = dict(payload)
     out["source"] = {"kind": "engine", "table_id": resolved["table_id"]}
     out["database_name"] = resolved["catalog"]
     out["schema_name"] = resolved["schema"]
     out["table_name"] = resolved["table"]
     out.pop("sql_text", None)
-    if not out.get("columns"):
+    if not out.get("columns") and not existing.get("columns"):
         out["columns"] = derived["columns"]
-    if not out.get("metrics"):
+    if not out.get("metrics") and not existing.get("metrics"):
         out["metrics"] = derived["metrics"]
-    if not out.get("date_column") and derived["date_column"]:
+    if not out.get("date_column") and not existing.get("date_column") and derived["date_column"]:
         out["date_column"] = derived["date_column"]
-    if out.get("dimensions") is None:
+    if out.get("dimensions") is None and not existing:
         out["dimensions"] = []
     return out
