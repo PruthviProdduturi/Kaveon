@@ -9,6 +9,7 @@ pub mod entra;
 pub mod exchange;
 pub mod fragment_exec;
 pub mod lifecycle;
+mod optimize;
 pub mod orchestrator;
 pub mod planner;
 pub mod result_cache;
