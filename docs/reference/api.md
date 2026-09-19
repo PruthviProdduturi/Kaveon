@@ -143,7 +143,7 @@ The Rust server exposes these routes:
 | `POST` | `/v1/statement` | Parse, bind, plan, execute and retain a query result; inline (up to 16 MiB) or `result_delivery: "paged"` with `next_uri` pages; accepts per-request `settings` and leading `SET SESSION` statements; a parse error is a 400 `SYNTAX_ERROR` whose body carries `position: {line, column}` (one-based) when the parser names the failing token, absent for an error at end of input |
 | `POST` | `/v1/statement` | Parse, bind, plan, execute and retain a query result; inline (up to 16 MiB) or `result_delivery: "paged"` with `next_uri` pages; accepts per-request `settings` and leading `SET SESSION` statements. Also runs [catalog statements](#catalog-statements) (`CREATE`/`DROP`/`ALTER` on the durable catalog, `SHOW`, `DESCRIBE`, `CALL system.register_table`) |
 | `GET` | `/v1/query` | Return up to 100 newest process-local query records, queued and running ones included |
-| `GET` | `/v1/query/{query_id}` | Return retained lifecycle, context, structured logical plan, result, and scan telemetry (`scans[]`: files considered, opened and pruned by partition; row groups considered, read, pruned and `row_groups_pruned_by_bloom` with `bloom_filters_read` and `bloom_filter_bytes_read`; rows and compressed bytes selected and read; row-filter rows examined and admitted; lane spread); while the state is `RUNNING`, `stages` (`completed_tasks`, `tasks`) and `scans` are updated as each distributed task completes, and `scan_metrics_complete` stays `false` until the statement finishes |
+| `GET` | `/v1/query/{query_id}` | Return retained lifecycle, context, structured logical plan, result, and scan telemetry (`scans[]`: files considered, opened, pruned by partition and `files_skipped` from recorded bounds; row groups considered, read, pruned and `row_groups_pruned_by_bloom` with `bloom_filters_read` and `bloom_filter_bytes_read`; rows and compressed bytes selected and read; row-filter rows examined and admitted; lane spread); while the state is `RUNNING`, `stages` (`completed_tasks`, `tasks`) and `scans` are updated as each distributed task completes, and `scan_metrics_complete` stays `false` until the statement finishes |
 | `DELETE` | `/v1/query/{query_id}` | Cancel the query: a queued statement leaves the admission queue at once; a running one propagates cancellation to active worker tasks |
 | `GET` | `/v1/cluster` | Coordinator and discovered-worker state, with each node's memory admission counters (`admission`) as last heartbeated |
 | `GET` | `/v1/node` | Current node information, with the result cache counters on a coordinator and the node's memory admission counters (`admission`) |
@@ -156,11 +156,12 @@ The Rust server exposes these routes:
 | `GET`, `PUT`, `DELETE` | `/v1/catalog/schemas/{schema_id}` | Read, revision-replace, or delete a durable schema definition |
 | `GET`, `POST` | `/v1/catalog/schemas/{schema_id}/tables` | List or create durable table definitions |
 | `GET`, `PUT`, `DELETE` | `/v1/catalog/tables/{table_id}` | Read, revision-replace, or delete a durable table definition |
+| `GET` | `/v1/catalog/tables/{table_id}/statistics`, `…/version` | The table's statistics on record with the source version observed now, and the current source version alone (see [Statistics endpoints](#statistics-endpoints)) |
 | `GET` | `/v1/catalog/{catalog}/schema` | List schemas |
 | `GET` | `/v1/catalog/{catalog}/schema/{schema}/table` | List tables |
 | `GET` | `/v1/query/{query_id}/results/{page}` | One page of a paged result, served while the statement still runs (owner-scoped, immutable once written, 15 min TTL): `200` with the rows, `202` + `Retry-After: 1` for the next page not yet flushed, `404` past the end or unknown, `410` when the statement failed or was cancelled — see "Streaming pages" under [Important behavior](#important-behavior) |
 | `GET` | `/v1/whoami` | The identity the security layer attached to the request: `principal`, `display` (null unless a validated sign-in supplied one), `role` (`reader`, `analyst`, `admin`) and `auth` (`static`, `bridge`, `entra`, `development`, `internal`). The client shows it in its session header; older coordinators answer 404 and the client hides the line |
-| `GET` | `/v1/capabilities`, `/v1/statistics`, `/v1/auth/config` | What the coordinator supports (native `ANALYZE`, transactions), published exact statistics, and the Entra sign-in configuration for the UI |
+| `GET` | `/v1/capabilities`, `/v1/statistics`, `/v1/auth/config` | What the coordinator supports (native `ANALYZE`, transactions), the tables with statistics on record and whether each is current, and the Entra sign-in configuration for the UI |
 | `POST` | `/v1/transaction`, `/v1/transaction/sql`, `/v1/transaction/{id}/stage`, `…/commit`, `…/rollback`, `…/recovery`; `GET` `/v1/transaction/metrics`, `/v1/products/{kind}`, `/v1/product/{kind}/{id}` | The bounded product-record transaction protocol and typed product reads; see the [SQL compatibility reference](engine-sql-compatibility.md#transaction-api-boundary) |
 | `POST`, `GET` | `/v1/task`, `/v1/exchange`, `/v1/internal/exchange/*`, `/v1/internal/query/{query_id}/finish`, `/v1/internal/catalog/snapshot` | Worker task submission, exchange partition upload/download, query finish and cancellation, catalog replica; exchange-token authenticated, not client routes. A task request with `stream_result: true` (a root task of a paged statement) is answered with its Arrow IPC stream as the fragment runs, marked `x-kaveon-task-streamed: 1`, its metrics omitted from the headers; a second submission of a streamed task is refused with `409 TASK_RESULT_NOT_RETAINED` |
 | `GET` | `/v1/task/{query_id}/{stage_id}/{partition}/{attempt}/metrics` | A task's outcome on its worker, exchange-token authenticated: `200` `{"elapsed_us", "scan", "execution"}` once it finished (`scan` and `execution` are the task's scan and execution metrics, `null` when it carries none), `202` `{"state": "RUNNING"}` while it runs, `500` `{"error"}` when it failed, `404` for a task the worker does not know or has already forgotten with its finished query |
@@ -303,8 +304,9 @@ schema, runs with whatever `catalog`/`schema` the request names.
 
 ### Statistics statements
 
-`ANALYZE` publishes a table's statistics; two statements read them. All
-three take the `ANALYZE` name form — `[catalog.][schema.]table`, plain or
+`ANALYZE` computes a table's statistics and stores them in the durable
+catalog beside the table definition; two statements read them. All take
+the `ANALYZE` name form — `[catalog.][schema.]table`, plain or
 double-quoted identifier parts, unqualified names resolved by the session
 `catalog` and `schema` — answer inline regardless of `result_delivery`, and
 leave a query record like any statement.
@@ -313,69 +315,68 @@ leave a query record like any statement.
 ANALYZE [catalog.][schema.]table
 ANALYZE [catalog.][schema.]table WITH (distinct = true)
 ANALYZE [catalog.][schema.]table WITH (columns = ARRAY['a', 'b'])
+ANALYZE [catalog.][schema.]table WITH (sketches = true)
 SHOW STATS FOR [catalog.][schema.]table
 DESCRIBE DETAIL [catalog.][schema.]table
 ```
 
-- **`ANALYZE`** (admin only; needs the durable product catalog, else 503
-  `ANALYZE_DISABLED`) reads the source's metadata twice — Parquet footers,
-  the Delta log, the Iceberg metadata pointer and manifests; never a data
-  page — refuses with 409 `SOURCE_CHANGED` when the immutable identity
-  moved between the reads, and commits one statistics document at
-  `statistics/<operation>.json` under the catalog head, bound to the catalog
-  snapshot and the source identity. Its result is one row, `table
-  (VARCHAR), row_count (BIGINT), distinct_columns (BIGINT)` — the last is
-  how many columns this statement counted distinct values for, `0` for the
-  metadata-only form. The planner keeps using the committed row count
-  alone.
-- **`ANALYZE … WITH (…)`** adds exact distinct counts, which take a scan.
-  `distinct = true` counts every column; `columns = ARRAY['a', 'b']`
-  (Trino's spelling; single-quoted names, case-sensitive as the source
-  spells them, `''` for a quote) counts the columns listed. The keys and
-  the values are case-insensitive; whitespace inside the parentheses is
-  free; `distinct = false` is the plain form. The two keys together, an
-  unknown key, or a malformed list is 400 `SYNTAX_ERROR`; a column the
-  table does not have is 400 `ANALYSIS_ERROR` naming it, before any count
-  runs. Each selected column is one statement, `SELECT COUNT(DISTINCT
-  "column") FROM catalog.schema.table`, run through the coordinator's own
-  statement path — admitted, recorded, planned and executed exactly as a
-  client statement is, on the workers when the cluster has them — four
-  at a time (fewer when `KAVEON_PRINCIPAL_QUERY_LIMIT` is lower, so no
-  count is refused admission), with the result cache off, under the
-  `ANALYZE` statement's cancellation: cancelling the `ANALYZE` cancels the
-  counts running, no further count starts, and no document is written.
-  The count is the number of distinct non-null values, exact; the cost is
-  one scan of the column per selected column, so an `ANALYZE` with
-  `distinct = true` over a wide table is that many aggregates, four
-  abreast (the local Compose stack counts the 21 columns of the 504M-row
-  table in about a minute; a single run, not a claim). A count that fails
-  fails the `ANALYZE` with that statement's status, code and message, the
-  column named, and cancels the counts still running. The counts are read after the first metadata
-  read and before the second, so a source that changes under the scans
-  is the same 409 `SOURCE_CHANGED`. The sub-statements are ordinary query
-  records: `GET /v1/query` lists them under the admin who ran the
-  `ANALYZE`, with the statement's own tags plus `analyze:<id of the
-  ANALYZE record>` in `client_tags`, so they are never anonymous. The
-  `ANALYZE` record itself stays `RUNNING`, and cancellable by its id, for
-  the whole run. `ANALYZE` holds no memory, principal or resource-group
-  admission of its own while the counts run — each count is admitted in
-  its own right — so a coordinator that admits one statement at a time
-  does not wait on itself.
-- **Keeping counts across runs.** A column not counted by a statement
-  keeps the `distinct` of the previous document when the source identity
-  (`source_identity_sha256`) is unchanged; when the source changed, the
-  columns not counted are null. So a nightly plain `ANALYZE t` after a
-  one-off `ANALYZE t WITH (distinct = true)` keeps the counts as long as
-  the table's files do not move, and `ANALYZE t WITH (columns =
-  ARRAY['a'])` refreshes one column without losing the others. A count is
-  only ever as current as the source identity it was measured under.
-- **`SHOW STATS FOR`** (any statement-capable role) presents the stored
-  document, never a fresh read: Trino's columns plus `row_count` and
-  `analyzed_at`, one row per column and a final summary row whose
-  `column_name` is null and which carries the table's `row_count` and total
-  `data_size`. A table that was never analyzed is 400
-  `STATISTICS_UNAVAILABLE` with `no statistics for c.s.t; run ANALYZE
-  c.s.t`; 503 `STATISTICS_DISABLED` without a durable product catalog.
+- **`ANALYZE`** (admin only) reads the source's metadata — Parquet
+  footers, the Delta log, the Iceberg metadata pointer and manifests;
+  never a data page — into one statistics object (below): the table
+  facts, per-column bounds with their exactness and null counts, and
+  per-file bounds for file skipping. The object is versioned by the
+  **source version** it was computed from — the Delta version, the
+  Iceberg snapshot, the digest of a directory listing, a file's identity
+  — and stored under the table's durable id (`table_statistics` in the
+  SQLite catalog, deleted with the table). A source that moves between
+  the build and the store is 409 `SOURCE_CHANGED`. Its result is one row,
+  `table (VARCHAR), row_count (BIGINT), distinct_columns (BIGINT)` — the
+  last is how many columns this statement counted distinct values for,
+  `0` for the metadata-only form.
+- **`ANALYZE … WITH (sketches = true)`** reads every sketchable column
+  once on the coordinator (files in parallel, batches reserved through
+  the statement's memory admission) for a HyperLogLog distinct-count
+  sketch per column, a KLL quantile sketch per numeric or temporal column
+  and exact bounds and null counts; `depth` becomes `full`. A source that
+  changes under the read is refused rather than mixed. The sketches are
+  what the planner estimates selectivity from; a later addition of files
+  folds new sketches in (see automatic refresh).
+- **`ANALYZE … WITH (distinct = true | columns = ARRAY['a', 'b'])`** adds
+  exact distinct counts, which take a scan. `distinct = true` counts every
+  column; `columns = ARRAY[…]` (Trino's spelling; single-quoted names,
+  case-sensitive as the source spells them, `''` for a quote) counts the
+  columns listed; either may be combined with `sketches = true`. The keys
+  and the values are case-insensitive; `distinct = false` is the plain
+  form. `distinct` and `columns` together, an unknown key, or a malformed
+  list is 400 `SYNTAX_ERROR`; a column the table does not have is 400
+  `ANALYSIS_ERROR` naming it, before any count runs. Each selected column
+  is one statement, `SELECT COUNT(DISTINCT "column") FROM
+  catalog.schema.table`, run through the coordinator's own statement
+  path — admitted, recorded, planned and executed exactly as a client
+  statement is, on the workers when the cluster has them — four at a
+  time (fewer when `KAVEON_PRINCIPAL_QUERY_LIMIT` is lower), with the
+  result cache off, under the `ANALYZE` statement's cancellation:
+  cancelling the `ANALYZE` cancels the counts running, no further count
+  starts, and nothing is stored. A count that fails fails the `ANALYZE`
+  with that statement's status, code and message, the column named. The
+  source version is read again after the counts; a change is 409
+  `SOURCE_CHANGED`. The sub-statements are ordinary query records with
+  `analyze:<id of the ANALYZE record>` in `client_tags`. `ANALYZE` holds
+  no memory, principal or resource-group admission of its own while the
+  counts run — each count is admitted in its own right.
+- **Keeping what was measured across runs.** A column not counted by a
+  statement keeps the exact count of the previous document when the
+  source version is unchanged, and a metadata-only `ANALYZE` at the same
+  version keeps the previous full read's sketches and exact bounds; a
+  document at a new source version carries only what was measured under
+  it. A sketch estimate stands in when there is no exact count.
+- **`SHOW STATS FOR`** (any statement-capable role) presents the
+  statistics on record, never a fresh read: Trino's columns plus
+  `row_count` and `analyzed_at`, one row per column and a final summary
+  row whose `column_name` is null and which carries the table's
+  `row_count` and total `data_size`. A table that was never analyzed is
+  400 `STATISTICS_UNAVAILABLE` with `no statistics for c.s.t; run ANALYZE
+  c.s.t`.
 
   | Column | Type | Value |
   |---|---|---|
@@ -383,57 +384,120 @@ DESCRIBE DETAIL [catalog.][schema.]table
   | `data_type` | `VARCHAR` | The SQL spelling `DESCRIBE` uses (`bigint`, `varchar`, `decimal(10, 2)`, …) |
   | `data_size` | `BIGINT` | Compressed bytes of the column's chunks; on the summary row the data files' bytes as stored; null when the source does not record it |
   | `nulls_fraction` | `DOUBLE` | `nulls / row_count`; null when the null count is unknown or the table is empty |
-  | `distinct_values_count` | `BIGINT` | The exact count of distinct non-null values from the last `ANALYZE … WITH (…)` that counted the column under the current source identity; null when none did |
+  | `distinct_values_count` | `BIGINT` | The exact count of distinct non-null values when `ANALYZE … WITH (distinct = true \| columns = …)` counted the column under this source version, else the HyperLogLog estimate when `WITH (sketches = true)` read it, else null |
   | `low_value` / `high_value` | `VARCHAR` | The bounds as text: numbers as digits, dates and timestamps as ISO 8601, decimals exact; null when any file or row group lacks the bound |
   | `row_count` | `BIGINT` | Null on column rows; the exact row count on the summary row |
-  | `analyzed_at` | `TIMESTAMP` | ISO 8601 UTC text (`2026-09-18T18:17:56.667Z`), the same on every row |
+  | `analyzed_at` | `TIMESTAMP` | ISO 8601 UTC text (`2026-09-18T18:17:56.667Z`), the same on every row: when the document was computed or last refreshed |
 
 - **`DESCRIBE DETAIL`** (any statement-capable role) is one row of
-  table-level facts: from the stored document when the table was analyzed,
-  else from a fresh metadata read, so it works before `ANALYZE` (400
-  `DESCRIBE_FAILED` with the storage error when the source cannot be read).
-  Columns: `format (VARCHAR: parquet|delta|iceberg)`, `location (VARCHAR)`,
-  `created_at (TIMESTAMP, null: no source records it)`, `last_modified
-  (TIMESTAMP)`, `num_files (BIGINT)`, `size_in_bytes (BIGINT)`, `row_count
-  (BIGINT)`, `delta_version (BIGINT)`, `partition_columns (VARCHAR,
-  comma-separated)`, `analyzed_at (TIMESTAMP)`, `catalog_snapshot (VARCHAR,
-  the SHA-256 the document is bound to)`. `row_count`, `analyzed_at` and
-  `catalog_snapshot` are null until the table is analyzed. Timestamps are
-  ISO 8601 UTC text.
+  table-level facts: from the statistics on record when the table was
+  analyzed, else from a fresh metadata read, so it works before `ANALYZE`
+  (400 `DESCRIBE_FAILED` with the storage error when the source cannot be
+  read). Columns: `format (VARCHAR: parquet|delta|iceberg)`, `location
+  (VARCHAR)`, `created_at (TIMESTAMP, null: no source records it)`,
+  `last_modified (TIMESTAMP)`, `num_files (BIGINT)`, `size_in_bytes
+  (BIGINT)`, `row_count (BIGINT)`, `delta_version (BIGINT)`,
+  `partition_columns (VARCHAR, comma-separated)`, `analyzed_at
+  (TIMESTAMP)`, `catalog_snapshot (VARCHAR, the published catalog
+  snapshot the statement resolved the table under)`. `row_count` and
+  `analyzed_at` are null until the table is analyzed. Timestamps are ISO
+  8601 UTC text.
 
-**The statistics document** (version 2) is what `ANALYZE` writes and the
-two statements read. Every fact is a metadata read: Parquet column facts
-are the row-group column-chunk statistics merged over row groups and files
-(null counts summed, bounds widened; a bound any chunk lacks is null); a
-Delta table whose add actions all carry `stats` and whose log carries the
-schema is profiled from the log alone (`numRecords`, `minValues`,
-`maxValues`, `nullCount`; `size` and `modificationTime` for the table),
-else from the active files' footers; an Iceberg table's rows and bytes come
-from the manifests and its column facts from the live files' footers,
-matched by field id. `min`/`max` are JSON of the logical type — numbers as
-numbers, strings as strings, dates and timestamps as ISO 8601 strings,
-decimals as exact decimal text, booleans as booleans; binary and INT96
-columns carry no bounds. `distinct` is the exact distinct count when an
-`ANALYZE … WITH (…)` measured the column (see above), else null.
+**The statistics object** (document version 3; versions 1 and 2 were the
+product catalog's `ANALYZE` documents, which are no longer written or
+read) is what `ANALYZE` stores, the two statements and
+`GET /v1/catalog/tables/{id}/statistics` read, and the planner plans
+from. It is JSON:
 
 ```json
-{"version": 2, "table": "lake.sales.orders", "analyzed_at_ms": 1789841876667,
- "catalog_snapshot_sha256": "…", "source_identity_sha256": "…",
- "format": "parquet", "location": "/data/orders.parquet", "delta_version": null,
- "row_count": 3, "file_count": 1, "row_group_count": 1,
- "compressed_bytes": 499, "uncompressed_bytes": 66, "last_modified_ms": 1789841876000,
- "partition_columns": [],
- "columns": [{"name": "id", "type": "bigint", "nulls": 0, "min": 1, "max": 3,
-              "compressed_bytes": 85, "distinct": null}]}
+{"version": 3, "table_id": "table:…",
+ "source_version": {"identity_sha256": "…", "kind": "listing", "files": 3},
+ "computed_at_ms": 1789841876667, "depth": "metadata",
+ "format": "Parquet", "location": "/lake/events",
+ "rows": 300, "bytes": 5232, "files": 3, "row_groups": 3,
+ "uncompressed_bytes": 9600, "last_modified_ms": 1789841876000,
+ "columns": [{"name": "id", "data_type": "Int64", "null_count": 0,
+              "min": 0, "max": 299, "bounds_exact": true, "bytes": 1710}],
+ "per_file": [{"path": "a.parquet", "rows": 100, "bytes": 1744,
+               "columns": [{"min": 0, "max": 99, "null_count": 0}]}],
+ "per_file_complete": true}
 ```
 
-`row_group_count`, `uncompressed_bytes`, `last_modified_ms`, `delta_version`
-and every column fact are null when the source does not record them (a
-Delta table profiled from its log has no row groups; a version 1 document
-from an earlier `ANALYZE` lists column names only and `SHOW STATS FOR`
-presents those with null facts). `partition_columns` is the Iceberg default
-partition spec's field names; Parquet and Delta tables report `[]` (the
-Delta reader refuses partitioned tables). `/v1/statistics` is unchanged.
+`source_version.kind` is `delta_version` (`version`), `iceberg_snapshot`
+(`snapshot_id`), `listing` (`files`: a directory of Parquet files at one
+listing) or `file`; `identity_sha256` is the digest `ANALYZE` and
+planning key a source by. `depth` is `metadata` or `full` (the columns
+were read for sketches). A column carries `distinct` (the HLL sketch) and
+`quantiles` (the KLL sketch), each base64 of its compact encoding, after a
+full read, `distinct_exact`
+after a count; `bounds_exact` is false when a writer may have truncated a
+text bound (the Delta log and Iceberg manifests carry no exactness flag).
+`partition_columns` (absent when empty) is the Delta log's or the
+`key=value` keys of a partitioned directory. `per_file` carries every
+file's bounds while the table has at most 10,000 files
+(`per_file_complete`); beyond that file skipping falls back to the
+readers' own footer pruning. Every fact is a metadata read: Parquet
+column facts are the row-group column-chunk statistics merged over row
+groups and files; a Delta table whose add actions all carry `stats` is
+profiled from the log alone, else from the active files' footers; an
+Iceberg table's rows and bytes come from the manifests and its column
+facts from the live files' footers, matched by field id. Bounds are JSON
+of the logical type — numbers as numbers, strings as strings, dates and
+timestamps as ISO 8601 strings, decimals as exact decimal text.
+
+**What the planner does with them.** The statistics on record are read
+for every table on a join side, under a filter, or in a
+`COUNT(*)`/`MIN`/`MAX` aggregate, beside the source's current version
+and exact row count.
+
+- *Stale statistics cost, never answer.* Whatever their version, the
+  statistics give a filtered scan an estimated cardinality — equality and
+  `IN` from the distinct count, ranges from the quantiles or interpolated
+  between the bounds, null tests from the null count, anything they cannot
+  judge at 1.0 so a side is never understated — and the estimated rows and
+  bytes decide the build side of an inner join and a broadcast (a build
+  side under a million estimated rows and 256 MiB, at least four times
+  smaller than the probe). Without statistics the choice is today's, from
+  the exact row counts alone.
+- *Current statistics answer.* A `SELECT COUNT(*) | MIN(col) | MAX(col)
+  [, …] FROM t` with no predicate and no grouping, over a table whose
+  statistics describe exactly the source version the statement is pinned
+  to (the same identity, the same row count), is answered from them
+  without a scan on any node — for a bound only when it is the column's
+  true extreme and its null count is known (an all-null or empty column
+  answers null). The record carries `execution: {"mode": "context",
+  "detail": "statistics at <version label>", "source_version": {…},
+  "current_source_version": {…}}` — the two versions equal by
+  construction — and no `scans`. Every other case, including a version
+  the record does not match exactly, scans; a statistics answer is held
+  to the scanned answer by the differential tests.
+- *Current statistics skip files.* A coordinator-local scan of a
+  directory Parquet table under a predicate reads only the files whose
+  recorded bounds admit it; the files left out are `files_skipped` on the
+  scan (considered, never opened). Delta and Iceberg scans skip from
+  their own metadata — the add actions' `stats`, the manifests' bounds
+  and null counts — on every node, statistics or not. A distributed
+  directory scan lists the location on each worker and does not carry
+  the coordinator's pruned listing.
+- *Automatic refresh.* When planning observes a source version newer
+  than the one on record, the coordinator refreshes the statistics in the
+  background (`KAVEON_STATISTICS_AUTO_REFRESH`, on by default; one
+  refresh per table at a time): files added to a full document are read
+  and their sketches folded in, a removal or a metadata-only document is
+  recomputed at the document's depth. Until it lands, the old record
+  costs and does not answer. Exact distinct counts do not survive a
+  refresh.
+
+### Statistics endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/v1/catalog/tables/{table_id}/statistics` | The statistics object on record with `source_version` (what it describes), `current_source_version` (the source as observed now, a metadata read: log tail, snapshot pointer or listing digest — no data read), `observed_at_ms` and `stale` (the two differ). 404 with `STATISTICS_UNAVAILABLE` when the table was never analyzed, plain 404 for an unknown id, 409 `TABLE_NOT_PUBLISHED` for a draft or retired table, 502 `SOURCE_UNAVAILABLE` when the source cannot be read |
+| `GET` | `/v1/catalog/tables/{table_id}/version` | `{table_id, table, source_version, observed_at_ms}` — the current source version alone, the same cheap read; the platform's freshness signal, to call before an answer |
+| `GET` | `/v1/statistics` | Admin only: every table with statistics on record (`table`, `table_id`, `row_count`, `source_version` label, `depth`, `computed_at`, `current`), at most 100 rows with `total` and `truncated` |
+
+Both catalog endpoints follow the catalog API's authorization: the
+catalog service credential or any authenticated principal.
 
 ### Per-request settings
 
