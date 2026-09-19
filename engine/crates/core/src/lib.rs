@@ -15,7 +15,7 @@ pub use catalog::{
     CatalogId, CatalogLifecycle, CatalogManager, CatalogProvider, CatalogRevision,
     ColumnDefinition, CredentialKind, CredentialReference, DataFormat, MemoryCatalog,
     PartitionColumn, ResolvedTable, SchemaDefinition, SchemaId, StorageType, TableDefinition,
-    TableId, TableMeta, TableReference,
+    TableId, TableLayout, TableMeta, TableReference,
 };
 pub use error::{KaveonError, Result};
 pub use exchange::{

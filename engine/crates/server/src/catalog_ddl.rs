@@ -19,11 +19,11 @@ use kaveon_catalog::{CascadePolicy, CatalogStore};
 use kaveon_core::{
     AccessPattern, CatalogAdapter, CatalogDefinition, CatalogId, CatalogLifecycle,
     ColumnDefinition, CredentialKind, CredentialReference, DataFormat, KaveonError, ResolvedTable,
-    SchemaDefinition, SchemaId, StorageType, TableDefinition, TableId, TableMeta,
+    SchemaDefinition, SchemaId, StorageType, TableDefinition, TableId, TableLayout, TableMeta,
 };
 use kaveon_sql::ddl::{
-    CatalogStatement, CatalogStorageSpec, ColumnSpec, CredentialSpec, QualifiedName, format_name,
-    quote_identifier, render_create_table, sql_type_name,
+    CatalogStatement, CatalogStorageSpec, ColumnSpec, CredentialSpec, QualifiedName,
+    TableColumnLists, format_name, quote_identifier, render_create_table, sql_type_name,
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -171,8 +171,12 @@ pub(crate) async fn execute_catalog_statement(
             format,
             access,
             partitioned_by,
+            clustered_by,
+            bloom,
         } => {
             let target = table_target(&name, context_catalog, context_schema);
+            let layout = TableLayout::new(clustered_by, bloom)
+                .map_err(CatalogStatementError::invalid_error)?;
             create_table(
                 store,
                 actor,
@@ -183,6 +187,7 @@ pub(crate) async fn execute_catalog_statement(
                 format,
                 access,
                 partitioned_by,
+                layout,
             )
             .await?
         }
@@ -197,6 +202,22 @@ pub(crate) async fn execute_catalog_statement(
         } => {
             let target = table_target(&name, context_catalog, context_schema);
             set_table_location(store, actor, target, if_exists, location).await?
+        }
+        CatalogStatement::AlterTableSetClusteredBy {
+            name,
+            if_exists,
+            columns,
+        } => {
+            let target = table_target(&name, context_catalog, context_schema);
+            set_table_clustering(store, actor, target, if_exists, columns)?
+        }
+        CatalogStatement::Optimize { .. } => {
+            // Routed by the statement handler to `crate::optimize` before
+            // this point: it rewrites data under the statement's memory
+            // budget, which a catalog statement does not hold.
+            return Err(CatalogStatementError::invalid(
+                "OPTIMIZE is a maintenance statement, not a catalog statement",
+            ));
         }
         CatalogStatement::ShowCreateTable { name } => {
             let target = table_target(&name, context_catalog, context_schema);
@@ -227,14 +248,14 @@ pub(crate) async fn execute_catalog_statement(
 
 // --- name resolution ---
 
-struct TableTarget {
-    catalog: String,
-    schema: String,
-    table: String,
+pub(crate) struct TableTarget {
+    pub(crate) catalog: String,
+    pub(crate) schema: String,
+    pub(crate) table: String,
 }
 
 impl TableTarget {
-    fn qualified(&self) -> String {
+    pub(crate) fn qualified(&self) -> String {
         QualifiedName(vec![
             self.catalog.clone(),
             self.schema.clone(),
@@ -255,7 +276,11 @@ fn schema_target(name: &QualifiedName, context_catalog: &str) -> (String, String
     }
 }
 
-fn table_target(name: &QualifiedName, context_catalog: &str, context_schema: &str) -> TableTarget {
+pub(crate) fn table_target(
+    name: &QualifiedName,
+    context_catalog: &str,
+    context_schema: &str,
+) -> TableTarget {
     match name.parts() {
         [table] => TableTarget {
             catalog: context_catalog.to_owned(),
@@ -340,7 +365,7 @@ fn find_table(
 
 /// The catalog, schema and table definitions a table statement names, or
 /// `None` for the table when it does not exist (its parents must).
-fn locate_table(
+pub(crate) fn locate_table(
     store: &CatalogStore,
     target: &TableTarget,
 ) -> DdlResult<(CatalogDefinition, SchemaDefinition, Option<TableDefinition>)> {
@@ -789,6 +814,7 @@ async fn create_table(
     format: DataFormat,
     access: AccessPattern,
     partitioned_by: Option<Vec<String>>,
+    layout: TableLayout,
 ) -> DdlResult<CatalogStatementResult> {
     let qualified = target.qualified();
     let (catalog, schema, existing) = locate_table(store, &target)?;
@@ -849,6 +875,8 @@ async fn create_table(
         let columns = resolve_columns(columns, &probed.schema, &location)?;
         let partitions =
             resolve_partitions(partitioned_by.as_deref(), &probed, &columns, &location)?;
+        // The layout names columns of the table as resolved: a clustering
+        // column the source does not have is refused by name.
         let active = TableDefinition::new(
             draft.id().clone(),
             schema.id().clone(),
@@ -860,6 +888,8 @@ async fn create_table(
         )
         .map_err(CatalogStatementError::invalid_error)?
         .partitioned_by(partitions)
+        .map_err(CatalogStatementError::invalid_error)?
+        .with_layout(layout.clone())
         .map_err(CatalogStatementError::invalid_error)?
         .transition(CatalogLifecycle::Active)
         .map_err(CatalogStatementError::invalid_error)?;
@@ -981,6 +1011,47 @@ async fn set_table_location(
     Ok(outcome("table", qualified, "relocated"))
 }
 
+/// `ALTER TABLE … SET CLUSTERED BY (…)`: the next revision of the
+/// definition with the clustering columns; the Bloom columns are kept.
+/// Changing the layout does not rewrite data — `OPTIMIZE` does.
+fn set_table_clustering(
+    store: &CatalogStore,
+    actor: &str,
+    target: TableTarget,
+    if_exists: bool,
+    columns: Vec<String>,
+) -> DdlResult<CatalogStatementResult> {
+    let qualified = target.qualified();
+    let located = match locate_table(store, &target) {
+        Ok(located) => located,
+        Err(error) if if_exists && error.code.ends_with("_NOT_FOUND") => {
+            return Ok(outcome("table", qualified, "absent"));
+        }
+        Err(error) => return Err(error),
+    };
+    let Some(table) = located.2 else {
+        if if_exists {
+            return Ok(outcome("table", qualified, "absent"));
+        }
+        return Err(CatalogStatementError::not_found(
+            "TABLE_NOT_FOUND",
+            format!("table {qualified} not found"),
+        ));
+    };
+    if table.layout().clustered_by() == columns.as_slice() {
+        return Ok(outcome("table", qualified, "unchanged"));
+    }
+    let layout = TableLayout::new(columns, table.layout().bloom().to_vec())
+        .map_err(CatalogStatementError::invalid_error)?;
+    let clustered = table
+        .with_layout_revision(layout)
+        .map_err(CatalogStatementError::invalid_error)?;
+    store
+        .replace_table(actor, table.revision(), &clustered)
+        .map_err(CatalogStatementError::store)?;
+    Ok(outcome("table", qualified, "clustered"))
+}
+
 // --- metadata reads ---
 
 fn show_create_table(
@@ -1015,7 +1086,11 @@ fn show_create_table(
         table.location(),
         table.format(),
         table.access(),
-        &partitioned_by,
+        TableColumnLists {
+            partitioned_by: &partitioned_by,
+            clustered_by: table.layout().clustered_by(),
+            bloom: table.layout().bloom(),
+        },
     );
     Ok(CatalogStatementResult {
         columns: vec![ColumnInfo {
@@ -1605,6 +1680,111 @@ mod tests {
         assert_eq!(failure.code, "TABLE_NOT_READABLE");
         assert!(failure.message.contains("dt/region"), "{}", failure.message);
         std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_layout_is_stored_shown_and_altered() {
+        let base = temporary_directory("layout");
+        write_parquet(&base.join("orders.parquet"), 5);
+        let state = state_with_local_catalog(&base);
+        let analyst = identity(Role::Analyst);
+        ok(&state, &analyst, "CREATE SCHEMA lake.sales").await;
+
+        // A clustering column the source does not have registers nothing.
+        let error = err(
+            &state,
+            &analyst,
+            "CREATE TABLE orders WITH (location = 'orders.parquet', format = 'parquet', clustered_by = ARRAY['region'])",
+        )
+        .await;
+        assert_eq!(error.code, "CATALOG_INVALID");
+        assert!(error.message.contains("'region'"), "{}", error.message);
+        assert!(published_tables(&state, "lake", "sales").await.is_empty());
+
+        ok(
+            &state,
+            &analyst,
+            "CREATE TABLE orders WITH (location = 'orders.parquet', format = 'parquet', clustered_by = ARRAY['id'], bloom = ARRAY['name'])",
+        )
+        .await;
+        let created = ok(&state, &analyst, "SHOW CREATE TABLE orders").await;
+        let rendered = created[0][0].as_str().unwrap().to_owned();
+        assert!(
+            rendered.contains("clustered_by = ARRAY['id']")
+                && rendered.contains("bloom = ARRAY['name']"),
+            "{rendered}"
+        );
+        let target = TableTarget {
+            catalog: "lake".into(),
+            schema: "sales".into(),
+            table: "orders".into(),
+        };
+        let stored = locate_table(&state.catalog_store, &target)
+            .unwrap()
+            .2
+            .unwrap();
+        assert_eq!(stored.layout().clustered_by(), ["id"]);
+        assert_eq!(stored.layout().bloom_columns(), ["id", "name"]);
+        let revision = stored.revision();
+
+        // SHOW CREATE TABLE output re-registers the same layout.
+        ok(&state, &analyst, "DROP TABLE orders").await;
+        ok(&state, &analyst, &rendered).await;
+        let again = ok(&state, &analyst, "SHOW CREATE TABLE orders").await;
+        assert_eq!(again[0][0].as_str().unwrap(), rendered);
+
+        assert_eq!(
+            ok(
+                &state,
+                &analyst,
+                "ALTER TABLE orders SET CLUSTERED BY (name, id)"
+            )
+            .await,
+            vec![vec![json!("lake.sales.orders"), json!("clustered")]]
+        );
+        assert_eq!(
+            ok(
+                &state,
+                &analyst,
+                "ALTER TABLE orders SET CLUSTERED BY (name, id)"
+            )
+            .await,
+            vec![vec![json!("lake.sales.orders"), json!("unchanged")]]
+        );
+        let altered = locate_table(&state.catalog_store, &target)
+            .unwrap()
+            .2
+            .unwrap();
+        assert_eq!(altered.layout().clustered_by(), ["name", "id"]);
+        assert_eq!(altered.layout().bloom(), ["name"]);
+        assert_eq!(altered.revision().value(), revision.value() + 1);
+        let error = err(
+            &state,
+            &analyst,
+            "ALTER TABLE orders SET CLUSTERED BY (nope)",
+        )
+        .await;
+        assert_eq!(error.code, "CATALOG_INVALID");
+        assert_eq!(
+            ok(&state, &analyst, "ALTER TABLE orders SET CLUSTERED BY ()").await,
+            vec![vec![json!("lake.sales.orders"), json!("clustered")]]
+        );
+        let cleared = locate_table(&state.catalog_store, &target)
+            .unwrap()
+            .2
+            .unwrap();
+        assert!(cleared.layout().clustered_by().is_empty());
+        assert_eq!(cleared.layout().bloom(), ["name"]);
+        assert_eq!(
+            ok(
+                &state,
+                &analyst,
+                "ALTER TABLE IF EXISTS missing SET CLUSTERED BY (id)"
+            )
+            .await,
+            vec![vec![json!("lake.sales.missing"), json!("absent")]]
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[tokio::test]
