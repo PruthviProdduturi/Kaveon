@@ -9,16 +9,20 @@ that resolves natural-language terms to columns/filters with no hosted LLM.
   GET  /datasets/{id}/freshness      data-change freshness score + rebuild recommendation
   GET  /datasets/{id}/dlm/resolve    term -> column/filter resolution (retrieval probe)
   GET  /dlm/route                    cross-dataset router: question -> which dataset(s)
+  POST /dlm/ask                      deterministic NL -> SQL; every answer carries its evidence
+  POST /dlm/reproduce                re-run an answer's statement as a live read (Analyst+)
   POST /dlm/serve-chart              dashboard chart from precomputed context (no live SQL)
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from middleware.auth import require_user_context, UserContext
 from middleware.permissions import require_min_role
+from middleware.rate_limit import sql_execute_limiter
+from services.sql_guard import assert_no_platform_tables, assert_read_only
 import dlm.engine as dlm
 
 router = APIRouter()
@@ -34,11 +38,20 @@ class AskBody(BaseModel):
 
 
 class CurationBody(BaseModel):
-    """Human overrides on a dataset's context spec. Any subset may be sent."""
+    """Human overrides on a dataset's context spec. Any subset may be sent.
+    `freshness_policy` applies to Engine-backed datasets: `cached` lets the
+    Engine's result cache answer a repeated statement, `live` bypasses it."""
     metrics: Dict[str, Any] = {}
     dimensions: Dict[str, Any] = {}
     value_aliases: Dict[str, str] = {}
     default_metric: Optional[str] = None
+    freshness_policy: Optional[Literal["cached", "live"]] = None
+
+
+class ReproduceBody(BaseModel):
+    """An answer's `evidence.reproduce` block, sent back to run it live."""
+    dataset_id: str = Field(..., min_length=1, max_length=64)
+    sql: str = Field(..., min_length=1, max_length=65_536)
 
 
 class ChartFilter(BaseModel):
@@ -160,6 +173,27 @@ def ask(body: AskBody, ctx: UserContext = Depends(require_user_context)):
         rebuilt = dlm.maybe_auto_rebuild(dataset_id)
         if rebuilt is True:
             result["_rebuild_triggered"] = True
+    return result
+
+
+@router.post("/dlm/reproduce")
+def reproduce(body: ReproduceBody, ctx: UserContext = Depends(require_min_role("Analyst"))):
+    """Run an answer's statement as a live read — on the Engine with
+    `use_statistics = false` and `result_cache = false`, on the warehouse
+    through the dataset's query plane — and return the rows with the evidence
+    of this run. The same guards as SQL Lab apply: one read-only statement,
+    no platform tables, the caller's rate limit."""
+    assert_read_only(body.sql)
+    sql_execute_limiter.check(ctx.email)
+    dataset = dlm.datasets_svc.get_dataset_by_id(body.dataset_id, ctx.email, ctx.role)
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    assert_no_platform_tables(body.sql, dataset.get("database_name"))
+    result = dlm.reproduce(body.dataset_id, body.sql, ctx.email, ctx.role)
+    if not result.get("ok"):
+        if result.get("reason") == "dataset_not_found":
+            raise HTTPException(status_code=404, detail="Dataset not found")
+        raise HTTPException(status_code=422, detail=result.get("message") or "Query failed")
     return result
 
 

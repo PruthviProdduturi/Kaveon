@@ -136,7 +136,8 @@ class ChartFreshnessTests(unittest.TestCase):
         with patch.object(engine, "_native_catalog", return_value={"engine_catalog": "OpenSource"}), \
              patch.object(engine, "_scan_distinct", return_value=[("Brooklyn", 10.0), ("Queens", 4.0)]) as scan:
             rows = engine._value_inventory("7", "OpenSource", "nyc_taxi", columns, [], {}, stats_supported=False)
-        scan.assert_called_once_with("OpenSource", "nyc_taxi", "trips", "borough", engine._MAX_CARDINALITY_FOR_VALUES)
+        scan.assert_called_once_with("OpenSource", "nyc_taxi", "trips", "borough", engine._MAX_CARDINALITY_FOR_VALUES,
+                                     cube_dim=False)
         self.assertEqual([r["value_text"] for r in rows], ["Brooklyn", "Queens"])
         self.assertEqual({r["source"] for r in rows}, {"scan.group_by"})
 

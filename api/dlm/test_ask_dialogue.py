@@ -301,6 +301,12 @@ class ProductUsersHarness(ExitStack):
         self.enter_context(patch.object(engine, "_context_hints", lambda *a, **k: []))
         self.enter_context(patch.object(engine, "_vocabulary_hit", lambda q: True))
         self.enter_context(patch.object(engine, "_native_catalog", lambda db: {"engine_catalog": "OpenSource"}))
+        # The catalog is native but no Engine is reachable here: the dataset
+        # keeps the legacy path (context cells, SQL handed to the client) and
+        # its evidence reads the artifact's change-counter snapshot.
+        self.enter_context(patch.object(engine, "_engine_binding", lambda ds, native=None: None))
+        self.enter_context(patch.object(engine, "_artifact_stats", lambda i: {}))
+        self.enter_context(patch.object(engine, "_change_counter", lambda *a: {"kind": "unavailable"}))
         return self
 
 

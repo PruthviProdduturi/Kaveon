@@ -43,6 +43,7 @@ from typing import Any, Dict, List, Optional
 import database.metadata as meta
 import database.pool as pool
 import dlm.profiler as profiler
+import dlm.engine_dialect as dialects
 import services.datasets as datasets_svc
 import dlm.hll as hll
 
@@ -364,8 +365,35 @@ def _generate_dlm_impl(dataset_id: str, force: bool = False,
     dimensions = ds.get("dimensions") or []
     metrics = ds.get("metrics") or []
 
+    # An Engine-backed dataset compiles from the Engine's table definition:
+    # the declared shape is what its questions are answered from (the cube),
+    # and the source version observed now is what the artifact reflects.
+    binding = _engine_binding(ds)
+    engine_table: Optional[Dict[str, Any]] = None
+    engine_version: Optional[Dict[str, Any]] = None
+    if binding:
+        from services import engine_datasets
+        engine_table = engine_datasets.resolve_table(binding["table_id"], _SERVICE_ACTOR, "Admin")
+        engine_version = _engine_version(binding["table_id"])
+    hint_token = _BOUND_ENGINE_CATALOG.set(binding["catalog"] if binding else None)
+    try:
+        return _generate_dlm_bound(dataset_id, force, actor, ds, state, prior_artifact, database, schema,
+                                   columns, dimensions, metrics, binding, engine_table, engine_version,
+                                   _gen_t0)
+    finally:
+        _BOUND_ENGINE_CATALOG.reset(hint_token)
+
+
+def _generate_dlm_bound(dataset_id: str, force: bool, actor: Optional[str], ds: dict, state,
+                        prior_artifact: Optional[dict], database: str, schema: str, columns: List[dict],
+                        dimensions: List[dict], metrics: List[dict], binding: Optional[dict],
+                        engine_table: Optional[dict], engine_version: Optional[dict],
+                        _gen_t0: float) -> Dict[str, Any]:
+    import time as _time
+    shape = (engine_table or {}).get("shape") if binding else None
+
     # 1) fingerprint the structural definition — cheap change-detection
-    source_hash = _fingerprint(ds, columns, dimensions, metrics)
+    source_hash = _fingerprint(ds, columns, dimensions, metrics, shape)
     if not force:
         if state is not None:
             existing = prior_artifact
@@ -392,8 +420,11 @@ def _generate_dlm_impl(dataset_id: str, force: bool = False,
     # Without catalog statistics a rebuild can only be an improvement if the
     # caller asked for one: a background sweep keeps a ready artifact rather
     # than replacing it with less, but an explicit force always rebuilds —
-    # native catalogs never have a profiler, so this is their only path.
-    if not stats_supported and not force:
+    # native catalogs never have a profiler, so this is their only path. An
+    # Engine-backed dataset is rebuilt whenever asked: its value index comes
+    # from the cube in a handful of context answers, and the freshness sweep
+    # only asks when the table's source version moved.
+    if not stats_supported and not force and not binding:
         existing_art = (prior_artifact if state is not None
                         else meta.query_one(
                             "SELECT status FROM dlm_artifact WHERE dataset_id = @param0",
@@ -414,8 +445,9 @@ def _generate_dlm_impl(dataset_id: str, force: bool = False,
     # 3) value inventory — prefer pg_stats most_common_vals (zero scan); fall
     #    back to a bounded generate-time scan for views / unanalyzed tables that
     #    have no catalog stats. Only low-cardinality dimensions get indexed.
+    cube_dims = {str(d.get("name")) for d in ((shape or {}).get("dimensions") or []) if d.get("name")}
     value_rows = _value_inventory(str(dataset_id), database, schema, columns, dimensions,
-                                  snapshots, stats_supported)
+                                  snapshots, stats_supported, cube_dims=cube_dims)
 
     # 4) usage rollup — how often each table has actually been asked about
     usage_rollup = _usage_rollup(schema, columns, dimensions, snapshots)
@@ -433,9 +465,22 @@ def _generate_dlm_impl(dataset_id: str, force: bool = False,
         stats_rollup["row_counts"] = native_counts
         if native_counts:
             stats_rollup["row_count_source"] = "kaveon_engine_exact"
+    if binding:
+        # What an Engine-backed answer reflects: the table, its declared shape
+        # and the source version the artifact was compiled against.
+        stats_rollup["engine"] = {
+            "table_id": binding["table_id"],
+            "table": f"{binding['catalog']}.{binding['schema']}.{binding['table']}",
+            "shape": shape,
+            "source_version": (engine_version or {}).get("source_version"),
+            "observed_at_ms": (engine_version or {}).get("observed_at_ms"),
+        }
+    else:
+        stats_rollup["change_counter"] = _change_counter(
+            database, schema, ds.get("table_name") or ds.get("fact_table"))
 
     # 6) manifest — the deterministic assembler's map of the dataset
-    manifest = _manifest(ds, columns, dimensions, metrics)
+    manifest = _manifest(ds, columns, dimensions, metrics, shape=shape, engine=bool(binding))
 
     # 7) persist artifact + value index + router summary atomically-ish
     _persist_value_index(str(dataset_id), value_rows)
@@ -452,14 +497,24 @@ def _generate_dlm_impl(dataset_id: str, force: bool = False,
     #    breakdown the spec marks for precompute) so those questions serve from
     #    context with no live query. A handful of scans now; a lookup forever after.
     precompute_report: Dict[str, Any] = {}
-    answers = _precompute_answers(str(dataset_id), database, schema,
-                                  ds.get("table_name") or ds.get("fact_table"),
-                                  columns, dimensions, metrics, spec, report=precompute_report,
-                                  date_column=ds.get("date_column"))
+    if binding:
+        # The Engine's cube is this dataset's answer-from-context: no cells
+        # are copied into the warehouse's answer tables.
+        answers = 0
+        if _RETIREMENT_BUILD.get() is None:
+            meta.execute("DELETE FROM dlm_answers WHERE dataset_id = @param0", [str(dataset_id)])
+            meta.execute("DELETE FROM dlm_sketch WHERE dataset_id = @param0", [str(dataset_id)])
+        precompute_report["context"] = "engine cube" if shape else "none (no declared shape)"
+    else:
+        answers = _precompute_answers(str(dataset_id), database, schema,
+                                      ds.get("table_name") or ds.get("fact_table"),
+                                      columns, dimensions, metrics, spec, report=precompute_report,
+                                      date_column=ds.get("date_column"))
     _evict_answers(str(dataset_id))  # invalidate in-memory caches after regen
     _SKETCH_CACHE.pop(str(dataset_id), None)
     _RANGE_CACHE.pop(str(dataset_id), None)
-    artifact_status = "ready" if stats_supported or answers > 0 or value_rows else "unsupported"
+    _STATS_CACHE.pop(str(dataset_id), None)
+    artifact_status = "ready" if stats_supported or answers > 0 or value_rows or binding else "unsupported"
     # record generation timing (+ what drove it) into the stored stats rollup so
     # the dataset page can be transparent about how long it took and why.
     duration_ms = int((_time.time() - _gen_t0) * 1000)
@@ -475,14 +530,15 @@ def _generate_dlm_impl(dataset_id: str, force: bool = False,
     # 9) dashboard-level curation — precompute N-dim combos for any dashboards
     #    that reference this dataset, so multi-filter interactions serve instantly.
     dash_answers = 0
-    try:
-        dash_answers = _curate_linked_dashboards(str(dataset_id), actor)
-        if dash_answers:
-            answers += dash_answers
-            _evict_answers(str(dataset_id))
-    except Exception:
-        if _RETIREMENT_BUILD.get() is not None:
-            raise
+    if not binding:
+        try:
+            dash_answers = _curate_linked_dashboards(str(dataset_id), actor)
+            if dash_answers:
+                answers += dash_answers
+                _evict_answers(str(dataset_id))
+        except Exception:
+            if _RETIREMENT_BUILD.get() is not None:
+                raise
 
     # 10) watermark — track row count + max date for incremental refresh
     row_count = max((stats_rollup.get("row_counts") or {}).values(), default=0)
@@ -503,6 +559,7 @@ def _generate_dlm_impl(dataset_id: str, force: bool = False,
         "max_date": max_date,
         "built_at": _now_iso(),
         "method": "full_rebuild",
+        **({"source_version": (engine_version or {}).get("source_version")} if binding else {}),
     }
 
     if artifact_status == "ready":
@@ -1297,7 +1354,7 @@ def _value_dataset_hits(q_tokens: set) -> Dict[str, int]:
 
 def _value_inventory(dataset_id: str, database: str, schema: str, columns: List[dict],
                      dimensions: List[dict], snapshots: Dict[str, dict],
-                     stats_supported: bool) -> List[Dict[str, Any]]:
+                     stats_supported: bool, cube_dims: Optional[set] = None) -> List[Dict[str, Any]]:
     """Which dimension values the DLM can recognise. With catalog statistics the
     index is built from them plus bounded scans; a native KaveonDB catalog has
     no pg_stats but runs the same bounded distinct scan on the Engine, so its
@@ -1306,12 +1363,14 @@ def _value_inventory(dataset_id: str, database: str, schema: str, columns: List[
     if stats_supported:
         return _build_value_index(dataset_id, database, schema, columns, dimensions, snapshots)
     if _native_catalog(database):
-        return _build_value_index(dataset_id, database, schema, columns, dimensions, {})
+        return _build_value_index(dataset_id, database, schema, columns, dimensions, {},
+                                  cube_dims=cube_dims)
     return []
 
 
 def _build_value_index(dataset_id: str, database: str, schema: str, columns: List[dict],
-                       dimensions: List[dict], snapshots: Dict[str, dict]) -> List[Dict[str, Any]]:
+                       dimensions: List[dict], snapshots: Dict[str, dict],
+                       cube_dims: Optional[set] = None) -> List[Dict[str, Any]]:
     """Enumerate the values of each low-cardinality dimension. A bounded GROUP BY
     scan is the primary source — it returns the COMPLETE set exactly, which
     matters for uniformly-distributed dims (e.g. covid 'country' in a daily
@@ -1337,8 +1396,10 @@ def _build_value_index(dataset_id: str, database: str, schema: str, columns: Lis
             if est is not None and est > _MAX_CARDINALITY_FOR_VALUES:
                 continue
 
-        # complete, exact values via bounded scan (returns None if > cap or fails)
-        pairs = _scan_distinct(database, schema, table, cname, _MAX_CARDINALITY_FOR_VALUES)
+        # complete, exact values via bounded scan (returns None if > cap or fails);
+        # a dimension the Engine's cube declares is one context answer, no scan
+        pairs = _scan_distinct(database, schema, table, cname, _MAX_CARDINALITY_FOR_VALUES,
+                               cube_dim=bool(cube_dims and cname in cube_dims))
         source = "scan.group_by"
         if pairs is None:               # scan unavailable — fall back to pg_stats sample
             pairs = []
@@ -1372,7 +1433,7 @@ def _build_value_index(dataset_id: str, database: str, schema: str, columns: Lis
 
 
 def _manifest(ds: dict, columns: List[dict], dimensions: List[dict],
-              metrics: List[dict]) -> Dict[str, Any]:
+              metrics: List[dict], shape: Optional[dict] = None, engine: bool = False) -> Dict[str, Any]:
     cols = [{
         "table": c.get("table_name"),
         "name": c.get("column_name") or c.get("name"),
@@ -1406,7 +1467,8 @@ def _manifest(ds: dict, columns: List[dict], dimensions: List[dict],
         "columns": cols,
         "joins": joins,
         "metrics": mets,
-        "context_spec": _suggest_spec(columns, metrics),
+        "context_spec": _suggest_spec(columns, metrics, shape=shape, engine=engine),
+        **({"engine": {"source": datasets_svc.source_binding(ds.get("source")), "shape": shape}} if engine else {}),
     }
 
 
@@ -1423,27 +1485,40 @@ _SCAN_TIMEOUT_SECONDS = 120
 
 
 def _scan_distinct(database: str, schema: str, table: str, column: str,
-                   cap: int) -> Optional[List[tuple]]:
+                   cap: int, cube_dim: bool = False) -> Optional[List[tuple]]:
     """Bounded generate-time distinct scan for a column whose table has no
     catalog stats (a view, or never analyzed). Returns [(value, count), ...] or
     None if the column is high-cardinality (> cap) or the scan fails. Works on
-    views. One-time cost, at generate — never on the query path."""
+    views. One-time cost, at generate — never on the query path.
+
+    `cube_dim` names a dimension the Engine's declared shape holds: the
+    statement is then the plain grouped count the cube answers from its
+    cells (no null test, no ordering, no limit — each of which sends the
+    planner to the row path), and the null key, order and cap are applied
+    here; the dimension's declared cap bounds the rows."""
     import database.pool as pool
-    tbl = f"{_qid(schema)}.{_qid(table)}" if schema else _qid(table)
-    qcol = _qid(column)
-    sql = (f"SELECT {qcol} AS v, COUNT(*) AS c FROM {tbl} "
-           f"WHERE {qcol} IS NOT NULL GROUP BY {qcol} ORDER BY c DESC LIMIT {int(cap) + 1}")
+    if cube_dim:
+        d = dialects.ENGINE
+        sql = (f"SELECT {d.ident(column)} AS v, COUNT(*) AS c FROM {d.relation(schema, table)} "
+               f"GROUP BY {d.ident(column)}")
+    else:
+        tbl = f"{_qid(schema)}.{_qid(table)}" if schema else _qid(table)
+        qcol = _qid(column)
+        sql = (f"SELECT {qcol} AS v, COUNT(*) AS c FROM {tbl} "
+               f"WHERE {qcol} IS NOT NULL GROUP BY {qcol} ORDER BY c DESC LIMIT {int(cap) + 1}")
     try:
         res = _execute_dataset_query(sql, database, timeout_seconds=_SCAN_TIMEOUT_SECONDS)
     except Exception:
         return None
     rows = res.get("rows_objects", res.get("rows", []))
-    if len(rows) > cap:      # high-cardinality — don't index values
-        return None
     out: List[tuple] = []
     for r in rows:
-        if isinstance(r, dict):
+        if isinstance(r, dict) and (not cube_dim or r.get("v") is not None):
             out.append((r.get("v"), _num(r.get("c"))))
+    if cube_dim:
+        out.sort(key=lambda pair: -pair[1])
+    if len(out) > cap:      # high-cardinality — don't index values
+        return None
     return out
 
 
@@ -1797,14 +1872,18 @@ def _clarify(kind: str, prompt: str, options: List[Dict[str, str]], question: st
 
 def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None,
         frame: Optional[Dict[str, Any]] = None, actor: Optional[str] = None,
-        role: str = "Viewer") -> Dict[str, Any]:
+        role: str = "Viewer", principal: Optional[str] = None) -> Dict[str, Any]:
     """Deterministic NL -> SQL via the DLM — no LLM.
 
     `choices` pins an ambiguous slot the user resolved ({"metric": name} or
     {"dimension": column}); `frame` is the previous answer's frame, inherited by
-    a follow-up for every slot the new question does not mention."""
+    a follow-up for every slot the new question does not mention. `principal`
+    is the identity an Engine-backed answer's statement runs under (the actor,
+    when given); every answer carries its evidence."""
     if actor and _RETIREMENT_SERVING.get() is None:
-        return _with_serving_identity(actor, role, lambda: ask(question, limit, choices, frame))
+        return _with_serving_identity(actor, role, lambda: ask(question, limit, choices, frame,
+                                                              role=role, principal=actor))
+    principal = principal or actor
     t0 = _time_mod.monotonic()
     ensure_tables()
     choices = dict(choices or {})
@@ -2042,15 +2121,71 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
         time_group = date_column
         year = None  # don't filter by year when showing trend
 
+    group_cols = _group_cols(group_col)
+    metric_expr = (metric or {}).get("expression") or "COUNT(*)"
+    native_lookup: Dict[str, bool] = {}
+
+    def _native() -> bool:
+        """Whether the dataset's catalog is a registered native catalog — looked
+        up once per question, and only when the answer needs it."""
+        if "native" not in native_lookup:
+            native_lookup["native"] = bool(_native_catalog(database))
+        return native_lookup["native"]
+
+    # A dataset bound to an Engine table by id is Engine-backed outright; a
+    # dataset over a native catalog is Engine-backed once its table id resolves.
+    # The PostgreSQL-free runtime serves compiled context and keeps the legacy
+    # behaviour for datasets without a binding.
+    if datasets_svc.source_binding(ds.get("source")):
+        binding = _engine_binding(ds)
+    elif _RETIREMENT_SERVING.get() is None:
+        binding = _engine_binding(ds, native=_native())
+    else:
+        binding = None
+    month_window = _time_window(year, None, month) if (year and month) else None
+    relative_window = _time_window(None, relative_time) if relative_time else None
+
+    def _statement(dialect: dialects.Dialect, ranked: bool = True) -> str:
+        """The statement for the resolved slots in one dialect — what runs on
+        the live path and, for a context answer, what would have."""
+        return dialects.assemble(
+            dialect, schema=schema, fact=fact, metric_expr=metric_expr, metric_name=metric_name,
+            group_cols=group_cols, time_group=time_group, filters=filters, columns=columns,
+            date_column=date_column, year=year, month_window=month_window, relative_time=relative_time,
+            relative_window=relative_window, limit_n=limit_n, sort_asc=sort_asc, ranked=ranked)
+
     def _finish(served: Dict[str, Any]) -> Dict[str, Any]:
         """Every answer leaves through here: the ranking title, the notes the
-        question earned, the frame a follow-up inherits, and the timing."""
+        question earned, the frame a follow-up inherits, the timing, and the
+        evidence — what ran (or would have), against which source at which
+        version, on which lane, and how to reproduce it live."""
         served["title"] = _ranked_title(served.get("title") or metric_name, metric_name, group_col, top_n, sort_asc)
         if note:
             served["note"] = f"{served['note']} {note}" if served.get("note") else note
         served["frame"] = _frame(dataset_id, metric_name, group_col, filters, year, relative_time, top_n, sort_asc)
         served["duration_ms"] = round((_time_mod.monotonic() - t0) * 1000, 1)
+        if served.get("ok") and "evidence" not in served:
+            served["evidence"] = _warehouse_evidence(
+                dataset_id, ds, database, schema, fact, served, _statement(dialects.POSTGRESQL))
+        evidence = served.get("evidence")
+        # A warehouse live answer is run by the client, which fills its elapsed
+        # and rows; every other lane is complete when it leaves here.
+        client_runs = bool(evidence) and evidence["lane"] == "live" and not evidence.get("reproduce", {}).get("engine")
+        if evidence and evidence.get("elapsed_ms") is None and not client_runs:
+            evidence["elapsed_ms"] = served["duration_ms"]
         return served
+
+    # ── Engine-backed: the Engine's knowing path is the answer-from-context ──
+    # One statement; the planner answers a covered question from the cube or
+    # the statistics (`execution.mode = "context"`), the result cache from a
+    # previous run (`cache`), or reads the rows (`distributed`/`coordinator`).
+    # The DLM labels the answer from the Engine's word, never from its own
+    # scoring, and no warehouse cell is consulted.
+    if binding:
+        return _finish(_answer_on_engine(
+            dataset_id, ds, binding, spec, metric, metric_name, metric_expr, group_cols, time_group,
+            filters, year, month, relative_time, date_column, columns, top_n, limit_n, sort_asc,
+            routed_entry, principal, role, question, year_shifted, _statement))
 
     # ── answer from context (precomputed) — NO database trip ─────────────────
     # Totals, single-dimension breakdowns, and single-dimension equality filters
@@ -2081,59 +2216,17 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
             return _finish(served)
 
     # ── assemble (live query path) ───────────────────────────────────────────
-    metric_expr = (metric or {}).get("expression") or "COUNT(*)"
-
-    select_parts: List[str] = []
-    if time_group:
-        select_parts.append(_qid(time_group))
-    group_cols = _group_cols(group_col)
-    select_parts.extend(_qid(c) for c in group_cols)
-    select_parts.append(f"{metric_expr} AS {_qid(metric_name)}")
-
-    where: List[str] = []
-    for f in filters:
-        where.append(f"{_qid(f['column'])} = '{str(f['value']).replace(chr(39), chr(39) * 2)}'")
-    if year and month and date_column:
-        lo, hi = _time_window(year, None, month)
-        where.append(f"{_qid(date_column)} >= '{lo}' AND {_qid(date_column)} < '{hi}'")
-    elif year and date_column:
-        where.append(_year_clause(date_column, year, columns))
-    elif relative_time and date_column:
-        where.append(f"{_qid(date_column)} >= {relative_time}")
-
-    sql = f"SELECT {', '.join(select_parts)} FROM {_qid(schema)}.{_qid(fact)}"
-    if where:
-        sql += " WHERE " + " AND ".join(where)
-    if time_group:
-        gb = ", ".join([_qid(time_group)] + [_qid(c) for c in group_cols])
-        sql += f" GROUP BY {gb} ORDER BY {_qid(time_group)} LIMIT 1000"
-    elif group_cols:
-        order_dir = "ASC" if sort_asc else "DESC"
-        sql += (f" GROUP BY {', '.join(_qid(c) for c in group_cols)} "
-                f"ORDER BY {_qid(metric_name)} {order_dir} LIMIT {int(limit_n)}")
-
+    sql = _statement(dialects.POSTGRESQL)
     chart_type = "line" if time_group else ("bar" if group_cols else "kpi")
     x_axis = time_group or (group_cols[0] if group_cols else None)
+    title = _live_title(metric_name, time_group, group_cols, filters, year, month, relative_time,
+                        question, year_shifted)
 
-    title = metric_name
-    if time_group:
-        title += " over time"
-    elif group_cols:
-        title += " by " + " and ".join(group_cols)
-    ctx_bits = [f["value"] for f in filters] + ([f"{_MONTH_NAMES[month - 1].title()} {year}" if month else str(year)] if year else [])
-    if relative_time:
-        rt_m = _RELATIVE_TIME_RE.search(question) or _RELATIVE_NAMED_RE.search(question)
-        rt_label = rt_m.group(0).strip() if rt_m else ("today" if _TODAY_RE.search(question) else "yesterday")
-        ctx_bits.append(rt_label)
-    if ctx_bits:
-        title += " — " + ", ".join(str(b) for b in ctx_bits)
-    if year_shifted:
-        title += " (latest available)"
-
-    # A native KaveonDB catalog is executed through /sql/engine with the
-    # dataset's schema selected, and its parser keeps ANSI quotes as part of
-    # an identifier, so the statement is handed over already unquoted.
-    engine = bool(_native_catalog(database))
+    # A native catalog whose table id could not be resolved is still executed
+    # through /sql/engine by the client with the dataset's schema selected; its
+    # parser keeps ANSI quotes as part of a relation name, so the statement
+    # is handed over already unquoted.
+    engine = _native()
     if engine:
         sql = re.sub(r'"([A-Za-z_][A-Za-z0-9_]*)"', r'\1', sql)
 
@@ -2160,6 +2253,217 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
         "context_hints": _context_hints(dataset_id, metric_name, filters),
         "confidence": round(routed_entry.get("score", 0.0), 3),
     })
+
+
+def _live_title(metric_name: str, time_group: Optional[str], group_cols: List[str],
+                filters: List[Dict[str, Any]], year: Optional[int], month: Optional[int],
+                relative_time: Optional[str], question: str, year_shifted: bool) -> str:
+    title = metric_name
+    if time_group:
+        title += " over time"
+    elif group_cols:
+        title += " by " + " and ".join(group_cols)
+    ctx_bits = [f["value"] for f in filters] + ([f"{_MONTH_NAMES[month - 1].title()} {year}" if month else str(year)] if year else [])
+    if relative_time:
+        rt_m = _RELATIVE_TIME_RE.search(question) or _RELATIVE_NAMED_RE.search(question)
+        rt_label = rt_m.group(0).strip() if rt_m else ("today" if _TODAY_RE.search(question) else "yesterday")
+        ctx_bits.append(rt_label)
+    if ctx_bits:
+        title += " — " + ", ".join(str(b) for b in ctx_bits)
+    if year_shifted:
+        title += " (latest available)"
+    return title
+
+
+# How long an ask waits for the Engine before the statement is cancelled.
+# Interactive; a question over a large lake table that misses the cube is a
+# scan, and the bound keeps a client that gave up from leaving it running.
+_ASK_TIMEOUT_SECONDS = 120
+# The Engine settings that force a live read: no answer from the statistics
+# or the cube, no cached result. What an answer's `reproduce` block carries.
+REPRODUCE_SETTINGS = {"use_statistics": False, "result_cache": False}
+# A reproduced warehouse statement is the answer's own statement, which the
+# DLM bounds by LIMIT; the cap is a guard against a hand-edited one.
+_REPRODUCE_MAX_ROWS = 5000
+
+
+def _engine_settings(spec: dict, metric: Optional[dict], metric_name: str) -> Dict[str, Any]:
+    """The per-statement settings the DLM chooses: the result cache per the
+    dataset's freshness policy, `approximate` only for a metric the spec marks
+    approximate (a `count_distinct` measure, by default), statistics always on
+    — the knowing path is the point."""
+    settings: Dict[str, Any] = {"result_cache": (spec.get("freshness_policy") or "cached") != "live",
+                                "use_statistics": True}
+    entry = (spec.get("metrics") or {}).get(metric_name) or {}
+    if metric and entry.get("approximate") and _distinct_col((metric or {}).get("expression") or ""):
+        settings["approximate"] = True
+    return settings
+
+
+def _engine_lane(record: Optional[dict]) -> str:
+    """`context` | `cache` | `live` from the Engine's `execution.mode` — the
+    Engine's word on whether the rows were read."""
+    mode = ((record or {}).get("execution") or {}).get("mode")
+    if mode == "context":
+        return "context"
+    if mode == "cache":
+        return "cache"
+    return "live"
+
+
+def _engine_principal(principal: Optional[str], role: str) -> tuple:
+    """Who an Engine-backed answer's statement runs as. A caller who can submit
+    statements runs as themselves; a viewer's question over a dataset they can
+    read runs as the platform service principal, as the build's reads do."""
+    if principal and role in ("Analyst", "Editor", "Admin"):
+        return principal, role
+    return _SERVICE_ACTOR, "Analyst"
+
+
+def _engine_rows(result: dict) -> tuple:
+    raw_columns = result.get("columns") or []
+    columns = [c.get("name", "") if isinstance(c, dict) else str(c) for c in raw_columns]
+    rows: List[list] = []
+    for row in result.get("data") or result.get("rows") or []:
+        if isinstance(row, dict):
+            rows.append([row.get(c) for c in columns])
+        elif isinstance(row, (list, tuple)):
+            rows.append(list(row))
+        else:
+            rows.append([row])
+    return columns, rows
+
+
+def _engine_evidence(dataset_id: str, ds: dict, binding: dict, sql: str, settings: Dict[str, Any],
+                     lane: str, record: Optional[dict], result: Optional[dict], rows: Optional[int],
+                     principal: str) -> Dict[str, Any]:
+    execution = (record or {}).get("execution") if isinstance(record, dict) else None
+    source_version = (execution or {}).get("source_version")
+    if source_version is None:
+        # A read statement's record names no version; the answer reflects the
+        # source as it is now, which is what /version reports.
+        version = _engine_version(binding["table_id"])
+        source_version = (version or {}).get("source_version")
+    return {
+        "sql": sql,
+        "dataset": {"id": dataset_id, "name": ds.get("dataset_name") or ds.get("name")},
+        "source": {"kind": "engine", "table_id": binding["table_id"], "catalog": binding["catalog"],
+                   "schema": binding["schema"], "table": binding["table"]},
+        "source_version": source_version,
+        "lane": lane,
+        "execution": execution,
+        "settings": settings,
+        "principal": principal,
+        "query_id": (result or {}).get("id"),
+        "elapsed_ms": (result or {}).get("elapsed_ms"),
+        "rows": rows,
+        "reproduce": {"sql": sql, "database": binding["catalog"], "schema": binding["schema"],
+                      "engine": True, "settings": dict(REPRODUCE_SETTINGS)},
+    }
+
+
+def _warehouse_evidence(dataset_id: str, ds: dict, database: str, schema: str, fact: str,
+                        served: Dict[str, Any], sql: str) -> Dict[str, Any]:
+    """Evidence for a warehouse answer. A context answer reflects the change
+    counter the artifact was compiled against; a live answer reflects the
+    counter as it is now, read from the warehouse's own statistics view. The
+    statement is what would compute the answer either way; the client fills
+    elapsed and rows for the live lane once it has run it."""
+    from_context = bool(served.get("from_context"))
+    lane = "context" if from_context else "live"
+    if from_context:
+        version = (_artifact_stats(dataset_id) or {}).get("change_counter") or {"kind": "unavailable"}
+    else:
+        version = _change_counter(database, schema, fact)
+    rows = served.get("rows")
+    return {
+        "sql": sql,
+        "dataset": {"id": dataset_id, "name": ds.get("dataset_name") or ds.get("name")},
+        "source": {"kind": "warehouse", "database": database, "schema": schema, "table": fact},
+        "source_version": version,
+        "lane": lane,
+        "execution": None,
+        "settings": None,
+        "query_id": None,
+        "elapsed_ms": None,
+        "rows": len(rows) if isinstance(rows, list) else None,
+        "reproduce": {"sql": sql, "database": database, "schema": schema, "engine": False, "settings": None},
+    }
+
+
+def _answer_on_engine(dataset_id: str, ds: dict, binding: dict, spec: dict, metric: Optional[dict],
+                      metric_name: str, metric_expr: str, group_cols: List[str], time_group: Optional[str],
+                      filters: List[Dict[str, Any]], year: Optional[int], month: Optional[int],
+                      relative_time: Optional[str], date_column: Optional[str], columns: List[dict],
+                      top_n: Optional[int], limit_n: int, sort_asc: bool, routed_entry: dict,
+                      principal: Optional[str], role: str, question: str, year_shifted: bool,
+                      statement) -> Dict[str, Any]:
+    """Run the question as one Engine statement and label the answer from the
+    record. A breakdown over dimensions the table's declared shape holds is
+    written without `ORDER BY`/`LIMIT` — the exact shape the cube answers,
+    bounded by the dimensions' caps — and ranked here; everything else keeps
+    its ordering and limit on the statement."""
+    from fastapi import HTTPException
+    from services.engine_bridge import execute
+    engine_meta = (_artifact_stats(dataset_id) or {}).get("engine") or {}
+    shape = engine_meta.get("shape") or binding.get("shape") or {}
+    declared = {str(d.get("name")) for d in (shape.get("dimensions") or [])
+                if isinstance(d, dict) and d.get("name")}
+    ranked = not (group_cols and not time_group and all(c in declared for c in group_cols))
+    sql = statement(dialects.ENGINE, ranked=ranked)
+    settings = _engine_settings(spec, metric, metric_name)
+    run_as, run_role = _engine_principal(principal, role)
+    dataset_name = ds.get("dataset_name") or ds.get("name")
+    chart_type = "line" if time_group else ("bar" if group_cols else "kpi")
+    x_axis = time_group or (group_cols[0] if group_cols else None)
+    title = _live_title(metric_name, time_group, group_cols, filters, year, month, relative_time,
+                        question, year_shifted)
+    try:
+        result = execute(sql, binding["catalog"], run_as, run_role, binding["schema"] or None,
+                         timeout=_ASK_TIMEOUT_SECONDS, settings=settings)
+    except HTTPException as error:
+        detail = error.detail if isinstance(error.detail, dict) else {"message": str(error.detail)}
+        return {
+            "ok": False, "reason": "query_failed", "dataset_id": dataset_id, "dataset_name": dataset_name,
+            "message": str(detail.get("message") or "Engine query failed"),
+            "sql": sql, "engine": True,
+            "evidence": _engine_evidence(dataset_id, ds, binding, sql, settings, "live",
+                                         detail.get("engine_details"), {"id": detail.get("query_id")},
+                                         None, run_as),
+        }
+    record = result.get("query_details") if isinstance(result.get("query_details"), dict) else None
+    lane = _engine_lane(record)
+    out_columns, rows = _engine_rows(result)
+    if not ranked:
+        sign = 1 if sort_asc else -1
+        rows = sorted(rows, key=lambda r: (r[-1] is None, sign * _num(r[-1]) if r[-1] is not None else 0))
+        rows = rows[:int(limit_n)]
+    approximate = ((record or {}).get("execution") or {}).get("approximate") or []
+    return {
+        "ok": True,
+        "dataset_id": dataset_id,
+        "dataset_name": dataset_name,
+        "database": binding["catalog"],
+        "schema_name": binding["schema"],
+        "sql": sql,
+        "engine": True,
+        "executed": True,
+        "from_context": lane == "context",
+        "route": lane,
+        "chartType": chart_type,
+        "xAxis": x_axis,
+        "yAxis": metric_name,
+        "title": title,
+        "columns": out_columns or ([time_group] if time_group else []) + group_cols + [metric_name],
+        "rows": rows,
+        "filters": filters,
+        "year": year,
+        "note": None,
+        "approx": bool(approximate),
+        "confidence": round(routed_entry.get("score", 0.0), 3),
+        "evidence": _engine_evidence(dataset_id, ds, binding, sql, settings, lane, record, result,
+                                     len(rows), run_as),
+    }
 
 
 def _ranked_title(title: str, metric_name: str, group_col: Optional[str],
@@ -2403,12 +2707,14 @@ def invalidate_caches(dataset_id: Optional[str] = None) -> int:
         _SKETCH_CACHE.pop(ds_id, None)
         _RANGE_CACHE.pop(ds_id, None)
         _SPEC_CACHE.pop(ds_id, None)
+        _STATS_CACHE.pop(ds_id, None)
         return cleared
     n = len({k[0] for k in _ANSWER_CACHE})
     _evict_answers()
     _SKETCH_CACHE.clear()
     _RANGE_CACHE.clear()
     _SPEC_CACHE.clear()
+    _STATS_CACHE.clear()
     return n
 
 
@@ -2447,10 +2753,32 @@ def check_freshness(dataset_id: str, actor: Optional[str] = None,
     age_seconds = max(0.0, (now - refreshed).total_seconds())
     t_factor = _time_factor(age_seconds, BASE_HALF_LIFE_SECONDS)
 
-    # 3) change factor — row modifications since the artifact was built
+    # 3) change factor — the change signal since the artifact was built. The
+    #    per-element rule is the same on both source kinds; the counter differs:
+    #    a warehouse table's row modifications from pg_stat_user_tables, an
+    #    Engine table's source version from GET /v1/catalog/tables/{id}/version
+    #    (a metadata read: the log tail, the snapshot pointer, the listing or
+    #    the file identity). A version that moved is a change of at least the
+    #    half fraction, as a re-analyzed warehouse table is.
     c_factor = 1.0
     data_modified = False
-    if fact_table and _RETIREMENT_SERVING.get() is None:
+    versions: Dict[str, Any] = {}
+    engine_meta = stats.get("engine") if isinstance(stats.get("engine"), dict) else None
+    if engine_meta and engine_meta.get("table_id"):
+        from dlm.validity import _change_factor
+        recorded = engine_meta.get("source_version") or {}
+        current = _engine_version(str(engine_meta["table_id"]))
+        versions = {"source_version": recorded or None,
+                    "current_source_version": (current or {}).get("source_version"),
+                    "observed_at_ms": (current or {}).get("observed_at_ms")}
+        if current and recorded:
+            data_modified = (current["source_version"].get("identity_sha256")
+                             != recorded.get("identity_sha256"))
+            if data_modified:
+                row_counts = stats.get("row_counts") or {}
+                rows_at_build = int(row_counts.get(fact_table) or 0) or 1
+                c_factor = _change_factor(rows_at_build, 0, 0, True)
+    elif fact_table and _RETIREMENT_SERVING.get() is None:
         ds = datasets_svc.get_dataset_by_id(str(dataset_id))
         database = (ds.get("database_name") or _metadata_database()) if ds else _metadata_database()
         try:
@@ -2488,6 +2816,8 @@ def check_freshness(dataset_id: str, actor: Optional[str] = None,
         "computed_at": built_at,
         "data_modified": data_modified,
         "recommendation": recommendation,
+        **({"signal": "engine_source_version", **versions} if engine_meta
+           else {"signal": "postgresql_change_counter"}),
     }
 
 
@@ -4178,22 +4508,6 @@ def _extract_relative_time(question: str) -> Optional[str]:
     return None
 
 
-def _year_clause(date_column: str, year: int, columns: List[dict]) -> str:
-    """Year filter. Integer 'year'-style columns use equality; true dates use a
-    half-open range so an index can be used."""
-    dtype = ""
-    for c in columns:
-        if (c.get("column_name") or c.get("name") or "") == date_column:
-            dtype = (c.get("data_type") or "").lower()
-            break
-    is_int_year = date_column.lower() == "year" or dtype in (
-        "smallint", "integer", "int", "int2", "int4", "int8", "bigint", "numeric")
-    if is_int_year:
-        return f"{_qid(date_column)} = {int(year)}"
-    return (f"{_qid(date_column)} >= '{int(year)}-01-01' "
-            f"AND {_qid(date_column)} < '{int(year) + 1}-01-01'")
-
-
 def coverage(actor: Optional[str] = None, role: str = "Viewer") -> List[Dict[str, Any]]:
     """What context is available to test against — one row per compiled DLM, with
     the date range, row count, and value coverage. Drives the homepage banner."""
@@ -4278,11 +4592,109 @@ def _native_row_counts(database: str, schema: str, tables: List[str]) -> Dict[st
 def _native_catalog(database: str) -> Optional[Dict[str, Any]]:
     if _RETIREMENT_BUILD.get() is not None:
         return {"engine_catalog": database}
+    bound = _BOUND_ENGINE_CATALOG.get()
+    if bound and bound == database:
+        return {"engine_catalog": database}
     return meta.query_one(
         "SELECT engine_catalog FROM catalog_sources "
         "WHERE engine_catalog = @param0 AND lifecycle = 'active' AND adapter_type = 'native'",
         [database],
     )
+
+
+# ── Engine-backed datasets ─────────────────────────────────────────────────
+# A dataset bound to an Engine table by id (`source: {kind: engine, table_id}`)
+# is answered on the Engine: its statements run through the bridge, its
+# answer-from-context is the Engine's cube, and its freshness signal is the
+# table's source version. A dataset over a native catalog that predates the
+# binding (bound by `database_name` alone) is Engine-backed too; its table id
+# is resolved once through the catalog API and remembered for the process.
+
+_SERVICE_ACTOR = "kaveon-system"
+# The catalog of the dataset being compiled, so build-time statements route
+# to the Engine whether or not the platform registry lists the catalog.
+_BOUND_ENGINE_CATALOG: ContextVar[Optional[str]] = ContextVar("dlm_bound_engine_catalog", default=None)
+_TABLE_ID_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
+def _engine_binding(ds: dict, native: Optional[bool] = None) -> Optional[Dict[str, Any]]:
+    """`{table_id, catalog, schema, table}` for an Engine-backed dataset, else
+    None. `native` is whether the dataset's catalog is a registered native
+    catalog, when the caller already looked."""
+    catalog = ds.get("database_name") or ""
+    schema = ds.get("schema_name") or ""
+    table = ds.get("table_name") or ds.get("fact_table") or ""
+    source = datasets_svc.source_binding(ds.get("source"))
+    if source:
+        return {"table_id": source["table_id"], "catalog": catalog, "schema": schema, "table": table}
+    if native is None:
+        native = bool(_native_catalog(catalog)) if catalog else False
+    if not (catalog and schema and table) or not native:
+        return None
+    key = str(ds.get("id") or "")
+    cached = _TABLE_ID_CACHE.get(key)
+    if cached and cached.get("table") == (catalog, schema, table):
+        return dict(cached["binding"])
+    from services import engine_bridge
+    try:
+        definition = engine_bridge.table_definition(catalog, schema, table, _SERVICE_ACTOR, "Admin")
+    except Exception:
+        logger.warning("Engine table id could not be resolved for %s.%s.%s", catalog, schema, table)
+        return None
+    binding = {"table_id": str(definition.get("id") or ""), "catalog": catalog, "schema": schema, "table": table,
+               "shape": definition.get("shape") if isinstance(definition.get("shape"), dict) else None}
+    if not binding["table_id"]:
+        return None
+    if key:
+        _TABLE_ID_CACHE[key] = {"table": (catalog, schema, table), "binding": binding}
+    return binding
+
+
+def _engine_version(table_id: str) -> Optional[Dict[str, Any]]:
+    """The table's current source version from `GET /v1/catalog/tables/{id}/version`
+    — a metadata read, no data page — or None when the Engine cannot say."""
+    from services import engine_bridge
+    try:
+        version = engine_bridge.table_version(table_id, _SERVICE_ACTOR, "Admin")
+    except Exception:
+        logger.warning("Engine source version unavailable for table %s", table_id)
+        return None
+    if not isinstance(version, dict) or not isinstance(version.get("source_version"), dict):
+        return None
+    return version
+
+
+def _change_counter(database: str, schema: str, table: Optional[str]) -> Dict[str, Any]:
+    """The warehouse's change counter for the fact table as read now — the
+    version a warehouse answer reflects. PostgreSQL's `pg_stat_user_tables`
+    counters; `unavailable` on a source without them."""
+    if not (database and table):
+        return {"kind": "unavailable"}
+    from dlm.validity import _live_change
+    live = _live_change(database, schema).get(table)
+    if not live:
+        return {"kind": "unavailable", "table": table}
+    return {"kind": "postgresql_change_counter", "table": table,
+            "row_count": live.get("row_count"), "mods_since_analyze": live.get("mods_since_analyze"),
+            "last_analyze": live.get("last_analyze"), "observed_at": _now_iso()}
+
+
+_STATS_CACHE: Dict[str, dict] = {}
+
+
+def _artifact_stats(dataset_id: str) -> Dict[str, Any]:
+    """The artifact's stats rollup (row counts, watermark, the Engine binding
+    or the change-counter snapshot), cached per dataset until a regeneration."""
+    if _RETIREMENT_SERVING.get() is not None:
+        artifact = _serving_artifact(dataset_id) or {}
+        return _loads(artifact.get("stats_rollup")) or {}
+    if dataset_id in _STATS_CACHE:
+        return _STATS_CACHE[dataset_id]
+    ensure_tables()
+    row = meta.query_one("SELECT stats_rollup FROM dlm_artifact WHERE dataset_id = @param0", [dataset_id]) or {}
+    stats = _loads(row.get("stats_rollup")) or {}
+    _STATS_CACHE[dataset_id] = stats
+    return stats
 
 
 def _backfill_native_row_counts(dataset_id: str, stats: Dict[str, Any]) -> Dict[str, int]:
@@ -4448,6 +4860,59 @@ def _metadata_database() -> str:
         return os.environ.get("METADATA_DATABASE", "")
 
 
+def reproduce(dataset_id: str, sql: str, actor: str, role: str) -> Dict[str, Any]:
+    """Run an answer's `reproduce` block: the same statement as a live read.
+    On the Engine the statement runs with `use_statistics = false` and
+    `result_cache = false`, so neither the cube, the statistics nor a cached
+    result may answer it; on the warehouse it runs through the dataset's
+    query plane. The result carries the rows and the evidence of this run, so
+    a client can set the two headline numbers side by side."""
+    from fastapi import HTTPException
+    ds = datasets_svc.get_dataset_by_id(str(dataset_id), actor, role)
+    if not ds:
+        return {"ok": False, "reason": "dataset_not_found"}
+    database = ds.get("database_name") or _metadata_database()
+    schema = ds.get("schema_name") or "public"
+    fact = ds.get("table_name") or ds.get("fact_table") or ""
+    dataset_id = str(dataset_id)
+    if datasets_svc.source_binding(ds.get("source")):
+        binding = _engine_binding(ds)
+    else:
+        binding = _engine_binding(ds, native=bool(_native_catalog(database)))
+    t0 = _time_mod.monotonic()
+    if binding:
+        from services.engine_bridge import execute
+        settings = dict(REPRODUCE_SETTINGS)
+        run_as, run_role = _engine_principal(actor, role)
+        try:
+            result = execute(sql, binding["catalog"], run_as, run_role, binding["schema"] or None,
+                             timeout=_ASK_TIMEOUT_SECONDS, settings=settings)
+        except HTTPException as error:
+            detail = error.detail if isinstance(error.detail, dict) else {"message": str(error.detail)}
+            return {"ok": False, "reason": "query_failed",
+                    "message": str(detail.get("message") or "Engine query failed")}
+        record = result.get("query_details") if isinstance(result.get("query_details"), dict) else None
+        columns, rows = _engine_rows(result)
+        evidence = _engine_evidence(dataset_id, ds, binding, sql, settings, _engine_lane(record),
+                                    record, result, len(rows), run_as)
+    else:
+        try:
+            result = pool.execute_query(sql, database, timeout_seconds=_ASK_TIMEOUT_SECONDS,
+                                        max_rows=_REPRODUCE_MAX_ROWS)
+        except HTTPException:
+            raise
+        except Exception as error:
+            return {"ok": False, "reason": "query_failed", "message": _failure_reason(error)}
+        columns = [str(c) for c in (result.get("columns") or [])]
+        rows = [list(r) for r in (result.get("rows") or [])]
+        evidence = _warehouse_evidence(dataset_id, ds, database, schema, fact,
+                                       {"from_context": False, "rows": rows}, sql)
+    if evidence.get("elapsed_ms") is None:
+        evidence["elapsed_ms"] = round((_time_mod.monotonic() - t0) * 1000, 1)
+    return {"ok": True, "dataset_id": dataset_id, "columns": columns, "rows": rows, "evidence": evidence,
+            "duration_ms": round((_time_mod.monotonic() - t0) * 1000, 1)}
+
+
 def _execute_dataset_query(sql: str, database: str,
                            timeout_seconds: Optional[float] = None) -> Dict[str, Any]:
     """Execute DLM build SQL through the dataset's registered query plane.
@@ -4585,10 +5050,17 @@ def _synonyms_for(name: str) -> List[str]:
 _SPEC_CACHE: Dict[str, dict] = {}
 
 
-def _suggest_spec(columns: List[dict], metrics: List[dict]) -> dict:
+def _suggest_spec(columns: List[dict], metrics: List[dict], shape: Optional[dict] = None,
+                  engine: bool = False) -> dict:
     """Auto-derive a starter context spec at generate time: aliases from the seed
     lexicon, additivity inferred from the aggregate, every dimension precomputed
-    by default. The user edits this on the context page; edits persist separately."""
+    by default. The user edits this on the context page; edits persist separately.
+
+    Over an Engine table the declared shape is the authority on additivity: a
+    measure declared `count_distinct` is non-additive and marked `approximate`
+    (the cube holds it as a sketch and the Engine states the error); the spec
+    also carries the dataset's freshness policy — `cached` lets the Engine's
+    result cache answer a repeated statement, `live` bypasses it."""
     ms: Dict[str, dict] = {}
     for i, m in enumerate(metrics):
         name = m.get("name") or m.get("metric_name")
@@ -4596,13 +5068,16 @@ def _suggest_spec(columns: List[dict], metrics: List[dict]) -> dict:
             continue
         expr = (m.get("expression") or "")
         # non-additive: distinct counts and averages can't be summed across a breakdown
-        additive = not (re.search(r"\bDISTINCT\b", expr, re.I) or re.search(r"\bAVG\s*\(", expr, re.I))
+        distinct = bool(re.search(r"\bDISTINCT\b", expr, re.I))
+        additive = not (distinct or re.search(r"\bAVG\s*\(", expr, re.I))
         ms[name] = {
             "display_name": name,
             "aliases": _synonyms_for(name),
             "additive": additive,
             "default": (i == 0),
         }
+        if engine and distinct:
+            ms[name]["approximate"] = True
     ds: Dict[str, dict] = {}
     for c in columns:
         if not c.get("is_dimension"):
@@ -4616,7 +5091,10 @@ def _suggest_spec(columns: List[dict], metrics: List[dict]) -> dict:
             "precompute": True,
             "top_n": 500,
         }
-    return {"metrics": ms, "dimensions": ds, "value_aliases": {}}
+    spec: Dict[str, Any] = {"metrics": ms, "dimensions": ds, "value_aliases": {}}
+    if engine:
+        spec["freshness_policy"] = "cached"
+    return spec
 
 
 def _merge_spec(suggested: dict, curation: dict) -> dict:
@@ -4633,13 +5111,16 @@ def _merge_spec(suggested: dict, curation: dict) -> dict:
                 # curated list is authoritative (WYSIWYG editor pre-fills from
                 # effective, so this supports removing a suggested alias too)
                 entry["aliases"] = sorted(set(o.get("aliases") or []))
-            for f in ("display_name", "additive", "default", "precompute", "top_n", "hidden"):
+            for f in ("display_name", "additive", "default", "precompute", "top_n", "hidden", "approximate"):
                 if f in o:
                     entry[f] = o[f]
             out[kind][key] = entry
     va = dict(suggested.get("value_aliases") or {})
     va.update(curation.get("value_aliases") or {})
     out["value_aliases"] = va
+    policy = curation.get("freshness_policy") or suggested.get("freshness_policy")
+    if policy:
+        out["freshness_policy"] = policy
     # default metric: explicit curation wins, else the one flagged default, else first
     dflt = curation.get("default_metric")
     if not dflt:
@@ -4798,7 +5279,7 @@ def _sanitize_curation(c: Any) -> Dict[str, Any]:
                 e["aliases"] = [str(a).strip().lower() for a in v["aliases"] if str(a).strip()][:50]
             if v.get("display_name") is not None:
                 e["display_name"] = str(v["display_name"])[:120]
-            for f in ("additive", "default", "precompute", "hidden"):
+            for f in ("additive", "default", "precompute", "hidden", "approximate"):
                 if f in v:
                     e[f] = bool(v[f])
             if "top_n" in v:
@@ -4818,6 +5299,8 @@ def _sanitize_curation(c: Any) -> Dict[str, Any]:
             out["value_aliases"] = cleaned
     if c.get("default_metric"):
         out["default_metric"] = str(c["default_metric"])
+    if c.get("freshness_policy") in ("cached", "live"):
+        out["freshness_policy"] = c["freshness_policy"]
     return out
 
 
@@ -4830,12 +5313,15 @@ def _curation_affects_precompute(prev: dict, new: dict) -> bool:
     return _shape(prev) != _shape(new)
 
 
-def _fingerprint(ds: dict, columns: List[dict], dimensions: List[dict], metrics: List[dict]) -> str:
+def _fingerprint(ds: dict, columns: List[dict], dimensions: List[dict], metrics: List[dict],
+                 shape: Optional[dict] = None) -> str:
     payload = {
         "name": ds.get("dataset_name") or ds.get("name"),
         "fact": ds.get("table_name") or ds.get("fact_table"),
         "schema": ds.get("schema_name"),
         "date_column": ds.get("date_column"),
+        "source": datasets_svc.source_binding(ds.get("source")),
+        "shape": shape,
         "columns": sorted([(c.get("table_name"), c.get("column_name") or c.get("name"),
                             c.get("data_type"), bool(c.get("is_dimension")), bool(c.get("is_metric")))
                            for c in columns]),
