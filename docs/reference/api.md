@@ -307,7 +307,9 @@ schema, runs with whatever `catalog`/`schema` the request names.
 ### Statistics statements
 
 `ANALYZE` computes a table's statistics and stores them in the durable
-catalog beside the table definition; two statements read them. All take
+catalog beside the table definition; two statements read them (the
+engineer's reference for the whole path is
+[The learning engine](../engine/learning-engine.md)). All take
 the `ANALYZE` name form — `[catalog.][schema.]table`, plain or
 double-quoted identifier parts, unqualified names resolved by the session
 `catalog` and `schema` — answer inline regardless of `result_delivery`, and

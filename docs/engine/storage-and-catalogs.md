@@ -252,6 +252,11 @@ table, alongside `*.parquet` files and Delta directories.
 
 ## Table statistics
 
+The reference page for the knowing path — `ANALYZE`'s three forms, the
+object, what answers without a scan, the `context` record, the settings
+and the guarantees — is [The learning engine](learning-engine.md); this
+section is the storage view.
+
 A table's statistics are one object in the durable catalog, stored
 beside the definition under the table's id (`table_statistics`, deleted
 with the table) and **versioned by the source version** they were

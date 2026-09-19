@@ -24,6 +24,7 @@ tested, most are cluster-verified, none is production-qualified.
 - [SQL and execution](sql-and-execution.md)
 - [Distributed runtime](distributed-runtime.md)
 - [Storage and catalogs](storage-and-catalogs.md)
+- [The learning engine](learning-engine.md) — `ANALYZE`, the statistics object, what answers without a scan, what the readers skip
 - [Memory management](../reference/engine-memory-management.md)
 - [Settings reference](settings.md)
 - [HTTP API](../reference/api.md)
