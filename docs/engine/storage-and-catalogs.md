@@ -260,10 +260,10 @@ directory listing, a file's size and modification time or ETag. The
 object holds the table facts (rows, bytes, files, row groups, last
 modified, partition columns), per column the null count, the bounds and
 whether they are the true extremes, the compressed bytes, and — after a
-full read — a HyperLogLog distinct-count sketch (p = 11, six-bit packed
-registers, Ertl's estimator; the register layout and hash the DLM's
-sketch cuboids use, so the two merge) and a KLL quantile sketch (k =
-200); per file the rows, bytes and bounds while the table has at most
+full read — a HyperLogLog distinct-count sketch (p = 12, six-bit packed
+registers, Ertl's estimator, 1.6 % standard error; the register layout
+and hash the DLM's sketch cuboids use, so two sketches at one precision
+merge) and a KLL quantile sketch (k = 200, 1.65 % rank error); per file the rows, bytes and bounds while the table has at most
 10,000 files. `ANALYZE` builds it from metadata alone; `WITH (sketches =
 true)` reads the sketchable columns once, files in parallel, batches
 reserved through the statement's memory admission; `WITH (distinct =
@@ -284,7 +284,15 @@ the statement:
 - **Current statistics answer and skip.** A `COUNT(*)`, `MIN` or `MAX`
   with no predicate is answered from a record at exactly the pinned
   version (`execution.mode = "context"`), for a bound only when it is
-  exact and the null count is known. A coordinator-local scan of a
+  exact and the null count is known. So is an `APPROX_COUNT_DISTINCT` or
+  `APPROX_PERCENTILE` with no predicate and no grouping, from the
+  column's stored sketch — the record names the sketch and states its
+  error (`execution.approximate`); an exact distinct count on record
+  answers before the sketch, with no error. The record holds one sketch
+  per column for the whole table, so a grouped or filtered approximate
+  aggregate computes its own sketch over the rows instead. `settings.
+  use_statistics = false` stands every such answer aside (the rows are
+  read; `execution.detail` says `statistics bypassed`). A coordinator-local scan of a
   directory table under a predicate is pinned at the files the record's
   bounds admit (`files_skipped`), on top of partition pruning. Delta and
   Iceberg readers skip files from their own metadata — the add actions'
