@@ -17,6 +17,7 @@ pub mod parquet_reader;
 mod scan_bench;
 pub mod scan_predicate;
 pub mod source_statistics;
+pub mod table_rewrite;
 
 pub use adls_commit::{
     AdlsConditionalCommit, CommitError, CommitErrorKind, CommitResult, ObjectVersion,
@@ -48,6 +49,9 @@ pub use parquet_reader::{
 pub use scan_predicate::LateMaterialisation;
 pub use source_statistics::{
     SourceColumnProfile, SourceProfile, SourceStatistics, analyze_source, profile_source,
+};
+pub use table_rewrite::{
+    Recovery, RewriteGroup, RewriteKind, RewriteReport, RewriteTarget, Staging, TableFile,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

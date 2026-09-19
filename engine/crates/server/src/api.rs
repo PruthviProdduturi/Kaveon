@@ -2430,6 +2430,29 @@ async fn run_statement(
 
     // Catalog and ANALYZE statements answer inline whatever the delivery;
     // their finished record drops `next_uri` and the writer with it.
+    // OPTIMIZE rewrites data under the statement's admitted memory: its
+    // sort runs on the pool like any operator, so the admission stays held.
+    if let Some(kaveon_sql::ddl::CatalogStatement::Optimize {
+        name,
+        filter,
+        options,
+    }) = catalog_statement
+    {
+        let result = crate::optimize::execute_optimize(
+            &state,
+            &identity,
+            &context.catalog,
+            &context.schema,
+            name,
+            filter,
+            options,
+            query_memory.pool().clone(),
+        )
+        .await
+        .map_err(|error| (error.status, error.code, error.message));
+        drop(query_memory);
+        return finish_catalog_result(&query_id, result, start).await;
+    }
     if let Some(statement) = catalog_statement {
         return execute_catalog(&state, &identity, &query_id, &context, statement, start).await;
     }
@@ -4331,41 +4354,33 @@ async fn execute_catalog(
         &context.schema,
         statement,
     )
-    .await;
-    let result = match result {
-        Ok(result) => result,
-        Err(error) => {
-            finish_failed_query(query_id, error.message.clone(), started, None, None, None).await;
-            return (
-                error.status,
+    .await
+    .map_err(|error| (error.status, error.code, error.message));
+    finish_catalog_result(query_id, result, started).await
+}
+
+/// The finished (or failed) record and response of a statement that
+/// answers with a catalog-shaped result: a catalog statement, `OPTIMIZE`.
+async fn finish_catalog_result(
+    query_id: &str,
+    result: Result<crate::catalog_ddl::CatalogStatementResult, (StatusCode, &'static str, String)>,
+    started: Instant,
+) -> Response {
+    match result {
+        Ok(result) => finish_inline_statement(query_id, started, result.columns, result.rows).await,
+        Err((status, code, message)) => {
+            finish_failed_query(query_id, message.clone(), started, None, None, None).await;
+            (
+                status,
                 Json(serde_json::json!({
                     "id": query_id,
-                    "error": error.message,
-                    "code": error.code
+                    "error": message,
+                    "code": code
                 })),
             )
-                .into_response();
+                .into_response()
         }
-    };
-    let elapsed = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
-    if let Some(record) = QUERY_STORE.write().await.queries.get_mut(query_id) {
-        record.state = QueryState::Finished;
-        record.next_uri = None;
-        record.columns = result.columns.clone();
-        record.rows = result.rows.clone();
-        record.elapsed_ms = elapsed;
-        record.completed_at_ms = unix_time_ms();
     }
-    Json(StatementResponse {
-        next_uri: None,
-        id: query_id.into(),
-        state: QueryState::Finished,
-        columns: Some(result.columns),
-        data: Some(result.rows),
-        error: None,
-        elapsed_ms: elapsed,
-    })
-    .into_response()
 }
 
 /// The distinct counts of a stored document: column name to count, for
