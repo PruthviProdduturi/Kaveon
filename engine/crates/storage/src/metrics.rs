@@ -11,6 +11,9 @@ pub struct ScanMetricsSnapshot {
     /// Files of a partitioned directory the predicate ruled out by their
     /// path values, before any file was opened.
     pub files_pruned_by_partition: u64,
+    /// Files the predicate ruled out from their recorded bounds (the
+    /// table's statistics or the Delta log) before any footer was read.
+    pub files_skipped: u64,
     pub object_metadata_cache_hits: u64,
     pub object_store_cache_hits: u64,
     pub decoded_batch_cache_hits: u64,
@@ -85,6 +88,7 @@ struct ScanMetricsInner {
     files_considered: AtomicU64,
     files_opened: AtomicU64,
     files_pruned_by_partition: AtomicU64,
+    files_skipped: AtomicU64,
     object_metadata_cache_hits: AtomicU64,
     object_store_cache_hits: AtomicU64,
     decoded_batch_cache_hits: AtomicU64,
@@ -119,6 +123,7 @@ impl ScanMetrics {
             files_considered: self.load(&self.0.files_considered),
             files_opened: self.load(&self.0.files_opened),
             files_pruned_by_partition: self.load(&self.0.files_pruned_by_partition),
+            files_skipped: self.load(&self.0.files_skipped),
             object_metadata_cache_hits: self.load(&self.0.object_metadata_cache_hits),
             object_store_cache_hits: self.load(&self.0.object_store_cache_hits),
             decoded_batch_cache_hits: self.load(&self.0.decoded_batch_cache_hits),
@@ -185,6 +190,12 @@ impl ScanMetrics {
         self.0
             .files_pruned_by_partition
             .fetch_add(value, Ordering::Relaxed);
+    }
+    /// Record files ruled out by their recorded bounds: they count as
+    /// considered and skipped, never opened.
+    pub fn files_skipped(&self, value: u64) {
+        self.0.files_considered.fetch_add(value, Ordering::Relaxed);
+        self.0.files_skipped.fetch_add(value, Ordering::Relaxed);
     }
     pub(crate) fn object_metadata_cache_hit(&self) {
         self.0

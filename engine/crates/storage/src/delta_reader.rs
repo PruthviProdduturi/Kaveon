@@ -168,17 +168,31 @@ impl DeltaTableReader {
             .first()
             .cloned()
             .ok_or_else(|| delta_error("Delta snapshot has no active files"))?;
+        // The add actions' stats rule files out before any footer is read.
+        let admitted = match &self.predicate {
+            Some(predicate) => snapshot.files_may_match(predicate),
+            None => vec![true; all_files.len()],
+        };
+        let metrics = ScanMetrics::default();
+        metrics.snapshot_time(snapshot_elapsed);
+        let mut skipped = 0u64;
         let files: Vec<_> = all_files
             .into_iter()
             .enumerate()
-            .filter_map(|(index, path)| {
+            .filter(|(index, _)| {
                 self.partition
-                    .is_none_or(|partition| partition.contains(index))
-                    .then_some(path)
+                    .is_none_or(|partition| partition.contains(*index))
+            })
+            .filter_map(|(index, path)| {
+                if admitted[index] {
+                    Some(path)
+                } else {
+                    skipped += 1;
+                    None
+                }
             })
             .collect();
-        let metrics = ScanMetrics::default();
-        metrics.snapshot_time(snapshot_elapsed);
+        metrics.files_skipped(skipped);
         let current = files
             .first()
             .map(|first| {
@@ -433,6 +447,70 @@ mod tests {
         }
         assert_eq!(values, vec![0, 1]);
         assert_eq!(source.metrics().snapshot().row_groups_pruned(), 3);
+        // Without add-action stats every file is opened.
+        assert_eq!(source.metrics().snapshot().files_skipped, 0);
+        assert_eq!(source.metrics().snapshot().files_opened, 2);
+
+        // With the log's stats a file whose bounds cannot match is never
+        // opened; a file without stats is.
+        let schema_string = serde_json::json!({"type":"struct","fields":[
+            {"name":"id","type":"long","nullable":false,"metadata":{}},
+            {"name":"payload","type":"long","nullable":false,"metadata":{}}
+        ]})
+        .to_string();
+        let stats = |lo: i64, hi: i64| {
+            serde_json::json!({"numRecords": 8, "minValues": {"id": lo, "payload": lo}, "maxValues": {"id": hi, "payload": hi}, "nullCount": {"id": 0, "payload": 0}}).to_string()
+        };
+        write_commit(
+            &table,
+            1,
+            &[
+                serde_json::json!({"metaData":{"id":"t","format":{"provider":"parquet"},"schemaString":schema_string,"partitionColumns":[]}}).to_string(),
+                serde_json::json!({"remove":{"path":"part-0.parquet"}}).to_string(),
+                serde_json::json!({"remove":{"path":"part-1.parquet"}}).to_string(),
+                serde_json::json!({"add":{"path":"part-0.parquet","stats":stats(0, 7)}}).to_string(),
+                serde_json::json!({"add":{"path":"part-1.parquet","stats":stats(8, 15)}}).to_string(),
+            ]
+            .join("\n"),
+        );
+        let read = |predicate: StoragePredicate| {
+            let mut source = DeltaTableReader::new(&table)
+                .with_columns(vec!["payload".into()])
+                .with_predicate(predicate)
+                .read()
+                .unwrap();
+            let mut values = Vec::new();
+            while let Some(batch) = source.next_batch().unwrap() {
+                values.extend(
+                    batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap()
+                        .values()
+                        .iter()
+                        .copied(),
+                );
+            }
+            (values, source.metrics().snapshot())
+        };
+        let (values, metrics) = read(StoragePredicate::Compare {
+            column: "id".into(),
+            op: CompareOp::Ge,
+            value: ScalarValue::Int64(10),
+        });
+        assert_eq!(values, vec![10, 11, 12, 13, 14, 15]);
+        assert_eq!(metrics.files_skipped, 1);
+        assert_eq!(metrics.files_opened, 1);
+        assert_eq!(metrics.files_considered, 2);
+        let (values, metrics) = read(StoragePredicate::Compare {
+            column: "id".into(),
+            op: CompareOp::Gt,
+            value: ScalarValue::Int64(15),
+        });
+        assert!(values.is_empty());
+        assert_eq!(metrics.files_skipped, 2);
+        assert_eq!(metrics.files_opened, 0);
         fs::remove_dir_all(table).unwrap();
     }
 
