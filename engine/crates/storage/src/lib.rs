@@ -3,6 +3,7 @@
 pub mod adls_commit;
 pub mod adls_reader;
 pub mod clustered_writer;
+pub mod cube;
 pub mod delta_reader;
 pub mod delta_snapshot;
 pub mod footer_profile;
@@ -29,6 +30,7 @@ pub use clustered_writer::{
     ClusteredFileSink, ClusteredParquetWriter, ClusteringLayout, FileNaming, LocalDirectorySink,
     MemorySink, WrittenFile,
 };
+pub use cube::{CubeBuild, CubeBuildOptions, build_cube, refresh_cube};
 pub use delta_reader::{DeltaBatchIterator, DeltaTableReader};
 pub use footer_profile::{ColumnProfile, FooterProfile, StatValue};
 pub use iceberg_reader::{IcebergReader, IcebergSnapshot, IcebergSource};
