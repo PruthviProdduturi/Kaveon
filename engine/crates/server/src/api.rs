@@ -212,6 +212,9 @@ struct TaskScanMetrics {
     decoded_batch_cache_singleflight_waits: u64,
     row_groups_considered: u64,
     row_groups_selected: u64,
+    row_groups_pruned_by_bloom: u64,
+    bloom_filters_read: u64,
+    bloom_filter_bytes_read: u64,
     rows_selected: u64,
     rows_emitted: u64,
     compressed_bytes_selected: u64,
@@ -262,6 +265,12 @@ struct ScanTelemetry {
     row_groups_considered: u64,
     row_groups_read: u64,
     row_groups_pruned: u64,
+    /// Of the pruned, the row groups a Bloom filter ruled out after the
+    /// statistics had kept them (an equality on a column that carries
+    /// one), and the filters read to decide it.
+    row_groups_pruned_by_bloom: u64,
+    bloom_filters_read: u64,
+    bloom_filter_bytes_read: u64,
     rows_selected: u64,
     rows_emitted: u64,
     batches_emitted: u64,
@@ -7867,6 +7876,9 @@ fn scan_telemetry(metrics: &kaveon_storage::ScanMetrics) -> ScanTelemetry {
         row_groups_considered: snapshot.row_groups_considered,
         row_groups_read: snapshot.row_groups_selected,
         row_groups_pruned: snapshot.row_groups_pruned(),
+        row_groups_pruned_by_bloom: snapshot.row_groups_pruned_by_bloom,
+        bloom_filters_read: snapshot.bloom_filters_read,
+        bloom_filter_bytes_read: snapshot.bloom_filter_bytes_read,
         rows_selected: snapshot.rows_selected,
         rows_emitted: snapshot.rows_emitted,
         batches_emitted: snapshot.batches_emitted,
@@ -7926,6 +7938,9 @@ fn merge_task_scan_metrics<'a>(
             snapshot.decoded_batch_cache_singleflight_waits;
         total.row_groups_considered += snapshot.row_groups_considered;
         total.row_groups_selected += snapshot.row_groups_selected;
+        total.row_groups_pruned_by_bloom += snapshot.row_groups_pruned_by_bloom;
+        total.bloom_filters_read += snapshot.bloom_filters_read;
+        total.bloom_filter_bytes_read += snapshot.bloom_filter_bytes_read;
         total.rows_selected += snapshot.rows_selected;
         total.rows_emitted += snapshot.rows_emitted;
         total.compressed_bytes_selected += snapshot.compressed_bytes_selected;
@@ -8051,6 +8066,9 @@ fn distributed_scan_telemetry(stages: &[StageTelemetry]) -> (Vec<ScanTelemetry>,
                 scan.decoded_batch_cache_singleflight_waits;
             total.row_groups_considered += scan.row_groups_considered;
             total.row_groups_selected += scan.row_groups_selected;
+            total.row_groups_pruned_by_bloom += scan.row_groups_pruned_by_bloom;
+            total.bloom_filters_read += scan.bloom_filters_read;
+            total.bloom_filter_bytes_read += scan.bloom_filter_bytes_read;
             total.rows_selected += scan.rows_selected;
             total.rows_emitted += scan.rows_emitted;
             total.compressed_bytes_selected += scan.compressed_bytes_selected;
@@ -8096,6 +8114,9 @@ fn distributed_scan_telemetry(stages: &[StageTelemetry]) -> (Vec<ScanTelemetry>,
             row_groups_pruned: total
                 .row_groups_considered
                 .saturating_sub(total.row_groups_selected),
+            row_groups_pruned_by_bloom: total.row_groups_pruned_by_bloom,
+            bloom_filters_read: total.bloom_filters_read,
+            bloom_filter_bytes_read: total.bloom_filter_bytes_read,
             rows_selected: total.rows_selected,
             rows_emitted: total.rows_emitted,
             batches_emitted: total.batches_emitted,

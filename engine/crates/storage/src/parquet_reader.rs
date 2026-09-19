@@ -3,12 +3,19 @@ use arrow::record_batch::{RecordBatch, RecordBatchReader as ArrowRecordBatchRead
 use kaveon_core::{BatchSource, CompareOp, KaveonError, Result, ScalarValue, StoragePredicate};
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::{
-    ArrowReaderOptions, ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder,
+    ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader,
+    ParquetRecordBatchReaderBuilder,
 };
+use parquet::basic::Type as PhysicalType;
+use parquet::bloom_filter::Sbbf;
+use parquet::data_type::ByteArray;
 use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
+use parquet::file::properties::ReaderProperties;
+use parquet::file::reader::{FileReader, SerializedFileReader};
+use parquet::file::serialized_reader::ReadOptionsBuilder;
 use parquet::file::statistics::Statistics;
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -427,10 +434,6 @@ impl ParquetReader {
         if self.batch_size == 0 {
             return Err(storage_error("batch size must be greater than zero"));
         }
-        // With a predicate the decoder runs a row filter; the offset index,
-        // when the file carries one, lets it skip whole pages the selection
-        // never touches instead of decompressing them.
-        let options = ArrowReaderOptions::new().with_page_index(self.predicate.is_some());
         // The path is the fact a reader of the error needs: a table whose
         // file moved answers "cannot open /data/x.parquet", not "os error 2".
         let file = File::open(&self.path).map_err(|error| {
@@ -440,7 +443,32 @@ impl ParquetReader {
                 io_reason(&error)
             ))
         })?;
-        ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).map_err(parquet_error)
+        // With a predicate the decoder runs a row filter; the offset index,
+        // when the file carries one, lets it skip whole pages the selection
+        // never touches instead of decompressing them. The footer decides:
+        // parquet-rs refuses to load a page index from a file that carries
+        // a column index but no offset index (a writer with page statistics
+        // and the offset index disabled), so the index is loaded only when
+        // every column chunk has one.
+        let metadata = parquet::file::metadata::ParquetMetaDataReader::new()
+            .parse_and_finish(&file)
+            .map_err(parquet_error)?;
+        let metadata = if self.predicate.is_some() && carries_offset_index(&metadata) {
+            let mut reader =
+                parquet::file::metadata::ParquetMetaDataReader::new_with_metadata(metadata)
+                    .with_page_indexes(true);
+            reader.read_page_indexes(&file).map_err(parquet_error)?;
+            reader.finish().map_err(parquet_error)?
+        } else {
+            metadata
+        };
+        let arrow_metadata =
+            ArrowReaderMetadata::try_new(Arc::new(metadata), ArrowReaderOptions::new())
+                .map_err(parquet_error)?;
+        Ok(ParquetRecordBatchReaderBuilder::new_with_metadata(
+            file,
+            arrow_metadata,
+        ))
     }
 
     fn configure_builder(
@@ -476,6 +504,15 @@ impl ParquetReader {
         if let Some(partition) = self.partition {
             groups.retain(|group| partition.contains(*group));
         }
+        if let Some(predicate) = &coerced {
+            groups = self.bloom_prune(
+                builder.metadata().as_ref(),
+                &schema,
+                predicate,
+                groups,
+                metrics,
+            )?;
+        }
         record_selection_metrics(
             builder.metadata().as_ref(),
             &groups,
@@ -499,6 +536,141 @@ impl ParquetReader {
         }
         Ok(builder)
     }
+}
+
+impl ParquetReader {
+    /// The row groups of `groups` a Bloom filter does not rule out: for
+    /// every group whose equality columns carry a filter, the filters are
+    /// read from the file (parquet-rs reads a row group's filters together)
+    /// and the predicate is asked again. A file without filters costs
+    /// nothing here.
+    fn bloom_prune(
+        &self,
+        metadata: &ParquetMetaData,
+        schema: &SchemaRef,
+        predicate: &StoragePredicate,
+        groups: Vec<usize>,
+        metrics: &ScanMetrics,
+    ) -> Result<Vec<usize>> {
+        let probes = groups
+            .iter()
+            .map(|group| bloom_probes(metadata.row_group(*group), schema, predicate))
+            .collect::<Vec<_>>();
+        if probes.iter().all(Vec::is_empty) {
+            return Ok(groups);
+        }
+        let file = File::open(&self.path).map_err(|error| {
+            storage_error(format!(
+                "cannot open {}: {}",
+                self.path.display(),
+                io_reason(&error)
+            ))
+        })?;
+        let options = ReadOptionsBuilder::new()
+            .with_reader_properties(
+                ReaderProperties::builder()
+                    .set_read_bloom_filter(true)
+                    .build(),
+            )
+            .build();
+        let reader =
+            SerializedFileReader::new_with_options(file, options).map_err(parquet_error)?;
+        let mut kept = Vec::with_capacity(groups.len());
+        let (mut filters_read, mut bytes_read, mut pruned) = (0_u64, 0_u64, 0_u64);
+        for (group, probes) in groups.into_iter().zip(probes) {
+            if probes.is_empty() {
+                kept.push(group);
+                continue;
+            }
+            let row_group = reader.get_row_group(group).map_err(parquet_error)?;
+            let group_metadata = metadata.row_group(group);
+            let filters = probes
+                .iter()
+                .filter_map(|column| {
+                    row_group
+                        .get_column_bloom_filter(*column)
+                        .map(|filter| (*column, filter))
+                })
+                .collect::<HashMap<usize, &Sbbf>>();
+            filters_read += filters.len() as u64;
+            bytes_read += filters
+                .keys()
+                .filter_map(|column| group_metadata.column(*column).bloom_filter_length())
+                .map(|length| u64::try_from(length).unwrap_or_default())
+                .sum::<u64>();
+            if bloom_can_match(group_metadata, schema, predicate, &|column| {
+                filters.get(&column).copied()
+            }) {
+                kept.push(group);
+            } else {
+                pruned += 1;
+            }
+        }
+        metrics.bloom_filters(filters_read, bytes_read, pruned);
+        Ok(kept)
+    }
+}
+
+/// The object readers' Bloom pruning: the row groups of `groups` the
+/// filters `builder` fetches (one range request per filter, only the
+/// filters the predicate consults) do not rule out.
+pub(crate) async fn bloom_prune_async<T>(
+    builder: &mut parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder<T>,
+    schema: &SchemaRef,
+    predicate: &StoragePredicate,
+    groups: Vec<usize>,
+    metrics: &ScanMetrics,
+) -> Result<Vec<usize>>
+where
+    T: parquet::arrow::async_reader::AsyncFileReader + Send + 'static,
+{
+    let metadata = Arc::clone(builder.metadata());
+    let mut kept = Vec::with_capacity(groups.len());
+    let (mut filters_read, mut bytes_read, mut pruned) = (0_u64, 0_u64, 0_u64);
+    for group in groups {
+        let group_metadata = metadata.row_group(group);
+        let probes = bloom_probes(group_metadata, schema, predicate);
+        if probes.is_empty() {
+            kept.push(group);
+            continue;
+        }
+        let mut filters = HashMap::new();
+        for column in probes {
+            if let Some(filter) = builder
+                .get_row_group_column_bloom_filter(group, column)
+                .await
+                .map_err(parquet_error)?
+            {
+                filters_read += 1;
+                bytes_read += group_metadata
+                    .column(column)
+                    .bloom_filter_length()
+                    .and_then(|length| u64::try_from(length).ok())
+                    .unwrap_or_default();
+                filters.insert(column, filter);
+            }
+        }
+        if bloom_can_match(group_metadata, schema, predicate, &|column| {
+            filters.get(&column)
+        }) {
+            kept.push(group);
+        } else {
+            pruned += 1;
+        }
+    }
+    metrics.bloom_filters(filters_read, bytes_read, pruned);
+    Ok(kept)
+}
+
+/// Whether every column chunk of every row group carries an offset index:
+/// what loading the page index requires.
+fn carries_offset_index(metadata: &ParquetMetaData) -> bool {
+    metadata.num_row_groups() > 0
+        && metadata
+            .row_groups()
+            .iter()
+            .flat_map(|group| group.columns())
+            .all(|column| column.offset_index_offset().is_some())
 }
 
 pub(crate) fn record_selection_metrics(
@@ -610,6 +782,21 @@ fn validate_column_value(column: &str, value: &ScalarValue, schema: &SchemaRef) 
     Ok(())
 }
 
+/// Whether any row group of a file may hold rows satisfying `predicate`,
+/// by the same footer statistics pruning every reader applies (the
+/// literals coerced to the columns' types first). An error names a column
+/// the schema does not have or a literal of the wrong type. `OPTIMIZE …
+/// WHERE` selects the files to rewrite with it.
+pub fn footer_may_match(
+    metadata: &ParquetMetaData,
+    schema: &SchemaRef,
+    predicate: &StoragePredicate,
+) -> Result<bool> {
+    let coerced = predicate.coerced_for(schema);
+    validate_predicate(&coerced, schema)?;
+    Ok(!matching_row_groups(metadata, schema, &coerced).is_empty())
+}
+
 pub(crate) fn matching_row_groups(
     metadata: &ParquetMetaData,
     schema: &SchemaRef,
@@ -655,6 +842,131 @@ fn predicate_can_match(
         StoragePredicate::Not(_) => true,
         // Statistics say nothing about a pattern match; the row filter does.
         StoragePredicate::Like { .. } => true,
+    }
+}
+
+/// The columns (leaf indices) of `group` whose Bloom filter `predicate`
+/// would consult: the columns it compares for equality (`=`, `IN`) that
+/// carry a filter in this row group. Empty when the filters cannot change
+/// the answer, so no reader fetches one for nothing.
+pub(crate) fn bloom_probes(
+    group: &RowGroupMetaData,
+    schema: &SchemaRef,
+    predicate: &StoragePredicate,
+) -> Vec<usize> {
+    fn collect(
+        group: &RowGroupMetaData,
+        schema: &SchemaRef,
+        predicate: &StoragePredicate,
+        out: &mut Vec<usize>,
+    ) {
+        let mut probe = |column: &str| {
+            if let Ok(index) = schema.index_of(column)
+                && index < group.num_columns()
+                && group.column(index).bloom_filter_offset().is_some()
+                && !out.contains(&index)
+            {
+                out.push(index);
+            }
+        };
+        match predicate {
+            StoragePredicate::Compare {
+                column,
+                op: CompareOp::Eq,
+                ..
+            }
+            | StoragePredicate::In { column, .. } => probe(column),
+            StoragePredicate::And(children) | StoragePredicate::Or(children) => {
+                for child in children {
+                    collect(group, schema, child, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    collect(group, schema, predicate, &mut out);
+    out
+}
+
+/// Whether `group` may hold a row satisfying `predicate` given the Bloom
+/// filters `filter` supplies for its columns: an equality whose value the
+/// column's filter does not know is false, everything the filters cannot
+/// decide is true. The statistics have already been asked; this only
+/// removes row groups they kept.
+pub(crate) fn bloom_can_match<'f>(
+    group: &RowGroupMetaData,
+    schema: &SchemaRef,
+    predicate: &StoragePredicate,
+    filter: &dyn Fn(usize) -> Option<&'f Sbbf>,
+) -> bool {
+    let contains = |column: &str, value: &ScalarValue| -> bool {
+        let Ok(index) = schema.index_of(column) else {
+            return true;
+        };
+        let Some(sbbf) = filter(index) else {
+            return true;
+        };
+        let physical = group.column(index).column_type();
+        bloom_may_contain(sbbf, physical, schema.field(index).data_type(), value)
+    };
+    match predicate {
+        StoragePredicate::Compare {
+            column,
+            op: CompareOp::Eq,
+            value,
+        } => contains(column, value),
+        StoragePredicate::In { column, values } => {
+            values.iter().any(|value| contains(column, value))
+        }
+        StoragePredicate::And(children) => children
+            .iter()
+            .all(|child| bloom_can_match(group, schema, child, filter)),
+        StoragePredicate::Or(children) => children
+            .iter()
+            .any(|child| bloom_can_match(group, schema, child, filter)),
+        _ => true,
+    }
+}
+
+/// Whether `filter` may contain `value`, hashed the way the writer hashed
+/// the column's values: by the physical type's bytes. A value the physical
+/// type cannot hold is absent; a type the filter is not consulted for
+/// (INT96, fixed-length bytes, decimals) may be present.
+fn bloom_may_contain(
+    filter: &Sbbf,
+    physical: PhysicalType,
+    data_type: &DataType,
+    value: &ScalarValue,
+) -> bool {
+    let data_type = match data_type {
+        DataType::Dictionary(_, values) => values.as_ref(),
+        other => other,
+    };
+    let unsigned = matches!(
+        data_type,
+        DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64
+    );
+    match (physical, value) {
+        (PhysicalType::BOOLEAN, ScalarValue::Bool(value)) => filter.check(value),
+        (PhysicalType::INT32, ScalarValue::Int64(value)) => {
+            let stored = if unsigned {
+                u32::try_from(*value).ok().map(|value| value as i32)
+            } else {
+                i32::try_from(*value).ok()
+            };
+            stored.is_some_and(|stored| filter.check(&stored))
+        }
+        (PhysicalType::INT64, ScalarValue::Int64(value)) => filter.check(value),
+        (PhysicalType::FLOAT, ScalarValue::Float64(value)) => {
+            let narrowed = *value as f32;
+            f64::from(narrowed) == *value && filter.check(&narrowed)
+        }
+        (PhysicalType::DOUBLE, ScalarValue::Float64(value)) => filter.check(value),
+        (PhysicalType::BYTE_ARRAY, ScalarValue::Utf8(value)) => {
+            filter.check(&ByteArray::from(value.as_str()))
+        }
+        _ => true,
     }
 }
 
@@ -1143,6 +1455,47 @@ mod tests {
             ScalarValue::Int64(99),
         ));
         assert_eq!(row_count(&absent), 0);
+    }
+
+    /// A writer with page statistics on and the offset index off leaves a
+    /// column index and no offset index: parquet-rs cannot load such a
+    /// page index, so a predicate scan reads the file without one.
+    #[test]
+    fn a_column_index_without_an_offset_index_reads_with_a_predicate() {
+        let id = NEXT_FILE_ID.fetch_add(1, AtomicOrdering::Relaxed);
+        let file = TestFile(std::env::temp_dir().join(format!(
+            "kaveon-storage-column-index-only-{}-{id}.parquet",
+            std::process::id()
+        )));
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(arrow::array::Int64Array::from(
+                (0..1_000).collect::<Vec<_>>(),
+            ))],
+        )
+        .unwrap();
+        let properties = parquet::file::properties::WriterProperties::builder()
+            .set_statistics_enabled(parquet::file::properties::EnabledStatistics::Page)
+            .set_offset_index_disabled(true)
+            .set_max_row_group_size(250)
+            .build();
+        let mut writer =
+            ArrowWriter::try_new(File::create(&file.0).unwrap(), schema, Some(properties)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let mut reader = ParquetReader::new(&file.0)
+            .with_predicate(compare("id", CompareOp::Ge, ScalarValue::Int64(900)))
+            .read()
+            .unwrap();
+        let metrics = reader.metrics();
+        let rows = reader
+            .by_ref()
+            .map(|batch| batch.unwrap().num_rows())
+            .sum::<usize>();
+        assert_eq!(rows, 100);
+        assert_eq!(metrics.snapshot().row_groups_selected, 1);
     }
 
     #[test]

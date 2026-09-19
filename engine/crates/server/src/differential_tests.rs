@@ -5,16 +5,20 @@
 //! plain rows held as one file and as a directory of three files, again
 //! against the same rows held as a Hive-partitioned directory
 //! (`region=…/industry=…/`, the keys read from the paths) and as one file
-//! of the same column order, and through the distributed planner's
-//! fragments executed in this process as a two-worker cluster would run
-//! them — for the dictionary file and for the partitioned directory. Any
-//! divergence is an Engine defect, whatever the cluster later says. The
-//! encodings exercise different operator paths (dictionary-aware
-//! predicates, coded folds, the columnar aggregate's arena keys) against
-//! one truth; the layouts exercise the directory reader (listing, file
-//! assignment, per-file pruning, partition columns and partition pruning)
-//! against the single-file reader; the fragment path exercises the stage
-//! planner, the exchanges and the fragment compiler.
+//! of the same column order, again against the same rows as a clustered
+//! directory (`ClusteredParquetWriter`: sorted by country and event date,
+//! small row groups, page index, Bloom filters), and through the
+//! distributed planner's fragments executed in this process as a
+//! two-worker cluster would run them — for the dictionary file, the
+//! partitioned directory and the clustered directory. Any divergence is an Engine defect, whatever the
+//! cluster later says. The encodings exercise different operator paths
+//! (dictionary-aware predicates, coded folds, the columnar aggregate's
+//! arena keys) against one truth; the layouts exercise the directory
+//! reader (listing, file assignment, per-file pruning, partition columns
+//! and partition pruning) and the clustered layout's pruning (row groups a
+//! filter skips, pages the offset index skips) against the single-file
+//! reader; the fragment path exercises the stage planner, the exchanges
+//! and the fragment compiler.
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::path::PathBuf;
@@ -31,7 +35,9 @@ use kaveon_core::{
     MemoryCatalog, Partitioning, QueryMemoryPool, Result, StageId, StorageType, TableMeta,
 };
 use kaveon_sql::logical_plan::LogicalPlan;
-use kaveon_storage::ScanPartition;
+use kaveon_storage::{
+    ClusteredParquetWriter, ClusteringLayout, FileNaming, LocalDirectorySink, ScanPartition,
+};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 
@@ -703,6 +709,74 @@ fn write_partitioned(
     }
 }
 
+/// The batch as a clustered directory table: the rows sorted by
+/// `clustered_by`, written by the clustered writer in row groups of 4 096
+/// rows and files of at most 64 KiB, with Bloom filters on `bloom`.
+fn write_clustered(
+    directory: &std::path::Path,
+    name: &str,
+    batch: &RecordBatch,
+    clustered_by: &[&str],
+    bloom: &[&str],
+) -> TableMeta {
+    let table = directory.join(name);
+    let columns = clustered_by
+        .iter()
+        .map(|column| arrow::compute::SortColumn {
+            values: Arc::clone(batch.column(batch.schema().index_of(column).unwrap())),
+            options: Some(arrow::compute::SortOptions {
+                descending: false,
+                nulls_first: false,
+            }),
+        })
+        .collect::<Vec<_>>();
+    let indices = arrow::compute::lexsort_to_indices(&columns, None).unwrap();
+    let sorted = RecordBatch::try_new(
+        batch.schema(),
+        batch
+            .columns()
+            .iter()
+            .map(|column| arrow::compute::take(column, &indices, None).unwrap())
+            .collect(),
+    )
+    .unwrap();
+    let layout = ClusteringLayout::new(
+        clustered_by
+            .iter()
+            .map(|column| (*column).to_owned())
+            .collect(),
+        bloom.iter().map(|column| (*column).to_owned()).collect(),
+    )
+    .with_max_row_group_rows(4_096)
+    .with_target_file_bytes(Some(64 * 1024));
+    let mut writer = ClusteredParquetWriter::new(
+        layout,
+        batch.schema(),
+        FileNaming::Parts {
+            prefix: "part-clustered".into(),
+        },
+        Box::new(LocalDirectorySink::new(&table).unwrap()),
+    )
+    .unwrap();
+    for offset in (0..sorted.num_rows()).step_by(1_000) {
+        writer
+            .write(&sorted.slice(offset, 1_000.min(sorted.num_rows() - offset)))
+            .unwrap();
+    }
+    let files = writer.finish().unwrap();
+    assert!(
+        files.len() > 1,
+        "the clustered layout spans files: {files:?}"
+    );
+    TableMeta {
+        name: name.to_owned(),
+        arrow_schema: batch.schema(),
+        location: name.to_owned(),
+        access: AccessPattern::Shortcut,
+        format: DataFormat::Parquet,
+    }
+}
+
 /// The batch with `keys` moved to the end, in the order given: the column
 /// order a partitioned directory table presents.
 fn keys_last(batch: &RecordBatch, keys: &[&str]) -> RecordBatch {
@@ -713,7 +787,7 @@ fn keys_last(batch: &RecordBatch, keys: &[&str]) -> RecordBatch {
     batch.project(&indices).unwrap()
 }
 
-/// Rows as text, one string per row, so both encodings, both layouts and
+/// Rows as text, one string per row, so both encodings, every layout and
 /// both paths compare alike.
 pub(crate) fn canonical_rows(batches: &[RecordBatch], ordered: bool) -> Vec<String> {
     let mut rows = Vec::new();
@@ -801,6 +875,14 @@ fn the_differential_sweep_matches_across_parquet_encodings_and_execution_paths()
         &keys_last(&batch(&events, false), &partition_keys),
     );
     catalog.register_table("events", hive_order).unwrap();
+    let clustered = write_clustered(
+        &directory,
+        "events_clustered",
+        &batch(&events, false),
+        &["country", "event_date"],
+        &["user_id"],
+    );
+    catalog.register_table("events", clustered).unwrap();
     let mut manager = CatalogManager::new("lake", "events");
     manager.register_catalog(Box::new(catalog));
 
@@ -844,10 +926,12 @@ fn the_differential_sweep_matches_across_parquet_encodings_and_execution_paths()
         let dictionary = local(&statement("events_dictionary"), *ordered);
         let plain = local(&statement("events_plain"), *ordered);
         let parts = local(&statement("events_parts"), *ordered);
+        let clustered = local(&statement("events_clustered"), *ordered);
         let fragments = distributed(&statement("events_dictionary"), *ordered);
         let partitioned = local(&statement("events_partitioned"), *ordered);
         let hive_order = local(&statement("events_hive_order"), *ordered);
         let partitioned_fragments = distributed(&statement("events_partitioned"), *ordered);
+        let clustered_fragments = distributed(&statement("events_clustered"), *ordered);
         assert!(!dictionary.is_empty(), "{name} returned no rows");
         if dictionary != plain {
             mismatches.push(format!(
@@ -860,6 +944,13 @@ fn the_differential_sweep_matches_across_parquet_encodings_and_execution_paths()
             mismatches.push(format!(
                 "{name}: directory of three files {:?} versus one file {:?}",
                 parts.iter().take(3).collect::<Vec<_>>(),
+                plain.iter().take(3).collect::<Vec<_>>()
+            ));
+        }
+        if clustered != plain {
+            mismatches.push(format!(
+                "{name}: clustered layout {:?} versus one file {:?}",
+                clustered.iter().take(3).collect::<Vec<_>>(),
                 plain.iter().take(3).collect::<Vec<_>>()
             ));
         }
@@ -882,6 +973,13 @@ fn the_differential_sweep_matches_across_parquet_encodings_and_execution_paths()
                 "{name}: partitioned directory local {:?} versus distributed {:?}",
                 partitioned.iter().take(3).collect::<Vec<_>>(),
                 partitioned_fragments.iter().take(3).collect::<Vec<_>>()
+            ));
+        }
+        if clustered != clustered_fragments {
+            mismatches.push(format!(
+                "{name}: clustered layout local {:?} versus distributed {:?}",
+                clustered.iter().take(3).collect::<Vec<_>>(),
+                clustered_fragments.iter().take(3).collect::<Vec<_>>()
             ));
         }
     }

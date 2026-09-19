@@ -95,7 +95,12 @@ impl BatchOperator for ScanOperator {
             None => batch,
             Some(indices) => batch.project(indices)?,
         };
-        if self.widen.is_empty() {
+        // The batch goes out under the declared schema. A source's batches
+        // may carry schema metadata the declaration does not — a Parquet
+        // footer's key-value entries (a Spark or pandas schema, this
+        // Engine's own layout entry) come back as Arrow schema metadata —
+        // and the operators downstream compare schemas whole.
+        if self.widen.is_empty() && batch.schema() == self.output_schema {
             return Ok(Some(batch));
         }
         let mut columns: Vec<ArrayRef> = batch.columns().to_vec();
@@ -105,9 +110,10 @@ impl BatchOperator for ScanOperator {
                 self.output_schema.field(position).data_type(),
             )?;
         }
-        Ok(Some(RecordBatch::try_new(
+        Ok(Some(RecordBatch::try_new_with_options(
             Arc::clone(&self.output_schema),
             columns,
+            &arrow::record_batch::RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
         )?))
     }
 }
@@ -175,5 +181,36 @@ mod tests {
             .column(0)
             .as_primitive::<arrow::datatypes::Int64Type>();
         assert_eq!(unsigned.value(0), u32::MAX as i64);
+    }
+
+    /// A source whose schema carries metadata (a Parquet footer's key-value
+    /// entries) hands out batches under the operator's declared schema,
+    /// which carries none.
+    #[test]
+    fn schema_metadata_of_the_source_is_not_presented() {
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![Field::new("wide", DataType::Int64, true)],
+            std::collections::HashMap::from([(
+                "kaveon.layout.clustered_by".to_owned(),
+                "[\"wide\"]".to_owned(),
+            )]),
+        ));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
+        )
+        .unwrap();
+        let mut scan = ScanOperator::new(
+            Box::new(Source {
+                schema,
+                batch: Some(batch),
+            }),
+            None,
+        )
+        .unwrap();
+        assert!(scan.schema().metadata().is_empty());
+        let output = scan.next_batch().unwrap().unwrap();
+        assert_eq!(output.schema(), *scan.schema());
+        assert_eq!(output.num_rows(), 3);
     }
 }

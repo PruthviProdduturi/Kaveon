@@ -2,7 +2,8 @@
 use crate::{
     ScanMetrics, ScanPartition,
     parquet_reader::{
-        matching_row_groups, projection_indices, record_selection_metrics, validate_predicate,
+        bloom_prune_async, matching_row_groups, projection_indices, record_selection_metrics,
+        validate_predicate,
     },
     scan_predicate::{LateMaterialisation, RowFilterPlan},
 };
@@ -284,6 +285,16 @@ impl ObjectParquetReader {
                         };
                         if let Some(partition) = self.partition {
                             groups.retain(|&ordinal| partition.contains(ordinal));
+                        }
+                        if let Some(predicate) = &coerced {
+                            groups = bloom_prune_async(
+                                &mut builder,
+                                &schema,
+                                predicate,
+                                groups,
+                                &self.metrics,
+                            )
+                            .await?;
                         }
                         record_selection_metrics(
                             builder.metadata().as_ref(),
