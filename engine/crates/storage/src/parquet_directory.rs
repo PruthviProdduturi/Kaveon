@@ -1169,6 +1169,32 @@ impl DirectoryColumns {
     }
 }
 
+/// The exact row count of a directory table at `listing` — a local
+/// directory or an `s3://`/`abfss://` prefix — from its footers, for the
+/// planner's statistics of a scan whose predicate pruned the listing.
+pub fn directory_row_count(
+    location: &str,
+    listing: Arc<DirectoryListing>,
+    catalog_schema: Option<SchemaRef>,
+) -> Result<u64> {
+    if listing.files.is_empty() {
+        return Ok(0);
+    }
+    if location.starts_with("s3://") || location.starts_with("abfss://") {
+        let mut reader = ObjectDirectoryReader::from_uri(location)?.with_listing(listing);
+        if let Some(schema) = catalog_schema {
+            reader = reader.with_catalog_schema(schema);
+        }
+        return crate::delta_snapshot::blocking(async move { reader.metadata().await })
+            .map(|metadata| metadata.row_count);
+    }
+    let mut reader = crate::ParquetReader::new(location).with_listing(listing);
+    if let Some(schema) = catalog_schema {
+        reader = reader.with_catalog_schema(schema);
+    }
+    reader.metadata().map(|metadata| metadata.row_count)
+}
+
 /// What a Parquet location holds.
 #[derive(Debug)]
 pub enum ParquetLocation {

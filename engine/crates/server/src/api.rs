@@ -205,6 +205,7 @@ struct ExchangeDecodeMetrics {
 struct TaskScanMetrics {
     files_considered: u64,
     files_opened: u64,
+    files_pruned_by_partition: u64,
     decoded_batch_cache_hits: u64,
     decoded_batch_cache_misses: u64,
     decoded_batch_cache_evictions: u64,
@@ -251,6 +252,9 @@ struct QueryContext {
 struct ScanTelemetry {
     files_considered: u64,
     files_opened: u64,
+    /// Files of a partitioned directory table the scan predicate ruled
+    /// out by their path values; never opened, never considered.
+    files_pruned_by_partition: u64,
     decoded_batch_cache_hits: u64,
     decoded_batch_cache_misses: u64,
     decoded_batch_cache_evictions: u64,
@@ -4689,6 +4693,8 @@ async fn optimize_with_durable_statistics(
     if tables.is_empty() {
         return (plan, SourcePins::default());
     }
+    let mut scan_predicates = BTreeMap::new();
+    collect_scan_predicates(&plan, &mut scan_predicates);
     let durable = match state.product_transactions.catalog() {
         Some(commit) => commit.read_current().await.ok(),
         None => None,
@@ -4705,36 +4711,65 @@ async fn optimize_with_durable_statistics(
             "{}.{}.{}",
             resolved.catalog, resolved.schema, resolved.table.name
         );
+        let predicate = known_scan_predicate(&scan_predicates, &table);
+        let catalog_schema = Arc::clone(&resolved.table.arrow_schema);
         loads.spawn_blocking(move || {
             let current = kaveon_storage::analyze_source(&location, format).ok();
-            (table, qualified, location, current)
+            // A directory table under a known predicate is pinned at the
+            // files that survive partition pruning, and its row count is
+            // theirs: the statistics see what the scan will read.
+            let pruned = current.as_ref().and_then(|current| {
+                let listing = current.parquet_listing.as_ref()?;
+                let predicate = predicate.as_ref()?;
+                let pruned = listing.pruned_by(Some(&catalog_schema), predicate).ok()?;
+                if pruned.files.len() == listing.files.len() {
+                    return None;
+                }
+                let pruned = Arc::new(pruned);
+                let rows = kaveon_storage::directory_row_count(
+                    &location,
+                    Arc::clone(&pruned),
+                    Some(Arc::clone(&catalog_schema)),
+                )
+                .ok()?;
+                Some((pruned, rows))
+            });
+            (table, qualified, location, current, pruned)
         });
     }
     let catalog_digest = format!("{:x}", Sha256::digest(catalog.snapshot_id.as_bytes()));
     let mut cache = HashMap::new();
     let mut pins = SourcePins::default();
     while let Some(loaded) = loads.join_next().await {
-        let Ok((table, qualified, location, current)) = loaded else {
+        let Ok((table, qualified, location, current, pruned)) = loaded else {
             continue;
         };
         if let Some(version) = current.as_ref().and_then(|value| value.delta_version) {
             pins.delta_versions.insert(location.clone(), version);
         }
-        if let Some(listing) = current
+        if let Some(listing) = pruned
             .as_ref()
-            .and_then(|value| value.parquet_listing.clone())
+            .map(|(listing, _)| Arc::clone(listing))
+            .or_else(|| {
+                current
+                    .as_ref()
+                    .and_then(|value| value.parquet_listing.clone())
+            })
         {
             pins.parquet_directories.insert(location, listing);
         }
         let value = current.map(|current| {
-            let rows = durable
-                .as_ref()
-                .and_then(|snapshot| snapshot.table_statistics.get(&qualified))
-                .filter(|stored| {
-                    stored.catalog_snapshot_sha256 == catalog_digest
-                        && stored.source_identity_sha256 == current.identity_sha256
-                })
-                .map_or(current.row_count, |stored| stored.row_count);
+            let rows = match &pruned {
+                Some((_, rows)) => *rows,
+                None => durable
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.table_statistics.get(&qualified))
+                    .filter(|stored| {
+                        stored.catalog_snapshot_sha256 == catalog_digest
+                            && stored.source_identity_sha256 == current.identity_sha256
+                    })
+                    .map_or(current.row_count, |stored| stored.row_count),
+            };
             kaveon_optim::statistics::RelationStatistics {
                 rows,
                 columns: current.columns,
@@ -4748,6 +4783,65 @@ async fn optimize_with_durable_statistics(
         }),
         pins,
     )
+}
+
+/// The storage predicate each scan of the plan carries, per table: the
+/// filter directly above the scan after pushdown, translated the way the
+/// planner translates it for the reader, or `None` for a scan without one.
+fn collect_scan_predicates(
+    plan: &LogicalPlan,
+    predicates: &mut BTreeMap<String, Vec<Option<kaveon_core::StoragePredicate>>>,
+) {
+    match plan {
+        LogicalPlan::Filter { input, predicate } => {
+            if let LogicalPlan::Scan { table, .. } = input.as_ref() {
+                predicates
+                    .entry(table.clone())
+                    .or_default()
+                    .push(kaveon_optim::rules::to_storage_predicate(predicate));
+            } else {
+                collect_scan_predicates(input, predicates);
+            }
+        }
+        LogicalPlan::Scan { table, .. } => {
+            predicates.entry(table.clone()).or_default().push(None);
+        }
+        LogicalPlan::Join { left, right, .. }
+        | LogicalPlan::Intersect { left, right }
+        | LogicalPlan::Except { left, right }
+        | LogicalPlan::SemiJoin { left, right, .. }
+        | LogicalPlan::AntiJoin { left, right, .. } => {
+            collect_scan_predicates(left, predicates);
+            collect_scan_predicates(right, predicates);
+        }
+        LogicalPlan::Project { input, .. }
+        | LogicalPlan::Aggregate { input, .. }
+        | LogicalPlan::Sort { input, .. }
+        | LogicalPlan::Limit { input, .. }
+        | LogicalPlan::Offset { input, .. }
+        | LogicalPlan::Distinct { input }
+        | LogicalPlan::Window { input, .. } => collect_scan_predicates(input, predicates),
+        LogicalPlan::Union { inputs, .. } => {
+            for input in inputs {
+                collect_scan_predicates(input, predicates);
+            }
+        }
+    }
+}
+
+/// The predicate every scan of `table` in the plan carries, when they all
+/// carry the same one; a table scanned under different predicates (or
+/// once without) is planned at its whole listing.
+fn known_scan_predicate(
+    predicates: &BTreeMap<String, Vec<Option<kaveon_core::StoragePredicate>>>,
+    table: &str,
+) -> Option<kaveon_core::StoragePredicate> {
+    let scans = predicates.get(table)?;
+    let first = scans.first()?.as_ref()?;
+    scans
+        .iter()
+        .all(|scan| scan.as_ref() == Some(first))
+        .then(|| first.clone())
 }
 
 /// Collects only relations for which the statistics optimizer will request
@@ -7743,6 +7837,7 @@ fn scan_telemetry(metrics: &kaveon_storage::ScanMetrics) -> ScanTelemetry {
     ScanTelemetry {
         files_considered: snapshot.files_considered,
         files_opened: snapshot.files_opened,
+        files_pruned_by_partition: snapshot.files_pruned_by_partition,
         decoded_batch_cache_hits: snapshot.decoded_batch_cache_hits,
         decoded_batch_cache_misses: snapshot.decoded_batch_cache_misses,
         decoded_batch_cache_evictions: snapshot.decoded_batch_cache_evictions,
@@ -7801,6 +7896,7 @@ fn merge_task_scan_metrics<'a>(
         let snapshot = metrics.snapshot();
         total.files_considered += snapshot.files_considered;
         total.files_opened += snapshot.files_opened;
+        total.files_pruned_by_partition += snapshot.files_pruned_by_partition;
         total.decoded_batch_cache_hits += snapshot.decoded_batch_cache_hits;
         total.decoded_batch_cache_misses += snapshot.decoded_batch_cache_misses;
         total.decoded_batch_cache_evictions += snapshot.decoded_batch_cache_evictions;
@@ -7925,6 +8021,7 @@ fn distributed_scan_telemetry(stages: &[StageTelemetry]) -> (Vec<ScanTelemetry>,
         .fold(TaskScanMetrics::default(), |mut total, scan| {
             total.files_considered += scan.files_considered;
             total.files_opened += scan.files_opened;
+            total.files_pruned_by_partition += scan.files_pruned_by_partition;
             total.decoded_batch_cache_hits += scan.decoded_batch_cache_hits;
             total.decoded_batch_cache_misses += scan.decoded_batch_cache_misses;
             total.decoded_batch_cache_evictions += scan.decoded_batch_cache_evictions;
@@ -7967,6 +8064,7 @@ fn distributed_scan_telemetry(stages: &[StageTelemetry]) -> (Vec<ScanTelemetry>,
         vec![ScanTelemetry {
             files_considered: total.files_considered,
             files_opened: total.files_opened,
+            files_pruned_by_partition: total.files_pruned_by_partition,
             decoded_batch_cache_hits: total.decoded_batch_cache_hits,
             decoded_batch_cache_misses: total.decoded_batch_cache_misses,
             decoded_batch_cache_evictions: total.decoded_batch_cache_evictions,
