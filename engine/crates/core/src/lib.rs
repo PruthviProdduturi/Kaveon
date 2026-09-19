@@ -25,7 +25,8 @@ pub use exchange::{
     StageGraph, StageId, TaskAssignment, TaskId, TaskState, TaskStatus,
 };
 pub use expr::{
-    BinaryOp, CastTarget, DateField, Expr, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    AGGREGATE_FUNCTION_NAMES, BinaryOp, CastTarget, DateField, Expr, WindowFrame, WindowFrameBound,
+    WindowFrameUnits, aggregate_output_name, is_aggregate_function,
 };
 pub use fragment::{
     AggregateFunction, AggregateMode, AggregateSpec, EXECUTABLE_FRAGMENT_VERSION, ExchangeInput,

@@ -12,8 +12,16 @@
 //! extracted in SQL over the same column at the same precision hold the
 //! same registers and merge by element-wise maximum.
 
+use crate::statistics::{StatValue, decimal_text};
+use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray};
+use arrow::datatypes::{
+    DataType, Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
+    Int64Type, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 /// The lowest register precision a sketch accepts (2 048 registers).
 pub const HLL_MIN_PRECISION: u8 = 11;
@@ -71,6 +79,12 @@ impl HllSketch {
     /// The number of registers.
     pub fn register_count(&self) -> usize {
         1usize << self.precision
+    }
+
+    /// The relative standard error of the estimate at this precision,
+    /// 1.04 / √m over m registers: 1.6 % at the statistics precision.
+    pub fn standard_error(&self) -> f64 {
+        1.04 / (self.register_count() as f64).sqrt()
     }
 
     /// Bytes this sketch holds in memory, for accounting.
@@ -544,6 +558,16 @@ impl KllSketch {
         self.k
     }
 
+    /// The normalized rank error bound at this `k` for one quantile:
+    /// 2.446 / k^0.9433, the empirical bound of the KLL compaction scheme
+    /// this sketch implements (level capacities k·(2/3)^depth, random
+    /// compaction offsets), holding with about 99 % confidence — 1.65 % at
+    /// the default k. The value at fraction p is one whose true rank is
+    /// within this of p.
+    pub fn rank_error(&self) -> f64 {
+        2.446 / f64::from(self.k).powf(0.9433)
+    }
+
     /// The number of values folded in.
     pub const fn count(&self) -> u64 {
         self.n
@@ -923,6 +947,329 @@ pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Whether a column of this type can be folded into a distinct-count
+/// sketch: booleans, integers, floats, text, dates, timestamps, decimals,
+/// and dictionaries over them.
+pub fn sketchable(data_type: &DataType) -> bool {
+    matches!(
+        logical_type(data_type),
+        DataType::Boolean
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Utf8
+            | DataType::LargeUtf8
+            | DataType::Date32
+            | DataType::Timestamp(_, _)
+            | DataType::Decimal128(_, _)
+    )
+}
+
+/// Whether a sketchable column's values sit on a number line for a
+/// quantile sketch: everything sketchable but booleans and text.
+pub fn quantile_sketchable(data_type: &DataType) -> bool {
+    sketchable(data_type)
+        && !matches!(
+            logical_type(data_type),
+            DataType::Boolean | DataType::Utf8 | DataType::LargeUtf8
+        )
+}
+
+fn logical_type(data_type: &DataType) -> &DataType {
+    match data_type {
+        DataType::Dictionary(_, values) => values.as_ref(),
+        other => other,
+    }
+}
+
+/// A dictionary array as its values, any other array as itself.
+fn plain(array: &ArrayRef) -> crate::Result<ArrayRef> {
+    Ok(match array.data_type() {
+        DataType::Dictionary(_, values) => arrow::compute::cast(array, values)?,
+        _ => Arc::clone(array),
+    })
+}
+
+/// Fold every non-null value of `array` into the distinct-count sketch,
+/// hashed over the value's canonical text — the text `ANALYZE` hashes, so
+/// a sketch built while a statement runs merges with a stored one.
+pub fn fold_distinct(array: &ArrayRef, sketch: &mut HllSketch) -> crate::Result<()> {
+    let array = plain(array)?;
+    if array.null_count() == array.len() {
+        return Ok(());
+    }
+    let mut text = String::new();
+    macro_rules! fold_primitive {
+        ($values:expr, $fmt:expr) => {{
+            for value in $values.iter().flatten() {
+                text.clear();
+                $fmt(&mut text, value);
+                sketch.insert_hash(pg_hash_bytes_extended(text.as_bytes(), 0));
+            }
+        }};
+    }
+    match array.data_type() {
+        DataType::Boolean => {
+            for value in array.as_boolean().iter().flatten() {
+                sketch.insert_hash(pg_hash_bytes_extended(
+                    if value { b"true" } else { b"false" },
+                    0,
+                ));
+            }
+        }
+        DataType::Int8 => fold_primitive!(array.as_primitive::<Int8Type>(), write_display),
+        DataType::Int16 => fold_primitive!(array.as_primitive::<Int16Type>(), write_display),
+        DataType::Int32 => fold_primitive!(array.as_primitive::<Int32Type>(), write_display),
+        DataType::Int64 => fold_primitive!(array.as_primitive::<Int64Type>(), write_display),
+        DataType::UInt8 => fold_primitive!(array.as_primitive::<UInt8Type>(), write_display),
+        DataType::UInt16 => fold_primitive!(array.as_primitive::<UInt16Type>(), write_display),
+        DataType::UInt32 => fold_primitive!(array.as_primitive::<UInt32Type>(), write_display),
+        DataType::UInt64 => fold_primitive!(array.as_primitive::<UInt64Type>(), write_display),
+        DataType::Float32 => fold_primitive!(
+            array.as_primitive::<Float32Type>(),
+            |text: &mut String, value: f32| write_display(text, f64::from(value))
+        ),
+        DataType::Float64 => fold_primitive!(array.as_primitive::<Float64Type>(), write_display),
+        DataType::Date32 => fold_primitive!(
+            array.as_primitive::<Date32Type>(),
+            |text: &mut String, value: i32| text.push_str(&StatValue::Date(value).to_hash_text())
+        ),
+        DataType::Timestamp(unit, zone) => {
+            let (unit, utc) = (*unit, zone.is_some());
+            for value in timestamp_values(&array, unit).iter().flatten() {
+                text.clear();
+                text.push_str(&StatValue::Timestamp { value, unit, utc }.to_hash_text());
+                sketch.insert_hash(pg_hash_bytes_extended(text.as_bytes(), 0));
+            }
+        }
+        DataType::Decimal128(_, scale) => {
+            let scale = *scale;
+            fold_primitive!(
+                array.as_primitive::<Decimal128Type>(),
+                |text: &mut String, value: i128| text.push_str(&decimal_text(value, scale))
+            )
+        }
+        DataType::Utf8 => {
+            for value in array.as_string::<i32>().iter().flatten() {
+                sketch.insert_hash(pg_hash_bytes_extended(value.as_bytes(), 0));
+            }
+        }
+        DataType::LargeUtf8 => {
+            for value in array.as_string::<i64>().iter().flatten() {
+                sketch.insert_hash(pg_hash_bytes_extended(value.as_bytes(), 0));
+            }
+        }
+        other => return Err(unsketchable(other)),
+    }
+    Ok(())
+}
+
+/// Fold one row of `array` into the distinct-count sketch, as
+/// [`fold_distinct`] would; a null row folds nothing. `text` is scratch
+/// the caller keeps between rows.
+pub fn fold_distinct_row(
+    array: &ArrayRef,
+    row: usize,
+    sketch: &mut HllSketch,
+    text: &mut String,
+) -> crate::Result<()> {
+    if array.is_null(row) {
+        return Ok(());
+    }
+    if let DataType::Dictionary(key, _) = array.data_type() {
+        if key.as_ref() != &DataType::Int32 {
+            return Err(unsketchable(array.data_type()));
+        }
+        let dictionary = array.as_dictionary::<Int32Type>();
+        let index = dictionary.keys().value(row) as usize;
+        return fold_distinct_row(dictionary.values(), index, sketch, text);
+    }
+    text.clear();
+    let bytes: &[u8] = match array.data_type() {
+        DataType::Boolean => {
+            if array.as_boolean().value(row) {
+                b"true"
+            } else {
+                b"false"
+            }
+        }
+        DataType::Int8 => display_row(array.as_primitive::<Int8Type>(), row, text),
+        DataType::Int16 => display_row(array.as_primitive::<Int16Type>(), row, text),
+        DataType::Int32 => display_row(array.as_primitive::<Int32Type>(), row, text),
+        DataType::Int64 => display_row(array.as_primitive::<Int64Type>(), row, text),
+        DataType::UInt8 => display_row(array.as_primitive::<UInt8Type>(), row, text),
+        DataType::UInt16 => display_row(array.as_primitive::<UInt16Type>(), row, text),
+        DataType::UInt32 => display_row(array.as_primitive::<UInt32Type>(), row, text),
+        DataType::UInt64 => display_row(array.as_primitive::<UInt64Type>(), row, text),
+        DataType::Float32 => {
+            write_display(
+                text,
+                f64::from(array.as_primitive::<Float32Type>().value(row)),
+            );
+            text.as_bytes()
+        }
+        DataType::Float64 => display_row(array.as_primitive::<Float64Type>(), row, text),
+        DataType::Date32 => {
+            text.push_str(
+                &StatValue::Date(array.as_primitive::<Date32Type>().value(row)).to_hash_text(),
+            );
+            text.as_bytes()
+        }
+        DataType::Timestamp(unit, zone) => {
+            let value = timestamp_values(array, *unit).value(row);
+            text.push_str(
+                &StatValue::Timestamp {
+                    value,
+                    unit: *unit,
+                    utc: zone.is_some(),
+                }
+                .to_hash_text(),
+            );
+            text.as_bytes()
+        }
+        DataType::Decimal128(_, scale) => {
+            text.push_str(&decimal_text(
+                array.as_primitive::<Decimal128Type>().value(row),
+                *scale,
+            ));
+            text.as_bytes()
+        }
+        DataType::Utf8 => array.as_string::<i32>().value(row).as_bytes(),
+        DataType::LargeUtf8 => array.as_string::<i64>().value(row).as_bytes(),
+        other => return Err(unsketchable(other)),
+    };
+    sketch.insert_hash(pg_hash_bytes_extended(bytes, 0));
+    Ok(())
+}
+
+/// Fold every non-null value of `array` into the quantile sketch as its
+/// number: integers and floats as they are, decimals scaled, dates as
+/// days, timestamps in their unit.
+pub fn fold_quantiles(array: &ArrayRef, sketch: &mut KllSketch) -> crate::Result<()> {
+    let array = plain(array)?;
+    if array.null_count() == array.len() {
+        return Ok(());
+    }
+    macro_rules! fold_primitive {
+        ($values:expr, $to_f64:expr) => {{
+            for value in $values.iter().flatten() {
+                sketch.update($to_f64(value));
+            }
+        }};
+    }
+    match array.data_type() {
+        DataType::Int8 => fold_primitive!(array.as_primitive::<Int8Type>(), f64::from),
+        DataType::Int16 => fold_primitive!(array.as_primitive::<Int16Type>(), f64::from),
+        DataType::Int32 => fold_primitive!(array.as_primitive::<Int32Type>(), f64::from),
+        DataType::Int64 => fold_primitive!(array.as_primitive::<Int64Type>(), |v: i64| v as f64),
+        DataType::UInt8 => fold_primitive!(array.as_primitive::<UInt8Type>(), f64::from),
+        DataType::UInt16 => fold_primitive!(array.as_primitive::<UInt16Type>(), f64::from),
+        DataType::UInt32 => fold_primitive!(array.as_primitive::<UInt32Type>(), f64::from),
+        DataType::UInt64 => fold_primitive!(array.as_primitive::<UInt64Type>(), |v: u64| v as f64),
+        DataType::Float32 => fold_primitive!(array.as_primitive::<Float32Type>(), f64::from),
+        DataType::Float64 => fold_primitive!(array.as_primitive::<Float64Type>(), |v: f64| v),
+        DataType::Date32 => fold_primitive!(array.as_primitive::<Date32Type>(), f64::from),
+        DataType::Timestamp(unit, _) => {
+            for value in timestamp_values(&array, *unit).iter().flatten() {
+                sketch.update(value as f64);
+            }
+        }
+        DataType::Decimal128(_, scale) => {
+            let divisor = 10f64.powi(i32::from(*scale));
+            fold_primitive!(array.as_primitive::<Decimal128Type>(), |v: i128| v as f64
+                / divisor)
+        }
+        other => return Err(unsketchable(other)),
+    }
+    Ok(())
+}
+
+/// Fold one row of `array` into the quantile sketch, as [`fold_quantiles`]
+/// would; a null row folds nothing.
+pub fn fold_quantiles_row(
+    array: &ArrayRef,
+    row: usize,
+    sketch: &mut KllSketch,
+) -> crate::Result<()> {
+    if array.is_null(row) {
+        return Ok(());
+    }
+    if let DataType::Dictionary(key, _) = array.data_type() {
+        if key.as_ref() != &DataType::Int32 {
+            return Err(unsketchable(array.data_type()));
+        }
+        let dictionary = array.as_dictionary::<Int32Type>();
+        let index = dictionary.keys().value(row) as usize;
+        return fold_quantiles_row(dictionary.values(), index, sketch);
+    }
+    let value = match array.data_type() {
+        DataType::Int8 => f64::from(array.as_primitive::<Int8Type>().value(row)),
+        DataType::Int16 => f64::from(array.as_primitive::<Int16Type>().value(row)),
+        DataType::Int32 => f64::from(array.as_primitive::<Int32Type>().value(row)),
+        DataType::Int64 => array.as_primitive::<Int64Type>().value(row) as f64,
+        DataType::UInt8 => f64::from(array.as_primitive::<UInt8Type>().value(row)),
+        DataType::UInt16 => f64::from(array.as_primitive::<UInt16Type>().value(row)),
+        DataType::UInt32 => f64::from(array.as_primitive::<UInt32Type>().value(row)),
+        DataType::UInt64 => array.as_primitive::<UInt64Type>().value(row) as f64,
+        DataType::Float32 => f64::from(array.as_primitive::<Float32Type>().value(row)),
+        DataType::Float64 => array.as_primitive::<Float64Type>().value(row),
+        DataType::Date32 => f64::from(array.as_primitive::<Date32Type>().value(row)),
+        DataType::Timestamp(unit, _) => timestamp_values(array, *unit).value(row) as f64,
+        DataType::Decimal128(_, scale) => {
+            array.as_primitive::<Decimal128Type>().value(row) as f64 / 10f64.powi(i32::from(*scale))
+        }
+        other => return Err(unsketchable(other)),
+    };
+    sketch.update(value);
+    Ok(())
+}
+
+/// A timestamp array's raw values, whatever its unit.
+pub fn timestamp_values(array: &ArrayRef, unit: TimeUnit) -> PrimitiveArray<Int64Type> {
+    match unit {
+        TimeUnit::Second => array
+            .as_primitive::<TimestampSecondType>()
+            .reinterpret_cast::<Int64Type>(),
+        TimeUnit::Millisecond => array
+            .as_primitive::<TimestampMillisecondType>()
+            .reinterpret_cast::<Int64Type>(),
+        TimeUnit::Microsecond => array
+            .as_primitive::<TimestampMicrosecondType>()
+            .reinterpret_cast::<Int64Type>(),
+        TimeUnit::Nanosecond => array
+            .as_primitive::<TimestampNanosecondType>()
+            .reinterpret_cast::<Int64Type>(),
+    }
+}
+
+fn write_display<T: std::fmt::Display>(text: &mut String, value: T) {
+    use std::fmt::Write;
+    let _ = write!(text, "{value}");
+}
+
+fn display_row<'a, T: ArrowPrimitiveType>(
+    values: &PrimitiveArray<T>,
+    row: usize,
+    text: &'a mut String,
+) -> &'a [u8]
+where
+    T::Native: std::fmt::Display,
+{
+    write_display(text, values.value(row));
+    text.as_bytes()
+}
+
+fn unsketchable(data_type: &DataType) -> crate::KaveonError {
+    crate::KaveonError::Execution(format!("column type {data_type} cannot be sketched"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1183,5 +1530,105 @@ mod tests {
         assert_eq!(base64_encode(b"Ma"), "TWE=");
         assert_eq!(base64_decode("TWE"), None);
         assert_eq!(base64_decode("TW=E"), None);
+    }
+
+    #[test]
+    fn array_folds_hash_the_canonical_text_row_by_row_and_state_their_error() {
+        use arrow::array::{
+            Date32Array, Decimal128Array, Float64Array, Int64Array, StringArray,
+            TimestampMillisecondArray,
+        };
+        let columns: Vec<(ArrayRef, Vec<String>)> = vec![
+            (
+                Arc::new(Int64Array::from(vec![Some(1), None, Some(-7)])),
+                vec!["1".into(), "-7".into()],
+            ),
+            (
+                Arc::new(Float64Array::from(vec![Some(0.5), Some(2.0)])),
+                vec!["0.5".into(), "2".into()],
+            ),
+            (
+                Arc::new(StringArray::from(vec![Some("a"), None, Some("b")])),
+                vec!["a".into(), "b".into()],
+            ),
+            (
+                Arc::new(Date32Array::from(vec![Some(0), Some(20_635)])),
+                vec![
+                    StatValue::Date(0).to_hash_text(),
+                    StatValue::Date(20_635).to_hash_text(),
+                ],
+            ),
+            (
+                Arc::new(TimestampMillisecondArray::from(vec![Some(1_000)]).with_timezone("UTC")),
+                vec![
+                    StatValue::Timestamp {
+                        value: 1_000,
+                        unit: TimeUnit::Millisecond,
+                        utc: true,
+                    }
+                    .to_hash_text(),
+                ],
+            ),
+            (
+                Arc::new(
+                    Decimal128Array::from(vec![Some(12_345)])
+                        .with_precision_and_scale(10, 2)
+                        .unwrap(),
+                ),
+                vec!["123.45".into()],
+            ),
+        ];
+        for (array, texts) in columns {
+            let mut expected = HllSketch::default_precision();
+            for text in &texts {
+                expected.insert_text(text);
+            }
+            let mut whole = HllSketch::default_precision();
+            fold_distinct(&array, &mut whole).unwrap();
+            assert_eq!(whole, expected, "{}", array.data_type());
+            let mut rows = HllSketch::default_precision();
+            let mut scratch = String::new();
+            for row in 0..array.len() {
+                fold_distinct_row(&array, row, &mut rows, &mut scratch).unwrap();
+            }
+            assert_eq!(rows, expected, "{}", array.data_type());
+            // A dictionary over the values folds as the values.
+            let dictionary = arrow::compute::cast(
+                &array,
+                &DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(array.data_type().clone()),
+                ),
+            );
+            if let Ok(dictionary) = dictionary {
+                let mut coded = HllSketch::default_precision();
+                fold_distinct(&dictionary, &mut coded).unwrap();
+                assert_eq!(coded, expected);
+                let mut coded_rows = HllSketch::default_precision();
+                for row in 0..dictionary.len() {
+                    fold_distinct_row(&dictionary, row, &mut coded_rows, &mut scratch).unwrap();
+                }
+                assert_eq!(coded_rows, expected);
+            }
+        }
+        let numbers: ArrayRef = Arc::new(Int64Array::from(vec![Some(3), None, Some(1), Some(2)]));
+        let mut whole = KllSketch::default_k();
+        fold_quantiles(&numbers, &mut whole).unwrap();
+        let mut rows = KllSketch::default_k();
+        for row in 0..numbers.len() {
+            fold_quantiles_row(&numbers, row, &mut rows).unwrap();
+        }
+        assert_eq!(whole.count(), 3);
+        assert_eq!(whole, rows);
+        assert_eq!(whole.quantile(0.5), Some(2.0));
+        let text: ArrayRef = Arc::new(StringArray::from(vec!["a"]));
+        assert!(fold_quantiles(&text, &mut whole).is_err());
+        assert!(sketchable(&DataType::Utf8) && !quantile_sketchable(&DataType::Utf8));
+        assert!(quantile_sketchable(&DataType::Decimal128(10, 2)));
+        assert!(!sketchable(&DataType::Binary));
+
+        assert!((HllSketch::default_precision().standard_error() - 0.01625).abs() < 1e-6);
+        assert!((HllSketch::new(14).unwrap().standard_error() - 0.008125).abs() < 1e-6);
+        assert!((KllSketch::default_k().rank_error() - 0.0165).abs() < 5e-4);
     }
 }
