@@ -5,8 +5,8 @@
 //! incremental refresh that folds added files in.
 
 use crate::{
-    FooterProfile, IcebergReader, ObjectDeltaReader, ObjectLocation, ObjectParquetReader,
-    ParquetReader, SourceColumnProfile, SourceProfile,
+    DirectoryListing, FooterProfile, IcebergReader, ObjectDeltaReader, ObjectLocation,
+    ObjectParquetReader, ParquetReader, SourceColumnProfile, SourceProfile,
     delta_snapshot::{DeltaFileDetail, DeltaSnapshot},
     source_statistics::{column_facts_from_delta_stats, columns_from_footers, is_object},
 };
@@ -18,7 +18,7 @@ use arrow::{
 use kaveon_core::{
     BatchSource, ColumnSketches, ColumnStatistics, DataFormat, FileColumnSketches,
     FileColumnStatistics, FileStatistics, HllSketch, KaveonError, KllSketch, OperatorMemoryAccount,
-    Result, SourceVersion, SourceVersionKind, StatValue, StatisticsDepth, TableId, TableStatistics,
+    Result, SourceVersion, StatValue, StatisticsDepth, TableId, TableStatistics,
     sketch::pg_hash_bytes_extended, statistics::MAX_PER_FILE_STATISTICS,
 };
 use object_store::{ObjectStore, path::Path as ObjectPath};
@@ -110,6 +110,8 @@ impl DataFile {
 
 /// The source's files and profile at one identity.
 pub struct SourceFiles {
+    /// The location as resolved by the catalog.
+    pub location: String,
     pub profile: SourceProfile,
     pub files: Vec<DataFile>,
     /// Per-file facts the Delta log carried for every file, when it did.
@@ -120,23 +122,7 @@ pub struct SourceFiles {
 
 impl SourceFiles {
     pub fn source_version(&self) -> SourceVersion {
-        let statistics = &self.profile.statistics;
-        SourceVersion {
-            identity_sha256: statistics.identity_sha256.clone(),
-            kind: match (self.profile.format, statistics.delta_version) {
-                (DataFormat::Delta, Some(version)) => SourceVersionKind::DeltaVersion { version },
-                (DataFormat::Delta, None) => SourceVersionKind::DeltaVersion { version: 0 },
-                (DataFormat::Iceberg, _) => SourceVersionKind::IcebergSnapshot {
-                    snapshot_id: self.profile.iceberg_snapshot_id,
-                },
-                (DataFormat::Parquet, _) if statistics.parquet_listing.is_some() => {
-                    SourceVersionKind::Listing {
-                        files: self.files.len() as u64,
-                    }
-                }
-                (DataFormat::Parquet, _) => SourceVersionKind::File,
-            },
-        }
+        crate::source_statistics::profile_source_version(&self.profile)
     }
 }
 
@@ -287,6 +273,7 @@ pub fn enumerate_source(location: &str, format: DataFormat) -> Result<SourceFile
         }
     };
     Ok(SourceFiles {
+        location: location.to_owned(),
         profile,
         files,
         delta_stats,
@@ -358,6 +345,26 @@ pub fn metadata_statistics(
     statistics_from_source(&source, table_id)
 }
 
+/// The partition columns a profiled source carries: the Delta log's, or the
+/// `key=value` keys of a partitioned Parquet directory.
+pub fn partition_column_names(profile: &SourceProfile) -> Vec<String> {
+    if !profile.partition_columns.is_empty() {
+        return profile.partition_columns.clone();
+    }
+    profile
+        .statistics
+        .parquet_listing
+        .as_ref()
+        .map(|listing| {
+            listing
+                .partitions
+                .iter()
+                .map(|column| column.name().to_owned())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn statistics_from_source(source: &SourceFiles, table_id: TableId) -> Result<TableStatistics> {
     let profile = &source.profile;
     let columns = profile
@@ -388,9 +395,15 @@ fn statistics_from_source(source: &SourceFiles, table_id: TableId) -> Result<Tab
         source_version: source.source_version(),
         computed_at_ms: now_ms(),
         depth: StatisticsDepth::Metadata,
+        format: profile.format,
+        location: source.location.clone(),
         rows: profile.statistics.row_count,
         bytes: profile.compressed_bytes,
         files: source.files.len() as u64,
+        row_groups: profile.row_group_count,
+        uncompressed_bytes: profile.uncompressed_bytes,
+        last_modified_ms: profile.last_modified_ms,
+        partition_columns: partition_column_names(profile),
         columns,
         per_file,
         per_file_complete,
@@ -561,6 +574,7 @@ pub fn refresh_statistics(
         .cloned()
         .collect();
     let added_source = SourceFiles {
+        location: source.location.clone(),
         profile: source.profile.clone(),
         delta_stats: source.delta_stats.as_ref().map(|stats| {
             source
@@ -611,6 +625,65 @@ pub fn refresh_statistics(
     next.source_version = source.source_version();
     next.computed_at_ms = now_ms();
     Ok(next)
+}
+
+/// The Arrow schema a statistics document describes: its columns in
+/// order, every one nullable.
+pub fn statistics_schema(statistics: &TableStatistics) -> SchemaRef {
+    Arc::new(arrow::datatypes::Schema::new(
+        statistics
+            .columns
+            .iter()
+            .map(|column| {
+                arrow::datatypes::Field::new(&column.name, column.data_type.clone(), true)
+            })
+            .collect::<Vec<_>>(),
+    ))
+}
+
+/// `listing` without the files the statistics prove empty of rows matching
+/// `predicate`: the kept listing and how many files were skipped. `None`
+/// when the statistics carry no complete per-file bounds, or describe a
+/// listing other than this one (a file the statistics do not know keeps
+/// the whole listing: the bounds are for another version). The caller
+/// establishes that the statistics are current for the listing's version.
+pub fn skip_listing_files(
+    listing: &DirectoryListing,
+    statistics: &TableStatistics,
+    predicate: &kaveon_core::StoragePredicate,
+) -> Option<(DirectoryListing, u64)> {
+    if !statistics.per_file_complete {
+        return None;
+    }
+    let predicate = predicate.coerced_for(&statistics_schema(statistics));
+    let names = statistics.column_names();
+    let by_label: std::collections::HashMap<&str, &FileStatistics> = statistics
+        .per_file
+        .iter()
+        .map(|file| (file.path.as_str(), file))
+        .collect();
+    let mut kept = Vec::with_capacity(listing.files.len());
+    let mut skipped = 0u64;
+    for file in &listing.files {
+        let label = relative_label(&listing.root, &file.path);
+        let facts = by_label.get(label.as_str())?;
+        if facts.may_match(&names, &predicate) {
+            kept.push(file.clone());
+        } else {
+            skipped += 1;
+        }
+    }
+    if skipped == 0 {
+        return None;
+    }
+    Some((
+        DirectoryListing {
+            root: listing.root.clone(),
+            files: kept,
+            partitions: listing.partitions.clone(),
+        },
+        skipped,
+    ))
 }
 
 /// Whether a column's values can be folded into the sketches.
@@ -1141,6 +1214,7 @@ mod tests {
         datatypes::{Field, Schema},
         record_batch::RecordBatch,
     };
+    use kaveon_core::SourceVersionKind;
     use kaveon_core::{CompareOp, QueryMemoryPool, ScalarValue, StoragePredicate};
     use parquet::{arrow::ArrowWriter, file::properties::WriterProperties};
     use std::fs::File;

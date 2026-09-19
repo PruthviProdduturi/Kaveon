@@ -966,6 +966,31 @@ mod tests {
     }
 
     #[test]
+    fn hll_at_precision_12_is_within_two_percent_over_a_million_values() {
+        let mut whole = HllSketch::new(12).unwrap();
+        let mut halves = [HllSketch::new(12).unwrap(), HllSketch::new(12).unwrap()];
+        // Integer keys as an integer column hashes them.
+        for value in 0..1_000_000u64 {
+            let text = value.to_string();
+            whole.insert_text(&text);
+            halves[(value % 2) as usize].insert_text(&text);
+        }
+        let estimate = whole.estimate() as f64;
+        assert!(
+            ((estimate - 1_000_000.0) / 1_000_000.0).abs() < 0.02,
+            "{estimate}"
+        );
+        // Merging the halves is the sketch over the whole.
+        let mut merged = halves[0].clone();
+        merged.merge(&halves[1]).unwrap();
+        assert_eq!(merged, whole);
+        // Values seen again change nothing.
+        let mut again = whole.clone();
+        again.insert_text("7");
+        assert_eq!(again, whole);
+    }
+
+    #[test]
     fn hll_merge_equals_the_sketch_over_the_union() {
         let mut left = HllSketch::new(12).unwrap();
         let mut right = HllSketch::new(12).unwrap();
