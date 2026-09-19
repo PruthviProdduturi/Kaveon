@@ -148,6 +148,7 @@ The Rust server exposes these routes:
 | `GET` | `/v1/cluster` | Coordinator and discovered-worker state, with each node's memory admission counters (`admission`) as last heartbeated |
 | `GET` | `/v1/node` | Current node information, with the result cache counters on a coordinator and the node's memory admission counters (`admission`) |
 | `DELETE` | `/v1/cache` | Drop every cached result (admin role) |
+| `GET` | `/v1/audit` | The audit ledger (admin role): statements submitted, finished, failed, cancelled, rejected; catalog mutations; settings changes; authentication failures — filtered by `since`, `until`, `principal`, `kind`, `query_id`, paged by `limit` and `cursor`, exported whole with `format=jsonl` — see [Audit ledger](#audit-ledger) |
 | `GET`, `PUT` | `/v1/admin/resource-groups` | The resource groups and selectors in force with their source and counters; replace them all at once, validated, effective for the next admission and durable across restarts (admin role) — see [Resource groups](#resource-groups) |
 | `POST` | `/v1/node/heartbeat` | Register a worker heartbeat on a coordinator |
 | `GET` | `/v1/catalog` | List catalogs |
@@ -561,6 +562,25 @@ A refusal by the group's own limit is HTTP 429 `RESOURCE_GROUP_REJECTED`
 with `resource_group`, `limit` (`{"max_memory_bytes"}`, `{"max_queued"}`
 or `{"max_queue_wait_seconds"}`) and `admission_wait_ms`; a refusal by the
 node's pool or queue keeps the code below and names the group too.
+
+### Audit ledger
+
+`GET /v1/audit` (admin) reads the coordinator's append-only ledger,
+oldest first: `{"records": [...], "next_cursor": <seq>}`, `next_cursor`
+present when more follow and passed back as `cursor`. Filters: `since`,
+`until` (Unix milliseconds, `YYYY-MM-DD`, or an RFC 3339 UTC timestamp),
+`principal`, `kind` (comma-separated kinds or families `statement`,
+`catalog`, `settings`, `auth`), `query_id`; `limit` 1 to 1000, default
+200. `format=jsonl` streams every matching record as
+`application/x-ndjson` for export. An invalid parameter is 400
+`INVALID_AUDIT_QUERY`; a node without a ledger (a worker, or
+`KAVEON_AUDIT_RETENTION_DAYS=0`) answers 404 `AUDIT_DISABLED`. Each record
+carries `seq`, `ts_ms`, `kind` and the fields of its kind; the record
+schema, the storage and the retention are in
+[Governance](../engine/governance.md#the-audit-ledger). Query records
+gained `row_count` (the whole result's rows, when the statement produced
+one) and `error_code` (the stable code of a refusal or classified failure)
+for the ledger's use; both are omitted when absent.
 
 ### Memory admission
 

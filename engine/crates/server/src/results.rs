@@ -112,6 +112,15 @@ impl ResultStore {
             }
         }
     }
+    /// The rows a live result holds so far (all of them once complete).
+    pub fn row_count(&self, id: &str) -> Option<usize> {
+        self.results.lock().ok().and_then(|entries| {
+            entries
+                .get(id)
+                .filter(|entry| entry.pages.state.load(Ordering::Acquire) != ABORTED)
+                .map(|entry| entry.pages.rows.load(Ordering::Acquire))
+        })
+    }
     /// Whether a live (in-progress or complete) result is registered.
     pub fn contains(&self, id: &str) -> bool {
         self.results.lock().is_ok_and(|entries| {

@@ -165,3 +165,73 @@ counters. The same counters are on `GET /v1/admin/resource-groups` under
 `ANALYZE … WITH (distinct = true)` runs its per-column counts through the
 statement path under the submitting principal's group, at most the
 group's `max_concurrent` abreast (and never more than four).
+
+## The audit ledger
+
+An append-only record of who did what on the coordinator, kept on the
+coordinator's own disk. Writing a line is an in-memory enqueue on the
+request's path; a dedicated thread appends each batch to the current
+segment and syncs it once, so a clean shutdown (SIGTERM, Ctrl-C: the
+listener closes, in-flight requests finish, the ledger drains) loses
+nothing and a crash loses at most the batch in flight. The ledger
+references the query record by `query_id` and repeats only what an audit
+reader needs; the record store keeps the plan, the stages and the
+telemetry.
+
+| Setting | Config key | Default | What it does |
+|---|---|---|---|
+| `KAVEON_AUDIT_DIR` | `audit.dir` | `<state dir>/audit` | The directory of segments and the catalog cursor. |
+| `KAVEON_AUDIT_RETENTION_DAYS` | `audit.retention_days` | 90 | A segment is removed once every record in it is older than this; `0` turns the ledger off (`GET /v1/audit` is then 404 `AUDIT_DISABLED`). |
+| `KAVEON_AUDIT_SEGMENT_BYTES` | `audit.segment_bytes` | 67108864 (64 MiB) | A segment is closed and a new one started once it reaches this; at least 1 MiB. |
+
+Segments are `audit-<first record ms>-<first seq>.jsonl`, one JSON object
+per line, oldest first; a segment is removed by the 30-second cleanup
+loop (and at start) once the segment after it began before the retention
+cutoff, so the open segment always stays. `seq` increases across
+segments and restarts. Workers keep no ledger.
+
+### Record kinds
+
+Every line carries `seq`, `ts_ms` (Unix milliseconds) and `kind`; the
+other fields are present when the kind has them.
+
+| `kind` | When | Fields |
+|---|---|---|
+| `statement.submitted` | a statement reaches admission (after its settings and context are accepted) | `query_id`, `principal`, `role`, `client`, `source`, `client_tags`, `catalog`, `schema`, `statement_sha256` (SHA-256 of the statement text as submitted, after any `SET SESSION` prefix), `statement` (its first 200 characters), `resource_group` |
+| `statement.finished` | the statement's response is sent | the submitted fields, `admission_wait_ms`, `elapsed_ms`, `rows` (the whole result, paged or inline), `bytes_scanned` (compressed bytes the scans read across every task), `mode` (`distributed`, `coordinator`, `cache`) |
+| `statement.failed` | the statement failed after admission — an execution error, or a wait that expired | the finished fields, `error_code` (`MEMORY_ADMISSION_REJECTED`, `RESOURCE_GROUP_REJECTED`, a catalog statement's code, `ANALYZE_FAILED`, else `EXECUTION_FAILED`), `error` (first 200 characters) |
+| `statement.canceled` | `DELETE /v1/query/{id}`, or the client disconnected | the finished fields, `error_code` (`QUERY_CANCELED`, `CLIENT_DISCONNECTED`) |
+| `statement.rejected` | refused on arrival, before any record exists: over the group's share, the group's or the node's queue full, no wait allowed | the submitted fields, `error_code`, `error` |
+| `catalog.create`, `catalog.update`, `catalog.delete` | a durable catalog, schema or table definition changed, through `/v1/catalog/*` or a catalog statement | `principal` (the actor), `object_type`, `object_id`, `revision_before` (absent for a create), `revision_after` (absent for a delete), `details` (a cascade's counts) |
+| `settings.resource_groups` | `PUT /v1/admin/resource-groups` applied | `principal`, `role`, `details` (`groups_before`, `groups_after`, `selectors_before`, `selectors_after`) |
+| `settings.cache_cleared` | `DELETE /v1/cache` | `principal`, `role`, `details` (`cleared_entries`, `cleared_bytes`) |
+| `auth.unauthorized`, `auth.forbidden` | a request was refused with 401 or 403 by the security layer | `route` (`METHOD /path`), `principal` (the one the request named or resolved to, when any), `error_code` |
+
+Catalog lines come from the catalog store's own `audit_events` table:
+every mutation publishes a snapshot, and the publish drains the events
+past the ledger's cursor (`catalog.cursor` in the audit directory) into
+the ledger, so both mutation paths are covered without a second write in
+either. A ledger opened for the first time positions the cursor at the
+store's newest event: it starts at its own start.
+
+```json
+{"seq":1042,"ts_ms":1789805123456,"kind":"statement.finished","principal":"alice","client":"kaveon-cli/0.3.0","catalog":"lake","schema":"sales","statement_sha256":"9f86d0…","statement":"SELECT country, COUNT(*) FROM orders GROUP BY 1","resource_group":"interactive","admission_wait_ms":0,"elapsed_ms":412,"rows":42,"bytes_scanned":183504211,"mode":"distributed","query_id":"5f0c…"}
+```
+
+### Reading it
+
+`GET /v1/audit` (admin) answers `{"records": [...], "next_cursor": seq}`
+oldest first. Parameters: `since` and `until` (Unix milliseconds,
+`YYYY-MM-DD`, or `YYYY-MM-DDTHH:MM:SS[.fff]Z`), `principal` (exact),
+`kind` (comma-separated exact kinds or families: `statement`, `catalog`,
+`settings`, `auth`), `query_id`, `limit` (1 to 1000, default 200) and
+`cursor` (a `next_cursor` from the previous page). `format=jsonl` streams
+every matching record as `application/x-ndjson`, one object per line, a
+page at a time, for export; the same filters apply. A read flushes the
+ledger first, so a line enqueued before the call is in the answer. An
+unparsable time, an unknown kind or another format is 400
+`INVALID_AUDIT_QUERY`; any other role is 403.
+
+The platform proxies both under `/api/v1/engine/audit` and
+`/api/v1/engine/admin/resource-groups` for Studio's Settings → Governance
+page, which filters, pages and exports the same ledger.

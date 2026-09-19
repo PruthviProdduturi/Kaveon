@@ -142,7 +142,15 @@ struct QueryRecord {
     state: QueryState,
     columns: Vec<ColumnInfo>,
     rows: Vec<Vec<serde_json::Value>>,
+    /// Rows the whole result holds, when the statement produced one:
+    /// `rows` is a preview of at most 100.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    row_count: Option<u64>,
     error: Option<String>,
+    /// The stable code of a refusal or failure the Engine classified;
+    /// absent for an execution error carried by `error` alone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_code: Option<String>,
     elapsed_ms: u64,
     submitted_at_ms: u64,
     completed_at_ms: u64,
@@ -388,6 +396,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/v1/cluster", get(get_cluster))
         .route("/v1/node", get(get_node))
         .route("/v1/cache", delete(clear_result_cache))
+        .route("/v1/audit", get(get_audit))
         .route(
             "/v1/admin/resource-groups",
             get(crate::resource_groups::get_resource_groups)
@@ -2043,21 +2052,133 @@ impl Drop for StatementLifecycleGuard {
         let _ = self.state.lifecycle.cancellations.cancel(&self.query_id);
         let _ = self.state.lifecycle.finish_query(&self.query_id);
         let query_id = self.query_id.clone();
+        let state = Arc::clone(&self.state);
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move {
-                if let Some(record) = QUERY_STORE.write().await.queries.get_mut(&query_id)
-                    && matches!(record.state, QueryState::Queued | QueryState::Running)
-                {
+                // The statement's exit is its audit line: the record has
+                // its terminal state by now, whichever path finished it.
+                let mut store = QUERY_STORE.write().await;
+                let Some(record) = store.queries.get_mut(&query_id) else {
+                    return;
+                };
+                if matches!(record.state, QueryState::Queued | QueryState::Running) {
                     record.state = QueryState::Canceled;
                     record.error =
                         Some("client disconnected before the statement finished".to_owned());
+                    record.error_code = Some("CLIENT_DISCONNECTED".to_owned());
                     record.completed_at_ms = unix_time_ms();
                     record.elapsed_ms = record
                         .completed_at_ms
                         .saturating_sub(record.submitted_at_ms);
                 }
+                let line = statement_audit_line(record);
+                drop(store);
+                state.audit.record(line);
             });
         }
+    }
+}
+
+/// The ledger line for a statement's terminal record.
+fn statement_audit_line(record: &QueryRecord) -> crate::audit::AuditRecord {
+    use crate::audit::{
+        AuditRecord, KIND_STATEMENT_CANCELED, KIND_STATEMENT_FAILED, KIND_STATEMENT_FINISHED,
+        text_prefix,
+    };
+    let kind = match record.state {
+        QueryState::Finished => KIND_STATEMENT_FINISHED,
+        QueryState::Canceled => KIND_STATEMENT_CANCELED,
+        QueryState::Failed | QueryState::Queued | QueryState::Running => KIND_STATEMENT_FAILED,
+    };
+    let error_code = match record.state {
+        QueryState::Finished => None,
+        QueryState::Canceled => Some(
+            record
+                .error_code
+                .clone()
+                .unwrap_or_else(|| "QUERY_CANCELED".to_owned()),
+        ),
+        _ => Some(
+            record
+                .error_code
+                .clone()
+                .unwrap_or_else(|| "EXECUTION_FAILED".to_owned()),
+        ),
+    };
+    AuditRecord {
+        query_id: Some(record.id.clone()),
+        principal: record.context.principal.clone(),
+        client: record.context.client.clone(),
+        source: record.context.source.clone(),
+        client_tags: record.context.client_tags.clone(),
+        catalog: Some(record.context.catalog.clone()),
+        schema: Some(record.context.schema.clone()),
+        statement_sha256: Some(crate::audit::sha256_hex(&record.sql)),
+        statement: Some(text_prefix(&record.sql)),
+        resource_group: Some(record.context.resource_group.name.clone()),
+        admission_wait_ms: Some(record.admission_wait_ms),
+        elapsed_ms: Some(record.elapsed_ms),
+        rows: record.row_count,
+        bytes_scanned: Some(
+            record
+                .scans
+                .iter()
+                .map(|scan| scan.compressed_bytes_read)
+                .sum(),
+        ),
+        mode: Some(record.execution.mode.to_owned()),
+        error_code,
+        error: record.error.as_deref().map(text_prefix),
+        ..AuditRecord::new(kind)
+    }
+}
+
+/// The ledger line for a statement as it arrives at admission.
+fn statement_submitted_line(
+    query_id: &str,
+    sql: &str,
+    identity: &Identity,
+    context: &QueryContext,
+) -> crate::audit::AuditRecord {
+    use crate::audit::{AuditRecord, KIND_STATEMENT_SUBMITTED, text_prefix};
+    AuditRecord {
+        query_id: Some(query_id.to_owned()),
+        client: context.client.clone(),
+        source: context.source.clone(),
+        client_tags: context.client_tags.clone(),
+        catalog: Some(context.catalog.clone()),
+        schema: Some(context.schema.clone()),
+        statement_sha256: Some(crate::audit::sha256_hex(sql)),
+        statement: Some(text_prefix(sql)),
+        resource_group: Some(context.resource_group.name.clone()),
+        ..AuditRecord::new(KIND_STATEMENT_SUBMITTED).by(identity)
+    }
+}
+
+/// Records a refusal on arrival — no query record exists for it — and
+/// answers with it.
+fn audit_rejection(
+    state: &AppState,
+    query_id: &str,
+    sql: &str,
+    identity: &Identity,
+    context: &QueryContext,
+    response: Response,
+    refusal: &kaveon_core::AdmissionRefusal,
+) -> Response {
+    let mut line = statement_submitted_line(query_id, sql, identity, context);
+    line.kind = crate::audit::KIND_STATEMENT_REJECTED.to_owned();
+    line.error_code = Some(refusal_code(refusal).to_owned());
+    line.error = Some(crate::audit::text_prefix(&refusal.to_string()));
+    line.admission_wait_ms = Some(0);
+    state.audit.record(line);
+    response
+}
+
+/// Marks a failed record with the code its refusal carried.
+async fn note_error_code(query_id: &str, code: &str) {
+    if let Some(record) = QUERY_STORE.write().await.queries.get_mut(query_id) {
+        record.error_code = Some(code.to_owned());
     }
 }
 
@@ -2083,6 +2204,19 @@ fn admission_rejected_response(
         body["limit"] = limit;
     }
     (StatusCode::TOO_MANY_REQUESTS, Json(body)).into_response()
+}
+
+/// The code a controller refusal answers with.
+fn refusal_code(refusal: &kaveon_core::AdmissionRefusal) -> &'static str {
+    use kaveon_core::AdmissionRefusal;
+    match refusal {
+        AdmissionRefusal::OverGroupLimit { .. } | AdmissionRefusal::GroupQueueFull { .. } => {
+            "RESOURCE_GROUP_REJECTED"
+        }
+        AdmissionRefusal::Invalid(_)
+        | AdmissionRefusal::QueueFull { .. }
+        | AdmissionRefusal::NoCapacity { .. } => "MEMORY_ADMISSION_REJECTED",
+    }
 }
 
 /// A controller refusal as the response: the group's own limits are named
@@ -2140,7 +2274,9 @@ fn pending_query_record(
         state,
         columns: vec![],
         rows: vec![],
+        row_count: None,
         error: None,
+        error_code: None,
         elapsed_ms: 0,
         submitted_at_ms,
         completed_at_ms: 0,
@@ -2354,6 +2490,9 @@ async fn run_statement(
         state: Arc::clone(&state),
         query_id: query_id.clone(),
     };
+    state.audit.record(statement_submitted_line(
+        &query_id, &sql, &identity, &context,
+    ));
 
     // Admission under the resource group: on arrival when the budget fits
     // and the group has a slot, else queued until it does, the statement
@@ -2375,7 +2514,10 @@ async fn run_statement(
         {
             Ok(memory) => memory,
             Err(refusal) => {
-                return admission_refusal_response(&refusal, &context.resource_group);
+                let response = admission_refusal_response(&refusal, &context.resource_group);
+                return audit_rejection(
+                    &state, &query_id, &sql, &identity, &context, response, &refusal,
+                );
             }
         }
     } else {
@@ -2386,7 +2528,10 @@ async fn run_statement(
         ) {
             Ok(wait) => wait,
             Err(refusal) => {
-                return admission_refusal_response(&refusal, &context.resource_group);
+                let response = admission_refusal_response(&refusal, &context.resource_group);
+                return audit_rejection(
+                    &state, &query_id, &sql, &identity, &context, response, &refusal,
+                );
             }
         };
         if !wait.admitted_immediately() {
@@ -2445,6 +2590,14 @@ async fn run_statement(
                         {
                             record.state = QueryState::Failed;
                             record.error = Some(message.clone());
+                            record.error_code = Some(
+                                if group_bounds_wait {
+                                    "RESOURCE_GROUP_REJECTED"
+                                } else {
+                                    "MEMORY_ADMISSION_REJECTED"
+                                }
+                                .to_owned(),
+                            );
                             record.admission_wait_ms = waited_ms;
                             record.completed_at_ms = unix_time_ms();
                         }
@@ -2692,7 +2845,9 @@ async fn run_statement(
             state: QueryState::Finished,
             columns: hit.columns.clone(),
             rows: history_preview(&data),
+            row_count: counted_rows(&state, &query_id, paged, &data),
             error: None,
+            error_code: None,
             elapsed_ms: elapsed,
             submitted_at_ms,
             completed_at_ms: unix_time_ms(),
@@ -2865,7 +3020,9 @@ async fn run_statement(
                     state: QueryState::Finished,
                     columns: result.columns.clone(),
                     rows: history_preview(&result.data),
+                    row_count: counted_rows(&state, &query_id, paged, &result.data),
                     error: None,
+                    error_code: None,
                     elapsed_ms: elapsed,
                     submitted_at_ms,
                     completed_at_ms: unix_time_ms(),
@@ -2979,7 +3136,9 @@ async fn run_statement(
                     state: QueryState::Finished,
                     columns: result.columns.clone(),
                     rows: history_preview(&result.data),
+                    row_count: counted_rows(&state, &query_id, paged, &result.data),
                     error: None,
+                    error_code: None,
                     elapsed_ms: elapsed,
                     submitted_at_ms,
                     completed_at_ms: unix_time_ms(),
@@ -3086,7 +3245,9 @@ async fn run_statement(
                     state: QueryState::Finished,
                     columns: result.columns.clone(),
                     rows: history_preview(&result.data),
+                    row_count: counted_rows(&state, &query_id, paged, &result.data),
                     error: None,
+                    error_code: None,
                     elapsed_ms: elapsed,
                     submitted_at_ms,
                     completed_at_ms: unix_time_ms(),
@@ -3252,7 +3413,9 @@ async fn run_statement(
                 state: QueryState::Failed,
                 columns: vec![],
                 rows: vec![],
+                row_count: None,
                 error: Some(format!("{e}")),
+                error_code: None,
                 elapsed_ms: elapsed,
                 submitted_at_ms,
                 completed_at_ms: unix_time_ms(),
@@ -3350,7 +3513,9 @@ async fn run_statement(
         state: QueryState::Finished,
         columns: columns.clone(),
         rows: history_preview(&rows),
+        row_count: counted_rows(&state, &query_id, paged, &rows),
         error: None,
+        error_code: None,
         elapsed_ms: elapsed,
         submitted_at_ms,
         completed_at_ms: unix_time_ms(),
@@ -3449,12 +3614,186 @@ async fn clear_result_cache(
             .into_response();
     }
     let (entries, bytes) = state.result_cache.clear();
+    state.audit.record(crate::audit::AuditRecord::settings(
+        &identity,
+        crate::audit::KIND_SETTINGS_CACHE_CLEARED,
+        serde_json::json!({"cleared_entries": entries, "cleared_bytes": bytes}),
+    ));
     Json(serde_json::json!({
         "cleared_entries": entries,
         "cleared_bytes": bytes,
         "result_cache": state.result_cache.stats(),
     }))
     .into_response()
+}
+
+/// The rows a finished statement produced: what the paged result store
+/// holds for a paged statement, else the inline result.
+fn counted_rows(
+    state: &AppState,
+    query_id: &str,
+    paged: bool,
+    data: &[Vec<serde_json::Value>],
+) -> Option<u64> {
+    if paged {
+        state.results.row_count(query_id).map(|rows| rows as u64)
+    } else {
+        Some(data.len() as u64)
+    }
+}
+
+#[derive(Deserialize)]
+struct AuditQuery {
+    #[serde(default)]
+    since: Option<String>,
+    #[serde(default)]
+    until: Option<String>,
+    #[serde(default)]
+    principal: Option<String>,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    query_id: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    cursor: Option<u64>,
+    /// `json` (the default page) or `jsonl` (every matching record,
+    /// streamed).
+    #[serde(default)]
+    format: Option<String>,
+}
+
+/// `GET /v1/audit`: the ledger, admin only, oldest first, paged by
+/// `cursor`; `format=jsonl` streams every matching record instead.
+async fn get_audit(
+    State(state): State<Arc<AppState>>,
+    Extension(identity): Extension<Identity>,
+    axum::extract::Query(query): axum::extract::Query<AuditQuery>,
+) -> Response {
+    if identity.role != crate::security::Role::Admin {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "the audit ledger requires admin role", "code": "FORBIDDEN"})),
+        )
+            .into_response();
+    }
+    if !state.audit.is_enabled() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "the audit ledger is not enabled on this node",
+                "code": "AUDIT_DISABLED"
+            })),
+        )
+            .into_response();
+    }
+    let invalid = |message: String| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": message, "code": "INVALID_AUDIT_QUERY"})),
+        )
+            .into_response()
+    };
+    let mut filter = crate::audit::AuditFilter {
+        principal: query.principal.filter(|value| !value.is_empty()),
+        query_id: query.query_id.filter(|value| !value.is_empty()),
+        after_seq: query.cursor,
+        ..Default::default()
+    };
+    for (name, value, slot) in [
+        ("since", &query.since, &mut filter.since_ms),
+        ("until", &query.until, &mut filter.until_ms),
+    ] {
+        if let Some(text) = value.as_deref().filter(|text| !text.trim().is_empty()) {
+            match crate::audit::parse_time(text) {
+                Some(ms) => *slot = Some(ms),
+                None => {
+                    return invalid(format!(
+                        "{name} must be Unix milliseconds, YYYY-MM-DD or an RFC 3339 UTC timestamp"
+                    ));
+                }
+            }
+        }
+    }
+    if let Some(kinds) = query.kind.as_deref().filter(|text| !text.trim().is_empty()) {
+        for kind in kinds
+            .split(',')
+            .map(str::trim)
+            .filter(|kind| !kind.is_empty())
+        {
+            let known = crate::audit::KINDS
+                .iter()
+                .any(|known| *known == kind || known.starts_with(&format!("{kind}.")));
+            if !known {
+                return invalid(format!("unknown audit kind '{kind}'"));
+            }
+            filter.kinds.push(kind.to_owned());
+        }
+    }
+    let ledger = state.audit.clone();
+    match query.format.as_deref() {
+        None | Some("json") => {
+            let limit = query
+                .limit
+                .unwrap_or(crate::audit::DEFAULT_PAGE)
+                .clamp(1, crate::audit::MAX_PAGE);
+            let page = tokio::task::spawn_blocking(move || ledger.query(&filter, limit)).await;
+            match page {
+                Ok(Ok(page)) => Json(page).into_response(),
+                Ok(Err(error)) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(
+                        serde_json::json!({"error": format!("audit ledger read failed: {error}")}),
+                    ),
+                )
+                    .into_response(),
+                Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            }
+        }
+        Some("jsonl") => {
+            // Every matching record, one JSON object per line, read a page
+            // at a time on a blocking thread so the response never holds
+            // the ledger whole.
+            let (sender, receiver) =
+                tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(4);
+            tokio::task::spawn_blocking(move || {
+                let mut filter = filter;
+                loop {
+                    let page = match ledger.query(&filter, crate::audit::MAX_PAGE) {
+                        Ok(page) => page,
+                        Err(error) => {
+                            let _ = sender.blocking_send(Err(error));
+                            return;
+                        }
+                    };
+                    let mut chunk = Vec::with_capacity(page.records.len() * 256);
+                    for record in &page.records {
+                        if let Ok(line) = serde_json::to_vec(record) {
+                            chunk.extend_from_slice(&line);
+                            chunk.push(b'\n');
+                        }
+                    }
+                    if !chunk.is_empty() && sender.blocking_send(Ok(chunk.into())).is_err() {
+                        return;
+                    }
+                    match page.next_cursor {
+                        Some(cursor) => filter.after_seq = Some(cursor),
+                        None => return,
+                    }
+                }
+            });
+            let stream = futures::stream::unfold(receiver, |mut receiver| async move {
+                receiver.recv().await.map(|item| (item, receiver))
+            });
+            (
+                [(header::CONTENT_TYPE, "application/x-ndjson")],
+                Body::from_stream(stream),
+            )
+                .into_response()
+        }
+        Some(other) => invalid(format!("format must be json or jsonl, not '{other}'")),
+    }
 }
 
 /// The statement's settings, its SQL with any `SET SESSION` prefix removed,
@@ -4102,6 +4441,7 @@ async fn finish_inline_statement(
         record.next_uri = None;
         record.columns = columns.clone();
         record.rows = rows.clone();
+        record.row_count = Some(rows.len() as u64);
         record.elapsed_ms = elapsed;
         record.completed_at_ms = unix_time_ms();
     }
@@ -4470,6 +4810,7 @@ async fn finish_catalog_result(
         Ok(result) => finish_inline_statement(query_id, started, result.columns, result.rows).await,
         Err((status, code, message)) => {
             finish_failed_query(query_id, message.clone(), started, None, None, None).await;
+            note_error_code(query_id, code).await;
             (
                 status,
                 Json(serde_json::json!({
@@ -4590,6 +4931,7 @@ async fn count_distinct_values(
             {
                 record.state = QueryState::Canceled;
                 record.error = Some(format!("canceled with ANALYZE {parent_id}"));
+                record.error_code = Some("QUERY_CANCELED".into());
                 record.completed_at_ms = unix_time_ms();
             }
             response
@@ -4645,6 +4987,7 @@ async fn analyze_failure(
     message: String,
 ) -> Response {
     finish_failed_query(query_id, message.clone(), started, None, None, None).await;
+    note_error_code(query_id, code).await;
     (
         status,
         Json(serde_json::json!({"id":query_id,"error":message,"code":code})),
@@ -5695,6 +6038,7 @@ async fn cancel_query(
     if was_running {
         record.state = QueryState::Canceled;
         record.error = Some("query canceled by client".into());
+        record.error_code = Some("QUERY_CANCELED".into());
         record.completed_at_ms = unix_time_ms();
         let _ = state.lifecycle.cancellations.cancel(&query_id);
     }
@@ -6116,6 +6460,9 @@ pub(crate) async fn publish_catalog_snapshot(state: &AppState) -> anyhow::Result
     // A new snapshot identity already misses every key; dropping the
     // entries bounds staleness and frees the budget at once.
     state.result_cache.clear();
+    // Every mutation publishes, so the catalog store's audit events reach
+    // the ledger here, whichever path (HTTP or statement) made them.
+    state.audit.drain_catalog(&state.catalog_store);
     Ok(())
 }
 
@@ -8835,6 +9182,7 @@ pub(crate) fn catalog_test_state() -> crate::AppState {
                 uuid::Uuid::new_v4()
             )),
         ),
+        audit: crate::audit::AuditLedger::disabled(),
         cluster: tokio::sync::RwLock::new(crate::cluster::ClusterState::new(&config)),
         catalog: tokio::sync::RwLock::new(Arc::new(crate::PublishedCatalog {
             manager: kaveon_core::CatalogManager::new("kaveon", "default"),
@@ -10360,6 +10708,311 @@ mod tests {
             .status(),
             axum::http::StatusCode::FORBIDDEN
         );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// The ledger, filtered, through the handler as an administrator.
+    async fn audit_page(
+        state: &Arc<crate::AppState>,
+        identity: &crate::security::Identity,
+        query: &str,
+    ) -> (axum::http::StatusCode, serde_json::Value) {
+        let parsed: super::AuditQuery = serde_urlencoded_from(query);
+        let response = super::get_audit(
+            axum::extract::State(state.clone()),
+            axum::Extension(identity.clone()),
+            axum::extract::Query(parsed),
+        )
+        .await;
+        let status = response.status();
+        (status, json_body(response).await)
+    }
+
+    /// A query string as the extractor would parse it, without a server.
+    fn serde_urlencoded_from(query: &str) -> super::AuditQuery {
+        let mut map = serde_json::Map::new();
+        for pair in query.split('&').filter(|pair| !pair.is_empty()) {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            let value = match key {
+                "limit" | "cursor" => serde_json::Value::from(value.parse::<u64>().unwrap()),
+                _ => serde_json::Value::from(value),
+            };
+            map.insert(key.to_owned(), value);
+        }
+        serde_json::from_value(serde_json::Value::Object(map)).unwrap()
+    }
+
+    /// Waits for the statement's terminal line, which the lifecycle guard
+    /// writes after the response.
+    async fn ledger_lines(
+        state: &Arc<crate::AppState>,
+        admin: &crate::security::Identity,
+        query: &str,
+        expected: usize,
+    ) -> Vec<serde_json::Value> {
+        for _ in 0..50 {
+            let (status, body) = audit_page(state, admin, query).await;
+            assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+            let records = body["records"].as_array().cloned().unwrap_or_default();
+            if records.len() >= expected {
+                return records;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        }
+        panic!("the ledger never held {expected} records for {query}");
+    }
+
+    /// Every kind the statement path, the settings and the catalog write,
+    /// with the fields each carries; paging by cursor; the JSONL export;
+    /// the admin gate and the query validation.
+    #[tokio::test]
+    async fn the_audit_ledger_records_statements_settings_and_catalog_changes_and_pages() {
+        let (state, _commit, directory) = governed_test_state(
+            8,
+            crate::resource_groups::ResourceGroups {
+                groups: vec![
+                    resource_group("default", 4),
+                    crate::resource_groups::ResourceGroup {
+                        max_memory_bytes: Some(256 * 1024),
+                        ..resource_group("small", 1)
+                    },
+                ],
+                selectors: vec![crate::resource_groups::Selector {
+                    principal: Some("svc-small".into()),
+                    group: "small".into(),
+                    ..Default::default()
+                }],
+            },
+        )
+        .await;
+        let mut state = Arc::try_unwrap(state).unwrap_or_else(|_| unreachable!());
+        state.audit = crate::audit::AuditLedger::open(
+            &directory.join("audit"),
+            1 << 20,
+            std::time::Duration::from_secs(86_400),
+        )
+        .unwrap();
+        state.audit.skip_catalog_history(&state.catalog_store);
+        let state = Arc::new(state);
+        let admin = principal("admin", Role::Admin);
+        let analyst = principal("analyst", Role::Analyst);
+        let sql = "SELECT id FROM orders WHERE id >= 2 AND id <= 3 ORDER BY id";
+
+        // A finished statement: submitted then finished, with the result.
+        let (status, body) = submit(
+            &state,
+            &analyst,
+            sql,
+            serde_json::json!({"result_cache": false}),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        let id = body["id"].as_str().unwrap().to_owned();
+        let lines = ledger_lines(&state, &admin, &format!("query_id={id}"), 2).await;
+        assert_eq!(lines[0]["kind"], "statement.submitted");
+        assert_eq!(lines[0]["principal"], "analyst");
+        assert_eq!(lines[0]["role"], "analyst");
+        assert_eq!(lines[0]["catalog"], "lake");
+        assert_eq!(lines[0]["schema"], "sales");
+        assert_eq!(lines[0]["resource_group"], "default");
+        assert_eq!(lines[0]["statement"], sql);
+        assert_eq!(lines[0]["statement_sha256"], crate::audit::sha256_hex(sql));
+        assert_eq!(lines[1]["kind"], "statement.finished");
+        assert_eq!(lines[1]["rows"], 2);
+        assert_eq!(lines[1]["mode"], "coordinator");
+        assert_eq!(lines[1]["admission_wait_ms"], 0);
+        assert!(lines[1]["elapsed_ms"].is_u64());
+        assert!(lines[1]["bytes_scanned"].is_u64());
+        assert!(lines[1].get("error_code").is_none());
+        assert!(lines[1]["seq"].as_u64().unwrap() > lines[0]["seq"].as_u64().unwrap());
+
+        // A refusal on arrival: submitted then rejected with the code.
+        let small = principal("svc-small", Role::Analyst);
+        let (status, body) = submit(&state, &small, sql, serde_json::json!({})).await;
+        assert_eq!(status, axum::http::StatusCode::TOO_MANY_REQUESTS, "{body}");
+        let rejected = ledger_lines(&state, &admin, "kind=statement.rejected", 1).await;
+        assert_eq!(rejected[0]["principal"], "svc-small");
+        assert_eq!(rejected[0]["resource_group"], "small");
+        assert_eq!(rejected[0]["error_code"], "RESOURCE_GROUP_REJECTED");
+        assert!(
+            rejected[0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("resource group 'small'")
+        );
+
+        // A cancellation by ID while queued: canceled with its code.
+        let occupied = state
+            .memory_admission
+            .admit("occupying", state.config.query_memory_limit_bytes)
+            .unwrap();
+        let queued_sql = "SELECT id FROM orders WHERE id = 1";
+        let submitting = {
+            let state = state.clone();
+            let analyst = analyst.clone();
+            tokio::spawn(async move {
+                submit(&state, &analyst, queued_sql, serde_json::json!({})).await
+            })
+        };
+        let queued_id = loop {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            let found = super::QUERY_STORE
+                .read()
+                .await
+                .queries
+                .values()
+                .find(|record| {
+                    record.sql == queued_sql && matches!(record.state, super::QueryState::Queued)
+                })
+                .map(|record| record.id.clone());
+            if let Some(id) = found {
+                break id;
+            }
+        };
+        super::cancel_query(
+            axum::extract::State(state.clone()),
+            axum::Extension(analyst.clone()),
+            axum::extract::Path(queued_id.clone()),
+        )
+        .await;
+        let (status, _) = submitting.await.unwrap();
+        assert_eq!(status, axum::http::StatusCode::CONFLICT);
+        drop(occupied);
+        let canceled = ledger_lines(
+            &state,
+            &admin,
+            &format!("query_id={queued_id}&kind=statement.canceled"),
+            1,
+        )
+        .await;
+        assert_eq!(canceled[0]["error_code"], "QUERY_CANCELED");
+        assert!(canceled[0]["admission_wait_ms"].is_u64());
+
+        // Settings: the cache cleared and the resource groups replaced.
+        super::clear_result_cache(
+            axum::extract::State(state.clone()),
+            axum::Extension(admin.clone()),
+        )
+        .await;
+        let put = crate::resource_groups::put_resource_groups(
+            axum::extract::State(state.clone()),
+            axum::Extension(admin.clone()),
+            axum::body::Bytes::from(
+                r#"{"groups":[{"name":"default","max_concurrent":3}],"selectors":[]}"#,
+            ),
+        )
+        .await;
+        assert_eq!(put.status(), axum::http::StatusCode::OK);
+        let settings = ledger_lines(&state, &admin, "kind=settings", 2).await;
+        assert_eq!(settings[0]["kind"], "settings.cache_cleared");
+        assert_eq!(settings[0]["principal"], "admin");
+        assert_eq!(settings[0]["role"], "admin");
+        assert_eq!(settings[1]["kind"], "settings.resource_groups");
+        assert_eq!(
+            settings[1]["details"]["groups_before"],
+            serde_json::json!(["default", "small"])
+        );
+        assert_eq!(
+            settings[1]["details"]["groups_after"],
+            serde_json::json!(["default"])
+        );
+
+        // A catalog mutation through the HTTP definition API reaches the
+        // ledger from the catalog store's own events.
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer admin-token".parse().unwrap(),
+        );
+        headers.insert("x-kaveon-actor", "engineer@example.com".parse().unwrap());
+        let definition = kaveon_core::CatalogDefinition::new(
+            kaveon_core::CatalogId::new("catalog:audited").unwrap(),
+            "audited",
+            kaveon_core::CatalogAdapter::Native,
+            kaveon_core::StorageType::Local {
+                base_path: directory.clone(),
+            },
+        )
+        .unwrap();
+        let created = super::create_catalog_definition(
+            axum::extract::State(state.clone()),
+            headers,
+            axum::Json(definition),
+        )
+        .await;
+        assert_eq!(created.status(), axum::http::StatusCode::CREATED);
+        let catalog = ledger_lines(&state, &admin, "kind=catalog", 1).await;
+        assert_eq!(catalog[0]["kind"], "catalog.create");
+        assert_eq!(catalog[0]["principal"], "engineer@example.com");
+        assert_eq!(catalog[0]["object_type"], "catalog");
+        assert_eq!(catalog[0]["object_id"], "catalog:audited");
+        assert_eq!(catalog[0]["revision_after"], 1);
+        assert!(catalog[0].get("revision_before").is_none());
+
+        // Paging: two per page, the cursor continues, the last page has none.
+        let (status, first) = audit_page(&state, &admin, "limit=2").await;
+        assert_eq!(status, axum::http::StatusCode::OK);
+        assert_eq!(first["records"].as_array().unwrap().len(), 2);
+        let cursor = first["next_cursor"].as_u64().unwrap();
+        assert_eq!(cursor, first["records"][1]["seq"].as_u64().unwrap());
+        let (_, second) = audit_page(&state, &admin, &format!("limit=2&cursor={cursor}")).await;
+        assert!(second["records"][0]["seq"].as_u64().unwrap() > cursor);
+        let (_, everything) = audit_page(&state, &admin, "limit=1000").await;
+        let total = everything["records"].as_array().unwrap().len();
+        assert!(total >= 9, "{total}");
+        assert!(everything.get("next_cursor").is_none());
+        let (_, by_principal) = audit_page(&state, &admin, "principal=svc-small").await;
+        assert_eq!(by_principal["records"].as_array().unwrap().len(), 2);
+        let (_, since_now) = audit_page(&state, &admin, "since=2999-01-01").await;
+        assert!(since_now["records"].as_array().unwrap().is_empty());
+
+        // The export: one object per line, every record.
+        let export = super::get_audit(
+            axum::extract::State(state.clone()),
+            axum::Extension(admin.clone()),
+            axum::extract::Query(serde_urlencoded_from("format=jsonl")),
+        )
+        .await;
+        assert_eq!(export.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            export.headers()[axum::http::header::CONTENT_TYPE],
+            "application/x-ndjson"
+        );
+        let body = axum::body::to_bytes(export.into_body(), 16 << 20)
+            .await
+            .unwrap();
+        let lines: Vec<serde_json::Value> = std::str::from_utf8(&body)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(lines.len(), total);
+        assert_eq!(lines[0]["seq"], 1);
+
+        // The gate and the validation.
+        let (status, _) = audit_page(&state, &analyst, "").await;
+        assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
+        let (status, body) = audit_page(&state, &admin, "since=yesterday").await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(body["code"], "INVALID_AUDIT_QUERY");
+        let (status, body) = audit_page(&state, &admin, "kind=nothing").await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+        let (status, body) = audit_page(&state, &admin, "format=csv").await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+
+        // A clean shutdown keeps everything: reopened, the sequence continues.
+        state.audit.shutdown();
+        let reopened = crate::audit::AuditLedger::open(
+            &directory.join("audit"),
+            1 << 20,
+            std::time::Duration::from_secs(86_400),
+        )
+        .unwrap();
+        let page = reopened
+            .query(&crate::audit::AuditFilter::default(), 1000)
+            .unwrap();
+        assert_eq!(page.records.len(), total);
+        reopened.shutdown();
         std::fs::remove_dir_all(directory).unwrap();
     }
 
