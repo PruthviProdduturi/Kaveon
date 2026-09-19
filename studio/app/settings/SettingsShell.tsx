@@ -5,13 +5,14 @@ import { usePathname } from "next/navigation";
 import { useRole } from "../../hooks/useRole";
 import s from "./settings.module.css";
 
-// Sections are either administration (connections, storage, maintenance) or
-// personal (preferences). Everyone sees the shell; administration
+// Sections are either administration (connections, storage, maintenance,
+// governance) or personal (preferences). Everyone sees the shell; administration
 // sections explain themselves to non-administrators instead of bouncing them.
 const SECTIONS = [
   { href: "/settings/connections", label: "Connections", icon: "fa-plug", admin: true },
   { href: "/settings/storage", label: "Storage", icon: "fa-hard-drive", admin: true },
   { href: "/settings/maintenance", label: "Maintenance", icon: "fa-screwdriver-wrench", admin: true },
+  { href: "/settings/governance", label: "Governance", icon: "fa-scale-balanced", admin: true },
   { href: "/settings/preferences", label: "Preferences", icon: "fa-user-gear", admin: false },
 ] as const;
 
