@@ -6,6 +6,7 @@ from middleware.permissions import require_min_role, can_read, can_write, can_pu
 from models.datasets import DatasetCreate, DatasetUpdate
 import services.datasets as svc
 import services.favorites as fav_svc
+from services import engine_datasets
 
 router = APIRouter()
 NO_CACHE = {
@@ -55,6 +56,9 @@ def create_dataset(
     # Only Editors+ may publish directly on create
     if payload.get("visibility") == "published" and not can_publish(ctx):
         payload["visibility"] = "internal"
+    # An Engine-backed dataset takes its names, columns and semantics from
+    # the Engine's table definition; the caller names the table by its id.
+    payload = engine_datasets.apply_binding(payload, ctx.email, ctx.role)
     return svc.create_dataset(payload, ctx.email)
 
 
@@ -73,6 +77,7 @@ def update_dataset(
     payload = data.model_dump(exclude_none=True)
     if payload.get("visibility") == "published" and not can_publish(ctx):
         payload["visibility"] = "internal"
+    payload = engine_datasets.apply_binding(payload, ctx.email, ctx.role)
 
     result = svc.update_dataset(dataset_id, payload, ctx.email)
     if not result:
@@ -95,6 +100,7 @@ def patch_dataset(
     payload = data.model_dump(exclude_none=True)
     if payload.get("visibility") == "published" and not can_publish(ctx):
         payload["visibility"] = "internal"
+    payload = engine_datasets.apply_binding(payload, ctx.email, ctx.role)
 
     result = svc.update_dataset(dataset_id, payload, ctx.email)
     if not result:

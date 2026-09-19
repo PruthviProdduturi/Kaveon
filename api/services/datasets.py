@@ -74,13 +74,27 @@ def _expand_columns_from_dimensions(columns: list, dimensions: list) -> list:
     return dimension_columns + non_dimension_columns
 
 
+def source_binding(value) -> Optional[dict]:
+    """The dataset's source binding as stored — `{"kind": "engine", "table_id"}`
+    — or None for a warehouse dataset. Anything else in the envelope is not
+    a binding."""
+    if not isinstance(value, dict):
+        return None
+    kind, table_id = value.get("kind"), value.get("table_id")
+    if kind != "engine" or not isinstance(table_id, str) or not table_id.strip():
+        return None
+    return {"kind": "engine", "table_id": table_id.strip()}
+
+
 def _adapt(row: dict) -> dict:
     name = row.get("dataset_name")
     sql_text = None
+    source = None
     if row.get("tables_used"):
         try:
             tu = json.loads(row["tables_used"])
             sql_text = tu.get("sql_text")
+            source = source_binding(tu.get("source"))
         except Exception:
             pass
     return {
@@ -92,6 +106,7 @@ def _adapt(row: dict) -> dict:
         "schema_name": row.get("schema_name"),
         "database_name": row.get("database_name"),
         "date_column": row.get("date_column"),
+        "source": source,
         "sql_text": sql_text,
         "tables_used": row.get("tables_used"),
         "visibility": row.get("visibility") or "internal",
@@ -303,9 +318,12 @@ def _dataset_product_document(data: dict, dataset_id: str, actor: str,
         raise ValueError("Dataset visibility is invalid")
     filters = _bounded_components(data.get("filters", prior.get("filters", [])), "filters")
     sql_text = data.get("sql_text", prior.get("sql_text"))
+    source = source_binding(data.get("source", prior.get("source")))
     metadata = {"filters": filters}
     if sql_text:
         metadata["sql_text"] = sql_text
+    if source:
+        metadata["source"] = source
     tables_used = json.dumps(metadata, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     owner = str(prior.get("created_by") or actor)
@@ -316,6 +334,7 @@ def _dataset_product_document(data: dict, dataset_id: str, actor: str,
         "schema_name": data.get("schema_name", prior.get("schema_name", "dbo")) or "dbo",
         "database_name": data.get("database_name", prior.get("database_name", "")) or "",
         "date_column": data.get("date_column", prior.get("date_column")),
+        "source": source,
         "sql_text": sql_text, "tables_used": tables_used, "visibility": visibility,
         "created_at": prior.get("created_at") or now, "updated_at": now,
         "created_by": owner, "modified_by": actor, "modified_at": now,
@@ -359,6 +378,8 @@ def create_dataset(data: dict, user_id: str) -> dict:
     tu_payload: dict = {"filters": data.get("filters") or []}
     if data.get("sql_text"):
         tu_payload["sql_text"] = data["sql_text"]
+    if source_binding(data.get("source")):
+        tu_payload["source"] = source_binding(data.get("source"))
     tables_used = json.dumps(tu_payload)
 
     visibility = data.get("visibility") or "internal"
@@ -519,7 +540,7 @@ def update_dataset(dataset_id: str, data: dict, user_id: str) -> Optional[dict]:
     # `tables_used` also carries the server-owned virtual dataset SQL.  Merge
     # an update into its JSON envelope so a filter-only seed refresh cannot
     # silently turn a virtual Engine dataset into an empty physical source.
-    if "filters" in data or "sql_text" in data:
+    if "filters" in data or "sql_text" in data or "source" in data:
         try:
             table_metadata = json.loads(existing.get("tables_used") or "{}")
         except (TypeError, json.JSONDecodeError):
@@ -533,6 +554,11 @@ def update_dataset(dataset_id: str, data: dict, user_id: str) -> Optional[dict]:
                 table_metadata["sql_text"] = data["sql_text"]
             else:
                 table_metadata.pop("sql_text", None)
+        if "source" in data:
+            if source_binding(data["source"]):
+                table_metadata["source"] = source_binding(data["source"])
+            else:
+                table_metadata.pop("source", None)
         updates.append(f"tables_used = @param{i}")
         params.append(json.dumps(table_metadata)); i += 1
 

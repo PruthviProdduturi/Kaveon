@@ -578,6 +578,16 @@ def table_definition_by_id(table_id, actor, role):
                     "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role))
 
 
+def table_version(table_id, actor, role):
+    """The table's current source version — `{table_id, table, source_version,
+    observed_at_ms}` from the least metadata that establishes it (a Delta log
+    tail, an Iceberg pointer, a listing, a file's identity), never a data
+    page. The platform's freshness signal for Engine-backed datasets; None
+    for an unknown table."""
+    return _request("GET", "/v1/catalog/tables/" + quote(table_id, safe="") + "/version",
+                    "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role))
+
+
 def _activate(path, definition, actor):
     """Draft revision 1 → Active revision 2. The Engine publishes only Active
     definitions into its query snapshot, so nothing is queryable before this."""
