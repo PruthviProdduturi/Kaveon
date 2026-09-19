@@ -2,7 +2,7 @@
 
 Kaveon's homepage lets you ask questions in plain English and get back charts, with **no LLM dependency**. Three engines sit behind it, tried in order:
 
-1. **DLM (Data Language Model) — the primary path.** A per-dataset compiled context artifact in the API. It resolves the question deterministically and, for common cases, **answers from precomputed context with no database scan at all** — returning a result badged **"From context · no DB scan"**. Only novel slices fall through to a single live query, badged **"Live query · Xs"**.
+1. **DLM (Data Language Model) — the primary path.** A per-dataset compiled context artifact in the API. It resolves the question deterministically and, for common cases, **answers from precomputed context with no database scan at all** — returning a result badged **"From context · no scan"**. Only novel slices fall through to a single live query, badged **"Live query · Xs"**. Over an Engine table the context is the Engine's own cube and statistics, and the badge is the Engine's word ([Over Engine tables](#over-engine-tables)). Every answer carries its evidence: the statement, the source and the version it reflects, the lane, and a block that reproduces it live.
 2. **ACR (Adaptive Context Routing) — the middle tier.** When the DLM can't answer (e.g. the shape doesn't match), the in-browser template parser generates SQL and ACR decides whether to serve the answer from cached context or run the query live.
 3. **Template parser — the fallback.** A keyword-based parser (`studio/utils/nlToSql.ts`) that runs entirely in the browser. It handles shapes neither the DLM nor ACR can build (mainly time-series trends, comparisons, distributions).
 
@@ -163,6 +163,99 @@ Answers from sketches identify the result as an estimate and state when it was s
 
 ---
 
+## Over Engine tables
+
+A dataset bound to a table of the Engine's durable catalog — `source: {kind:
+"engine", table_id}` on the dataset, or a dataset over a registered native
+catalog whose table id resolves — is answered on the Engine with the same
+guarantees as a warehouse dataset, and the answer-from-context above is
+replaced by the Engine's own knowing path
+([The learning engine](../engine/learning-engine.md), [Declared shape and the
+cube](../engine/storage-and-catalogs.md#declared-shape-and-the-cube)).
+
+**Binding.** The dataset's catalog, schema and table names and its column
+list come from `GET /v1/catalog/tables/{id}`; when the table declares a
+shape (`ALTER TABLE … SET SHAPE (dimensions = …, measures = …, time = …)`),
+the shape is the DLM's semantics: every declared dimension is a breakdown
+dimension, every measure a metric under its aggregates — `sum`, `count`,
+`min`, `max` additive; `count_distinct` non-additive and marked
+`approximate` in the context spec — and the time column is the date column.
+`COUNT(*)` is always a metric (`Rows`). Without a shape the column types
+decide (text and boolean columns are dimensions, numeric non-identifier
+columns are summed, the first date or timestamp column is the date column)
+and questions take the Engine's row path until a shape is declared. The
+context editor curates the spec as for any dataset — aliases, hidden
+elements, the default metric — plus `approximate` per metric and the
+dataset's `freshness_policy` (`cached`, the default, or `live`).
+
+**Generation** reads the table definition and `GET
+/v1/catalog/tables/{id}/version`, indexes each declared dimension's values
+with one cube-shaped statement (`SELECT dim, COUNT(*) … GROUP BY dim`,
+answered from the cube's cells without a scan when the cube is built), and
+records the table, its shape and the source version in the artifact. **No
+warehouse cell is written**: `dlm_answers` and `dlm_sketch` hold nothing for
+an Engine-backed dataset. On the local stack this turns a thirty-second
+generation into under a second.
+
+**Answering.** The question resolves to its slots exactly as before — the
+router is shared — and the statement is written in the Engine's dialect
+(`api/dlm/engine_dialect.py`: bare relation names, a quoted column only
+when it is not a plain identifier or is a reserved word, `DATE` literals
+for date columns, `EXTRACT` for timestamps, resolved bounds instead of
+`CURRENT_DATE` arithmetic). A breakdown over declared dimensions is written
+**without `ORDER BY`/`LIMIT`** — the shape the cube answers, bounded by the
+dimensions' caps — and the DLM ranks and slices the cells itself, so "top 3
+countries by users" is a context answer. The DLM executes the statement
+through the Engine bridge with the settings it chooses:
+
+| Setting | Value | Why |
+|---|---|---|
+| `result_cache` | `true` under `freshness_policy: cached`, `false` under `live` | The Engine's cache is keyed by the catalog snapshot and cleared on every publish; a dataset that must read every time says so in its spec |
+| `approximate` | `true` only when the question's metric is marked `approximate` (a `count_distinct` measure, by default) | The cube holds distinct counts as sketches; the Engine states the error on the record; an exact `COUNT(DISTINCT)` is never taken from the cube |
+| `use_statistics` | `true` | The knowing path is the point; the `reproduce` block turns it off |
+
+The lane and the label come from the record's `execution.mode`, never from
+the DLM's own scoring: `context` — the cube (`detail: cube at <version>`) or
+the statistics (`statistics at <version>`) answered without reading the
+rows — is badged **From context · no scan**; `cache` (the result cache) is
+**From cache**; `distributed`/`coordinator` is **Live query · Xs**. An
+estimate is labelled from `execution.approximate` with the sketch and error
+the Engine states. The Engine only answers from a cube or statistics that are
+current for the statement's pinned source version, so a context answer over
+an Engine table is exact at the version its evidence names.
+
+**Freshness.** The scorer's change signal is the table's source version from
+`GET /v1/catalog/tables/{id}/version` (the Delta log's tail, the Iceberg
+pointer, a listing digest or a file's identity — a metadata read): a version
+equal to the one the artifact recorded is no change; a moved version is a
+change of at least the half fraction, the same per-element rule a re-analyzed
+warehouse table takes, and the sweep rebuilds the value index. The
+PostgreSQL counter path is unchanged for warehouse datasets.
+
+**Evidence and reproduction.** Every answer's `evidence` names the statement,
+the dataset and its source (table id and catalog names), the source version
+it reflects, the lane, the Engine's `execution` object verbatim, the elapsed
+time and rows, and a `reproduce` block — the same statement with
+`{use_statistics: false, result_cache: false}` — that `POST /api/v1/dlm/reproduce`
+runs so the live number sits beside the context one
+([API reference](../reference/api.md#dlm-answers-and-their-evidence)). Studio's
+answer card shows this under **Evidence**, with **Run live** for Analysts and
+above.
+
+**Coverage.** `python -m dlm.coverage --dataset <id>` (in `api/`) builds a
+question corpus from the dataset's own spec — totals, breakdowns, filters,
+filter-and-breakdown, two filters, rankings, non-additive totals and
+breakdowns, years and trends when there is a date column, an unknown value
+and an out-of-scope question — asks each through `/dlm/ask`, and prints per
+class how many were answered, clarified or refused and, of the answered, how
+many came from context, the cache or a live read, every count taken from the
+evidence. The run on the local stack's dataset is recorded in
+[coverage-2026-09-19](../qualification/dlm/coverage-2026-09-19.md); the
+contract corpus for the AKS telemetry dataset stays with
+`scripts/qualify-dlm-questions.py`.
+
+---
+
 ## `serve_chart()` and `serve_chart_multi()`
 
 Dashboard charts use a dedicated serving path that maps a `(metric_column, aggregation, group_by, filters)` tuple to precomputed context — no chat-style NL parsing needed.
@@ -190,7 +283,7 @@ The values are extracted from `dlm_answers`: for any metric that has a single-di
 `check_freshness()` computes how current a dataset's DLM context is by combining two signals:
 
 1. **Time decay** — exponential decay from the artifact's `built_at` timestamp
-2. **Data-change signal** — row modifications since the last ANALYZE, read from `pg_stat_user_tables`
+2. **Data-change signal** — row modifications since the last ANALYZE, read from `pg_stat_user_tables`; for an Engine-backed dataset, the table's source version from `GET /v1/catalog/tables/{id}/version` compared with the version the artifact recorded ([Over Engine tables](#over-engine-tables))
 
 The product yields a score in [0, 1]:
 
@@ -265,7 +358,10 @@ Each loaded schema is scored against the query: +3 for dataset name words, +2 fo
 
 | File | Role |
 |------|------|
-| `api/dlm/engine.py` | DLM runtime: compilation, deterministic resolution, and answer serving |
+| `api/dlm/engine.py` | DLM runtime: compilation, deterministic resolution, and answer serving; the Engine-backed path (`_answer_on_engine`), evidence and `reproduce` |
+| `api/dlm/engine_dialect.py` | One statement assembler, two dialects (PostgreSQL, Engine) |
+| `api/dlm/coverage.py` | `python -m dlm.coverage`: question-class coverage of one dataset |
+| `api/services/engine_datasets.py` | Binding a dataset to an Engine table: names, columns and semantics from the definition and its shape |
 | `api/routers/dlm.py` | API endpoints: /dlm/ask, /dlm/serve-chart, /dlm/filter-values, /dlm/route, /datasets/{id}/dlm/generate, /datasets/{id}/freshness |
 | `api/dlm/hll.py` | HyperLogLog implementation |
 | `api/dlm/profiler.py` | Statistics substrate and context profiling |
@@ -274,4 +370,5 @@ Each loaded schema is scored against the query: +3 for dataset name words, +2 fo
 | `studio/app/page.tsx` | Frontend chat flow: three-tier execution (DLM → ACR → template parser), follow-up detection, context hints display |
 | `studio/utils/nlToSql.ts` | In-browser template parser: patterns, fuzzy matching, SQL builder |
 | `studio/components/chat/InlineChart.tsx` | Chat-embedded chart renderer (ECharts) |
+| `studio/components/chat/EvidencePanel.tsx` | The answer card's Evidence disclosure: statement, source and version, lane, Run live |
 | `studio/components/ContextBanner.tsx` | Homepage banner showing compiled context coverage per dataset |
