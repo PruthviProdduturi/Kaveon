@@ -12,6 +12,7 @@ pub mod lifecycle;
 mod optimize;
 pub mod orchestrator;
 pub mod planner;
+pub mod resource_groups;
 pub mod result_cache;
 pub mod results;
 pub mod runtime;
@@ -55,7 +56,8 @@ pub struct AppState {
     pub results: results::ResultStore,
     /// Complete results of finished statements; only a coordinator keeps any.
     pub result_cache: result_cache::ResultCache,
-    pub principal_admission: security::PrincipalAdmission,
+    /// The resource groups in force and where they came from.
+    pub governance: resource_groups::Governor,
     pub config: ServerConfig,
     pub cluster: RwLock<ClusterState>,
     /// Published catalog view. Queries clone the `Arc` once and retain that
@@ -217,6 +219,29 @@ async fn main() {
         },
         std::time::Duration::from_secs(config.result_cache_ttl_seconds),
     );
+    let governance = match resource_groups::load(&config, config.resource_groups_section.clone()) {
+        Ok((groups, source, store_path)) => {
+            if config.coordinator {
+                if let Err(error) = memory_admission
+                    .set_groups(groups.policies(config.memory_admission_limit_bytes))
+                {
+                    eprintln!("failed to apply resource groups: {error}");
+                    std::process::exit(1);
+                }
+                println!(
+                    "Governance:  {} resource group(s), {} selector(s), from {:?}",
+                    groups.groups.len(),
+                    groups.selectors.len(),
+                    source
+                );
+            }
+            resource_groups::Governor::new(groups, source, store_path)
+        }
+        Err(error) => {
+            eprintln!("failed to load resource groups: {error}");
+            std::process::exit(1);
+        }
+    };
     let state = Arc::new(AppState {
         disk_exchange_store,
         results: results::ResultStore::with_limits(
@@ -224,7 +249,7 @@ async fn main() {
             config.result_disk_limit_bytes,
         ),
         result_cache,
-        principal_admission: security::PrincipalAdmission::default(),
+        governance,
         config,
         cluster: RwLock::new(cluster),
         catalog: RwLock::new(Arc::new(PublishedCatalog {

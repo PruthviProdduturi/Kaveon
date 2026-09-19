@@ -418,6 +418,7 @@ mod tests {
             catalog_snapshot_id: None,
             result_cache: None,
             admission: None,
+            resource_groups: None,
         }
     }
 

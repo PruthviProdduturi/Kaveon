@@ -41,6 +41,10 @@ pub struct NodeInfo {
     /// on a worker. Workers report theirs with every heartbeat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admission: Option<kaveon_core::AdmissionStats>,
+    /// The coordinator's resource groups: each group's limits and its
+    /// running, queued, admitted, rejected counters and wait percentiles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_groups: Option<Vec<kaveon_core::AdmissionGroupStats>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +95,7 @@ impl ClusterState {
                 catalog_snapshot_id: None,
                 result_cache: None,
                 admission: None,
+                resource_groups: None,
             },
             workers: HashMap::new(),
             process_memory_limit_bytes: config.process_memory_limit_bytes,
