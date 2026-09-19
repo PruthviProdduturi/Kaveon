@@ -2,13 +2,17 @@
 //! `scripts/differential-cases.py`, run against the same rows held in two
 //! Parquet encodings — an Arrow dictionary schema for every text column,
 //! and plain UTF-8 — through the node-local planner, again against the
-//! plain rows held as one file and as a directory of three files, and
-//! through the distributed planner's fragments executed in this process as
-//! a two-worker cluster would run them. Any divergence is an Engine
-//! defect, whatever the cluster later says. The encodings exercise
-//! different operator paths (dictionary-aware predicates, coded folds, the
-//! columnar aggregate's arena keys) against one truth; the layouts exercise
-//! the directory reader (listing, file assignment, per-file pruning)
+//! plain rows held as one file and as a directory of three files, again
+//! against the same rows held as a Hive-partitioned directory
+//! (`region=…/industry=…/`, the keys read from the paths) and as one file
+//! of the same column order, and through the distributed planner's
+//! fragments executed in this process as a two-worker cluster would run
+//! them — for the dictionary file and for the partitioned directory. Any
+//! divergence is an Engine defect, whatever the cluster later says. The
+//! encodings exercise different operator paths (dictionary-aware
+//! predicates, coded folds, the columnar aggregate's arena keys) against
+//! one truth; the layouts exercise the directory reader (listing, file
+//! assignment, per-file pruning, partition columns and partition pruning)
 //! against the single-file reader; the fragment path exercises the stage
 //! planner, the exchanges and the fragment compiler.
 use std::collections::{BTreeMap, HashMap};
@@ -342,6 +346,44 @@ const CASES: &[(&str, &str, bool)] = &[
         "SELECT DISTINCT REGEXP_REPLACE(platform, 'top|ile', '') AS p FROM {T} ORDER BY p",
         true,
     ),
+    // The partitioned layout's keys: `region` and `industry` (nullable)
+    // come from the paths there and from the file everywhere else. These
+    // shapes fold to a decision on some files and a residual on others.
+    (
+        "partition_in_and_null",
+        "SELECT COUNT(*) AS n FROM {T} WHERE region IN ('Asia', 'Europe') AND industry IS NULL",
+        false,
+    ),
+    (
+        "partition_not",
+        "SELECT region, COUNT(*) AS n FROM {T} WHERE NOT (region = 'Asia' OR industry = 'Retail') GROUP BY region ORDER BY region",
+        true,
+    ),
+    (
+        "partition_range_text",
+        "SELECT industry, SUM(actions) AS a FROM {T} WHERE region > 'M' AND region <= 'South America' GROUP BY industry ORDER BY industry",
+        true,
+    ),
+    (
+        "partition_keys_only",
+        "SELECT region, industry, COUNT(*) AS n FROM {T} GROUP BY region, industry ORDER BY region, industry",
+        true,
+    ),
+    (
+        "partition_like_or_file_column",
+        "SELECT COUNT(*) AS n FROM {T} WHERE region LIKE 'S%' OR actions > 38",
+        false,
+    ),
+    (
+        "partition_between_and_residual",
+        "SELECT country, COUNT(*) AS n FROM {T} WHERE region BETWEEN 'Asia' AND 'Europe' AND industry IS NOT NULL AND sessions >= 3 GROUP BY country ORDER BY country",
+        true,
+    ),
+    (
+        "partition_ne_and_null_group",
+        "SELECT industry, MIN(latency_p75_ms) AS lo FROM {T} WHERE region <> 'Africa' GROUP BY industry ORDER BY industry",
+        true,
+    ),
 ];
 
 const SURFACES: [&str; 6] = [
@@ -588,6 +630,89 @@ fn write_directory(
     }
 }
 
+/// The batch as a Hive-partitioned directory table: one file per
+/// combination of the `keys` values, under `key=value` directories (a
+/// NULL under Hive's default partition), the key columns absent from the
+/// files. The catalog schema is what the directory reader serves: the file
+/// columns, then the keys as read from the paths.
+fn write_partitioned(
+    directory: &std::path::Path,
+    name: &str,
+    batch: &RecordBatch,
+    keys: &[&str],
+) -> TableMeta {
+    let table = directory.join(name);
+    std::fs::create_dir_all(&table).unwrap();
+    let key_columns = keys
+        .iter()
+        .map(|key| {
+            cast(batch.column_by_name(key).unwrap(), &DataType::Utf8)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .clone()
+        })
+        .collect::<Vec<_>>();
+    let file_indices = (0..batch.num_columns())
+        .filter(|index| !keys.contains(&batch.schema().field(*index).name().as_str()))
+        .collect::<Vec<_>>();
+    let mut groups: BTreeMap<Vec<Option<String>>, Vec<u32>> = BTreeMap::new();
+    for row in 0..batch.num_rows() {
+        let values = key_columns
+            .iter()
+            .map(|column| column.is_valid(row).then(|| column.value(row).to_owned()))
+            .collect::<Vec<_>>();
+        groups.entry(values).or_default().push(row as u32);
+    }
+    for (values, rows) in groups {
+        let mut partition = table.clone();
+        for (key, value) in keys.iter().zip(&values) {
+            partition.push(format!(
+                "{key}={}",
+                value
+                    .as_deref()
+                    .unwrap_or(kaveon_storage::HIVE_DEFAULT_PARTITION)
+            ));
+        }
+        std::fs::create_dir_all(&partition).unwrap();
+        let rows = arrow::compute::take(
+            &arrow::array::StructArray::from(batch.project(&file_indices).unwrap()),
+            &arrow::array::UInt32Array::from(rows),
+            None,
+        )
+        .unwrap();
+        let rows = RecordBatch::from(
+            rows.as_any()
+                .downcast_ref::<arrow::array::StructArray>()
+                .unwrap(),
+        );
+        write(&partition, "part-00000.parquet", &rows);
+    }
+    std::fs::write(table.join("_SUCCESS"), b"").unwrap();
+    let schema = kaveon_storage::ParquetReader::new(&table)
+        .metadata()
+        .unwrap()
+        .schema;
+    TableMeta {
+        name: name.to_owned(),
+        arrow_schema: schema,
+        location: name.to_owned(),
+        access: AccessPattern::Shortcut,
+        format: DataFormat::Parquet,
+    }
+}
+
+/// The batch with `keys` moved to the end, in the order given: the column
+/// order a partitioned directory table presents.
+fn keys_last(batch: &RecordBatch, keys: &[&str]) -> RecordBatch {
+    let mut indices = (0..batch.num_columns())
+        .filter(|index| !keys.contains(&batch.schema().field(*index).name().as_str()))
+        .collect::<Vec<_>>();
+    indices.extend(keys.iter().map(|key| batch.schema().index_of(key).unwrap()));
+    batch.project(&indices).unwrap()
+}
+
 /// Rows as text, one string per row, so both encodings, both layouts and
 /// both paths compare alike.
 pub(crate) fn canonical_rows(batches: &[RecordBatch], ordered: bool) -> Vec<String> {
@@ -651,6 +776,31 @@ fn the_differential_sweep_matches_across_parquet_encodings_and_execution_paths()
     }
     let parts = write_directory(&directory, "events_parts", &batch(&events, false), 3);
     catalog.register_table("events", parts).unwrap();
+    let partition_keys = ["region", "industry"];
+    let partitioned = write_partitioned(
+        &directory,
+        "events_partitioned",
+        &batch(&events, false),
+        &partition_keys,
+    );
+    assert_eq!(
+        partitioned
+            .arrow_schema
+            .fields()
+            .iter()
+            .rev()
+            .take(2)
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>(),
+        ["industry", "region"]
+    );
+    catalog.register_table("events", partitioned).unwrap();
+    let hive_order = write(
+        &directory,
+        "events_hive_order.parquet",
+        &keys_last(&batch(&events, false), &partition_keys),
+    );
+    catalog.register_table("events", hive_order).unwrap();
     let mut manager = CatalogManager::new("lake", "events");
     manager.register_catalog(Box::new(catalog));
 
@@ -695,6 +845,9 @@ fn the_differential_sweep_matches_across_parquet_encodings_and_execution_paths()
         let plain = local(&statement("events_plain"), *ordered);
         let parts = local(&statement("events_parts"), *ordered);
         let fragments = distributed(&statement("events_dictionary"), *ordered);
+        let partitioned = local(&statement("events_partitioned"), *ordered);
+        let hive_order = local(&statement("events_hive_order"), *ordered);
+        let partitioned_fragments = distributed(&statement("events_partitioned"), *ordered);
         assert!(!dictionary.is_empty(), "{name} returned no rows");
         if dictionary != plain {
             mismatches.push(format!(
@@ -715,6 +868,20 @@ fn the_differential_sweep_matches_across_parquet_encodings_and_execution_paths()
                 "{name}: local {:?} versus distributed {:?}",
                 dictionary.iter().take(3).collect::<Vec<_>>(),
                 fragments.iter().take(3).collect::<Vec<_>>()
+            ));
+        }
+        if partitioned != hive_order {
+            mismatches.push(format!(
+                "{name}: partitioned directory {:?} versus one file in its column order {:?}",
+                partitioned.iter().take(3).collect::<Vec<_>>(),
+                hive_order.iter().take(3).collect::<Vec<_>>()
+            ));
+        }
+        if partitioned != partitioned_fragments {
+            mismatches.push(format!(
+                "{name}: partitioned directory local {:?} versus distributed {:?}",
+                partitioned.iter().take(3).collect::<Vec<_>>(),
+                partitioned_fragments.iter().take(3).collect::<Vec<_>>()
             ));
         }
     }

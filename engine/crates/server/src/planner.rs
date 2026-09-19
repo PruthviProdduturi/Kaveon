@@ -3282,6 +3282,205 @@ mod tests {
         assert_ne!(reanalyzed.identity_sha256, analyzed.identity_sha256);
     }
 
+    /// A Hive-partitioned directory: its keys are columns the catalog
+    /// serves, a predicate on them prunes files before any is opened (the
+    /// metric says how many), the pruned listing is what a query pins and
+    /// what statistics count, and the fragment path agrees.
+    #[test]
+    fn a_partitioned_directory_prunes_files_by_its_path_values() {
+        let mut fixture = fixture();
+        let table = fixture.directory.join("sales");
+        let file_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        let write = |partition: &str, values: Vec<i64>| {
+            let directory = table.join(partition);
+            fs::create_dir_all(&directory).unwrap();
+            let batch = RecordBatch::try_new(
+                Arc::clone(&file_schema),
+                vec![Arc::new(Int64Array::from(values))],
+            )
+            .unwrap();
+            let properties = WriterProperties::builder()
+                .set_max_row_group_size(2)
+                .build();
+            let mut writer = ArrowWriter::try_new(
+                File::create(directory.join("part-0.parquet")).unwrap(),
+                Arc::clone(&file_schema),
+                Some(properties),
+            )
+            .unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+        };
+        write("dt=2026-09-01", vec![1, 2]);
+        write("dt=2026-09-02", vec![3, 4, 5, 6]);
+        write("dt=2026-09-03", (7..=20).collect());
+        write("dt=__HIVE_DEFAULT_PARTITION__", vec![21]);
+        fs::write(table.join("_SUCCESS"), b"").unwrap();
+        let source = table.to_string_lossy().into_owned();
+        // Registration reads the table's schema from the directory: the
+        // file column and the typed key.
+        let analyzed = kaveon_storage::analyze_source(&source, DataFormat::Parquet).unwrap();
+        assert_eq!(analyzed.row_count, 21);
+        assert_eq!(analyzed.columns, ["id", "dt"]);
+        assert_eq!(analyzed.schema.field(1).data_type(), &DataType::Date32);
+        let mut lake = MemoryCatalog::new(
+            "lake",
+            StorageType::Local {
+                base_path: fixture.directory.clone(),
+            },
+        )
+        .with_schema("default");
+        lake.register_table(
+            "default",
+            TableMeta {
+                name: "sales".into(),
+                arrow_schema: Arc::clone(&analyzed.schema),
+                location: "sales".into(),
+                access: AccessPattern::Shortcut,
+                format: DataFormat::Parquet,
+            },
+        )
+        .unwrap();
+        fixture.catalog.register_catalog(Box::new(lake));
+        let optimized = |sql: &str| {
+            let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan_for_binder(sql).unwrap();
+            qualify_tables(&mut plan, "lake", "default");
+            let plan = kaveon_optim::binder::bind(plan, &fixture.catalog).unwrap();
+            let plan = kaveon_optim::rules::push_filter_down(plan);
+            kaveon_optim::rules::push_projection_down(plan)
+        };
+        let ids = |planned: &mut PlannedQuery| {
+            let mut ids = collect_batches(&mut *planned.operator)
+                .unwrap()
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap()
+                        .values()
+                        .to_vec()
+                })
+                .collect::<Vec<_>>();
+            ids.sort_unstable();
+            ids
+        };
+
+        // One partition's files are pruned by the date before any opens.
+        let plan = optimized("SELECT id FROM sales WHERE dt = DATE '2026-09-02'");
+        let mut planned = plan_query(&plan, &fixture.catalog).unwrap();
+        assert_eq!(ids(&mut planned), [3, 4, 5, 6]);
+        let snapshot = planned.scan_metrics[0].snapshot();
+        assert_eq!(snapshot.files_pruned_by_partition, 3);
+        assert_eq!(snapshot.files_considered, 1);
+        assert_eq!(snapshot.files_opened, 1);
+
+        // A text literal against the date key prunes the same way, and the
+        // residual on the file column still prunes row groups inside.
+        let plan = optimized("SELECT id FROM sales WHERE dt >= '2026-09-02' AND id > 10");
+        let mut seen = Vec::new();
+        let mut pruned = 0;
+        let mut considered = 0;
+        let mut opened = 0;
+        for index in 0..2 {
+            let mut planned = plan_partitioned_query(
+                &plan,
+                &fixture.catalog,
+                ScanPartition::new(index, 2).unwrap(),
+            )
+            .unwrap();
+            seen.extend(ids(&mut planned));
+            let snapshot = planned.scan_metrics[0].snapshot();
+            pruned += snapshot.files_pruned_by_partition;
+            considered += snapshot.files_considered;
+            opened += snapshot.files_opened;
+            assert!(snapshot.row_groups_pruned() >= 1, "{snapshot:?}");
+        }
+        seen.sort_unstable();
+        assert_eq!(seen, (11..=20).collect::<Vec<_>>());
+        assert_eq!(pruned, 2);
+        assert_eq!(considered, opened);
+
+        // The NULL partition answers IS NULL alone.
+        let plan = optimized("SELECT id FROM sales WHERE dt IS NULL");
+        let mut planned = plan_query(&plan, &fixture.catalog).unwrap();
+        assert_eq!(ids(&mut planned), [21]);
+        assert_eq!(
+            planned.scan_metrics[0].snapshot().files_pruned_by_partition,
+            3
+        );
+
+        // The key groups like any column, NULL included.
+        let plan = optimized("SELECT dt, COUNT(*) AS n FROM sales GROUP BY dt ORDER BY dt");
+        let mut planned = plan_query(&plan, &fixture.catalog).unwrap();
+        let batches = collect_batches(&mut *planned.operator).unwrap();
+        let rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+        assert_eq!(rows, 4);
+        assert_eq!(batches[0].schema().field(0).data_type(), &DataType::Date32);
+        assert_eq!(
+            planned.scan_metrics[0].snapshot().files_pruned_by_partition,
+            0
+        );
+
+        // The listing pinned for a query under a known predicate is the
+        // pruned one, and statistics count its rows.
+        let listing = analyzed.parquet_listing.clone().unwrap();
+        let predicate = kaveon_core::StoragePredicate::Compare {
+            column: "dt".into(),
+            op: kaveon_core::CompareOp::Eq,
+            value: kaveon_core::ScalarValue::Utf8("2026-09-02".into()),
+        };
+        let pinned = listing
+            .pruned_by(Some(&analyzed.schema), &predicate)
+            .unwrap();
+        assert_eq!(pinned.files.len(), 1);
+        assert_eq!(
+            kaveon_storage::directory_row_count(
+                &source,
+                Arc::new(pinned.clone()),
+                Some(Arc::clone(&analyzed.schema))
+            )
+            .unwrap(),
+            4
+        );
+        let plan = optimized("SELECT id FROM sales WHERE dt = '2026-09-02'");
+        let pins = SourcePins {
+            delta_versions: BTreeMap::new(),
+            parquet_directories: BTreeMap::from([(source.clone(), Arc::new(pinned))]),
+        };
+        let pool = QueryMemoryPool::new("partitioned", 64 * 1024 * 1024).unwrap();
+        let mut at_pin = plan_query_with_pins(&plan, &fixture.catalog, &pool, &pins).unwrap();
+        assert_eq!(ids(&mut at_pin), [3, 4, 5, 6]);
+        let snapshot = at_pin.scan_metrics[0].snapshot();
+        assert_eq!(snapshot.files_pruned_by_partition, 0);
+        assert_eq!(snapshot.files_considered, 1);
+
+        // The fragment path: every task lists, prunes and assigns from the
+        // kept files, and the rows agree with the local path.
+        let plan = optimized(
+            "SELECT dt, SUM(id) AS s FROM sales WHERE dt <> DATE '2026-09-03' GROUP BY dt ORDER BY dt",
+        );
+        let distributed = crate::differential_tests::execute_distributed(
+            "partitioned",
+            &plan,
+            &fixture.catalog,
+            2,
+            &pool,
+        )
+        .unwrap();
+        let mut planned = plan_query(&plan, &fixture.catalog).unwrap();
+        let local = collect_batches(&mut *planned.operator).unwrap();
+        assert_eq!(
+            crate::differential_tests::canonical_rows(&distributed, true),
+            crate::differential_tests::canonical_rows(&local, true)
+        );
+        assert_eq!(
+            crate::differential_tests::canonical_rows(&local, true),
+            ["2026-09-01\u{1f}3", "2026-09-02\u{1f}18"]
+        );
+    }
+
     #[test]
     fn plans_grouped_aggregate_with_hash_exchange() {
         let graph = graph("SELECT region, SUM(total) FROM orders GROUP BY region");
