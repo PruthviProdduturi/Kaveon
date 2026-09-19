@@ -7,7 +7,7 @@ paused over the weekend, not deleted: `az aks stop` deallocates the control
 plane and both node pools while the managed disks stay, so the coordinator's
 catalog PVC, the PostgreSQL PVC, the storage account with the benchmark
 objects (ClickBench `hits.parquet`, TPC-H SF100 as Delta under
-`opensource/benchmarks/tpch/delta/sf100/`) and the ACR images all come back
+`opensource/benchmarks/tpch/v2/sf100/`) and the ACR images all come back
 as they were. Worker `emptyDir` state (exchange spools, spills) is lost,
 which is by design.
 

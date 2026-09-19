@@ -151,17 +151,16 @@ Reference pages: [The learning engine](../engine/learning-engine.md),
   `docs/engineering/aks-suspend-resume.md` before any run; a StatefulSet
   that lost a `kubectl set image` roll is recovered from the digest in the
   last run record; nothing measured on a Friday is comparable to a Monday
-  without a cold round. **Unverified:** the brief for this log says the
-  cluster was *deleted and rebuilt from Bicep* on 2026-09-18. The
-  repository records the opposite for that week — `2dd11b7e` ("pause and
-  resume … instead of deleting it", 2026-09-17), no commit under
-  `infra/bicep` since 2026-09-14, and the only delete on record is the
-  eastus cluster before 2026-09-14 — while the HANDSHAKE Log row of
-  2026-09-19 (resource groups and the audit ledger) says "AKS (deleted
-  until Monday)". Which of stop or delete was run on 2026-09-18 is not
-  established by the repository; if it was a delete, the rebuild follows
-  the historical section of the runbook. Record: `2dd11b7e`;
-  `docs/engineering/aks-suspend-resume.md`; HANDSHAKE Log 2026-09-19.
+  without a cold round. **2026-09-18, 22:10 PT (architect's call, this
+  session):** the AKS cluster and the ACR were deleted — not stopped — to
+  prove the rebuild; the storage account (ClickBench, TPC-H v2 Delta, the
+  lake), the three managed identities, the VNet, the Key Vault and a
+  PostgreSQL disk snapshot (`kaveon-postgres-pre-aks-delete-20260918`)
+  were kept. The Monday rebuild is `infra/bicep/environments/aks-test.bicep`
+  → `scripts/aks-test-secrets.py` → the three Helm charts → images from
+  git or the GHCR digest → the three catalog registrations → a smoke
+  query, and its first run is the test of that path. The stop/start
+  procedure in `aks-suspend-resume.md` remains the ordinary weekend rule.
 
 ## 2026-09-18
 
@@ -367,22 +366,20 @@ Reference pages: [The learning engine](../engine/learning-engine.md),
   benchmark record. Record: `0ba3d691`; `docs/engine/settings.md`,
   `use_statistics`; HANDSHAKE Log 2026-09-19.
 
-### DataFusion: a possible SQL front end later, never the execution layer — unverified
+### DataFusion: a possible SQL front end later, never the execution layer
 
-- **Decision (as briefed).** Apache DataFusion is considered only as a
+- **Decision (architect, 2026-09-18, in conversation; first recorded here).** Apache DataFusion is considered only as a
   future SQL front end (parser and planner), never as the execution or
   storage layer; the columnar executor, the exchange, the memory model and
   the readers stay Kaveon's own.
-- **Reason (as briefed).** The product claim is a purpose-built engine
+- **Reason.** The product claim is a purpose-built engine
   with its own parser, planner, optimizer and distributed runtime — "no
   DuckDB, Trino, or Spark embedded inside it" — and a rented execution
   layer would forfeit the memory guard, the spill machinery, the exchange
   protocol and the statistics-aware planner that the qualification
   records are built on.
-- **Consequence.** **Unverified in the repository:** no commit, HANDSHAKE
-  Log row or document records this call. The only DataFusion mentions are
-  a comparison line in `docs/engineering/upper-hand-program.md` (E1) and a
-  dialect comment in `api/routers/sql.py`; the "own SQL parser, planner,
-  optimizer, and distributed runtime" wording is in Studio's docs pages.
-  Recorded here from the architect's brief so the reasoning is on file;
-  it becomes a decision of record when a HANDSHAKE row or an ADR states it.
+- **Consequence.** No engine work targets DataFusion before the ship
+  date; the question is reopened only if SQL-surface misses (not
+  performance) become the recurring adoption blocker, and then for the
+  front end alone — `docs/engineering/upper-hand-program.md` (E1) and the
+  dialect note in `api/routers/sql.py` are the only prior mentions.
