@@ -29,6 +29,7 @@ import hashlib
 from collections import OrderedDict
 import json
 import logging
+import os
 import re
 import threading
 import time as _time_mod
@@ -1108,10 +1109,8 @@ def resolve_value(dataset_id: str, term: str, limit: int = 5,
     return [_value_hit(r) for r in rows[:limit]]
 
 
-def _fuzzy_value(dataset_id: str, norm: str) -> List[dict]:
-    """Close-match a (possibly misspelled) term against the dataset's indexed
-    values using edit-distance ratio. 'paskistan' -> 'Pakistan'."""
-    import difflib
+def _indexed_values(dataset_id: str) -> List[dict]:
+    """Every indexed value of a dataset, from the serving artifact or the index table."""
     if _RETIREMENT_SERVING.get() is not None:
         artifact = _serving_artifact(dataset_id) or {}
         cand = ((artifact.get("compiled_context") or {}).get("values") or [])
@@ -1120,14 +1119,74 @@ def _fuzzy_value(dataset_id: str, norm: str) -> List[dict]:
             "SELECT element_key, value_text, value_norm, key_column, key_value, freq "
             "FROM dlm_value_index WHERE dataset_id = @param0", [dataset_id])
         cand = res.get("rows_objects", res.get("rows", []))
+    return [c for c in cand if isinstance(c, dict)]
+
+
+def _fuzzy_value(dataset_id: str, norm: str) -> List[dict]:
+    """Close-match a (possibly misspelled) term against the dataset's indexed
+    values using edit-distance ratio. 'paskistan' -> 'Pakistan'."""
+    import difflib
+    cand = _indexed_values(dataset_id)
     if not cand:
         return []
     by_norm = {}
     for c in cand:
-        if isinstance(c, dict):
-            by_norm.setdefault(c.get("value_norm"), c)
+        by_norm.setdefault(c.get("value_norm"), c)
     close = difflib.get_close_matches(norm, [k for k in by_norm if k], n=1, cutoff=0.84)
     return [by_norm[close[0]]] if close else []
+
+
+def _near_score(term: str, value: str) -> float:
+    """How closely a normalized term names a normalized value, word by word:
+    the same stem ("finances" ~ "finance"), one bounded edit (the distance
+    `_fuzzy_question` allows: one for short words, two for long ones), or a
+    shared prefix of at least four letters covering three quarters of the
+    shorter word ("finance" ~ "financial services"). 0 means not close."""
+    words = [value] + (value.split() if " " in value else [])
+    cap = 1 if len(term) < 8 else 2
+    tstem = _stem(term)
+    best = 0.0
+    for w in words:
+        if w == term:
+            return 1.0
+        if len(w) < 4:
+            continue
+        if _stem(w) == tstem:
+            best = max(best, 0.95)
+            continue
+        d = _osa_distance(term, w, cap)
+        if d <= cap:
+            best = max(best, 0.9 - 0.1 * d)
+            continue
+        p = len(os.path.commonprefix([term, w]))
+        if p >= 4 and p >= 0.75 * min(len(term), len(w)):
+            best = max(best, 0.5 + 0.4 * p / max(len(term), len(w)))
+    return best
+
+
+def _near_values(dataset_id: str, term: str, limit: int = 5) -> List[Dict[str, Any]]:
+    """The indexed values a term nearly names, closest first, then most frequent
+    — the candidates a clarification offers when "finance" resolves to nothing
+    but Financial Services is one edit-and-a-suffix away. One entry per
+    (value, column); empty when nothing is close."""
+    norm = _normalize(term)
+    norm = _VALUE_ALIASES.get(norm, norm)
+    if len(norm) < 4:
+        return []
+    scored: List[tuple] = []
+    seen: set = set()
+    for r in _indexed_values(dataset_id):
+        vn = str(r.get("value_norm") or "")
+        hit = _value_hit(r)
+        key = (vn, _hit_column(hit))
+        if not vn or key in seen:
+            continue
+        seen.add(key)
+        s = _near_score(norm, vn)
+        if s > 0:
+            scored.append((-s, -_num(r.get("freq")), len(scored), hit))
+    scored.sort(key=lambda t: t[:3])
+    return [hit for _s, _f, _i, hit in scored[:limit]]
 
 
 _ROUTE_NOISE = frozenset({"sum", "avg", "count", "total", "max", "min", "the", "of", "by"})
@@ -1631,19 +1690,57 @@ def _rank_metrics(qset: set, metrics: List[dict], extra: Optional[Dict[str, List
     return ranked
 
 
+_BY_PHRASE_RE = re.compile(r"\b(?:by|per|across|for each)\s+([A-Za-z][A-Za-z ,&]*)", re.I)
+
+
+def _by_phrase(question: str) -> Optional[str]:
+    """The words after "by" / "per" / "across" / "for each" — what the question
+    wants the answer broken down by, or ordered by."""
+    m = _BY_PHRASE_RE.search(question)
+    return m.group(1) if m else None
+
+
+def _name_tokens(name: str, extra: Optional[Dict[str, List[str]]] = None) -> set:
+    """The tokens that name an element outright: its own words, their stems and
+    its curated aliases — no seed-lexicon synonyms."""
+    toks = set(_tokenize(name))
+    for alias in (extra or {}).get(_normalize(name), []):
+        toks |= set(_tokenize(alias))
+    return toks | {_stem(t) for t in toks}
+
+
+def _names_metric(phrase_tokens: set, metrics: List[dict],
+                  m_alias: Optional[Dict[str, List[str]]] = None) -> bool:
+    """True when the phrase names a measure outright ("by users" against a
+    metric called Users): it is then the ordering key of a ranking, not a
+    grouping. Quantifier words ("total", "count") never name a measure here."""
+    want = {t for t in (phrase_tokens | {_stem(t) for t in phrase_tokens})
+            if t not in _GENERIC_METRIC_TOKENS}
+    for m in metrics:
+        name = m.get("name") or m.get("metric_name") or ""
+        if want & (_name_tokens(name, m_alias) - _GENERIC_METRIC_TOKENS):
+            return True
+    return False
+
+
 def _group_by_candidates(question: str, dims: List[dict],
-                         extra: Optional[Dict[str, List[str]]] = None) -> List[str]:
+                         extra: Optional[Dict[str, List[str]]] = None,
+                         metrics: Optional[List[dict]] = None,
+                         m_alias: Optional[Dict[str, List[str]]] = None) -> List[str]:
     """All dimensions a 'by <x>' phrase could mean, in dataset order.
 
     A dimension named outright in the phrase ("by license") outranks one that
     only a synonym reaches ("segment" through a curated alias), so naming a
-    column never provokes a question. Two dimensions named together ("by
-    platform and deployment") are one two-dimension group, returned as the
-    canonical pair key the precomputed answers use ("deployment|platform")."""
-    m = re.search(r"\b(?:by|per|across|for each)\s+([A-Za-z][A-Za-z ,&]*)", question, re.I)
-    if not m:
+    column never provokes a question. A phrase that names a measure instead
+    ("top 5 countries by users") is the ordering key of a ranking, and no
+    lexicon synonym may turn it into a grouping — "users" used to reach
+    acquisition_channel through the seed entry "acquisition ~ new user". Two
+    dimensions named together ("by platform and deployment") are one
+    two-dimension group, returned as the canonical pair key the precomputed
+    answers use ("deployment|platform")."""
+    phrase = _by_phrase(question)
+    if not phrase:
         return []
-    phrase = m.group(1)
     phrase_tokens = set(_tokenize(phrase))
     target = _expand_tokens(phrase_tokens)
     exact: List[str] = []
@@ -1657,7 +1754,27 @@ def _group_by_candidates(question: str, dims: List[dict],
             loose.append(col)
     if len(exact) == 2 and re.search(r"\band\b|[,&]", phrase, re.I):
         return ["|".join(sorted(exact))]
-    return exact or loose
+    if exact:
+        return exact
+    if metrics and _names_metric(phrase_tokens, metrics, m_alias):
+        return []
+    return loose
+
+
+def _column_named_by(phrase: Optional[str], columns: List[dict]) -> Optional[str]:
+    """A column the phrase names outright — used to tell a user that "by
+    locale" points at a column of the dataset that is not one of its dimensions,
+    rather than pretending the phrase was never there."""
+    if not phrase:
+        return None
+    named = set(_tokenize(phrase))
+    named |= {_stem(t) for t in named}
+    for c in columns:
+        col = c.get("column_name") or c.get("name") or ""
+        own = set(_tokenize(col))
+        if own and (own <= named or {_stem(t) for t in own} <= named):
+            return col
+    return None
 
 
 def _group_cols(group_col: Optional[str]) -> List[str]:
@@ -1736,7 +1853,10 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
     # 1) entity filters from the value index (e.g. "india" -> country='India').
     #    A value that lives in more than one column is a question, not a guess.
     ambiguous: List[Dict[str, Any]] = []
-    filters = _resolve_entity_filters(dataset_id, question, choices=choices, ambiguous=ambiguous)
+    consumed: set = set()
+    unapplied: List[Dict[str, Any]] = []
+    filters = _resolve_entity_filters(dataset_id, question, choices=choices, ambiguous=ambiguous,
+                                      matched=consumed, unapplied=unapplied)
     if ambiguous:
         amb = ambiguous[0]
         cols = amb["columns"]
@@ -1748,17 +1868,50 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
         carried = [f for f in frame["filters"] if isinstance(f, dict) and f.get("column")
                    and not any(n.get("column") == f.get("column") for n in filters)]
         filters = carried + filters
+    consumed |= {_normalize(f.get("value")) for f in filters if f.get("value")}
 
-    # 1b) detect unresolved entity phrases — if the question says "in <X>" or
-    #     "for <X>" but <X> didn't match any value, warn the user instead of
-    #     silently ignoring the filter and returning unfiltered results.
-    unresolved_entity = None
-    if not filters:
-        ent_m = re.search(r"\b(?:in|for)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b", question)
-        if ent_m:
-            candidate = ent_m.group(1)
-            if candidate.lower() not in _STOPWORDS and len(candidate) >= 3:
-                unresolved_entity = candidate
+    # 1b) words that look like a filter but resolved to nothing ("desktop users
+    #     in finance") are never dropped silently. A near miss of an indexed
+    #     value is a question with the closest values as options; a word with
+    #     nothing close is left out and the answer says so. A choice pins
+    #     either a "column=value" filter or "skip".
+    notes: List[str] = []
+    for extra_value in unapplied:
+        applied = [str(f.get("value")) for f in filters if f.get("column") in extra_value["columns"]]
+        notes.append(f'"{extra_value["value"]}" is a second {" / ".join(extra_value["columns"])} value; '
+                     f'one value per dimension is applied ({", ".join(applied)}).')
+    dim_names = [d.get("column_name") or d.get("name") for d in dims if d.get("column_name") or d.get("name")]
+    metric_name_tokens: set = set()
+    for m in metrics:
+        metric_name_tokens |= _name_tokens(m.get("name") or m.get("metric_name") or "", m_alias)
+    metric_name_tokens -= _GENERIC_METRIC_TOKENS
+    vocabulary = _dataset_vocabulary(metrics, dims, m_alias, d_alias) | set(_tokenize(ds.get("dataset_name") or ds.get("name") or ""))
+    for c in columns:
+        vocabulary |= set(_tokenize(c.get("column_name") or c.get("name") or ""))
+    pinned_phrase = str(choices.get("value_phrase") or "").lower()
+    pinned_value = str(choices.get("value") or "")
+    for term in _unresolved_terms(_strip_time_phrases(question), consumed, vocabulary, metric_name_tokens):
+        if term.lower() == pinned_phrase and pinned_value:
+            if pinned_value == "skip":
+                notes.append(f'"{term}" was left out of the answer.')
+            elif "=" in pinned_value:
+                col, val = pinned_value.split("=", 1)
+                if col and val and not any(f.get("column") == col for f in filters):
+                    filters.append({"column": col, "value": val, "element_key": None})
+            continue
+        near = _near_values(dataset_id, term)
+        if near:
+            options = [{"id": f"{_hit_column(h)}={h.get('key_value') or h.get('value')}",
+                        "label": f"{_hit_column(h)} = {h.get('value') or h.get('key_value')}", "description": ""}
+                       for h in near]
+            options.append({"id": "skip", "label": f'Leave "{term}" out', "description": ""})
+            closest = ", ".join(str(h.get("value") or h.get("key_value")) for h in near[:3])
+            scope = f" of {', '.join(dim_names)}" if dim_names else ""
+            return _clarify("value", f'"{term}" is not a value{scope} — did you mean {closest}?',
+                            options, original_question, dict(choices, value_phrase=term.lower()),
+                            dataset_id, ds, t0)
+        notes.append(f'"{term}" matched no value' + (f" of {', '.join(dim_names)}" if dim_names else "")
+                     + " and was left out of the answer.")
 
     # 2) metric — curated aliases + default metric; generic quantifier words ignored.
     #    A tie between named metrics is a question for the user, not a coin flip.
@@ -1782,7 +1935,9 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
         metric = _match_metric(qset, metrics, m_alias, spec.get("default_metric"))
 
     # 3) group-by dimension ("... by country") — several matches is a question too
-    candidates = _group_by_candidates(question, dims, d_alias)
+    #    A "by" phrase that names the measure ("top 5 countries by users") is an
+    #    ordering, and the dimension is the one named elsewhere in the question.
+    candidates = _group_by_candidates(question, dims, d_alias, metrics, m_alias)
     if choices.get("dimension") and choices["dimension"] in candidates:
         group_col = choices["dimension"]
     elif len(candidates) > 1:
@@ -1791,26 +1946,30 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
                         original_question, choices, dataset_id, ds, t0)
     else:
         group_col = candidates[0] if candidates else None
+    metric_words = {t for t in _tokenize(question)
+                    if t in metric_name_tokens or _stem(t) in metric_name_tokens}
 
-    # 3b) top-N ("top 10 countries by consumption") — sets the row limit and, if
-    #     no explicit "by <dim>", groups by the dimension named in the question.
+    # 3b) ranking — "top 10", "bottom 5", "lowest 3", a bare "top", or a
+    #     superlative ("which country has the most") — sets the order and the
+    #     row limit and, with no explicit "by <dim>", groups by the dimension
+    #     named in the question.
     top_n = None
-    mtop = re.search(r"\btop\s+(\d+)\b", question, re.I)
+    mtop = re.search(r"\b(?:top|bottom|highest|lowest|largest|smallest|biggest|fewest)\s+(\d+)\b", question, re.I)
     if mtop:
         top_n = int(mtop.group(1))
-    elif re.search(r"\btop\b", question, re.I):
+    elif re.search(r"\b(?:top|bottom)\b", question, re.I):
         top_n = 10  # "top models" without a number → default 10
     # Superlative → top 1 ("which country has the most", "highest scoring model")
     if not top_n and re.search(r"\b(which|what)\b.*\b(most|highest|largest|biggest|greatest|lowest|least|fewest|smallest)\b", question, re.I):
         top_n = 1
     if top_n:
         if not group_col:
-            group_col = _match_any_dim(question, dims, d_alias)
+            group_col = _match_any_dim(question, dims, d_alias, exclude=metric_words)
     # If "by <metric>" was parsed but didn't match a dimension, also try
     # matching a dimension anywhere in the question (e.g. "top models by ELO")
     wanted_groupby = bool(re.search(r"\b(?:by|per|across|for each)\b", question, re.I))
     if not group_col and wanted_groupby:
-        group_col = _match_any_dim(question, dims, d_alias)
+        group_col = _match_any_dim(question, dims, d_alias, exclude=metric_words)
     if not group_col and follow_up and frame and frame.get("group_col") and not wanted_groupby:
         group_col = frame["group_col"] if any((d.get("column_name") or d.get("name")) == frame["group_col"] for d in dims) else None
     if not top_n and follow_up and frame and frame.get("top_n"):
@@ -1820,21 +1979,23 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
     # "lowest latency platform" / "highest error region": a superlative with a
     # dimension in the sentence is a top-1 over that dimension.
     if not group_col and not top_n and re.search(r"\b(lowest|least|fewest|smallest|highest|most|largest|biggest|greatest)\b", question, re.I):
-        group_col = _match_any_dim(question, dims, d_alias)
+        group_col = _match_any_dim(question, dims, d_alias, exclude=metric_words)
         if group_col:
             top_n = 1
     limit_n = top_n or limit
 
-    note = None
-    if unresolved_entity:
-        dim_names = [d.get("column_name") or d.get("name") for d in dims if d.get("column_name") or d.get("name")]
-        note = f'"{unresolved_entity}" not found in this dataset\'s values.' + (
-            f" Available dimensions: {', '.join(dim_names)}." if dim_names else "")
-    # If the user asked for a breakdown but no dimension matched, note it
+    # The user asked for a breakdown and got none: say what the phrase hit — a
+    # column of the dataset that is not one of its dimensions ("by locale"),
+    # or nothing at all — and what the dimensions are.
     if wanted_groupby and not group_col:
-        dim_names = [d.get("column_name") or d.get("name") for d in dims if d.get("column_name") or d.get("name")]
-        if dim_names:
-            note = f"No matching breakdown found. Available dimensions: {', '.join(dim_names)}."
+        by_column = _column_named_by(_by_phrase(question), columns)
+        dataset_label = ds.get("dataset_name") or ds.get("name") or "this dataset"
+        available = f" Dimensions: {', '.join(dim_names)}." if dim_names else ""
+        if by_column and by_column not in dim_names:
+            notes.append(f"{by_column} is a column of {dataset_label} but not one of its dimensions, "
+                         f"so the answer is not broken down by it.{available}")
+        elif dim_names:
+            notes.append(f"No dimension matches the requested breakdown.{available}")
 
     # 4) year filter, optionally narrowed to a named month ("July 2026")
     year = _extract_year(question)
@@ -1861,16 +2022,18 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
     #     (for these entity filters), answer with the latest available year and
     #     say so, instead of returning an empty result for a future/missing year.
     metric_name = (metric or {}).get("name") or "Count"
+    year_shifted = False
     if year and metric:
         lo, hi = _cell_year_bounds(dataset_id, metric_name, date_column, filters)
         if lo is None:
             lo, hi = _metric_year_bounds(database, schema, fact, date_column, metric, columns, filters)
         if hi is not None and year > hi:
-            note = f"No data for {year} yet — showing the latest available ({hi}) for {metric_name}."
-            year = hi
+            notes.append(f"No data for {year} yet — showing the latest available ({hi}) for {metric_name}.")
+            year, year_shifted = hi, True
         elif lo is not None and year < lo:
-            note = f"No data for {year} — {metric_name} data starts in {lo}; showing {lo}."
-            year = lo
+            notes.append(f"No data for {year} — {metric_name} data starts in {lo}; showing {lo}.")
+            year, year_shifted = lo, True
+    note = " ".join(notes) or None
 
     # 5) trend detection — "trend over time" / "by year" → time-series line
     is_trend = bool(re.search(r"\b(trend|over time|by year|by month|yearly|monthly|over the years)\b", question, re.I))
@@ -1878,6 +2041,16 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
     if is_trend and date_column and not group_col:
         time_group = date_column
         year = None  # don't filter by year when showing trend
+
+    def _finish(served: Dict[str, Any]) -> Dict[str, Any]:
+        """Every answer leaves through here: the ranking title, the notes the
+        question earned, the frame a follow-up inherits, and the timing."""
+        served["title"] = _ranked_title(served.get("title") or metric_name, metric_name, group_col, top_n, sort_asc)
+        if note:
+            served["note"] = f"{served['note']} {note}" if served.get("note") else note
+        served["frame"] = _frame(dataset_id, metric_name, group_col, filters, year, relative_time, top_n, sort_asc)
+        served["duration_ms"] = round((_time_mod.monotonic() - t0) * 1000, 1)
+        return served
 
     # ── answer from context (precomputed) — NO database trip ─────────────────
     # Totals, single-dimension breakdowns, and single-dimension equality filters
@@ -1887,11 +2060,7 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
         served = _serve_from_context(dataset_id, ds, metric_name, group_col, top_n,
                                      filters, routed_entry, sort_asc=sort_asc)
         if served is not None:
-            if note:
-                served["note"] = note
-            served["frame"] = _frame(dataset_id, metric_name, group_col, filters, year, relative_time, top_n, sort_asc)
-            served["duration_ms"] = round((_time_mod.monotonic() - t0) * 1000, 1)
-            return served
+            return _finish(served)
 
         # exact combo not materialized → for a non-additive COUNT(DISTINCT) metric,
         # answer approximately from the HLL sketch cuboid (register union, no scan)
@@ -1900,9 +2069,7 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
             sketched = _serve_sketch(dataset_id, ds, metric_name, group_col, top_n,
                                      filters, routed_entry)
             if sketched is not None:
-                sketched["frame"] = _frame(dataset_id, metric_name, group_col, filters, year, relative_time, top_n, sort_asc)
-                sketched["duration_ms"] = round((_time_mod.monotonic() - t0) * 1000, 1)
-                return sketched
+                return _finish(sketched)
 
     # ── time windows and trends from the day cells — still no database trip ──
     if (time_group or year or relative_time) and metric and date_column \
@@ -1911,11 +2078,7 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
                                     year, relative_time, time_group, question, top_n, sort_asc,
                                     round(routed_entry.get("score", 0.0), 3), month=month)
         if served is not None:
-            if note:
-                served["note"] = note
-            served["frame"] = _frame(dataset_id, metric_name, group_col, filters, year, relative_time, top_n, sort_asc)
-            served["duration_ms"] = round((_time_mod.monotonic() - t0) * 1000, 1)
-            return served
+            return _finish(served)
 
     # ── assemble (live query path) ───────────────────────────────────────────
     metric_expr = (metric or {}).get("expression") or "COUNT(*)"
@@ -1964,7 +2127,7 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
         ctx_bits.append(rt_label)
     if ctx_bits:
         title += " — " + ", ".join(str(b) for b in ctx_bits)
-    if note:
+    if year_shifted:
         title += " (latest available)"
 
     # A native KaveonDB catalog is executed through /sql/engine with the
@@ -1974,7 +2137,7 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
     if engine:
         sql = re.sub(r'"([A-Za-z_][A-Za-z0-9_]*)"', r'\1', sql)
 
-    return {
+    return _finish({
         "ok": True,
         "dataset_id": dataset_id,
         "dataset_name": ds.get("dataset_name") or ds.get("name"),
@@ -1991,14 +2154,29 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
         "columns": group_cols + [metric_name],
         "filters": filters,
         "year": year,
-        "note": note,
+        "note": None,
         # what we already know from context — shown instantly while the live
         # query fetches the exact (multi-filter / combo) figure.
         "context_hints": _context_hints(dataset_id, metric_name, filters),
         "confidence": round(routed_entry.get("score", 0.0), 3),
-        "frame": _frame(dataset_id, metric_name, group_col, filters, year, relative_time, top_n, sort_asc),
-        "duration_ms": round((_time_mod.monotonic() - t0) * 1000, 1),
-    }
+    })
+
+
+def _ranked_title(title: str, metric_name: str, group_col: Optional[str],
+                  top_n: Optional[int], sort_asc: bool) -> str:
+    """A ranking reads as one: "Users by country" becomes "Top 5 country by
+    Users" (or "Bottom 5 …", "Highest …" / "Lowest …" for a single row) whenever
+    the question set a limit over a grouping. Any subtitle stays attached."""
+    if not top_n or not group_col:
+        return title
+    head = f"{metric_name} by {' and '.join(_group_cols(group_col))}"
+    if not title.startswith(head):
+        return title
+    if int(top_n) == 1:
+        lead = "Lowest" if sort_asc else "Highest"
+        return f"{lead} {head}{title[len(head):]}"
+    lead = "Bottom" if sort_asc else "Top"
+    return f"{lead} {int(top_n)} {' and '.join(_group_cols(group_col))} by {metric_name}{title[len(head):]}"
 
 
 def _frame(dataset_id: str, metric: str, group_col: Optional[str], filters: List[Dict[str, Any]],
@@ -2593,8 +2771,11 @@ def _serve_from_context(dataset_id: str, ds: dict, metric_name: str, group_col: 
         if ctx is None:
             return None
         rows = ctx["rows"]
-        if group_col and sort_asc:
-            rows = sorted(rows, key=lambda r: (r[-1] is None, r[-1]))
+        # The cells are stored in the first metric's order; a ranking over any
+        # metric orders by the one asked for before it slices.
+        if group_col and (sort_asc or top_n):
+            sign = 1 if sort_asc else -1
+            rows = sorted(rows, key=lambda r: (r[-1] is None, sign * _num(r[-1]) if r[-1] is not None else 0))
         if group_col and top_n:
             rows = rows[:int(top_n)]
         return _ctx_response(dataset_id, dataset_name, metric_name, group_col, ctx["columns"], rows, conf)
@@ -3725,12 +3906,17 @@ def _hit_column(hit: Dict[str, Any]) -> Optional[str]:
 
 
 def _resolve_entity_filters(dataset_id: str, question: str, choices: Optional[Dict[str, str]] = None,
-                            ambiguous: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+                            ambiguous: Optional[List[Dict[str, Any]]] = None,
+                            matched: Optional[set] = None,
+                            unapplied: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     """Resolve value phrases in the question to (column, value) filters via the
     value index. Longest n-grams first so "United States" wins over "United".
     One filter per column. A value indexed under several columns ("Enterprise"
     as a license, a segment and a team size) is appended to `ambiguous` and
-    left unfiltered unless `choices` pins the column for it."""
+    left unfiltered unless `choices` pins the column for it; a further value of
+    a column already filtered ("Germany and France") goes to `unapplied`. Every
+    phrase the index recognised is added lower-cased to `matched`, so the
+    caller can tell which words of the question the answer accounts for."""
     words = re.findall(r"[A-Za-z0-9][A-Za-z0-9&.\-]*", question)
     out: List[Dict[str, Any]] = []
     used_cols: set = set()
@@ -3751,15 +3937,24 @@ def _resolve_entity_filters(dataset_id: str, question: str, choices: Optional[Di
             hits = resolve_value(dataset_id, va.get(phrase.lower(), phrase), limit=8, exact_only=True)
             if not hits:
                 continue
+            if matched is not None:
+                matched.add(phrase.lower())
             columns: List[str] = []
             for hit in hits:
                 c = _hit_column(hit)
                 if c and c not in columns and c not in used_cols:
                     columns.append(c)
             if not columns:
+                # a second value of a column already filtered ("Germany and
+                # France"): recognised, not applied — the caller says so
+                if unapplied is not None:
+                    unapplied.append({"value": phrase, "columns": sorted({_hit_column(h) for h in hits if _hit_column(h)})})
+                for k in range(size):
+                    used_spans.add(i + k)
                 continue
             if len(columns) > 1:
                 pinned = choices.get("value") if choices.get("value_phrase") == phrase.lower() else None
+                pinned = str(pinned).split("=", 1)[0] if pinned else None
                 if pinned in columns:
                     columns = [pinned]
                 else:
@@ -3778,6 +3973,58 @@ def _resolve_entity_filters(dataset_id: str, question: str, choices: Optional[Di
             out.append({"column": col, "value": h.get("key_value") or h.get("value"),
                         "element_key": h.get("element_key")})
     return out
+
+
+_FILTER_PREPOSITION_RE = re.compile(
+    r"\b(?:in|for|from|within|at|with)\s+(?:(?:the|a|an)\s+)?([A-Za-z][A-Za-z&.\-]*(?:\s+[A-Za-z][A-Za-z&.\-]*){0,2})",
+    re.I)
+_RANKING_WORDS = frozenset({
+    "top", "bottom", "highest", "lowest", "most", "least", "fewest", "largest", "smallest",
+    "biggest", "greatest", "best", "worst", "first", "last", "which", "there", "many", "much",
+    "please", "only", "just", "also", "about", "compared", "compare", "breakdown", "split",
+})
+
+
+def _unresolved_terms(question: str, consumed: set, vocabulary: set,
+                      metric_tokens: set) -> List[str]:
+    """The words of a question that look like a filter but resolved to nothing:
+    the object of a filter preposition ("desktop users *in finance*") and a
+    qualifier right before the measure's name ("*finance* users"). A phrase is
+    trimmed at the first word the dataset already accounts for — a value the
+    index matched, a metric, dimension or column name, a stopword — so "in the
+    finance sector" yields "finance" and "users by platform in Europe" nothing."""
+    known = set(consumed) | vocabulary | _STOPWORDS | _GENERIC_METRIC_TOKENS | _RANKING_WORDS
+    known_stems = {_stem(t) for t in known}
+    heads = [t for t in vocabulary if len(t) >= 3]
+
+    def accounted(word: str) -> bool:
+        w = _normalize(word)
+        return (not w or w.isdigit() or len(w) < 3 or w in known or _stem(w) in known_stems
+                or any(w in c.split() for c in consumed)
+                or any(w.startswith(h) for h in heads))   # "seconds" against a metric's "sec"
+
+    found: List[str] = []
+
+    def add(words: List[str]) -> None:
+        phrase = " ".join(words)
+        if phrase and phrase.lower() not in consumed and phrase.lower() not in {f.lower() for f in found}:
+            found.append(phrase)
+
+    for m in _FILTER_PREPOSITION_RE.finditer(question):
+        kept: List[str] = []
+        for w in m.group(1).split():
+            if accounted(w):
+                break
+            kept.append(w)
+        if kept:
+            add(kept)
+    words = re.findall(r"[A-Za-z][A-Za-z&.\-]*", question)
+    for i in range(1, len(words)):
+        w = _normalize(words[i])
+        if (w in metric_tokens or _stem(w) in metric_tokens) and not accounted(words[i - 1]) \
+                and len(words[i - 1]) >= 4 and words[i - 1].isalpha():
+            add([words[i - 1]])
+    return found
 
 
 # Generic quantifier words that must not sway metric matching. They appear in
@@ -3869,22 +4116,30 @@ def _match_group_by(question: str, dims: List[dict],
 
 
 def _match_any_dim(question: str, dims: List[dict],
-                   extra: Optional[Dict[str, List[str]]] = None) -> Optional[str]:
+                   extra: Optional[Dict[str, List[str]]] = None,
+                   exclude: Optional[set] = None) -> Optional[str]:
     """Find a dimension named anywhere in the question. Handles plurals ('orgs'
-    -> org, 'countries' -> country) and typos via singular-strip + 4-char prefix."""
-    qt = _expand_tokens(set(_normalize(t) for t in _tokenize(question)))
-    for d in dims:
-        col = (d.get("column_name") or d.get("name") or "").strip()
-        cn = _normalize(col)
-        if not cn:
-            continue
-        col_toks = _expand_tokens({cn} | set(_syn(col, extra)))
-        if qt & col_toks:
+    -> org, 'countries' -> country) and typos via singular-strip + 4-char prefix.
+
+    A dimension named outright (its own words or a curated alias) wins over one
+    only a lexicon synonym reaches, which wins over a prefix guess — so "top 5
+    countries by users" is country, never a dimension whose synonyms happen to
+    contain "user". `exclude` drops the tokens that already named the measure."""
+    words = {_normalize(t) for t in _tokenize(question)} - set(exclude or ())
+    named = words | {_stem(t) for t in words}
+    qt = _expand_tokens(words)
+    cols = [c for c in ((d.get("column_name") or d.get("name") or "").strip() for d in dims)
+            if _normalize(c)]
+    for col in cols:
+        if named & _name_tokens(col, extra):
             return col
-        if len(cn) >= 4:
-            for tn in qt:
-                if len(tn) >= 4 and tn[:4] == cn[:4]:
-                    return col
+    for col in cols:
+        if qt & _expand_tokens({_normalize(col)} | set(_syn(col, extra))):
+            return col
+    for col in cols:
+        cn = _normalize(col)
+        if len(cn) >= 4 and any(len(tn) >= 4 and tn[:4] == cn[:4] for tn in qt):
+            return col
     return None
 
 
