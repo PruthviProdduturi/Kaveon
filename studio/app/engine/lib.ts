@@ -65,6 +65,8 @@ export interface QueryTimings {
 
 export interface ScanTelemetry {
   files_considered: number; files_opened: number;
+  /** Files of a partitioned directory table the predicate ruled out by their path values before any opened. */
+  files_pruned_by_partition?: number;
   row_groups_considered: number; row_groups_read: number; row_groups_pruned: number;
   rows_selected: number; rows_emitted: number;
   compressed_bytes_selected: number;

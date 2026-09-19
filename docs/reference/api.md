@@ -195,7 +195,7 @@ DROP CATALOG [IF EXISTS] name [CASCADE | RESTRICT]
 CREATE SCHEMA [IF NOT EXISTS] [catalog.]schema
 DROP SCHEMA [IF EXISTS] [catalog.]schema [CASCADE | RESTRICT]
 CREATE TABLE [IF NOT EXISTS] [catalog.][schema.]table [(column type [NOT NULL], …)]
-    WITH (location = '<path within the catalog root>', format = 'parquet' | 'delta' | 'iceberg' [, access = 'shortcut' | 'optimized'])
+    WITH (location = '<path within the catalog root>', format = 'parquet' | 'delta' | 'iceberg' [, access = 'shortcut' | 'optimized'] [, partitioned_by = ARRAY['key', …]])
 CALL [catalog.]system.register_table(schema_name => '…', table_name => '…', table_location => '…' [, format => 'delta'])
 CALL [catalog.]system.unregister_table(schema_name => '…', table_name => '…')
 ALTER TABLE [IF EXISTS] [catalog.][schema.]table SET LOCATION '<path>'
@@ -223,6 +223,20 @@ SHOW COLUMNS FROM [catalog.][schema.]table
   `decimal(p, s)`) and the Arrow names (`Int64`, `Utf8`, …), which is what
   `SHOW CREATE TABLE` and `DESCRIBE` present, so their output registers the
   same table again.
+- **Partition columns.** A Parquet directory in the Hive layout
+  (`dt=2026-09-01/region=eu/part-0.parquet`) has its `key=value` keys as
+  columns after the file columns, typed by inference from the values
+  (`bigint`, `date`, else `varchar`; `__HIVE_DEFAULT_PARTITION__` is NULL).
+  `partitioned_by = ARRAY['dt', 'region']` declares them — each must be in
+  the column list when one is given, which is how a key's type is declared
+  (`dt VARCHAR` reads a date key as text) — and must name exactly the path's
+  keys in their order. A directory whose paths carry keys is recorded as
+  partitioned either way, and `SHOW CREATE TABLE` renders the option. The
+  option is refused for Delta and Iceberg. Every file must lie under the
+  same keys at the same depth, and a key must not also be a column inside
+  the files; both fail the probe naming the file. See
+  [Storage and catalogs](../engine/storage-and-catalogs.md#partition-columns)
+  for the read and pruning rule.
 - **Verification.** A table is created as a `Draft` (revision 1), its
   location is probed, and only a readable location becomes `Active`
   (revision 2). A failed probe deletes the draft and the statement fails with
