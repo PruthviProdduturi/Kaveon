@@ -117,9 +117,23 @@ export interface PlanNode {
 }
 
 /** Where KaveonDB ran the query: on the workers, on the coordinator and why, or from the result cache. */
+/** One result that is an estimate from a sketch: the function and argument as written, the sketch, and the error it states — HyperLogLog's relative standard error, or KLL's normalized rank error. Zero when the statistics held an exact count. */
+export interface ApproximateNote {
+  function: string;
+  argument: string;
+  sketch: string;
+  error: number;
+  error_kind: "relative_standard_error" | "rank_error";
+}
+
 export interface ExecutionPlacement {
-  mode: "pending" | "distributed" | "coordinator" | "cache";
+  mode: "pending" | "distributed" | "coordinator" | "cache" | "context";
   detail?: string;
+  /** For a `context` answer: the source version the statistics describe and the one the statement observed — equal by construction. */
+  source_version?: { identity_sha256: string; kind: string; [key: string]: unknown };
+  current_source_version?: { identity_sha256: string; kind: string; [key: string]: unknown };
+  /** The results that are estimates from sketches; absent when every result is exact. */
+  approximate?: ApproximateNote[];
 }
 
 /** What the statement set for itself; the Engine serialises it only when something was set. */
@@ -128,6 +142,10 @@ export interface QuerySettings {
   local_parallelism?: number;
   result_cache?: boolean;
   admission_wait_seconds?: number;
+  /** Plain COUNT(DISTINCT) answered from a HyperLogLog sketch, as APPROX_COUNT_DISTINCT would. */
+  approximate?: boolean;
+  /** `false`: no answer from statistics or sketches; the rows are read. */
+  use_statistics?: boolean;
 }
 
 export interface QueryRecord {
