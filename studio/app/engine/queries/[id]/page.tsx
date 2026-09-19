@@ -235,6 +235,7 @@ export default function EngineQueryPage() {
                           ["Files pruned by partition", String(sc.files_pruned_by_partition ?? 0)],
                           ["Row groups read", `${sc.row_groups_read} / ${sc.row_groups_considered}`],
                           ["Row groups pruned", String(sc.row_groups_pruned)],
+                          ["Row groups pruned by Bloom filter", sc.bloom_filters_read ? `${sc.row_groups_pruned_by_bloom ?? 0}, ${sc.bloom_filters_read} filters (${bytes(sc.bloom_filter_bytes_read ?? 0)})` : "0"],
                           ["Rows emitted", sc.rows_emitted.toLocaleString()],
                           ["Rows in selected groups", sc.rows_selected.toLocaleString()],
                           ["Compressed data read", bytes(sc.compressed_bytes_selected)],

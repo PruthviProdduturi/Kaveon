@@ -4,7 +4,9 @@ Arrow `RecordBatch` is the execution unit. Storage exposes streaming readers
 with strict projection validation: unknown, empty, or duplicate columns
 fail. Storage predicates conservatively eliminate Parquet row groups on
 footer statistics (including byte-array statistics a writer marked inexact,
-which the format still defines as bounds) while execution filters preserve
+which the format still defines as bounds) and, for an equality on a column
+that carries one, on Bloom filters; a row filter over the offset index
+skips the pages a selection never reaches; execution filters preserve
 row-level correctness. Narrow integers are presented at computing widths and
 dictionary-encoded string columns are carried as dictionaries end to end,
 so predicates, functions and group keys run once per dictionary value.
@@ -13,7 +15,7 @@ so predicates, functions and group keys run once per dictionary value.
 
 | Format | Where | What is read | Refused by name |
 |---|---|---|---|
-| Parquet | local disk, ADLS Gen2 (`abfss://`), S3 (`s3://`, not qualified) | One object per table; projection, row-group pruning, parallel decoder lanes for large ADLS objects (`KAVEON_SCAN_PARALLELISM`), full-object and decoded-batch caches under the pinned identity | — |
+| Parquet | local disk, ADLS Gen2 (`abfss://`), S3 (`s3://`, not qualified) | One object per table; projection, row-group pruning by statistics and Bloom filters, page skipping over the offset index, parallel decoder lanes for large ADLS objects (`KAVEON_SCAN_PARALLELISM`), full-object and decoded-batch caches under the pinned identity; written in the [clustered layout](#layout) by `OPTIMIZE` | — |
 | Delta Lake | local disk, ADLS Gen2 | The snapshot at one pinned version from the JSON commits and v1 checkpoints (classic and multipart); active files become deterministic scan partitions; the version is pinned per query so retries and joins read the same snapshot. This is the multi-file table on object storage today: TPC-H SF100 is generated as Delta for both engines | Reader protocol v2 (column mapping, deletion vectors, table features), v2 checkpoint sidecars, unsupported logical types |
 | Iceberg | local disk, ADLS Gen2 | v1/v2 snapshots from an immutable metadata JSON pointer with field-ID projection and type promotion | Delete manifests, equality/position deletes, encrypted tables, name mapping |
 | Parquet directory | local disk, ADLS Gen2, S3 | A directory of Parquet files (the Hive/Spark layout) listed once per scan under one visibility rule, files spread over the scan partitions by size, one schema checked file by file; `key=value` directories are partition columns (Hive default partition is NULL, types inferred or declared) read as constant columns and pruned by the scan predicate before any file is opened | A mixed layout (files under different keys or depths), a key that is also a file column, a stray file of another extension |
@@ -112,6 +114,111 @@ applied while listing, before any file is opened:
 
 Not partitioning: a Delta or Iceberg table's partition columns come from
 its own metadata, and `partitioned_by` is refused for those formats.
+
+## Layout
+
+The Engine reads better than most writers lay data out: a table written as
+one file of million-row row groups without a page index still touches
+every row group for a filter on a column that looks clustered. A table
+definition can carry a **layout** — `WITH (clustered_by = ARRAY['a', 'b'],
+bloom = ARRAY['c'])`, or `ALTER TABLE … SET CLUSTERED BY (a, b)` — and
+`OPTIMIZE` rewrites the table's files in it. Three readers prune by it: the
+local file reader, the ADLS reader and the generic object-store reader all
+apply the same three steps to every file they open.
+
+What `OPTIMIZE` writes (`kaveon_storage::clustered_writer`), and why:
+
+| Property | Value | What it buys |
+|---|---|---|
+| Row order | sorted by the clustering columns, ascending, NULLs last, within every file; the writer verifies the order row by row and refuses an out-of-order batch | a row group's min/max span a narrow key range, so the statistics pruning every reader already does drops the groups a point or range filter cannot touch |
+| Row groups | closed at 128 MiB of encoded bytes or 1 M rows, whichever first (`OPTIMIZE … WITH (row_group_bytes = …, row_group_rows = …)`) | the unit the readers prune by; Spark's and Trino's size, so a rewritten table is no worse for another engine |
+| Files | closed at the first row-group boundary past 1 GiB (`file_bytes = …`); a single-file table stays one file under its name | whole files spread over scan partitions by size |
+| Page index | column index and offset index on every column, pages of 20 000 rows or 1 MiB | a row filter reads only the pages the selection touches; over an object store the offset index is what late materialisation fetches by |
+| Bloom filters | one per row group on every clustering column and every `bloom` column, false-positive rate 0.01, sized for the row-group row cap | a point lookup (`=`, `IN`) on a column the statistics cannot narrow — a high-cardinality key scattered over the file — rejects the row groups that do not hold the value |
+| Encoding | dictionary encoding, page statistics, ZSTD level 3, Parquet 2.0 | the dictionary-aware predicates and the columnar aggregate's arena keys run over dictionaries |
+| Footer | `sorting_columns` per row group, `created_by = kaveon-storage <version>`, key-value `kaveon.layout.clustered_by` | another engine sees the order; the Engine sees the layout a file was written in |
+
+How the readers use it, per file, before any data page is read:
+
+1. **Statistics.** Row groups whose column min/max exclude the predicate
+   are dropped (`row_groups_pruned`).
+2. **Bloom filters.** For every remaining row group, the columns the
+   predicate compares for equality (`=`, `IN`, under `AND`/`OR`) that
+   carry a filter are probed — one filter per column per row group, the
+   local reader from the file, the object readers by one range request
+   each — and a row group whose filter does not know the value is dropped
+   (`row_groups_pruned_by_bloom`, `bloom_filters_read`,
+   `bloom_filter_bytes_read`). A value is hashed as the column's physical
+   type stores it: a literal an `INT32` column cannot hold is absent, a
+   `DOUBLE` literal is probed against a `FLOAT` column only when it
+   narrows exactly. `INT96`, fixed-length and decimal columns are not
+   probed. `NOT`, `IS NULL` and `LIKE` do not consult a filter.
+3. **Pages.** With a predicate, the page index is loaded (the local reader
+   loads it when every column chunk carries an offset index; parquet-rs
+   cannot load a column index without one) and the decoder's row filter
+   skips the pages the selection never touches: `compressed_bytes_read`
+   falls below `compressed_bytes_selected` by what was left unread.
+
+The measured skip, from the storage crate's proof
+(`a_clustered_layout_reads_fewer_row_groups_pages_and_bytes_than_the_same_rows_unclustered`,
+`bloom_filters_prune_the_row_groups_the_statistics_keep`): 2 M rows in
+8 row groups clustered by a key against the same rows written the way
+`hits.parquet` is (1 M-row groups, no page index) — a point and a range
+filter select 1 of 8 row groups instead of 2 of 2, examine 250 000 rows
+instead of 2 000 000, select 1.45 MB instead of 23.1 MB and fetch 0.78–0.80
+MB instead of 23.1 MB through the object reader's offset index; 800 000 rows
+in 8 row groups with a Bloom column whose values are scattered over every
+row group — the statistics keep 8 of 8 for `user = …`, `tag IN (…)` and
+`user = … AND value >= 0`, the Bloom filters prune 7 (8 filters, 1.0 MB
+read), and 100 000 rows are examined instead of 800 000. Unit tests, not
+benchmarks: they prove the skip, not a speed.
+
+`OPTIMIZE [catalog.][schema.]table [WITH (…)] [WHERE predicate]` (admin
+role) rewrites a **Parquet** table in its layout and answers one row —
+`files_replaced`, `files_written`, `rows`, `row_groups`, `bytes_before`,
+`bytes_after`, `clustered_by`, `recovered`:
+
+- *Selection.* `WHERE` selects files, not rows. For a partitioned
+  directory the predicate is folded over the path values first, the way a
+  scan prunes; what it leaves open meets each file's footer statistics. A
+  selected file is rewritten whole; the rest stay as they are, so a table
+  can be clustered a partition or a key range at a time. A predicate the
+  footers cannot evaluate (an expression, an unknown column) is refused.
+- *Sort.* The selected files are read as one source and sorted by the
+  executor's `SortOperator` over the statement's admitted memory and the
+  spill machinery, so a table larger than the memory budget sorts through
+  spill runs. A table with no clustering columns is compacted into the
+  layout without a sort.
+- *Publication, crash-safe.* The new files are staged under
+  `_kaveon_optimize/<id>/` (hidden by the listing rule; the process temp
+  directory for an object store), then: a manifest naming the files to
+  replace and the files written is stored; the new files are renamed into
+  place (local) or uploaded (object store); the replaced files are deleted;
+  the manifest is deleted. A crash before the manifest leaves the table
+  untouched; a crash after it leaves old and new files both visible, and
+  the next `OPTIMIZE` of the table finishes the rewrite when every written
+  file landed (deleting the replaced ones) or rolls it back when one is
+  missing (deleting the ones that landed) — `recovered` counts these — so
+  no row is lost. A query planned while a publication runs may list both
+  sets: a plain Parquet directory has no snapshot to isolate it, which is
+  the cost of the format. One rewrite runs per location at a time
+  (`409 OPTIMIZE_IN_PROGRESS`).
+- *Partitioned directories.* Each partition directory is rewritten as its
+  own group and published on its own, its new files under its own
+  `key=value` path; a rewrite that stops between groups leaves every
+  partition consistent. Clustering by a partition column is refused: it
+  is constant within every file.
+- *Single files.* A single-file table is replaced by one file under its
+  name (one rename or one PUT).
+- *Not rewritten.* A **Delta** or **Iceberg** table is refused by name
+  (`400 OPTIMIZE_UNSUPPORTED`): its files are named by a log the Engine
+  does not write — there is no Delta commit writer — and moving them
+  would leave the log pointing at files that are gone. Their `OPTIMIZE`
+  belongs to the writer that owns the log.
+- *Statistics.* Row counts are unchanged; a table's `ANALYZE` statistics
+  are keyed by the listing digest, so the next planning re-lists the
+  rewritten files. The result cache is keyed by the catalog snapshot and
+  is not cleared: the rows a statement answers are the same.
 
 Files are spread over the scan partitions by size: whole files go to the
 partition with the fewest bytes so far, largest first; if the heaviest

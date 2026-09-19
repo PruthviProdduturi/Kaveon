@@ -143,7 +143,7 @@ The Rust server exposes these routes:
 | `POST` | `/v1/statement` | Parse, bind, plan, execute and retain a query result; inline (up to 16 MiB) or `result_delivery: "paged"` with `next_uri` pages; accepts per-request `settings` and leading `SET SESSION` statements; a parse error is a 400 `SYNTAX_ERROR` whose body carries `position: {line, column}` (one-based) when the parser names the failing token, absent for an error at end of input |
 | `POST` | `/v1/statement` | Parse, bind, plan, execute and retain a query result; inline (up to 16 MiB) or `result_delivery: "paged"` with `next_uri` pages; accepts per-request `settings` and leading `SET SESSION` statements. Also runs [catalog statements](#catalog-statements) (`CREATE`/`DROP`/`ALTER` on the durable catalog, `SHOW`, `DESCRIBE`, `CALL system.register_table`) |
 | `GET` | `/v1/query` | Return up to 100 newest process-local query records, queued and running ones included |
-| `GET` | `/v1/query/{query_id}` | Return retained lifecycle, context, structured logical plan, result, and scan telemetry; while the state is `RUNNING`, `stages` (`completed_tasks`, `tasks`) and `scans` are updated as each distributed task completes, and `scan_metrics_complete` stays `false` until the statement finishes |
+| `GET` | `/v1/query/{query_id}` | Return retained lifecycle, context, structured logical plan, result, and scan telemetry (`scans[]`: files considered, opened and pruned by partition; row groups considered, read, pruned and `row_groups_pruned_by_bloom` with `bloom_filters_read` and `bloom_filter_bytes_read`; rows and compressed bytes selected and read; row-filter rows examined and admitted; lane spread); while the state is `RUNNING`, `stages` (`completed_tasks`, `tasks`) and `scans` are updated as each distributed task completes, and `scan_metrics_complete` stays `false` until the statement finishes |
 | `DELETE` | `/v1/query/{query_id}` | Cancel the query: a queued statement leaves the admission queue at once; a running one propagates cancellation to active worker tasks |
 | `GET` | `/v1/cluster` | Coordinator and discovered-worker state, with each node's memory admission counters (`admission`) as last heartbeated |
 | `GET` | `/v1/node` | Current node information, with the result cache counters on a coordinator and the node's memory admission counters (`admission`) |
@@ -195,10 +195,12 @@ DROP CATALOG [IF EXISTS] name [CASCADE | RESTRICT]
 CREATE SCHEMA [IF NOT EXISTS] [catalog.]schema
 DROP SCHEMA [IF EXISTS] [catalog.]schema [CASCADE | RESTRICT]
 CREATE TABLE [IF NOT EXISTS] [catalog.][schema.]table [(column type [NOT NULL], …)]
-    WITH (location = '<path within the catalog root>', format = 'parquet' | 'delta' | 'iceberg' [, access = 'shortcut' | 'optimized'] [, partitioned_by = ARRAY['key', …]])
+    WITH (location = '<path within the catalog root>', format = 'parquet' | 'delta' | 'iceberg' [, access = 'shortcut' | 'optimized'] [, partitioned_by = ARRAY['key', …]] [, clustered_by = ARRAY['column', …]] [, bloom = ARRAY['column', …]])
 CALL [catalog.]system.register_table(schema_name => '…', table_name => '…', table_location => '…' [, format => 'delta'])
 CALL [catalog.]system.unregister_table(schema_name => '…', table_name => '…')
 ALTER TABLE [IF EXISTS] [catalog.][schema.]table SET LOCATION '<path>'
+ALTER TABLE [IF EXISTS] [catalog.][schema.]table SET CLUSTERED BY (column, …)
+OPTIMIZE [TABLE] [catalog.][schema.]table [WITH (row_group_rows = n, row_group_bytes = n, file_bytes = n)] [WHERE predicate]
 DROP TABLE [IF EXISTS] [catalog.][schema.]table
 SHOW CATALOGS [LIKE 'pattern']
 SHOW SCHEMAS [FROM | IN catalog] [LIKE 'pattern']
@@ -237,6 +239,39 @@ SHOW COLUMNS FROM [catalog.][schema.]table
   the files; both fail the probe naming the file. See
   [Storage and catalogs](../engine/storage-and-catalogs.md#partition-columns)
   for the read and pruning rule.
+- **Layout.** `clustered_by = ARRAY['a', 'b']` records the columns rows are
+  sorted by within every file the Engine writes for the table, and `bloom =
+  ARRAY['c']` the columns that carry a Bloom filter per row group beyond
+  the clustering columns (which always do). Both name columns of the table
+  as resolved — with a column list, declared columns; without one, the
+  source's — and an unknown column is refused by name. `ALTER TABLE … SET
+  CLUSTERED BY (…)` publishes the next revision with another clustering
+  (an empty list clears it; the `bloom` list stays); its result is
+  `clustered`, or `unchanged`. `SHOW CREATE TABLE` renders both options.
+  The layout describes what `OPTIMIZE` writes, not what the files hold: a
+  freshly registered table is not clustered until it is rewritten. See
+  [Layout](../engine/storage-and-catalogs.md#layout).
+- **`OPTIMIZE`** (admin role) rewrites a Parquet table's files in its
+  layout — sorted by the clustering columns, 128 MiB / 1 M-row row groups
+  with a page index and Bloom filters, files of up to 1 GiB — and answers
+  one row: `table, files_replaced, files_written, rows, row_groups,
+  bytes_before, bytes_after, clustered_by, recovered`. `WITH` overrides the
+  sizes (positive integers; `row_group_rows`, `row_group_bytes`,
+  `file_bytes`). `WHERE` selects the files to rewrite by their partition
+  values and footer statistics — a predicate over columns compared with
+  literals, `IN`, `IS [NOT] NULL`, `[NOT] LIKE`, `AND`/`OR`/`NOT` — and a
+  selected file is rewritten whole; a predicate the footers cannot
+  evaluate is 400 `OPTIMIZE_INVALID`. A table without clustering columns is
+  compacted without a sort. The sort runs under the statement's memory
+  admission and spills like any operator. Publication is crash-safe (a
+  manifest, new files into place, old files deleted, manifest deleted; an
+  interrupted rewrite is finished or rolled back by the next `OPTIMIZE`,
+  reported as `recovered`); a partitioned directory is rewritten one
+  partition directory at a time. Delta and Iceberg tables are refused with
+  400 `OPTIMIZE_UNSUPPORTED` (the Engine has no Delta commit writer, and
+  their files are named by a log); a second `OPTIMIZE` of a table being
+  rewritten is 409 `OPTIMIZE_IN_PROGRESS`; a table clustered by a partition
+  column is 400 `OPTIMIZE_INVALID`.
 - **Verification.** A table is created as a `Draft` (revision 1), its
   location is probed, and only a readable location becomes `Active`
   (revision 2). A failed probe deletes the draft and the statement fails with
