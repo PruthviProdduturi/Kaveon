@@ -295,6 +295,55 @@ impl ColumnDefinition {
     }
 }
 
+/// A column of a directory Parquet table whose values come from the
+/// `key=value` path segments of its files (the Hive layout), not from the
+/// files themselves. A path value is text; it is read as `bigint`, `date`
+/// or `varchar`, inferred from the values or declared by the table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PartitionColumn {
+    name: String,
+    data_type: DataType,
+}
+
+impl PartitionColumn {
+    /// The types a path value can carry. A dictionary over text is text:
+    /// the reader hands text partitions out dictionary-encoded, and a table
+    /// whose columns were inferred from such a scan declares them that way.
+    pub fn new(name: impl Into<String>, data_type: DataType) -> Result<Self> {
+        let name = name.into();
+        validate_metadata_text("partition column name", &name)?;
+        let Some(data_type) = Self::partition_type(&data_type) else {
+            return Err(crate::KaveonError::Execution(format!(
+                "partition column '{name}' cannot be {data_type}; a path value is read as \
+                 bigint, date or varchar"
+            )));
+        };
+        Ok(Self { name, data_type })
+    }
+
+    /// `data_type` as a partition column carries it, or `None` when no
+    /// path value can be read as that type.
+    pub fn partition_type(data_type: &DataType) -> Option<DataType> {
+        match data_type {
+            DataType::Dictionary(_, values) if **values == DataType::Utf8 => Some(DataType::Utf8),
+            DataType::Int64 | DataType::Date32 | DataType::Utf8 => Some(data_type.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub const fn data_type(&self) -> &DataType {
+        &self.data_type
+    }
+    /// Whether a column declared as `data_type` reads this partition
+    /// column's values (a dictionary over text reads text).
+    pub fn accepts(&self, data_type: &DataType) -> bool {
+        Self::partition_type(data_type).as_ref() == Some(&self.data_type)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CatalogDefinition {
     id: CatalogId,
@@ -414,6 +463,11 @@ pub struct TableDefinition {
     access: AccessPattern,
     format: DataFormat,
     columns: Vec<ColumnDefinition>,
+    /// The columns read from `key=value` path segments (a directory Parquet
+    /// table): each names a column of `columns` and gives its type. Empty
+    /// for every other table, and absent from older stored definitions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    partitions: Vec<PartitionColumn>,
     lifecycle: CatalogLifecycle,
 }
 
@@ -451,8 +505,45 @@ impl TableDefinition {
             access,
             format,
             columns,
+            partitions: Vec::new(),
             lifecycle: CatalogLifecycle::Draft,
         })
+    }
+    /// The definition with its partition columns declared: each must name
+    /// one of the table's columns, with that column's type, and no column
+    /// twice. Nothing else about the definition changes.
+    pub fn partitioned_by(mut self, partitions: Vec<PartitionColumn>) -> Result<Self> {
+        let mut seen = std::collections::HashSet::new();
+        for partition in &partitions {
+            if !seen.insert(partition.name()) {
+                return Err(crate::KaveonError::Execution(format!(
+                    "partition column '{}' is declared twice",
+                    partition.name()
+                )));
+            }
+            let Some(column) = self
+                .columns
+                .iter()
+                .find(|column| column.name() == partition.name())
+            else {
+                return Err(crate::KaveonError::Execution(format!(
+                    "partition column '{}' is not a column of table '{}'",
+                    partition.name(),
+                    self.name
+                )));
+            };
+            if !partition.accepts(column.data_type()) {
+                return Err(crate::KaveonError::Execution(format!(
+                    "partition column '{}' is declared {} but column '{}' is {}",
+                    partition.name(),
+                    partition.data_type(),
+                    column.name(),
+                    column.data_type()
+                )));
+            }
+        }
+        self.partitions = partitions;
+        Ok(self)
     }
     pub fn id(&self) -> &TableId {
         &self.id
@@ -477,6 +568,11 @@ impl TableDefinition {
     }
     pub fn columns(&self) -> &[ColumnDefinition] {
         &self.columns
+    }
+    /// The columns read from the files' paths, in path order; empty when
+    /// the table is not a partitioned directory.
+    pub fn partitions(&self) -> &[PartitionColumn] {
+        &self.partitions
     }
     pub const fn lifecycle(&self) -> CatalogLifecycle {
         self.lifecycle

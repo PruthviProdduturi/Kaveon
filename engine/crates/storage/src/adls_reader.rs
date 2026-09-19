@@ -794,6 +794,9 @@ pub struct AdlsParquetReader {
     columns: Option<Vec<String>>,
     predicate: Option<StoragePredicate>,
     partition: Option<ScanPartition>,
+    /// The schema the catalog serves for the table, for the partition
+    /// columns of a directory table at this location.
+    catalog_schema: Option<SchemaRef>,
     metrics: Option<ScanMetrics>,
     late_materialisation: LateMaterialisation,
 }
@@ -865,6 +868,7 @@ impl AdlsParquetReader {
             columns: None,
             predicate: None,
             partition: None,
+            catalog_schema: None,
             metrics: None,
             late_materialisation: LateMaterialisation::from_environment(),
         }
@@ -936,6 +940,14 @@ impl AdlsParquetReader {
 
     pub fn with_partition(mut self, partition: ScanPartition) -> Self {
         self.partition = Some(partition);
+        self
+    }
+
+    /// The schema the catalog serves for the table: when the location is a
+    /// directory table, a partition column it names is read as the type it
+    /// gives.
+    pub fn with_catalog_schema(mut self, schema: SchemaRef) -> Self {
+        self.catalog_schema = Some(schema);
         self
     }
 
@@ -1453,6 +1465,9 @@ impl AdlsParquetReader {
         }
         if let Some(partition) = self.partition {
             reader = reader.with_partition(partition);
+        }
+        if let Some(schema) = &self.catalog_schema {
+            reader = reader.with_catalog_schema(Arc::clone(schema));
         }
         reader
     }

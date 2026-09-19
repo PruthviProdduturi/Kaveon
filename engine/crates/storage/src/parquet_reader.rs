@@ -44,40 +44,52 @@ enum ParquetBatchInner {
     Directory(Box<DirectoryFiles>),
 }
 
+/// One file of a local directory scan, after pruning.
+struct DirectoryScanFile {
+    path: PathBuf,
+    /// Listing-relative path, for messages.
+    relative: String,
+    /// Whether the scan partition applies inside the file.
+    split: bool,
+    /// What the predicate leaves to the file's own columns.
+    residual: Option<StoragePredicate>,
+    values: Vec<crate::parquet_directory::PartitionValue>,
+}
+
 /// The files of a local directory table this scan reads, opened lazily in
 /// listing order; each is checked against the first listed file's schema as
-/// it is opened.
+/// it is opened, and its batches carry its partition values.
 struct DirectoryFiles {
     root: PathBuf,
     first: String,
     file_schema: SchemaRef,
-    /// (absolute path, listing-relative path, whether the partition applies
-    /// inside the file).
-    files: Vec<(PathBuf, String, bool)>,
+    files: Vec<DirectoryScanFile>,
     next: usize,
-    current: Option<ParquetBatchIterator>,
+    current: Option<(ParquetBatchIterator, usize)>,
     batch_size: usize,
-    columns: Option<Vec<String>>,
-    predicate: Option<StoragePredicate>,
+    columns: crate::parquet_directory::DirectoryColumns,
     partition: Option<ScanPartition>,
 }
 
 impl DirectoryFiles {
     fn open_next(&mut self, metrics: &ScanMetrics) -> Result<bool> {
-        let Some((path, relative, split)) = self.files.get(self.next) else {
+        let Some(file) = self.files.get(self.next) else {
             return Ok(false);
         };
+        let position = self.next;
         self.next += 1;
-        let mut reader = ParquetReader::new(path)
+        let mut reader = ParquetReader::new(&file.path)
             .with_batch_size(self.batch_size)
             .with_metrics(metrics.clone());
-        if let Some(columns) = &self.columns {
-            reader = reader.with_columns(columns.clone());
+        if let Some(columns) = self.columns.file_columns() {
+            reader = reader.with_columns(columns.to_vec());
         }
-        if let Some(predicate) = &self.predicate {
+        if let Some(predicate) = &file.residual {
             reader = reader.with_predicate(predicate.clone());
         }
-        if *split && let Some(partition) = self.partition {
+        if file.split
+            && let Some(partition) = self.partition
+        {
             reader = reader.with_partition(partition);
         }
         let footer_started = Instant::now();
@@ -87,11 +99,11 @@ impl DirectoryFiles {
             &self.root.display().to_string(),
             &self.first,
             &self.file_schema,
-            relative,
+            &file.relative,
             builder.schema(),
         )?;
         metrics.file_opened();
-        self.current = Some(reader.finish(builder, metrics.clone())?);
+        self.current = Some((reader.finish(builder, metrics.clone())?, position));
         Ok(true)
     }
 }
@@ -120,15 +132,13 @@ impl Iterator for ParquetBatchIterator {
                 })
             }
             ParquetBatchInner::Directory(directory) => loop {
-                if let Some(current) = directory.current.as_mut() {
+                if let Some((current, position)) = directory.current.as_mut() {
                     match current.next() {
                         Some(Ok(batch)) => {
                             return Some(
-                                RecordBatch::try_new(
-                                    Arc::clone(&self.schema),
-                                    batch.columns().to_vec(),
-                                )
-                                .map_err(|error| storage_error(error.to_string())),
+                                directory
+                                    .columns
+                                    .assemble(&batch, &directory.files[*position].values),
                             );
                         }
                         Some(Err(error)) => return Some(Err(error)),
@@ -171,6 +181,7 @@ pub struct ParquetReader {
     metrics: Option<ScanMetrics>,
     partition: Option<ScanPartition>,
     listing: Option<Arc<crate::DirectoryListing>>,
+    catalog_schema: Option<SchemaRef>,
 }
 
 impl ParquetReader {
@@ -183,12 +194,21 @@ impl ParquetReader {
             metrics: None,
             partition: None,
             listing: None,
+            catalog_schema: None,
         }
     }
 
     /// Read a directory table at a listing already taken for this query.
     pub fn with_listing(mut self, listing: Arc<crate::DirectoryListing>) -> Self {
         self.listing = Some(listing);
+        self
+    }
+
+    /// The schema the catalog serves for the table: a partition column of a
+    /// directory table it names is read as the type it gives, not the
+    /// inferred one.
+    pub fn with_catalog_schema(mut self, schema: SchemaRef) -> Self {
+        self.catalog_schema = Some(schema);
         self
     }
 
@@ -263,41 +283,57 @@ impl ParquetReader {
         })
     }
 
-    /// The path read as a directory table: the listing rule, the file
-    /// assignment and the schema check are those of the object-store path.
+    /// The path read as a directory table: the listing rule, the partition
+    /// columns, the pruning, the file assignment and the schema check are
+    /// those of the object-store path. When every file is pruned the first
+    /// listed file's footer still supplies the schema.
     fn read_directory(&self, metrics: ScanMetrics) -> Result<ParquetBatchIterator> {
         let listing_started = Instant::now();
         let listing = self.listing()?;
         metrics.snapshot_time(listing_started.elapsed());
-        let Some(first) = listing.files.first() else {
+        if listing.files.is_empty() {
             return Err(storage_error(format!(
                 "directory '{}' holds no Parquet data files",
                 self.path.display()
             )));
-        };
-        let assignment = match self.partition {
-            Some(partition) => crate::parquet_directory::assign_files(&listing.sizes(), partition),
-            None => crate::FileAssignment {
-                whole: (0..listing.files.len()).collect(),
-                split: Vec::new(),
-            },
-        };
-        metrics.files_considered(assignment.len() as u64);
-        let file_schema = ParquetReader::new(self.path.join(first.path.as_ref()))
-            .metadata()?
-            .schema;
-        let schema =
-            crate::parquet_directory::advertised_schema(&file_schema, self.columns.as_deref())?;
-        let files = assignment
-            .files()
+        }
+        let layout =
+            crate::parquet_directory::PartitionLayout::of(&listing, self.catalog_schema.as_ref())?;
+        let pruned = crate::parquet_directory::prune_files(&layout, self.predicate.as_ref());
+        metrics.files_pruned_by_partition(pruned.pruned_share(self.partition));
+        let files =
+            crate::parquet_directory::assign_kept_files(&pruned, &layout.sizes, self.partition);
+        metrics.files_considered(files.len() as u64);
+        let first = &listing.files[pruned.kept.first().map_or(0, |file| file.index)];
+        let head = ParquetReader::new(self.path.join(first.path.as_ref())).metadata()?;
+        let file_schema = head.schema;
+        crate::parquet_directory::check_partition_columns_absent(
+            &self.path.display().to_string(),
+            first.path.as_ref(),
+            &file_schema,
+            &layout.columns,
+        )?;
+        let columns = crate::parquet_directory::DirectoryColumns::plan(
+            &file_schema,
+            &layout,
+            self.columns.as_deref(),
+            &head.profile,
+        )?;
+        let files = files
             .into_iter()
-            .map(|(index, split)| {
-                let relative = listing.files[index].path.to_string();
-                (self.path.join(&relative), relative, split)
+            .map(|(kept, split)| {
+                let relative = listing.files[kept.index].path.to_string();
+                DirectoryScanFile {
+                    path: self.path.join(&relative),
+                    relative,
+                    split,
+                    residual: kept.residual,
+                    values: layout.values[kept.index].clone(),
+                }
             })
             .collect();
         Ok(ParquetBatchIterator {
-            schema,
+            schema: Arc::clone(columns.schema()),
             inner: ParquetBatchInner::Directory(Box::new(DirectoryFiles {
                 root: self.path.clone(),
                 first: first.path.to_string(),
@@ -306,8 +342,7 @@ impl ParquetReader {
                 next: 0,
                 current: None,
                 batch_size: self.batch_size,
-                columns: self.columns.clone(),
-                predicate: self.predicate.clone(),
+                columns,
                 partition: self.partition,
             })),
             metrics,
@@ -355,7 +390,15 @@ impl ParquetReader {
                 self.path.display()
             )));
         };
+        let layout =
+            crate::parquet_directory::PartitionLayout::of(&listing, self.catalog_schema.as_ref())?;
         let mut combined = ParquetReader::new(self.path.join(first.path.as_ref())).metadata()?;
+        crate::parquet_directory::check_partition_columns_absent(
+            &self.path.display().to_string(),
+            first.path.as_ref(),
+            &combined.schema,
+            &layout.columns,
+        )?;
         for file in listing.files.iter().skip(1) {
             let next = ParquetReader::new(self.path.join(file.path.as_ref())).metadata()?;
             crate::parquet_directory::check_file_schema(
@@ -376,6 +419,7 @@ impl ParquetReader {
                     .ok_or_else(|| storage_error("Parquet directory row-group count overflow"))?;
             combined.profile.merge(next.profile);
         }
+        combined.schema = crate::parquet_directory::table_schema(&combined.schema, &layout);
         Ok(combined)
     }
 
@@ -1510,15 +1554,14 @@ mod tests {
         writer.close().unwrap();
     }
 
-    /// A directory table: two small files, one large partitioned file, and
-    /// the hidden and marker files a writer leaves behind.
+    /// A flat directory table: two small files, one large file, and the
+    /// hidden and marker files a writer leaves behind.
     fn directory_fixture() -> (TestDirectory, SchemaRef) {
         let id = NEXT_FILE_ID.fetch_add(1, AtomicOrdering::Relaxed);
         let directory = TestDirectory(std::env::temp_dir().join(format!(
             "kaveon-storage-directory-{}-{id}",
             std::process::id()
         )));
-        std::fs::create_dir_all(directory.0.join("year=2026")).unwrap();
         std::fs::create_dir_all(directory.0.join("_delta_log")).unwrap();
         let schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),
@@ -1527,7 +1570,7 @@ mod tests {
         write_file(&directory.0.join("b.parquet"), &schema, vec![3, 4], 1);
         write_file(&directory.0.join("a.parquet"), &schema, vec![1, 2], 1);
         write_file(
-            &directory.0.join("year=2026").join("c.PARQUET"),
+            &directory.0.join("c.PARQUET"),
             &schema,
             (5..=104).collect(),
             10,
@@ -1537,6 +1580,73 @@ mod tests {
         std::fs::write(directory.0.join("_delta_log").join("0.json"), b"{}").unwrap();
         std::fs::write(directory.0.join("empty-marker"), b"").unwrap();
         (directory, schema)
+    }
+
+    /// A Hive layout on disk: `dt=<date>/region=<text>/` with a NULL date
+    /// partition and a value Hive-escapes; a file per partition.
+    fn partitioned_fixture() -> (TestDirectory, SchemaRef) {
+        let id = uuid_like();
+        let directory = TestDirectory(
+            std::env::temp_dir().join(format!("kaveon-storage-hive-{}-{id}", std::process::id())),
+        );
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("label", DataType::Utf8, true),
+        ]));
+        for (relative, ids) in [
+            ("dt=2026-09-01/region=eu", vec![1, 2]),
+            ("dt=2026-09-01/region=us", vec![3]),
+            ("dt=2026-09-02/region=eu", vec![4, 5, 6]),
+            ("dt=__HIVE_DEFAULT_PARTITION__/region=eu", vec![7]),
+            ("dt=2026-09-02/region=latin%20am", vec![8]),
+        ] {
+            let partition = directory.0.join(relative);
+            std::fs::create_dir_all(&partition).unwrap();
+            write_file(&partition.join("part-0.parquet"), &schema, ids, 1);
+        }
+        std::fs::write(directory.0.join("_SUCCESS"), b"").unwrap();
+        (directory, schema)
+    }
+
+    fn uuid_like() -> String {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+            .to_string()
+    }
+
+    /// Every row as `(id, dt, region)` text, sorted by `id`.
+    fn partitioned_rows(
+        iterator: ParquetBatchIterator,
+    ) -> Vec<(i32, Option<String>, Option<String>)> {
+        use arrow::array::{Array, AsArray};
+        let schema = Arc::clone(iterator.schema());
+        let mut rows = Vec::new();
+        for batch in iterator {
+            let batch = batch.unwrap();
+            assert_eq!(batch.schema(), schema);
+            let id = batch
+                .column_by_name("id")
+                .unwrap()
+                .as_primitive::<arrow::datatypes::Int32Type>();
+            let dt =
+                arrow::compute::cast(batch.column_by_name("dt").unwrap(), &DataType::Utf8).unwrap();
+            let dt = dt.as_string::<i32>();
+            let region =
+                arrow::compute::cast(batch.column_by_name("region").unwrap(), &DataType::Utf8)
+                    .unwrap();
+            let region = region.as_string::<i32>();
+            for row in 0..batch.num_rows() {
+                rows.push((
+                    id.value(row),
+                    dt.is_valid(row).then(|| dt.value(row).to_owned()),
+                    region.is_valid(row).then(|| region.value(row).to_owned()),
+                ));
+            }
+        }
+        rows.sort();
+        rows
     }
 
     fn ids(iterator: ParquetBatchIterator) -> Vec<i32> {
@@ -1632,5 +1742,201 @@ mod tests {
             .expect("a foreign file is an error")
             .to_string();
         assert!(failure.contains("notes.txt"), "{failure}");
+
+        // A file beside the partition directories breaks the layout: it is
+        // named together with the first partitioned file.
+        let (directory, schema) = partitioned_fixture();
+        write_file(&directory.0.join("stray.parquet"), &schema, vec![9], 1);
+        let failure = ParquetReader::new(&directory.0)
+            .metadata()
+            .expect_err("a mixed layout is an error")
+            .to_string();
+        assert!(
+            failure.contains("stray.parquet") && failure.contains("dt=2026-09-01/region=eu"),
+            "{failure}"
+        );
+    }
+
+    #[test]
+    fn a_local_partitioned_directory_reads_its_keys_and_prunes_files() {
+        let (directory, _) = partitioned_fixture();
+        let metadata = ParquetReader::new(&directory.0).metadata().unwrap();
+        assert_eq!(metadata.row_count, 8);
+        assert_eq!(
+            metadata
+                .schema
+                .fields()
+                .iter()
+                .map(|field| (field.name().as_str(), field.data_type().clone()))
+                .collect::<Vec<_>>(),
+            [
+                ("id", DataType::Int32),
+                ("label", DataType::Utf8),
+                ("dt", DataType::Date32),
+                (
+                    "region",
+                    DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+                ),
+            ]
+        );
+        let eu = || Some("eu".to_owned());
+        let day1 = || Some("2026-09-01".to_owned());
+        let day2 = || Some("2026-09-02".to_owned());
+        let metrics = ScanMetrics::default();
+        let all = ParquetReader::new(&directory.0)
+            .with_metrics(metrics.clone())
+            .read()
+            .unwrap();
+        assert_eq!(
+            partitioned_rows(all),
+            [
+                (1, day1(), eu()),
+                (2, day1(), eu()),
+                (3, day1(), Some("us".into())),
+                (4, day2(), eu()),
+                (5, day2(), eu()),
+                (6, day2(), eu()),
+                (7, None, eu()),
+                (8, day2(), Some("latin am".into())),
+            ]
+        );
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.files_considered, 5);
+        assert_eq!(snapshot.files_opened, 5);
+        assert_eq!(snapshot.files_pruned_by_partition, 0);
+
+        // A projection in the caller's order, keys and file columns mixed.
+        let projected = ParquetReader::new(&directory.0)
+            .with_columns(vec!["region".into(), "id".into(), "dt".into()])
+            .read()
+            .unwrap();
+        assert_eq!(
+            projected
+                .schema()
+                .fields()
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect::<Vec<_>>(),
+            ["region", "id", "dt"]
+        );
+        assert_eq!(partitioned_rows(projected).len(), 8);
+
+        // Keys alone still count every row.
+        let keys_only = ParquetReader::new(&directory.0)
+            .with_columns(vec!["region".into()])
+            .read()
+            .unwrap();
+        assert_eq!(keys_only.schema().fields().len(), 1);
+        let rows: usize = keys_only.map(|batch| batch.unwrap().num_rows()).sum();
+        assert_eq!(rows, 8);
+
+        // Pruning on the keys before any file is opened; the residual
+        // prunes row groups inside the kept files.
+        let metrics = ScanMetrics::default();
+        let pruned = ParquetReader::new(&directory.0)
+            .with_predicate(StoragePredicate::And(vec![
+                StoragePredicate::In {
+                    column: "dt".into(),
+                    values: vec![ScalarValue::Utf8("2026-09-02".into())],
+                },
+                compare("id", CompareOp::Ge, ScalarValue::Int64(6)),
+            ]))
+            .with_metrics(metrics.clone())
+            .read()
+            .unwrap();
+        assert_eq!(ids(pruned), [6, 8]);
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.files_pruned_by_partition, 3);
+        assert_eq!(snapshot.files_considered, 2);
+        assert_eq!(snapshot.files_opened, 2);
+        assert_eq!(snapshot.row_groups_considered, 4);
+        assert_eq!(snapshot.row_groups_selected, 2);
+
+        // IS NULL keeps the NULL partition alone.
+        let metrics = ScanMetrics::default();
+        let nulls = ParquetReader::new(&directory.0)
+            .with_predicate(StoragePredicate::IsNull {
+                column: "dt".into(),
+            })
+            .with_metrics(metrics.clone())
+            .read()
+            .unwrap();
+        assert_eq!(ids(nulls), [7]);
+        assert_eq!(metrics.snapshot().files_pruned_by_partition, 4);
+
+        // Two scan partitions share the kept files and sum the pruned.
+        let mut seen = Vec::new();
+        let mut pruned_total = 0;
+        for index in 0..2 {
+            let metrics = ScanMetrics::default();
+            let part = ParquetReader::new(&directory.0)
+                .with_predicate(compare(
+                    "region",
+                    CompareOp::Eq,
+                    ScalarValue::Utf8("eu".into()),
+                ))
+                .with_partition(ScanPartition::new(index, 2).unwrap())
+                .with_metrics(metrics.clone())
+                .read()
+                .unwrap();
+            seen.extend(ids(part));
+            pruned_total += metrics.snapshot().files_pruned_by_partition;
+        }
+        seen.sort_unstable();
+        assert_eq!(seen, [1, 2, 4, 5, 6, 7]);
+        assert_eq!(pruned_total, 2);
+
+        // Everything pruned: no file opened, the schema still served.
+        let metrics = ScanMetrics::default();
+        let none = ParquetReader::new(&directory.0)
+            .with_predicate(compare(
+                "dt",
+                CompareOp::Lt,
+                ScalarValue::Utf8("2020-01-01".into()),
+            ))
+            .with_metrics(metrics.clone())
+            .read()
+            .unwrap();
+        assert_eq!(none.schema().fields().len(), 4);
+        assert!(ids(none).is_empty());
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.files_pruned_by_partition, 5);
+        assert_eq!(snapshot.files_opened, 0);
+
+        // The catalog's declared type is what the scan produces, and a
+        // value that does not read as it names the file.
+        let declared = ParquetReader::new(&directory.0)
+            .with_catalog_schema(Arc::new(Schema::new(vec![Field::new(
+                "dt",
+                DataType::Utf8,
+                true,
+            )])))
+            .with_columns(vec!["id".into(), "dt".into(), "region".into()])
+            .with_predicate(compare(
+                "dt",
+                CompareOp::Gt,
+                ScalarValue::Utf8("2026-09-01".into()),
+            ))
+            .read()
+            .unwrap();
+        assert_eq!(
+            declared.schema().field(1).data_type(),
+            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+        );
+        assert_eq!(partitioned_rows(declared).len(), 4);
+        let failure = ParquetReader::new(&directory.0)
+            .with_catalog_schema(Arc::new(Schema::new(vec![Field::new(
+                "region",
+                DataType::Int64,
+                true,
+            )])))
+            .read()
+            .err()
+            .expect("text under a bigint declaration is an error")
+            .to_string();
+        assert!(
+            failure.contains("region") && failure.contains("bigint") && failure.contains("'eu'"),
+            "{failure}"
+        );
     }
 }

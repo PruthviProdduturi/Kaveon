@@ -257,9 +257,23 @@ fn compile_node(
         FragmentOperator::Scan(scan) => {
             let source: Box<dyn kaveon_core::BatchSource> = match scan.format {
                 DataFormat::Parquet => {
+                    // The catalog snapshot the task was validated against
+                    // types the partition columns of a directory table the
+                    // way the coordinator's planner did.
+                    let catalog_schema = catalog
+                        .resolve_table(&kaveon_core::TableReference::Full {
+                            catalog: scan.table.catalog.clone(),
+                            schema: scan.table.schema.clone(),
+                            table: scan.table.table.clone(),
+                        })
+                        .ok()
+                        .map(|resolved| Arc::clone(&resolved.table.arrow_schema));
                     if scan.source_uri.starts_with("s3://") {
                         let mut reader = ObjectParquetReader::from_uri(&scan.source_uri)?
                             .with_partition(scan_partition);
+                        if let Some(schema) = catalog_schema {
+                            reader = reader.with_catalog_schema(schema);
+                        }
                         if !scan.projection.is_empty() {
                             reader = reader.with_columns(scan.projection.clone());
                         }
@@ -277,6 +291,9 @@ fn compile_node(
                     if scan.source_uri.starts_with("abfss://") {
                         let mut reader = AdlsParquetReader::from_abfss_uri(&scan.source_uri)?
                             .with_partition(scan_partition);
+                        if let Some(schema) = catalog_schema {
+                            reader = reader.with_catalog_schema(schema);
+                        }
                         if !scan.projection.is_empty() {
                             reader = reader.with_columns(scan.projection.clone());
                         }
@@ -293,6 +310,9 @@ fn compile_node(
                     }
                     let path = local_path(&scan.source_uri)?;
                     let mut reader = ParquetReader::new(path).with_partition(scan_partition);
+                    if let Some(schema) = catalog_schema {
+                        reader = reader.with_catalog_schema(schema);
+                    }
                     if !scan.projection.is_empty() {
                         reader = reader.with_columns(scan.projection.clone());
                     }

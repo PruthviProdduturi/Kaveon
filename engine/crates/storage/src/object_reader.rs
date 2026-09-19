@@ -96,6 +96,9 @@ pub struct ObjectParquetReader {
     columns: Option<Vec<String>>,
     predicate: Option<StoragePredicate>,
     partition: Option<ScanPartition>,
+    /// The schema the catalog serves for the table, for the partition
+    /// columns of a directory table at this location.
+    catalog_schema: Option<SchemaRef>,
     metrics: ScanMetrics,
     late_materialisation: LateMaterialisation,
 }
@@ -138,6 +141,7 @@ impl ObjectParquetReader {
             columns: None,
             predicate: None,
             partition: None,
+            catalog_schema: None,
             metrics: ScanMetrics::default(),
             late_materialisation: LateMaterialisation::from_environment(),
         }
@@ -163,6 +167,13 @@ impl ObjectParquetReader {
     }
     pub fn with_partition(mut self, value: ScanPartition) -> Self {
         self.partition = Some(value);
+        self
+    }
+    /// The schema the catalog serves for the table: when the location is a
+    /// directory table, a partition column it names is read as the type it
+    /// gives.
+    pub fn with_catalog_schema(mut self, value: SchemaRef) -> Self {
+        self.catalog_schema = Some(value);
         self
     }
     pub fn with_metrics(mut self, value: ScanMetrics) -> Self {
@@ -396,6 +407,9 @@ impl ObjectParquetReader {
         }
         if let Some(partition) = self.partition {
             reader = reader.with_partition(partition);
+        }
+        if let Some(schema) = &self.catalog_schema {
+            reader = reader.with_catalog_schema(Arc::clone(schema));
         }
         reader
     }
