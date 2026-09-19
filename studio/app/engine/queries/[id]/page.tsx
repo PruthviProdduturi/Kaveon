@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import s from "../../engine.module.css";
 import {
-  EngineUnavailable, PlanNode, QueryRecord,
+  ApproximateNote, EngineUnavailable, PlanNode, QueryRecord,
   absoluteTime, bytes, clientLabel, fetchQuery, inProgress, ms, ns, rate, us, userLabel,
 } from "../../lib";
 
@@ -33,7 +33,19 @@ function placement(q: QueryRecord) {
       </>
     );
   }
+  if (p.mode === "context") return <>Statistics · no scan{p.detail ? <span className={s.na}> · {p.detail}</span> : null}</>;
   return <span className={s.na}>Pending</span>;
+}
+
+/** The results that are estimates: each function with the error its sketch states, as a percentage. Absent when every result is exact. */
+function approximation(q: QueryRecord): React.ReactNode {
+  const notes = q.execution?.approximate;
+  if (!notes?.length) return <span className={s.na}>Exact</span>;
+  const label = (n: ApproximateNote) => {
+    const error = n.error === 0 ? "exact count from statistics" : `±${(n.error * 100).toFixed(2)} % ${n.error_kind === "rank_error" ? "rank" : "standard"} error`;
+    return `${n.function}(${n.argument}) · ${n.sketch} · ${error}`;
+  };
+  return <>{notes.map((n, i) => <span key={i} style={{ display: "block" }}>{label(n)}</span>)}</>;
 }
 
 /** The settings the statement carried, as the Engine recorded them; a statement that set nothing shows the defaults applied. */
@@ -45,6 +57,8 @@ function settingsSummary(q: QueryRecord): React.ReactNode {
   if (st.local_parallelism != null) parts.push(`parallelism ${st.local_parallelism}`);
   if (st.result_cache != null) parts.push(st.result_cache ? "result cache on" : "result cache bypassed");
   if (st.admission_wait_seconds != null) parts.push(st.admission_wait_seconds === 0 ? "no admission wait" : `admission wait ${st.admission_wait_seconds} s`);
+  if (st.approximate != null) parts.push(st.approximate ? "approximate distinct counts" : "exact distinct counts");
+  if (st.use_statistics != null) parts.push(st.use_statistics ? "statistics may answer" : "statistics bypassed");
   return parts.join(" · ");
 }
 
@@ -217,6 +231,7 @@ export default function EngineQueryPage() {
                       : `${q.rows.length.toLocaleString()}${q.rows_are_preview ? " (preview)" : ""}`],
                     ["Columns", String(q.columns.length)],
                     ["Ran on", placement(q)],
+                    ["Approximation", approximation(q)],
                     ["Settings", settingsSummary(q)],
                     ["Distributed stages", q.stages.length ? String(q.stages.length) : <span key="ns" className={s.na}>Node-local</span>],
                     ["KaveonDB version", <Value key="ev" v={c.engine_version} />], ["Environment", <Value key="en" v={c.environment} />],
