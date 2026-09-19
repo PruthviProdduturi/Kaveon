@@ -6,7 +6,7 @@ use crate::{
     delta_snapshot::{DeltaFileDetail, DeltaSnapshot},
 };
 use arrow::datatypes::{DataType, SchemaRef};
-use kaveon_core::{DataFormat, KaveonError, Result};
+use kaveon_core::{DataFormat, KaveonError, Result, SourceVersion, SourceVersionKind};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
@@ -115,15 +115,8 @@ fn profile_at(location: &str, format: DataFormat, depth: Depth) -> Result<Source
         (true, DataFormat::Iceberg) => {
             let reader = IcebergReader::new(location);
             let snapshot = reader.snapshot()?;
-            let mut identity = format!(
-                "iceberg\n{}\n{:?}\n",
-                snapshot.metadata_uri, snapshot.snapshot_id
-            );
-            for file in &snapshot.files {
-                identity.push_str(file);
-                identity.push('\n');
-            }
-            iceberg_profile(&reader, snapshot, digest(identity), depth)
+            let identity_sha256 = iceberg_identity(true, &snapshot);
+            iceberg_profile(&reader, snapshot, identity_sha256, depth)
         }
         (true, DataFormat::Parquet) => {
             let reader = ObjectDirectoryReader::from_uri(location)?;
@@ -133,14 +126,7 @@ fn profile_at(location: &str, format: DataFormat, depth: Depth) -> Result<Source
             })?;
             match probed {
                 ParquetLocation::Object(meta) => {
-                    let version = meta.e_tag.or(meta.version).ok_or_else(|| {
-                        KaveonError::Storage(
-                            "object store did not provide an ETag or version for stable ANALYZE"
-                                .into(),
-                        )
-                    })?;
-                    let identity_sha256 =
-                        digest(format!("parquet\n{location}\n{version}\n{}", meta.size));
+                    let identity_sha256 = object_parquet_identity(location, &meta)?;
                     if let Some(cached) = cached_statistics(&identity_sha256, depth) {
                         return Ok(cached);
                     }
@@ -157,18 +143,8 @@ fn profile_at(location: &str, format: DataFormat, depth: Depth) -> Result<Source
                     )))
                 }
                 ParquetLocation::Directory(listing) => {
-                    if listing.files.iter().any(|file| file.identity().is_none()) {
-                        return Err(KaveonError::Storage(
-                            "object store did not provide an ETag or version for every file of \
-                             the directory for stable ANALYZE"
-                                .into(),
-                        ));
-                    }
+                    let identity_sha256 = object_directory_identity(location, &listing)?;
                     let listing = Arc::new(listing);
-                    let identity_sha256 = digest(format!(
-                        "parquet-directory\n{location}\n{}",
-                        listing.identity_lines()
-                    ));
                     if let Some(cached) = cached_statistics(&identity_sha256, depth) {
                         return Ok(cached);
                     }
@@ -188,14 +164,7 @@ fn profile_at(location: &str, format: DataFormat, depth: Depth) -> Result<Source
             let listing = Arc::new(crate::parquet_reader::local_directory_listing(
                 std::path::Path::new(location),
             )?);
-            let mut identity = format!("parquet-local-directory\n{location}\n");
-            for file in &listing.files {
-                identity.push_str(&format!(
-                    "{}\t{}\t{}\n",
-                    file.path, file.size, file.modified_nanos
-                ));
-            }
-            let identity_sha256 = digest(identity);
+            let identity_sha256 = local_directory_identity(location, &listing);
             if let Some(cached) = cached_statistics(&identity_sha256, depth) {
                 return Ok(cached);
             }
@@ -210,16 +179,7 @@ fn profile_at(location: &str, format: DataFormat, depth: Depth) -> Result<Source
             )))
         }
         (false, DataFormat::Parquet) => {
-            let file = fs::metadata(location)?;
-            let modified = file
-                .modified()?
-                .duration_since(UNIX_EPOCH)
-                .map_err(|_| KaveonError::Storage("file modification time precedes epoch".into()))?
-                .as_nanos();
-            let identity_sha256 = digest(format!(
-                "parquet-local\n{location}\n{}\n{modified}",
-                file.len()
-            ));
+            let identity_sha256 = local_file_identity(location)?;
             if let Some(cached) = cached_statistics(&identity_sha256, depth) {
                 return Ok(cached);
             }
@@ -235,7 +195,7 @@ fn profile_at(location: &str, format: DataFormat, depth: Depth) -> Result<Source
             let reader = crate::DeltaTableReader::new(location);
             let snapshot = reader.snapshot()?;
             let version = snapshot.version;
-            let identity_sha256 = digest(format!("delta-local\n{location}\n{version}"));
+            let identity_sha256 = local_delta_identity(location, version);
             if let Some(cached) = cached_statistics(&identity_sha256, depth) {
                 return Ok(cached);
             }
@@ -248,13 +208,203 @@ fn profile_at(location: &str, format: DataFormat, depth: Depth) -> Result<Source
         (false, DataFormat::Iceberg) => {
             let reader = IcebergReader::new(location);
             let snapshot = reader.snapshot()?;
-            let identity_sha256 = digest(format!(
-                "iceberg-local\n{}\n{:?}\n{:?}",
-                snapshot.metadata_uri, snapshot.snapshot_id, snapshot.files
-            ));
+            let identity_sha256 = iceberg_identity(false, &snapshot);
             iceberg_profile(&reader, snapshot, identity_sha256, depth)
         }
     }
+}
+
+/// The source's current version — the identity `analyze_source` keys its
+/// statistics by, and what it names — from the least metadata that
+/// establishes it: the Delta log's tail, the Iceberg metadata pointer and
+/// its manifests, a directory listing, or one object's or file's identity.
+/// No footer and no data page is read. Cheap enough to call before an
+/// answer.
+pub fn current_source_version(location: &str, format: DataFormat) -> Result<SourceVersion> {
+    match (is_object(location), format) {
+        (true, DataFormat::Delta) => {
+            let reader = ObjectDeltaReader::from_uri(location)?;
+            if let Some((version, statistics)) = cached_delta_statistics(location)
+                && reader.is_latest_version(version)?
+            {
+                return Ok(SourceVersion {
+                    identity_sha256: statistics.statistics.identity_sha256,
+                    kind: SourceVersionKind::DeltaVersion { version },
+                });
+            }
+            let snapshot = reader.snapshot()?;
+            Ok(SourceVersion {
+                identity_sha256: object_delta_identity(location, &snapshot),
+                kind: SourceVersionKind::DeltaVersion {
+                    version: snapshot.version,
+                },
+            })
+        }
+        (true, DataFormat::Iceberg) => {
+            let snapshot = IcebergReader::new(location).snapshot()?;
+            Ok(SourceVersion {
+                identity_sha256: iceberg_identity(true, &snapshot),
+                kind: SourceVersionKind::IcebergSnapshot {
+                    snapshot_id: snapshot.snapshot_id,
+                },
+            })
+        }
+        (true, DataFormat::Parquet) => {
+            let reader = ObjectDirectoryReader::from_uri(location)?;
+            let probed = crate::delta_snapshot::blocking(async move { reader.probe().await })?;
+            match probed {
+                ParquetLocation::Object(meta) => Ok(SourceVersion {
+                    identity_sha256: object_parquet_identity(location, &meta)?,
+                    kind: SourceVersionKind::File,
+                }),
+                ParquetLocation::Directory(listing) => Ok(SourceVersion {
+                    identity_sha256: object_directory_identity(location, &listing)?,
+                    kind: SourceVersionKind::Listing {
+                        files: listing.files.len() as u64,
+                    },
+                }),
+            }
+        }
+        (false, DataFormat::Parquet) if fs::metadata(location)?.is_dir() => {
+            let listing =
+                crate::parquet_reader::local_directory_listing(std::path::Path::new(location))?;
+            Ok(SourceVersion {
+                identity_sha256: local_directory_identity(location, &listing),
+                kind: SourceVersionKind::Listing {
+                    files: listing.files.len() as u64,
+                },
+            })
+        }
+        (false, DataFormat::Parquet) => Ok(SourceVersion {
+            identity_sha256: local_file_identity(location)?,
+            kind: SourceVersionKind::File,
+        }),
+        (false, DataFormat::Delta) => {
+            let version = crate::DeltaTableReader::new(location).snapshot_version()?;
+            Ok(SourceVersion {
+                identity_sha256: local_delta_identity(location, version),
+                kind: SourceVersionKind::DeltaVersion { version },
+            })
+        }
+        (false, DataFormat::Iceberg) => {
+            let snapshot = IcebergReader::new(location).snapshot()?;
+            Ok(SourceVersion {
+                identity_sha256: iceberg_identity(false, &snapshot),
+                kind: SourceVersionKind::IcebergSnapshot {
+                    snapshot_id: snapshot.snapshot_id,
+                },
+            })
+        }
+    }
+}
+
+/// The [`SourceVersion`] a profile describes: its identity and, from the
+/// format, what that identity names.
+pub fn profile_source_version(profile: &SourceProfile) -> SourceVersion {
+    let statistics = &profile.statistics;
+    SourceVersion {
+        identity_sha256: statistics.identity_sha256.clone(),
+        kind: match (profile.format, statistics.delta_version) {
+            (DataFormat::Delta, version) => SourceVersionKind::DeltaVersion {
+                version: version.unwrap_or(0),
+            },
+            (DataFormat::Iceberg, _) => SourceVersionKind::IcebergSnapshot {
+                snapshot_id: profile.iceberg_snapshot_id,
+            },
+            (DataFormat::Parquet, _) => match &statistics.parquet_listing {
+                Some(listing) => SourceVersionKind::Listing {
+                    files: listing.files.len() as u64,
+                },
+                None => SourceVersionKind::File,
+            },
+        },
+    }
+}
+
+fn object_delta_identity(location: &str, snapshot: &DeltaSnapshot) -> String {
+    let mut identity = format!("delta\n{}\n{}\n", location, snapshot.version);
+    for file in &snapshot.files {
+        identity.push_str(file.as_ref());
+        identity.push('\n');
+    }
+    digest(identity)
+}
+
+fn local_delta_identity(location: &str, version: u64) -> String {
+    digest(format!("delta-local\n{location}\n{version}"))
+}
+
+fn iceberg_identity(object: bool, snapshot: &crate::IcebergSnapshot) -> String {
+    if object {
+        let mut identity = format!(
+            "iceberg\n{}\n{:?}\n",
+            snapshot.metadata_uri, snapshot.snapshot_id
+        );
+        for file in &snapshot.files {
+            identity.push_str(file);
+            identity.push('\n');
+        }
+        digest(identity)
+    } else {
+        digest(format!(
+            "iceberg-local\n{}\n{:?}\n{:?}",
+            snapshot.metadata_uri, snapshot.snapshot_id, snapshot.files
+        ))
+    }
+}
+
+fn object_parquet_identity(location: &str, meta: &object_store::ObjectMeta) -> Result<String> {
+    let version = meta
+        .e_tag
+        .as_deref()
+        .or(meta.version.as_deref())
+        .ok_or_else(|| {
+            KaveonError::Storage(
+                "object store did not provide an ETag or version for stable ANALYZE".into(),
+            )
+        })?;
+    Ok(digest(format!(
+        "parquet\n{location}\n{version}\n{}",
+        meta.size
+    )))
+}
+
+fn object_directory_identity(location: &str, listing: &DirectoryListing) -> Result<String> {
+    if listing.files.iter().any(|file| file.identity().is_none()) {
+        return Err(KaveonError::Storage(
+            "object store did not provide an ETag or version for every file of the directory \
+             for stable ANALYZE"
+                .into(),
+        ));
+    }
+    Ok(digest(format!(
+        "parquet-directory\n{location}\n{}",
+        listing.identity_lines()
+    )))
+}
+
+fn local_directory_identity(location: &str, listing: &DirectoryListing) -> String {
+    let mut identity = format!("parquet-local-directory\n{location}\n");
+    for file in &listing.files {
+        identity.push_str(&format!(
+            "{}\t{}\t{}\n",
+            file.path, file.size, file.modified_nanos
+        ));
+    }
+    digest(identity)
+}
+
+fn local_file_identity(location: &str) -> Result<String> {
+    let file = fs::metadata(location)?;
+    let modified = file
+        .modified()?
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| KaveonError::Storage("file modification time precedes epoch".into()))?
+        .as_nanos();
+    Ok(digest(format!(
+        "parquet-local\n{location}\n{}\n{modified}",
+        file.len()
+    )))
 }
 
 fn analyze_object_delta(location: &str, reader: &ObjectDeltaReader) -> Result<SourceProfile> {
@@ -265,12 +415,7 @@ fn analyze_object_delta(location: &str, reader: &ObjectDeltaReader) -> Result<So
     }
     let snapshot = reader.snapshot()?;
     let version = snapshot.version;
-    let mut identity = format!("delta\n{}\n{}\n", location, snapshot.version);
-    for file in &snapshot.files {
-        identity.push_str(file.as_ref());
-        identity.push('\n');
-    }
-    let identity_sha256 = digest(identity);
+    let identity_sha256 = object_delta_identity(location, &snapshot);
     if let Some(cached) = cached_statistics(&identity_sha256, Depth::Columns) {
         cache_delta_statistics(location, version, cached.clone());
         return Ok(cached);

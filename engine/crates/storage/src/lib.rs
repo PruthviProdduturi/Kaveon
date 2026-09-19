@@ -49,14 +49,15 @@ pub use parquet_reader::{
 };
 pub use scan_predicate::LateMaterialisation;
 pub use source_statistics::{
-    SourceColumnProfile, SourceProfile, SourceStatistics, analyze_source, profile_source,
+    SourceColumnProfile, SourceProfile, SourceStatistics, analyze_source, current_source_version,
+    profile_source, profile_source_version,
 };
 pub use table_rewrite::{
     Recovery, RewriteGroup, RewriteKind, RewriteReport, RewriteTarget, Staging, TableFile,
 };
 pub use table_statistics::{
     DataFile, FullScanOptions, SourceFiles, enumerate_source, full_statistics, metadata_statistics,
-    refresh_statistics, sketchable,
+    partition_column_names, refresh_statistics, sketchable, skip_listing_files, statistics_schema,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

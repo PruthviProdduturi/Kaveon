@@ -22,6 +22,31 @@ use std::{
 const DATABASE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const MIGRATION_VERSION: i64 = 2;
 
+/// A table's `catalog.schema.table` name as the store holds it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QualifiedTableName {
+    pub catalog: String,
+    pub schema: String,
+    pub table: String,
+}
+
+impl QualifiedTableName {
+    pub fn qualified(&self) -> String {
+        format!("{}.{}.{}", self.catalog, self.schema, self.table)
+    }
+}
+
+/// What the store records beside a table's statistics document.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TableStatisticsSummary {
+    pub table_id: TableId,
+    pub name: QualifiedTableName,
+    pub source_version: kaveon_core::SourceVersion,
+    pub computed_at_ms: u64,
+    pub depth: kaveon_core::StatisticsDepth,
+    pub rows: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CascadePolicy {
     Restrict,
@@ -344,6 +369,73 @@ impl CatalogStore {
         document
             .map(|bytes| TableStatistics::from_json_bytes(&bytes))
             .transpose()
+    }
+
+    /// The `catalog.schema.table` name of a table id, whatever its
+    /// lifecycle; `None` for an unknown id.
+    pub fn table_name(&self, id: &TableId) -> Result<Option<QualifiedTableName>> {
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "SELECT c.name, s.name, t.name FROM tables t                  JOIN schemas s ON s.id = t.schema_id                  JOIN catalogs c ON c.id = s.catalog_id                  WHERE t.id = ?1",
+                [id.as_str()],
+                |row| {
+                    Ok(QualifiedTableName {
+                        catalog: row.get(0)?,
+                        schema: row.get(1)?,
+                        table: row.get(2)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(db_error)
+    }
+
+    /// Every table with statistics on record, by qualified name: the facts
+    /// the store keeps beside the document, without decoding it.
+    pub fn list_table_statistics(&self) -> Result<Vec<TableStatisticsSummary>> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT t.id, c.name, s.name, t.name, ts.source_version, ts.computed_at_ms,                  ts.depth, ts.document FROM table_statistics ts                  JOIN tables t ON t.id = ts.table_id                  JOIN schemas s ON s.id = t.schema_id                  JOIN catalogs c ON c.id = s.catalog_id                  ORDER BY c.name, s.name, t.name",
+            )
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, u64>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, Vec<u8>>(7)?,
+                ))
+            })
+            .map_err(db_error)?;
+        let mut summaries = Vec::new();
+        for row in rows {
+            let (id, catalog, schema, table, source_version, computed_at_ms, depth, document) =
+                row.map_err(db_error)?;
+            let statistics = TableStatistics::from_json_bytes(&document)?;
+            summaries.push(TableStatisticsSummary {
+                table_id: TableId::new(id)?,
+                name: QualifiedTableName {
+                    catalog,
+                    schema,
+                    table,
+                },
+                source_version: kaveon_core::SourceVersion {
+                    identity_sha256: source_version,
+                    kind: statistics.source_version.kind,
+                },
+                computed_at_ms,
+                depth: decode(&format!("\"{depth}\""))?,
+                rows: statistics.rows,
+            });
+        }
+        Ok(summaries)
     }
 
     /// The source version the table's stored statistics describe, without
@@ -957,9 +1049,15 @@ mod tests {
             },
             computed_at_ms: 1,
             depth: StatisticsDepth::Full,
+            format: kaveon_core::DataFormat::Parquet,
+            location: "/lake/t".into(),
             rows,
             bytes: rows * 10,
             files: 1,
+            row_groups: None,
+            uncompressed_bytes: None,
+            last_modified_ms: None,
+            partition_columns: Vec::new(),
             columns: vec![ColumnStatistics {
                 name: "id".into(),
                 data_type: arrow_schema::DataType::Int64,
@@ -1025,6 +1123,21 @@ mod tests {
                 store.table_by_name("local", "default", "nope").unwrap(),
                 None
             );
+            assert_eq!(
+                store.table_name(table.id()).unwrap().unwrap().qualified(),
+                "local.default.orders"
+            );
+            assert_eq!(
+                store.table_name(&TableId::new("table-x").unwrap()).unwrap(),
+                None
+            );
+            let listed = store.list_table_statistics().unwrap();
+            assert_eq!(listed.len(), 1);
+            assert_eq!(listed[0].table_id, *table.id());
+            assert_eq!(listed[0].name.qualified(), "local.default.orders");
+            assert_eq!(listed[0].source_version.identity_sha256, "v2");
+            assert_eq!(listed[0].depth, kaveon_core::StatisticsDepth::Full);
+            assert_eq!(listed[0].rows, 250);
             // An unknown table has nowhere to keep statistics.
             let orphan = TableStatistics {
                 table_id: TableId::new("table-x").unwrap(),

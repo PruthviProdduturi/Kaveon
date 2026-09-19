@@ -5,13 +5,16 @@
 //! it was computed from and stored beside the table definition.
 
 use crate::sketch::{HllSketch, KllSketch};
-use crate::{CompareOp, ScalarValue, StoragePredicate, TableId};
+use crate::{CompareOp, DataFormat, ScalarValue, StoragePredicate, TableId};
 use arrow::datatypes::{DataType, TimeUnit};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 
-/// The format version of a stored statistics document.
-pub const TABLE_STATISTICS_VERSION: u32 = 1;
+/// The format version of a stored statistics document. Versions 1 (a row
+/// count) and 2 (the metadata profile as loose JSON) were the product
+/// catalog's `ANALYZE` documents; version 3 is this object, stored in the
+/// durable catalog beside the table definition.
+pub const TABLE_STATISTICS_VERSION: u32 = 3;
 
 /// The most files a statistics document keeps per-file bounds for. Beyond
 /// it the table-level facts are still complete and file skipping falls back
@@ -435,10 +438,29 @@ pub struct TableStatistics {
     /// Milliseconds since the epoch.
     pub computed_at_ms: u64,
     pub depth: StatisticsDepth,
+    /// The source's format and resolved location when the statistics
+    /// were computed.
+    pub format: DataFormat,
+    pub location: String,
     pub rows: u64,
     /// The data files' bytes as stored.
     pub bytes: u64,
     pub files: u64,
+    /// Row groups over every file; unknown when no footer was read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub row_groups: Option<u64>,
+    /// The row groups' uncompressed byte total; unknown when no footer was
+    /// read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uncompressed_bytes: Option<u64>,
+    /// The newest data file's modification time, milliseconds since the
+    /// epoch, when the store or log records one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_modified_ms: Option<i64>,
+    /// The Delta log's partition columns, or the `key=value` keys of a
+    /// partitioned Parquet directory; empty otherwise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub partition_columns: Vec<String>,
     pub columns: Vec<ColumnStatistics>,
     /// Per-file bounds, complete when `per_file_complete`; empty otherwise.
     #[serde(default)]
@@ -622,9 +644,15 @@ mod tests {
             },
             computed_at_ms: 1,
             depth: StatisticsDepth::Metadata,
+            format: DataFormat::Parquet,
+            location: "/lake/t".into(),
             rows: 10,
             bytes: 1000,
             files: 2,
+            row_groups: Some(2),
+            uncompressed_bytes: Some(1500),
+            last_modified_ms: Some(1),
+            partition_columns: Vec::new(),
             columns: vec![
                 ColumnStatistics {
                     name: "id".into(),
