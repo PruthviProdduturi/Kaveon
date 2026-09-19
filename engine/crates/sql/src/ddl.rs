@@ -1,7 +1,8 @@
 //! Catalog statements: the Trino-shaped DDL and metadata surface over the
 //! Engine's durable catalog (`CREATE SCHEMA`, `CREATE TABLE … WITH (…)`,
-//! `DROP`, `ALTER TABLE … SET LOCATION`, `SHOW …`, `DESCRIBE`, `CALL
-//! system.register_table`). This module only recognises and validates the
+//! `DROP`, `ALTER TABLE … SET LOCATION | SET CLUSTERED BY (…)`, `SHOW …`,
+//! `DESCRIBE`, `CALL system.register_table`) and the table maintenance
+//! statement `OPTIMIZE`. This module only recognises and validates the
 //! statement shape; the coordinator lowers it onto catalog definitions.
 //!
 //! [`parse_catalog_statement`] answers `Ok(None)` for anything that is not a
@@ -66,6 +67,16 @@ pub enum CatalogStorageSpec {
     },
 }
 
+/// The sizes `OPTIMIZE … WITH (…)` overrides: `row_group_rows`,
+/// `row_group_bytes` and `file_bytes`, each a positive integer; absent
+/// means the writer's default.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OptimizeOptions {
+    pub row_group_rows: Option<u64>,
+    pub row_group_bytes: Option<u64>,
+    pub file_bytes: Option<u64>,
+}
+
 /// A credential reference for a catalog: `kind:reference`. Never a secret.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredentialSpec {
@@ -108,6 +119,12 @@ pub enum CatalogStatement {
         /// directory table reads from its `key=value` paths, in path order.
         /// `None` leaves them to discovery.
         partitioned_by: Option<Vec<String>>,
+        /// `clustered_by = ARRAY['a', 'b']`: the columns the Engine sorts
+        /// rows by within every file it writes for this table.
+        clustered_by: Vec<String>,
+        /// `bloom = ARRAY['c']`: columns that carry a Bloom filter per row
+        /// group beyond the clustering columns.
+        bloom: Vec<String>,
     },
     DropTable {
         name: QualifiedName,
@@ -117,6 +134,21 @@ pub enum CatalogStatement {
         name: QualifiedName,
         if_exists: bool,
         location: String,
+    },
+    /// `ALTER TABLE t SET CLUSTERED BY (a, b)`; an empty list clears the
+    /// clustering. The Bloom columns are kept.
+    AlterTableSetClusteredBy {
+        name: QualifiedName,
+        if_exists: bool,
+        columns: Vec<String>,
+    },
+    /// `OPTIMIZE t [WITH (…)] [WHERE predicate]`: rewrite the table's files
+    /// in its clustering layout. The predicate, when given, is kept as SQL
+    /// text and selects the files to rewrite by their statistics.
+    Optimize {
+        name: QualifiedName,
+        filter: Option<String>,
+        options: OptimizeOptions,
     },
     ShowCreateTable {
         name: QualifiedName,
@@ -150,7 +182,13 @@ impl CatalogStatement {
                 | Self::CreateTable { .. }
                 | Self::DropTable { .. }
                 | Self::AlterTableSetLocation { .. }
+                | Self::AlterTableSetClusteredBy { .. }
         )
+    }
+
+    /// Whether the statement rewrites table data rather than definitions.
+    pub fn is_maintenance(&self) -> bool {
+        matches!(self, Self::Optimize { .. })
     }
 
     /// Whether the statement creates or drops a whole catalog.
@@ -176,6 +214,7 @@ pub fn parse_catalog_statement(sql: &str) -> Result<Option<CatalogStatement>> {
         Keyword::SHOW => parse_show(&mut parser)?,
         Keyword::DESCRIBE | Keyword::DESC => parse_describe(&mut parser)?,
         Keyword::CALL => parse_call(&mut parser)?,
+        Keyword::OPTIMIZE => parse_optimize(&mut parser)?,
         _ => return Ok(None),
     };
     let Some(statement) = statement else {
@@ -253,12 +292,31 @@ fn parse_create(parser: &mut Parser<'_>) -> Result<Option<CatalogStatement>> {
             )
         })?;
         let options = parse_with_options(parser, "CREATE TABLE")?;
-        let (location, format, access, partitioned_by) = table_options(options)?;
-        if let (Some(columns), Some(partitioned_by)) = (&columns, &partitioned_by) {
-            for key in partitioned_by {
-                if !columns.iter().any(|column| &column.name == key) {
+        let TableOptions {
+            location,
+            format,
+            access,
+            partitioned_by,
+            clustered_by,
+            bloom,
+        } = table_options(options)?;
+        if let Some(columns) = &columns {
+            if let Some(partitioned_by) = &partitioned_by {
+                for key in partitioned_by {
+                    if !columns.iter().any(|column| &column.name == key) {
+                        return Err(sql_error(&format!(
+                            "partitioned_by names '{key}', which is not in the column list"
+                        )));
+                    }
+                }
+            }
+            for (kind, names) in [("clustered_by", &clustered_by), ("bloom", &bloom)] {
+                if let Some(unknown) = names
+                    .iter()
+                    .find(|name| !columns.iter().any(|column| column.name == **name))
+                {
                     return Err(sql_error(&format!(
-                        "partitioned_by names '{key}', which is not in the column list"
+                        "{kind} names column '{unknown}', which is not a declared column"
                     )));
                 }
             }
@@ -271,6 +329,8 @@ fn parse_create(parser: &mut Parser<'_>) -> Result<Option<CatalogStatement>> {
             format,
             access,
             partitioned_by,
+            clustered_by,
+            bloom,
         }));
     }
     // CREATE VIEW, CREATE INDEX, … are not catalog statements; the query
@@ -327,18 +387,110 @@ fn parse_alter(parser: &mut Parser<'_>) -> Result<Option<CatalogStatement>> {
         1..=3,
         "ALTER TABLE expects [catalog.][schema.]table",
     )?;
-    if !parser.parse_keywords(&[Keyword::SET, Keyword::LOCATION]) {
-        return Err(sql_error(
-            "ALTER TABLE supports SET LOCATION '…' only; columns come from the table itself",
-        ));
+    if parser.parse_keywords(&[Keyword::SET, Keyword::LOCATION]) {
+        let location = string_literal(parser, "SET LOCATION expects a quoted location")?;
+        validate_location(&location)?;
+        return Ok(Some(CatalogStatement::AlterTableSetLocation {
+            name,
+            if_exists,
+            location,
+        }));
     }
-    let location = string_literal(parser, "SET LOCATION expects a quoted location")?;
-    validate_location(&location)?;
-    Ok(Some(CatalogStatement::AlterTableSetLocation {
+    if parser.parse_keywords(&[Keyword::SET, Keyword::CLUSTERED, Keyword::BY]) {
+        parser
+            .expect_token(&Token::LParen)
+            .map_err(|_| sql_error("SET CLUSTERED BY expects a parenthesised column list"))?;
+        let columns = if parser.consume_token(&Token::RParen) {
+            Vec::new()
+        } else {
+            let columns = parser
+                .parse_comma_separated(|parser| parser.parse_identifier(false))
+                .map_err(|_| sql_error("SET CLUSTERED BY expects a parenthesised column list"))?
+                .into_iter()
+                .map(|ident| ident.value)
+                .collect::<Vec<_>>();
+            parser.expect_token(&Token::RParen).map_err(parse_error)?;
+            columns
+        };
+        unique_columns("clustered_by", &columns)?;
+        return Ok(Some(CatalogStatement::AlterTableSetClusteredBy {
+            name,
+            if_exists,
+            columns,
+        }));
+    }
+    Err(sql_error(
+        "ALTER TABLE supports SET LOCATION '…' and SET CLUSTERED BY (…) only; columns come from the table itself",
+    ))
+}
+
+/// `OPTIMIZE [catalog.][schema.]table [WHERE predicate]`. The predicate is
+/// parsed for shape and kept as SQL text; the coordinator lowers it with
+/// the query pipeline against the table's columns.
+fn parse_optimize(parser: &mut Parser<'_>) -> Result<Option<CatalogStatement>> {
+    parser
+        .expect_keyword(Keyword::OPTIMIZE)
+        .map_err(parse_error)?;
+    let _ = parser.parse_keyword(Keyword::TABLE);
+    let name = qualified_name(
+        parser,
+        1..=3,
+        "OPTIMIZE expects [catalog.][schema.]table [WITH (…)] [WHERE …]",
+    )?;
+    let mut options = OptimizeOptions::default();
+    if parser.parse_keyword(Keyword::WITH) {
+        for (key, value) in parse_with_options(parser, "OPTIMIZE")? {
+            let lowered = key.to_ascii_lowercase();
+            let size = value
+                .text(&lowered)?
+                .parse::<u64>()
+                .ok()
+                .filter(|size| *size > 0)
+                .ok_or_else(|| {
+                    sql_error(&format!(
+                        "OPTIMIZE option '{lowered}' expects a positive integer"
+                    ))
+                })?;
+            match lowered.as_str() {
+                "row_group_rows" => options.row_group_rows = Some(size),
+                "row_group_bytes" => options.row_group_bytes = Some(size),
+                "file_bytes" => options.file_bytes = Some(size),
+                other => {
+                    return Err(sql_error(&format!(
+                        "OPTIMIZE option '{other}' is not supported; use row_group_rows, row_group_bytes and file_bytes"
+                    )));
+                }
+            }
+        }
+    }
+    let filter = if parser.parse_keyword(Keyword::WHERE) {
+        let expression = parser
+            .parse_expr()
+            .map_err(|error| sql_error(&format!("OPTIMIZE WHERE: {error}")))?;
+        Some(expression.to_string())
+    } else {
+        None
+    };
+    Ok(Some(CatalogStatement::Optimize {
         name,
-        if_exists,
-        location,
+        filter,
+        options,
     }))
+}
+
+fn unique_columns(option: &str, columns: &[String]) -> Result<()> {
+    let mut seen = std::collections::HashSet::new();
+    for column in columns {
+        if column.trim().is_empty() {
+            return Err(sql_error(&format!("{option} cannot name an empty column")));
+        }
+        if !seen.insert(column.as_str()) {
+            return Err(sql_error(&format!(
+                "{option} names column '{column}' twice"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn parse_show(parser: &mut Parser<'_>) -> Result<Option<CatalogStatement>> {
@@ -518,6 +670,8 @@ fn parse_call(parser: &mut Parser<'_>) -> Result<Option<CatalogStatement>> {
         format,
         access: AccessPattern::Shortcut,
         partitioned_by: None,
+        clustered_by: Vec::new(),
+        bloom: Vec::new(),
     }))
 }
 
@@ -548,8 +702,9 @@ fn parse_column(parser: &mut Parser<'_>) -> std::result::Result<ColumnSpec, Pars
     })
 }
 
-/// A `WITH (…)` option's value: a string, or `ARRAY['a', 'b']`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A `WITH (…)` option value: a quoted string, or `ARRAY['a', 'b']` of
+/// quoted strings.
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum OptionValue {
     Text(String),
     List(Vec<String>),
@@ -560,33 +715,48 @@ impl OptionValue {
         match self {
             Self::Text(value) => Ok(value),
             Self::List(_) => Err(sql_error(&format!(
-                "option '{key}' takes a single-quoted string, not an ARRAY"
+                "option '{key}' expects a quoted value, not ARRAY[…]"
             ))),
         }
     }
 
     fn list(self, key: &str) -> Result<Vec<String>> {
         match self {
-            Self::List(values) => Ok(values),
+            Self::List(values) => {
+                unique_columns(key, &values)?;
+                Ok(values)
+            }
             Self::Text(_) => Err(sql_error(&format!(
-                "option '{key}' takes ARRAY['…', …], not a string"
+                "option '{key}' expects ARRAY['column', …]"
             ))),
         }
     }
 }
 
 fn parse_option_value(parser: &mut Parser<'_>) -> std::result::Result<OptionValue, ParserError> {
+    // Values are single-quoted strings or bare numbers: an unquoted word
+    // is an identifier, not a value, so `ARRAY[a]` is refused rather than
+    // read as `'a'`.
+    fn quoted(parser: &mut Parser<'_>) -> std::result::Result<String, ParserError> {
+        match parser.next_token().token {
+            Token::SingleQuotedString(value) | Token::Number(value, _) => Ok(value),
+            other => Err(ParserError::ParserError(format!(
+                "expected a single-quoted value, found {other}"
+            ))),
+        }
+    }
     if parser.parse_keyword(Keyword::ARRAY) {
         parser.expect_token(&Token::LBracket)?;
-        let values = if parser.peek_token().token == Token::RBracket {
+        let values = if parser.consume_token(&Token::RBracket) {
             Vec::new()
         } else {
-            parser.parse_comma_separated(|parser| parser.parse_literal_string())?
+            let values = parser.parse_comma_separated(quoted)?;
+            parser.expect_token(&Token::RBracket)?;
+            values
         };
-        parser.expect_token(&Token::RBracket)?;
         return Ok(OptionValue::List(values));
     }
-    parser.parse_literal_string().map(OptionValue::Text)
+    quoted(parser).map(OptionValue::Text)
 }
 
 fn parse_with_options(
@@ -607,8 +777,7 @@ fn parse_with_options(
         })
         .map_err(|_| {
             sql_error(&format!(
-                "{statement} WITH options are key = 'value' pairs (or key = ARRAY['…']) \
-                 separated by commas"
+                "{statement} WITH options are key = 'value' or key = ARRAY['…'] pairs separated by commas"
             ))
         })?;
     parser.expect_token(&Token::RParen).map_err(parse_error)?;
@@ -623,20 +792,29 @@ fn parse_with_options(
     Ok(options)
 }
 
-type TableOptions = (String, DataFormat, AccessPattern, Option<Vec<String>>);
+struct TableOptions {
+    location: String,
+    format: DataFormat,
+    access: AccessPattern,
+    partitioned_by: Option<Vec<String>>,
+    clustered_by: Vec<String>,
+    bloom: Vec<String>,
+}
 
 fn table_options(options: Vec<(String, OptionValue)>) -> Result<TableOptions> {
     let mut location = None;
     let mut format = None;
     let mut access = AccessPattern::Shortcut;
     let mut partitioned_by = None;
+    let mut clustered_by = Vec::new();
+    let mut bloom = Vec::new();
     for (key, value) in options {
         let lowered = key.to_ascii_lowercase();
         match lowered.as_str() {
-            "location" => location = Some(value.text(&key)?),
-            "format" => format = Some(parse_format(&value.text(&key)?)?),
+            "location" => location = Some(value.text(&lowered)?),
+            "format" => format = Some(parse_format(&value.text(&lowered)?)?),
             "access" => {
-                access = match value.text(&key)?.to_ascii_lowercase().as_str() {
+                access = match value.text(&lowered)?.to_ascii_lowercase().as_str() {
                     "shortcut" => AccessPattern::Shortcut,
                     "optimized" => AccessPattern::Optimized,
                     other => {
@@ -647,7 +825,7 @@ fn table_options(options: Vec<(String, OptionValue)>) -> Result<TableOptions> {
                 }
             }
             "partitioned_by" => {
-                let keys = value.list(&key)?;
+                let keys = value.list(&lowered)?;
                 if keys.is_empty() {
                     return Err(sql_error(
                         "partitioned_by needs at least one column; omit it for a table that is \
@@ -667,10 +845,12 @@ fn table_options(options: Vec<(String, OptionValue)>) -> Result<TableOptions> {
                 }
                 partitioned_by = Some(keys);
             }
+            "clustered_by" => clustered_by = value.list(&lowered)?,
+            "bloom" => bloom = value.list(&lowered)?,
             other => {
                 return Err(sql_error(&format!(
-                    "table option '{other}' is not supported; use location, format, access and \
-                     partitioned_by"
+                    "table option '{other}' is not supported; use location, format, access, \
+                     partitioned_by, clustered_by and bloom"
                 )));
             }
         }
@@ -687,7 +867,14 @@ fn table_options(options: Vec<(String, OptionValue)>) -> Result<TableOptions> {
              their partitioning in their own metadata",
         ));
     }
-    Ok((location, format, access, partitioned_by))
+    Ok(TableOptions {
+        location,
+        format,
+        access,
+        partitioned_by,
+        clustered_by,
+        bloom,
+    })
 }
 
 fn catalog_options(
@@ -697,8 +884,9 @@ fn catalog_options(
     let mut fields = std::collections::BTreeMap::new();
     let mut credential = None;
     for (key, value) in options {
-        let value = value.text(&key)?;
-        match key.to_ascii_lowercase().as_str() {
+        let lowered = key.to_ascii_lowercase();
+        let value = value.text(&lowered)?;
+        match lowered.as_str() {
             "storage" => storage = Some(value.to_ascii_lowercase()),
             "credential" => {
                 let (kind, reference) = value.split_once(':').ok_or_else(|| {
@@ -967,16 +1155,31 @@ pub fn quote_identifier(name: &str) -> String {
     }
 }
 
-/// Render a definition as the `CREATE TABLE` statement that recreates it;
-/// `partitioned_by` names the columns read from the paths, if any.
+/// The column lists a rendered `CREATE TABLE` carries after its location,
+/// format and access: the partition keys read from the paths, if any, and
+/// the layout (`clustered_by`, `bloom`). Empty lists render nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TableColumnLists<'a> {
+    pub partitioned_by: &'a [String],
+    pub clustered_by: &'a [String],
+    pub bloom: &'a [String],
+}
+
+/// Render a definition as the `CREATE TABLE` statement that recreates it,
+/// its partition keys and layout included.
 pub fn render_create_table(
     name: &QualifiedName,
     columns: &[ColumnSpec],
     location: &str,
     format: DataFormat,
     access: AccessPattern,
-    partitioned_by: &[String],
+    lists: TableColumnLists<'_>,
 ) -> String {
+    let TableColumnLists {
+        partitioned_by,
+        clustered_by,
+        bloom,
+    } = lists;
     let mut text = format!("CREATE TABLE {name} (\n");
     for (index, column) in columns.iter().enumerate() {
         text.push_str("   ");
@@ -999,16 +1202,26 @@ pub fn render_create_table(
     ));
     if !partitioned_by.is_empty() {
         text.push_str(&format!(
-            ",\n   partitioned_by = ARRAY[{}]",
-            partitioned_by
-                .iter()
-                .map(|key| format!("'{}'", key.replace('\'', "''")))
-                .collect::<Vec<_>>()
-                .join(", ")
+            ",\n   partitioned_by = {}",
+            render_array(partitioned_by)
         ));
+    }
+    for (key, values) in [("clustered_by", clustered_by), ("bloom", bloom)] {
+        if !values.is_empty() {
+            text.push_str(&format!(",\n   {key} = {}", render_array(values)));
+        }
     }
     text.push_str("\n)");
     text
+}
+
+/// `ARRAY['a', 'b']`, each value single-quoted.
+pub fn render_array(values: &[String]) -> String {
+    let quoted = values
+        .iter()
+        .map(|value| format!("'{}'", value.replace('\'', "''")))
+        .collect::<Vec<_>>();
+    format!("ARRAY[{}]", quoted.join(", "))
 }
 
 pub fn format_name(format: DataFormat) -> &'static str {
@@ -1103,6 +1316,8 @@ mod tests {
                 format: DataFormat::Delta,
                 access: AccessPattern::Shortcut,
                 partitioned_by: None,
+                clustered_by: Vec::new(),
+                bloom: Vec::new(),
             }
         );
         assert_eq!(
@@ -1117,6 +1332,8 @@ mod tests {
                 format: DataFormat::Parquet,
                 access: AccessPattern::Optimized,
                 partitioned_by: None,
+                clustered_by: Vec::new(),
+                bloom: Vec::new(),
             }
         );
     }
@@ -1151,6 +1368,8 @@ mod tests {
                 format: DataFormat::Parquet,
                 access: AccessPattern::Shortcut,
                 partitioned_by: Some(vec!["dt".into(), "region".into()]),
+                clustered_by: Vec::new(),
+                bloom: Vec::new(),
             }
         );
         // Without a column list the keys are declared by name and typed by
@@ -1176,11 +1395,11 @@ mod tests {
             ),
             (
                 "CREATE TABLE sales WITH (location = 'sales', format = 'parquet', partitioned_by = 'dt')",
-                "takes ARRAY",
+                "expects ARRAY",
             ),
             (
                 "CREATE TABLE sales WITH (location = ARRAY['sales'], format = 'parquet')",
-                "single-quoted string",
+                "quoted value",
             ),
             (
                 "CREATE TABLE sales WITH (location = 'sales', format = 'delta', partitioned_by = ARRAY['dt'])",
@@ -1188,12 +1407,162 @@ mod tests {
             ),
             (
                 "CREATE CATALOG lake WITH (storage = ARRAY['local'], base_path = '/data')",
-                "single-quoted string",
+                "quoted value",
             ),
         ] {
             let failure = parse_catalog_statement(sql).unwrap_err().to_string();
             assert!(failure.contains(expected), "{sql}: {failure}");
         }
+    }
+
+    #[test]
+    fn create_table_reads_the_layout_options() {
+        assert_eq!(
+            parse(
+                "CREATE TABLE hits (event_time BIGINT, url VARCHAR, user_id BIGINT) WITH (location = 'hits', format = 'parquet', clustered_by = ARRAY['event_time', 'url'], bloom = ARRAY['user_id'])"
+            ),
+            CatalogStatement::CreateTable {
+                name: name(&["hits"]),
+                if_not_exists: false,
+                columns: Some(vec![
+                    ColumnSpec {
+                        name: "event_time".into(),
+                        data_type: DataType::Int64,
+                        nullable: true,
+                    },
+                    ColumnSpec {
+                        name: "url".into(),
+                        data_type: DataType::Utf8,
+                        nullable: true,
+                    },
+                    ColumnSpec {
+                        name: "user_id".into(),
+                        data_type: DataType::Int64,
+                        nullable: true,
+                    },
+                ]),
+                location: "hits".into(),
+                format: DataFormat::Parquet,
+                access: AccessPattern::Shortcut,
+                partitioned_by: None,
+                clustered_by: vec!["event_time".into(), "url".into()],
+                bloom: vec!["user_id".into()],
+            }
+        );
+        // Inferred columns: the layout is checked by the coordinator
+        // against the source's columns.
+        let CatalogStatement::CreateTable { clustered_by, .. } = parse(
+            "CREATE TABLE hits WITH (location = 'hits', format = 'parquet', clustered_by = ARRAY['k'])",
+        ) else {
+            panic!("expected CREATE TABLE");
+        };
+        assert_eq!(clustered_by, vec!["k".to_owned()]);
+        for (sql, expected) in [
+            (
+                "CREATE TABLE t (a BIGINT) WITH (location = 'x', format = 'parquet', clustered_by = ARRAY['b'])",
+                "not a declared column",
+            ),
+            (
+                "CREATE TABLE t WITH (location = 'x', format = 'parquet', clustered_by = 'a')",
+                "ARRAY",
+            ),
+            (
+                "CREATE TABLE t WITH (location = 'x', format = 'parquet', clustered_by = ARRAY['a', 'a'])",
+                "twice",
+            ),
+            (
+                "CREATE TABLE t WITH (location = ARRAY['x'], format = 'parquet')",
+                "quoted value",
+            ),
+            (
+                "CREATE TABLE t WITH (location = 'x', format = 'parquet', clustered_by = ARRAY[a])",
+                "WITH options",
+            ),
+        ] {
+            let error = parse_catalog_statement(sql)
+                .err()
+                .unwrap_or_else(|| panic!("{sql} was accepted"))
+                .to_string();
+            assert!(error.contains(expected), "{sql}: {error}");
+        }
+    }
+
+    #[test]
+    fn alter_table_set_clustered_by_and_optimize_parse() {
+        assert_eq!(
+            parse("ALTER TABLE lake.sales.orders SET CLUSTERED BY (region, \"Order Day\")"),
+            CatalogStatement::AlterTableSetClusteredBy {
+                name: name(&["lake", "sales", "orders"]),
+                if_exists: false,
+                columns: vec!["region".into(), "Order Day".into()],
+            }
+        );
+        assert_eq!(
+            parse("ALTER TABLE IF EXISTS orders SET CLUSTERED BY ()"),
+            CatalogStatement::AlterTableSetClusteredBy {
+                name: name(&["orders"]),
+                if_exists: true,
+                columns: Vec::new(),
+            }
+        );
+        assert!(
+            parse_catalog_statement("ALTER TABLE orders SET CLUSTERED BY (a, a)")
+                .unwrap_err()
+                .to_string()
+                .contains("twice")
+        );
+        assert_eq!(
+            parse("OPTIMIZE lake.sales.orders"),
+            CatalogStatement::Optimize {
+                name: name(&["lake", "sales", "orders"]),
+                filter: None,
+                options: OptimizeOptions::default(),
+            }
+        );
+        assert_eq!(
+            parse("OPTIMIZE TABLE orders WHERE region = 'Asia' AND day >= DATE '2026-07-01'"),
+            CatalogStatement::Optimize {
+                name: name(&["orders"]),
+                filter: Some("region = 'Asia' AND day >= DATE '2026-07-01'".into()),
+                options: OptimizeOptions::default(),
+            }
+        );
+        assert_eq!(
+            parse(
+                "OPTIMIZE orders WITH (row_group_rows = 250000, file_bytes = '1073741824') WHERE region = 'Asia'"
+            ),
+            CatalogStatement::Optimize {
+                name: name(&["orders"]),
+                filter: Some("region = 'Asia'".into()),
+                options: OptimizeOptions {
+                    row_group_rows: Some(250_000),
+                    row_group_bytes: None,
+                    file_bytes: Some(1_073_741_824),
+                },
+            }
+        );
+        for (sql, expected) in [
+            (
+                "OPTIMIZE orders WITH (row_group_rows = 0)",
+                "positive integer",
+            ),
+            (
+                "OPTIMIZE orders WITH (row_group_rows = 'many')",
+                "positive integer",
+            ),
+            ("OPTIMIZE orders WITH (pages = 3)", "not supported"),
+        ] {
+            let error = parse_catalog_statement(sql).unwrap_err().to_string();
+            assert!(error.contains(expected), "{sql}: {error}");
+        }
+        assert!(
+            parse_catalog_statement("OPTIMIZE orders WHERE")
+                .unwrap_err()
+                .to_string()
+                .contains("OPTIMIZE WHERE")
+        );
+        assert!(parse("OPTIMIZE orders").is_maintenance());
+        assert!(!parse("OPTIMIZE orders").is_mutation());
     }
 
     #[test]
@@ -1335,7 +1704,7 @@ mod tests {
             parse_catalog_statement("ALTER TABLE orders ADD COLUMN x BIGINT")
                 .unwrap_err()
                 .to_string()
-                .contains("SET LOCATION")
+                .contains("SET CLUSTERED BY")
         );
         assert!(
             parse_catalog_statement("ALTER TABLE orders SET LOCATION orders")
@@ -1433,6 +1802,8 @@ mod tests {
                 format: DataFormat::Delta,
                 access: AccessPattern::Shortcut,
                 partitioned_by: None,
+                clustered_by: Vec::new(),
+                bloom: Vec::new(),
             }
         );
         assert_eq!(
@@ -1447,6 +1818,8 @@ mod tests {
                 format: DataFormat::Parquet,
                 access: AccessPattern::Shortcut,
                 partitioned_by: None,
+                clustered_by: Vec::new(),
+                bloom: Vec::new(),
             }
         );
         assert_eq!(
@@ -1585,10 +1958,15 @@ mod tests {
             "nyc/taxi's/yellow",
             DataFormat::Delta,
             AccessPattern::Shortcut,
-            &[],
+            TableColumnLists {
+                partitioned_by: &[],
+                clustered_by: &["Region Name".to_owned(), "id".to_owned()],
+                bloom: &["wide".to_owned()],
+            },
         );
         assert!(rendered.starts_with("CREATE TABLE \"OpenSource\".nyc_taxi.yellow_trips (\n"));
         assert!(!rendered.contains("partitioned_by"));
+        assert!(rendered.contains("clustered_by = ARRAY['Region Name', 'id']"));
         assert_eq!(
             parse(&rendered),
             CatalogStatement::CreateTable {
@@ -1599,6 +1977,8 @@ mod tests {
                 format: DataFormat::Delta,
                 access: AccessPattern::Shortcut,
                 partitioned_by: None,
+                clustered_by: vec!["Region Name".into(), "id".into()],
+                bloom: vec!["wide".into()],
             }
         );
         // A partitioned table renders its keys and reads back the same.
@@ -1608,7 +1988,10 @@ mod tests {
             "sales",
             DataFormat::Parquet,
             AccessPattern::Shortcut,
-            &["Region Name".to_owned(), "id".to_owned()],
+            TableColumnLists {
+                partitioned_by: &["Region Name".to_owned(), "id".to_owned()],
+                ..TableColumnLists::default()
+            },
         );
         assert!(rendered.contains("   partitioned_by = ARRAY['Region Name', 'id']\n)"));
         assert_eq!(
@@ -1616,12 +1999,23 @@ mod tests {
             CatalogStatement::CreateTable {
                 name: name(&["lake", "sales"]),
                 if_not_exists: false,
-                columns: Some(columns),
+                columns: Some(columns.clone()),
                 location: "sales".into(),
                 format: DataFormat::Parquet,
                 access: AccessPattern::Shortcut,
                 partitioned_by: Some(vec!["Region Name".into(), "id".into()]),
+                clustered_by: Vec::new(),
+                bloom: Vec::new(),
             }
         );
+        let plain = render_create_table(
+            &name(&["t"]),
+            &columns[..1],
+            "t",
+            DataFormat::Parquet,
+            AccessPattern::Shortcut,
+            TableColumnLists::default(),
+        );
+        assert!(plain.ends_with("access = 'shortcut'\n)"), "{plain}");
     }
 }

@@ -453,6 +453,88 @@ impl SchemaDefinition {
     }
 }
 
+/// How a table's files are laid out when the Engine writes them: the
+/// columns rows are clustered (sorted) by within every file, and the
+/// columns that carry a Bloom filter per row group. `OPTIMIZE` rewrites a
+/// table to this layout; a reader prunes by it. Both lists name columns of
+/// the definition; the clustering columns always carry a Bloom filter.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TableLayout {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    clustered_by: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    bloom: Vec<String>,
+}
+
+impl TableLayout {
+    pub fn new(clustered_by: Vec<String>, bloom: Vec<String>) -> Result<Self> {
+        let mut seen = std::collections::HashSet::new();
+        for column in &clustered_by {
+            validate_metadata_text("clustering column", column)?;
+            if !seen.insert(column.as_str()) {
+                return Err(crate::KaveonError::Execution(format!(
+                    "clustering column '{column}' is listed twice"
+                )));
+            }
+        }
+        seen.clear();
+        for column in &bloom {
+            validate_metadata_text("bloom column", column)?;
+            if !seen.insert(column.as_str()) {
+                return Err(crate::KaveonError::Execution(format!(
+                    "bloom column '{column}' is listed twice"
+                )));
+            }
+        }
+        Ok(Self {
+            clustered_by,
+            bloom,
+        })
+    }
+
+    /// The columns rows are sorted by, in order.
+    pub fn clustered_by(&self) -> &[String] {
+        &self.clustered_by
+    }
+
+    /// The columns declared to carry a Bloom filter, beyond the clustering
+    /// columns.
+    pub fn bloom(&self) -> &[String] {
+        &self.bloom
+    }
+
+    /// Every column that carries a Bloom filter: the clustering columns
+    /// first, then the declared ones not already listed.
+    pub fn bloom_columns(&self) -> Vec<String> {
+        let mut columns = self.clustered_by.clone();
+        for column in &self.bloom {
+            if !columns.contains(column) {
+                columns.push(column.clone());
+            }
+        }
+        columns
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.clustered_by.is_empty() && self.bloom.is_empty()
+    }
+
+    /// Every named column must be one of `columns`.
+    fn check_against(&self, columns: &[ColumnDefinition]) -> Result<()> {
+        for (kind, names) in [("clustering", &self.clustered_by), ("bloom", &self.bloom)] {
+            if let Some(unknown) = names
+                .iter()
+                .find(|name| !columns.iter().any(|column| column.name() == name.as_str()))
+            {
+                return Err(crate::KaveonError::Execution(format!(
+                    "{kind} column '{unknown}' is not a column of the table"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TableDefinition {
     id: TableId,
@@ -469,6 +551,10 @@ pub struct TableDefinition {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     partitions: Vec<PartitionColumn>,
     lifecycle: CatalogLifecycle,
+    /// Absent in definitions stored before layouts existed: no clustering,
+    /// no Bloom filters.
+    #[serde(default, skip_serializing_if = "TableLayout::is_empty")]
+    layout: TableLayout,
 }
 
 impl TableDefinition {
@@ -507,6 +593,7 @@ impl TableDefinition {
             columns,
             partitions: Vec::new(),
             lifecycle: CatalogLifecycle::Draft,
+            layout: TableLayout::default(),
         })
     }
     /// The definition with its partition columns declared: each must name
@@ -592,6 +679,27 @@ impl TableDefinition {
         validate_metadata_text("table location", &location)?;
         let mut next = self.clone();
         next.location = location;
+        next.revision = self.revision.next()?;
+        Ok(next)
+    }
+    /// The layout the Engine writes this table in.
+    pub const fn layout(&self) -> &TableLayout {
+        &self.layout
+    }
+    /// This definition, at the same revision, with `layout`; every column
+    /// the layout names must be a column of the table. What `CREATE TABLE
+    /// … WITH (clustered_by = …)` stores.
+    pub fn with_layout(mut self, layout: TableLayout) -> Result<Self> {
+        layout.check_against(&self.columns)?;
+        self.layout = layout;
+        Ok(self)
+    }
+    /// The next revision of this definition with another layout: what
+    /// `ALTER TABLE … SET CLUSTERED BY (…)` publishes.
+    pub fn with_layout_revision(&self, layout: TableLayout) -> Result<Self> {
+        layout.check_against(&self.columns)?;
+        let mut next = self.clone();
+        next.layout = layout;
         next.revision = self.revision.next()?;
         Ok(next)
     }
@@ -1151,6 +1259,56 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn table_layout_names_columns_of_the_table_and_survives_older_documents() {
+        let columns = vec![
+            ColumnDefinition::new("order_id", DataType::Int64, false).unwrap(),
+            ColumnDefinition::new("region", DataType::Utf8, true).unwrap(),
+        ];
+        let table = TableDefinition::new(
+            TableId::new("table-01").unwrap(),
+            SchemaId::new("schema-01").unwrap(),
+            "orders",
+            "sales/orders",
+            AccessPattern::Shortcut,
+            DataFormat::Parquet,
+            columns,
+        )
+        .unwrap();
+        assert!(table.layout().is_empty());
+
+        let layout = TableLayout::new(vec!["region".into()], vec!["order_id".into()]).unwrap();
+        let clustered = table.clone().with_layout(layout.clone()).unwrap();
+        assert_eq!(clustered.revision(), table.revision());
+        assert_eq!(clustered.layout().clustered_by(), ["region"]);
+        assert_eq!(clustered.layout().bloom_columns(), ["region", "order_id"]);
+        let again = clustered
+            .with_layout_revision(TableLayout::new(vec!["order_id".into()], vec![]).unwrap())
+            .unwrap();
+        assert_eq!(again.revision().value(), 2);
+        assert_eq!(again.layout().clustered_by(), ["order_id"]);
+
+        assert!(
+            table
+                .clone()
+                .with_layout(TableLayout::new(vec!["missing".into()], vec![]).unwrap())
+                .is_err()
+        );
+        assert!(TableLayout::new(vec!["a".into(), "a".into()], vec![]).is_err());
+        assert!(TableLayout::new(vec![], vec![" ".into()]).is_err());
+
+        // A definition stored before layouts existed carries no `layout`
+        // key; a clustered one round-trips.
+        let mut document = serde_json::to_value(&table).unwrap();
+        assert!(document.get("layout").is_none());
+        document.as_object_mut().unwrap().remove("layout");
+        let restored: TableDefinition = serde_json::from_value(document).unwrap();
+        assert_eq!(restored, table);
+        let restored: TableDefinition =
+            serde_json::from_str(&serde_json::to_string(&clustered).unwrap()).unwrap();
+        assert_eq!(restored, clustered);
     }
 
     #[test]
