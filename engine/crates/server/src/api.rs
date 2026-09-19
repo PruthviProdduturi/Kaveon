@@ -313,6 +313,21 @@ struct TaskExecutionMetrics {
     aggregate_input_rows: u64,
     aggregate_groups_created: u64,
     aggregate_distinct_values_admitted: u64,
+    /// `aggregating` when every row of the grouped partial went through
+    /// its table, `passthrough` when the partial found it reduced nothing
+    /// and passed rows through as their own partial rows; absent when no
+    /// grouped partial ran on the task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    aggregate_partial_mode: Option<String>,
+    #[serde(default)]
+    aggregate_partial_input_rows: u64,
+    #[serde(default)]
+    aggregate_partial_output_rows: u64,
+    #[serde(default)]
+    aggregate_partial_passthrough_rows: u64,
+    /// Partial rows out per row in (1.0: the partial reduced nothing).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    aggregate_partial_reduction: Option<f64>,
     spill_peak_bytes: u64,
     spill_bytes_written: u64,
     spill_runs_written: u64,
@@ -1987,6 +2002,17 @@ async fn execute_fragment_task(
     metrics.aggregate_input_rows = aggregate_metrics.input_rows;
     metrics.aggregate_groups_created = aggregate_metrics.groups_created;
     metrics.aggregate_distinct_values_admitted = aggregate_metrics.distinct_values_admitted;
+    metrics.aggregate_partial_input_rows = aggregate_metrics.partial_input_rows;
+    metrics.aggregate_partial_output_rows = aggregate_metrics.partial_output_rows;
+    metrics.aggregate_partial_passthrough_rows = aggregate_metrics.partial_passthrough_rows;
+    metrics.aggregate_partial_reduction = aggregate_metrics.partial_reduction();
+    metrics.aggregate_partial_mode = (aggregate_metrics.partial_input_rows > 0).then(|| {
+        if aggregate_metrics.partial_passthrough_rows > 0 {
+            "passthrough".to_owned()
+        } else {
+            "aggregating".to_owned()
+        }
+    });
     if let (Some(before), Some(after)) = (spill_before, spill.map(|spill| spill.snapshot())) {
         metrics.spill_peak_bytes = after.peak_bytes;
         metrics.spill_bytes_written = after.bytes_written.saturating_sub(before.bytes_written);

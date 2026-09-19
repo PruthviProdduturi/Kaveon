@@ -107,6 +107,12 @@ impl Arena {
     fn bytes(&self) -> u64 {
         (self.bytes.capacity() + self.offsets.capacity() * 4 + self.index.capacity() * 8) as u64
     }
+    /// Forget every string, keeping the allocations.
+    fn clear(&mut self) {
+        self.bytes.clear();
+        self.offsets.truncate(1);
+        self.index.clear();
+    }
 }
 
 /// One aggregate's accumulators for every slot.
@@ -212,6 +218,30 @@ impl AccColumn {
             Self::Float { .. } => 16,
             Self::FloatMin { .. } | Self::FloatMax { .. } => 9,
             Self::TextMin(_) | Self::TextMax(_) => 16,
+        }
+    }
+
+    /// Drop every slot, keeping the allocations.
+    fn clear(&mut self) {
+        match self {
+            Self::Count(counts) => counts.clear(),
+            Self::IntegerSum { sums, counts } => {
+                sums.clear();
+                counts.clear();
+            }
+            Self::IntegerMin { values, present } | Self::IntegerMax { values, present } => {
+                values.clear();
+                present.clear();
+            }
+            Self::Float { sums, counts, .. } => {
+                sums.clear();
+                counts.clear();
+            }
+            Self::FloatMin { values, present } | Self::FloatMax { values, present } => {
+                values.clear();
+                present.clear();
+            }
+            Self::TextMin(values) | Self::TextMax(values) => values.clear(),
         }
     }
 
@@ -878,6 +908,12 @@ impl SlotIndex {
         self.tags.len() / INDEX_LOAD_DENOMINATOR * INDEX_LOAD_NUMERATOR
     }
 
+    /// Empty every bucket, keeping the buckets.
+    fn clear(&mut self) {
+        self.tags.fill(0);
+        self.len = 0;
+    }
+
     fn is_full(&self) -> bool {
         self.len >= self.capacity()
     }
@@ -1184,6 +1220,35 @@ impl ColumnarGroups {
 
     pub fn len(&self) -> usize {
         self.len
+    }
+
+    /// Empty the table for the next batch, keeping what it has allocated:
+    /// the pass-through partial encodes every batch through one small
+    /// table rather than a table of every group the task has seen.
+    pub fn clear(&mut self) {
+        for key in &mut self.keys {
+            match key {
+                KeyColumn::Integer { values, nulls, .. } => {
+                    values.clear();
+                    nulls.clear();
+                }
+                KeyColumn::Text {
+                    words,
+                    nulls,
+                    arena,
+                    ..
+                } => {
+                    words.clear();
+                    nulls.clear();
+                    arena.clear();
+                }
+            }
+        }
+        for accumulator in &mut self.accumulators {
+            accumulator.clear();
+        }
+        self.index.clear();
+        self.len = 0;
     }
 
     /// The accumulator template every group started from.
