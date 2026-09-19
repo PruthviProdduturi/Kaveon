@@ -350,15 +350,19 @@ principal):
 
 `GET /v1/statistics` (admin) lists every table with a record (`table`,
 `table_id`, `row_count`, `source_version` label, `depth`, `computed_at`,
-`current`); it is the one of the three the platform API calls today
-(`api/services/engine_bridge.py`, behind `GET
-/api/v1/engine/console/statistics`, which Studio's catalog pages read).
-What the DLM will use `/version` for: an answer served from its own
-context cache over an Engine table is only as fresh as the version it was
-computed at, so the DLM will read `/version` before serving and compare it
-with the version its cuboids were built from — serve when equal, requery
-or rebuild when not — and carry the version in the answer's evidence. That
-reading is not written yet (last section).
+`current`); the platform API calls it behind `GET
+/api/v1/engine/console/statistics`, which Studio's catalog pages read.
+The DLM reads `/version` (`api/services/engine_bridge.py`,
+`table_version`) for a dataset bound to an Engine table: at generation it
+records the version the artifact was compiled at, and its freshness
+scorer compares that with the version observed now — equal is no change,
+a moved identity is a change of the half fraction and the sweep rebuilds
+the value index. The DLM's answers over such a table are not served from
+its own cells at all: each is one statement the Engine answers from the
+cube or the statistics at the pinned version (`execution.mode =
+"context"`) or reads, and the answer's evidence carries the record's
+`source_version` (or `/version` for a read) — see
+[Over Engine tables](../guides/nl-to-sql.md#over-engine-tables).
 
 ## Guarantees
 
@@ -402,17 +406,18 @@ reading is not written yet (last section).
 
 Stated as target, not as the product:
 
-- **The incremental cube.** A per-declared-shape cube (grouped totals,
-  low-cardinality combinations) maintained incrementally at the source
-  version, answering grouped and filtered statements with
-  `execution.mode = "context"` the way the ungrouped aggregates are
-  answered today. The DLM's answer-from-context does this over the
-  PostgreSQL warehouse; the Engine has no cube.
-- **The DLM over Engine tables** with the freshness signal: the DLM does
-  not read `/v1/catalog/tables/{id}/version` yet (the platform API calls
-  only `/v1/statistics`), and a DLM dataset over a native-catalog table
-  runs its SQL on the coordinator without carrying the source version in
-  its evidence.
+- **The cube beyond what it declares.** The incremental cube over a
+  declared shape is built ([Declared shape and the
+  cube](storage-and-catalogs.md#declared-shape-and-the-cube)); partition
+  columns as axes, `ORDER BY`/`LIMIT` over a cube answer, a date column at
+  month grain and a `/cube` freshness endpoint beside `/statistics` are
+  not.
+- **The DLM over Engine tables beyond one table.** A dataset bound to an
+  Engine table is answered from the cube and the statistics with its
+  evidence and the `/version` freshness signal
+  ([Over Engine tables](../guides/nl-to-sql.md#over-engine-tables)); a
+  dataset joining Engine tables, and a time axis the DLM asks by year or
+  month against a cube's `time` grain, still take the row path.
 - **Heavy-hitter sketches.** `APPROX_MOST_FREQUENT` is not implemented:
   the statistics object holds no count-min or space-saving sketch, and
   adding one is a third sketch kind in the object, the exchange encoding
