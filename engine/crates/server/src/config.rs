@@ -22,7 +22,17 @@ pub struct ServerConfig {
     pub bind_host: String,
     pub tls_cert_path: Option<PathBuf>,
     pub tls_key_path: Option<PathBuf>,
+    /// The `default` resource group's `max_concurrent`
+    /// (`KAVEON_PRINCIPAL_QUERY_LIMIT`, kept as the alias).
     pub principal_query_limit: usize,
+    /// Where the coordinator keeps what must survive a restart and is not
+    /// the catalog store: the runtime resource-group copy and the audit
+    /// ledger. Defaults to the catalog store's directory.
+    pub state_dir: PathBuf,
+    /// The JSON or TOML file named by `KAVEON_RESOURCE_GROUPS`.
+    pub resource_groups_path: Option<PathBuf>,
+    /// The `[resource_groups]` section of the configuration file.
+    pub resource_groups_section: Option<crate::resource_groups::ResourceGroups>,
     pub coordinator_exchange_spool: bool,
     /// Workers keep the exchange partitions addressed to them on their own
     /// disk, so producers upload straight to the consuming worker and the
@@ -121,6 +131,9 @@ impl Default for ServerConfig {
             tls_cert_path: None,
             tls_key_path: None,
             principal_query_limit: 4,
+            state_dir: PathBuf::from("."),
+            resource_groups_path: None,
+            resource_groups_section: None,
             coordinator_exchange_spool: true,
             worker_exchange_spool: false,
             exchange_spool_root: std::env::temp_dir(),
@@ -182,6 +195,7 @@ struct RawConfig {
     result_cache: Option<ResultCacheConfig>,
     catalog: Option<NativeCatalogConfig>,
     product_transactions: Option<ProductTransactionsConfig>,
+    resource_groups: Option<crate::resource_groups::ResourceGroups>,
 }
 
 #[derive(Deserialize)]
@@ -189,6 +203,7 @@ struct NodeConfig {
     id: Option<String>,
     environment: Option<String>,
     coordinator: Option<bool>,
+    state_dir: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -241,6 +256,7 @@ pub fn default_config_path() -> PathBuf {
 pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     let mut config = ServerConfig::default();
     let mut config_sets_admission = false;
+    let mut state_dir_from_config = None;
 
     if path.exists() {
         let content = std::fs::read_to_string(path)?;
@@ -255,6 +271,9 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
             }
             if let Some(coord) = node.coordinator {
                 config.coordinator = coord;
+            }
+            if let Some(dir) = node.state_dir {
+                state_dir_from_config = Some(PathBuf::from(dir));
             }
         }
         if let Some(http) = raw.http
@@ -314,6 +333,7 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
         if let Some(product_transactions) = raw.product_transactions {
             config.product_transactions = product_transactions;
         }
+        config.resource_groups_section = raw.resource_groups;
     }
 
     if let Ok(v) = std::env::var("KAVEON_NODE_ID") {
@@ -457,6 +477,29 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     anyhow::ensure!(
         config.principal_query_limit > 0,
         "principal query limit must be positive"
+    );
+    // The state directory: the variable, the key, else beside the
+    // catalog store.
+    config.state_dir = match std::env::var("KAVEON_STATE_DIR") {
+        Ok(value) => PathBuf::from(value),
+        Err(_) => state_dir_from_config.unwrap_or_else(|| {
+            config
+                .catalog_database_path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
+        }),
+    };
+    if let Ok(value) = std::env::var("KAVEON_RESOURCE_GROUPS") {
+        anyhow::ensure!(
+            !value.trim().is_empty(),
+            "KAVEON_RESOURCE_GROUPS must name a JSON or TOML file"
+        );
+        config.resource_groups_path = Some(PathBuf::from(value));
+    }
+    anyhow::ensure!(
+        config.resource_groups_section.is_none() || config.security.resource_groups.is_empty(),
+        "resource groups are configured twice: the [resource_groups] section and security.resource_groups; keep one"
     );
     config.tls_cert_path = std::env::var("KAVEON_TLS_CERT_PATH")
         .ok()
@@ -1211,6 +1254,105 @@ admission_wait_seconds = 0
                 .memory_admission_queue,
             0
         );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// The `[resource_groups]` section loads and validates; the state
+    /// directory follows the catalog store unless `node.state_dir` says
+    /// otherwise; the section and the legacy security list together are
+    /// refused; the loader's precedence and the built-in fallback hold.
+    #[test]
+    fn resource_group_configuration_loads_from_the_file_and_falls_back_to_the_builtin() {
+        let directory = temporary_directory();
+        let config_path = directory.join("config.toml");
+        let defaults = load_server_config(&directory.join("missing.toml")).unwrap();
+        assert!(defaults.resource_groups_section.is_none());
+        assert_eq!(defaults.state_dir, std::path::PathBuf::from("."));
+        let (groups, source, store_path) =
+            crate::resource_groups::load(&defaults, defaults.resource_groups_section.clone())
+                .unwrap();
+        assert_eq!(source, crate::resource_groups::Source::Builtin);
+        assert_eq!(
+            groups.groups[0].max_concurrent,
+            defaults.principal_query_limit
+        );
+        assert_eq!(
+            store_path,
+            std::path::PathBuf::from("./resource-groups.json")
+        );
+
+        std::fs::write(
+            &config_path,
+            format!(
+                "[catalog]
+database_path = \"{}\"
+
+[[resource_groups.groups]]
+name = \"default\"
+max_concurrent = 2
+
+[[resource_groups.groups]]
+name = \"etl\"
+max_concurrent = 1
+max_queued = 3
+max_queue_wait_seconds = 120
+priority = 2
+default_settings = {{ result_cache = false }}
+
+[[resource_groups.selectors]]
+client_tag = \"etl\"
+group = \"etl\"
+",
+                directory
+                    .join("catalog")
+                    .join("kaveon-catalog.db")
+                    .display()
+                    .to_string()
+                    .replace('\\', "/")
+            ),
+        )
+        .unwrap();
+        let config = load_server_config(&config_path).unwrap();
+        assert_eq!(config.state_dir, directory.join("catalog"));
+        let section = config.resource_groups_section.clone().unwrap();
+        assert_eq!(section.groups[1].name, "etl");
+        assert_eq!(section.groups[1].max_queue_wait_seconds, 120);
+        assert_eq!(section.groups[1].default_settings["result_cache"], false);
+        let (groups, source, store_path) =
+            crate::resource_groups::load(&config, config.resource_groups_section.clone()).unwrap();
+        assert_eq!(source, crate::resource_groups::Source::ConfigFile);
+        assert_eq!(groups.selectors[0].client_tag.as_deref(), Some("etl"));
+        assert_eq!(
+            store_path,
+            directory.join("catalog").join("resource-groups.json")
+        );
+
+        // A durable runtime copy beside the catalog store wins over the section.
+        std::fs::create_dir_all(directory.join("catalog")).unwrap();
+        std::fs::write(
+            directory.join("catalog").join("resource-groups.json"),
+            r#"{"groups":[{"name":"default","max_concurrent":7}],"selectors":[]}"#,
+        )
+        .unwrap();
+        let (groups, source, _) =
+            crate::resource_groups::load(&config, config.resource_groups_section.clone()).unwrap();
+        assert_eq!(source, crate::resource_groups::Source::Runtime);
+        assert_eq!(groups.groups[0].max_concurrent, 7);
+
+        // A section that does not validate is refused at load.
+        std::fs::write(
+            &config_path,
+            "[[resource_groups.groups]]
+name = \"etl\"
+max_concurrent = 1
+",
+        )
+        .unwrap();
+        let config = load_server_config(&config_path).unwrap();
+        let error = crate::resource_groups::load(&config, config.resource_groups_section.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("default"), "{error}");
         std::fs::remove_dir_all(directory).unwrap();
     }
 

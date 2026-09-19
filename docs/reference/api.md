@@ -148,6 +148,7 @@ The Rust server exposes these routes:
 | `GET` | `/v1/cluster` | Coordinator and discovered-worker state, with each node's memory admission counters (`admission`) as last heartbeated |
 | `GET` | `/v1/node` | Current node information, with the result cache counters on a coordinator and the node's memory admission counters (`admission`) |
 | `DELETE` | `/v1/cache` | Drop every cached result (admin role) |
+| `GET`, `PUT` | `/v1/admin/resource-groups` | The resource groups and selectors in force with their source and counters; replace them all at once, validated, effective for the next admission and durable across restarts (admin role) — see [Resource groups](#resource-groups) |
 | `POST` | `/v1/node/heartbeat` | Register a worker heartbeat on a coordinator |
 | `GET` | `/v1/catalog` | List catalogs |
 | `GET`, `POST` | `/v1/catalog/definitions` | List or create durable catalog definitions |
@@ -167,7 +168,7 @@ The Rust server exposes these routes:
 | `GET` | `/v1/task/{query_id}/{stage_id}/{partition}/{attempt}/metrics` | A task's outcome on its worker, exchange-token authenticated: `200` `{"elapsed_us", "scan", "execution"}` once it finished (`scan` and `execution` are the task's scan and execution metrics, `null` when it carries none), `202` `{"state": "RUNNING"}` while it runs, `500` `{"error"}` when it failed, `404` for a task the worker does not know or has already forgotten with its finished query |
 | `GET` | `/health`, `/ready`, `/ui` | Liveness, catalog readiness, and operational UI |
 
-Catalog mutations through `/v1/catalog/*` require the configured catalog-admin bearer token, an actor header, and optimistic `If-Match` revisions for replacement; the same definitions are also created and dropped by [catalog statements](#catalog-statements) on `/v1/statement` under the submitting principal's role. Internal task/exchange routes use a separate shared bearer token. Statement clients authenticate with a principal token from `KAVEON_SECURITY_JSON` (roles `reader`, `analyst`, `admin`), an Entra bearer token, or the API bridge token with delegated `x-kaveon-principal`/`x-kaveon-role` headers; the server serves native TLS, applies a per-principal concurrent-statement limit, resource groups and memory admission, and scopes query records and paged results to their owner (`docs/engineering/engine-security-integration.md`). This is a credential boundary, not production identity federation: rotation without restart, tenant isolation and row/column policies remain gates, so keep the Engine on a private network during alpha.
+Catalog mutations through `/v1/catalog/*` require the configured catalog-admin bearer token, an actor header, and optimistic `If-Match` revisions for replacement; the same definitions are also created and dropped by [catalog statements](#catalog-statements) on `/v1/statement` under the submitting principal's role. Internal task/exchange routes use a separate shared bearer token. Statement clients authenticate with a principal token from `KAVEON_SECURITY_JSON` (roles `reader`, `analyst`, `admin`), an Entra bearer token, or the API bridge token with delegated `x-kaveon-principal`/`x-kaveon-role` headers; the server serves native TLS, admits every statement through its resource group (concurrency, memory share, queue) and the memory admission pool, and scopes query records and paged results to their owner (`docs/engineering/engine-security-integration.md`). This is a credential boundary, not production identity federation: rotation without restart, tenant isolation and row/column policies remain gates, so keep the Engine on a private network during alpha.
 
 The statement JSON body requires `query`. Clients may also provide `source`,
 `client`, `time_zone`, `client_tags`, `result_delivery` and `settings`. `source`,
@@ -532,19 +533,50 @@ statements is refused with HTTP 400. The query record carries the effective
 settings in its `settings` field, present only when the statement set
 something; Studio shows them on the query page under Execution.
 
+### Resource groups
+
+Every statement is admitted through one resource group, chosen by the
+ordered selectors from the principal, its role and the request's
+`client_tags`; the group bounds its running statements, its memory share,
+its queue and wait, its aggregator threads, and supplies default settings.
+The record carries the group and its limits under `context.resource_group`
+(`name`, `max_memory_bytes`, `max_concurrent`, `max_queued`,
+`max_queue_wait_seconds`, `max_local_parallelism`, `priority`); Studio
+shows it on the query page. The keys, the selector rules, the admission
+order across groups and the configuration sources are in
+[Governance](../engine/governance.md).
+
+`GET /v1/admin/resource-groups` (admin) answers with `source`,
+`store_path`, `admission_limit_bytes`, `groups`, `selectors` and
+`counters` (one entry per group: `running`, `queued`, `admitted_bytes`,
+`admitted`, `queued_total`, `rejected`, `withdrawn`, `wait_ms_p50`,
+`wait_ms_p95` and the limits in force). `PUT /v1/admin/resource-groups`
+(admin) takes `{"groups": [...], "selectors": [...]}` and replaces
+everything at once: HTTP 200 with the same document as `GET` once it is in
+force and written to `store_path`, HTTP 400 `INVALID_RESOURCE_GROUPS`
+naming the group or selector otherwise, with nothing changed. Both are
+HTTP 403 for any other role and 400 `NOT_COORDINATOR` on a worker.
+
+A refusal by the group's own limit is HTTP 429 `RESOURCE_GROUP_REJECTED`
+with `resource_group`, `limit` (`{"max_memory_bytes"}`, `{"max_queued"}`
+or `{"max_queue_wait_seconds"}`) and `admission_wait_ms`; a refusal by the
+node's pool or queue keeps the code below and names the group too.
+
 ### Memory admission
 
 Every statement is admitted against the coordinator's memory admission
 limit (`KAVEON_MEMORY_ADMISSION_LIMIT_BYTES`) with its query memory pool
 (`KAVEON_QUERY_MEMORY_LIMIT_BYTES`, or the request's
-`query_memory_limit_bytes`). A statement whose pool fits on arrival runs
-at once. One that does not fit waits in a FIFO queue
-(`KAVEON_MEMORY_ADMISSION_QUEUE`, default 64) until running statements
-release enough budget, for at most `KAVEON_MEMORY_ADMISSION_WAIT_SECONDS`
-(default 60) or the request's `admission_wait_seconds`. The head of the
-queue is admitted first and only when its whole pool fits; nothing behind
-it is admitted ahead of it. A resource group's queue, when the principal
-has one, is passed before memory admission.
+`query_memory_limit_bytes`). A statement whose pool fits on arrival, whose
+group has a running slot and room in its share, runs at once. One that
+does not waits in its group's queue (`KAVEON_MEMORY_ADMISSION_QUEUE`,
+default 64, bounds every group together) until running statements release
+enough, for at most the shortest of `KAVEON_MEMORY_ADMISSION_WAIT_SECONDS`
+(default 60), the group's `max_queue_wait_seconds` and the request's
+`admission_wait_seconds`. Within a group the head is admitted first and
+only when its whole pool fits; across groups the group furthest below its
+weighted share of the pool is next, and the pool is held for it until its
+head fits ([the order](../engine/governance.md#the-admission-order)).
 
 While it waits the statement is in the history with `state: "QUEUED"`, so
 `GET /v1/query` shows it and `DELETE /v1/query/{query_id}` cancels it: the
@@ -553,12 +585,12 @@ statement leaves the queue at once and its submitter receives HTTP 409
 the same way.
 
 The refusal is HTTP 429 with code `MEMORY_ADMISSION_REJECTED` in three
-cases: the queue is full on arrival, the request asked not to wait
-(`admission_wait_seconds: 0`) and its pool does not fit, or the wait
-expired. The body carries `admission_wait_ms`, how long the statement
-waited before the refusal (zero for the first two). A statement refused
-after waiting stays in the history as `FAILED` with the same
-`admission_wait_ms` and the reason; one refused on arrival leaves no
+cases: the node's queue is full on arrival, the request asked not to wait
+(`admission_wait_seconds: 0`) and it is not next, or the node's wait
+expired. The body carries `resource_group` and `admission_wait_ms`, how
+long the statement waited before the refusal (zero for the first two). A
+statement refused after waiting stays in the history as `FAILED` with the
+same `admission_wait_ms` and the reason; one refused on arrival leaves no
 record. Clients that retry should honour the wait they were given rather
 than resubmitting at once: the coordinator has already held the request
 for the configured time.
@@ -580,9 +612,11 @@ appear on `/v1/node` and, per node, on `/v1/cluster` under `admission`:
 `limit_bytes`, `admitted_bytes`, `peak_admitted_bytes`, `queue_limit`,
 `queue_depth` (waiting now), and the cumulative `admitted`, `queued`
 (arrivals that waited), `rejected` and `withdrawn` (left the queue by
-cancellation or disconnection). Workers admit each task of a distributed
-statement through the same queue and report the same counters; a task's
-wait is `admission_wait_us` in the stage telemetry.
+cancellation or disconnection); the coordinator adds `resource_groups`,
+the same counters per group with the wait percentiles. Workers admit each
+task of a distributed statement through the same queue (one group, no
+concurrency bound) and report the same counters; a task's wait is
+`admission_wait_us` in the stage telemetry.
 
 ### Result cache
 

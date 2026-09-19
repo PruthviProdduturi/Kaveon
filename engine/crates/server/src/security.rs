@@ -8,10 +8,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::sync::Arc;
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -28,6 +25,12 @@ pub struct SecurityConfig {
     pub resource_groups: Vec<ResourceGroupConfig>,
 }
 
+/// The legacy resource group list of `security.resource_groups`: still
+/// accepted, translated at start into `resource_groups::ResourceGroups`
+/// (`max_running` is `max_concurrent`, `queue_timeout_ms` rounds up to
+/// `max_queue_wait_seconds`, principals are exact selectors and `*` the
+/// catch-all). New deployments configure `[resource_groups]` or
+/// `KAVEON_RESOURCE_GROUPS` instead.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceGroupConfig {
@@ -44,7 +47,7 @@ pub struct PrincipalCredential {
     pub principal: String,
     pub role: Role,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     Reader,
@@ -296,110 +299,6 @@ pub async fn authorize(
     next.run(request).await
 }
 
-#[derive(Default)]
-pub struct PrincipalAdmission {
-    active: Arc<Mutex<HashMap<String, usize>>>,
-    groups: Mutex<HashMap<String, Arc<GroupGate>>>,
-}
-struct GroupGate {
-    running: Arc<tokio::sync::Semaphore>,
-    queued: Arc<std::sync::atomic::AtomicUsize>,
-}
-struct QueueGuard(Arc<std::sync::atomic::AtomicUsize>);
-impl Drop for QueueGuard {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
-    }
-}
-pub struct PrincipalPermit {
-    active: Arc<Mutex<HashMap<String, usize>>>,
-    principal: String,
-}
-impl PrincipalAdmission {
-    pub async fn admit_group(
-        &self,
-        principal: &str,
-        config: &SecurityConfig,
-    ) -> Result<Option<tokio::sync::OwnedSemaphorePermit>, StatusCode> {
-        let Some(group) = config
-            .resource_groups
-            .iter()
-            .find(|group| group.principals.iter().any(|member| member == principal))
-            .or_else(|| {
-                config
-                    .resource_groups
-                    .iter()
-                    .find(|group| group.principals.iter().any(|member| member == "*"))
-            })
-        else {
-            return Ok(None);
-        };
-        let gate = {
-            let mut gates = self
-                .groups
-                .lock()
-                .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-            gates
-                .entry(group.name.clone())
-                .or_insert_with(|| {
-                    Arc::new(GroupGate {
-                        running: Arc::new(tokio::sync::Semaphore::new(group.max_running)),
-                        queued: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-                    })
-                })
-                .clone()
-        };
-        if let Ok(permit) = gate.running.clone().try_acquire_owned() {
-            return Ok(Some(permit));
-        }
-        gate.queued
-            .fetch_update(
-                std::sync::atomic::Ordering::AcqRel,
-                std::sync::atomic::Ordering::Acquire,
-                |queued| (queued < group.max_queued).then_some(queued + 1),
-            )
-            .map_err(|_| StatusCode::TOO_MANY_REQUESTS)?;
-        let _waiting = QueueGuard(gate.queued.clone());
-        match tokio::time::timeout(
-            std::time::Duration::from_millis(group.queue_timeout_ms),
-            gate.running.clone().acquire_owned(),
-        )
-        .await
-        {
-            Ok(Ok(permit)) => Ok(Some(permit)),
-            Ok(Err(_)) => Err(StatusCode::SERVICE_UNAVAILABLE),
-            Err(_) => Err(StatusCode::TOO_MANY_REQUESTS),
-        }
-    }
-    pub fn admit(&self, principal: &str, limit: usize) -> Result<PrincipalPermit, StatusCode> {
-        let mut active = self
-            .active
-            .lock()
-            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-        let count = active.entry(principal.into()).or_default();
-        if *count >= limit {
-            return Err(StatusCode::TOO_MANY_REQUESTS);
-        }
-        *count += 1;
-        Ok(PrincipalPermit {
-            active: self.active.clone(),
-            principal: principal.into(),
-        })
-    }
-}
-impl Drop for PrincipalPermit {
-    fn drop(&mut self) {
-        if let Ok(mut active) = self.active.lock()
-            && let Some(count) = active.get_mut(&self.principal)
-        {
-            *count -= 1;
-            if *count == 0 {
-                active.remove(&self.principal);
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -442,7 +341,11 @@ mod tests {
                 1 << 20,
                 std::time::Duration::from_secs(60),
             ),
-            principal_admission: PrincipalAdmission::default(),
+            governance: crate::resource_groups::Governor::new(
+                crate::resource_groups::ResourceGroups::builtin(&config),
+                crate::resource_groups::Source::Builtin,
+                std::path::PathBuf::from("resource-groups.json"),
+            ),
             cluster: tokio::sync::RwLock::new(crate::cluster::ClusterState::new(&config)),
             catalog: tokio::sync::RwLock::new(Arc::new(crate::PublishedCatalog {
                 manager: kaveon_core::CatalogManager::new("kaveon", "default"),
@@ -603,107 +506,6 @@ mod tests {
         headers.insert("x-kaveon-role", "analyst".parse().unwrap());
         assert_eq!(config.authenticate(&headers).unwrap().role, Role::Analyst);
     }
-    #[test]
-    fn quota_is_per_principal_and_releases() {
-        let admission = PrincipalAdmission::default();
-        let alice = admission.admit("alice", 1).unwrap();
-        assert!(admission.admit("alice", 1).is_err());
-        let _bob = admission.admit("bob", 1).unwrap();
-        drop(alice);
-        assert!(admission.admit("alice", 1).is_ok());
-    }
-
-    #[tokio::test]
-    async fn resource_group_queue_is_bounded_and_recovers_after_timeout() {
-        let admission = PrincipalAdmission::default();
-        let config = SecurityConfig {
-            resource_groups: vec![ResourceGroupConfig {
-                name: "interactive".into(),
-                principals: vec!["alice".into(), "bob".into()],
-                max_running: 1,
-                max_queued: 1,
-                queue_timeout_ms: 10,
-            }],
-            ..Default::default()
-        };
-        config.validate().unwrap();
-        let first = admission.admit_group("alice", &config).await.unwrap();
-        assert_eq!(
-            admission.admit_group("bob", &config).await.unwrap_err(),
-            StatusCode::TOO_MANY_REQUESTS
-        );
-        drop(first);
-        assert!(admission.admit_group("bob", &config).await.is_ok());
-        assert_eq!(
-            admission.groups.lock().unwrap()["interactive"]
-                .queued
-                .load(std::sync::atomic::Ordering::Acquire),
-            0
-        );
-    }
-
-    #[tokio::test]
-    async fn queued_group_request_runs_when_slot_releases() {
-        let admission = Arc::new(PrincipalAdmission::default());
-        let config = Arc::new(SecurityConfig {
-            resource_groups: vec![ResourceGroupConfig {
-                name: "interactive".into(),
-                principals: vec!["alice".into()],
-                max_running: 1,
-                max_queued: 1,
-                queue_timeout_ms: 1000,
-            }],
-            ..Default::default()
-        });
-        let first = admission.admit_group("alice", &config).await.unwrap();
-        let waiter_admission = admission.clone();
-        let waiter_config = config.clone();
-        let waiting =
-            tokio::spawn(
-                async move { waiter_admission.admit_group("alice", &waiter_config).await },
-            );
-        tokio::task::yield_now().await;
-        assert_eq!(
-            admission.admit_group("alice", &config).await.unwrap_err(),
-            StatusCode::TOO_MANY_REQUESTS
-        );
-        drop(first);
-        assert!(waiting.await.unwrap().is_ok());
-    }
-
-    #[tokio::test]
-    async fn wildcard_group_admits_unlisted_principals_and_exact_group_wins() {
-        let admission = PrincipalAdmission::default();
-        let config = SecurityConfig {
-            resource_groups: vec![
-                ResourceGroupConfig {
-                    name: "interactive".into(),
-                    principals: vec!["alice".into()],
-                    max_running: 1,
-                    max_queued: 0,
-                    queue_timeout_ms: 100,
-                },
-                ResourceGroupConfig {
-                    name: "default".into(),
-                    principals: vec!["*".into()],
-                    max_running: 1,
-                    max_queued: 0,
-                    queue_timeout_ms: 100,
-                },
-            ],
-            ..Default::default()
-        };
-        config.validate().unwrap();
-
-        let alice = admission.admit_group("alice", &config).await.unwrap();
-        let bob = admission.admit_group("bob", &config).await.unwrap();
-        assert!(alice.is_some());
-        assert!(bob.is_some());
-        assert!(admission.groups.lock().unwrap().contains_key("interactive"));
-        assert!(admission.groups.lock().unwrap().contains_key("default"));
-        assert_eq!(admission.groups.lock().unwrap().len(), 2);
-    }
-
     #[test]
     fn resource_groups_reject_multiple_wildcards_and_whitespace_principals() {
         let group = |name: &str, principal: &str| ResourceGroupConfig {

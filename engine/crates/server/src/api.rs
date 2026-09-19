@@ -269,6 +269,9 @@ struct QueryContext {
     client_tags: Vec<String>,
     result_delivery: Option<String>,
     catalog_snapshot_id: String,
+    /// The resource group the selectors picked at admission, with the
+    /// limits that applied.
+    resource_group: crate::resource_groups::EffectiveGroup,
     #[serde(skip_serializing)]
     settings: QuerySettings,
 }
@@ -385,6 +388,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/v1/cluster", get(get_cluster))
         .route("/v1/node", get(get_node))
         .route("/v1/cache", delete(clear_result_cache))
+        .route(
+            "/v1/admin/resource-groups",
+            get(crate::resource_groups::get_resource_groups)
+                .put(crate::resource_groups::put_resource_groups),
+        )
         .route("/v1/node/heartbeat", post(receive_heartbeat))
         .route(
             "/v1/internal/catalog/snapshot",
@@ -2055,17 +2063,47 @@ impl Drop for StatementLifecycleGuard {
 
 /// The refusal of a statement that could not be admitted: on arrival, from
 /// a full queue, or after its wait expired. `admission_wait_ms` is how long
-/// it waited before the refusal.
-fn admission_rejected_response(error: String, admission_wait_ms: u64) -> Response {
-    (
-        StatusCode::TOO_MANY_REQUESTS,
-        Json(serde_json::json!({
-            "error": error,
-            "code": "MEMORY_ADMISSION_REJECTED",
-            "admission_wait_ms": admission_wait_ms
-        })),
-    )
-        .into_response()
+/// it waited before the refusal. The code is `RESOURCE_GROUP_REJECTED`
+/// when the binding limit is the group's (its memory share, its queue,
+/// its wait), `MEMORY_ADMISSION_REJECTED` when it is the node's; either
+/// way the body names the group.
+fn admission_rejected_response(
+    error: String,
+    group: &crate::resource_groups::EffectiveGroup,
+    limit: Option<serde_json::Value>,
+    admission_wait_ms: u64,
+) -> Response {
+    let mut body = serde_json::json!({
+        "error": error,
+        "code": if limit.is_some() { "RESOURCE_GROUP_REJECTED" } else { "MEMORY_ADMISSION_REJECTED" },
+        "resource_group": group.name,
+        "admission_wait_ms": admission_wait_ms
+    });
+    if let Some(limit) = limit {
+        body["limit"] = limit;
+    }
+    (StatusCode::TOO_MANY_REQUESTS, Json(body)).into_response()
+}
+
+/// A controller refusal as the response: the group's own limits are named
+/// as such, the node's as memory admission.
+fn admission_refusal_response(
+    refusal: &kaveon_core::AdmissionRefusal,
+    group: &crate::resource_groups::EffectiveGroup,
+) -> Response {
+    use kaveon_core::AdmissionRefusal;
+    let limit = match refusal {
+        AdmissionRefusal::OverGroupLimit { limit_bytes, .. } => {
+            Some(serde_json::json!({ "max_memory_bytes": limit_bytes }))
+        }
+        AdmissionRefusal::GroupQueueFull { max_queued, .. } => {
+            Some(serde_json::json!({ "max_queued": max_queued }))
+        }
+        AdmissionRefusal::Invalid(_)
+        | AdmissionRefusal::QueueFull { .. }
+        | AdmissionRefusal::NoCapacity { .. } => None,
+    };
+    admission_rejected_response(refusal.to_string(), group, limit, 0)
 }
 
 /// The record's `next_uri` for a paged statement: its first page, served
@@ -2165,37 +2203,39 @@ async fn run_statement(
         )
             .into_response();
     }
-    // Settings first: a refused setting is a 400 before any permit is held.
-    let (settings, sql, time_zone) = match request_settings(&req, &state.config) {
-        Ok(parsed) => parsed,
-        Err(error) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": error.to_string(),
-                    "code": "INVALID_SETTING"
-                })),
-            )
-                .into_response();
-        }
-    };
+    // The resource group is chosen before the settings are read: its
+    // defaults fill what the request left unset, and its parallelism cap
+    // applies to what the request asked.
+    let groups = state.governance.current();
+    let group = groups.select(&identity, &req.client_tags);
+    let resource_group = crate::resource_groups::EffectiveGroup::from(group);
+    // Settings first: a refused setting is a 400 before anything is held.
+    let (mut settings, sql, time_zone) =
+        match request_settings(&req, &state.config, &group.default_settings) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": error.to_string(),
+                        "code": "INVALID_SETTING"
+                    })),
+                )
+                    .into_response();
+            }
+        };
+    if let Some(cap) = group.max_local_parallelism {
+        let requested = match settings.local_parallelism {
+            Some(threads) => threads,
+            None => match kaveon_exec::local_parallel::configured_parallelism() {
+                Ok(threads) => threads,
+                Err(error) => return lifecycle_error_response(error.to_string()),
+            },
+        };
+        settings.local_parallelism = Some(requested.min(cap).max(1));
+    }
     prune_query_history().await;
     let paged = req.result_delivery.as_deref() == Some("paged");
-    let _principal_permit = match state
-        .principal_admission
-        .admit(&identity.principal, state.config.principal_query_limit)
-    {
-        Ok(permit) => permit,
-        Err(status) => return status.into_response(),
-    };
-    let _group_permit = match state
-        .principal_admission
-        .admit_group(&identity.principal, &state.config.security)
-        .await
-    {
-        Ok(permit) => permit,
-        Err(status) => return status.into_response(),
-    };
     if let Some((status, body)) =
         transaction_api_guidance(&sql, state.product_transactions.catalog().is_some())
     {
@@ -2302,6 +2342,7 @@ async fn run_statement(
             client_tags: req.client_tags,
             result_delivery: req.result_delivery,
             catalog_snapshot_id,
+            resource_group,
             settings: settings.clone(),
         }
     };
@@ -2314,28 +2355,39 @@ async fn run_statement(
         query_id: query_id.clone(),
     };
 
-    // Memory admission: on arrival when the budget fits, else queued until
-    // it does, the statement asked not to wait, the wait expired, or the
-    // statement was cancelled. A queued statement is in the history as
-    // QUEUED so that it can be seen and cancelled by ID.
+    // Admission under the resource group: on arrival when the budget fits
+    // and the group has a slot, else queued until it does, the statement
+    // asked not to wait, the wait expired, or the statement was cancelled.
+    // A queued statement is in the history as QUEUED so that it can be
+    // seen and cancelled by ID. The wait is the shortest of the node's,
+    // the group's and the request's.
     let admission_started = Instant::now();
-    let admission_wait = settings.admission_wait(&state.config);
+    let node_wait = settings.admission_wait(&state.config);
+    let group_wait = Duration::from_secs(context.resource_group.max_queue_wait_seconds);
+    let admission_wait = node_wait.min(group_wait);
+    let group_bounds_wait = group_wait < node_wait;
     let query_limit_bytes = settings.query_memory_limit_bytes(&state.config);
+    let group_name = context.resource_group.name.clone();
     let query_memory = if admission_wait.is_zero() {
         match state
             .memory_admission
-            .admit(query_id.clone(), query_limit_bytes)
+            .admit_in(&group_name, query_id.clone(), query_limit_bytes)
         {
             Ok(memory) => memory,
-            Err(error) => return admission_rejected_response(error.to_string(), 0),
+            Err(refusal) => {
+                return admission_refusal_response(&refusal, &context.resource_group);
+            }
         }
     } else {
-        let mut wait = match state
-            .memory_admission
-            .admit_queued(query_id.clone(), query_limit_bytes)
-        {
+        let mut wait = match state.memory_admission.admit_queued_in(
+            &group_name,
+            query_id.clone(),
+            query_limit_bytes,
+        ) {
             Ok(wait) => wait,
-            Err(error) => return admission_rejected_response(error.to_string(), 0),
+            Err(refusal) => {
+                return admission_refusal_response(&refusal, &context.resource_group);
+            }
         };
         if !wait.admitted_immediately() {
             QUERY_STORE.write().await.queries.insert(
@@ -2364,13 +2416,30 @@ async fn run_statement(
                     None => {
                         let waited_ms = elapsed_ms(admission_started);
                         let stats = state.memory_admission.stats();
-                        let message = format!(
-                            "memory admission wait of {} s expired: {} of {} bytes admitted, {} statements waiting",
-                            admission_wait.as_secs(),
-                            stats.admitted_bytes,
-                            stats.limit_bytes,
-                            stats.queue_depth
-                        );
+                        let group_stats = state
+                            .memory_admission
+                            .group_stats()
+                            .into_iter()
+                            .find(|group| group.name == group_name);
+                        let (running, max_concurrent) = group_stats
+                            .map_or((0, 0), |group| (group.running, group.max_concurrent));
+                        let message = if group_bounds_wait {
+                            format!(
+                                "resource group '{group_name}' wait of {} s expired: {running} of {max_concurrent} running, {} of {} bytes admitted on the node, {} statements waiting",
+                                admission_wait.as_secs(),
+                                stats.admitted_bytes,
+                                stats.limit_bytes,
+                                stats.queue_depth
+                            )
+                        } else {
+                            format!(
+                                "memory admission wait of {} s expired: {} of {} bytes admitted, {} statements waiting, resource group '{group_name}' running {running} of {max_concurrent}",
+                                admission_wait.as_secs(),
+                                stats.admitted_bytes,
+                                stats.limit_bytes,
+                                stats.queue_depth
+                            )
+                        };
                         if let Some(record) = QUERY_STORE.write().await.queries.get_mut(&query_id)
                             && matches!(record.state, QueryState::Queued)
                         {
@@ -2379,7 +2448,17 @@ async fn run_statement(
                             record.admission_wait_ms = waited_ms;
                             record.completed_at_ms = unix_time_ms();
                         }
-                        return admission_rejected_response(message, waited_ms);
+                        let limit = group_bounds_wait.then(|| {
+                            serde_json::json!({
+                                "max_queue_wait_seconds": context.resource_group.max_queue_wait_seconds
+                            })
+                        });
+                        return admission_rejected_response(
+                            message,
+                            &context.resource_group,
+                            limit,
+                            waited_ms,
+                        );
                     }
                 }
             }
@@ -2492,11 +2571,10 @@ async fn run_statement(
     }
     if let Some(statement) = parse_analyze_statement(&sql) {
         // ANALYZE runs no operator of its own, and the statements it runs
-        // for its distinct counts are admitted in their own right — memory,
-        // principal and resource group — so a single-slot coordinator does
-        // not wait on itself.
-        drop(_group_permit);
-        drop(_principal_permit);
+        // for its distinct counts are admitted in their own right — memory
+        // and resource group slot — so a single-slot coordinator does not
+        // wait on itself; the sketches of a full read use this statement's
+        // own admitted memory.
         return execute_analyze(
             &state,
             &identity,
@@ -3111,19 +3189,10 @@ async fn run_statement(
             local_columns,
             result_writer,
             query_memory,
-            _principal_permit,
-            _group_permit,
         )
     })
     .await;
-    let (
-        planned_execution,
-        local_columns,
-        result_writer,
-        _query_memory,
-        _principal_permit,
-        _group_permit,
-    ) = match local_execution {
+    let (planned_execution, local_columns, result_writer, _query_memory) = match local_execution {
         Ok(execution) => execution,
         Err(error) => {
             finish_failed_query(
@@ -3394,10 +3463,16 @@ async fn clear_result_cache(
 fn request_settings(
     req: &StatementRequest,
     config: &crate::config::ServerConfig,
+    defaults: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(QuerySettings, String, Option<String>), crate::settings::SettingsError> {
     let prefix = crate::settings::split_session_prefix(&req.query)?;
     let mut settings = req.settings.clone().unwrap_or_default();
     let session_time_zone = crate::settings::merge_session_prefix(&mut settings, &prefix)?;
+    // The resource group's defaults apply to the keys the request left
+    // unset, whichever form the request used.
+    for (key, value) in defaults {
+        settings.entry(key.clone()).or_insert_with(|| value.clone());
+    }
     let time_zone = match (&req.time_zone, session_time_zone) {
         (Some(field), Some(session)) if *field != session => {
             return Err(crate::settings::SettingsError(
@@ -4182,11 +4257,11 @@ async fn execute_analyze(
     };
     // The counts run a few at a time: each is one distributed scan of the
     // table, and the cluster has room for more than one. The width stays
-    // under the principal's statement limit so no count is refused
-    // admission, and the parent's own permits are already released.
-    let width = state
-        .config
-        .principal_query_limit
+    // under the resource group's concurrency so no count is refused
+    // admission, and the parent's own slot is already released.
+    let width = context
+        .resource_group
+        .max_concurrent
         .clamp(1, ANALYZE_COUNT_CONCURRENCY);
     let children: Vec<(String, String)> = selected
         .iter()
@@ -5679,6 +5754,7 @@ async fn get_cluster(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     if state.config.coordinator {
         coordinator.result_cache = Some(state.result_cache.stats());
         coordinator.admission = Some(state.memory_admission.stats());
+        coordinator.resource_groups = Some(state.memory_admission.group_stats());
     }
 
     let workers: Vec<NodeInfo> = nodes
@@ -5711,6 +5787,7 @@ async fn get_node(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let mut node = cluster.this_node.clone();
     if state.config.coordinator {
         node.result_cache = Some(state.result_cache.stats());
+        node.resource_groups = Some(state.memory_admission.group_stats());
     }
     node.admission = Some(state.memory_admission.stats());
     Json(node)
@@ -8735,6 +8812,14 @@ pub(crate) fn catalog_test_state() -> crate::AppState {
     };
     let catalog_store = kaveon_catalog::CatalogStore::open_in_memory().unwrap();
     let snapshot_id = catalog_store.snapshot_identity().unwrap();
+    let groups = crate::resource_groups::ResourceGroups::builtin(&config);
+    let memory_admission =
+        kaveon_core::MemoryAdmissionController::new(config.memory_admission_limit_bytes)
+            .unwrap()
+            .with_queue_limit(config.memory_admission_queue);
+    memory_admission
+        .set_groups(groups.policies(config.memory_admission_limit_bytes))
+        .unwrap();
     crate::AppState {
         disk_exchange_store: None,
         results: crate::results::ResultStore::default(),
@@ -8742,7 +8827,14 @@ pub(crate) fn catalog_test_state() -> crate::AppState {
             1 << 20,
             std::time::Duration::from_secs(60),
         ),
-        principal_admission: crate::security::PrincipalAdmission::default(),
+        governance: crate::resource_groups::Governor::new(
+            groups,
+            crate::resource_groups::Source::Builtin,
+            std::env::temp_dir().join(format!(
+                "kaveon-server-test-{}-resource-groups.json",
+                uuid::Uuid::new_v4()
+            )),
+        ),
         cluster: tokio::sync::RwLock::new(crate::cluster::ClusterState::new(&config)),
         catalog: tokio::sync::RwLock::new(Arc::new(crate::PublishedCatalog {
             manager: kaveon_core::CatalogManager::new("kaveon", "default"),
@@ -8752,11 +8844,7 @@ pub(crate) fn catalog_test_state() -> crate::AppState {
         exchange_store: crate::exchange::ExchangeStore::default(),
         internal_http_client: reqwest::Client::new(),
         lifecycle: crate::lifecycle::WorkerLifecycle::default(),
-        memory_admission: kaveon_core::MemoryAdmissionController::new(
-            config.memory_admission_limit_bytes,
-        )
-        .unwrap()
-        .with_queue_limit(config.memory_admission_queue),
+        memory_admission,
         product_transactions: crate::transaction_api::TransactionRegistry::disabled(),
         config,
     }
@@ -8980,7 +9068,8 @@ mod tests {
             "SET SESSION result_cache = false; SET SESSION time_zone = 'UTC'; SELECT 1;",
             serde_json::json!({"query_memory_limit_bytes": 1 << 20}),
         );
-        let (settings, sql, time_zone) = super::request_settings(&request, &config).unwrap();
+        let (settings, sql, time_zone) =
+            super::request_settings(&request, &config, &Default::default()).unwrap();
         assert_eq!(sql, "SELECT 1");
         assert_eq!(time_zone.as_deref(), Some("UTC"));
         assert_eq!(settings.result_cache, Some(false));
@@ -8989,31 +9078,33 @@ mod tests {
 
         // The record serialises the settings only when the statement set some.
         let plain = statement_request("SELECT 1", serde_json::Value::Null);
-        let (settings, sql, time_zone) = super::request_settings(&plain, &config).unwrap();
+        let (settings, sql, time_zone) =
+            super::request_settings(&plain, &config, &Default::default()).unwrap();
         assert!(settings.is_default());
         assert_eq!(sql, "SELECT 1");
         assert!(time_zone.is_none());
 
         let unknown = statement_request("SELECT 1", serde_json::json!({"spill_bytes": 1}));
-        let error = super::request_settings(&unknown, &config).unwrap_err();
+        let error = super::request_settings(&unknown, &config, &Default::default()).unwrap_err();
         assert_eq!(error.0, "unknown setting 'spill_bytes'");
 
         let raised = statement_request(
             "SELECT 1",
             serde_json::json!({"query_memory_limit_bytes": (1u64 << 30) + 1}),
         );
-        assert!(super::request_settings(&raised, &config).is_err());
+        assert!(super::request_settings(&raised, &config, &Default::default()).is_err());
 
         let mut conflicting = statement_request(
             "SET SESSION time_zone = 'UTC'; SELECT 1",
             serde_json::Value::Null,
         );
         conflicting.time_zone = Some("Europe/Dublin".into());
-        let error = super::request_settings(&conflicting, &config).unwrap_err();
+        let error =
+            super::request_settings(&conflicting, &config, &Default::default()).unwrap_err();
         assert!(error.0.contains("time_zone"), "{error}");
 
         let alone = statement_request("SET SESSION result_cache = false", serde_json::Value::Null);
-        let error = super::request_settings(&alone, &config).unwrap_err();
+        let error = super::request_settings(&alone, &config, &Default::default()).unwrap_err();
         assert!(error.0.contains("stateless"), "{error}");
     }
 
@@ -9942,6 +10033,336 @@ mod tests {
         std::fs::remove_dir_all(directory).unwrap();
     }
 
+    /// The admission test state under `groups`, applied to the controller
+    /// and the governor as the coordinator applies them at start.
+    async fn governed_test_state(
+        queue: usize,
+        groups: crate::resource_groups::ResourceGroups,
+    ) -> (
+        Arc<crate::AppState>,
+        kaveon_catalog::product_commit::ProductCatalogCommit,
+        std::path::PathBuf,
+    ) {
+        let (mut state, commit, directory) = admission_test_state(queue).await;
+        groups.validate(&state.config).unwrap();
+        state
+            .memory_admission
+            .set_groups(groups.policies(state.config.memory_admission_limit_bytes))
+            .unwrap();
+        state.governance = crate::resource_groups::Governor::new(
+            groups,
+            crate::resource_groups::Source::ConfigFile,
+            directory.join("resource-groups.json"),
+        );
+        (Arc::new(state), commit, directory)
+    }
+
+    fn resource_group(name: &str, max_concurrent: usize) -> crate::resource_groups::ResourceGroup {
+        crate::resource_groups::ResourceGroup {
+            name: name.into(),
+            max_memory_bytes: None,
+            max_concurrent,
+            max_queued: 4,
+            max_queue_wait_seconds: 60,
+            max_local_parallelism: None,
+            priority: 1,
+            default_settings: serde_json::Map::new(),
+        }
+    }
+
+    fn principal(name: &str, role: Role) -> crate::security::Identity {
+        crate::security::Identity {
+            principal: name.into(),
+            display_identity: None,
+            role,
+        }
+    }
+
+    /// A statement over its group's memory share, or arriving at a full
+    /// group queue, is refused with 429 naming the group and the limit;
+    /// the record of an admitted statement carries the group.
+    #[tokio::test]
+    async fn a_group_limit_is_a_429_that_names_the_group_and_the_limit() {
+        let (state, _commit, directory) = governed_test_state(
+            8,
+            crate::resource_groups::ResourceGroups {
+                groups: vec![
+                    resource_group("default", 4),
+                    crate::resource_groups::ResourceGroup {
+                        max_memory_bytes: Some(512 * 1024),
+                        max_queued: 0,
+                        ..resource_group("small", 1)
+                    },
+                ],
+                selectors: vec![crate::resource_groups::Selector {
+                    principal_prefix: Some("svc-".into()),
+                    group: "small".into(),
+                    ..Default::default()
+                }],
+            },
+        )
+        .await;
+        let service = principal("svc-loader", Role::Analyst);
+        let sql = "SELECT id FROM orders WHERE id > 1 AND id < 4 ORDER BY id";
+        // Over the share: the node's per-query limit is 1 MiB, the group
+        // admits 512 KiB per statement.
+        let (status, body) = submit(&state, &service, sql, serde_json::json!({})).await;
+        assert_eq!(status, axum::http::StatusCode::TOO_MANY_REQUESTS, "{body}");
+        assert_eq!(body["code"], "RESOURCE_GROUP_REJECTED");
+        assert_eq!(body["resource_group"], "small");
+        assert_eq!(body["limit"]["max_memory_bytes"], 512 * 1024);
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("resource group 'small'"),
+            "{body}"
+        );
+        // Within the share it runs, and the record carries the group.
+        let (status, body) = submit(
+            &state,
+            &service,
+            sql,
+            serde_json::json!({"query_memory_limit_bytes": 256 * 1024, "result_cache": false}),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        let stored = record(body["id"].as_str().unwrap(), &service).await;
+        assert_eq!(stored["context"]["resource_group"]["name"], "small");
+        assert_eq!(stored["context"]["resource_group"]["max_concurrent"], 1);
+        assert_eq!(
+            stored["context"]["resource_group"]["max_memory_bytes"],
+            512 * 1024
+        );
+        // One running slot taken and no queue: the next arrival is refused
+        // at once naming the queue bound.
+        let occupied = state
+            .memory_admission
+            .admit_in("small", "occupying", 1)
+            .unwrap();
+        let (status, body) = submit(
+            &state,
+            &service,
+            sql,
+            serde_json::json!({"query_memory_limit_bytes": 256 * 1024}),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::TOO_MANY_REQUESTS, "{body}");
+        assert_eq!(body["code"], "RESOURCE_GROUP_REJECTED");
+        assert_eq!(body["limit"]["max_queued"], 0);
+        assert_eq!(body["admission_wait_ms"], 0);
+        drop(occupied);
+        // Unmatched principals take `default`, with the node's memory.
+        let analyst = principal("analyst", Role::Analyst);
+        let (status, body) = submit(
+            &state,
+            &analyst,
+            sql,
+            serde_json::json!({"result_cache": false}),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        let stored = record(body["id"].as_str().unwrap(), &analyst).await;
+        assert_eq!(stored["context"]["resource_group"]["name"], "default");
+        let counters = json_body(
+            super::get_node(axum::extract::State(state.clone()))
+                .await
+                .into_response(),
+        )
+        .await;
+        let small = counters["resource_groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|group| group["name"] == "small")
+            .cloned()
+            .unwrap();
+        assert_eq!(small["admitted"], 2);
+        assert_eq!(small["rejected"], 2);
+        assert_eq!(small["running"], 0);
+        assert!(small["wait_ms_p50"].is_u64() && small["wait_ms_p95"].is_u64());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// The group's wait bounds the statement's wait, and its expiry is a
+    /// 429 naming the group's bound; a statement of another group runs
+    /// while the first group is at its concurrency.
+    #[tokio::test]
+    async fn a_group_wait_expires_as_a_group_refusal_and_other_groups_keep_running() {
+        let (state, _commit, directory) = governed_test_state(
+            8,
+            crate::resource_groups::ResourceGroups {
+                groups: vec![
+                    resource_group("default", 4),
+                    crate::resource_groups::ResourceGroup {
+                        max_queue_wait_seconds: 1,
+                        ..resource_group("interactive", 1)
+                    },
+                ],
+                selectors: vec![crate::resource_groups::Selector {
+                    principal: Some("alice".into()),
+                    group: "interactive".into(),
+                    ..Default::default()
+                }],
+            },
+        )
+        .await;
+        let alice = principal("alice", Role::Analyst);
+        let sql = "SELECT id FROM orders WHERE id > 1 AND id < 9 ORDER BY id";
+        let occupied = state
+            .memory_admission
+            .admit_in("interactive", "occupying", 1)
+            .unwrap();
+        let started = std::time::Instant::now();
+        let (status, body) = submit(&state, &alice, sql, serde_json::json!({})).await;
+        assert_eq!(status, axum::http::StatusCode::TOO_MANY_REQUESTS, "{body}");
+        assert!(started.elapsed() >= std::time::Duration::from_secs(1));
+        assert_eq!(body["code"], "RESOURCE_GROUP_REJECTED");
+        assert_eq!(body["resource_group"], "interactive");
+        assert_eq!(body["limit"]["max_queue_wait_seconds"], 1);
+        assert!(body["admission_wait_ms"].as_u64().unwrap() >= 1_000);
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("resource group 'interactive' wait of 1 s expired: 1 of 1 running"),
+            "{body}"
+        );
+        // Another group is not held by interactive's slot.
+        let bob = principal("bob", Role::Analyst);
+        let (status, body) = submit(
+            &state,
+            &bob,
+            sql,
+            serde_json::json!({"query_memory_limit_bytes": 512 * 1024, "result_cache": false}),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        drop(occupied);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// `PUT /v1/admin/resource-groups` replaces the configuration for the
+    /// next statement, writes the durable copy, and is admin-only and
+    /// validated; `GET` reports it with the counters.
+    #[tokio::test]
+    async fn the_runtime_resource_group_replacement_takes_effect_and_is_durable() {
+        let (state, _commit, directory) = governed_test_state(
+            8,
+            crate::resource_groups::ResourceGroups {
+                groups: vec![resource_group("default", 4)],
+                selectors: vec![],
+            },
+        )
+        .await;
+        let admin = principal("admin", Role::Admin);
+        let analyst = principal("analyst", Role::Analyst);
+        let sql = "SELECT id FROM orders WHERE id > 1 AND id < 7 ORDER BY id";
+        let put = |state: &Arc<crate::AppState>,
+                   identity: &crate::security::Identity,
+                   body: serde_json::Value| {
+            let state = state.clone();
+            let identity = identity.clone();
+            async move {
+                let response = crate::resource_groups::put_resource_groups(
+                    axum::extract::State(state),
+                    axum::Extension(identity),
+                    axum::body::Bytes::from(serde_json::to_vec(&body).unwrap()),
+                )
+                .await;
+                let status = response.status();
+                (status, json_body(response).await)
+            }
+        };
+        let replacement = serde_json::json!({
+            "groups": [
+                {"name": "default", "max_concurrent": 2},
+                {"name": "analysts", "max_concurrent": 1, "max_queued": 2, "max_queue_wait_seconds": 30,
+                 "max_memory_bytes": 768 * 1024, "max_local_parallelism": 1, "priority": 3,
+                 "default_settings": {"result_cache": false}}
+            ],
+            "selectors": [{"role": "analyst", "group": "analysts"}]
+        });
+        let (status, body) = put(&state, &analyst, replacement.clone()).await;
+        assert_eq!(status, axum::http::StatusCode::FORBIDDEN, "{body}");
+        let (status, body) = put(
+            &state,
+            &admin,
+            serde_json::json!({"groups": [{"name": "other", "max_concurrent": 1}], "selectors": []}),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["code"], "INVALID_RESOURCE_GROUPS");
+        assert!(
+            body["error"].as_str().unwrap().contains("default"),
+            "{body}"
+        );
+        let (status, body) = put(&state, &admin, replacement.clone()).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(body["source"], "runtime");
+        assert_eq!(body["groups"].as_array().unwrap().len(), 2);
+        assert_eq!(body["selectors"][0]["role"], "analyst");
+        let durable: crate::resource_groups::ResourceGroups = serde_json::from_str(
+            &std::fs::read_to_string(directory.join("resource-groups.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(durable.groups[1].name, "analysts");
+        assert_eq!(durable.groups[1].priority, 3);
+        // The next statement of an analyst is admitted through the new
+        // group, with its defaults and its parallelism cap on the record.
+        let (status, body) = submit(
+            &state,
+            &analyst,
+            sql,
+            serde_json::json!({"query_memory_limit_bytes": 512 * 1024}),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        let stored = record(body["id"].as_str().unwrap(), &analyst).await;
+        assert_eq!(stored["context"]["resource_group"]["name"], "analysts");
+        assert_eq!(stored["context"]["resource_group"]["priority"], 3);
+        assert_eq!(stored["settings"]["result_cache"], false);
+        assert_eq!(stored["settings"]["local_parallelism"], 1);
+        assert_eq!(stored["settings"]["query_memory_limit_bytes"], 512 * 1024);
+        // Over the new share: refused naming the group.
+        let (status, body) = submit(&state, &analyst, sql, serde_json::json!({})).await;
+        assert_eq!(status, axum::http::StatusCode::TOO_MANY_REQUESTS, "{body}");
+        assert_eq!(body["resource_group"], "analysts");
+        assert_eq!(body["limit"]["max_memory_bytes"], 768 * 1024);
+        let listing = json_body(
+            crate::resource_groups::get_resource_groups(
+                axum::extract::State(state.clone()),
+                axum::Extension(admin.clone()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(listing["source"], "runtime");
+        let analysts = listing["counters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|group| group["name"] == "analysts")
+            .cloned()
+            .unwrap();
+        assert_eq!(
+            (analysts["admitted"].as_u64(), analysts["rejected"].as_u64()),
+            (Some(1), Some(1))
+        );
+        assert_eq!(analysts["weight"], 3);
+        assert_eq!(analysts["limit_bytes"], 768 * 1024);
+        assert_eq!(
+            crate::resource_groups::get_resource_groups(
+                axum::extract::State(state.clone()),
+                axum::Extension(analyst.clone()),
+            )
+            .await
+            .status(),
+            axum::http::StatusCode::FORBIDDEN
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     /// The analyze test state with an admission limit of one statement's
     /// budget, a queue of `queue` and a long configured wait.
     async fn admission_test_state(queue: usize) -> (crate::AppState, std::path::PathBuf) {
@@ -10273,6 +10694,7 @@ mod tests {
             client_tags: vec![],
             result_delivery: delivery.map(str::to_owned),
             catalog_snapshot_id: String::new(),
+            resource_group: crate::resource_groups::EffectiveGroup::for_tests(),
             settings: super::QuerySettings::default(),
         };
         let pending = |delivery: Option<&str>, state: super::QueryState| {
@@ -10621,6 +11043,7 @@ mod tests {
             client_tags: vec![],
             result_delivery: None,
             catalog_snapshot_id: "sha256:catalog-one".into(),
+            resource_group: crate::resource_groups::EffectiveGroup::for_tests(),
             settings: crate::settings::QuerySettings::default(),
         }
     }
@@ -11949,6 +12372,7 @@ mod tests {
             client_tags: Vec::new(),
             result_delivery: None,
             catalog_snapshot_id: String::new(),
+            resource_group: crate::resource_groups::EffectiveGroup::for_tests(),
             settings: crate::settings::QuerySettings::default(),
         };
         let snapshot = kaveon_core::CatalogManager::new("kaveon", "default");
@@ -12191,6 +12615,7 @@ mod tests {
             client_tags: vec![],
             result_delivery: None,
             catalog_snapshot_id: "sha256:test".into(),
+            resource_group: crate::resource_groups::EffectiveGroup::for_tests(),
             settings: crate::settings::QuerySettings::default(),
         };
 
@@ -12443,6 +12868,7 @@ mod tests {
                 client_tags: vec![],
                 result_delivery: None,
                 catalog_snapshot_id: String::new(),
+                resource_group: crate::resource_groups::EffectiveGroup::for_tests(),
                 settings: super::QuerySettings::default(),
             },
             super::QueryState::Running,
@@ -12713,6 +13139,7 @@ mod streamed_root_tests {
             client_tags: Vec::new(),
             result_delivery: Some("paged".into()),
             catalog_snapshot_id: SNAPSHOT.into(),
+            resource_group: crate::resource_groups::EffectiveGroup::for_tests(),
             settings: QuerySettings::default(),
         }
     }
