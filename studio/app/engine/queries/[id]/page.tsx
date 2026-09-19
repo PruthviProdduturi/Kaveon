@@ -232,6 +232,7 @@ export default function EngineQueryPage() {
                       <div key={i} className={s.metrics} style={{ marginBottom: i < q.scans.length - 1 ? 12 : 0 }}>
                         {[
                           ["Files opened", `${sc.files_opened} / ${sc.files_considered}`],
+                          ["Files pruned by partition", String(sc.files_pruned_by_partition ?? 0)],
                           ["Row groups read", `${sc.row_groups_read} / ${sc.row_groups_considered}`],
                           ["Row groups pruned", String(sc.row_groups_pruned)],
                           ["Rows emitted", sc.rows_emitted.toLocaleString()],

@@ -16,7 +16,7 @@ so predicates, functions and group keys run once per dictionary value.
 | Parquet | local disk, ADLS Gen2 (`abfss://`), S3 (`s3://`, not qualified) | One object per table; projection, row-group pruning, parallel decoder lanes for large ADLS objects (`KAVEON_SCAN_PARALLELISM`), full-object and decoded-batch caches under the pinned identity | — |
 | Delta Lake | local disk, ADLS Gen2 | The snapshot at one pinned version from the JSON commits and v1 checkpoints (classic and multipart); active files become deterministic scan partitions; the version is pinned per query so retries and joins read the same snapshot. This is the multi-file table on object storage today: TPC-H SF100 is generated as Delta for both engines | Reader protocol v2 (column mapping, deletion vectors, table features), v2 checkpoint sidecars, unsupported logical types |
 | Iceberg | local disk, ADLS Gen2 | v1/v2 snapshots from an immutable metadata JSON pointer with field-ID projection and type promotion | Delete manifests, equality/position deletes, encrypted tables, name mapping |
-| Parquet directory | — | Not a table yet: a Parquet table definition names one object, and a directory of Parquet files with no Delta log is not a table for the Engine. Directory tables are in progress | — |
+| Parquet directory | local disk, ADLS Gen2, S3 | A directory of Parquet files (the Hive/Spark layout) listed once per scan under one visibility rule, files spread over the scan partitions by size, one schema checked file by file; `key=value` directories are partition columns (Hive default partition is NULL, types inferred or declared) read as constant columns and pruned by the scan predicate before any file is opened | A mixed layout (files under different keys or depths), a key that is also a file column, a stray file of another extension |
 
 Telemetry measures file and row-group selection, compressed bytes, output,
 footer/read/snapshot time, lane count with the lightest and heaviest lane,
@@ -40,15 +40,78 @@ A local path that is a directory is listed the same way through the
   no extension at all (Trino's file names).
 - Anything else (`README.md`, `part-0.orc`) is an error naming the object, so
   a stray file is neither read as data nor silently dropped from the table.
-- The listing is sorted by path. Partition directories
-  (`year=2026/part-0.parquet`) are included; the values in their names are
-  not surfaced as columns.
+- The listing is sorted by path. Every directory between the root and a
+  data file must be a `key=value` segment; those keys are the table's
+  partition columns (next section). A directory that is not one is an
+  error naming the file under it.
 
-The schema is the first listed file's, projected in the query's column order.
-Every other file is checked against it — same names, order and types; a file
-may declare a column non-nullable where the first declares it nullable,
-never the reverse — and a difference is an error naming both files. No file
-is cast to another's schema.
+The schema is the first listed file's with the partition columns appended,
+projected in the query's column order. Every other file is checked against
+it — same names, order and types; a file may declare a column non-nullable
+where the first declares it nullable, never the reverse — and a difference
+is an error naming both files. No file is cast to another's schema.
+
+### Partition columns
+
+A Hive-partitioned directory (`sales/dt=2026-09-01/region=eu/part-0.parquet`,
+what Hive, Spark and Trino write) carries columns in its paths. The rule,
+applied while listing, before any file is opened:
+
+- Every directory between the root and a data file is one `key=value`
+  segment. Keys and values are Hive-decoded (`%2F` is `/`, `%25` is `%`; a
+  `%` that no two hex digits follow stands for itself); the value
+  `__HIVE_DEFAULT_PARTITION__` is NULL. Every file must carry the same keys
+  in the same order — a file at another depth, or under other keys, is an
+  error naming that file and the first listed one — so a flat directory
+  and a partitioned one are never mixed silently.
+- A key's type is inferred from its non-null values: `bigint` when every
+  value is a canonical integer (`7`, `-12`; not `007` or `+1`), `date` when
+  every value is `YYYY-MM-DD`, else `varchar` (a key with only NULLs is
+  `varchar`). The table definition can declare the type instead: `CREATE
+  TABLE sales (id BIGINT, dt VARCHAR, region VARCHAR) WITH (location =
+  'sales', format = 'parquet', partitioned_by = ARRAY['dt', 'region'])`
+  stores `dt` as text, and a scan reads the key as the type the catalog
+  serves for that column. A value that does not read as the declared type
+  (`dt=2026-09-01` under `bigint`) is an error naming the file. Declared
+  keys must be exactly the path's keys in their order; a location whose
+  paths carry keys is recorded as partitioned whether or not `partitioned_by`
+  is given, and `SHOW CREATE TABLE` renders the option.
+- The partition columns come after the file columns in the table schema
+  and are nullable. A key that is also a column inside a file is an error
+  naming the file: a column has one source. A scan appends each file's
+  values to its batches as constant arrays — text as a one-value `Int32`
+  dictionary, `bigint` and `date` as plain arrays — and projects them like
+  any column; a projection of keys alone still reads the narrowest file
+  column, by compressed bytes, for its row counts.
+- The scan predicate is folded over each file's path values before any file
+  is opened. Comparisons, `IN`, `IS [NOT] NULL`, `LIKE`/`ILIKE` and
+  `AND`/`OR`/`NOT` over them fold under SQL's three-valued logic: a file
+  whose values make the predicate false or NULL is pruned; a term the path
+  cannot decide (a literal of another type, a column that is not a key)
+  keeps the file, and `NOT` folds only over an operand that folded exactly,
+  since the negation of a weakened predicate is not implied. What the fold
+  leaves open on the file columns is the predicate the kept file's reader
+  runs (row-group pruning, late materialisation, as before); the executor's
+  filter above the scan is unchanged and remains the truth. A NULL
+  partition compares to NULL and is pruned by every comparison, kept by
+  `IS NULL`. Pruned files are never opened and never counted as considered:
+  they appear as `files_pruned_by_partition` on the task's scan metrics, on
+  the query record's scan telemetry and in Studio (dealt round-robin over
+  the scan partitions so the tasks of a stage sum to the total), while
+  `files_considered` counts the kept files a partition was assigned and
+  `files_opened` those it opened. When every file is pruned the scan is
+  empty but still advertises the table's schema from the first listed
+  file's footer (a metadata read, not an open).
+- Files are spread over the scan partitions from the kept set: the pruned
+  bytes weigh nothing in the assignment. When planning takes statistics for
+  a directory table and every scan of that table in the plan carries the
+  same storage predicate, the listing pinned for the query is the pruned one
+  and the relation's row count is the kept files' (a footer read); a table
+  scanned under different predicates, or once without, is planned at its
+  whole listing.
+
+Not partitioning: a Delta or Iceberg table's partition columns come from
+its own metadata, and `partitioned_by` is refused for those formats.
 
 Files are spread over the scan partitions by size: whole files go to the
 partition with the fewest bytes so far, largest first; if the heaviest

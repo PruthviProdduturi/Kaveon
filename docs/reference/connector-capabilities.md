@@ -18,7 +18,7 @@ credentials, network access or drivers configured.
 |---|---|---|---|---|
 | **Delta Lake** | A table directory holding `_delta_log/` | The snapshot at one pinned version, from the JSON commits and v1 checkpoints (classic and multipart). Active files become deterministic scan partitions; the version is pinned per query so retries and joins read one snapshot. `COUNT(*)` and planning statistics come from the pinned snapshot, not a scan. | Reader protocol v2: column mapping, deletion vectors and other table features; v2 checkpoint sidecars; unsupported logical types. These are refused by name, not read partially. | Implemented; qualified on ADLS Gen2 (TPC-H SF100 is Delta on the cluster) and run on local disk in the Docker stack. |
 | **Iceberg** | A table directory holding `metadata/` | v1 and v2 snapshots from an immutable metadata JSON pointer, with field-ID projection and type promotion; the snapshot is pinned per query. | Delete manifests, equality and position deletes, encrypted tables, name mapping. | Implemented for ADLS Gen2 and local disk; **not yet qualified on the cluster** — no Iceberg table has been registered and run end to end there. |
-| **Parquet** | One file, or a directory of Parquet files | A single object; or a directory in the Hive and Spark layout (what Trino writes), listed once at query time. Hidden entries — any name, or any directory below the root, beginning with `_` or `.`, and zero-byte objects — are skipped; every other object ending in `.parquet` or with no extension is data; anything else is an error naming the object. The first listed file's schema is the table's; every other file must carry the same names, order and types. `COUNT(*)` comes from footers. | Partition values in directory names (`year=2026/`) are not surfaced as columns yet; a file with a differing schema is an error, never cast. | Implemented; qualified for single objects on ADLS Gen2 (ClickBench `hits` is one object of 99,997,497 rows) and run on local disk in the Docker stack; directories are implemented with the rule above. |
+| **Parquet** | One file, or a directory of Parquet files | A single object; or a directory in the Hive and Spark layout (what Trino writes), listed once at query time. Hidden entries — any name, or any directory below the root, beginning with `_` or `.`, and zero-byte objects — are skipped; every other object ending in `.parquet` or with no extension is data; anything else is an error naming the object. The first listed file's schema is the table's; every other file must carry the same names, order and types. `key=value` directories are partition columns: Hive-decoded, `__HIVE_DEFAULT_PARTITION__` as NULL, typed by inference (bigint, date, else varchar) or by the table's column list with `partitioned_by = ARRAY['dt']`, appended after the file columns, and pruned by the scan predicate before any file is opened (`files_pruned_by_partition` on the query record). `COUNT(*)` comes from footers. | A file with a differing schema is an error, never cast; a mixed layout (files under different keys or depths) and a key that is also a file column are errors naming the file. | Implemented; qualified for single objects on ADLS Gen2 (ClickBench `hits` is one object of 99,997,497 rows) and run on local disk in the Docker stack; directories and partition columns are implemented with the rule above and covered by the differential sweep on local disk and the in-memory object store, not yet run against a partitioned layout on the cluster. |
 
 The columns declared on a table definition are the Arrow schema KaveonDB
 reads the table with. There is no schema inference through the catalog API:
@@ -117,6 +117,18 @@ added to the Engine; they register the same definitions through the same
 lifecycle. See the [Engine CLI guide](../guides/engine-cli.md) for the
 statements as they land and their status. The CLI's `SHOW CATALOGS`, `SHOW SCHEMAS`, `SHOW TABLES` and
 `DESCRIBE` read what any path registered.
+
+A partitioned Parquet directory registers with its keys as columns whether
+or not they are declared: `CREATE TABLE sales WITH (location = 'sales',
+format = 'parquet')` infers them from the paths, and `CREATE TABLE sales (id
+BIGINT, dt VARCHAR, region VARCHAR) WITH (location = 'sales', format =
+'parquet', partitioned_by = ARRAY['dt', 'region'])` names them and types
+them from the column list. The declared keys must be exactly the path's keys
+in their order (`400 TABLE_NOT_READABLE` otherwise), `partitioned_by` is
+refused for Delta and Iceberg (their partitioning is in their own metadata),
+and `SHOW CREATE TABLE` renders the option. The `/v1/catalog/*` service path
+carries no partition declaration; a table registered there is partitioned as
+its paths say and typed by inference.
 
 ## SQL sources on the platform API
 
