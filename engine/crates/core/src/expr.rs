@@ -142,3 +142,56 @@ pub enum BinaryOp {
     Modulo,
     StringConcat,
 }
+
+/// The aggregate functions the SQL front end recognises, by their
+/// canonical upper-case names. `APPROX_DISTINCT` is Trino's name for
+/// `APPROX_COUNT_DISTINCT` and is normalised to it when parsed.
+pub const AGGREGATE_FUNCTION_NAMES: &[&str] = &[
+    "COUNT",
+    "SUM",
+    "AVG",
+    "MIN",
+    "MAX",
+    "APPROX_COUNT_DISTINCT",
+    "APPROX_PERCENTILE",
+];
+
+/// Whether `name` (upper-case) is an aggregate function.
+pub fn is_aggregate_function(name: &str) -> bool {
+    AGGREGATE_FUNCTION_NAMES.contains(&name)
+}
+
+/// The output column an aggregate call is named by when the statement
+/// gives it no alias: the function in lower case, an underscore, and the
+/// arguments' labels — a column by its name, `*`, a number by its value
+/// (`approx_percentile_latency, 0.5`), anything else `expr`. Every planner
+/// names aggregate outputs with this, so a projection over the aggregate
+/// binds to them by the same rule.
+pub fn aggregate_output_name(function: &str, args: &[Expr]) -> String {
+    let labels = args
+        .iter()
+        .map(aggregate_argument_label)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{}_{labels}", function.to_ascii_lowercase())
+}
+
+fn aggregate_argument_label(expr: &Expr) -> String {
+    match expr {
+        Expr::Column(name) => name.clone(),
+        Expr::Star => "*".to_owned(),
+        Expr::Literal(ScalarValue::Int64(value)) => value.to_string(),
+        Expr::Literal(ScalarValue::Float64(value)) => value.to_string(),
+        Expr::Literal(ScalarValue::Decimal128 { value, scale, .. }) => {
+            (*value as f64 / 10f64.powi(i32::from(*scale))).to_string()
+        }
+        Expr::Function { name, args } if name.eq_ignore_ascii_case("ARRAY") => format!(
+            "array[{}]",
+            args.iter()
+                .map(aggregate_argument_label)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        _ => "expr".to_owned(),
+    }
+}

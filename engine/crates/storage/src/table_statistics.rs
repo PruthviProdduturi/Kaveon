@@ -13,19 +13,18 @@ use crate::{
 use arrow::{
     array::{Array, ArrayRef, AsArray},
     compute,
-    datatypes::{DataType, SchemaRef, TimeUnit},
+    datatypes::{DataType, SchemaRef},
 };
 use kaveon_core::{
     BatchSource, ColumnSketches, ColumnStatistics, DataFormat, FileColumnSketches,
     FileColumnStatistics, FileStatistics, HllSketch, KaveonError, KllSketch, OperatorMemoryAccount,
     Result, SourceVersion, StatValue, StatisticsDepth, TableId, TableStatistics,
-    sketch::pg_hash_bytes_extended, statistics::MAX_PER_FILE_STATISTICS,
+    statistics::MAX_PER_FILE_STATISTICS,
 };
 use object_store::{ObjectStore, path::Path as ObjectPath};
 use std::{
     cmp::Ordering,
     collections::BTreeSet,
-    fmt::Write as _,
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -687,42 +686,11 @@ pub fn skip_listing_files(
 }
 
 /// Whether a column's values can be folded into the sketches.
-pub fn sketchable(data_type: &DataType) -> bool {
-    let data_type = match data_type {
-        DataType::Dictionary(_, values) => values.as_ref(),
-        other => other,
-    };
-    matches!(
-        data_type,
-        DataType::Boolean
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Float32
-            | DataType::Float64
-            | DataType::Utf8
-            | DataType::LargeUtf8
-            | DataType::Date32
-            | DataType::Timestamp(_, _)
-            | DataType::Decimal128(_, _)
-    )
-}
+pub use kaveon_core::sketch::sketchable;
 
 /// Whether a column's values sit on a number line for a quantile sketch.
 fn numeric(data_type: &DataType) -> bool {
-    let data_type = match data_type {
-        DataType::Dictionary(_, values) => values.as_ref(),
-        other => other,
-    };
-    !matches!(
-        data_type,
-        DataType::Boolean | DataType::Utf8 | DataType::LargeUtf8
-    )
+    kaveon_core::sketch::quantile_sketchable(data_type)
 }
 
 /// The column indexes to sketch.
@@ -864,7 +832,6 @@ fn scan_file(
             quantiles: numeric(data_type).then(KllSketch::default_k),
         })
         .collect();
-    let mut text = String::new();
     while let Some(batch) = source.next_batch()? {
         let reservation = memory
             .map(|memory| {
@@ -877,7 +844,7 @@ fn scan_file(
             let array = batch.column_by_name(name).ok_or_else(|| {
                 KaveonError::Storage(format!("column '{name}' missing from '{}'", file.label))
             })?;
-            fold_array(array, &mut columns[slot], &mut text)?;
+            fold_array(array, &mut columns[slot])?;
         }
         drop(reservation);
     }
@@ -885,8 +852,9 @@ fn scan_file(
 }
 
 /// Fold one array into the column's scan: null count, exact bounds through
-/// the executor's kernels, every non-null value into the sketches.
-fn fold_array(array: &ArrayRef, scan: &mut ColumnScan, text: &mut String) -> Result<()> {
+/// the executor's kernels, every non-null value into the sketches (the
+/// core's folds, shared with the executor's approximate aggregates).
+fn fold_array(array: &ArrayRef, scan: &mut ColumnScan) -> Result<()> {
     let array: ArrayRef = match array.data_type() {
         DataType::Dictionary(_, values) => compute::cast(array, values)?,
         _ => Arc::clone(array),
@@ -895,24 +863,14 @@ fn fold_array(array: &ArrayRef, scan: &mut ColumnScan, text: &mut String) -> Res
     if array.null_count() == array.len() {
         return Ok(());
     }
-    macro_rules! fold_primitive {
-        ($array:expr, $to_stat:expr, $to_f64:expr, $fmt:expr) => {{
+    macro_rules! primitive_bounds {
+        ($array:expr, $to_stat:expr) => {{
             let values = $array;
-            let min = compute::min(values).map($to_stat);
-            let max = compute::max(values).map($to_stat);
-            widen_bounds(scan, min, max);
-            let mut distinct = scan.distinct.as_mut();
-            let mut quantiles = scan.quantiles.as_mut();
-            for value in values.iter().flatten() {
-                if let Some(distinct) = distinct.as_deref_mut() {
-                    text.clear();
-                    $fmt(text, value);
-                    distinct.insert_hash(pg_hash_bytes_extended(text.as_bytes(), 0));
-                }
-                if let Some(quantiles) = quantiles.as_deref_mut() {
-                    quantiles.update($to_f64(value));
-                }
-            }
+            widen_bounds(
+                scan,
+                compute::min(values).map($to_stat),
+                compute::max(values).map($to_stat),
+            );
         }};
     }
     match array.data_type() {
@@ -923,151 +881,67 @@ fn fold_array(array: &ArrayRef, scan: &mut ColumnScan, text: &mut String) -> Res
                 compute::min_boolean(values).map(StatValue::Bool),
                 compute::max_boolean(values).map(StatValue::Bool),
             );
-            if let Some(distinct) = scan.distinct.as_mut() {
-                for value in values.iter().flatten() {
-                    distinct.insert_hash(pg_hash_bytes_extended(
-                        if value { b"true" } else { b"false" },
-                        0,
-                    ));
-                }
-            }
         }
-        DataType::Int8 => fold_primitive!(
+        DataType::Int8 => primitive_bounds!(
             array.as_primitive::<arrow::datatypes::Int8Type>(),
-            |v: i8| StatValue::Int(i128::from(v)),
-            |v: i8| f64::from(v),
-            |t: &mut String, v: i8| {
-                let _ = write!(t, "{v}");
-            }
+            |v: i8| StatValue::Int(i128::from(v))
         ),
-        DataType::Int16 => fold_primitive!(
+        DataType::Int16 => primitive_bounds!(
             array.as_primitive::<arrow::datatypes::Int16Type>(),
-            |v: i16| StatValue::Int(i128::from(v)),
-            |v: i16| f64::from(v),
-            |t: &mut String, v: i16| {
-                let _ = write!(t, "{v}");
-            }
+            |v: i16| StatValue::Int(i128::from(v))
         ),
-        DataType::Int32 => fold_primitive!(
+        DataType::Int32 => primitive_bounds!(
             array.as_primitive::<arrow::datatypes::Int32Type>(),
-            |v: i32| StatValue::Int(i128::from(v)),
-            |v: i32| f64::from(v),
-            |t: &mut String, v: i32| {
-                let _ = write!(t, "{v}");
-            }
+            |v: i32| StatValue::Int(i128::from(v))
         ),
-        DataType::Int64 => fold_primitive!(
+        DataType::Int64 => primitive_bounds!(
             array.as_primitive::<arrow::datatypes::Int64Type>(),
-            |v: i64| StatValue::Int(i128::from(v)),
-            |v: i64| v as f64,
-            |t: &mut String, v: i64| {
-                let _ = write!(t, "{v}");
-            }
+            |v: i64| StatValue::Int(i128::from(v))
         ),
-        DataType::UInt8 => fold_primitive!(
+        DataType::UInt8 => primitive_bounds!(
             array.as_primitive::<arrow::datatypes::UInt8Type>(),
-            |v: u8| StatValue::Int(i128::from(v)),
-            |v: u8| f64::from(v),
-            |t: &mut String, v: u8| {
-                let _ = write!(t, "{v}");
-            }
+            |v: u8| StatValue::Int(i128::from(v))
         ),
-        DataType::UInt16 => fold_primitive!(
+        DataType::UInt16 => primitive_bounds!(
             array.as_primitive::<arrow::datatypes::UInt16Type>(),
-            |v: u16| StatValue::Int(i128::from(v)),
-            |v: u16| f64::from(v),
-            |t: &mut String, v: u16| {
-                let _ = write!(t, "{v}");
-            }
+            |v: u16| StatValue::Int(i128::from(v))
         ),
-        DataType::UInt32 => fold_primitive!(
+        DataType::UInt32 => primitive_bounds!(
             array.as_primitive::<arrow::datatypes::UInt32Type>(),
-            |v: u32| StatValue::Int(i128::from(v)),
-            |v: u32| f64::from(v),
-            |t: &mut String, v: u32| {
-                let _ = write!(t, "{v}");
-            }
+            |v: u32| StatValue::Int(i128::from(v))
         ),
-        DataType::UInt64 => fold_primitive!(
+        DataType::UInt64 => primitive_bounds!(
             array.as_primitive::<arrow::datatypes::UInt64Type>(),
-            |v: u64| StatValue::Int(i128::from(v)),
-            |v: u64| v as f64,
-            |t: &mut String, v: u64| {
-                let _ = write!(t, "{v}");
-            }
+            |v: u64| StatValue::Int(i128::from(v))
         ),
-        DataType::Float32 => fold_primitive!(
+        DataType::Float32 => primitive_bounds!(
             array.as_primitive::<arrow::datatypes::Float32Type>(),
-            |v: f32| StatValue::Float(f64::from(v)),
-            |v: f32| f64::from(v),
-            |t: &mut String, v: f32| {
-                let _ = write!(t, "{}", f64::from(v));
-            }
+            |v: f32| StatValue::Float(f64::from(v))
         ),
-        DataType::Float64 => fold_primitive!(
+        DataType::Float64 => primitive_bounds!(
             array.as_primitive::<arrow::datatypes::Float64Type>(),
-            StatValue::Float,
-            |v: f64| v,
-            |t: &mut String, v: f64| {
-                let _ = write!(t, "{v}");
-            }
+            StatValue::Float
         ),
-        DataType::Date32 => fold_primitive!(
+        DataType::Date32 => primitive_bounds!(
             array.as_primitive::<arrow::datatypes::Date32Type>(),
-            StatValue::Date,
-            |v: i32| f64::from(v),
-            |t: &mut String, v: i32| {
-                match StatValue::Date(v).to_json() {
-                    serde_json::Value::String(date) => t.push_str(&date),
-                    _ => {
-                        let _ = write!(t, "{v}");
-                    }
-                }
-            }
+            StatValue::Date
         ),
         DataType::Timestamp(unit, zone) => {
-            let unit = *unit;
-            let utc = zone.is_some();
-            let values = timestamp_values(&array, unit)?;
+            let (unit, utc) = (*unit, zone.is_some());
+            let values = kaveon_core::sketch::timestamp_values(&array, unit);
             let to_stat = move |value: i64| StatValue::Timestamp { value, unit, utc };
-            let min = compute::min(&values).map(to_stat);
-            let max = compute::max(&values).map(to_stat);
-            widen_bounds(scan, min, max);
-            let mut distinct = scan.distinct.as_mut();
-            let mut quantiles = scan.quantiles.as_mut();
-            for value in values.iter().flatten() {
-                if let Some(distinct) = distinct.as_deref_mut() {
-                    text.clear();
-                    text.push_str(&to_stat(value).to_hash_text());
-                    distinct.insert_hash(pg_hash_bytes_extended(text.as_bytes(), 0));
-                }
-                if let Some(quantiles) = quantiles.as_deref_mut() {
-                    quantiles.update(value as f64);
-                }
-            }
+            widen_bounds(
+                scan,
+                compute::min(&values).map(to_stat),
+                compute::max(&values).map(to_stat),
+            );
         }
         DataType::Decimal128(_, scale) => {
             let scale = *scale;
-            let values = array.as_primitive::<arrow::datatypes::Decimal128Type>();
-            let to_stat = move |unscaled: i128| StatValue::Decimal { unscaled, scale };
-            widen_bounds(
-                scan,
-                compute::min(values).map(to_stat),
-                compute::max(values).map(to_stat),
-            );
-            let divisor = 10f64.powi(i32::from(scale));
-            let mut distinct = scan.distinct.as_mut();
-            let mut quantiles = scan.quantiles.as_mut();
-            for value in values.iter().flatten() {
-                if let Some(distinct) = distinct.as_deref_mut() {
-                    text.clear();
-                    text.push_str(&kaveon_core::statistics::decimal_text(value, scale));
-                    distinct.insert_hash(pg_hash_bytes_extended(text.as_bytes(), 0));
-                }
-                if let Some(quantiles) = quantiles.as_deref_mut() {
-                    quantiles.update(value as f64 / divisor);
-                }
-            }
+            primitive_bounds!(
+                array.as_primitive::<arrow::datatypes::Decimal128Type>(),
+                move |unscaled: i128| StatValue::Decimal { unscaled, scale }
+            )
         }
         DataType::Utf8 => {
             let values = array.as_string::<i32>();
@@ -1076,11 +950,6 @@ fn fold_array(array: &ArrayRef, scan: &mut ColumnScan, text: &mut String) -> Res
                 compute::min_string(values).map(|v| StatValue::Text(v.to_owned())),
                 compute::max_string(values).map(|v| StatValue::Text(v.to_owned())),
             );
-            if let Some(distinct) = scan.distinct.as_mut() {
-                for value in values.iter().flatten() {
-                    distinct.insert_hash(pg_hash_bytes_extended(value.as_bytes(), 0));
-                }
-            }
         }
         DataType::LargeUtf8 => {
             let values = array.as_string::<i64>();
@@ -1089,11 +958,6 @@ fn fold_array(array: &ArrayRef, scan: &mut ColumnScan, text: &mut String) -> Res
                 compute::min_string(values).map(|v| StatValue::Text(v.to_owned())),
                 compute::max_string(values).map(|v| StatValue::Text(v.to_owned())),
             );
-            if let Some(distinct) = scan.distinct.as_mut() {
-                for value in values.iter().flatten() {
-                    distinct.insert_hash(pg_hash_bytes_extended(value.as_bytes(), 0));
-                }
-            }
         }
         other => {
             return Err(KaveonError::Storage(format!(
@@ -1101,29 +965,13 @@ fn fold_array(array: &ArrayRef, scan: &mut ColumnScan, text: &mut String) -> Res
             )));
         }
     }
+    if let Some(distinct) = scan.distinct.as_mut() {
+        kaveon_core::sketch::fold_distinct(&array, distinct)?;
+    }
+    if let Some(quantiles) = scan.quantiles.as_mut() {
+        kaveon_core::sketch::fold_quantiles(&array, quantiles)?;
+    }
     Ok(())
-}
-
-fn timestamp_values(
-    array: &ArrayRef,
-    unit: TimeUnit,
-) -> Result<arrow::array::PrimitiveArray<arrow::datatypes::Int64Type>> {
-    use arrow::datatypes::*;
-    let values = match unit {
-        TimeUnit::Second => array
-            .as_primitive::<TimestampSecondType>()
-            .reinterpret_cast::<Int64Type>(),
-        TimeUnit::Millisecond => array
-            .as_primitive::<TimestampMillisecondType>()
-            .reinterpret_cast::<Int64Type>(),
-        TimeUnit::Microsecond => array
-            .as_primitive::<TimestampMicrosecondType>()
-            .reinterpret_cast::<Int64Type>(),
-        TimeUnit::Nanosecond => array
-            .as_primitive::<TimestampNanosecondType>()
-            .reinterpret_cast::<Int64Type>(),
-    };
-    Ok(values)
 }
 
 fn widen_bounds(scan: &mut ColumnScan, min: Option<StatValue>, max: Option<StatValue>) {
