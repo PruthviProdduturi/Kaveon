@@ -540,9 +540,14 @@ registered dataset and answers in one of four shapes:
   without a scan, marked `from context · no scan` (`≈ approximate` for a
   sketch-backed distinct count).
 - **Clarify**: a numbered list of the readings the question could have;
-  `.ask <n>` chooses one and the answer follows. A later question inherits
-  the previous answer's frame, so `.ask and in Asia` narrows the same
-  question.
+  `.ask <n>` chooses one and the answer follows. A word that looks like a
+  filter but is no value the DLM knows is never dropped silently: a near
+  miss (`desktop users in finance`) is a clarification listing the closest
+  values (`industry = Financial Services`) and the choice to leave the word
+  out; a word with nothing close is left out and the answer's note says so,
+  as does a `by` phrase naming a column that is not one of the dataset's
+  dimensions. A later question inherits the previous answer's frame, so
+  `.ask and in Asia` narrows the same question.
 - **Out of scope** or refused: one line saying why, with the registered
   datasets when there are any.
 
