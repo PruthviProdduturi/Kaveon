@@ -86,7 +86,7 @@ impl DataFile {
         }
     }
 
-    fn open(&self, columns: Option<&[String]>) -> Result<Box<dyn BatchSource>> {
+    pub(crate) fn open(&self, columns: Option<&[String]>) -> Result<Box<dyn BatchSource>> {
         match &self.location {
             FileLocation::Local(path) => {
                 let mut reader = ParquetReader::new(path).with_batch_size(SKETCH_BATCH_SIZE);
