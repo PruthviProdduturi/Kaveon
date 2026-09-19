@@ -1685,6 +1685,9 @@ fn plan_query_with_predicate(
                     if let Some(columns) = columns {
                         reader = reader.with_columns(columns.clone());
                     }
+                    if let Some(predicate) = storage_predicate {
+                        reader = reader.with_predicate(predicate.clone());
+                    }
                     if let Some(partition) = partition {
                         reader = reader.with_partition(partition);
                     }

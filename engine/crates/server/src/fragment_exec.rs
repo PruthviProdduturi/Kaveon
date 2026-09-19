@@ -363,6 +363,9 @@ fn compile_node(
                     if let Some(id) = scan.iceberg_snapshot_id {
                         reader = reader.with_snapshot_id(id);
                     }
+                    if let Some(predicate) = &scan.predicate {
+                        reader = reader.with_predicate(predicate.clone());
+                    }
                     if !scan.projection.is_empty() {
                         reader = reader.with_columns(scan.projection.clone());
                     }
