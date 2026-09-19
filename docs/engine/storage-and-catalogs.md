@@ -316,6 +316,153 @@ the source version from the least metadata that establishes it — the
 Delta log's tail, the Iceberg pointer and manifests, a listing, a file's
 identity — and is the platform's freshness signal.
 
+## Declared shape and the cube
+
+The statistics answer a table's totals and bounds. Its breakdowns —
+"by region", "by status and month", "in Europe" — need a second object,
+the **cube**, built over a **declared shape**. This is the Engine's
+counterpart of the DLM's answer-from-context over lake tables: the DLM's
+per-dataset context spec (dimensions, measures with their additivity,
+breakdowns, low-cardinality combo cells, HLL cuboids) becomes a
+declaration on the table definition, and its precomputed cells become a
+catalog object versioned like the statistics. Nothing declared, no cube;
+nothing is inferred.
+
+**The shape** lives on the table definition (`shape` in the table
+document; `SHOW CREATE TABLE` renders it; the store keeps it across
+revisions) and names three things:
+
+- `dimensions` — columns the cube breaks measures down by, each with a
+  **cardinality cap** (default 10,000): boolean, integer, text, date,
+  timestamp or decimal columns (a floating-point column is refused).
+  Spelled `'region'` or `'status:50'`.
+- `measures` — columns under the aggregates the cube keeps them at:
+  `sum`, `count`, `min`, `max` (**additive** — a file's contribution
+  folds in and, from the per-file partials, folds out) and
+  `count_distinct` (**non-additive** — kept as a HyperLogLog sketch,
+  p = 12, the same registers and hash as the statistics' sketches, so
+  the two merge). Spelled `'total:sum,count'`, `'user_id:count_distinct'`.
+  `sum` takes numbers; `min`/`max` numbers, text and dates; `count`
+  anything; `count_distinct` whatever a sketch hashes.
+- `time` — one date or microsecond-timestamp column at a **grain**,
+  `day` or `month`, planned at a cap of its own (ten years: 3,660 days
+  or 120 months unless given). Spelled `'order_date:day'`,
+  `'at:month:60'`. A date column takes day grain only: the row path has
+  no `DATE_TRUNC` over dates, and the cube answers nothing the row path
+  cannot compute.
+
+```sql
+ALTER TABLE lake.sales.orders SET SHAPE (
+    dimensions = ARRAY['region', 'status:50'],
+    measures   = ARRAY['total:sum,count', 'user_id:count_distinct'],
+    time       = 'order_date:day'
+)
+ALTER TABLE lake.sales.orders DROP SHAPE
+```
+
+`CREATE TABLE … WITH (…)` takes the same three options. A declaration is
+checked against the table's columns and types, against the partition
+columns of a directory table (read from the paths, not the files — not
+an axis yet), and against the **cell limit**: the cube it plans (below)
+must fit `KAVEON_CUBE_MAX_CELLS` (default 1,000,000). Changing the shape
+drops the cube on record; `ANALYZE … WITH (cube = true)` builds the new
+one.
+
+**The cube** holds cells at every grouping the shape plans: the grand
+total, every single axis (each dimension, the time column at its grain),
+and every pair of axes whose caps multiply to at most 1,000,000 cells.
+Caps are what pairs are planned from — with the default cap of 10,000
+no two dimensions pair, and a dimension pairs with a day-grain time axis
+only under a cap of 273 or less — so declaring a dimension's true
+cardinality (`'region:20'`) is what unlocks its combinations, exactly
+as the DLM's combo cells are chosen from the low-cardinality dimensions.
+Each cell holds its row count, the additive measures exactly (integer
+and decimal sums as exact integers, sums of doubles as doubles, bounds
+as the column's values) and each distinct count as a sketch. A null
+dimension value is a key of its own, as `GROUP BY` treats it.
+
+It is built by `ANALYZE t WITH (cube = true)` (admin; one scan of the
+table on the coordinator, files in parallel, batches and cells reserved
+through the statement's memory admission): every file is read once, its
+rows folded into every grouping, and the cube is the merge of the files'
+cells. An axis that shows more distinct values than its cap in any one
+file is **excluded** — its groupings dropped, the exclusion recorded on
+the cube (`excluded: [{column, distinct, cap}]`) — rather than failing
+the build; a cube that exceeds the cell limit fails it. The object is
+**versioned by the source version** like the statistics and stored
+beside them in the durable catalog: a `table_cubes` row per table (the
+merged document) and a `table_cube_files` row per contributing file (its
+partial), both deleted with the table. Two rows rather than one document
+beside the statistics because the statistics are read on every planning
+of every join side and filtered scan while the cube is read only for a
+cube-shaped statement, and because a refresh then rewrites only the
+partials of the files that changed. The planner keeps decoded cubes in
+memory per version, so a document is parsed once. **Size rule:** a cube
+holds at most `KAVEON_CUBE_MAX_CELLS` cells and encodes to at most 1 MiB
+plus 256 bytes per cell of that limit (a sketch is sparse while its cell
+holds few values and 3 KiB dense, so a cube of many high-distinct cells
+meets the byte bound first); the partials together may hold eight times
+the limit in cells over at most 10,000 files, beyond which they are
+dropped and every removal rebuilds.
+
+**Maintained incrementally.** When planning observes a source version
+newer than the cube's, the coordinator refreshes it in the background
+under the same knob as the statistics (`KAVEON_STATISTICS_AUTO_REFRESH`;
+one refresh per table at a time; a failed refresh leaves the previous
+cube, which then answers nothing). The rule:
+
+- *Added files* are read once and folded into the cells — sums and
+  counts add, bounds widen, sketches merge — and their partials appended.
+  A fold equals a rebuild cell for cell (the tests hold it to one).
+- *Removed files, every measure additive:* every cell is re-derived from
+  the remaining files' partials — sums and counts add up again, bounds
+  are the bounds of the files that remain — with no read; files added in
+  the same refresh are read and folded in.
+- *Removed files with a `count_distinct` measure:* a sketch cannot give a
+  file's values back, and every cell the removed file touched needs the
+  remaining files' values again — so the affected cells are recomputed
+  from a scan of the remaining files, which is the whole table: the cube
+  is rebuilt in one scan (the additive measures come out of it too).
+- *A changed shape, a changed schema, or partials no longer complete*
+  rebuild. An axis excluded for its cap stays excluded until a rebuild
+  re-evaluates it.
+
+**What the planner answers from it.** A statement over one table whose
+cube is current for the statement's pinned version and was built over
+the shape as declared now is answered from the cells with `execution.mode
+= "context"` and `detail = "cube at <version label>"`, no scan on any
+node, when it is exactly:
+
+- a `GROUP BY` over a subset of the declared dimensions (none is the
+  grand total), the time column at its grain (the date column itself at
+  day grain, or `DATE_TRUNC('day' | 'month', ts)` at the declared grain),
+  or both — at most two axes counting the predicate's, and a grouping
+  the cube holds (an excluded axis or a pair beyond the pair limit takes
+  the row path);
+- with `COUNT(*)` and `SUM`, `COUNT`, `MIN`, `MAX` of columns declared
+  under those aggregates (any subset, in any order, renamed at most);
+  `APPROX_COUNT_DISTINCT(col)` — or a `COUNT(DISTINCT col)` that
+  `settings.approximate = true` lowers to it — of a column declared
+  `count_distinct`, the estimate noted with its error under
+  `execution.approximate`; an exact `COUNT(DISTINCT)` is never answered
+  from the cube;
+- with an optional `WHERE` that is a conjunction of `dim = literal` and
+  `dim IN (literals)` over declared dimensions (a predicate on a measure,
+  on the time column, a range, a disjunction or a null test takes the row
+  path). A predicate on a dimension not grouped by rolls the cells up
+  along that axis: sums add, bounds widen, sketches merge exactly.
+
+`ORDER BY`, `LIMIT`, `HAVING`, expressions over aggregates, joins and
+everything else take the row path, unchanged. `settings.use_statistics =
+false` stands the cube aside like every statistics answer. The answer's
+columns are typed as the executor types them (counts unsigned, integer
+sums as `BIGINT`, decimal sums at precision 38, bounds in the column's
+type), and the differential sweep holds every cube-answered statement to
+the scanned answer: exactly for the row count and the additive measures,
+bit-identically for the distinct sketches against
+`APPROX_COUNT_DISTINCT` (the registers merge exactly), within the
+sketch's error of the exact count.
+
 ## Cloud read boundary
 
 An ADLS Parquet scan pins the object identity returned by `HEAD` (ETag or

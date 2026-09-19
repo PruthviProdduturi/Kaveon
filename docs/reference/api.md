@@ -187,8 +187,26 @@ and republishes the planning snapshot, so the table answers queries on the
 next statement. It leaves a query record like any statement (`FINISHED`
 with the result, or `FAILED` with the reason) and returns a one-row result:
 `(catalog|schema|table, result)` with `created`, `exists`, `dropped`,
-`absent`, `relocated` or `unchanged`. One statement per request; the
-session `catalog` and `schema` of the request resolve unqualified names.
+`absent`, `relocated`, `clustered`, `shaped`, `unshaped` or `unchanged`.
+One statement per request; the session `catalog` and `schema` of the
+request resolve unqualified names.
+
+`SET SHAPE` declares the shape the table's cube is built over (see
+[Declared shape and the cube](../engine/storage-and-catalogs.md#declared-shape-and-the-cube)):
+`dimensions` are columns each with an optional cardinality cap
+(`'region'`, `'status:50'`; default 10,000), `measures` are columns under
+`sum`, `count`, `min`, `max` and `count_distinct` (`'total:sum,count'`),
+`time` is one date or microsecond-timestamp column at `day` or `month`
+grain with an optional cap (`'order_date:day'`, `'at:month:60'`). A
+declaration is refused (`CATALOG_INVALID`) for a column the table does
+not have, a type the role does not accept (a floating-point dimension, a
+sum over text, a date column at month grain), a partition column, or a
+planned cube above `KAVEON_CUBE_MAX_CELLS`. `DROP SHAPE` (or `SET SHAPE
+()`) clears it; either change drops the cube on record. `CREATE TABLE`
+accepts the same three options. The table document
+(`GET /v1/catalog/tables/{id}`) carries the shape as `shape: {dimensions:
+[{name, cap}], measures: [{column, aggregates: [...]}], time: {column,
+grain, cap}}`, absent when none is declared.
 
 ```sql
 CREATE CATALOG [IF NOT EXISTS] name WITH (storage = 'adls', account = '…', container = '…' [, root = '…'] [, credential = 'workload-identity:<reference>'])
@@ -198,11 +216,13 @@ DROP CATALOG [IF EXISTS] name [CASCADE | RESTRICT]
 CREATE SCHEMA [IF NOT EXISTS] [catalog.]schema
 DROP SCHEMA [IF EXISTS] [catalog.]schema [CASCADE | RESTRICT]
 CREATE TABLE [IF NOT EXISTS] [catalog.][schema.]table [(column type [NOT NULL], …)]
-    WITH (location = '<path within the catalog root>', format = 'parquet' | 'delta' | 'iceberg' [, access = 'shortcut' | 'optimized'] [, partitioned_by = ARRAY['key', …]] [, clustered_by = ARRAY['column', …]] [, bloom = ARRAY['column', …]])
+    WITH (location = '<path within the catalog root>', format = 'parquet' | 'delta' | 'iceberg' [, access = 'shortcut' | 'optimized'] [, partitioned_by = ARRAY['key', …]] [, clustered_by = ARRAY['column', …]] [, bloom = ARRAY['column', …]] [, dimensions = ARRAY['column[:cap]', …]] [, measures = ARRAY['column:agg[,agg…]', …]] [, time = 'column:day|month[:cap]'])
 CALL [catalog.]system.register_table(schema_name => '…', table_name => '…', table_location => '…' [, format => 'delta'])
 CALL [catalog.]system.unregister_table(schema_name => '…', table_name => '…')
 ALTER TABLE [IF EXISTS] [catalog.][schema.]table SET LOCATION '<path>'
 ALTER TABLE [IF EXISTS] [catalog.][schema.]table SET CLUSTERED BY (column, …)
+ALTER TABLE [IF EXISTS] [catalog.][schema.]table SET SHAPE (dimensions = ARRAY['column[:cap]', …], measures = ARRAY['column:agg[,agg…]', …], time = 'column:day|month[:cap]')
+ALTER TABLE [IF EXISTS] [catalog.][schema.]table DROP SHAPE
 OPTIMIZE [TABLE] [catalog.][schema.]table [WITH (row_group_rows = n, row_group_bytes = n, file_bytes = n)] [WHERE predicate]
 DROP TABLE [IF EXISTS] [catalog.][schema.]table
 SHOW CATALOGS [LIKE 'pattern']
@@ -320,19 +340,22 @@ ANALYZE [catalog.][schema.]table
 ANALYZE [catalog.][schema.]table WITH (sketches = true)
 ANALYZE [catalog.][schema.]table WITH (distinct = true)
 ANALYZE [catalog.][schema.]table WITH (columns = ARRAY['a', 'b'])
+ANALYZE [catalog.][schema.]table WITH (cube = true)
 SHOW STATS FOR [catalog.][schema.]table
 DESCRIBE DETAIL [catalog.][schema.]table
 ```
 
-`ANALYZE` has three forms, by how much of the table it reads. They
-combine: `sketches = true` with `distinct` or `columns` reads every column
-once and then counts exactly.
+`ANALYZE` has three forms, by how much of the table it reads, and a
+fourth that builds the cube. They combine: `sketches = true` with
+`distinct` or `columns` reads every column once and then counts exactly;
+`cube = true` with any of them builds the cube first.
 
 | Form | Reads | Produces |
 |---|---|---|
 | `ANALYZE t` — metadata only, the default | Parquet footers, the Delta log, the Iceberg metadata pointer and manifests; never a data page | The table facts (rows, bytes, files, row groups, last modified), each column's null count and bounds as the writer recorded them (`bounds_exact` says whether a bound may be truncated), the compressed bytes per column, and every file's rows, bytes and bounds for file skipping; the document's `depth` is `metadata` |
 | `ANALYZE t WITH (sketches = true)` — the sketches | Every sketchable column once, on the coordinator, files in parallel, batches reserved through the statement's memory admission; a source that changes under the read is refused rather than mixed | Everything the metadata form produces, plus a HyperLogLog distinct-count sketch per column (p = 12, 1.6 % standard error), a KLL quantile sketch per numeric or temporal column (k = 200), exact bounds and exact null counts; the document's `depth` is `full`. These are what the planner estimates selectivity from and what `APPROX_*` aggregates answer from without a scan |
 | `ANALYZE t WITH (distinct = true)` / `WITH (columns = ARRAY['a', 'b'])` — exact distinct counts | One `SELECT COUNT(DISTINCT "column") FROM t` per selected column through the cluster (details below) | The exact distinct count of every column, or of the columns named, kept beside whatever the record already holds at this source version; a count answers before a sketch's estimate wherever both exist |
+| `ANALYZE t WITH (cube = true)` — the cube | The shape's columns of every file once, on the coordinator, files in parallel, under the statement's memory admission; refused with `SHAPE_UNDECLARED` when the table declares no shape | The cube (see [Declared shape and the cube](../engine/storage-and-catalogs.md#declared-shape-and-the-cube)): cells at the grand total, every axis and every low-cardinality pair, holding the row count, the additive measures exactly and the distinct counts as sketches; stored beside the statistics with one partial per file, versioned by the same source version. The result's `cube_cells` is the cell count. A cube above `KAVEON_CUBE_MAX_CELLS` cells (or the byte bound derived from it) fails the statement; an axis over its cap is excluded, not failed |
 
 - **`ANALYZE`** (admin only) reads the source's metadata — Parquet
   footers, the Delta log, the Iceberg metadata pointer and manifests;
@@ -344,9 +367,10 @@ once and then counts exactly.
   — and stored under the table's durable id (`table_statistics` in the
   SQLite catalog, deleted with the table). A source that moves between
   the build and the store is 409 `SOURCE_CHANGED`. Its result is one row,
-  `table (VARCHAR), row_count (BIGINT), distinct_columns (BIGINT)` — the
-  last is how many columns this statement counted distinct values for,
-  `0` for the metadata-only form.
+  `table (VARCHAR), row_count (BIGINT), distinct_columns (BIGINT),
+  cube_cells (BIGINT)` — `distinct_columns` is how many columns this
+  statement counted distinct values for, `0` for the metadata-only form;
+  `cube_cells` the cells of the cube it built, null when it built none.
 - **`ANALYZE … WITH (sketches = true)`** reads every sketchable column
   once on the coordinator (files in parallel, batches reserved through
   the statement's memory admission) for a HyperLogLog distinct-count
@@ -504,6 +528,30 @@ and exact row count.
   recomputed at the document's depth. Until it lands, the old record
   costs and does not answer. Exact distinct counts do not survive a
   refresh.
+- *The cube answers breakdowns.* Over a table with a declared shape whose
+  cube is current for the pinned version, a statement that is exactly a
+  `GROUP BY` over a subset of the declared dimensions (none is the grand
+  total), the time column at its grain (the date column itself at day
+  grain, or `DATE_TRUNC('day' | 'month', ts)` at the declared grain), or
+  both — at most two axes counting the predicate's — with `COUNT(*)`,
+  the declared `SUM`/`COUNT`/`MIN`/`MAX`, and `APPROX_COUNT_DISTINCT` (or
+  a `COUNT(DISTINCT)` under `settings.approximate`, never an exact one)
+  of a column declared `count_distinct`, under an optional conjunction
+  of `dim = literal` and `dim IN (…)` predicates on declared dimensions,
+  projected as they are (renamed at most), is answered from the cells:
+  `execution: {"mode": "context", "detail": "cube at <version label>",
+  …}`, `execution.approximate` naming each sketch's error, no `scans`.
+  A predicate on a dimension not grouped by rolls the cells up along it.
+  `ORDER BY`, `LIMIT`, `HAVING`, expressions over aggregates, an
+  undeclared measure, a predicate on a measure or on the time column,
+  a grouping the cube does not hold (an excluded axis, a pair beyond the
+  pair limit) and every other shape take the row path. `use_statistics =
+  false` stands the cube aside. A cube behind the source refreshes in
+  the background under the same knob (added files folded in; a removal
+  re-derived from the per-file partials when every measure is additive,
+  rebuilt when a distinct count is declared) and answers nothing until
+  it lands. The cube is held to the row path by the differential sweep
+  (`the_cube_answers_what_the_row_path_answers`).
 
 ### Statistics endpoints
 
