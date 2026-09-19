@@ -203,6 +203,11 @@ impl ObjectDeltaReader {
         let source = schema_reader.read_blocking()?;
         let mut schema = source.schema().clone();
         drop(source);
+        // The add actions' stats rule files out before any footer is read.
+        let admitted = match &self.predicate {
+            Some(predicate) => snapshot.files_may_match(predicate),
+            None => vec![true; snapshot.files.len()],
+        };
         if let Some(logical_schema) = snapshot.schema {
             let store = self.location.store.clone();
             let physical_schema = blocking(async move {
@@ -216,17 +221,26 @@ impl ObjectDeltaReader {
                 crate::parquet_reader::ordered_projection(logical_schema, self.columns.as_deref())?
                     .0;
         }
+        let mut skipped = 0u64;
         let files = snapshot
             .files
             .into_iter()
             .enumerate()
-            .filter_map(|(i, path)| {
+            .filter(|(i, _)| {
                 self.partition
-                    .is_none_or(|partition| partition.contains(i))
-                    .then_some(path)
+                    .is_none_or(|partition| partition.contains(*i))
+            })
+            .filter_map(|(i, path)| {
+                if admitted[i] {
+                    Some(path)
+                } else {
+                    skipped += 1;
+                    None
+                }
             })
             .collect::<Vec<_>>()
             .into_iter();
+        metrics.files_skipped(skipped);
         Ok(ObjectDeltaSource {
             store: self.location.store,
             files,

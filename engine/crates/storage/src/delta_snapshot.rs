@@ -4,7 +4,7 @@ use crate::object_reader::{error, relative_path, storage_error};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow::json::LineDelimitedWriter;
 use futures::TryStreamExt;
-use kaveon_core::Result;
+use kaveon_core::{FileColumnStatistics, FileStatistics, Result, StoragePredicate};
 use object_store::{ObjectStore, path::Path};
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, async_reader::ParquetObjectReader};
 use serde_json::Value;
@@ -52,6 +52,46 @@ impl DeltaFileDetail {
                 },
             },
         }
+    }
+}
+
+impl DeltaSnapshot {
+    /// For each active file, whether its add action's `stats` admit a row
+    /// matching `predicate` (coerced for the logical schema): `false` only
+    /// when the recorded bounds or null counts prove no row can match. A
+    /// file without stats, or a snapshot without a schema, keeps every
+    /// file.
+    pub fn files_may_match(&self, predicate: &StoragePredicate) -> Vec<bool> {
+        let Some(schema) = &self.schema else {
+            return vec![true; self.files.len()];
+        };
+        let predicate = predicate.coerced_for(schema);
+        let names: Vec<String> = schema.fields().iter().map(|f| f.name().clone()).collect();
+        self.details
+            .iter()
+            .map(|detail| {
+                let Some((rows, columns)) = crate::source_statistics::column_facts_from_delta_stats(
+                    schema,
+                    std::slice::from_ref(detail),
+                ) else {
+                    return true;
+                };
+                let file = FileStatistics {
+                    path: String::new(),
+                    rows,
+                    bytes: 0,
+                    columns: columns
+                        .into_iter()
+                        .map(|column| FileColumnStatistics {
+                            min: column.min,
+                            max: column.max,
+                            null_count: column.nulls,
+                        })
+                        .collect(),
+                };
+                file.may_match(&names, &predicate)
+            })
+            .collect()
     }
 }
 
