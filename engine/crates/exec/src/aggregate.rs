@@ -27,6 +27,23 @@ pub struct AggregateMetricsSnapshot {
     pub input_rows: u64,
     pub groups_created: u64,
     pub distinct_values_admitted: u64,
+    /// Rows the grouped partial stage read, in either mode.
+    pub partial_input_rows: u64,
+    /// Partial rows the grouped partial stage handed to the exchange.
+    pub partial_output_rows: u64,
+    /// Rows the partial stage passed through as their own partial rows,
+    /// having found it reduced nothing.
+    pub partial_passthrough_rows: u64,
+}
+
+impl AggregateMetricsSnapshot {
+    /// Partial rows out per row in, over the grouped partial stage: 1.0
+    /// when the partial reduced nothing; None when no grouped partial ran.
+    #[must_use]
+    pub fn partial_reduction(&self) -> Option<f64> {
+        (self.partial_input_rows > 0)
+            .then(|| self.partial_output_rows as f64 / self.partial_input_rows as f64)
+    }
 }
 
 #[derive(Default)]
@@ -34,6 +51,9 @@ pub struct AggregateMetrics {
     input_rows: AtomicU64,
     groups_created: AtomicU64,
     distinct_values_admitted: AtomicU64,
+    partial_input_rows: AtomicU64,
+    partial_output_rows: AtomicU64,
+    partial_passthrough_rows: AtomicU64,
 }
 
 impl AggregateMetrics {
@@ -43,7 +63,20 @@ impl AggregateMetrics {
             input_rows: self.input_rows.load(Ordering::Acquire),
             groups_created: self.groups_created.load(Ordering::Acquire),
             distinct_values_admitted: self.distinct_values_admitted.load(Ordering::Acquire),
+            partial_input_rows: self.partial_input_rows.load(Ordering::Acquire),
+            partial_output_rows: self.partial_output_rows.load(Ordering::Acquire),
+            partial_passthrough_rows: self.partial_passthrough_rows.load(Ordering::Acquire),
         }
+    }
+
+    /// One round of a grouped partial: `rows` in, `output` partial rows
+    /// out, `passed_through` of the rows encoded without aggregation.
+    pub fn record_partial_round(&self, rows: u64, output: u64, passed_through: u64) {
+        self.partial_input_rows.fetch_add(rows, Ordering::Relaxed);
+        self.partial_output_rows
+            .fetch_add(output, Ordering::Relaxed);
+        self.partial_passthrough_rows
+            .fetch_add(passed_through, Ordering::Relaxed);
     }
 }
 
@@ -2398,6 +2431,44 @@ impl HashAggregate {
         Ok((batch, reservations))
     }
 
+    /// The pass-through encoder for this operator's shape, over the same
+    /// source schema; the operator's source is dropped unread.
+    pub fn into_partial_batch_encoder(self) -> Result<PartialBatchEncoder> {
+        let input_schema = Arc::clone(self.source.schema());
+        let group_types = self.exchanged_key_types()?;
+        let output_types = self.output_types()?;
+        let key_indices = self
+            .group_by
+            .iter()
+            .map(|name| input_schema.index_of(name).expect("validated group key"))
+            .collect::<Vec<_>>();
+        let value_indices = self
+            .aggregates
+            .iter()
+            .map(|aggregate| {
+                (aggregate.column != "*")
+                    .then(|| input_schema.index_of(&aggregate.column))
+                    .transpose()
+                    .expect("validated aggregate input")
+            })
+            .collect::<Vec<_>>();
+        let groups = self
+            .columnar_key_types()
+            .and_then(|key_types| ColumnarGroups::new(&key_types, &self.new_states()));
+        Ok(PartialBatchEncoder {
+            group_by: self.group_by,
+            aggregates: self.aggregates,
+            input_schema,
+            key_indices,
+            value_indices,
+            groups,
+            group_types,
+            output_types,
+            memory: self.memory,
+            table_memory: ReservationSlab::default(),
+        })
+    }
+
     /// The key types the columnar aggregate takes for this shape, or None
     /// when it stays on the row paths: every key carried, at least one key
     /// not dictionary-encoded (the coded fold wins for the low-cardinality
@@ -3587,6 +3658,142 @@ impl HashAggregate {
             groups.push((vec![GroupKey::Null], states(state)));
         }
         Ok((groups, reservations.into_guards()))
+    }
+}
+
+/// Encodes each input batch as its own partial — every row a group, or
+/// the few duplicates the batch holds — for a grouped partial that has
+/// found it reduces nothing: the states cross the exchange as they would
+/// from a table (COUNT 1, SUM the value, MIN and MAX the value), so the
+/// final stage merges the same states, but through one small table that
+/// is cleared per batch rather than a table of every group the task has
+/// seen. The columnar table for every shape it carries, a row-path
+/// aggregate over the one batch otherwise.
+pub struct PartialBatchEncoder {
+    group_by: Vec<String>,
+    aggregates: Vec<AggExpr>,
+    input_schema: SchemaRef,
+    key_indices: Vec<usize>,
+    value_indices: Vec<Option<usize>>,
+    groups: Option<ColumnarGroups>,
+    group_types: Vec<DataType>,
+    output_types: Vec<DataType>,
+    memory: Option<OperatorMemoryAccount>,
+    /// The retained table's memory: grows to the largest batch, stays.
+    table_memory: ReservationSlab,
+}
+
+impl PartialBatchEncoder {
+    /// The encoder for a grouped shape over `input_schema`.
+    pub fn new(
+        input_schema: &SchemaRef,
+        group_by: Vec<String>,
+        aggregates: Vec<AggExpr>,
+        memory: Option<OperatorMemoryAccount>,
+    ) -> Result<Self> {
+        let mut operator = HashAggregate::new(
+            Box::new(crate::local_parallel::EmptyInput(Arc::clone(input_schema))),
+            group_by,
+            aggregates,
+        )?;
+        operator.memory = memory;
+        operator.into_partial_batch_encoder()
+    }
+
+    /// The batch's rows as partial rows, with the reservation the encoded
+    /// batch holds (None without an account).
+    pub fn encode(
+        &mut self,
+        batch: &RecordBatch,
+    ) -> Result<(RecordBatch, Option<MemoryReservation>)> {
+        let rows = batch.num_rows();
+        let metrics = self
+            .memory
+            .as_ref()
+            .map(|memory| aggregate_metrics(memory.query()))
+            .transpose()?;
+        if let Some(metrics) = &metrics {
+            metrics.input_rows.fetch_add(rows as u64, Ordering::Relaxed);
+        }
+        let Some(groups) = self.groups.as_mut() else {
+            // The row paths: an aggregate over the one batch. Its states
+            // are gone once the batch exists.
+            let mut operator = HashAggregate::new(
+                Box::new(OneBatch(
+                    Some(batch.clone()),
+                    Arc::clone(&self.input_schema),
+                )),
+                self.group_by.clone(),
+                self.aggregates.clone(),
+            )?;
+            operator.memory = self.memory.clone();
+            let (encoded, state_memory) =
+                operator.into_partial_batch(&self.group_types, &self.output_types)?;
+            drop(state_memory);
+            let guard = self
+                .memory
+                .as_ref()
+                .map(|memory| memory.reserve(encoded.get_array_memory_size() as u64))
+                .transpose()?;
+            return Ok((encoded, guard));
+        };
+        groups.clear();
+        let keys = self
+            .key_indices
+            .iter()
+            .map(|index| batch.column(*index).clone())
+            .collect::<Vec<_>>();
+        let values = self
+            .value_indices
+            .iter()
+            .map(|index| {
+                index
+                    .map(|index| day_numbers(batch.column(index)))
+                    .transpose()
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let values = values.iter().map(Option::as_ref).collect::<Vec<_>>();
+        if let Some(memory) = &self.memory {
+            memory.check_cancelled()?;
+            let key_bytes = keys
+                .iter()
+                .map(|array| array.get_array_memory_size() as u64)
+                .sum::<u64>();
+            // Every row may be a group; the table keeps its allocation
+            // across batches, so the slab grows to the largest batch.
+            self.table_memory.ensure(
+                memory,
+                (rows as u64)
+                    .saturating_mul(groups.slot_bytes())
+                    .saturating_add(groups.scratch_bytes(rows))
+                    .saturating_add(key_bytes),
+            )?;
+        }
+        let (created, _) = groups.push_batch(&keys, &values, rows)?;
+        if let Some(metrics) = &metrics {
+            metrics
+                .groups_created
+                .fetch_add(created as u64, Ordering::Relaxed);
+        }
+        let guard = self
+            .memory
+            .as_ref()
+            .map(|memory| memory.reserve(groups.encoded_bytes() * 3 / 2))
+            .transpose()?;
+        let encoded = columnar_partial_batch(groups, &self.group_types, &self.output_types)?;
+        Ok((encoded, guard))
+    }
+}
+
+/// A source of one batch.
+struct OneBatch(Option<RecordBatch>, SchemaRef);
+
+impl BatchOperator for OneBatch {
+    fn schema(&self) -> &SchemaRef {
+        &self.1
+    }
+    fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        Ok(self.0.take())
     }
 }
 

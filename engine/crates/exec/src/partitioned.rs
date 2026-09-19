@@ -14,7 +14,8 @@ use kaveon_core::{
 
 use crate::{
     aggregate::{
-        AggExpr, HashAggregate, aggregate_output_types, grouped_aggregate_states_to_schema_batch,
+        AggExpr, HashAggregate, PartialBatchEncoder, aggregate_metrics, aggregate_output_types,
+        grouped_aggregate_states_to_schema_batch,
     },
     exchange::HashPartitioner,
     join::{HashJoin, JoinType},
@@ -24,6 +25,92 @@ use crate::{
 const MAX_PARTITIONS: usize = 256;
 const MAX_RUNS_PER_PARTITION: usize = 16;
 const MAX_ADAPTIVE_BATCHES: usize = 64;
+
+/// How a grouped partial decides whether aggregating pays. Registered on
+/// the query pool (a test's, or the settings a caller pins), else read
+/// from the environment once per operator.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AdaptivePartialSettings {
+    /// Off: the partial aggregates every row, as before.
+    pub enabled: bool,
+    /// Rows a round must have read before its reduction is judged: a
+    /// short round says little about the input.
+    pub min_rows: u64,
+    /// Groups per row at or above which a round "did not reduce".
+    pub threshold: f64,
+}
+
+/// Rows read before a round's reduction counts. A round is the first
+/// flush's worth of groups — a sixth of the budget share — so on any
+/// budget that matters the sample is millions of rows, which is what
+/// tells a uniform million-key input (a reduction the first hundred
+/// thousand rows cannot see) from a unique one; the floor is for small
+/// budgets, where a round of fewer rows is not judged at all.
+pub const ADAPTIVE_PARTIAL_MIN_ROWS: u64 = 100_000;
+
+/// Groups per row at or above which the partial stops aggregating.
+/// Aggregating a row costs a probe of a table beyond the caches (P) and,
+/// per group it leaves, the encoding at the flush plus the exchange and
+/// the final merge of one partial row (E + X); passing a row through
+/// costs E + X once. Aggregating pays while P + r(E + X) < E + X, that
+/// is while the reduction r is below 1 − P / (E + X). Measured on the
+/// q19 shape (`partial_stage_rate`, release, one thread): P ≈ 70 ns per
+/// row against E ≈ 77 ns through the cleared table, and the exchange and
+/// merge of a partial row are several hundred nanoseconds more (the
+/// final merges at 134–146 ns per row, `merge_rate`; the AKS record puts
+/// the output handling of q19's partial stage above a microsecond per
+/// row), so P / (E + X) is below a fifth and the rule turns at four
+/// groups in five rows — where Trino's partial gives up too. The
+/// constant is deliberately on the aggregating side of the measurement.
+pub const ADAPTIVE_PARTIAL_THRESHOLD: f64 = 0.8;
+
+/// Rounds of pass-through per aggregating round: four after the first
+/// decision, eight after the next, so a partial that stopped reducing
+/// re-checks on at most a ninth of its rows and one that starts reducing
+/// again (skew later in the input) is back to aggregating within eight
+/// rounds.
+const PASSTHROUGH_ROUNDS_FIRST: u64 = 4;
+const PASSTHROUGH_ROUNDS_MAX: u64 = 8;
+
+const ADAPTIVE_PARTIAL_RESOURCE: &str = "kaveon.exec.adaptive-partial.v1";
+
+impl AdaptivePartialSettings {
+    /// The settings a query runs with: the pool's, else the environment's
+    /// (`KAVEON_ADAPTIVE_PARTIAL_AGGREGATION`, `on` unless `off`).
+    pub fn for_query(memory: &QueryMemoryPool) -> Result<Self> {
+        if let Some(settings) =
+            memory.shared_resource_if_present::<Self>(ADAPTIVE_PARTIAL_RESOURCE)?
+        {
+            return Ok(*settings);
+        }
+        let enabled = match std::env::var("KAVEON_ADAPTIVE_PARTIAL_AGGREGATION") {
+            Ok(value) if value.eq_ignore_ascii_case("off") => false,
+            Ok(value) if value.eq_ignore_ascii_case("on") => true,
+            Ok(_) => {
+                return Err(KaveonError::Execution(
+                    "KAVEON_ADAPTIVE_PARTIAL_AGGREGATION must be on or off".into(),
+                ));
+            }
+            Err(std::env::VarError::NotPresent) => true,
+            Err(_) => {
+                return Err(KaveonError::Execution(
+                    "KAVEON_ADAPTIVE_PARTIAL_AGGREGATION must contain valid Unicode".into(),
+                ));
+            }
+        };
+        Ok(Self {
+            enabled,
+            min_rows: ADAPTIVE_PARTIAL_MIN_ROWS,
+            threshold: ADAPTIVE_PARTIAL_THRESHOLD,
+        })
+    }
+
+    /// Pin these settings on the pool for every partial of the query.
+    pub fn register(self, memory: &QueryMemoryPool) -> Result<()> {
+        memory.shared_resource(ADAPTIVE_PARTIAL_RESOURCE, || Ok(self))?;
+        Ok(())
+    }
+}
 
 /// A bounded prefix can be replayed from memory without reopening its source.
 struct BufferedPrefix {
@@ -613,6 +700,8 @@ struct FlushingSource {
     reserve_input: bool,
     current: Option<MemoryReservation>,
     yielded: usize,
+    /// Rows this round has read.
+    rows: Rc<Cell<u64>>,
     /// What the account held when the round began — the previous round's
     /// output batch, still on its way downstream — so the threshold
     /// measures this round's groups alone.
@@ -641,6 +730,7 @@ impl BatchOperator for FlushingSource {
                     self.current = Some(self.memory.reserve(batch.get_array_memory_size() as u64)?);
                 }
                 self.yielded += 1;
+                self.rows.set(self.rows.get() + batch.num_rows() as u64);
                 Ok(Some(batch))
             }
             None => {
@@ -652,6 +742,16 @@ impl BatchOperator for FlushingSource {
     }
 }
 
+/// What the grouped partial is doing with its rows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PartialMode {
+    /// Aggregating into a table, flushing it in rounds.
+    Aggregating,
+    /// Passing rows through as their own partial rows for `remaining`
+    /// more rows, then judging an aggregating round again.
+    PassThrough { remaining: u64 },
+}
+
 /// A grouped partial aggregate that flushes on memory pressure. Partial
 /// groups merge across batches, so a grouped partial never needs the disk:
 /// it aggregates until it holds its share of the query budget, hands its
@@ -659,6 +759,17 @@ impl BatchOperator for FlushingSource {
 /// the input. Every round reads at least one batch, so progress does not
 /// depend on the budget; a batch the budget cannot hold at all fails
 /// closed as before.
+///
+/// The partial measures its reduction as it goes: a round that read at
+/// least `min_rows` and made a group for `threshold` or more of them did
+/// not reduce, and the next rows go through as their own partial rows
+/// (`PartialBatchEncoder`: per-row states, the same encoding, one small
+/// table cleared per batch) rather than into a table that only grows —
+/// the final stage does the only aggregation that matters. Every
+/// pass-through window ends with an aggregating round that judges again,
+/// so a partial whose input starts reducing (skew later in the input)
+/// resumes aggregating. Exactness is unchanged either way: the final
+/// merges the same states.
 pub struct FlushingPartialAggregate {
     source: SharedSource,
     exhausted: Rc<Cell<bool>>,
@@ -671,6 +782,12 @@ pub struct FlushingPartialAggregate {
     memory: OperatorMemoryAccount,
     budget_share: usize,
     input_reserved: bool,
+    settings: AdaptivePartialSettings,
+    mode: PartialMode,
+    /// Rounds of pass-through the next decision buys.
+    passthrough_rounds: u64,
+    encoder: Option<PartialBatchEncoder>,
+    passthrough_rows: u64,
 }
 
 impl FlushingPartialAggregate {
@@ -691,6 +808,7 @@ impl FlushingPartialAggregate {
         let output_types = probe.output_types()?;
         let schema =
             grouped_aggregate_states_to_schema_batch(&[], &group_types, &output_types)?.schema();
+        let settings = AdaptivePartialSettings::for_query(memory.query())?;
         Ok(Self {
             source: Rc::new(RefCell::new(Some(source))),
             exhausted: Rc::new(Cell::new(false)),
@@ -703,6 +821,11 @@ impl FlushingPartialAggregate {
             memory,
             budget_share: 1,
             input_reserved: false,
+            settings,
+            mode: PartialMode::Aggregating,
+            passthrough_rounds: PASSTHROUGH_ROUNDS_FIRST,
+            encoder: None,
+            passthrough_rows: 0,
         })
     }
 
@@ -716,6 +839,117 @@ impl FlushingPartialAggregate {
     pub fn with_budget_share(mut self, share: usize) -> Self {
         self.budget_share = share.max(1);
         self
+    }
+
+    /// What the partial is doing with its rows now.
+    pub fn mode(&self) -> PartialMode {
+        self.mode
+    }
+
+    /// Rows passed through so far.
+    pub fn passthrough_rows(&self) -> u64 {
+        self.passthrough_rows
+    }
+
+    /// Judge a finished aggregating round: `rows` in, `groups` out. A
+    /// round cut short by the end of the input is not judged (nothing
+    /// follows it); one below `min_rows` says too little.
+    fn judge_round(&mut self, rows: u64, groups: u64) {
+        if !self.settings.enabled || self.exhausted.get() || rows < self.settings.min_rows {
+            return;
+        }
+        if groups as f64 >= self.settings.threshold * rows as f64 {
+            self.mode = PartialMode::PassThrough {
+                remaining: rows.saturating_mul(self.passthrough_rounds).max(1),
+            };
+            self.passthrough_rounds = (self.passthrough_rounds * 2).min(PASSTHROUGH_ROUNDS_MAX);
+        } else {
+            self.passthrough_rounds = PASSTHROUGH_ROUNDS_FIRST;
+        }
+    }
+
+    /// One aggregating round: the table until the flush threshold or the
+    /// end of the input, as one partial batch (empty for no rows).
+    fn aggregating_round(&mut self) -> Result<RecordBatch> {
+        let rows = Rc::new(Cell::new(0_u64));
+        let source = FlushingSource {
+            inner: self.source.clone(),
+            exhausted: self.exhausted.clone(),
+            schema: Arc::clone(&self.input_schema),
+            memory: self.memory.clone(),
+            flush_at: self.flush_bytes(),
+            reserve_input: !self.input_reserved,
+            current: None,
+            yielded: 0,
+            rows: rows.clone(),
+            baseline: None,
+        };
+        let operator = HashAggregate::new_with_memory(
+            Box::new(source),
+            self.group_by.clone(),
+            self.aggregates.clone(),
+            self.memory.clone(),
+        )?
+        .with_reserved_input();
+        let (batch, state_memory) =
+            operator.into_partial_batch(&self.group_types, &self.output_types)?;
+        // The groups are gone once the batch exists; the consumer
+        // accounts for the batch it takes, as for any operator's output.
+        drop(state_memory);
+        let rows = rows.get();
+        let groups = batch.num_rows() as u64;
+        aggregate_metrics(self.memory.query())?.record_partial_round(rows, groups, 0);
+        self.judge_round(rows, groups);
+        Ok(batch)
+    }
+
+    /// One batch of the input as its own partial rows.
+    fn passthrough_batch(&mut self, remaining: u64) -> Result<Option<RecordBatch>> {
+        let batch = {
+            let mut inner = self.source.borrow_mut();
+            let Some(source) = inner.as_mut() else {
+                return Ok(None);
+            };
+            match source.next_batch()? {
+                Some(batch) => batch,
+                None => {
+                    *inner = None;
+                    self.exhausted.set(true);
+                    return Ok(None);
+                }
+            }
+        };
+        let _input = if self.input_reserved {
+            None
+        } else {
+            Some(self.memory.reserve(batch.get_array_memory_size() as u64)?)
+        };
+        self.memory.check_cancelled()?;
+        if self.encoder.is_none() {
+            self.encoder = Some(PartialBatchEncoder::new(
+                &self.input_schema,
+                self.group_by.clone(),
+                self.aggregates.clone(),
+                Some(self.memory.clone()),
+            )?);
+        }
+        let encoder = self.encoder.as_mut().expect("encoder built");
+        let (encoded, guard) = encoder.encode(&batch)?;
+        // As for the aggregating round: the consumer accounts for the
+        // batch it takes.
+        drop(guard);
+        let rows = batch.num_rows() as u64;
+        self.passthrough_rows += rows;
+        aggregate_metrics(self.memory.query())?.record_partial_round(
+            rows,
+            encoded.num_rows() as u64,
+            rows,
+        );
+        self.mode = match remaining.saturating_sub(rows) {
+            0 => PartialMode::Aggregating,
+            remaining => PartialMode::PassThrough { remaining },
+        };
+        Ok(Some(encoded))
     }
 
     /// Bytes held before a flush: a sixth of the query budget, divided
@@ -739,35 +973,29 @@ impl BatchOperator for FlushingPartialAggregate {
     fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
         loop {
             if self.exhausted.get() {
+                // The table the pass-through kept is not needed again.
+                self.encoder = None;
                 return Ok(None);
             }
-            let source = FlushingSource {
-                inner: self.source.clone(),
-                exhausted: self.exhausted.clone(),
-                schema: Arc::clone(&self.input_schema),
-                memory: self.memory.clone(),
-                flush_at: self.flush_bytes(),
-                reserve_input: !self.input_reserved,
-                current: None,
-                yielded: 0,
-                baseline: None,
-            };
-            let operator = HashAggregate::new_with_memory(
-                Box::new(source),
-                self.group_by.clone(),
-                self.aggregates.clone(),
-                self.memory.clone(),
-            )?
-            .with_reserved_input();
-            let (batch, state_memory) =
-                operator.into_partial_batch(&self.group_types, &self.output_types)?;
-            // The groups are gone once the batch exists; the consumer
-            // accounts for the batch it takes, as for any operator's output.
-            drop(state_memory);
-            // An ungrouped partial over no rows is still one row of empty
-            // states; a grouped one is nothing.
-            if batch.num_rows() > 0 {
-                return Ok(Some(batch));
+            match self.mode {
+                PartialMode::Aggregating => {
+                    let batch = self.aggregating_round()?;
+                    // An ungrouped partial over no rows is still one row
+                    // of empty states; a grouped one is nothing.
+                    if batch.num_rows() > 0 {
+                        return Ok(Some(batch));
+                    }
+                }
+                PartialMode::PassThrough { remaining } => {
+                    match self.passthrough_batch(remaining)? {
+                        Some(batch) if batch.num_rows() > 0 => return Ok(Some(batch)),
+                        Some(_) => {}
+                        None => {
+                            self.encoder = None;
+                            return Ok(None);
+                        }
+                    }
+                }
             }
         }
     }
@@ -1721,6 +1949,261 @@ mod tests {
         assert!(bounded_pool.snapshot().peak_bytes <= 16 * 1024 * 1024);
         assert_eq!(bounded_spill.snapshot().peak_bytes, 0);
         assert_eq!(bounded_pool.snapshot().current_bytes, 0);
+    }
+
+    /// Drain a flushing partial and merge its rows as the final would:
+    /// (group count, total of the first COUNT, batches emitted).
+    fn merged_partial(aggregate: &mut FlushingPartialAggregate) -> (usize, u64, usize) {
+        let mut batches = Vec::new();
+        while let Some(batch) = aggregate.next_batch().unwrap() {
+            batches.push(batch);
+        }
+        let states = grouped_aggregate_states_from_batches(&batches).unwrap();
+        let merged = merge_grouped_aggregate_states(states).unwrap();
+        let finalized = finalize_grouped_aggregate_states(&merged).unwrap();
+        let total = finalized
+            .iter()
+            .map(|group| match group.values[0] {
+                crate::aggregate::FinalAggregateValue::Count(value) => value,
+                _ => panic!("expected count state"),
+            })
+            .sum::<u64>();
+        (finalized.len(), total, batches.len())
+    }
+
+    fn adaptive(min_rows: u64) -> AdaptivePartialSettings {
+        AdaptivePartialSettings {
+            enabled: true,
+            min_rows,
+            threshold: ADAPTIVE_PARTIAL_THRESHOLD,
+        }
+    }
+
+    #[test]
+    fn a_partial_over_near_unique_keys_passes_rows_through_and_merges_exactly() {
+        // 300 000 unique keys in a 16 MiB budget: the first round fills a
+        // sixth of the budget and made a group for every row, so the
+        // rows after it go through as their own partial rows; the merge
+        // is what the aggregating partial would have given.
+        let pool = QueryMemoryPool::new("passthrough-partial", 16 * 1024 * 1024).unwrap();
+        adaptive(10_000).register(&pool).unwrap();
+        let mut aggregate = FlushingPartialAggregate::new(
+            input((0..300_000).map(Some).collect(), 8_192),
+            vec!["id".into()],
+            vec![
+                AggExpr::new(AggFunc::Count, "*"),
+                AggExpr::new(AggFunc::Sum, "id"),
+                AggExpr::new(AggFunc::Max, "id"),
+            ],
+            pool.operator("partial").unwrap(),
+        )
+        .unwrap();
+        let (groups, total, _) = merged_partial(&mut aggregate);
+        assert_eq!((groups, total), (300_000, 300_000));
+        let passed = aggregate.passthrough_rows();
+        assert!(passed > 0, "the partial never stopped aggregating");
+        assert!(passed < 300_000, "the first round aggregates");
+        let metrics = aggregate_metrics(&pool).unwrap().snapshot();
+        assert_eq!(metrics.partial_input_rows, 300_000);
+        assert_eq!(metrics.partial_passthrough_rows, passed);
+        assert_eq!(metrics.partial_output_rows, 300_000);
+        assert_eq!(metrics.partial_reduction(), Some(1.0));
+        assert!(pool.snapshot().peak_bytes <= 16 * 1024 * 1024);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+
+        // The same rows with the rule off: every row through the table.
+        let pool = QueryMemoryPool::new("aggregating-partial", 16 * 1024 * 1024).unwrap();
+        AdaptivePartialSettings {
+            enabled: false,
+            ..adaptive(10_000)
+        }
+        .register(&pool)
+        .unwrap();
+        let mut aggregate = FlushingPartialAggregate::new(
+            input((0..300_000).map(Some).collect(), 8_192),
+            vec!["id".into()],
+            vec![AggExpr::new(AggFunc::Count, "*")],
+            pool.operator("partial").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(merged_partial(&mut aggregate).0, 300_000);
+        assert_eq!(aggregate.passthrough_rows(), 0);
+        assert_eq!(aggregate.mode(), PartialMode::Aggregating);
+        assert_eq!(
+            aggregate_metrics(&pool)
+                .unwrap()
+                .snapshot()
+                .partial_passthrough_rows,
+            0
+        );
+    }
+
+    #[test]
+    fn a_partial_over_low_cardinality_keys_keeps_aggregating() {
+        let pool = QueryMemoryPool::new("reducing-partial", 16 * 1024 * 1024).unwrap();
+        adaptive(10_000).register(&pool).unwrap();
+        let mut aggregate = FlushingPartialAggregate::new(
+            input((0..300_000).map(|value| Some(value % 17)).collect(), 8_192),
+            vec!["id".into()],
+            vec![AggExpr::new(AggFunc::Count, "*")],
+            pool.operator("partial").unwrap(),
+        )
+        .unwrap();
+        let (groups, total, batches) = merged_partial(&mut aggregate);
+        assert_eq!((groups, total, batches), (17, 300_000, 1));
+        assert_eq!(aggregate.passthrough_rows(), 0);
+        let metrics = aggregate_metrics(&pool).unwrap().snapshot();
+        assert_eq!(metrics.partial_output_rows, 17);
+        assert!(metrics.partial_reduction().unwrap() < 0.001);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn a_partial_resumes_aggregating_when_its_input_starts_reducing() {
+        // Unique keys first, then a hundred thousand rows over seventeen
+        // keys: the partial stops aggregating on the unique prefix, judges
+        // an aggregating round at the end of each pass-through window, and
+        // is aggregating again by the end. The merge is exact throughout.
+        let pool = QueryMemoryPool::new("skewed-partial", 16 * 1024 * 1024).unwrap();
+        adaptive(10_000).register(&pool).unwrap();
+        let values = (0..200_000)
+            .map(Some)
+            .chain((0..1_000_000).map(|value| Some(value % 17)))
+            .collect();
+        let mut aggregate = FlushingPartialAggregate::new(
+            input(values, 8_192),
+            vec!["id".into()],
+            vec![AggExpr::new(AggFunc::Count, "*")],
+            pool.operator("partial").unwrap(),
+        )
+        .unwrap();
+        let (groups, total, _) = merged_partial(&mut aggregate);
+        assert_eq!((groups, total), (200_000, 1_200_000));
+        let passed = aggregate.passthrough_rows();
+        assert!(passed > 0, "the unique prefix stops the aggregation");
+        // At most the first window (four rounds) and the re-check windows
+        // over the reducing suffix; the bulk of the suffix aggregates.
+        assert!(passed < 400_000, "{passed} rows passed through");
+        assert_eq!(aggregate.mode(), PartialMode::Aggregating);
+        let metrics = aggregate_metrics(&pool).unwrap().snapshot();
+        assert!(metrics.partial_output_rows < 600_000);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn a_pass_through_partial_on_the_row_path_encodes_per_row_states() {
+        // COUNT(DISTINCT) is not a columnar accumulator: the pass-through
+        // encodes each batch through the row-path aggregate, and the
+        // merge is still exact.
+        let pool = QueryMemoryPool::new("row-path-passthrough", 16 * 1024 * 1024).unwrap();
+        // The row path holds more per group, so its rounds are shorter.
+        adaptive(2_000).register(&pool).unwrap();
+        let mut aggregate = FlushingPartialAggregate::new(
+            input((0..200_000).map(Some).collect(), 8_192),
+            vec!["id".into()],
+            vec![
+                AggExpr::new(AggFunc::Count, "*"),
+                AggExpr::new(AggFunc::Count, "id").distinct(),
+            ],
+            pool.operator("partial").unwrap(),
+        )
+        .unwrap();
+        let (groups, total, _) = merged_partial(&mut aggregate);
+        assert_eq!((groups, total), (200_000, 200_000));
+        assert!(aggregate.passthrough_rows() > 0);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    /// The partial stage's cost per row on the shape ClickBench q19 hands
+    /// it (near-unique Int64 + Int64 + Utf8 keys, one COUNT) and on a
+    /// low-cardinality key, with the adaptive rule on and off. Ignored by
+    /// default; run as `cargo test --release -p kaveon-exec
+    /// partial_stage_rate -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "benchmark: prints the partial stage's rate, run explicitly in release"]
+    fn partial_stage_rate() {
+        use arrow::array::StringArray;
+        const ROWS: usize = 4_000_000;
+        const BATCH_ROWS: usize = 8_192;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("user", DataType::Int64, false),
+            Field::new("minute", DataType::Int64, false),
+            Field::new("phrase", DataType::Utf8, false),
+        ]));
+        let user = |i: usize| (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) as i64;
+        let shape = |near_unique: bool| -> Vec<RecordBatch> {
+            (0..ROWS / BATCH_ROWS)
+                .map(|batch| {
+                    let rows = batch * BATCH_ROWS..(batch + 1) * BATCH_ROWS;
+                    let users = rows.clone().map(|i| {
+                        if near_unique {
+                            // Every sixteenth row repeats the one fifteen before it.
+                            user(if i % 16 == 15 { i - 15 } else { i })
+                        } else {
+                            user(i % 1_000)
+                        }
+                    });
+                    let minutes = rows.clone().map(|i| (i % 60) as i64);
+                    let phrases = rows.map(|i| {
+                        if i.is_multiple_of(5) {
+                            String::new()
+                        } else {
+                            format!("search phrase {}", i % 100_000)
+                        }
+                    });
+                    RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![
+                            Arc::new(Int64Array::from_iter_values(users)),
+                            Arc::new(Int64Array::from_iter_values(minutes)),
+                            Arc::new(StringArray::from_iter_values(phrases)),
+                        ],
+                    )
+                    .unwrap()
+                })
+                .collect()
+        };
+        for (name, near_unique) in [("near-unique", true), ("low-cardinality", false)] {
+            let batches = shape(near_unique);
+            for enabled in [false, true] {
+                let mut best = std::time::Duration::MAX;
+                let mut passed = 0;
+                let mut output_rows = 0;
+                for _ in 0..3 {
+                    let pool = QueryMemoryPool::new("partial-rate", 1 << 30).unwrap();
+                    AdaptivePartialSettings {
+                        enabled,
+                        ..adaptive(ADAPTIVE_PARTIAL_MIN_ROWS)
+                    }
+                    .register(&pool)
+                    .unwrap();
+                    let mut aggregate = FlushingPartialAggregate::new(
+                        Box::new(Input {
+                            schema: Arc::clone(&schema),
+                            batches: batches.clone().into(),
+                        }),
+                        vec!["user".into(), "minute".into(), "phrase".into()],
+                        vec![AggExpr::new(AggFunc::Count, "*")],
+                        pool.operator("partial").unwrap(),
+                    )
+                    .unwrap();
+                    let started = std::time::Instant::now();
+                    let mut rows = 0;
+                    while let Some(batch) = aggregate.next_batch().unwrap() {
+                        rows += batch.num_rows();
+                    }
+                    best = best.min(started.elapsed());
+                    passed = aggregate.passthrough_rows();
+                    output_rows = rows;
+                }
+                println!(
+                    "{name} keys, adaptive {}: {:.0} ns/row, {} partial rows out of {ROWS}, {passed} passed through",
+                    if enabled { "on" } else { "off" },
+                    best.as_nanos() as f64 / ROWS as f64,
+                    output_rows
+                );
+            }
+        }
     }
 
     fn join_rows(operator: &mut dyn BatchOperator) -> Vec<(Option<i64>, Option<i64>)> {
