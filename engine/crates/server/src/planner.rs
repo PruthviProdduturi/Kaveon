@@ -1522,6 +1522,9 @@ fn plan_query_with_predicate(
 
             let (source, scan_metrics): (Box<dyn BatchSource>, _) = match resolved.table.format {
                 DataFormat::Parquet => {
+                    // The catalog's schema types the partition columns of a
+                    // directory table; every Parquet reader takes it.
+                    let catalog_schema = Arc::clone(&resolved.table.arrow_schema);
                     // A directory table planning already listed is read at
                     // that listing; every other location is probed by the
                     // reader itself (one object, or a directory listed now).
@@ -1529,7 +1532,8 @@ fn plan_query_with_predicate(
                         && (path.starts_with("s3://") || path.starts_with("abfss://"))
                     {
                         let mut reader = ObjectDirectoryReader::from_uri(&path)?
-                            .with_listing(Arc::clone(listing));
+                            .with_listing(Arc::clone(listing))
+                            .with_catalog_schema(catalog_schema);
                         if let Some(cols) = columns {
                             reader = reader.with_columns(cols.clone());
                         }
@@ -1552,7 +1556,8 @@ fn plan_query_with_predicate(
                         });
                     }
                     if path.starts_with("s3://") {
-                        let mut reader = ObjectParquetReader::from_uri(&path)?;
+                        let mut reader = ObjectParquetReader::from_uri(&path)?
+                            .with_catalog_schema(catalog_schema);
                         if let Some(cols) = columns {
                             reader = reader.with_columns(cols.clone());
                         }
@@ -1573,7 +1578,8 @@ fn plan_query_with_predicate(
                         });
                     }
                     if path.starts_with("abfss://") {
-                        let mut reader = AdlsParquetReader::from_abfss_uri(&path)?;
+                        let mut reader = AdlsParquetReader::from_abfss_uri(&path)?
+                            .with_catalog_schema(catalog_schema);
                         if let Some(cols) = columns {
                             reader = reader.with_columns(cols.clone());
                         }
@@ -1595,7 +1601,7 @@ fn plan_query_with_predicate(
                             scan_metrics: vec![metrics],
                         });
                     }
-                    let mut reader = ParquetReader::new(&path);
+                    let mut reader = ParquetReader::new(&path).with_catalog_schema(catalog_schema);
                     if let Some(listing) = pins.parquet_directories.get(&path) {
                         reader = reader.with_listing(Arc::clone(listing));
                     }

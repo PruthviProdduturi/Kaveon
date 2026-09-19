@@ -32,8 +32,10 @@ pub use metrics::{ScanMetrics, ScanMetricsSnapshot};
 pub use object_delta::{ObjectDeltaReader, ObjectDeltaSource};
 pub use object_reader::{ObjectBatchSource, ObjectLocation, ObjectParquetReader};
 pub use parquet_directory::{
-    DirectoryFile, DirectoryListing, FileAssignment, ObjectDirectoryReader, ObjectDirectorySource,
-    ParquetLocation, assign_files, list_parquet_directory,
+    DirectoryFile, DirectoryListing, FileAssignment, HIVE_DEFAULT_PARTITION, KeptFile,
+    ObjectDirectoryReader, ObjectDirectorySource, ParquetLocation, PartitionLayout, PartitionValue,
+    PrunedFiles, assign_files, assign_kept_files, list_parquet_directory, partition_field,
+    prune_files,
 };
 pub use parquet_reader::{ParquetBatchIterator, ParquetFileMetadata, ParquetReader};
 pub use scan_predicate::LateMaterialisation;

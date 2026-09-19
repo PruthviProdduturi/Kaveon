@@ -14,8 +14,8 @@ pub use catalog::{
     AccessPattern, AdapterCapabilities, CatalogAdapter, CatalogCapability, CatalogDefinition,
     CatalogId, CatalogLifecycle, CatalogManager, CatalogProvider, CatalogRevision,
     ColumnDefinition, CredentialKind, CredentialReference, DataFormat, MemoryCatalog,
-    ResolvedTable, SchemaDefinition, SchemaId, StorageType, TableDefinition, TableId, TableMeta,
-    TableReference,
+    PartitionColumn, ResolvedTable, SchemaDefinition, SchemaId, StorageType, TableDefinition,
+    TableId, TableMeta, TableReference,
 };
 pub use error::{KaveonError, Result};
 pub use exchange::{
