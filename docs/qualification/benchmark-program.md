@@ -16,8 +16,11 @@
   table (the telemetry file, ClickBench `hits.parquet`) is read directly by
   Kaveon and through a Hive external table by Trino; a multi-file table
   (the TPC-H tables) is a Delta table for both, Kaveon through its Delta log
-  reader and Trino through its Delta connector, because a plain directory of
-  Parquet files is not yet a table for Kaveon (in progress).
+  reader and Trino through its Delta connector — the format both engines
+  read by their own metadata (a plain directory of Parquet files is a table
+  for Kaveon since 2026-09-18, and the first generation's Hive layout under
+  `benchmarks/tpch/sf100/` remains as a second copy for a Parquet-versus-Delta
+  read comparison).
 - **Exact results, checked.** Every statement carries a DuckDB reference hash;
   a wrong result is a failed execution, not a fast one.
 - **Rounds, not runs.** At least five rounds, alternating engine order, five
@@ -160,7 +163,7 @@ joins — the shapes Tier 1 and Tier 2 barely touch.
   factor 100 by `infra/aks/tpch-generate-job.yaml`
   (`scripts/generate-tpch-trino.py`, chart value `trino.tpch.enabled=true`
   for that window only), written as **Delta tables** under
-  `opensource/benchmarks/tpch/delta/sf100/<table>/` through the chart's
+  `opensource/benchmarks/tpch/v2/sf100/<table>/` through the chart's
   `lake` Delta catalog (`CREATE TABLE AS SELECT` per table, then `COUNT(*)`
   and `DESCRIBE`). Delta rather than a plain Parquet directory because that
   is the multi-file table both engines read from object storage today. The
