@@ -661,3 +661,99 @@ def probe_table(catalog, schema, table, actor, role, timeout=120):
     return {"ok": True, "row_count": row_count,
             "elapsed_ms": int(elapsed) if isinstance(elapsed, (int, float)) else None,
             "query_id": body.get("id")}
+
+
+# ── Governance: resource groups and the audit ledger ──────────────────────────
+
+def _admin_role(role, what):
+    if role != "Admin":
+        raise HTTPException(403, f"Administrator access is required for {what}")
+    return "admin"
+
+
+def _governance_response(response, fallback):
+    """The Engine's answer for an admin governance call, its message kept:
+    validation refusals are 422, its admin gate 403, the rest 502."""
+    status = response.status_code
+    if status == 400:
+        raise HTTPException(422, _engine_message(response, fallback))
+    if status == 403:
+        raise HTTPException(403, _engine_message(response, "Engine refused the administrator credential"))
+    if status == 404:
+        raise HTTPException(404, _engine_message(response, "Not available on this Engine"))
+    if status in {401, 503}:
+        raise HTTPException(503, _engine_message(response, "Engine governance is unavailable"))
+    if not response.is_success:
+        raise HTTPException(502, "Engine rejected the request")
+    try:
+        return response.json()
+    except ValueError:
+        raise HTTPException(502, "Engine returned an invalid governance document") from None
+
+
+def resource_groups(actor, role):
+    """The resource groups in force, their source and each group's counters."""
+    response = _send("GET", "/v1/admin/resource-groups", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
+                     role=_admin_role(role, "resource groups"))
+    return _governance_response(response, "Engine could not read the resource groups")
+
+
+def replace_resource_groups(document, actor, role):
+    """Replace every group and selector at once; the Engine validates and
+    applies it for the next admission, durably."""
+    response = _send("PUT", "/v1/admin/resource-groups", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
+                     payload=document, role=_admin_role(role, "resource groups"))
+    return _governance_response(response, "Engine refused the resource groups")
+
+
+def _audit_path(params):
+    allowed = ("since", "until", "principal", "kind", "query_id", "limit", "cursor", "format")
+    query = "&".join(f"{key}={quote(str(params[key]), safe='')}" for key in allowed
+                     if params.get(key) not in (None, ""))
+    return "/v1/audit" + ("?" + query if query else "")
+
+
+def audit(params, actor, role):
+    """One page of the audit ledger, the Engine's filters passed through."""
+    response = _send("GET", _audit_path({**params, "format": "json"}), "KAVEON_ENGINE_BRIDGE_TOKEN",
+                     actor, role=_admin_role(role, "the audit ledger"))
+    return _governance_response(response, "Engine refused the audit query")
+
+
+def audit_export(params, actor, role):
+    """Every matching ledger record as JSON lines, streamed from the Engine a
+    chunk at a time so the export is never held whole."""
+    token = os.getenv("KAVEON_ENGINE_BRIDGE_TOKEN")
+    if not token:
+        raise HTTPException(503, "Engine service credential is not configured")
+    engine_role = _admin_role(role, "the audit ledger")
+    headers = {"Authorization": f"Bearer {token}", "x-kaveon-actor": actor,
+               "x-kaveon-principal": actor, "x-kaveon-role": engine_role}
+    url = _endpoint() + _audit_path({**params, "format": "jsonl"})
+    try:
+        client = httpx.Client(timeout=httpx.Timeout(600, connect=10), verify=_verify_context())
+        stream = client.stream("GET", url, headers=headers, follow_redirects=False)
+        response = stream.__enter__()
+    except httpx.HTTPError:
+        raise HTTPException(502, "Engine is unavailable") from None
+    if not response.is_success:
+        body = response.read()
+        stream.__exit__(None, None, None)
+        client.close()
+        message = "Engine refused the audit export"
+        try:
+            parsed = json.loads(body)
+            if isinstance(parsed, dict) and isinstance(parsed.get("error"), str):
+                message = parsed["error"]
+        except ValueError:
+            pass
+        raise HTTPException(422 if response.status_code == 400 else 502, message)
+
+    def lines():
+        try:
+            yield from response.iter_bytes()
+        finally:
+            stream.__exit__(None, None, None)
+            client.close()
+
+    return lines()
