@@ -143,9 +143,10 @@ in this repository sends it.
 
 ## Per-request settings
 
-A statement may lower four of the bounds above for itself, through the
-`settings` object of `POST /v1/statement` or leading `SET SESSION <key> =
-<value>;` statements in the same request. Nothing can be raised; an unknown
+A statement may lower four of the bounds above for itself, and choose
+two behaviours, through the `settings` object of `POST /v1/statement` or
+leading `SET SESSION <key> = <value>;` statements in the same request.
+Nothing can be raised; an unknown
 key or an out-of-range value is HTTP 400 `INVALID_SETTING` with the key
 named. HTTP is stateless and there is no server-side session: a setting
 lives as long as the statement it arrived with. The query record's
@@ -159,6 +160,8 @@ shapes.
 | `local_parallelism` | 1 to the coordinator's configured `KAVEON_LOCAL_PARALLELISM` | Aggregator threads for the statement's partial aggregates, DISTINCT and final merges; carried in the task request and capped again by each worker's own value. | coordinator, worker |
 | `result_cache` | `true` or `false` | `false` bypasses the coordinator's result cache for the statement. | coordinator |
 | `admission_wait_seconds` | 0 to the coordinator's `KAVEON_MEMORY_ADMISSION_WAIT_SECONDS` | How long the statement waits for memory admission before HTTP 429; `0` refuses at once when its pool does not fit on arrival (the pre-2026-09-17 behaviour, for a client that prefers to retry itself). Ignored when the node has no queue. | coordinator |
+| `approximate` | `true` or `false`, default `false` | `true` lets the planner answer every plain `COUNT(DISTINCT col)` from a HyperLogLog sketch — computed over the rows, or stored in the table's statistics — exactly as `APPROX_COUNT_DISTINCT(col)` would, under COUNT's output name; the query record's `execution.approximate` states the error (1.6 % relative standard error at p = 12). Nothing else is approximated; `APPROX_*` functions need no setting. See [Approximate aggregates](../reference/engine-sql-compatibility.md#approximate-aggregates). | coordinator (planning), worker (the sketch aggregate) |
+| `use_statistics` | `true` or `false`, default `true` | `false` stands every answer from statistics aside: the `context` path for `COUNT(*)`/`MIN`/`MAX` and the statistics path for `APPROX_*` are both skipped and the rows are read (`APPROX_*` computes its sketch over them; exact functions scan as usual). File skipping by the statistics' bounds still applies — pruning, not answering — and statistics still cost a join. `execution.detail` ends with `statistics bypassed` when the statistics would otherwise have answered. Every benchmark script sets it beside `result_cache = false`: a benchmark measures the read path. | coordinator |
 
 ## Timeouts and intervals
 

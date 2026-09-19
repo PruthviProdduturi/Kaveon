@@ -315,12 +315,22 @@ leave a query record like any statement.
 
 ```sql
 ANALYZE [catalog.][schema.]table
+ANALYZE [catalog.][schema.]table WITH (sketches = true)
 ANALYZE [catalog.][schema.]table WITH (distinct = true)
 ANALYZE [catalog.][schema.]table WITH (columns = ARRAY['a', 'b'])
-ANALYZE [catalog.][schema.]table WITH (sketches = true)
 SHOW STATS FOR [catalog.][schema.]table
 DESCRIBE DETAIL [catalog.][schema.]table
 ```
+
+`ANALYZE` has three forms, by how much of the table it reads. They
+combine: `sketches = true` with `distinct` or `columns` reads every column
+once and then counts exactly.
+
+| Form | Reads | Produces |
+|---|---|---|
+| `ANALYZE t` — metadata only, the default | Parquet footers, the Delta log, the Iceberg metadata pointer and manifests; never a data page | The table facts (rows, bytes, files, row groups, last modified), each column's null count and bounds as the writer recorded them (`bounds_exact` says whether a bound may be truncated), the compressed bytes per column, and every file's rows, bytes and bounds for file skipping; the document's `depth` is `metadata` |
+| `ANALYZE t WITH (sketches = true)` — the sketches | Every sketchable column once, on the coordinator, files in parallel, batches reserved through the statement's memory admission; a source that changes under the read is refused rather than mixed | Everything the metadata form produces, plus a HyperLogLog distinct-count sketch per column (p = 12, 1.6 % standard error), a KLL quantile sketch per numeric or temporal column (k = 200), exact bounds and exact null counts; the document's `depth` is `full`. These are what the planner estimates selectivity from and what `APPROX_*` aggregates answer from without a scan |
+| `ANALYZE t WITH (distinct = true)` / `WITH (columns = ARRAY['a', 'b'])` — exact distinct counts | One `SELECT COUNT(DISTINCT "column") FROM t` per selected column through the cluster (details below) | The exact distinct count of every column, or of the columns named, kept beside whatever the record already holds at this source version; a count answers before a sketch's estimate wherever both exist |
 
 - **`ANALYZE`** (admin only) reads the source's metadata — Parquet
   footers, the Delta log, the Iceberg metadata pointer and manifests;
@@ -341,8 +351,11 @@ DESCRIBE DETAIL [catalog.][schema.]table
   sketch per column, a KLL quantile sketch per numeric or temporal column
   and exact bounds and null counts; `depth` becomes `full`. A source that
   changes under the read is refused rather than mixed. The sketches are
-  what the planner estimates selectivity from; a later addition of files
-  folds new sketches in (see automatic refresh).
+  what the planner estimates selectivity from and what
+  `APPROX_COUNT_DISTINCT` and `APPROX_PERCENTILE` answer from without a
+  scan (see [Approximate aggregates](engine-sql-compatibility.md#approximate-aggregates));
+  a later addition of files folds new sketches in (see automatic
+  refresh).
 - **`ANALYZE … WITH (distinct = true | columns = ARRAY['a', 'b'])`** adds
   exact distinct counts, which take a scan. `distinct = true` counts every
   column; `columns = ARRAY[…]` (Trino's spelling; single-quoted names,
@@ -514,6 +527,8 @@ unknown key, or a value outside its bound, is refused with HTTP 400 and code
 | `local_parallelism` | unsigned integer | 1 to the coordinator's configured parallelism (`KAVEON_LOCAL_PARALLELISM`) | Aggregator threads per task for the statement's partial aggregates, DISTINCT and final merges, on every node. Carried in the task request; each worker caps it at its own configured value. |
 | `result_cache` | boolean | — | `false` bypasses the coordinator's result cache for this statement: no lookup, no insertion. See the settings reference. |
 | `admission_wait_seconds` | unsigned integer | 0 to `KAVEON_MEMORY_ADMISSION_WAIT_SECONDS` on the coordinator | How long the statement waits for memory admission before HTTP 429; `0` refuses at once when its memory pool does not fit on arrival. See [Memory admission](#memory-admission). |
+| `approximate` | boolean | — | `true` answers every plain `COUNT(DISTINCT col)` from a HyperLogLog sketch as `APPROX_COUNT_DISTINCT(col)` would, under COUNT's output name; the record's `execution.approximate` states the error. Default `false`. See [Approximate aggregates](engine-sql-compatibility.md#approximate-aggregates). |
+| `use_statistics` | boolean | — | `false` bypasses every answer from statistics for this statement: no `context` answer for `COUNT(*)`/`MIN`/`MAX`, no statistics answer for `APPROX_*`; the rows are read. File skipping by the statistics' bounds still applies. `execution.detail` ends with `statistics bypassed` when the statistics would have answered. Default `true`. |
 
 `time_zone` is not a settings key: it is the request's own `time_zone` field.
 

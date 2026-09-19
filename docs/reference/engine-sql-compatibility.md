@@ -31,6 +31,60 @@ by the selected database and Kaveon's API guardrails.
 | Conditional, comparison and strings | Alpha | `CASE`, `COALESCE`, `BETWEEN`, `IN`, `LIKE`/`ILIKE` (Arrow kernels), `REGEXP_REPLACE`, `CAST`, concatenation, `UPPER`/`LOWER`/`LENGTH`/`TRIM`/`SUBSTR`/`REPEAT`/`REPLACE`/`LPAD`/`RPAD`; functions over dictionary columns run once per dictionary value the batch uses and keep a text result dictionary-encoded; `REGEXP_REPLACE` over plain text runs once per distinct value in the batch |
 | Literals against columns | Alpha | Integer literals push down to narrow integer and Date32 columns; integer and decimal literals meet double columns; text literals against Date32 columns are coerced on every reader |
 | `SUM(DISTINCT)`, `AVG(DISTINCT)` | Alpha | Exact mergeable distinct state |
+| `APPROX_COUNT_DISTINCT` (`APPROX_DISTINCT`), `APPROX_PERCENTILE` | Alpha | Sketch-answered estimates with the error stated on the query record; from the table's statistics without a scan when they carry sketches at the pinned version, else computed over the rows. See [Approximate aggregates](#approximate-aggregates) |
+
+## Approximate aggregates
+
+Two aggregates answer with an estimate from a mergeable sketch, and say
+so: every query record whose result includes one carries
+`execution.approximate`, a list of `{function, argument, sketch, error,
+error_kind}`. Exact `COUNT(DISTINCT)` and every other function are
+unchanged; nothing is approximated unless the statement writes an
+`APPROX_*` function or sets `approximate = true`.
+
+| Function | Result | Sketch | Error stated |
+|---|---|---|---|
+| `APPROX_COUNT_DISTINCT(col)` — `APPROX_DISTINCT(col)` is Trino's name for the same function | `BIGINT` (`UInt64`): the estimated number of distinct non-null values | HyperLogLog, p = 12 (4 096 six-bit registers; the DLM's register layout and PostgreSQL's `hash_bytes_extended` over the value's canonical text, so a sketch built here merges with a stored one) | `error_kind: relative_standard_error`, 1.04 / √4096 = 1.6 % of the true count (one standard error) |
+| `APPROX_PERCENTILE(col, p)` | `DOUBLE`: the value at fraction `p` of the column's distribution | KLL, k = 200 | `error_kind: rank_error`, 2.446 / k^0.9433 = 1.65 %: the value returned has a true rank within this of `p`, with about 99 % confidence |
+| `APPROX_PERCENTILE(col, ARRAY[p, …])` | `List(Float64)`: one value per fraction, in the order written (a JSON array inline; an Arrow list on a page) | KLL, k = 200 | As above, per value |
+
+- `col` is a column reference (`*` is refused). `APPROX_COUNT_DISTINCT`
+  takes any sketchable type — booleans, integers, floats, decimals, text,
+  dates, timestamps, and dictionaries over them; `APPROX_PERCENTILE` takes
+  integers, floats and decimals (dates and timestamps are refused). The
+  fractions are numeric constants in `[0, 1]`; `DISTINCT` inside an
+  `APPROX_*` call is refused. Over no non-null values the count is `0` and
+  a percentile is null.
+- **From statistics.** An ungrouped statement over one table with no
+  predicate whose statistics are current for the statement's pinned
+  source version and carry the column's sketch (`ANALYZE … WITH (sketches
+  = true)`) answers with no scan: `execution.mode = "context"`,
+  `execution.detail = "statistics at <version> (hyperloglog p=12, kll
+  k=200)"`. When `ANALYZE … WITH (distinct = true | columns = …)` counted
+  the column exactly, the exact count answers and the note reads `sketch:
+  "exact count", error: 0`. Statistics for another version, a predicate, a
+  grouping, a join, or a missing sketch take the computed path; the
+  statistics object holds one sketch per column for the whole table, so a
+  grouped or filtered statement is never answered from it.
+- **Computed.** Otherwise the aggregate builds its sketch over the scanned
+  rows — a partial sketch per worker thread, merged on the final stage
+  through the same encoded partial state every aggregate uses, memory
+  accounted like any other state — and returns the estimate. HyperLogLog
+  registers merge exactly, so a distinct count is the same on every
+  execution path; a KLL sketch merged from partials compacts differently
+  from one built in sequence, so a percentile agrees across paths within
+  its rank error (the differential sweep compares approximate results
+  within a tolerance rather than as text).
+- **`approximate = true`** (`settings.approximate` or `SET SESSION
+  approximate = true`) lets the planner answer a plain `COUNT(DISTINCT
+  col)` from a HyperLogLog sketch exactly as `APPROX_COUNT_DISTINCT`
+  would, under COUNT's output name; the record's note names the function
+  as written (`COUNT`). Off by default.
+- **`use_statistics = false`** stands every answer from statistics aside:
+  `APPROX_*` computes over the rows and `COUNT(*)`/`MIN`/`MAX` scan;
+  `execution.detail` ends with `statistics bypassed` when the statistics
+  would have answered. File skipping by the statistics' bounds still
+  applies.
 
 ## Not currently executable
 
@@ -39,7 +93,11 @@ by the selected database and Kaveon's API guardrails.
   `LIMIT`/set operations inside a correlated subquery, `EXISTS` correlated on
   more than one column, correlated `IN`; each is refused by name.
 - Non-equality join conditions (residual join filters) and `GROUPING SETS`/
-  `CUBE`/`ROLLUP`, recursive CTEs, approximate aggregates, array/map/JSON types.
+  `CUBE`/`ROLLUP`, recursive CTEs, array/map/JSON types (the one list-typed
+  result, `APPROX_PERCENTILE(col, ARRAY[…])`, is rendered, not operated on);
+  approximate aggregates beyond `APPROX_COUNT_DISTINCT` and
+  `APPROX_PERCENTILE` — `APPROX_MOST_FREQUENT` has no heavy-hitter sketch in
+  the statistics object yet.
 - Table-creating DDL and row DML: `CREATE TABLE AS`, `INSERT`, `UPDATE`,
   `DELETE`, `ALTER TABLE ADD/DROP COLUMN`. Catalog DDL registers tables that
   already exist in storage. The separate product transaction API accepts a
