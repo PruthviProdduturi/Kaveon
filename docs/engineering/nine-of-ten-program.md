@@ -22,4 +22,6 @@ to `dev`, recorded in HANDSHAKE.md and `engine/DISTRIBUTED_EXECUTION_STATUS.md`.
 Rules carried from the benchmark program: never publish a single-run
 number; Trino is the internal yardstick only; no debug logging, no lowered
 thresholds, root causes only; one commit per change with tests; never
-add attribution trailers; versioned releases only.
+add attribution trailers; versioned releases only. The calls behind these
+rules and the workstreams, dated and cited, are in the
+[decision log](decision-log.md).
