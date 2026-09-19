@@ -2126,7 +2126,8 @@ fn statement_audit_line(record: &QueryRecord) -> crate::audit::AuditRecord {
                 .map(|scan| scan.compressed_bytes_read)
                 .sum(),
         ),
-        mode: Some(record.execution.mode.to_owned()),
+        // A statement that never ran has no placement to report.
+        mode: (record.execution.mode != "pending").then(|| record.execution.mode.to_owned()),
         error_code,
         error: record.error.as_deref().map(text_prefix),
         ..AuditRecord::new(kind)
