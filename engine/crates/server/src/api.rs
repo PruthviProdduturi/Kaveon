@@ -2916,6 +2916,8 @@ async fn run_statement(
             scan_metrics_complete: true,
             execution: ExecutionPlacement::context(&answer),
             settings: settings.clone(),
+            row_count: Some(data.len() as u64),
+            error_code: None,
             cached_from: None,
             cached_elapsed_ms: None,
             admission_wait_ms,
@@ -10169,7 +10171,6 @@ mod tests {
             role: Role::Analyst,
         };
         let sql = "SELECT id FROM orders WHERE id > 1 ORDER BY id";
-        let state = Arc::new(state);
         let submitting = {
             let state = state.clone();
             let analyst = analyst.clone();
@@ -10241,7 +10242,6 @@ mod tests {
             role: Role::Analyst,
         };
         let sql = "SELECT id FROM orders WHERE id > 0 ORDER BY id";
-        let state = Arc::new(state);
 
         let started = std::time::Instant::now();
         let (status, body) = submit(
@@ -10340,7 +10340,6 @@ mod tests {
             role: Role::Analyst,
         };
         let sql = "SELECT id FROM orders WHERE id > 2 ORDER BY id";
-        let state = Arc::new(state);
         let submitting = {
             let state = state.clone();
             let analyst = analyst.clone();
@@ -10387,23 +10386,31 @@ mod tests {
     async fn governed_test_state(
         queue: usize,
         groups: crate::resource_groups::ResourceGroups,
-    ) -> (
-        Arc<crate::AppState>,
-        kaveon_catalog::product_commit::ProductCatalogCommit,
-        std::path::PathBuf,
-    ) {
-        let (mut state, commit, directory) = admission_test_state(queue).await;
-        groups.validate(&state.config).unwrap();
-        state
-            .memory_admission
-            .set_groups(groups.policies(state.config.memory_admission_limit_bytes))
-            .unwrap();
-        state.governance = crate::resource_groups::Governor::new(
-            groups,
-            crate::resource_groups::Source::ConfigFile,
-            directory.join("resource-groups.json"),
-        );
-        (Arc::new(state), commit, directory)
+    ) -> (Arc<crate::AppState>, std::path::PathBuf) {
+        governed_test_state_built(queue, groups, |_, _| {}).await
+    }
+
+    /// `governed_test_state` with `build` applied after the governor, before
+    /// the state is shared (the audit ledger, in its test).
+    async fn governed_test_state_built(
+        queue: usize,
+        groups: crate::resource_groups::ResourceGroups,
+        build: impl FnOnce(&mut crate::AppState, &std::path::Path),
+    ) -> (Arc<crate::AppState>, std::path::PathBuf) {
+        admission_test_state_built(queue, move |state, directory| {
+            groups.validate(&state.config).unwrap();
+            state
+                .memory_admission
+                .set_groups(groups.policies(state.config.memory_admission_limit_bytes))
+                .unwrap();
+            state.governance = crate::resource_groups::Governor::new(
+                groups,
+                crate::resource_groups::Source::ConfigFile,
+                directory.join("resource-groups.json"),
+            );
+            build(state, directory);
+        })
+        .await
     }
 
     fn resource_group(name: &str, max_concurrent: usize) -> crate::resource_groups::ResourceGroup {
@@ -10432,7 +10439,7 @@ mod tests {
     /// the record of an admitted statement carries the group.
     #[tokio::test]
     async fn a_group_limit_is_a_429_that_names_the_group_and_the_limit() {
-        let (state, _commit, directory) = governed_test_state(
+        let (state, directory) = governed_test_state(
             8,
             crate::resource_groups::ResourceGroups {
                 groups: vec![
@@ -10538,7 +10545,7 @@ mod tests {
     /// while the first group is at its concurrency.
     #[tokio::test]
     async fn a_group_wait_expires_as_a_group_refusal_and_other_groups_keep_running() {
-        let (state, _commit, directory) = governed_test_state(
+        let (state, directory) = governed_test_state(
             8,
             crate::resource_groups::ResourceGroups {
                 groups: vec![
@@ -10596,7 +10603,7 @@ mod tests {
     /// validated; `GET` reports it with the counters.
     #[tokio::test]
     async fn the_runtime_resource_group_replacement_takes_effect_and_is_durable() {
-        let (state, _commit, directory) = governed_test_state(
+        let (state, directory) = governed_test_state(
             8,
             crate::resource_groups::ResourceGroups {
                 groups: vec![resource_group("default", 4)],
@@ -10768,7 +10775,7 @@ mod tests {
     /// the admin gate and the query validation.
     #[tokio::test]
     async fn the_audit_ledger_records_statements_settings_and_catalog_changes_and_pages() {
-        let (state, _commit, directory) = governed_test_state(
+        let (state, directory) = governed_test_state_built(
             8,
             crate::resource_groups::ResourceGroups {
                 groups: vec![
@@ -10784,17 +10791,17 @@ mod tests {
                     ..Default::default()
                 }],
             },
+            |state, directory| {
+                state.audit = crate::audit::AuditLedger::open(
+                    &directory.join("audit"),
+                    1 << 20,
+                    std::time::Duration::from_secs(86_400),
+                )
+                .unwrap();
+                state.audit.skip_catalog_history(&state.catalog_store);
+            },
         )
         .await;
-        let mut state = Arc::try_unwrap(state).unwrap_or_else(|_| unreachable!());
-        state.audit = crate::audit::AuditLedger::open(
-            &directory.join("audit"),
-            1 << 20,
-            std::time::Duration::from_secs(86_400),
-        )
-        .unwrap();
-        state.audit.skip_catalog_history(&state.catalog_store);
-        let state = Arc::new(state);
         let admin = principal("admin", Role::Admin);
         let analyst = principal("analyst", Role::Analyst);
         let sql = "SELECT id FROM orders WHERE id >= 2 AND id <= 3 ORDER BY id";
@@ -11019,16 +11026,33 @@ mod tests {
 
     /// The analyze test state with an admission limit of one statement's
     /// budget, a queue of `queue` and a long configured wait.
-    async fn admission_test_state(queue: usize) -> (crate::AppState, std::path::PathBuf) {
-        let (state, directory) = analyze_test_state().await;
-        let mut state = Arc::try_unwrap(state).unwrap_or_else(|_| unreachable!());
-        state.config.query_memory_limit_bytes = 1 << 20;
-        state.config.memory_admission_limit_bytes = 1 << 20;
-        state.config.memory_admission_queue = queue;
-        state.config.memory_admission_wait_seconds = 60;
-        state.memory_admission = kaveon_core::MemoryAdmissionController::new(1 << 20)
-            .unwrap()
-            .with_queue_limit(queue);
+    async fn admission_test_state(queue: usize) -> (Arc<crate::AppState>, std::path::PathBuf) {
+        admission_test_state_built(queue, |_, _| {}).await
+    }
+
+    /// The admission test state with `build` applied before the state is
+    /// shared (the governor, in the resource-group tests).
+    async fn admission_test_state_built(
+        queue: usize,
+        build: impl FnOnce(&mut crate::AppState, &std::path::Path),
+    ) -> (Arc<crate::AppState>, std::path::PathBuf) {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
+        )
+        .unwrap();
+        let (state, directory) = analyze_test_state_built(schema, batch, |state, directory| {
+            state.config.query_memory_limit_bytes = 1 << 20;
+            state.config.memory_admission_limit_bytes = 1 << 20;
+            state.config.memory_admission_queue = queue;
+            state.config.memory_admission_wait_seconds = 60;
+            state.memory_admission = kaveon_core::MemoryAdmissionController::new(1 << 20)
+                .unwrap()
+                .with_queue_limit(queue);
+            build(state, directory);
+        })
+        .await;
         (state, directory)
     }
 
@@ -11082,12 +11106,23 @@ mod tests {
         batch: RecordBatch,
         configure: impl FnOnce(&mut crate::config::ServerConfig),
     ) -> (Arc<crate::AppState>, std::path::PathBuf) {
+        analyze_test_state_built(schema, batch, |state, _| configure(&mut state.config)).await
+    }
+
+    /// The analyze test state with the whole `AppState` open to the caller
+    /// before it is shared: the admission controller and the governor are
+    /// set here, since the fixture's DDL statements hand clones of the
+    /// state to background work and it cannot be unwrapped afterwards.
+    async fn analyze_test_state_built(
+        schema: Arc<Schema>,
+        batch: RecordBatch,
+        build: impl FnOnce(&mut crate::AppState, &std::path::Path),
+    ) -> (Arc<crate::AppState>, std::path::PathBuf) {
         let directory =
             std::env::temp_dir().join(format!("kaveon-server-analyze-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
         write_batch(&directory.join("orders.parquet"), schema, &batch);
         let mut state = catalog_test_state();
-        configure(&mut state.config);
         let catalog = kaveon_core::CatalogDefinition::new(
             kaveon_core::CatalogId::new("catalog:lake").unwrap(),
             "lake",
@@ -11103,15 +11138,42 @@ mod tests {
             .catalog_store
             .create_catalog("test", &catalog)
             .unwrap();
-        let state = Arc::new(state);
-        for sql in [
-            "CREATE SCHEMA lake.sales",
-            "CREATE TABLE orders WITH (location = 'orders.parquet', format = 'parquet')",
-        ] {
-            let (status, body) = submit(&state, &admin(), sql, serde_json::Value::Null).await;
-            assert_eq!(status, StatusCode::OK, "{sql}: {body}");
-        }
-        (state, directory)
+        // The schema and the table go in through the store directly — the
+        // fixture's setup is not part of what a test measures (admission
+        // counters, the audit ledger).
+        let schema_definition = kaveon_core::SchemaDefinition::new(
+            kaveon_core::SchemaId::new("schema:lake:sales").unwrap(),
+            kaveon_core::CatalogId::new("catalog:lake").unwrap(),
+            "sales",
+        )
+        .unwrap()
+        .transition(kaveon_core::CatalogLifecycle::Active)
+        .unwrap();
+        state
+            .catalog_store
+            .create_schema("test", &schema_definition)
+            .unwrap();
+        let table_definition = kaveon_core::TableDefinition::new(
+            kaveon_core::TableId::new("table:lake:sales:orders").unwrap(),
+            kaveon_core::SchemaId::new("schema:lake:sales").unwrap(),
+            "orders",
+            "orders.parquet",
+            kaveon_core::AccessPattern::Shortcut,
+            kaveon_core::DataFormat::Parquet,
+            vec![kaveon_core::ColumnDefinition::new("id", DataType::Int64, false).unwrap()],
+        )
+        .unwrap()
+        .transition(kaveon_core::CatalogLifecycle::Active)
+        .unwrap();
+        state
+            .catalog_store
+            .create_table("test", &table_definition)
+            .unwrap();
+        // The state is the caller's to shape once the fixture's own catalog
+        // writes are in: the audit ledger starts after them.
+        build(&mut state, &directory);
+        super::publish_catalog_snapshot(&state).await.unwrap();
+        (Arc::new(state), directory)
     }
 
     /// The statistics on record for `lake.sales.orders`.
