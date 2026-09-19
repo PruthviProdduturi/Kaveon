@@ -5,6 +5,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 use std::task::{Context, Poll, Waker};
+use std::time::Instant;
 use std::{
     any::Any,
     collections::{HashMap, VecDeque},
@@ -70,22 +71,226 @@ pub struct QueryMemoryPool {
     inner: Arc<QueryMemoryInner>,
 }
 
+/// The name of the group an arrival is admitted through when the caller
+/// names none, and the policy every unknown group name falls back to.
+pub const DEFAULT_ADMISSION_GROUP: &str = "default";
+
+/// How many admission waits a group keeps for its wait percentiles.
+const WAIT_SAMPLES: usize = 1_024;
+
+/// One resource group's policy in the admission controller: what the
+/// group may hold of the pool, how many of its requests run at once, how
+/// many may wait, and its weight in the cross-group order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdmissionGroupPolicy {
+    pub name: String,
+    /// The sum of the group's admitted budgets cannot exceed this; a
+    /// request over it can never be admitted and is refused on arrival.
+    pub limit_bytes: u64,
+    /// Admitted requests of the group at once. The controller's implicit
+    /// group has no bound.
+    pub max_concurrent: usize,
+    /// Waiting requests of the group at once; the controller's own queue
+    /// limit bounds every group together.
+    pub max_queued: usize,
+    /// The group's weight in the cross-group order (see
+    /// [`MemoryAdmissionController::admit_queued_in`]). Must be positive.
+    pub weight: u32,
+}
+
+/// One group's counters, as `/v1/node` reports them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdmissionGroupStats {
+    pub name: String,
+    pub limit_bytes: u64,
+    pub max_concurrent: usize,
+    pub max_queued: usize,
+    pub weight: u32,
+    /// Admitted requests now.
+    pub running: usize,
+    /// Waiting requests now.
+    pub queued: usize,
+    pub admitted_bytes: u64,
+    /// Budgets granted, whether immediately or after a wait.
+    pub admitted: u64,
+    /// Arrivals that had to wait before a decision.
+    pub queued_total: u64,
+    /// Arrivals refused: over the group's share, a full queue, no
+    /// capacity with no wait allowed, or a wait that expired.
+    pub rejected: u64,
+    /// Arrivals that left the queue before a decision.
+    pub withdrawn: u64,
+    /// Percentiles of the admission wait over the group's last 1024
+    /// admissions, immediate ones counted as zero; absent before the
+    /// first admission.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait_ms_p50: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait_ms_p95: Option<u64>,
+}
+
+/// Why an arrival was not admitted. Every variant names what bound it so
+/// the caller can answer with the limit and the group.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdmissionRefusal {
+    /// A budget of zero, over the pool, or an empty request identity.
+    Invalid(String),
+    /// The budget exceeds the group's share of the pool: it can never be
+    /// admitted through this group.
+    OverGroupLimit {
+        group: String,
+        limit_bytes: u64,
+        requested: u64,
+    },
+    /// The group already has `max_queued` requests waiting.
+    GroupQueueFull { group: String, max_queued: usize },
+    /// The controller already has `queue_limit` requests waiting across
+    /// every group.
+    QueueFull { queue_limit: usize, queued: usize },
+    /// No wait was allowed and the arrival could not be admitted now:
+    /// the pool or the group's share or its concurrency is taken, or the
+    /// arrival is not next under the admission order.
+    NoCapacity {
+        group: String,
+        requested: u64,
+        admitted_bytes: u64,
+        limit_bytes: u64,
+        group_running: usize,
+        group_max_concurrent: usize,
+        queued_ahead: usize,
+    },
+}
+
+impl std::fmt::Display for AdmissionRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid(message) => f.write_str(message),
+            Self::OverGroupLimit {
+                group,
+                limit_bytes,
+                requested,
+            } => write!(
+                f,
+                "resource group '{group}' admits at most {limit_bytes} bytes per statement share; {requested} bytes requested"
+            ),
+            Self::GroupQueueFull { group, max_queued } => write!(
+                f,
+                "resource group '{group}' queue is full: {max_queued} statements already waiting"
+            ),
+            Self::QueueFull {
+                queue_limit,
+                queued,
+            } => write!(
+                f,
+                "memory admission queue is full: {queued} of {queue_limit} statements already waiting"
+            ),
+            Self::NoCapacity {
+                group,
+                requested,
+                admitted_bytes,
+                limit_bytes,
+                group_running,
+                group_max_concurrent,
+                queued_ahead,
+            } => {
+                write!(
+                    f,
+                    "memory admission rejected query budget of {requested} bytes: {admitted_bytes} of {limit_bytes} bytes already admitted"
+                )?;
+                if *group_max_concurrent != usize::MAX {
+                    write!(
+                        f,
+                        ", resource group '{group}' running {group_running} of {group_max_concurrent}"
+                    )?;
+                }
+                if *queued_ahead != 0 {
+                    write!(f, ", {queued_ahead} waiting ahead")?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl std::error::Error for AdmissionRefusal {}
+
+impl From<AdmissionRefusal> for KaveonError {
+    fn from(refusal: AdmissionRefusal) -> Self {
+        KaveonError::Execution(refusal.to_string())
+    }
+}
+
 #[derive(Debug)]
 struct AdmissionInner {
     limit_bytes: u64,
-    /// Mutated only under `queue`; read without it for snapshots.
+    /// Mutated only under `groups`; read without it for snapshots.
     admitted_bytes: AtomicU64,
     peak_admitted_bytes: AtomicU64,
-    /// Arrivals that could not be admitted, oldest first. The head is
-    /// granted first and only when its whole budget fits; nothing behind
-    /// it is admitted ahead of it.
-    queue: Mutex<VecDeque<Arc<AdmissionWaiter>>>,
+    /// Every group's queue, policy and counters. One lock: an admission
+    /// decision reads every group's head.
+    groups: Mutex<GroupTable>,
     queue_limit: usize,
     next_waiter: AtomicU64,
     admitted_total: AtomicU64,
     queued_total: AtomicU64,
     rejected_total: AtomicU64,
     withdrawn_total: AtomicU64,
+}
+
+#[derive(Debug)]
+struct GroupTable {
+    policies: HashMap<String, AdmissionGroupPolicy>,
+    states: HashMap<String, GroupState>,
+}
+
+impl GroupTable {
+    fn policy(&self, name: &str) -> &AdmissionGroupPolicy {
+        self.policies
+            .get(name)
+            .or_else(|| self.policies.get(DEFAULT_ADMISSION_GROUP))
+            .expect("the default policy is always present")
+    }
+
+    fn state_mut(&mut self, name: &str) -> &mut GroupState {
+        self.states.entry(name.to_owned()).or_default()
+    }
+
+    fn queued(&self) -> usize {
+        self.states.values().map(|state| state.queue.len()).sum()
+    }
+}
+
+#[derive(Debug, Default)]
+struct GroupState {
+    /// Arrivals of the group that could not be admitted, oldest first.
+    queue: VecDeque<Arc<AdmissionWaiter>>,
+    running: usize,
+    admitted_bytes: u64,
+    admitted_total: u64,
+    queued_total: u64,
+    rejected_total: u64,
+    withdrawn_total: u64,
+    /// The last admissions' waits in milliseconds, for the percentiles.
+    waits: VecDeque<u64>,
+}
+
+impl GroupState {
+    fn record_wait(&mut self, wait_ms: u64) {
+        if self.waits.len() == WAIT_SAMPLES {
+            self.waits.pop_front();
+        }
+        self.waits.push_back(wait_ms);
+    }
+
+    fn percentile(&self, fraction: f64) -> Option<u64> {
+        if self.waits.is_empty() {
+            return None;
+        }
+        let mut sorted: Vec<u64> = self.waits.iter().copied().collect();
+        sorted.sort_unstable();
+        let rank = ((sorted.len() as f64 - 1.0) * fraction).round() as usize;
+        Some(sorted[rank.min(sorted.len() - 1)])
+    }
 }
 
 /// The admission controller's counters, as `/v1/node` reports them.
@@ -119,6 +324,18 @@ pub struct MemoryAdmissionController {
     process: Option<ProcessMemory>,
 }
 
+/// A candidate for the next grant: a group's head, or an arrival that
+/// asks whether it would be next.
+struct Candidate<'a> {
+    group: &'a str,
+    bytes: u64,
+    /// The waiter's id, or `None` for an arrival not yet queued (it is
+    /// younger than every queued waiter).
+    waiter: Option<u64>,
+    admitted_bytes: u64,
+    weight: u32,
+}
+
 impl MemoryAdmissionController {
     /// A controller that refuses immediately whatever does not fit: no
     /// queue. See [`Self::with_queue_limit`].
@@ -128,12 +345,20 @@ impl MemoryAdmissionController {
                 "memory admission limit must be greater than zero".into(),
             ));
         }
+        let mut policies = HashMap::new();
+        policies.insert(
+            DEFAULT_ADMISSION_GROUP.to_owned(),
+            Self::implicit_policy(limit_bytes, 0),
+        );
         Ok(Self {
             inner: Arc::new(AdmissionInner {
                 limit_bytes,
                 admitted_bytes: AtomicU64::new(0),
                 peak_admitted_bytes: AtomicU64::new(0),
-                queue: Mutex::new(VecDeque::new()),
+                groups: Mutex::new(GroupTable {
+                    policies,
+                    states: HashMap::new(),
+                }),
                 queue_limit: 0,
                 next_waiter: AtomicU64::new(0),
                 admitted_total: AtomicU64::new(0),
@@ -145,12 +370,29 @@ impl MemoryAdmissionController {
         })
     }
 
-    /// How many arrivals [`Self::admit_queued`] may keep waiting at once.
-    /// Must be called before the controller is shared.
+    /// The policy of a controller with no groups configured: one group,
+    /// the whole pool, no concurrency bound, the controller's queue.
+    fn implicit_policy(limit_bytes: u64, queue_limit: usize) -> AdmissionGroupPolicy {
+        AdmissionGroupPolicy {
+            name: DEFAULT_ADMISSION_GROUP.to_owned(),
+            limit_bytes,
+            max_concurrent: usize::MAX,
+            max_queued: queue_limit,
+            weight: 1,
+        }
+    }
+
+    /// How many arrivals [`Self::admit_queued`] may keep waiting at once,
+    /// across every group. Must be called before the controller is shared.
     #[must_use]
     pub fn with_queue_limit(mut self, queue_limit: usize) -> Self {
         if let Some(inner) = Arc::get_mut(&mut self.inner) {
             inner.queue_limit = queue_limit;
+            if let Ok(table) = inner.groups.get_mut()
+                && let Some(policy) = table.policies.get_mut(DEFAULT_ADMISSION_GROUP)
+            {
+                policy.max_queued = queue_limit;
+            }
         }
         self
     }
@@ -168,74 +410,178 @@ impl MemoryAdmissionController {
         self.process.as_ref()
     }
 
-    /// Admits now or refuses now. An arrival is refused when its budget
-    /// does not fit, and also while anyone is queued ahead of it: the
-    /// queue is served in order.
+    /// Replaces every group policy at once; takes effect for the next
+    /// decision, waiting arrivals included. A group that is not named
+    /// keeps its queue and counters and is decided under the `default`
+    /// policy. A policy over the pool, without a weight, or without a
+    /// `default` group is refused and nothing changes.
+    pub fn set_groups(&self, policies: Vec<AdmissionGroupPolicy>) -> Result<()> {
+        let mut table = HashMap::with_capacity(policies.len());
+        for policy in policies {
+            if policy.name.trim().is_empty() || policy.name != policy.name.trim() {
+                return Err(KaveonError::Execution(
+                    "resource group names must be nonempty and trimmed".into(),
+                ));
+            }
+            if policy.weight == 0 {
+                return Err(KaveonError::Execution(format!(
+                    "resource group '{}' needs a positive weight",
+                    policy.name
+                )));
+            }
+            if policy.limit_bytes == 0 || policy.limit_bytes > self.inner.limit_bytes {
+                return Err(KaveonError::Execution(format!(
+                    "resource group '{}' memory share must be between 1 and the admission limit of {} bytes",
+                    policy.name, self.inner.limit_bytes
+                )));
+            }
+            if policy.max_concurrent == 0 {
+                return Err(KaveonError::Execution(format!(
+                    "resource group '{}' needs a positive concurrency limit",
+                    policy.name
+                )));
+            }
+            if table.insert(policy.name.clone(), policy).is_some() {
+                return Err(KaveonError::Execution(
+                    "resource group names must be unique".into(),
+                ));
+            }
+        }
+        if !table.contains_key(DEFAULT_ADMISSION_GROUP) {
+            return Err(KaveonError::Execution(
+                "resource groups must include a 'default' group".into(),
+            ));
+        }
+        let mut groups = self.lock_groups();
+        groups.policies = table;
+        self.grant_waiting(&mut groups);
+        Ok(())
+    }
+
+    /// The policies in force, `default` included.
+    #[must_use]
+    pub fn groups(&self) -> Vec<AdmissionGroupPolicy> {
+        let groups = self.lock_groups();
+        let mut policies: Vec<_> = groups.policies.values().cloned().collect();
+        policies.sort_by(|a, b| a.name.cmp(&b.name));
+        policies
+    }
+
+    /// Admits now or refuses now, through the `default` group.
     pub fn admit(
         &self,
         query_id: impl Into<String>,
         query_limit_bytes: u64,
-    ) -> Result<AdmittedQueryMemory> {
-        let query_id = self.validate(query_id, query_limit_bytes)?;
-        let queue = self.lock_queue();
-        if queue.is_empty()
-            && let Some(memory) = self.grant_if_fits(&query_id, query_limit_bytes)
-        {
-            return Ok(memory);
-        }
-        let queued = queue.len();
-        drop(queue);
-        self.inner.rejected_total.fetch_add(1, Ordering::AcqRel);
-        Err(self.capacity_error(query_limit_bytes, queued))
+    ) -> std::result::Result<AdmittedQueryMemory, AdmissionRefusal> {
+        self.admit_in(DEFAULT_ADMISSION_GROUP, query_id, query_limit_bytes)
     }
 
-    /// Admits now when the budget fits and nobody is queued; otherwise
-    /// joins the queue and resolves once the budget is granted. The queue
-    /// is served in arrival order: the head is granted first, only when its
-    /// whole budget fits, and nothing behind it is admitted ahead of it.
-    /// That rule is predictable and starves nobody: every admitted budget
-    /// is at most the limit and is released when its query ends, so the
-    /// head always fits eventually. A small arrival behind a large head
-    /// waits for it; the caller bounds that wait.
-    ///
-    /// The queue is full: refused with [`KaveonError::Execution`]. Dropping
-    /// the returned future leaves the queue at once; see
-    /// [`AdmissionWait::expire`] for a wait the caller gives up on.
+    /// Admits now or refuses now. An arrival is refused when it would not
+    /// be the next grant under the admission order: its budget does not
+    /// fit the pool or its group's share, its group has no running slot,
+    /// someone is queued ahead of it in its group, or the pool is held
+    /// for a group further below its share.
+    pub fn admit_in(
+        &self,
+        group: &str,
+        query_id: impl Into<String>,
+        query_limit_bytes: u64,
+    ) -> std::result::Result<AdmittedQueryMemory, AdmissionRefusal> {
+        let query_id = self.validate(query_id, query_limit_bytes)?;
+        let mut groups = self.lock_groups();
+        if let Err(refusal) = self.check_share(&groups, group, query_limit_bytes) {
+            return Err(self.refuse(&mut groups, group, refusal));
+        }
+        if self.would_grant_next(&groups, group, query_limit_bytes) {
+            let memory = self.grant(&mut groups, group, &query_id, query_limit_bytes, 0);
+            return Ok(memory);
+        }
+        let refusal = self.no_capacity(&groups, group, query_limit_bytes);
+        Err(self.refuse(&mut groups, group, refusal))
+    }
+
+    /// [`Self::admit_queued_in`] through the `default` group.
     pub fn admit_queued(
         &self,
         query_id: impl Into<String>,
         query_limit_bytes: u64,
-    ) -> Result<AdmissionWait> {
+    ) -> std::result::Result<AdmissionWait, AdmissionRefusal> {
+        self.admit_queued_in(DEFAULT_ADMISSION_GROUP, query_id, query_limit_bytes)
+    }
+
+    /// Admits now when the arrival is next under the admission order;
+    /// otherwise joins its group's queue and resolves once granted.
+    ///
+    /// The order: within a group, strict arrival order — the head is
+    /// granted first and only when its whole budget fits, and nothing
+    /// behind it is admitted ahead of it. Across groups, on every release
+    /// the groups with an eligible head (a running slot free and the head
+    /// within the group's share) are ranked by admitted bytes divided by
+    /// weight, lowest first, ties to the older head: the group furthest
+    /// below its weighted share of the pool is next. When that group's
+    /// head does not fit the pool, the pool is held for it — nothing from
+    /// another group is admitted until it fits — so a group under its
+    /// share cannot be starved by smaller statements of groups over
+    /// theirs; every lease ends, so it fits eventually. A group at its
+    /// own concurrency or share is not entitled to more and is skipped,
+    /// so it cannot stall the others. The decision is a function of the
+    /// current admitted bytes alone: no clocks, no virtual time.
+    ///
+    /// Refused without queueing when the budget is over the group's share,
+    /// the group's queue is full, or the controller's queue is full.
+    /// Dropping the returned future leaves the queue at once; see
+    /// [`AdmissionWait::expire`] for a wait the caller gives up on.
+    pub fn admit_queued_in(
+        &self,
+        group: &str,
+        query_id: impl Into<String>,
+        query_limit_bytes: u64,
+    ) -> std::result::Result<AdmissionWait, AdmissionRefusal> {
         let query_id = self.validate(query_id, query_limit_bytes)?;
-        let mut queue = self.lock_queue();
-        if queue.is_empty()
-            && let Some(memory) = self.grant_if_fits(&query_id, query_limit_bytes)
-        {
+        let mut groups = self.lock_groups();
+        if let Err(refusal) = self.check_share(&groups, group, query_limit_bytes) {
+            return Err(self.refuse(&mut groups, group, refusal));
+        }
+        if self.would_grant_next(&groups, group, query_limit_bytes) {
+            let memory = self.grant(&mut groups, group, &query_id, query_limit_bytes, 0);
             return Ok(AdmissionWait {
                 controller: self.clone(),
                 waiter: None,
                 granted: Some(memory),
             });
         }
-        if queue.len() >= self.inner.queue_limit {
-            let queued = queue.len();
-            drop(queue);
-            self.inner.rejected_total.fetch_add(1, Ordering::AcqRel);
-            return Err(KaveonError::Execution(format!(
-                "memory admission queue is full: {queued} of {} statements already waiting, {} of {} bytes admitted",
-                self.inner.queue_limit,
-                self.inner.admitted_bytes.load(Ordering::Acquire),
-                self.inner.limit_bytes
-            )));
+        let queued = groups.queued();
+        if queued >= self.inner.queue_limit {
+            let refusal = AdmissionRefusal::QueueFull {
+                queue_limit: self.inner.queue_limit,
+                queued,
+            };
+            return Err(self.refuse(&mut groups, group, refusal));
         }
+        let max_queued = groups.policy(group).max_queued;
+        if groups
+            .states
+            .get(group)
+            .is_some_and(|state| state.queue.len() >= max_queued)
+        {
+            let refusal = AdmissionRefusal::GroupQueueFull {
+                group: group.to_owned(),
+                max_queued,
+            };
+            return Err(self.refuse(&mut groups, group, refusal));
+        }
+        let state = groups.state_mut(group);
         let waiter = Arc::new(AdmissionWaiter {
             id: self.inner.next_waiter.fetch_add(1, Ordering::AcqRel),
+            group: group.to_owned(),
             query_id,
             bytes: query_limit_bytes,
+            arrived: Instant::now(),
             state: Mutex::new(WaiterState::Queued(None)),
         });
-        queue.push_back(Arc::clone(&waiter));
-        drop(queue);
+        state.queue.push_back(Arc::clone(&waiter));
+        state.queued_total += 1;
+        drop(groups);
         self.inner.queued_total.fetch_add(1, Ordering::AcqRel);
         Ok(AdmissionWait {
             controller: self.clone(),
@@ -257,7 +603,7 @@ impl MemoryAdmissionController {
 
     #[must_use]
     pub fn stats(&self) -> AdmissionStats {
-        let queue_depth = self.lock_queue().len();
+        let queue_depth = self.lock_groups().queued();
         AdmissionStats {
             limit_bytes: self.inner.limit_bytes,
             admitted_bytes: self.inner.admitted_bytes.load(Ordering::Acquire),
@@ -271,66 +617,236 @@ impl MemoryAdmissionController {
         }
     }
 
-    fn validate(&self, query_id: impl Into<String>, query_limit_bytes: u64) -> Result<String> {
+    /// Every configured group's counters, and those of any group that has
+    /// admitted or queued under a policy since removed, by name.
+    #[must_use]
+    pub fn group_stats(&self) -> Vec<AdmissionGroupStats> {
+        let groups = self.lock_groups();
+        let mut names: Vec<&str> = groups
+            .policies
+            .keys()
+            .chain(groups.states.keys())
+            .map(String::as_str)
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        let empty = GroupState::default();
+        names
+            .into_iter()
+            .map(|name| {
+                let policy = groups.policy(name);
+                let state = groups.states.get(name).unwrap_or(&empty);
+                AdmissionGroupStats {
+                    name: name.to_owned(),
+                    limit_bytes: policy.limit_bytes,
+                    max_concurrent: policy.max_concurrent,
+                    max_queued: policy.max_queued,
+                    weight: policy.weight,
+                    running: state.running,
+                    queued: state.queue.len(),
+                    admitted_bytes: state.admitted_bytes,
+                    admitted: state.admitted_total,
+                    queued_total: state.queued_total,
+                    rejected: state.rejected_total,
+                    withdrawn: state.withdrawn_total,
+                    wait_ms_p50: state.percentile(0.5),
+                    wait_ms_p95: state.percentile(0.95),
+                }
+            })
+            .collect()
+    }
+
+    fn validate(
+        &self,
+        query_id: impl Into<String>,
+        query_limit_bytes: u64,
+    ) -> std::result::Result<String, AdmissionRefusal> {
         if query_limit_bytes == 0 || query_limit_bytes > self.inner.limit_bytes {
-            return Err(KaveonError::Execution(format!(
+            return Err(AdmissionRefusal::Invalid(format!(
                 "query memory limit {query_limit_bytes} must be between 1 and the admission limit of {} bytes",
                 self.inner.limit_bytes
             )));
         }
         let query_id = query_id.into();
         if query_id.trim().is_empty() {
-            return Err(KaveonError::Execution(
+            return Err(AdmissionRefusal::Invalid(
                 "query memory pool requires a non-empty query ID".into(),
             ));
         }
         Ok(query_id)
     }
 
-    fn lock_queue(&self) -> std::sync::MutexGuard<'_, VecDeque<Arc<AdmissionWaiter>>> {
-        // The queue holds only waiter handles; a panic while it was held
-        // cannot have left it inconsistent.
+    fn check_share(
+        &self,
+        groups: &GroupTable,
+        group: &str,
+        bytes: u64,
+    ) -> std::result::Result<(), AdmissionRefusal> {
+        let policy = groups.policy(group);
+        if bytes > policy.limit_bytes {
+            return Err(AdmissionRefusal::OverGroupLimit {
+                group: group.to_owned(),
+                limit_bytes: policy.limit_bytes,
+                requested: bytes,
+            });
+        }
+        Ok(())
+    }
+
+    /// Counts a refusal against the group and the controller.
+    fn refuse(
+        &self,
+        groups: &mut GroupTable,
+        group: &str,
+        refusal: AdmissionRefusal,
+    ) -> AdmissionRefusal {
+        groups.state_mut(group).rejected_total += 1;
+        self.inner.rejected_total.fetch_add(1, Ordering::AcqRel);
+        refusal
+    }
+
+    fn lock_groups(&self) -> std::sync::MutexGuard<'_, GroupTable> {
+        // The table holds waiter handles, policies and counters; a panic
+        // while it was held cannot have left a decision half made.
         self.inner
-            .queue
+            .groups
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Reserves `bytes` and builds the admitted pool when the budget fits.
-    /// Called with the queue lock held, so the check and the reservation
-    /// are one step.
-    fn grant_if_fits(&self, query_id: &str, bytes: u64) -> Option<AdmittedQueryMemory> {
-        let current = self.inner.admitted_bytes.load(Ordering::Acquire);
-        let next = current.checked_add(bytes)?;
-        if next > self.inner.limit_bytes {
-            return None;
+    /// Whether an arrival in `group` with `bytes` would be the next grant
+    /// now: nobody queued ahead of it in its group, and the cross-group
+    /// order picks it over every other group's head.
+    fn would_grant_next(&self, groups: &GroupTable, group: &str, bytes: u64) -> bool {
+        if groups
+            .states
+            .get(group)
+            .is_some_and(|state| !state.queue.is_empty())
+        {
+            return false;
         }
+        let arrival = Candidate {
+            group,
+            bytes,
+            waiter: None,
+            admitted_bytes: groups
+                .states
+                .get(group)
+                .map_or(0, |state| state.admitted_bytes),
+            weight: groups.policy(group).weight,
+        };
+        match self.next_grant(groups, Some(arrival)) {
+            Some(selected) => selected.waiter.is_none(),
+            None => false,
+        }
+    }
+
+    /// The cross-group order over every group's head (and `arrival`, when
+    /// given): the first eligible candidate by admitted bytes over weight,
+    /// if its budget fits the pool. `None` when nothing is eligible or the
+    /// pool is held for the first candidate.
+    fn next_grant<'a>(
+        &self,
+        groups: &'a GroupTable,
+        arrival: Option<Candidate<'a>>,
+    ) -> Option<Candidate<'a>> {
+        let mut candidates: Vec<Candidate<'a>> = groups
+            .states
+            .iter()
+            .filter_map(|(name, state)| {
+                let head = state.queue.front()?;
+                let policy = groups.policy(name);
+                let eligible = state.running < policy.max_concurrent
+                    && state.admitted_bytes.saturating_add(head.bytes) <= policy.limit_bytes;
+                eligible.then(|| Candidate {
+                    group: name.as_str(),
+                    bytes: head.bytes,
+                    waiter: Some(head.id),
+                    admitted_bytes: state.admitted_bytes,
+                    weight: policy.weight,
+                })
+            })
+            .collect();
+        if let Some(arrival) = arrival {
+            let policy = groups.policy(arrival.group);
+            let state = groups.states.get(arrival.group);
+            let running = state.map_or(0, |state| state.running);
+            if running < policy.max_concurrent
+                && arrival.admitted_bytes.saturating_add(arrival.bytes) <= policy.limit_bytes
+            {
+                candidates.push(arrival);
+            }
+        }
+        candidates.sort_by(|a, b| {
+            let a_share = u128::from(a.admitted_bytes) * u128::from(b.weight);
+            let b_share = u128::from(b.admitted_bytes) * u128::from(a.weight);
+            a_share.cmp(&b_share).then_with(|| {
+                // An arrival not yet queued is younger than every waiter.
+                match (a.waiter, b.waiter) {
+                    (Some(x), Some(y)) => x.cmp(&y),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => std::cmp::Ordering::Equal,
+                }
+            })
+        });
+        let first = candidates.into_iter().next()?;
+        let admitted = self.inner.admitted_bytes.load(Ordering::Acquire);
+        (admitted.saturating_add(first.bytes) <= self.inner.limit_bytes).then_some(first)
+    }
+
+    /// Reserves `bytes` for `group` and builds the admitted pool. Called
+    /// with the table lock held after the decision, so the check and the
+    /// reservation are one step.
+    fn grant(
+        &self,
+        groups: &mut GroupTable,
+        group: &str,
+        query_id: &str,
+        bytes: u64,
+        wait_ms: u64,
+    ) -> AdmittedQueryMemory {
+        let current = self.inner.admitted_bytes.load(Ordering::Acquire);
+        let next = current
+            .checked_add(bytes)
+            .expect("the decision checked the pool");
+        debug_assert!(next <= self.inner.limit_bytes, "grant over the pool");
         self.inner.admitted_bytes.store(next, Ordering::Release);
         self.inner
             .peak_admitted_bytes
             .fetch_max(next, Ordering::AcqRel);
         self.inner.admitted_total.fetch_add(1, Ordering::AcqRel);
+        let state = groups.state_mut(group);
+        state.running += 1;
+        state.admitted_bytes += bytes;
+        state.admitted_total += 1;
+        state.record_wait(wait_ms);
         let mut pool =
             QueryMemoryPool::new(query_id, bytes).expect("query ID and budget were validated");
         let inner = Arc::get_mut(&mut pool.inner).expect("new query pool is uniquely owned");
         inner._admission = Some(AdmissionLease {
             controller: self.clone(),
+            group: group.to_owned(),
             admitted_bytes: bytes,
         });
         inner.process = self.process.clone();
-        Some(AdmittedQueryMemory { pool })
+        AdmittedQueryMemory { pool }
     }
 
-    /// Grants the head of the queue for as long as it fits. Called with the
-    /// queue lock held: a waiter still in the queue is in the `Queued`
-    /// state, because leaving the queue and changing state happen under
-    /// this same lock.
-    fn grant_waiting(&self, queue: &mut VecDeque<Arc<AdmissionWaiter>>) {
-        while let Some(head) = queue.front() {
-            let Some(memory) = self.grant_if_fits(&head.query_id, head.bytes) else {
-                return;
-            };
-            let head = queue.pop_front().expect("front was just observed");
+    /// Grants heads for as long as the order names one that fits. Called
+    /// with the table lock held: a waiter still in a queue is in the
+    /// `Queued` state, because leaving the queue and changing state happen
+    /// under this same lock.
+    fn grant_waiting(&self, groups: &mut GroupTable) {
+        while let Some(selected) = self.next_grant(groups, None) {
+            let group = selected.group.to_owned();
+            let head = groups
+                .state_mut(&group)
+                .queue
+                .pop_front()
+                .expect("the selected head was just observed");
+            let wait_ms = u64::try_from(head.arrived.elapsed().as_millis()).unwrap_or(u64::MAX);
+            let memory = self.grant(groups, &group, &head.query_id, head.bytes, wait_ms);
             let previous = {
                 let mut state = head.lock_state();
                 std::mem::replace(&mut *state, WaiterState::Granted(Some(memory)))
@@ -341,56 +857,62 @@ impl MemoryAdmissionController {
         }
     }
 
-    fn capacity_error(&self, requested: u64, queued: usize) -> KaveonError {
-        let current = self.inner.admitted_bytes.load(Ordering::Acquire);
-        let ahead = if queued == 0 {
-            String::new()
-        } else {
-            format!(", {queued} waiting ahead")
-        };
-        KaveonError::Execution(format!(
-            "memory admission rejected query budget of {requested} bytes: {current} of {} bytes already admitted{ahead}",
-            self.inner.limit_bytes
-        ))
+    fn no_capacity(&self, groups: &GroupTable, group: &str, requested: u64) -> AdmissionRefusal {
+        let policy = groups.policy(group);
+        let state = groups.states.get(group);
+        AdmissionRefusal::NoCapacity {
+            group: group.to_owned(),
+            requested,
+            admitted_bytes: self.inner.admitted_bytes.load(Ordering::Acquire),
+            limit_bytes: self.inner.limit_bytes,
+            group_running: state.map_or(0, |state| state.running),
+            group_max_concurrent: policy.max_concurrent,
+            queued_ahead: groups.queued(),
+        }
     }
 
-    fn release(&self, bytes: u64) {
-        let mut queue = self.lock_queue();
+    fn release(&self, group: &str, bytes: u64) {
+        let mut groups = self.lock_groups();
         let previous = self.inner.admitted_bytes.fetch_sub(bytes, Ordering::AcqRel);
         debug_assert!(previous >= bytes, "memory admission accounting underflow");
-        self.grant_waiting(&mut queue);
+        let state = groups.state_mut(group);
+        state.running = state.running.saturating_sub(1);
+        state.admitted_bytes = state.admitted_bytes.saturating_sub(bytes);
+        self.grant_waiting(&mut groups);
     }
 
-    /// Takes `waiter` out of the queue if it is still there, and serves
-    /// whoever is behind it. Returns a budget granted to it in the meantime,
-    /// which the caller owns.
+    /// Takes `waiter` out of its queue if it is still there, and serves
+    /// whoever the order names next. Returns a budget granted to it in the
+    /// meantime, which the caller owns.
     fn withdraw(
         &self,
         waiter: &Arc<AdmissionWaiter>,
         rejected: bool,
     ) -> Option<AdmittedQueryMemory> {
-        let mut queue = self.lock_queue();
-        let position = queue.iter().position(|queued| queued.id == waiter.id);
+        let mut groups = self.lock_groups();
+        let state = groups.state_mut(&waiter.group);
+        let position = state.queue.iter().position(|queued| queued.id == waiter.id);
         if let Some(position) = position {
-            queue.remove(position);
+            state.queue.remove(position);
         }
         let granted = {
-            let mut state = waiter.lock_state();
-            match std::mem::replace(&mut *state, WaiterState::Withdrawn) {
+            let mut waiter_state = waiter.lock_state();
+            match std::mem::replace(&mut *waiter_state, WaiterState::Withdrawn) {
                 WaiterState::Granted(memory) => memory,
                 WaiterState::Queued(_) | WaiterState::Withdrawn => None,
             }
         };
         if granted.is_none() {
-            let counter = if rejected {
-                &self.inner.rejected_total
+            if rejected {
+                state.rejected_total += 1;
+                self.inner.rejected_total.fetch_add(1, Ordering::AcqRel);
             } else {
-                &self.inner.withdrawn_total
-            };
-            counter.fetch_add(1, Ordering::AcqRel);
+                state.withdrawn_total += 1;
+                self.inner.withdrawn_total.fetch_add(1, Ordering::AcqRel);
+            }
         }
         if position.is_some() {
-            self.grant_waiting(&mut queue);
+            self.grant_waiting(&mut groups);
         }
         granted
     }
@@ -399,8 +921,10 @@ impl MemoryAdmissionController {
 #[derive(Debug)]
 struct AdmissionWaiter {
     id: u64,
+    group: String,
     query_id: String,
     bytes: u64,
+    arrived: Instant,
     state: Mutex<WaiterState>,
 }
 
@@ -487,7 +1011,7 @@ impl Drop for AdmissionWait {
     fn drop(&mut self) {
         if let Some(waiter) = self.waiter.take() {
             // A budget granted in the meantime is dropped here, outside the
-            // queue lock, and its release serves the next waiter.
+            // table lock, and its release serves the next waiter.
             drop(self.controller.withdraw(&waiter, false));
         }
     }
@@ -505,6 +1029,7 @@ pub struct AdmittedQueryMemory {
 #[derive(Debug)]
 struct AdmissionLease {
     controller: MemoryAdmissionController,
+    group: String,
     admitted_bytes: u64,
 }
 
@@ -517,7 +1042,7 @@ impl AdmittedQueryMemory {
 
 impl Drop for AdmissionLease {
     fn drop(&mut self) {
-        self.controller.release(self.admitted_bytes);
+        self.controller.release(&self.group, self.admitted_bytes);
     }
 }
 
@@ -1314,6 +1839,254 @@ mod tests {
         let admitted = waiter.join().unwrap();
         assert_eq!(admitted.pool().snapshot().limit_bytes, 1_024);
         assert_eq!(admission.stats().admitted, 2);
+    }
+
+    fn policy(
+        name: &str,
+        limit: u64,
+        concurrent: usize,
+        queued: usize,
+        weight: u32,
+    ) -> AdmissionGroupPolicy {
+        AdmissionGroupPolicy {
+            name: name.into(),
+            limit_bytes: limit,
+            max_concurrent: concurrent,
+            max_queued: queued,
+            weight,
+        }
+    }
+
+    fn grouped_controller(
+        limit: u64,
+        policies: Vec<AdmissionGroupPolicy>,
+    ) -> MemoryAdmissionController {
+        let admission = queued_controller(limit, 64);
+        admission.set_groups(policies).unwrap();
+        admission
+    }
+
+    #[test]
+    fn within_a_group_arrivals_are_served_in_order_and_across_groups_the_lowest_weighted_share_first()
+     {
+        let admission = grouped_controller(
+            1_000,
+            vec![
+                policy("default", 1_000, usize::MAX, 64, 1),
+                policy("batch", 1_000, usize::MAX, 64, 1),
+                policy("interactive", 1_000, usize::MAX, 64, 2),
+            ],
+        );
+        let batch_running = admission.admit_in("batch", "b0", 700).unwrap();
+        let woken = Arc::new(Woken(Default::default()));
+        // batch is first to queue, but holds 700 against weight 1 and its
+        // 400 does not fit; interactive holds nothing against weight 2,
+        // so it is next and its 300 fits beside the 700.
+        let mut batch = admission.admit_queued_in("batch", "b1", 400).unwrap();
+        let mut interactive = admission.admit_queued_in("interactive", "i1", 300).unwrap();
+        assert!(!batch.admitted_immediately());
+        assert!(
+            interactive.admitted_immediately(),
+            "the group furthest below its weighted share is next"
+        );
+        assert!(poll_once(&mut batch, &woken).is_pending());
+        let Poll::Ready(interactive) = poll_once(&mut interactive, &woken) else {
+            panic!("an immediate grant resolves at the first poll");
+        };
+        assert!(poll_once(&mut batch, &woken).is_pending());
+        // Within batch, a later arrival waits behind b1.
+        let mut later = admission.admit_queued_in("batch", "b2", 400).unwrap();
+        assert!(poll_once(&mut later, &woken).is_pending());
+        drop(batch_running);
+        let Poll::Ready(_b1) = poll_once(&mut batch, &woken) else {
+            panic!("the head of batch is granted on the release");
+        };
+        assert!(poll_once(&mut later, &woken).is_pending());
+        drop(interactive);
+        let Poll::Ready(_b2) = poll_once(&mut later, &woken) else {
+            panic!("the next in batch follows once its budget fits");
+        };
+        let stats = admission.group_stats();
+        let batch_stats = stats.iter().find(|group| group.name == "batch").unwrap();
+        assert_eq!(
+            (
+                batch_stats.admitted,
+                batch_stats.queued_total,
+                batch_stats.running
+            ),
+            (3, 2, 2)
+        );
+        assert!(batch_stats.wait_ms_p50.is_some() && batch_stats.wait_ms_p95.is_some());
+    }
+
+    #[test]
+    fn the_pool_is_held_for_the_group_under_its_share_until_its_head_fits() {
+        let admission = grouped_controller(
+            1_000,
+            vec![
+                policy("default", 1_000, usize::MAX, 64, 1),
+                policy("a", 1_000, usize::MAX, 64, 1),
+                policy("b", 1_000, usize::MAX, 64, 1),
+                policy("c", 1_000, usize::MAX, 64, 1),
+            ],
+        );
+        let a = admission.admit_in("a", "a0", 700).unwrap();
+        let woken = Arc::new(Woken(Default::default()));
+        // b and c both hold nothing: tie, b's head is older. b's 500 does
+        // not fit beside the 700, so the pool is held for it: c's 200
+        // fits but is not admitted ahead of it, nor is an immediate
+        // arrival.
+        let mut b = admission.admit_queued_in("b", "b0", 500).unwrap();
+        let mut c = admission.admit_queued_in("c", "c0", 200).unwrap();
+        assert!(poll_once(&mut b, &woken).is_pending());
+        assert!(poll_once(&mut c, &woken).is_pending());
+        let refusal = admission.admit_in("c", "c1", 100).unwrap_err();
+        assert!(
+            matches!(
+                refusal,
+                AdmissionRefusal::NoCapacity {
+                    queued_ahead: 2,
+                    ..
+                }
+            ),
+            "{refusal}"
+        );
+        drop(a);
+        // b first; c's 200 then fits beside b's 500 and follows at once.
+        assert!(matches!(poll_once(&mut b, &woken), Poll::Ready(_)));
+        assert!(matches!(poll_once(&mut c, &woken), Poll::Ready(_)));
+        assert_eq!(admission.stats().admitted, 3);
+    }
+
+    #[test]
+    fn a_group_at_its_own_share_or_concurrency_is_skipped_so_it_cannot_stall_the_others() {
+        let admission = grouped_controller(
+            1_000,
+            vec![
+                policy("default", 1_000, usize::MAX, 64, 1),
+                policy("capped", 300, 1, 64, 1),
+                policy("open", 1_000, usize::MAX, 64, 1),
+            ],
+        );
+        let capped_running = admission.admit_in("capped", "k0", 300).unwrap();
+        let woken = Arc::new(Woken(Default::default()));
+        // capped's head is over the group's share and its one slot is
+        // taken: not entitled to more, so open's head is admitted at once
+        // even though capped queued first.
+        let mut capped = admission.admit_queued_in("capped", "k1", 100).unwrap();
+        let open = admission.admit_queued_in("open", "o0", 400).unwrap();
+        assert!(open.admitted_immediately());
+        assert!(poll_once(&mut capped, &woken).is_pending());
+        drop(capped_running);
+        let Poll::Ready(capped) = poll_once(&mut capped, &woken) else {
+            panic!("the slot and the share are free again");
+        };
+        assert_eq!(capped.pool().snapshot().limit_bytes, 100);
+        drop(open);
+        drop(capped);
+        assert_eq!(admission.stats().admitted_bytes, 0);
+        assert_eq!(admission.stats().rejected, 0);
+    }
+
+    #[test]
+    fn over_share_and_full_group_queue_are_refused_on_arrival_naming_the_group() {
+        let admission = grouped_controller(
+            1_000,
+            vec![
+                policy("default", 1_000, usize::MAX, 64, 1),
+                policy("small", 256, 1, 1, 1),
+            ],
+        );
+        let refusal = admission.admit_queued_in("small", "s0", 512).unwrap_err();
+        assert_eq!(
+            refusal,
+            AdmissionRefusal::OverGroupLimit {
+                group: "small".into(),
+                limit_bytes: 256,
+                requested: 512
+            }
+        );
+        let running = admission.admit_in("small", "s1", 256).unwrap();
+        let waiting = admission.admit_queued_in("small", "s2", 256).unwrap();
+        assert!(!waiting.admitted_immediately());
+        let refusal = admission.admit_queued_in("small", "s3", 256).unwrap_err();
+        assert_eq!(
+            refusal,
+            AdmissionRefusal::GroupQueueFull {
+                group: "small".into(),
+                max_queued: 1
+            }
+        );
+        assert!(refusal.to_string().contains("resource group 'small'"));
+        let small = admission
+            .group_stats()
+            .into_iter()
+            .find(|group| group.name == "small")
+            .unwrap();
+        assert_eq!((small.rejected, small.queued, small.running), (2, 1, 1));
+        drop(waiting);
+        drop(running);
+        assert_eq!(admission.stats().withdrawn, 1);
+    }
+
+    #[test]
+    fn replacing_the_policies_takes_effect_for_waiting_arrivals_and_unknown_groups_take_the_default()
+     {
+        let admission = grouped_controller(
+            1_000,
+            vec![
+                policy("default", 1_000, 1, 64, 1),
+                policy("etl", 1_000, 1, 64, 1),
+            ],
+        );
+        let running = admission.admit_in("etl", "e0", 100).unwrap();
+        let woken = Arc::new(Woken(Default::default()));
+        let mut waiting = admission.admit_queued_in("etl", "e1", 100).unwrap();
+        assert!(poll_once(&mut waiting, &woken).is_pending());
+        // A group the policies do not name is decided as `default`: one
+        // slot, which e0 does not hold, so it runs.
+        let unknown = admission
+            .admit_in("nobody-configured-this", "u0", 100)
+            .unwrap();
+        assert!(
+            admission
+                .admit_in("nobody-configured-this", "u1", 100)
+                .is_err()
+        );
+        drop(unknown);
+        // Raising etl's concurrency grants the waiter without a release.
+        admission
+            .set_groups(vec![
+                policy("default", 1_000, 1, 64, 1),
+                policy("etl", 1_000, 2, 64, 3),
+            ])
+            .unwrap();
+        assert!(matches!(poll_once(&mut waiting, &woken), Poll::Ready(_)));
+        assert_eq!(
+            admission.groups(),
+            vec![
+                policy("default", 1_000, 1, 64, 1),
+                policy("etl", 1_000, 2, 64, 3)
+            ]
+        );
+        // Refused policies leave the table unchanged.
+        assert!(
+            admission
+                .set_groups(vec![policy("etl", 1_000, 1, 64, 1)])
+                .is_err()
+        );
+        assert!(
+            admission
+                .set_groups(vec![policy("default", 2_000, 1, 64, 1)])
+                .is_err()
+        );
+        assert!(
+            admission
+                .set_groups(vec![policy("default", 1_000, 1, 64, 0)])
+                .is_err()
+        );
+        assert_eq!(admission.groups().len(), 2);
+        drop(running);
     }
 
     /// A minimal executor: parks the thread until the waker unparks it.

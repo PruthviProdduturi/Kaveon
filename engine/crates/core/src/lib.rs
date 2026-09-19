@@ -33,8 +33,9 @@ pub use fragment::{
     JoinType, NamedExpr, ScanSpec, ScanTable, SortSpec,
 };
 pub use memory::{
-    AdmissionStats, AdmissionWait, AdmittedQueryMemory, MemoryAdmissionController,
-    MemoryReservation, MemorySnapshot, OperatorMemoryAccount, QueryMemoryPool, ReservationSlab,
+    AdmissionGroupPolicy, AdmissionGroupStats, AdmissionRefusal, AdmissionStats, AdmissionWait,
+    AdmittedQueryMemory, DEFAULT_ADMISSION_GROUP, MemoryAdmissionController, MemoryReservation,
+    MemorySnapshot, OperatorMemoryAccount, QueryMemoryPool, ReservationSlab,
 };
 pub use operator::{BatchOperator, BatchSource, collect_batches};
 pub use predicate::{CompareOp, ScalarValue, StoragePredicate};
