@@ -7,6 +7,8 @@ pub mod memory;
 pub mod operator;
 pub mod predicate;
 pub mod process_memory;
+pub mod sketch;
+pub mod statistics;
 pub mod telemetry;
 pub mod types;
 
@@ -37,6 +39,11 @@ pub use memory::{
 pub use operator::{BatchOperator, BatchSource, collect_batches};
 pub use predicate::{CompareOp, ScalarValue, StoragePredicate};
 pub use process_memory::{CountingAllocator, ProcessMemory};
+pub use sketch::{HllSketch, KllSketch};
+pub use statistics::{
+    ColumnSketches, ColumnStatistics, FileColumnSketches, FileColumnStatistics, FileStatistics,
+    SourceVersion, SourceVersionKind, StatValue, StatisticsDepth, TableStatistics,
+};
 pub use telemetry::{
     NodeMetrics, OperatorMetrics, PlanMetricsSnapshot, PlanNode, PlanNodeId, PlanPhase, ScanMetrics,
 };
