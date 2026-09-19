@@ -19,7 +19,9 @@ import time
 sys.path.insert(0, "/app")
 import services.engine_bridge as eb  # noqa: E402
 
-NO_CACHE = {"result_cache": False}
+# A benchmark measures the read path: no result cache, no answer from
+# statistics or sketches (file skipping by their bounds still applies).
+NO_CACHE = {"result_cache": False, "use_statistics": False}
 # Timed executions after the warm-up: three for a record (the default),
 # fewer only for a first coverage pass, and the record says how many.
 REPETITIONS = int(os.environ.get("REPETITIONS", "3"))

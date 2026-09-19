@@ -54,9 +54,10 @@ CASES = [
 
 def run(sql):
     t0 = time.time()
-    # Bypass the coordinator's result cache: both timings are the Engine's.
+    # Bypass the coordinator's result cache and every answer from statistics:
+    # both timings are the Engine's read path.
     result = eb.execute(sql, "OpenSource", "differential", "Admin", "kaveon_product", timeout=900,
-                        settings={"result_cache": False})
+                        settings={"result_cache": False, "use_statistics": False})
     rows = result.get("data") or result.get("rows") or []
     return round(time.time() - t0, 2), rows
 

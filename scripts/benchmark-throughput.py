@@ -136,8 +136,10 @@ class KaveonExecutor:
 
     def execute(self, sql, client_index):
         try:
+            # The read path: no result cache, no answer from statistics.
             result = self.bridge.execute(sql, self.catalog, f"throughput-{client_index}", "Admin",
-                                         self.schema, timeout=self.timeout)
+                                         self.schema, timeout=self.timeout,
+                                         settings={"result_cache": False, "use_statistics": False})
         except Exception as exc:
             if getattr(exc, "status_code", None) == 429:
                 raise Rejected(str(getattr(exc, "detail", exc))) from exc

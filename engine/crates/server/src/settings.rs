@@ -40,6 +40,14 @@ pub struct QuerySettings {
     /// setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approximate: Option<bool>,
+    /// `false` bypasses every answer from statistics: the `context` path
+    /// for `COUNT(*)`/`MIN`/`MAX` and the statistics path for `APPROX_*`
+    /// both stand aside and the rows are read (`APPROX_*` computes its
+    /// sketch over them). File skipping by the statistics' bounds still
+    /// applies — pruning, not answering. On by default; a benchmark of
+    /// the read path sets it beside `result_cache = false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_statistics: Option<bool>,
 }
 
 impl QuerySettings {
@@ -65,6 +73,11 @@ impl QuerySettings {
     /// Whether exact distinct counts may be answered from sketches.
     pub fn approximate(&self) -> bool {
         self.approximate.unwrap_or(false)
+    }
+
+    /// Whether a statement may be answered from statistics at all.
+    pub fn use_statistics(&self) -> bool {
+        self.use_statistics.unwrap_or(true)
     }
 
     /// How long the statement waits for memory admission: its own bound
@@ -117,6 +130,9 @@ impl QuerySettings {
                 }
                 "approximate" => {
                     validated.approximate = Some(boolean(key, value)?);
+                }
+                "use_statistics" => {
+                    validated.use_statistics = Some(boolean(key, value)?);
                 }
                 "admission_wait_seconds" => {
                     let seconds = unsigned(key, value)?;
@@ -474,27 +490,35 @@ mod tests {
     }
 
     #[test]
-    fn approximate_is_a_boolean_off_by_default() {
+    fn approximate_and_use_statistics_are_booleans_off_and_on_by_default() {
         let config = config();
-        assert!(!QuerySettings::default().approximate());
-        let settings =
-            QuerySettings::from_request(&map(json!({"approximate": true})), &config).unwrap();
+        let defaults = QuerySettings::default();
+        assert!(!defaults.approximate());
+        assert!(defaults.use_statistics());
+        let settings = QuerySettings::from_request(
+            &map(json!({"approximate": true, "use_statistics": "off"})),
+            &config,
+        )
+        .unwrap();
         assert!(settings.approximate());
+        assert!(!settings.use_statistics());
         assert_eq!(
             serde_json::to_value(&settings).unwrap(),
-            json!({"approximate": true})
+            json!({"approximate": true, "use_statistics": false})
         );
-        let error =
-            QuerySettings::from_request(&map(json!({"approximate": 1})), &config).unwrap_err();
-        assert_eq!(error.0, "setting 'approximate' must be true or false");
-        let prefix = split_session_prefix("SET SESSION approximate = true; SELECT 1").unwrap();
+        for key in ["approximate", "use_statistics"] {
+            let error = QuerySettings::from_request(&map(json!({key: 1})), &config).unwrap_err();
+            assert_eq!(error.0, format!("setting '{key}' must be true or false"));
+        }
+        let prefix = split_session_prefix(
+            "SET SESSION use_statistics = false; SET SESSION approximate = true; SELECT 1",
+        )
+        .unwrap();
         let mut settings = map(json!({}));
         merge_session_prefix(&mut settings, &prefix).unwrap();
-        assert!(
-            QuerySettings::from_request(&settings, &config)
-                .unwrap()
-                .approximate()
-        );
+        let settings = QuerySettings::from_request(&settings, &config).unwrap();
+        assert!(!settings.use_statistics());
+        assert!(settings.approximate());
     }
 
     #[test]
