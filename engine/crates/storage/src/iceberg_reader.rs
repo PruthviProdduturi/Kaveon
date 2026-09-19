@@ -11,10 +11,12 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit},
     record_batch::RecordBatch,
 };
-use kaveon_core::{BatchSource, Result};
+use kaveon_core::{
+    BatchSource, FileColumnStatistics, FileStatistics, Result, StatValue, StoragePredicate,
+};
 use serde_json::Value;
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -22,12 +24,25 @@ use std::{
 const FIELD_ID: &str = "PARQUET:field_id";
 const MAX_METADATA_BYTES: u64 = 64 * 1024 * 1024;
 
+/// What a manifest records about one data file: its row count and, per
+/// field id, the null count and the lower and upper bounds in Iceberg's
+/// single-value binary form. Absent entries are "not recorded".
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IcebergFileFacts {
+    pub record_count: u64,
+    pub null_value_counts: BTreeMap<i64, u64>,
+    pub lower_bounds: BTreeMap<i64, Vec<u8>>,
+    pub upper_bounds: BTreeMap<i64, Vec<u8>>,
+}
+
 #[derive(Clone, Debug)]
 pub struct IcebergSnapshot {
     pub metadata_uri: String,
     pub snapshot_id: Option<i64>,
     pub schema: SchemaRef,
     pub files: Vec<String>,
+    /// The manifests' facts about each of `files`, in the same order.
+    pub facts: Vec<IcebergFileFacts>,
     pub row_count: u64,
     /// The manifests' `file_size_in_bytes` summed over the live data files.
     pub total_bytes: u64,
@@ -40,6 +55,7 @@ pub struct IcebergReader {
     snapshot_id: Option<i64>,
     columns: Option<Vec<String>>,
     partition: Option<ScanPartition>,
+    predicate: Option<StoragePredicate>,
     batch_size: usize,
     object_store: Option<Arc<dyn object_store::ObjectStore>>,
 }
@@ -53,9 +69,19 @@ impl IcebergReader {
             snapshot_id: None,
             columns: None,
             partition: None,
+            predicate: None,
             batch_size: 8192,
             object_store: None,
         }
+    }
+    /// The pushed-down predicate: data files whose manifest bounds and
+    /// null counts prove no row can match are never opened. The rows of
+    /// the files read are not filtered here — the filter above the scan
+    /// remains the truth — since a file may name its columns by an older
+    /// schema (Iceberg projects by field id, not by name).
+    pub fn with_predicate(mut self, predicate: StoragePredicate) -> Self {
+        self.predicate = Some(predicate);
+        self
     }
     pub fn with_snapshot_id(mut self, id: i64) -> Self {
         self.snapshot_id = Some(id);
@@ -130,6 +156,10 @@ impl IcebergReader {
         let io = self.io();
         let metrics = ScanMetrics::default();
         metrics.snapshot_time(start.elapsed());
+        let admitted = match &self.predicate {
+            Some(predicate) => snapshot.files_may_match(predicate),
+            None => vec![true; snapshot.files.len()],
+        };
         let schema = if let Some(columns) = self.columns {
             let mut seen = BTreeSet::new();
             let fields = columns
@@ -152,13 +182,23 @@ impl IcebergReader {
         } else {
             snapshot.schema
         };
+        let mut skipped = 0u64;
         let files = snapshot
             .files
             .into_iter()
             .enumerate()
-            .filter_map(|(i, f)| self.partition.is_none_or(|p| p.contains(i)).then_some(f))
+            .filter(|(i, _)| self.partition.is_none_or(|p| p.contains(*i)))
+            .filter_map(|(i, f)| {
+                if admitted[i] {
+                    Some(f)
+                } else {
+                    skipped += 1;
+                    None
+                }
+            })
             .collect::<Vec<_>>()
             .into_iter();
+        metrics.files_skipped(skipped);
         Ok(IcebergSource {
             files,
             schema,
@@ -221,6 +261,149 @@ impl BatchSource for IcebergSource {
             )?;
             self.current = Some(source);
         }
+    }
+}
+
+impl IcebergSnapshot {
+    /// For each data file, whether the manifest's bounds and null counts
+    /// admit a row matching `predicate` (coerced for the table schema):
+    /// `false` only when they prove no row can match. A column without
+    /// recorded facts keeps the file. Bounds are matched to columns by
+    /// field id, so a renamed column is judged by its own facts.
+    pub fn files_may_match(&self, predicate: &StoragePredicate) -> Vec<bool> {
+        let predicate = predicate.coerced_for(&self.schema);
+        let names: Vec<String> = self
+            .schema
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
+        let ids: Vec<Option<i64>> = self
+            .schema
+            .fields()
+            .iter()
+            .map(|f| f.metadata().get(FIELD_ID).and_then(|id| id.parse().ok()))
+            .collect();
+        self.facts
+            .iter()
+            .map(|facts| {
+                let columns = self
+                    .schema
+                    .fields()
+                    .iter()
+                    .zip(&ids)
+                    .map(|(field, id)| {
+                        let Some(id) = id else {
+                            return FileColumnStatistics::default();
+                        };
+                        FileColumnStatistics {
+                            min: facts
+                                .lower_bounds
+                                .get(id)
+                                .and_then(|bytes| decode_bound(field.data_type(), bytes)),
+                            max: facts
+                                .upper_bounds
+                                .get(id)
+                                .and_then(|bytes| decode_bound(field.data_type(), bytes)),
+                            null_count: facts.null_value_counts.get(id).copied(),
+                        }
+                    })
+                    .collect();
+                FileStatistics {
+                    path: String::new(),
+                    rows: facts.record_count,
+                    bytes: 0,
+                    columns,
+                }
+                .may_match(&names, &predicate)
+            })
+            .collect()
+    }
+}
+
+/// An Iceberg single-value binary bound as a statistic value: booleans one
+/// byte, ints and dates four bytes little-endian, longs, times and
+/// timestamps eight, floats and doubles IEEE little-endian, strings UTF-8,
+/// decimals the unscaled value big-endian two's complement. `None` for a
+/// bound of another shape or a type without an order the engine compares.
+fn decode_bound(data_type: &DataType, bytes: &[u8]) -> Option<StatValue> {
+    let int32 = |bytes: &[u8]| -> Option<i32> { Some(i32::from_le_bytes(bytes.try_into().ok()?)) };
+    let int64 = |bytes: &[u8]| -> Option<i64> { Some(i64::from_le_bytes(bytes.try_into().ok()?)) };
+    match data_type {
+        DataType::Boolean => match bytes {
+            [0] => Some(StatValue::Bool(false)),
+            [1] => Some(StatValue::Bool(true)),
+            _ => None,
+        },
+        DataType::Int32 => int32(bytes).map(|v| StatValue::Int(i128::from(v))),
+        DataType::Int64 => int64(bytes).map(|v| StatValue::Int(i128::from(v))),
+        DataType::Float32 => Some(StatValue::Float(f64::from(f32::from_le_bytes(
+            bytes.try_into().ok()?,
+        )))),
+        DataType::Float64 => Some(StatValue::Float(f64::from_le_bytes(bytes.try_into().ok()?))),
+        DataType::Date32 => int32(bytes).map(StatValue::Date),
+        DataType::Time64(unit) => int64(bytes).map(|value| StatValue::Time { value, unit: *unit }),
+        DataType::Timestamp(unit, zone) => int64(bytes).map(|value| StatValue::Timestamp {
+            value,
+            unit: *unit,
+            utc: zone.is_some(),
+        }),
+        DataType::Utf8 => std::str::from_utf8(bytes)
+            .ok()
+            .map(|text| StatValue::Text(text.to_owned())),
+        DataType::Decimal128(_, scale) => {
+            if bytes.is_empty() || bytes.len() > 16 {
+                return None;
+            }
+            let mut wide = [if bytes[0] & 0x80 != 0 { 0xff } else { 0 }; 16];
+            wide[16 - bytes.len()..].copy_from_slice(bytes);
+            Some(StatValue::Decimal {
+                unscaled: i128::from_be_bytes(wide),
+                scale: *scale,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// A manifest's map of field id to value — an Avro map keyed by the id's
+/// text, or the array of `{key, value}` records Iceberg writes — read
+/// with `value` for each entry.
+fn avro_id_map<T>(
+    value: Option<&Avro>,
+    mut read: impl FnMut(&Avro) -> Option<T>,
+) -> BTreeMap<i64, T> {
+    let mut map = BTreeMap::new();
+    let Some(value) = value.map(avro_unwrap) else {
+        return map;
+    };
+    match value {
+        Avro::Map(entries) => {
+            for (key, value) in entries {
+                if let (Ok(id), Some(value)) = (key.parse::<i64>(), read(avro_unwrap(value))) {
+                    map.insert(id, value);
+                }
+            }
+        }
+        Avro::Array(entries) => {
+            for entry in entries {
+                let id = avro_field(entry, "key").and_then(avro_i64);
+                let value = avro_field(entry, "value").and_then(&mut read);
+                if let (Some(id), Some(value)) = (id, value) {
+                    map.insert(id, value);
+                }
+            }
+        }
+        _ => {}
+    }
+    map
+}
+
+fn avro_bytes(value: &Avro) -> Option<Vec<u8>> {
+    match avro_unwrap(value) {
+        Avro::Bytes(bytes) | Avro::Fixed(_, bytes) => Some(bytes.clone()),
+        Avro::String(text) => Some(text.as_bytes().to_vec()),
+        _ => None,
     }
 }
 
@@ -308,7 +491,7 @@ async fn resolve_snapshot(
     };
     let schema = parse_schema(schema)?;
     let partition_columns = partition_field_names(&metadata);
-    let mut files = BTreeSet::new();
+    let mut files: BTreeMap<String, IcebergFileFacts> = BTreeMap::new();
     let mut row_count = 0u64;
     let mut total_bytes = 0u64;
     if let Some(snapshot) = snapshot {
@@ -387,14 +570,23 @@ async fn resolve_snapshot(
                     avro_field(data, "file_path").ok_or_else(|| error("missing data file path"))?,
                 )?;
                 let file = resolve_path(location, file)?;
-                if !files.insert(file) {
-                    return Err(error("duplicate live Iceberg data file"));
-                }
                 let count = avro_field(data, "record_count")
                     .and_then(avro_i64)
                     .filter(|n| *n >= 0)
                     .ok_or_else(|| error("invalid Iceberg file record count"))?
                     as u64;
+                let facts = IcebergFileFacts {
+                    record_count: count,
+                    null_value_counts: avro_id_map(
+                        avro_field(data, "null_value_counts"),
+                        |value| avro_i64(value).and_then(|n| u64::try_from(n).ok()),
+                    ),
+                    lower_bounds: avro_id_map(avro_field(data, "lower_bounds"), avro_bytes),
+                    upper_bounds: avro_id_map(avro_field(data, "upper_bounds"), avro_bytes),
+                };
+                if files.insert(file, facts).is_some() {
+                    return Err(error("duplicate live Iceberg data file"));
+                }
                 row_count = row_count
                     .checked_add(count)
                     .ok_or_else(|| error("Iceberg row count overflow"))?;
@@ -406,11 +598,13 @@ async fn resolve_snapshot(
             }
         }
     }
+    let (files, facts) = files.into_iter().unzip();
     Ok(IcebergSnapshot {
         metadata_uri: uri.into(),
         snapshot_id: selected,
         schema,
-        files: files.into_iter().collect(),
+        files,
+        facts,
         row_count,
         total_bytes,
         partition_columns,
@@ -699,16 +893,32 @@ mod tests {
             writer.write(&batch).unwrap();
             writer.close().unwrap();
         }
+        // The column facts as an Iceberg writer records them: maps of
+        // field id to value, written as arrays of key/value records; the
+        // bounds in the table type's single-value binary form (`long`).
         let manifest_schema = json!({"type":"record","name":"manifest_entry","fields":[
             {"name":"status","type":"int"}, {"name":"snapshot_id","type":["null","long"]},
             {"name":"sequence_number","type":["null","long"]}, {"name":"file_sequence_number","type":["null","long"]},
             {"name":"data_file","type":{"type":"record","name":"r2","fields":[
                 {"name":"content","type":"int"}, {"name":"file_path","type":"string"}, {"name":"file_format","type":"string"},
                 {"name":"partition","type":{"type":"record","name":"r102","fields":[]}},
-                {"name":"record_count","type":"long"}, {"name":"file_size_in_bytes","type":"long"}
+                {"name":"record_count","type":"long"}, {"name":"file_size_in_bytes","type":"long"},
+                {"name":"null_value_counts","type":["null",{"type":"array","items":{"type":"record","name":"k109_v110","fields":[{"name":"key","type":"int"},{"name":"value","type":"long"}]}}]},
+                {"name":"lower_bounds","type":["null",{"type":"array","items":{"type":"record","name":"k126_v127","fields":[{"name":"key","type":"int"},{"name":"value","type":"bytes"}]}}]},
+                {"name":"upper_bounds","type":["null",{"type":"array","items":{"type":"record","name":"k129_v130","fields":[{"name":"key","type":"int"},{"name":"value","type":"bytes"}]}}]}
             ]}}
         ]});
+        let bound = |value: i64| {
+            Avro::Union(
+                1,
+                Box::new(Avro::Array(vec![record(vec![
+                    ("key", Avro::Int(1)),
+                    ("value", Avro::Bytes(value.to_le_bytes().to_vec())),
+                ])])),
+            )
+        };
         let entry = |status, name: &str| {
+            let (low, high) = if name == "a.parquet" { (1, 2) } else { (3, 4) };
             record(vec![
                 ("status", Avro::Int(status)),
                 ("snapshot_id", Avro::Union(1, Box::new(Avro::Long(1)))),
@@ -723,6 +933,18 @@ mod tests {
                         ("partition", record(vec![])),
                         ("record_count", Avro::Long(2)),
                         ("file_size_in_bytes", Avro::Long(100)),
+                        (
+                            "null_value_counts",
+                            Avro::Union(
+                                1,
+                                Box::new(Avro::Array(vec![record(vec![
+                                    ("key", Avro::Int(1)),
+                                    ("value", Avro::Long(0)),
+                                ])])),
+                            ),
+                        ),
+                        ("lower_bounds", bound(low)),
+                        ("upper_bounds", bound(high)),
                     ]),
                 ),
             ])
@@ -785,6 +1007,100 @@ mod tests {
         }
         values
     }
+    #[test]
+    fn manifest_bounds_skip_files_by_field_id_before_any_footer_is_read() {
+        use kaveon_core::{CompareOp, ScalarValue};
+        let f = fixture(0);
+        let snapshot = IcebergReader::new(&f.metadata).snapshot().unwrap();
+        assert_eq!(snapshot.facts.len(), 2);
+        assert_eq!(snapshot.facts[0].record_count, 2);
+        assert_eq!(
+            snapshot.facts[0].lower_bounds[&1],
+            1i64.to_le_bytes().to_vec()
+        );
+        assert_eq!(snapshot.facts[1].null_value_counts[&1], 0);
+        let compare = |op, value| StoragePredicate::Compare {
+            column: "renamed".into(),
+            op,
+            value: ScalarValue::Int64(value),
+        };
+        // The predicate names the table's column; the file's older name
+        // does not matter — the bounds are keyed by field id.
+        assert_eq!(
+            snapshot.files_may_match(&compare(CompareOp::Ge, 3)),
+            vec![false, true]
+        );
+        assert_eq!(
+            snapshot.files_may_match(&compare(CompareOp::Lt, 2)),
+            vec![true, false]
+        );
+        assert_eq!(
+            snapshot.files_may_match(&compare(CompareOp::Gt, 4)),
+            vec![false, false]
+        );
+        // A column without facts keeps every file.
+        assert_eq!(
+            snapshot.files_may_match(&StoragePredicate::IsNull {
+                column: "added".into()
+            }),
+            vec![true, true]
+        );
+        assert_eq!(
+            snapshot.files_may_match(&StoragePredicate::IsNull {
+                column: "renamed".into()
+            }),
+            vec![false, false]
+        );
+        let source = IcebergReader::new(&f.metadata)
+            .with_predicate(compare(CompareOp::Ge, 3))
+            .read_blocking()
+            .unwrap();
+        let metrics = source.metrics();
+        assert_eq!(values(source), vec![3, 4]);
+        let metrics = metrics.snapshot();
+        assert_eq!(metrics.files_skipped, 1);
+        assert_eq!(metrics.files_opened, 1);
+        assert_eq!(metrics.files_considered, 2);
+        let source = IcebergReader::new(&f.metadata)
+            .with_predicate(compare(CompareOp::Gt, 4))
+            .read_blocking()
+            .unwrap();
+        let metrics = source.metrics();
+        assert!(values(source).is_empty());
+        assert_eq!(metrics.snapshot().files_opened, 0);
+
+        // Bound decoding follows the table type.
+        assert_eq!(
+            decode_bound(&DataType::Int32, &7i32.to_le_bytes()),
+            Some(StatValue::Int(7))
+        );
+        assert_eq!(
+            decode_bound(&DataType::Date32, &19_000i32.to_le_bytes()),
+            Some(StatValue::Date(19_000))
+        );
+        assert_eq!(
+            decode_bound(&DataType::Float64, &2.5f64.to_le_bytes()),
+            Some(StatValue::Float(2.5))
+        );
+        assert_eq!(
+            decode_bound(&DataType::Utf8, b"abc"),
+            Some(StatValue::Text("abc".into()))
+        );
+        assert_eq!(
+            decode_bound(&DataType::Decimal128(10, 2), &[0xff, 0x38]),
+            Some(StatValue::Decimal {
+                unscaled: -200,
+                scale: 2
+            })
+        );
+        assert_eq!(
+            decode_bound(&DataType::Boolean, &[1]),
+            Some(StatValue::Bool(true))
+        );
+        assert_eq!(decode_bound(&DataType::Int64, &[1, 2, 3]), None);
+        assert_eq!(decode_bound(&DataType::Binary, b"x"), None);
+    }
+
     #[test]
     fn reads_live_snapshot_and_projects_renamed_fields_by_id() {
         let f = fixture(0);
