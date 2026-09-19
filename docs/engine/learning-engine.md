@@ -429,4 +429,5 @@ Stated as target, not as the product:
   manifest-level file skipping.
 
 The program these belong to, with the exit criterion per area, is the
-[9/10 program](../engineering/nine-of-ten-program.md).
+[9/10 program](../engineering/nine-of-ten-program.md); the calls behind the
+design are in the [decision log](../engineering/decision-log.md).
