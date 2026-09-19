@@ -21,6 +21,10 @@ pub struct ColumnProfile {
     pub nulls: Option<u64>,
     pub min: Option<StatValue>,
     pub max: Option<StatValue>,
+    /// Whether `min` and `max` are the true extremes: every chunk's
+    /// statistics were exact (a writer may truncate text bounds, and the
+    /// footer says so only when it records the exactness flags).
+    pub bounds_exact: bool,
     /// Compressed bytes of every column chunk under the root column.
     pub compressed_bytes: Option<u64>,
 }
@@ -42,151 +46,8 @@ pub struct FooterProfile {
     pub columns: Vec<ColumnProfile>,
 }
 
-/// A statistic value in its logical type, comparable within its variant and
-/// renderable as JSON: numbers as numbers, text as text, dates and
-/// timestamps as ISO 8601 strings, decimals as their exact decimal text.
-#[derive(Clone, Debug, PartialEq)]
-pub enum StatValue {
-    Int(i128),
-    Float(f64),
-    Bool(bool),
-    Text(String),
-    Decimal {
-        unscaled: i128,
-        scale: i8,
-    },
-    /// Days since the epoch.
-    Date(i32),
-    /// Since the epoch in `unit`; `utc` renders a trailing `Z`.
-    Timestamp {
-        value: i64,
-        unit: arrow::datatypes::TimeUnit,
-        utc: bool,
-    },
-    /// Since midnight in `unit`.
-    Time {
-        value: i64,
-        unit: arrow::datatypes::TimeUnit,
-    },
-}
-
-impl PartialOrd for StatValue {
-    /// Ordered within one variant (and one unit or scale); values of
-    /// different kinds are incomparable.
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        use StatValue::*;
-        match (self, other) {
-            (Int(a), Int(b)) => Some(a.cmp(b)),
-            (Float(a), Float(b)) => a.partial_cmp(b),
-            (Bool(a), Bool(b)) => Some(a.cmp(b)),
-            (Text(a), Text(b)) => Some(a.cmp(b)),
-            (
-                Decimal {
-                    unscaled: a,
-                    scale: sa,
-                },
-                Decimal {
-                    unscaled: b,
-                    scale: sb,
-                },
-            ) if sa == sb => Some(a.cmp(b)),
-            (Date(a), Date(b)) => Some(a.cmp(b)),
-            (
-                Timestamp {
-                    value: a, unit: ua, ..
-                },
-                Timestamp {
-                    value: b, unit: ub, ..
-                },
-            ) if ua == ub => Some(a.cmp(b)),
-            (Time { value: a, unit: ua }, Time { value: b, unit: ub }) if ua == ub => {
-                Some(a.cmp(b))
-            }
-            _ => None,
-        }
-    }
-}
-
-impl StatValue {
-    /// The JSON rendering; `null` for a value JSON cannot carry (a NaN, an
-    /// out-of-range date).
-    pub fn to_json(&self) -> serde_json::Value {
-        use arrow::temporal_conversions as t;
-        use serde_json::Value;
-        match self {
-            StatValue::Int(value) => match i64::try_from(*value) {
-                Ok(value) => Value::from(value),
-                Err(_) => match u64::try_from(*value) {
-                    Ok(value) => Value::from(value),
-                    Err(_) => Value::String(value.to_string()),
-                },
-            },
-            StatValue::Float(value) => serde_json::Number::from_f64(*value)
-                .map(Value::Number)
-                .unwrap_or(Value::Null),
-            StatValue::Bool(value) => Value::Bool(*value),
-            StatValue::Text(value) => Value::String(value.clone()),
-            StatValue::Decimal { unscaled, scale } => {
-                Value::String(decimal_text(*unscaled, *scale))
-            }
-            StatValue::Date(days) => t::date32_to_datetime(*days)
-                .map(|date| Value::String(date.format("%Y-%m-%d").to_string()))
-                .unwrap_or(Value::Null),
-            StatValue::Timestamp { value, unit, utc } => {
-                use arrow::datatypes::TimeUnit::*;
-                let (datetime, fraction) = match unit {
-                    Second => (t::timestamp_s_to_datetime(*value), "%Y-%m-%dT%H:%M:%S"),
-                    Millisecond => (t::timestamp_ms_to_datetime(*value), "%Y-%m-%dT%H:%M:%S%.3f"),
-                    Microsecond => (t::timestamp_us_to_datetime(*value), "%Y-%m-%dT%H:%M:%S%.6f"),
-                    Nanosecond => (t::timestamp_ns_to_datetime(*value), "%Y-%m-%dT%H:%M:%S%.9f"),
-                };
-                datetime
-                    .map(|datetime| {
-                        let mut text = datetime.format(fraction).to_string();
-                        if *utc {
-                            text.push('Z');
-                        }
-                        Value::String(text)
-                    })
-                    .unwrap_or(Value::Null)
-            }
-            StatValue::Time { value, unit } => {
-                use arrow::datatypes::TimeUnit::*;
-                let (time, fraction) = match unit {
-                    Second => (
-                        i32::try_from(*value).ok().and_then(t::time32s_to_time),
-                        "%H:%M:%S",
-                    ),
-                    Millisecond => (
-                        i32::try_from(*value).ok().and_then(t::time32ms_to_time),
-                        "%H:%M:%S%.3f",
-                    ),
-                    Microsecond => (t::time64us_to_time(*value), "%H:%M:%S%.6f"),
-                    Nanosecond => (t::time64ns_to_time(*value), "%H:%M:%S%.9f"),
-                };
-                time.map(|time| Value::String(time.format(fraction).to_string()))
-                    .unwrap_or(Value::Null)
-            }
-        }
-    }
-}
-
-/// `unscaled` with the decimal point `scale` digits from the right, exact.
-pub fn decimal_text(unscaled: i128, scale: i8) -> String {
-    let scale = usize::try_from(scale).unwrap_or(0);
-    let negative = unscaled < 0;
-    let mut digits = unscaled.unsigned_abs().to_string();
-    if scale > 0 {
-        if digits.len() <= scale {
-            digits = format!("{}{digits}", "0".repeat(scale - digits.len() + 1));
-        }
-        digits.insert(digits.len() - scale, '.');
-    }
-    if negative {
-        digits.insert(0, '-');
-    }
-    digits
-}
+/// The statistic value type, shared with the catalog statistics.
+pub use kaveon_core::statistics::{StatValue, decimal_text};
 
 /// A bound merged over chunks: unknown once any chunk cannot supply it.
 #[derive(Clone, Debug, Default)]
@@ -223,6 +84,8 @@ struct Accumulator {
     nulls_unknown: bool,
     min: Bound,
     max: Bound,
+    /// False once a chunk's bounds were not flagged exact.
+    inexact: bool,
     compressed_bytes: u64,
     /// A root column with more than one leaf (a struct, a list) has sizes
     /// but no scalar bounds.
@@ -241,6 +104,7 @@ impl Accumulator {
             },
             min: if self.nested { None } else { self.min.value },
             max: if self.nested { None } else { self.max.value },
+            bounds_exact: !self.nested && !self.inexact,
             compressed_bytes: Some(self.compressed_bytes),
         }
     }
@@ -317,6 +181,13 @@ impl FooterProfile {
                     continue;
                 }
                 let (min, max) = bounds(statistics, leaf.as_ref());
+                if matches!(
+                    statistics,
+                    Statistics::ByteArray(_) | Statistics::FixedLenByteArray(_)
+                ) && !(statistics.min_is_exact() && statistics.max_is_exact())
+                {
+                    column.inexact = true;
+                }
                 column.min.fold(min, Ordering::Less);
                 column.max.fold(max, Ordering::Greater);
             }
@@ -357,9 +228,11 @@ impl FooterProfile {
                 column.nulls = None;
                 column.min = None;
                 column.max = None;
+                column.bounds_exact = false;
                 column.compressed_bytes = None;
                 continue;
             };
+            column.bounds_exact = column.bounds_exact && other.bounds_exact;
             column.compressed_bytes = column
                 .compressed_bytes
                 .zip(other.compressed_bytes)
@@ -724,6 +597,7 @@ mod tests {
                 nulls: None,
                 min: None,
                 max: None,
+                bounds_exact: false,
                 compressed_bytes: None,
             }],
         });
