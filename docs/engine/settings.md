@@ -144,8 +144,10 @@ in this repository sends it.
 ## Per-request settings
 
 A statement may lower four of the bounds above for itself, and choose
-two behaviours, through the `settings` object of `POST /v1/statement` or
-leading `SET SESSION <key> = <value>;` statements in the same request.
+two behaviours (what `approximate` and `use_statistics` decide on the
+knowing path is in [The learning engine](learning-engine.md#the-settings)),
+through the `settings` object of `POST /v1/statement` or leading
+`SET SESSION <key> = <value>;` statements in the same request.
 Nothing can be raised; an unknown
 key or an out-of-range value is HTTP 400 `INVALID_SETTING` with the key
 named. HTTP is stateless and there is no server-side session: a setting

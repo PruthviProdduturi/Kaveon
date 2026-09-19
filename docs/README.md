@@ -42,6 +42,7 @@ are planned rather than executable.
 - [Engine SQL compatibility](reference/engine-sql-compatibility.md)
 - [Engine memory management](reference/engine-memory-management.md)
 - [Engine settings reference](engine/settings.md)
+- [The learning engine: statistics, sketches, context answers and what the readers skip](engine/learning-engine.md)
 - [Engine governance: resource groups and the audit ledger](engine/governance.md)
 - [Connectors: Delta, Iceberg, Parquet, storage, and how to register them](reference/connector-capabilities.md)
 - [Operations and troubleshooting](operations-troubleshooting.md)
