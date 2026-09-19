@@ -215,10 +215,12 @@ role) rewrites a **Parquet** table in its layout and answers one row —
   does not write — there is no Delta commit writer — and moving them
   would leave the log pointing at files that are gone. Their `OPTIMIZE`
   belongs to the writer that owns the log.
-- *Statistics.* Row counts are unchanged; a table's `ANALYZE` statistics
-  are keyed by the listing digest, so the next planning re-lists the
-  rewritten files. The result cache is keyed by the catalog snapshot and
-  is not cleared: the rows a statement answers are the same.
+- *Statistics.* Row counts are unchanged; a table's statistics on record
+  are versioned by the listing digest, so the rewrite makes them stale:
+  the next planning re-lists the rewritten files and, with the automatic
+  refresh on, recomputes the record (a removal is never folded). The
+  result cache is keyed by the catalog snapshot and is not cleared: the
+  rows a statement answers are the same.
 
 Files are spread over the scan partitions by size: whole files go to the
 partition with the fewest bytes so far, largest first; if the heaviest
@@ -247,6 +249,59 @@ not yet close; carrying the listing in the fragment belongs to the split
 assignment workstream. A local data directory (`KAVEON_DATA_DIR`) registers
 each child directory of Parquet files without a `_delta_log` as a Parquet
 table, alongside `*.parquet` files and Delta directories.
+
+## Table statistics
+
+A table's statistics are one object in the durable catalog, stored
+beside the definition under the table's id (`table_statistics`, deleted
+with the table) and **versioned by the source version** they were
+computed from — the Delta version, the Iceberg snapshot, the digest of a
+directory listing, a file's size and modification time or ETag. The
+object holds the table facts (rows, bytes, files, row groups, last
+modified, partition columns), per column the null count, the bounds and
+whether they are the true extremes, the compressed bytes, and — after a
+full read — a HyperLogLog distinct-count sketch (p = 11, six-bit packed
+registers, Ertl's estimator; the register layout and hash the DLM's
+sketch cuboids use, so the two merge) and a KLL quantile sketch (k =
+200); per file the rows, bytes and bounds while the table has at most
+10,000 files. `ANALYZE` builds it from metadata alone; `WITH (sketches =
+true)` reads the sketchable columns once, files in parallel, batches
+reserved through the statement's memory admission; `WITH (distinct =
+true | columns = …)` adds exact counts through the cluster. The
+statements, the endpoints and the JSON are in the [API
+reference](../reference/api.md#statistics-statements).
+
+What the planner does with the record depends on one comparison, the
+record's source version against the source's version as observed for
+the statement:
+
+- **Stale statistics cost, never answer.** Whatever their version, they
+  estimate a filtered scan's cardinality (equality and `IN` from the
+  distinct count, ranges from the quantiles or interpolated between the
+  bounds, null tests from the null count; what they cannot judge stays at
+  1.0) and the estimate decides the build side and a broadcast. Without
+  a record, the exact row counts alone decide, as before.
+- **Current statistics answer and skip.** A `COUNT(*)`, `MIN` or `MAX`
+  with no predicate is answered from a record at exactly the pinned
+  version (`execution.mode = "context"`), for a bound only when it is
+  exact and the null count is known. A coordinator-local scan of a
+  directory table under a predicate is pinned at the files the record's
+  bounds admit (`files_skipped`), on top of partition pruning. Delta and
+  Iceberg readers skip files from their own metadata — the add actions'
+  `stats`, the manifests' bounds and null counts — on every node,
+  statistics or not; the readers' footer pruning follows inside the files
+  read.
+- **A newer source version refreshes the record** in the background
+  (`KAVEON_STATISTICS_AUTO_REFRESH`): files added to a full record are
+  read and their sketches folded in; a removal, a schema change or a
+  metadata-only record recomputes at the record's depth. One refresh per
+  table at a time; a failed refresh leaves the previous record, which
+  still costs.
+
+The version endpoint, `GET /v1/catalog/tables/{id}/version`, observes
+the source version from the least metadata that establishes it — the
+Delta log's tail, the Iceberg pointer and manifests, a listing, a file's
+identity — and is the platform's freshness signal.
 
 ## Cloud read boundary
 

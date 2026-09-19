@@ -212,8 +212,9 @@ pub fn stats(
         .collect();
     let (rendered, _) = styled_cells(&headings, &cells, width, theme);
     lines.extend(rendered);
-    // Distinct counts are opt-in (a scan per column); say how to get the
-    // missing ones rather than leave a column of dashes to be wondered at.
+    // Distinct counts are opt-in (one read for the sketches, a scan per
+    // column for exact counts); say how to get the missing ones rather
+    // than leave a column of dashes to be wondered at.
     let uncounted = columns
         .iter()
         .filter(|row| field(row, "distinct_values_count").is_none_or(|value| value.is_null()))
@@ -231,7 +232,7 @@ pub fn stats(
         };
         lines.push(Line::from(Span::styled(
             format!(
-                " {what} — ANALYZE {target} WITH (distinct = true) counts every column, WITH (columns = ARRAY['a', 'b']) some"
+                " {what} — ANALYZE {target} WITH (sketches = true) estimates every column in one read, WITH (distinct = true) counts every column exactly, WITH (columns = ARRAY['a', 'b']) some"
             ),
             theme.dim,
         )));
@@ -517,7 +518,7 @@ mod tests {
 │ id     │ bigint  │ 22.9 MiB │ 0.0 % │ —        │ 1      │ 3000000 │\n\
 │ city   │ varchar │ 17.3 MiB │ 1.3 % │      412 │ Aachen │ Zürich  │\n\
 └────────┴─────────┴──────────┴───────┴──────────┴────────┴─────────┘\n\
-\x20distinct values are counted for 1 of 2 columns — ANALYZE lake.sales.orders WITH (distinct = true) counts every column, WITH (columns = ARRAY['a', 'b']) some\n"
+\x20distinct values are counted for 1 of 2 columns — ANALYZE lake.sales.orders WITH (sketches = true) estimates every column in one read, WITH (distinct = true) counts every column exactly, WITH (columns = ARRAY['a', 'b']) some\n"
         );
     }
 
