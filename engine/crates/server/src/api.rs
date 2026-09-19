@@ -201,6 +201,17 @@ impl ExecutionPlacement {
         self.approximate = notes;
         self
     }
+    /// The same placement, its detail saying the statistics would have
+    /// answered had `settings.use_statistics` not stood them aside.
+    fn bypassing_statistics(mut self, bypassed: bool) -> Self {
+        if bypassed {
+            self.detail = Some(match self.detail.take() {
+                Some(detail) => format!("{detail}; statistics bypassed"),
+                None => "statistics bypassed".to_owned(),
+            });
+        }
+        self
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -2983,7 +2994,11 @@ async fn run_statement(
     // A COUNT(*), MIN or MAX with no predicate — or an APPROX_* aggregate
     // — whose table's statistics describe exactly the version this
     // statement is pinned to is answered from them: no scan, on any node.
-    if let Some(answer) = context_answer(&plan, &planning_statistics) {
+    // `settings.use_statistics = false` stands the answer aside and reads
+    // the rows; the record says the statistics would have answered.
+    let statistics_answer = context_answer(&plan, &planning_statistics);
+    let statistics_bypassed = statistics_answer.is_some() && !settings.use_statistics();
+    if let Some(answer) = statistics_answer.filter(|_| settings.use_statistics()) {
         let mut data = vec![answer.row.clone()];
         let next_uri = if paged {
             match spool_rows(&state, &query_id, result_writer.take(), &mut data) {
@@ -3110,7 +3125,8 @@ async fn run_statement(
                     rows_are_preview: true,
                     scan_metrics_complete,
                     execution: ExecutionPlacement::distributed("fragments")
-                        .with_approximate(approximate.clone()),
+                        .with_approximate(approximate.clone())
+                        .bypassing_statistics(statistics_bypassed),
                     settings: settings.clone(),
                     cached_from: None,
                     cached_elapsed_ms: None,
@@ -3227,7 +3243,8 @@ async fn run_statement(
                     rows_are_preview: true,
                     scan_metrics_complete,
                     execution: ExecutionPlacement::distributed("aggregate")
-                        .with_approximate(approximate.clone()),
+                        .with_approximate(approximate.clone())
+                        .bypassing_statistics(statistics_bypassed),
                     settings: settings.clone(),
                     cached_from: None,
                     cached_elapsed_ms: None,
@@ -3337,7 +3354,8 @@ async fn run_statement(
                     rows_are_preview: true,
                     scan_metrics_complete,
                     execution: ExecutionPlacement::distributed("top_n")
-                        .with_approximate(approximate.clone()),
+                        .with_approximate(approximate.clone())
+                        .bypassing_statistics(statistics_bypassed),
                     settings: settings.clone(),
                     cached_from: None,
                     cached_elapsed_ms: None,
@@ -3506,7 +3524,8 @@ async fn run_statement(
                 rows_are_preview: true,
                 scan_metrics_complete: true,
                 execution: ExecutionPlacement::coordinator(placement_reason.clone())
-                    .with_approximate(approximate.clone()),
+                    .with_approximate(approximate.clone())
+                    .bypassing_statistics(statistics_bypassed),
                 settings: settings.clone(),
                 cached_from: None,
                 cached_elapsed_ms: None,
@@ -3607,7 +3626,8 @@ async fn run_statement(
         rows_are_preview: true,
         scan_metrics_complete: true,
         execution: ExecutionPlacement::coordinator(placement_reason.clone())
-            .with_approximate(approximate.clone()),
+            .with_approximate(approximate.clone())
+            .bypassing_statistics(statistics_bypassed),
         settings: settings.clone(),
         cached_from: None,
         cached_elapsed_ms: None,
@@ -9655,6 +9675,7 @@ mod tests {
             result_cache: None,
             admission_wait_seconds: None,
             approximate: None,
+            use_statistics: None,
         };
         let request = super::TaskRequest {
             query_id: "query-settings".into(),
@@ -12905,6 +12926,70 @@ mod tests {
         assert_eq!(
             exact_note["execution"]["approximate"][0]["sketch"],
             "exact count"
+        );
+
+        // `use_statistics = false`: neither path answers from statistics.
+        // COUNT(*) scans, APPROX_* computes its sketch over the rows, and
+        // the record says the statistics stood aside.
+        for (sql, expected, function) in [
+            ("SELECT COUNT(*) FROM events", serde_json::json!(300), None),
+            (
+                "SET SESSION use_statistics = false; SELECT APPROX_COUNT_DISTINCT(id) FROM events",
+                computed[0].1[0][0].clone(),
+                Some("APPROX_COUNT_DISTINCT"),
+            ),
+            (
+                "SELECT APPROX_COUNT_DISTINCT(name) FROM events",
+                computed[1].1[0][0].clone(),
+                Some("APPROX_COUNT_DISTINCT"),
+            ),
+        ] {
+            let settings = if sql.starts_with("SET SESSION") {
+                serde_json::json!({"result_cache": false})
+            } else {
+                serde_json::json!({"result_cache": false, "use_statistics": false})
+            };
+            let (status, body) = submit(&state, &admin(), sql, settings).await;
+            assert_eq!(status, StatusCode::OK, "{sql}: {body}");
+            let bypassed = record(body["id"].as_str().unwrap(), &admin()).await;
+            assert_ne!(bypassed["execution"]["mode"], "context", "{sql}");
+            assert!(
+                bypassed["execution"]["detail"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("; statistics bypassed"),
+                "{sql}: {}",
+                bypassed["execution"]
+            );
+            assert_eq!(bypassed["settings"]["use_statistics"], false, "{sql}");
+            assert_eq!(body["data"][0][0], expected, "{sql}");
+            match function {
+                Some(function) => {
+                    // The sketch was built over the rows.
+                    assert!(!bypassed["scans"].as_array().unwrap().is_empty(), "{sql}");
+                    note_of(&bypassed, function, hll_error);
+                }
+                None => assert!(bypassed["execution"]["approximate"].is_null()),
+            }
+        }
+        // A statement the statistics would not answer anyway carries no
+        // such detail under the setting.
+        let (status, body) = submit(
+            &state,
+            &admin(),
+            "SELECT COUNT(*) FROM events WHERE id > 5",
+            serde_json::json!({"result_cache": false, "use_statistics": false}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let plain = record(body["id"].as_str().unwrap(), &admin()).await;
+        assert!(
+            !plain["execution"]["detail"]
+                .as_str()
+                .unwrap()
+                .contains("bypassed"),
+            "{}",
+            plain["execution"]
         );
 
         // The source moves on: the statistics describe another version, so
