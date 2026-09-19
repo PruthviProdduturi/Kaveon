@@ -145,30 +145,6 @@ jobs:
           (cd bundle && zip -qr ../release/kaveon-deploy.zip .)
           (cd release && sha256sum kaveon-deploy.zip preview-artifacts.json kaveon-test-*.tgz > SHA256SUMS)
 
-      - name: Publish commit-specific preview bundle
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SOURCE_SHA: ${{ steps.coordinates.outputs.sha }}
-        run: |
-          cat > preview-notes.md <<'NOTES'
-          Development preview for Linux amd64. Download `kaveon-deploy.zip` for deployment without cloning.
-          Image digest and Helm OCI coordinates are in `preview-artifacts.json`.
-          The chart requires deployment-specific credentials, TLS and workload identity configuration.
-          GHCR packages must be made public by a package administrator before anonymous pulls work.
-          This is not a production qualification or availability guarantee.
-          NOTES
-          tag="engine-preview-$SOURCE_SHA"
-          if gh release view "$tag" > /dev/null 2>&1; then
-            gh release edit "$tag" --title "Engine preview $SOURCE_SHA" \
-              --prerelease --latest=false --notes-file preview-notes.md
-          else
-            gh release create "$tag" --target "$SOURCE_SHA" \
-              --title "Engine preview $SOURCE_SHA" --prerelease --latest=false \
-              --notes-file preview-notes.md
-          fi
-          gh release upload "$tag" release/* --clobber
-
       - name: Update rolling preview downloads
         shell: bash
         env:

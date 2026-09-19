@@ -7,8 +7,14 @@ semantic-versioning compatibility across persisted metadata or APIs.
 
 ## Current policy
 
-- `dev` is the active integration branch. Engine CI may publish a moving
-  `engine-dev` prerelease from successful `dev` builds.
+- `dev` is the active integration branch. Engine CI updates two moving
+  prereleases in place from successful `dev` builds — `engine-dev` (the
+  binaries) and `engine-preview` (the Linux image digest, Helm chart and
+  deployment bundle) — and never creates a release per commit. Everything
+  else on the Releases page is a versioned release: a `cli-vX.Y.Z` or
+  `engine-vX.Y.Z` tag cut deliberately, with release notes. Per-commit
+  artifacts are addressed by digest in GHCR and in the preview's
+  `preview-artifacts.json`, not by a release.
 - The `kaveon` CLI has versioned releases: a `cli-vX.Y.Z` tag equal to the
   `kaveon-cli` crate version produces a checksummed GitHub release with the
   winget and Homebrew packaging files attached
