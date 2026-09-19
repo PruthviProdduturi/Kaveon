@@ -12,7 +12,6 @@ use kaveon_exec::limit::LimitOperator;
 use kaveon_exec::offset::OffsetOperator;
 use kaveon_exec::project::ProjectOperator;
 use kaveon_exec::scan::ScanOperator;
-use kaveon_exec::semijoin::SemiJoinOperator;
 use kaveon_exec::setop::{SetOpMode, SetOpOperator};
 use kaveon_exec::sort::SortExpr;
 use kaveon_exec::union::UnionOperator;
@@ -2065,21 +2064,18 @@ fn plan_query_with_predicate(
             let right_planned = plan_query_inner(right, catalog, partition, memory, pins)?;
             let mut scan_metrics = left_planned.scan_metrics;
             scan_metrics.extend(right_planned.scan_metrics);
-            let mut operator = SemiJoinOperator::new(
-                left_planned.operator,
-                right_planned.operator,
-                left_key.clone(),
-                right_key.clone(),
-                matches!(plan, LogicalPlan::AntiJoin { .. }),
-            )?;
-            if let Some(residual) = residual {
-                operator = operator.with_residual(residual.clone())?;
-            }
-            if let Some(memory) = memory {
-                operator = operator.with_memory(memory.operator("semi-join")?);
-            }
             Ok(PlannedQuery {
-                operator: Box::new(operator),
+                operator: kaveon_exec::partitioned::semi_join(
+                    left_planned.operator,
+                    right_planned.operator,
+                    left_key.clone(),
+                    right_key.clone(),
+                    matches!(plan, LogicalPlan::AntiJoin { .. }),
+                    residual.clone(),
+                    memory
+                        .map(|memory| memory.operator("semi-join"))
+                        .transpose()?,
+                )?,
                 scan_metrics,
             })
         }

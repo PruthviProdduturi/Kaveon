@@ -62,6 +62,18 @@ enum Build {
     },
 }
 
+/// What the whole right input holds, for a build over one partition of
+/// it: NOT IN's rules read the whole set — a NULL anywhere in it empties
+/// an anti join, and an empty set keeps a NULL probe key — so a partition
+/// is probed with the facts of the whole.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BuildFacts {
+    /// A right key was NULL.
+    pub has_null: bool,
+    /// A right key was not NULL.
+    pub nonempty: bool,
+}
+
 pub struct SemiJoinOperator {
     left: Box<dyn BatchOperator>,
     right: Box<dyn BatchOperator>,
@@ -73,6 +85,8 @@ pub struct SemiJoinOperator {
     right_has_null: bool,
     memory: Option<OperatorMemoryAccount>,
     reservations: ReservationSlab,
+    /// Facts of the whole right input, when this build is one partition.
+    facts: Option<BuildFacts>,
 }
 
 impl SemiJoinOperator {
@@ -143,12 +157,49 @@ impl SemiJoinOperator {
             right_has_null: false,
             memory: None,
             reservations: ReservationSlab::default(),
+            facts: None,
         })
     }
 
     pub fn with_memory(mut self, memory: OperatorMemoryAccount) -> Self {
         self.memory = Some(memory);
         self
+    }
+
+    /// This build is one partition of the right input; probe with the
+    /// facts of the whole.
+    pub fn with_build_facts(mut self, facts: BuildFacts) -> Self {
+        self.facts = Some(facts);
+        self
+    }
+
+    /// The key expressions, the anti flag and the residual, for a
+    /// partitioned operator over the same inputs.
+    pub fn shape(&self) -> (Expr, Expr, bool, Option<Expr>) {
+        (
+            self.left_key.clone(),
+            self.right_key.clone(),
+            self.anti,
+            self.residual
+                .as_ref()
+                .map(|residual| residual.predicate.clone()),
+        )
+    }
+
+    /// Build the right side now, before any left row is read. A refusal
+    /// leaves the operator unbuilt with the right input consumed as far as
+    /// the refusal; `into_inputs` gives the inputs back.
+    pub fn build(&mut self) -> Result<()> {
+        if self.build.is_some() {
+            return Ok(());
+        }
+        let expression_memory = self.memory.clone();
+        crate::expr_eval::with_expression_memory(expression_memory.as_ref(), || self.build_right())
+    }
+
+    /// The inputs back.
+    pub fn into_inputs(self) -> (Box<dyn BatchOperator>, Box<dyn BatchOperator>) {
+        (self.left, self.right)
     }
 
     /// Evaluate `predicate` over each (left row, right row) pair sharing a
@@ -354,7 +405,14 @@ impl BatchOperator for SemiJoinOperator {
                 let build = self.build.as_ref().expect("built before probing");
                 let indices = match (build, &self.residual) {
                     (Build::Keys(keys), _) => {
-                        probe_keys(keys, self.right_has_null, self.anti, col)?
+                        // NOT IN's rules read the whole right input: for a
+                        // build over one partition of it, the facts of the
+                        // whole decide what a NULL key and an empty set mean.
+                        let (has_null, empty) = match self.facts {
+                            Some(facts) => (facts.has_null, !facts.nonempty),
+                            None => (self.right_has_null, keys.is_empty()),
+                        };
+                        probe_keys(keys, has_null, empty, self.anti, col)?
                     }
                     (
                         Build::Rows {
@@ -406,6 +464,7 @@ impl BatchOperator for SemiJoinOperator {
 fn probe_keys(
     keys: &HashSet<Key>,
     right_has_null: bool,
+    right_empty: bool,
     anti: bool,
     col: ArrayRef,
 ) -> Result<Vec<u32>> {
@@ -443,7 +502,7 @@ fn probe_keys(
             None => col.is_null(row),
         };
         if is_null {
-            if anti && keys.is_empty() && !right_has_null {
+            if anti && right_empty && !right_has_null {
                 indices.push(row as u32);
             }
             continue;
@@ -586,6 +645,61 @@ fn evaluate_pairs(
     }
     pairs.clear();
     Ok(())
+}
+
+/// The hash of the key at `row`, by value as the build compares keys: a
+/// dictionary through its values, every integer width and a decimal at
+/// its reduced scale alike, a float by its canonical bits, text by its
+/// bytes. None for a NULL. The partitioned semi join partitions both
+/// sides by it, so it must agree with `extract_value`'s equality.
+pub(crate) fn key_hash_at(array: &dyn Array, row: usize) -> Result<Option<u64>> {
+    if is_null_at(array, row) {
+        return Ok(None);
+    }
+    match array.data_type() {
+        arrow::datatypes::DataType::Dictionary(key_type, _)
+            if key_type.as_ref() == &arrow::datatypes::DataType::Int32 =>
+        {
+            let dictionary = array.as_dictionary::<Int32Type>();
+            return key_hash_at(
+                dictionary.values().as_ref(),
+                dictionary.keys().value(row) as usize,
+            );
+        }
+        arrow::datatypes::DataType::Utf8 => {
+            return Ok(Some(crate::exchange::stable_hash_with_prefix(
+                4,
+                array.as_string::<i32>().value(row).as_bytes(),
+            )));
+        }
+        _ => {}
+    }
+    let mut bytes = [0u8; 18];
+    let hashed: &[u8] = match extract_value(array, row)? {
+        Key::Bool(value) => {
+            bytes[0] = 1;
+            bytes[1] = value as u8;
+            &bytes[..2]
+        }
+        Key::Number(value, scale) => {
+            bytes[0] = 2;
+            bytes[1..17].copy_from_slice(&value.to_le_bytes());
+            bytes[17] = scale as u8;
+            &bytes[..18]
+        }
+        Key::Float(bits) => {
+            bytes[0] = 3;
+            bytes[1..9].copy_from_slice(&bits.to_le_bytes());
+            &bytes[..9]
+        }
+        Key::Text(text) => {
+            return Ok(Some(crate::exchange::stable_hash_with_prefix(
+                4,
+                text.as_bytes(),
+            )));
+        }
+    };
+    Ok(Some(crate::exchange::stable_hash(hashed)))
 }
 
 fn key_bytes(key: &Key) -> u64 {

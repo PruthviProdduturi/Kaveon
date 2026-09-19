@@ -196,8 +196,17 @@ pub(crate) fn mix(mut value: u64) -> u64 {
     value ^ (value >> 31)
 }
 
-fn stable_hash(bytes: &[u8]) -> u64 {
-    bytes.iter().fold(FNV_OFFSET_BASIS, |hash, byte| {
+pub(crate) fn stable_hash(bytes: &[u8]) -> u64 {
+    stable_hash_from(FNV_OFFSET_BASIS, bytes)
+}
+
+/// `stable_hash` of `prefix` followed by `bytes`, without joining them.
+pub(crate) fn stable_hash_with_prefix(prefix: u8, bytes: &[u8]) -> u64 {
+    stable_hash_from(stable_hash(&[prefix]), bytes)
+}
+
+fn stable_hash_from(seed: u64, bytes: &[u8]) -> u64 {
+    bytes.iter().fold(seed, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(FNV_PRIME)
     })
 }

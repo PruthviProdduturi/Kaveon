@@ -736,20 +736,21 @@ fn compile_node(
                     memory,
                     scan_metrics,
                 )?;
-                let mut operator = kaveon_exec::semijoin::SemiJoinOperator::new(
+                // Spill-safe under the query's spill: the build side
+                // partitions to disk when the budget refuses it. A
+                // broadcast build is the same rows on every task, so each
+                // task spills its own.
+                return kaveon_exec::partitioned::semi_join(
                     left,
                     right,
                     left_key.clone(),
                     right_key.clone(),
                     join.join_type == kaveon_core::JoinType::Anti,
-                )?;
-                if let Some(residual) = &join.residual {
-                    operator = operator.with_residual(residual.clone())?;
-                }
-                if let Some(memory) = memory {
-                    operator = operator.with_memory(memory.operator("fragment-semi-join")?);
-                }
-                return Ok(Box::new(operator));
+                    join.residual.clone(),
+                    memory
+                        .map(|memory| memory.operator("fragment-semi-join"))
+                        .transpose()?,
+                );
             }
             let left_keys = join
                 .left_keys
