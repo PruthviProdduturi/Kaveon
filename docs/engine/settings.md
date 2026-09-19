@@ -114,6 +114,9 @@ replay reads at most 64 MiB of commit JSON; Iceberg metadata is capped at
 | `KAVEON_STUDIO_URL` | `security.studio_url` | none | URL | The Studio origin allowed to use the Engine UI's sign-in. | coordinator | chart value `studioUrl` |
 | `KAVEON_PRINCIPAL_QUERY_LIMIT` | none | 4 | statements | The `default` resource group's `max_concurrent` when no resource-group configuration names one: statements of the `default` group running at once on the coordinator. Kept as the alias; before 2026-09-19 it bounded each principal separately. Must be positive. | coordinator | not set |
 | `KAVEON_STATE_DIR` | `node.state_dir` | the directory of the catalog store (`KAVEON_CATALOG_DATABASE_PATH`) | directory path | Where the coordinator keeps what must survive a restart and is not the catalog store: the durable copy of a runtime resource-group replacement (`resource-groups.json`) and the audit ledger (`audit/`). | coordinator | not set: `/state/catalog` |
+| `KAVEON_AUDIT_DIR` | `audit.dir` | `<state dir>/audit` | directory path | Where the audit ledger keeps its JSONL segments and the catalog cursor ([Governance](governance.md#the-audit-ledger)). | coordinator | not set: `/state/catalog/audit` |
+| `KAVEON_AUDIT_RETENTION_DAYS` | `audit.retention_days` | 90 | days | A ledger segment is removed once every record in it is older than this; `0` turns the ledger off. | coordinator | not set |
+| `KAVEON_AUDIT_SEGMENT_BYTES` | `audit.segment_bytes` | 67108864 (64 MiB) | bytes | The size at which a ledger segment is closed and the next started; at least 1 MiB. | coordinator | not set |
 | `KAVEON_RESOURCE_GROUPS` | `[resource_groups]` section (`[[resource_groups.groups]]`, `[[resource_groups.selectors]]`) | none: the durable runtime copy, the section, the legacy list, else one built-in `default` group | file path (JSON, or TOML by extension) | The resource groups and selectors (`groups`, `selectors` at the top level; the keys and bounds are in [Governance](governance.md)). Validated on start; a group over the admission limit, without a `default`, or a selector naming an unknown group refuses to start. `PUT /v1/admin/resource-groups` writes back to this file. | coordinator | not set |
 
 ## Result cache
@@ -169,7 +172,8 @@ so that an operator knows what bounds a run. Changing one is a code change.
 | `NODE_EXPIRY` | 30 s | `cluster.rs` | A worker with no heartbeat for this long leaves the cluster view. |
 | Result store TTL | 900 s | `results.rs` | How long paged results stay readable. |
 | Disk exchange TTL | 900 s | `disk_exchange.rs` | How long an exchange partition stays on disk after its query. |
-| Cleanup loop | 30 s | `main.rs` | How often expired results and exchange partitions are removed. |
+| Cleanup loop | 30 s | `main.rs` | How often expired results and exchange partitions are removed and the audit ledger's retention is applied. |
+| Graceful shutdown | 30 s | `main.rs` | On SIGTERM or Ctrl-C the listener closes, in-flight requests get this long to finish, then the audit ledger drains and the process exits. |
 | Entra JWKS cache | 3600 s, refreshed no more than every 60 s, fetched with a 5 s timeout | `entra.rs` | The signing keys used to validate Entra bearer tokens. |
 | Resource group `max_queue_wait_seconds` | per group (default 60) | `resource_groups.rs`, `api.rs` | How long a statement waits for its group's slot, its group's share and the node's pool together before HTTP 429; one wait, the shortest of the group's, the node's and the request's. |
 

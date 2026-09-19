@@ -56,7 +56,7 @@ pub enum Role {
 }
 /// How a request was authenticated. Attached next to `Identity` so a handler
 /// can report it without widening `Identity`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthSource {
     Static,
@@ -270,6 +270,20 @@ pub async fn authorize(
     {
         return next.run(request).await;
     }
+    let route = format!("{} {path}", request.method());
+    let named_principal = request
+        .headers()
+        .get("x-kaveon-principal")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let refused = |status: StatusCode, principal: Option<&str>| {
+        state.audit.record(crate::audit::AuditRecord::auth_failure(
+            status.as_u16(),
+            principal,
+            route.clone(),
+        ));
+        status.into_response()
+    };
     let (identity, source) = match state
         .config
         .security
@@ -278,21 +292,21 @@ pub async fn authorize(
         Ok(authenticated) => authenticated,
         Err(status) => {
             let Some(entra) = &state.config.security.entra else {
-                return status.into_response();
+                return refused(status, named_principal.as_deref());
             };
             let Some(token) = bearer(request.headers()) else {
-                return status.into_response();
+                return refused(status, named_principal.as_deref());
             };
             match entra.authenticate(token).await {
                 Ok(identity) => (identity, AuthSource::Entra),
-                Err(status) => return status.into_response(),
+                Err(status) => return refused(status, named_principal.as_deref()),
             }
         }
     };
     if (path == "/v1/statement" || path.starts_with("/v1/transaction"))
         && identity.role == Role::Reader
     {
-        return StatusCode::FORBIDDEN.into_response();
+        return refused(StatusCode::FORBIDDEN, Some(&identity.principal));
     }
     request.extensions_mut().insert(identity);
     request.extensions_mut().insert(source);
@@ -334,6 +348,8 @@ mod tests {
         };
         let catalog_store = kaveon_catalog::CatalogStore::open_in_memory().unwrap();
         let snapshot_id = catalog_store.snapshot_identity().unwrap();
+        let audit_directory =
+            std::env::temp_dir().join(format!("kaveon-security-audit-{}", uuid::Uuid::new_v4()));
         let state = Arc::new(crate::AppState {
             disk_exchange_store: None,
             results: crate::results::ResultStore::default(),
@@ -346,6 +362,12 @@ mod tests {
                 crate::resource_groups::Source::Builtin,
                 std::path::PathBuf::from("resource-groups.json"),
             ),
+            audit: crate::audit::AuditLedger::open(
+                &audit_directory,
+                1 << 20,
+                std::time::Duration::from_secs(60),
+            )
+            .unwrap(),
             cluster: tokio::sync::RwLock::new(crate::cluster::ClusterState::new(&config)),
             catalog: tokio::sync::RwLock::new(Arc::new(crate::PublishedCatalog {
                 manager: kaveon_core::CatalogManager::new("kaveon", "default"),
@@ -380,7 +402,7 @@ mod tests {
                 state.clone(),
                 authorize,
             ))
-            .with_state(state);
+            .with_state(state.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -461,6 +483,45 @@ mod tests {
             StatusCode::FORBIDDEN
         );
         server.abort();
+        // Every refusal is in the ledger with its route; the reader's
+        // forbidden write names the principal the token resolved to.
+        let page = state
+            .audit
+            .query(
+                &crate::audit::AuditFilter {
+                    kinds: vec!["auth".into()],
+                    ..Default::default()
+                },
+                100,
+            )
+            .unwrap();
+        let unauthorized: Vec<&str> = page
+            .records
+            .iter()
+            .filter(|record| record.kind == crate::audit::KIND_AUTH_UNAUTHORIZED)
+            .map(|record| record.route.as_deref().unwrap())
+            .collect();
+        assert_eq!(
+            unauthorized,
+            vec![
+                "GET /v1/cluster",
+                "GET /v1/cluster",
+                "GET /v1/query",
+                "GET /v1/query",
+                "POST /ui"
+            ]
+        );
+        let forbidden: Vec<&crate::audit::AuditRecord> = page
+            .records
+            .iter()
+            .filter(|record| record.kind == crate::audit::KIND_AUTH_FORBIDDEN)
+            .collect();
+        assert_eq!(forbidden.len(), 1);
+        assert_eq!(forbidden[0].route.as_deref(), Some("POST /v1/transaction"));
+        assert_eq!(forbidden[0].principal.as_deref(), Some("reader"));
+        assert_eq!(forbidden[0].error_code.as_deref(), Some("FORBIDDEN"));
+        state.audit.shutdown();
+        std::fs::remove_dir_all(audit_directory).unwrap();
     }
 
     #[test]

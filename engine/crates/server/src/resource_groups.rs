@@ -574,6 +574,7 @@ pub async fn put_resource_groups(
                 .into_response();
         }
     };
+    let before = state.governance.current();
     if let Err(error) = state.governance.replace(&state, groups) {
         return (
             StatusCode::BAD_REQUEST,
@@ -584,6 +585,17 @@ pub async fn put_resource_groups(
         )
             .into_response();
     }
+    let after = state.governance.current();
+    state.audit.record(crate::audit::AuditRecord::settings(
+        &identity,
+        crate::audit::KIND_SETTINGS_RESOURCE_GROUPS,
+        serde_json::json!({
+            "groups_before": before.groups.iter().map(|group| &group.name).collect::<Vec<_>>(),
+            "groups_after": after.groups.iter().map(|group| &group.name).collect::<Vec<_>>(),
+            "selectors_before": before.selectors.len(),
+            "selectors_after": after.selectors.len(),
+        }),
+    ));
     Json(document(&state)).into_response()
 }
 

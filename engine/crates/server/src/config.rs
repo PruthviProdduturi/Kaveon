@@ -33,6 +33,12 @@ pub struct ServerConfig {
     pub resource_groups_path: Option<PathBuf>,
     /// The `[resource_groups]` section of the configuration file.
     pub resource_groups_section: Option<crate::resource_groups::ResourceGroups>,
+    /// The audit ledger's directory; defaults to `<state dir>/audit`.
+    pub audit_dir: PathBuf,
+    /// How long ledger segments are kept; zero turns the ledger off.
+    pub audit_retention_days: u64,
+    /// The size at which a ledger segment is rotated.
+    pub audit_segment_bytes: u64,
     pub coordinator_exchange_spool: bool,
     /// Workers keep the exchange partitions addressed to them on their own
     /// disk, so producers upload straight to the consuming worker and the
@@ -134,6 +140,9 @@ impl Default for ServerConfig {
             state_dir: PathBuf::from("."),
             resource_groups_path: None,
             resource_groups_section: None,
+            audit_dir: PathBuf::from("./audit"),
+            audit_retention_days: crate::audit::DEFAULT_RETENTION_DAYS,
+            audit_segment_bytes: crate::audit::DEFAULT_SEGMENT_BYTES,
             coordinator_exchange_spool: true,
             worker_exchange_spool: false,
             exchange_spool_root: std::env::temp_dir(),
@@ -196,6 +205,14 @@ struct RawConfig {
     catalog: Option<NativeCatalogConfig>,
     product_transactions: Option<ProductTransactionsConfig>,
     resource_groups: Option<crate::resource_groups::ResourceGroups>,
+    audit: Option<AuditConfig>,
+}
+
+#[derive(Deserialize)]
+struct AuditConfig {
+    dir: Option<String>,
+    retention_days: Option<u64>,
+    segment_bytes: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -257,6 +274,7 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     let mut config = ServerConfig::default();
     let mut config_sets_admission = false;
     let mut state_dir_from_config = None;
+    let mut audit_dir_from_config = None;
 
     if path.exists() {
         let content = std::fs::read_to_string(path)?;
@@ -334,6 +352,15 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
             config.product_transactions = product_transactions;
         }
         config.resource_groups_section = raw.resource_groups;
+        if let Some(audit) = raw.audit {
+            audit_dir_from_config = audit.dir.map(PathBuf::from);
+            if let Some(days) = audit.retention_days {
+                config.audit_retention_days = days;
+            }
+            if let Some(bytes) = audit.segment_bytes {
+                config.audit_segment_bytes = bytes;
+            }
+        }
     }
 
     if let Ok(v) = std::env::var("KAVEON_NODE_ID") {
@@ -500,6 +527,24 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     anyhow::ensure!(
         config.resource_groups_section.is_none() || config.security.resource_groups.is_empty(),
         "resource groups are configured twice: the [resource_groups] section and security.resource_groups; keep one"
+    );
+    config.audit_dir = match std::env::var("KAVEON_AUDIT_DIR") {
+        Ok(value) => PathBuf::from(value),
+        Err(_) => audit_dir_from_config.unwrap_or_else(|| config.state_dir.join("audit")),
+    };
+    if let Ok(value) = std::env::var("KAVEON_AUDIT_RETENTION_DAYS") {
+        config.audit_retention_days = value.parse().map_err(|_| {
+            anyhow::anyhow!("KAVEON_AUDIT_RETENTION_DAYS must be an unsigned integer")
+        })?;
+    }
+    if let Ok(value) = std::env::var("KAVEON_AUDIT_SEGMENT_BYTES") {
+        config.audit_segment_bytes = value.parse().map_err(|_| {
+            anyhow::anyhow!("KAVEON_AUDIT_SEGMENT_BYTES must be an unsigned integer")
+        })?;
+    }
+    anyhow::ensure!(
+        config.audit_segment_bytes >= 1024 * 1024,
+        "KAVEON_AUDIT_SEGMENT_BYTES must be at least 1 MiB"
     );
     config.tls_cert_path = std::env::var("KAVEON_TLS_CERT_PATH")
         .ok()
@@ -1314,6 +1359,9 @@ group = \"etl\"
         .unwrap();
         let config = load_server_config(&config_path).unwrap();
         assert_eq!(config.state_dir, directory.join("catalog"));
+        assert_eq!(config.audit_dir, directory.join("catalog").join("audit"));
+        assert_eq!(config.audit_retention_days, 90);
+        assert_eq!(config.audit_segment_bytes, 64 * 1024 * 1024);
         let section = config.resource_groups_section.clone().unwrap();
         assert_eq!(section.groups[1].name, "etl");
         assert_eq!(section.groups[1].max_queue_wait_seconds, 120);
@@ -1339,16 +1387,28 @@ group = \"etl\"
         assert_eq!(source, crate::resource_groups::Source::Runtime);
         assert_eq!(groups.groups[0].max_concurrent, 7);
 
-        // A section that does not validate is refused at load.
+        // A section that does not validate is refused at load; the audit
+        // section loads beside it.
         std::fs::write(
             &config_path,
-            "[[resource_groups.groups]]
+            "[audit]
+dir = \"/var/lib/kaveon/ledger\"
+retention_days = 7
+segment_bytes = 2097152
+
+[[resource_groups.groups]]
 name = \"etl\"
 max_concurrent = 1
 ",
         )
         .unwrap();
         let config = load_server_config(&config_path).unwrap();
+        assert_eq!(
+            config.audit_dir,
+            std::path::PathBuf::from("/var/lib/kaveon/ledger")
+        );
+        assert_eq!(config.audit_retention_days, 7);
+        assert_eq!(config.audit_segment_bytes, 2 * 1024 * 1024);
         let error = crate::resource_groups::load(&config, config.resource_groups_section.clone())
             .unwrap_err()
             .to_string();

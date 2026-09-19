@@ -1,4 +1,5 @@
 mod api;
+pub mod audit;
 mod catalog_ddl;
 pub mod cluster;
 mod config;
@@ -58,6 +59,8 @@ pub struct AppState {
     pub result_cache: result_cache::ResultCache,
     /// The resource groups in force and where they came from.
     pub governance: resource_groups::Governor,
+    /// The audit ledger; disabled on workers.
+    pub audit: audit::AuditLedger,
     pub config: ServerConfig,
     pub cluster: RwLock<ClusterState>,
     /// Published catalog view. Queries clone the `Arc` once and retain that
@@ -242,6 +245,32 @@ async fn main() {
             std::process::exit(1);
         }
     };
+    let audit = if config.coordinator && config.audit_retention_days > 0 {
+        match audit::AuditLedger::open(
+            &config.audit_dir,
+            config.audit_segment_bytes,
+            std::time::Duration::from_secs(config.audit_retention_days * 86_400),
+        ) {
+            Ok(ledger) => {
+                ledger.skip_catalog_history(&catalog_store);
+                println!(
+                    "Audit:       {} ({} day retention)",
+                    config.audit_dir.display(),
+                    config.audit_retention_days
+                );
+                ledger
+            }
+            Err(error) => {
+                eprintln!(
+                    "failed to open audit ledger {}: {error}",
+                    config.audit_dir.display()
+                );
+                std::process::exit(1);
+            }
+        }
+    } else {
+        audit::AuditLedger::disabled()
+    };
     let state = Arc::new(AppState {
         disk_exchange_store,
         results: results::ResultStore::with_limits(
@@ -250,6 +279,7 @@ async fn main() {
         ),
         result_cache,
         governance,
+        audit,
         config,
         cluster: RwLock::new(cluster),
         catalog: RwLock::new(Arc::new(PublishedCatalog {
@@ -283,20 +313,56 @@ async fn main() {
             if let Some(store) = &cleanup_state.disk_exchange_store {
                 store.cleanup();
             }
+            if cleanup_state.audit.is_enabled() {
+                let ledger = cleanup_state.audit.clone();
+                let _ = tokio::task::spawn_blocking(move || ledger.enforce_retention()).await;
+            }
         }
     });
     let app = api::build_router(Arc::clone(&state));
 
+    // A clean stop: the listener closes, in-flight requests finish, and
+    // the audit ledger writes what is enqueued before the process ends.
     if let (Some(cert), Some(key)) = (&state.config.tls_cert_path, &state.config.tls_key_path) {
         let tls = axum_server::tls_rustls::RustlsConfig::from_pem_file(cert, key)
             .await
             .expect("valid TLS certificate and private key");
+        let handle = axum_server::Handle::new();
+        let stopper = handle.clone();
+        tokio::spawn(async move {
+            shutdown_signal().await;
+            stopper.graceful_shutdown(Some(std::time::Duration::from_secs(30)));
+        });
         axum_server::bind_rustls(addr, tls)
+            .handle(handle)
             .serve(app.into_make_service())
             .await
             .unwrap();
     } else {
         let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-        axum::serve(listener, app).await.unwrap();
+        axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal())
+            .await
+            .unwrap();
+    }
+    let ledger = state.audit.clone();
+    let _ = tokio::task::spawn_blocking(move || ledger.shutdown()).await;
+}
+
+/// Resolves on SIGTERM (the container runtime's stop) or Ctrl-C.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = terminate.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
     }
 }
