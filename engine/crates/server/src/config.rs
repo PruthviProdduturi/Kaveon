@@ -63,6 +63,11 @@ pub struct ServerConfig {
     pub result_disk_limit_bytes: u64,
     /// How long a cached result may be served.
     pub result_cache_ttl_seconds: u64,
+    /// Whether the coordinator refreshes a table's statistics on its own
+    /// when planning observes a source version newer than the one on
+    /// record: added files folded in, a removal recomputed at the
+    /// document's depth. Off, statistics change only through `ANALYZE`.
+    pub statistics_auto_refresh: bool,
     pub product_transactions: ProductTransactionsConfig,
 }
 
@@ -141,6 +146,7 @@ impl Default for ServerConfig {
             result_query_disk_limit_bytes: crate::results::DEFAULT_QUERY_BYTES,
             result_disk_limit_bytes: crate::results::DEFAULT_PROCESS_BYTES,
             result_cache_ttl_seconds: DEFAULT_RESULT_CACHE_TTL_SECONDS,
+            statistics_auto_refresh: true,
             product_transactions: ProductTransactionsConfig::default(),
         }
     }
@@ -529,6 +535,11 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
         config.result_cache_bytes = value.parse().map_err(|_| {
             anyhow::anyhow!("KAVEON_RESULT_CACHE_BYTES must be an unsigned integer")
         })?;
+    }
+    if let Ok(value) = std::env::var("KAVEON_STATISTICS_AUTO_REFRESH") {
+        config.statistics_auto_refresh = value
+            .parse()
+            .map_err(|_| anyhow::anyhow!("KAVEON_STATISTICS_AUTO_REFRESH must be true or false"))?;
     }
     if let Ok(value) = std::env::var("KAVEON_RESULT_CACHE_TTL_SECONDS") {
         config.result_cache_ttl_seconds = value.parse().map_err(|_| {
