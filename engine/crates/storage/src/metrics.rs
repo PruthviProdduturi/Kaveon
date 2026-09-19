@@ -19,6 +19,13 @@ pub struct ScanMetricsSnapshot {
     pub decoded_batch_cache_singleflight_waits: u64,
     pub row_groups_considered: u64,
     pub row_groups_selected: u64,
+    /// Row groups the footer statistics admitted that a Bloom filter then
+    /// ruled out for an equality (`=`, `IN`) predicate; counted among the
+    /// pruned, not the selected.
+    pub row_groups_pruned_by_bloom: u64,
+    /// Bloom filters read from the file to decide that, and their bytes.
+    pub bloom_filters_read: u64,
+    pub bloom_filter_bytes_read: u64,
     pub rows_selected: u64,
     pub rows_emitted: u64,
     pub compressed_bytes_selected: u64,
@@ -86,6 +93,9 @@ struct ScanMetricsInner {
     decoded_batch_cache_singleflight_waits: AtomicU64,
     row_groups_considered: AtomicU64,
     row_groups_selected: AtomicU64,
+    row_groups_pruned_by_bloom: AtomicU64,
+    bloom_filters_read: AtomicU64,
+    bloom_filter_bytes_read: AtomicU64,
     rows_selected: AtomicU64,
     rows_emitted: AtomicU64,
     compressed_bytes_selected: AtomicU64,
@@ -118,6 +128,9 @@ impl ScanMetrics {
                 .load(&self.0.decoded_batch_cache_singleflight_waits),
             row_groups_considered: self.load(&self.0.row_groups_considered),
             row_groups_selected: self.load(&self.0.row_groups_selected),
+            row_groups_pruned_by_bloom: self.load(&self.0.row_groups_pruned_by_bloom),
+            bloom_filters_read: self.load(&self.0.bloom_filters_read),
+            bloom_filter_bytes_read: self.load(&self.0.bloom_filter_bytes_read),
             rows_selected: self.load(&self.0.rows_selected),
             rows_emitted: self.load(&self.0.rows_emitted),
             compressed_bytes_selected: self.load(&self.0.compressed_bytes_selected),
@@ -210,6 +223,19 @@ impl ScanMetrics {
         self.0
             .row_groups_selected
             .fetch_add(selected, Ordering::Relaxed);
+    }
+    /// `filters` Bloom filters of `bytes` were read and ruled out `pruned`
+    /// row groups.
+    pub(crate) fn bloom_filters(&self, filters: u64, bytes: u64, pruned: u64) {
+        self.0
+            .bloom_filters_read
+            .fetch_add(filters, Ordering::Relaxed);
+        self.0
+            .bloom_filter_bytes_read
+            .fetch_add(bytes, Ordering::Relaxed);
+        self.0
+            .row_groups_pruned_by_bloom
+            .fetch_add(pruned, Ordering::Relaxed);
     }
     pub(crate) fn selected(&self, rows: u64, bytes: u64) {
         self.0.rows_selected.fetch_add(rows, Ordering::Relaxed);

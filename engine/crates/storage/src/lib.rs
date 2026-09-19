@@ -2,6 +2,7 @@
 
 pub mod adls_commit;
 pub mod adls_reader;
+pub mod clustered_writer;
 pub mod delta_reader;
 pub mod delta_snapshot;
 pub mod footer_profile;
@@ -22,6 +23,10 @@ pub use adls_commit::{
     VersionedObject, local_file_commit, workload_identity_adls_commit,
 };
 pub use adls_reader::{AdlsAuthMode, AdlsBatchSource, AdlsBatchStream, AdlsParquetReader};
+pub use clustered_writer::{
+    ClusteredFileSink, ClusteredParquetWriter, ClusteringLayout, FileNaming, LocalDirectorySink,
+    MemorySink, WrittenFile,
+};
 pub use delta_reader::{DeltaBatchIterator, DeltaTableReader};
 pub use footer_profile::{ColumnProfile, FooterProfile, StatValue};
 pub use iceberg_reader::{IcebergReader, IcebergSnapshot, IcebergSource};
@@ -37,7 +42,9 @@ pub use parquet_directory::{
     PrunedFiles, assign_files, assign_kept_files, directory_row_count, list_parquet_directory,
     partition_field, prune_files,
 };
-pub use parquet_reader::{ParquetBatchIterator, ParquetFileMetadata, ParquetReader};
+pub use parquet_reader::{
+    ParquetBatchIterator, ParquetFileMetadata, ParquetReader, footer_may_match,
+};
 pub use scan_predicate::LateMaterialisation;
 pub use source_statistics::{
     SourceColumnProfile, SourceProfile, SourceStatistics, analyze_source, profile_source,

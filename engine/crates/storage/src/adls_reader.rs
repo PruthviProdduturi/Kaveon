@@ -28,7 +28,8 @@ use parquet::{
 use crate::{
     ScanMetrics, ScanPartition,
     parquet_reader::{
-        matching_row_groups, projection_indices, record_selection_metrics, validate_predicate,
+        bloom_prune_async, matching_row_groups, projection_indices, record_selection_metrics,
+        validate_predicate,
     },
     scan_predicate::{BatchPredicate, LateMaterialisation, RowFilterPlan},
 };
@@ -1096,6 +1097,22 @@ impl AdlsParquetReader {
         };
         if let Some(partition) = self.partition {
             row_groups.retain(|ordinal| partition.contains(*ordinal));
+        }
+        if let Some(predicate) = &coerced {
+            // The filters come through their own object reader so their
+            // bytes are counted as Bloom filter bytes, not as bytes the
+            // decoder read.
+            let mut probe = ParquetRecordBatchStreamBuilder::new_with_metadata(
+                AdlsObjectReader::new(
+                    store.clone(),
+                    object_metadata.clone(),
+                    object_cache_key.clone(),
+                    ScanMetrics::default(),
+                ),
+                metadata.clone(),
+            );
+            row_groups =
+                bloom_prune_async(&mut probe, &schema, predicate, row_groups, &metrics).await?;
         }
         record_selection_metrics(
             metadata.metadata().as_ref(),
