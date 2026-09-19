@@ -74,67 +74,41 @@ Once the release exists, `KAVEON_VERSION=X.Y.Z` with
 [the install scripts](../guides/engine-cli.md#install) installs it with
 checksum verification; no script change is needed per release.
 
-## 3. Submit the winget manifest
+## 3. Package managers — optional, not part of a release
 
-The manifests are rendered, not checked in: the repository holds only the
-templates under `packaging/winget/templates/`, and the workflow fills the
-version, release date, download URL and archive hash from `SHA256SUMS`. They
-target [winget-pkgs](https://github.com/microsoft/winget-pkgs) at
-`manifests/p/PruthviProdduturi/Kaveon/X.Y.Z/` as a `zip` installer with a
-`portable` nested `kaveon.exe` and the `kaveon` command alias.
+The release is complete once the assets are up and the install scripts
+resolve the version. Two more files are rendered for the day a
+package-manager listing is wanted; neither needs a repository of its own to
+sit in until then.
 
-Download the three `.yaml` assets from the release into a directory named
-after the version, validate, then submit:
+**winget.** The three `PruthviProdduturi.Kaveon*.yaml` assets are a
+complete manifest for `manifests/p/PruthviProdduturi/Kaveon/X.Y.Z/` in
+[winget-pkgs](https://github.com/microsoft/winget-pkgs): download them into a
+directory named after the version, `winget validate --manifest .`, then
+`wingetcreate submit --token $env:GITHUB_TOKEN .` (or a pull request by
+hand). After the first accepted submission, `winget install
+PruthviProdduturi.Kaveon` resolves and later versions are one directory
+each.
 
-```powershell
-$v = "0.4.0"
-mkdir $v; cd $v
-gh release download cli-v$v --repo PruthviProdduturi/Kaveon --pattern "PruthviProdduturi.Kaveon*.yaml"
-winget validate --manifest .
-winget install --manifest .          # local install test; needs `winget settings --enable LocalManifestFiles` (admin) once
-wingetcreate submit --token $env:GITHUB_TOKEN .
-```
+**Homebrew.** `kaveon.rb` is a formula that installs the release tarball for
+Apple Silicon, Intel macOS or Linux x64 and verifies its SHA-256. Homebrew
+installs formulas from homebrew-core (a pull request there, once the project
+meets their notability bar) or from a tap — a repository named
+`homebrew-<name>` holding `Formula/kaveon.rb`, which is what projects that
+run their own distribution do. Neither is planned; the file is there so the
+choice stays open. Until then, macOS and Linux users use `install.sh` or the
+tarball.
 
-`wingetcreate submit` forks winget-pkgs and opens the pull request from
-your account; alternatively copy the directory into a fork at
-`manifests/p/PruthviProdduturi/Kaveon/X.Y.Z/` and open the PR by hand. The
-first submission creates the package; later versions add a directory. After
-the PR merges and the index republishes,
-`winget install PruthviProdduturi.Kaveon` resolves.
-
-To re-render locally (for a dry run or a template change):
+To re-render either locally (a dry run or a template change):
 
 ```bash
 gh release download cli-v0.4.0 --pattern SHA256SUMS --output SHA256SUMS
 python scripts/release/render-packaging.py --version 0.4.0 --sums SHA256SUMS --out out
 ```
 
-## 4. Publish the Homebrew formula
-
-Homebrew installs from a tap: a GitHub repository named `homebrew-kaveon`
-under `PruthviProdduturi` with the formula at `Formula/kaveon.rb`. The tap
-does not exist yet; create it once (an ordinary public repository, no code
-other than the formula and a README), then per release copy the rendered
-`kaveon.rb` asset over `Formula/kaveon.rb` and commit:
-
-```bash
-gh release download cli-v0.4.0 --repo PruthviProdduturi/Kaveon --pattern kaveon.rb --output Formula/kaveon.rb
-brew install ./Formula/kaveon.rb     # local check on a Mac or Linux box
-brew test kaveon
-git commit -am "kaveon 0.4.0" && git push
-brew audit --strict --online PruthviProdduturi/kaveon/kaveon   # after the push, from a tapped checkout
-```
-
-Users then run `brew install PruthviProdduturi/kaveon/kaveon` (or
-`brew tap PruthviProdduturi/kaveon` once, then `brew install kaveon`). The
-formula selects the Apple Silicon, Intel macOS or Linux x64 tarball by
-platform and verifies its SHA-256; its `test` block runs
-`kaveon --version`.
-
 ## Checklist
 
 - [ ] `engine/crates/cli/Cargo.toml` version bumped, `Cargo.lock` updated, release notes entry written, Engine workflow green on `dev`.
 - [ ] `cli-vX.Y.Z` pushed; CLI release workflow green; release page lists the four archives, `SHA256SUMS`, three winget manifests and `kaveon.rb`.
 - [ ] `KAVEON_VERSION=X.Y.Z` install script run on one Windows and one Unix machine.
-- [ ] winget PR opened from the rendered manifests.
-- [ ] Tap updated with the rendered formula.
+- [ ] (Only if a listing is wanted) winget manifests submitted; formula sent to homebrew-core.

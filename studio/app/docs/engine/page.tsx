@@ -47,9 +47,9 @@ cd engine && cargo install --path crates/cli`}</Code>
     <p>
       Tagged releases are listed at{" "}
       <a href="https://github.com/PruthviProdduturi/Kaveon/releases">github.com/PruthviProdduturi/Kaveon/releases</a>{" "}
-      with one archive per platform and a <code>SHA256SUMS</code> file. <code>winget install PruthviProdduturi.Kaveon</code>{" "}
-      and <code>brew install PruthviProdduturi/kaveon/kaveon</code> follow once the winget manifest is accepted and the
-      Homebrew tap is published; each release attaches both packaging files.
+      with one archive per platform and a <code>SHA256SUMS</code> file the install scripts verify against. Each release
+      also attaches a winget manifest and a Homebrew formula for whenever a package-manager listing is wanted; the
+      scripts and the archives are the supported installs.
     </p>
 
     <h2>Define a catalog</h2>

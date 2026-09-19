@@ -27,31 +27,14 @@ to `dev` by the [Engine workflow](../../.github/workflows/engine.yml) and is
 not checksummed. The release procedure is in
 [Cutting a CLI release](../engineering/cli-release.md).
 
-### winget (Windows)
+### Package managers
 
-Once the manifest is accepted in
-[microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs):
-
-```powershell
-winget install PruthviProdduturi.Kaveon
-kaveon --version
-```
-
-winget verifies the archive against the hash in the manifest and puts
-`kaveon` on the PATH as a portable command. Upgrade with
-`winget upgrade PruthviProdduturi.Kaveon`.
-
-### Homebrew (macOS and Linux)
-
-Once the tap is published:
-
-```bash
-brew install PruthviProdduturi/kaveon/kaveon
-kaveon --version
-```
-
-The formula installs the release binary for Apple Silicon, Intel macOS or
-Linux x64 and verifies its SHA-256. Upgrade with `brew upgrade kaveon`.
+Not needed, and not published. The release assets include a rendered winget
+manifest and a Homebrew formula so either can be submitted later — winget
+through a pull request to `microsoft/winget-pkgs`, Homebrew through
+homebrew-core once the project qualifies — but the install scripts and the
+release archives are the supported paths, the way Trino ships its client as
+a downloadable executable rather than through a package manager it runs.
 
 ### Install scripts
 
@@ -762,10 +745,9 @@ for the SQL surface.
 
 Everything `.help` lists is implemented. What the client does not do yet:
 per-operator statistics inside a plan (`EXPLAIN ANALYZE` is per task);
-spooling to object storage; Kerberos, JWT and HTTP-proxy options. The
-winget manifest and Homebrew formula are rendered with every tagged release
-(see [Install](#install)) but are not yet accepted in winget-pkgs or
-published in a tap. Rows appear while a
+spooling to object storage; Kerberos, JWT and HTTP-proxy options;
+package-manager listings (a winget manifest and a Homebrew formula are
+rendered with every release for whenever that is wanted). Rows appear while a
 statement runs only where the plan's root emits them early: a scan, a
 filter, a projection, a `LIMIT` without `ORDER BY` and a join's probe
 output stream from their first batch, on one node and across workers
