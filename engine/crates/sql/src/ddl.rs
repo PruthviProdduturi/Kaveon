@@ -104,6 +104,10 @@ pub enum CatalogStatement {
         location: String,
         format: DataFormat,
         access: AccessPattern,
+        /// `partitioned_by = ARRAY['dt', …]`: the columns a Parquet
+        /// directory table reads from its `key=value` paths, in path order.
+        /// `None` leaves them to discovery.
+        partitioned_by: Option<Vec<String>>,
     },
     DropTable {
         name: QualifiedName,
@@ -249,7 +253,16 @@ fn parse_create(parser: &mut Parser<'_>) -> Result<Option<CatalogStatement>> {
             )
         })?;
         let options = parse_with_options(parser, "CREATE TABLE")?;
-        let (location, format, access) = table_options(options)?;
+        let (location, format, access, partitioned_by) = table_options(options)?;
+        if let (Some(columns), Some(partitioned_by)) = (&columns, &partitioned_by) {
+            for key in partitioned_by {
+                if !columns.iter().any(|column| &column.name == key) {
+                    return Err(sql_error(&format!(
+                        "partitioned_by names '{key}', which is not in the column list"
+                    )));
+                }
+            }
+        }
         return Ok(Some(CatalogStatement::CreateTable {
             name,
             if_not_exists,
@@ -257,6 +270,7 @@ fn parse_create(parser: &mut Parser<'_>) -> Result<Option<CatalogStatement>> {
             location,
             format,
             access,
+            partitioned_by,
         }));
     }
     // CREATE VIEW, CREATE INDEX, … are not catalog statements; the query
@@ -503,6 +517,7 @@ fn parse_call(parser: &mut Parser<'_>) -> Result<Option<CatalogStatement>> {
         location,
         format,
         access: AccessPattern::Shortcut,
+        partitioned_by: None,
     }))
 }
 
@@ -533,7 +548,51 @@ fn parse_column(parser: &mut Parser<'_>) -> std::result::Result<ColumnSpec, Pars
     })
 }
 
-fn parse_with_options(parser: &mut Parser<'_>, statement: &str) -> Result<Vec<(String, String)>> {
+/// A `WITH (…)` option's value: a string, or `ARRAY['a', 'b']`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum OptionValue {
+    Text(String),
+    List(Vec<String>),
+}
+
+impl OptionValue {
+    fn text(self, key: &str) -> Result<String> {
+        match self {
+            Self::Text(value) => Ok(value),
+            Self::List(_) => Err(sql_error(&format!(
+                "option '{key}' takes a single-quoted string, not an ARRAY"
+            ))),
+        }
+    }
+
+    fn list(self, key: &str) -> Result<Vec<String>> {
+        match self {
+            Self::List(values) => Ok(values),
+            Self::Text(_) => Err(sql_error(&format!(
+                "option '{key}' takes ARRAY['…', …], not a string"
+            ))),
+        }
+    }
+}
+
+fn parse_option_value(parser: &mut Parser<'_>) -> std::result::Result<OptionValue, ParserError> {
+    if parser.parse_keyword(Keyword::ARRAY) {
+        parser.expect_token(&Token::LBracket)?;
+        let values = if parser.peek_token().token == Token::RBracket {
+            Vec::new()
+        } else {
+            parser.parse_comma_separated(|parser| parser.parse_literal_string())?
+        };
+        parser.expect_token(&Token::RBracket)?;
+        return Ok(OptionValue::List(values));
+    }
+    parser.parse_literal_string().map(OptionValue::Text)
+}
+
+fn parse_with_options(
+    parser: &mut Parser<'_>,
+    statement: &str,
+) -> Result<Vec<(String, OptionValue)>> {
     parser.expect_token(&Token::LParen).map_err(|_| {
         sql_error(&format!(
             "{statement} WITH expects a parenthesised option list"
@@ -543,12 +602,13 @@ fn parse_with_options(parser: &mut Parser<'_>, statement: &str) -> Result<Vec<(S
         .parse_comma_separated(|parser| {
             let key = parser.parse_identifier(false)?.value;
             parser.expect_token(&Token::Eq)?;
-            let value = parser.parse_literal_string()?;
+            let value = parse_option_value(parser)?;
             Ok((key, value))
         })
         .map_err(|_| {
             sql_error(&format!(
-                "{statement} WITH options are key = 'value' pairs separated by commas"
+                "{statement} WITH options are key = 'value' pairs (or key = ARRAY['…']) \
+                 separated by commas"
             ))
         })?;
     parser.expect_token(&Token::RParen).map_err(parse_error)?;
@@ -563,16 +623,20 @@ fn parse_with_options(parser: &mut Parser<'_>, statement: &str) -> Result<Vec<(S
     Ok(options)
 }
 
-fn table_options(options: Vec<(String, String)>) -> Result<(String, DataFormat, AccessPattern)> {
+type TableOptions = (String, DataFormat, AccessPattern, Option<Vec<String>>);
+
+fn table_options(options: Vec<(String, OptionValue)>) -> Result<TableOptions> {
     let mut location = None;
     let mut format = None;
     let mut access = AccessPattern::Shortcut;
+    let mut partitioned_by = None;
     for (key, value) in options {
-        match key.to_ascii_lowercase().as_str() {
-            "location" => location = Some(value),
-            "format" => format = Some(parse_format(&value)?),
+        let lowered = key.to_ascii_lowercase();
+        match lowered.as_str() {
+            "location" => location = Some(value.text(&key)?),
+            "format" => format = Some(parse_format(&value.text(&key)?)?),
             "access" => {
-                access = match value.to_ascii_lowercase().as_str() {
+                access = match value.text(&key)?.to_ascii_lowercase().as_str() {
                     "shortcut" => AccessPattern::Shortcut,
                     "optimized" => AccessPattern::Optimized,
                     other => {
@@ -582,9 +646,31 @@ fn table_options(options: Vec<(String, String)>) -> Result<(String, DataFormat, 
                     }
                 }
             }
+            "partitioned_by" => {
+                let keys = value.list(&key)?;
+                if keys.is_empty() {
+                    return Err(sql_error(
+                        "partitioned_by needs at least one column; omit it for a table that is \
+                         not partitioned",
+                    ));
+                }
+                let mut seen = std::collections::HashSet::new();
+                if let Some(duplicate) = keys.iter().find(|key| !seen.insert(key.as_str())) {
+                    return Err(sql_error(&format!(
+                        "partitioned_by names '{duplicate}' twice"
+                    )));
+                }
+                if let Some(blank) = keys.iter().find(|key| key.trim().is_empty()) {
+                    return Err(sql_error(&format!(
+                        "partitioned_by names an empty column '{blank}'"
+                    )));
+                }
+                partitioned_by = Some(keys);
+            }
             other => {
                 return Err(sql_error(&format!(
-                    "table option '{other}' is not supported; use location, format and access"
+                    "table option '{other}' is not supported; use location, format, access and \
+                     partitioned_by"
                 )));
             }
         }
@@ -595,16 +681,23 @@ fn table_options(options: Vec<(String, String)>) -> Result<(String, DataFormat, 
     let format = format.ok_or_else(|| {
         sql_error("CREATE TABLE requires the format = 'parquet'|'delta'|'iceberg' option")
     })?;
-    Ok((location, format, access))
+    if partitioned_by.is_some() && format != DataFormat::Parquet {
+        return Err(sql_error(
+            "partitioned_by applies to Parquet directory tables; Delta and Iceberg tables carry \
+             their partitioning in their own metadata",
+        ));
+    }
+    Ok((location, format, access, partitioned_by))
 }
 
 fn catalog_options(
-    options: Vec<(String, String)>,
+    options: Vec<(String, OptionValue)>,
 ) -> Result<(CatalogStorageSpec, Option<CredentialSpec>)> {
     let mut storage = None;
     let mut fields = std::collections::BTreeMap::new();
     let mut credential = None;
     for (key, value) in options {
+        let value = value.text(&key)?;
         match key.to_ascii_lowercase().as_str() {
             "storage" => storage = Some(value.to_ascii_lowercase()),
             "credential" => {
@@ -874,13 +967,15 @@ pub fn quote_identifier(name: &str) -> String {
     }
 }
 
-/// Render a definition as the `CREATE TABLE` statement that recreates it.
+/// Render a definition as the `CREATE TABLE` statement that recreates it;
+/// `partitioned_by` names the columns read from the paths, if any.
 pub fn render_create_table(
     name: &QualifiedName,
     columns: &[ColumnSpec],
     location: &str,
     format: DataFormat,
     access: AccessPattern,
+    partitioned_by: &[String],
 ) -> String {
     let mut text = format!("CREATE TABLE {name} (\n");
     for (index, column) in columns.iter().enumerate() {
@@ -897,11 +992,22 @@ pub fn render_create_table(
         text.push('\n');
     }
     text.push_str(&format!(
-        ")\nWITH (\n   location = '{}',\n   format = '{}',\n   access = '{}'\n)",
+        ")\nWITH (\n   location = '{}',\n   format = '{}',\n   access = '{}'",
         location.replace('\'', "''"),
         format_name(format),
         access_name(access)
     ));
+    if !partitioned_by.is_empty() {
+        text.push_str(&format!(
+            ",\n   partitioned_by = ARRAY[{}]",
+            partitioned_by
+                .iter()
+                .map(|key| format!("'{}'", key.replace('\'', "''")))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    text.push_str("\n)");
     text
 }
 
@@ -996,6 +1102,7 @@ mod tests {
                 location: "sales/orders".into(),
                 format: DataFormat::Delta,
                 access: AccessPattern::Shortcut,
+                partitioned_by: None,
             }
         );
         assert_eq!(
@@ -1009,8 +1116,84 @@ mod tests {
                 location: "orders.parquet".into(),
                 format: DataFormat::Parquet,
                 access: AccessPattern::Optimized,
+                partitioned_by: None,
             }
         );
+    }
+
+    #[test]
+    fn create_table_declares_its_partition_columns() {
+        assert_eq!(
+            parse(
+                "CREATE TABLE sales (id BIGINT, dt DATE, region VARCHAR) WITH (location = 'sales', format = 'parquet', partitioned_by = ARRAY['dt', 'region'])"
+            ),
+            CatalogStatement::CreateTable {
+                name: name(&["sales"]),
+                if_not_exists: false,
+                columns: Some(vec![
+                    ColumnSpec {
+                        name: "id".into(),
+                        data_type: DataType::Int64,
+                        nullable: true,
+                    },
+                    ColumnSpec {
+                        name: "dt".into(),
+                        data_type: DataType::Date32,
+                        nullable: true,
+                    },
+                    ColumnSpec {
+                        name: "region".into(),
+                        data_type: DataType::Utf8,
+                        nullable: true,
+                    },
+                ]),
+                location: "sales".into(),
+                format: DataFormat::Parquet,
+                access: AccessPattern::Shortcut,
+                partitioned_by: Some(vec!["dt".into(), "region".into()]),
+            }
+        );
+        // Without a column list the keys are declared by name and typed by
+        // discovery.
+        let CatalogStatement::CreateTable { partitioned_by, .. } = parse(
+            "CREATE TABLE sales WITH (location = 'sales', format = 'parquet', partitioned_by = ARRAY['dt'])",
+        ) else {
+            panic!("expected CREATE TABLE");
+        };
+        assert_eq!(partitioned_by, Some(vec!["dt".into()]));
+        for (sql, expected) in [
+            (
+                "CREATE TABLE sales (id BIGINT) WITH (location = 'sales', format = 'parquet', partitioned_by = ARRAY['dt'])",
+                "not in the column list",
+            ),
+            (
+                "CREATE TABLE sales WITH (location = 'sales', format = 'parquet', partitioned_by = ARRAY[])",
+                "at least one column",
+            ),
+            (
+                "CREATE TABLE sales WITH (location = 'sales', format = 'parquet', partitioned_by = ARRAY['dt', 'dt'])",
+                "twice",
+            ),
+            (
+                "CREATE TABLE sales WITH (location = 'sales', format = 'parquet', partitioned_by = 'dt')",
+                "takes ARRAY",
+            ),
+            (
+                "CREATE TABLE sales WITH (location = ARRAY['sales'], format = 'parquet')",
+                "single-quoted string",
+            ),
+            (
+                "CREATE TABLE sales WITH (location = 'sales', format = 'delta', partitioned_by = ARRAY['dt'])",
+                "applies to Parquet",
+            ),
+            (
+                "CREATE CATALOG lake WITH (storage = ARRAY['local'], base_path = '/data')",
+                "single-quoted string",
+            ),
+        ] {
+            let failure = parse_catalog_statement(sql).unwrap_err().to_string();
+            assert!(failure.contains(expected), "{sql}: {failure}");
+        }
     }
 
     #[test]
@@ -1249,6 +1432,7 @@ mod tests {
                 location: "sales/orders".into(),
                 format: DataFormat::Delta,
                 access: AccessPattern::Shortcut,
+                partitioned_by: None,
             }
         );
         assert_eq!(
@@ -1262,6 +1446,7 @@ mod tests {
                 location: "hits.parquet".into(),
                 format: DataFormat::Parquet,
                 access: AccessPattern::Shortcut,
+                partitioned_by: None,
             }
         );
         assert_eq!(
@@ -1400,17 +1585,42 @@ mod tests {
             "nyc/taxi's/yellow",
             DataFormat::Delta,
             AccessPattern::Shortcut,
+            &[],
         );
         assert!(rendered.starts_with("CREATE TABLE \"OpenSource\".nyc_taxi.yellow_trips (\n"));
+        assert!(!rendered.contains("partitioned_by"));
         assert_eq!(
             parse(&rendered),
             CatalogStatement::CreateTable {
                 name: name(&["OpenSource", "nyc_taxi", "yellow_trips"]),
                 if_not_exists: false,
-                columns: Some(columns),
+                columns: Some(columns.clone()),
                 location: "nyc/taxi's/yellow".into(),
                 format: DataFormat::Delta,
                 access: AccessPattern::Shortcut,
+                partitioned_by: None,
+            }
+        );
+        // A partitioned table renders its keys and reads back the same.
+        let rendered = render_create_table(
+            &name(&["lake", "sales"]),
+            &columns,
+            "sales",
+            DataFormat::Parquet,
+            AccessPattern::Shortcut,
+            &["Region Name".to_owned(), "id".to_owned()],
+        );
+        assert!(rendered.contains("   partitioned_by = ARRAY['Region Name', 'id']\n)"));
+        assert_eq!(
+            parse(&rendered),
+            CatalogStatement::CreateTable {
+                name: name(&["lake", "sales"]),
+                if_not_exists: false,
+                columns: Some(columns),
+                location: "sales".into(),
+                format: DataFormat::Parquet,
+                access: AccessPattern::Shortcut,
+                partitioned_by: Some(vec!["Region Name".into(), "id".into()]),
             }
         );
     }

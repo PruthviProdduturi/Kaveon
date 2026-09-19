@@ -170,6 +170,7 @@ pub(crate) async fn execute_catalog_statement(
             location,
             format,
             access,
+            partitioned_by,
         } => {
             let target = table_target(&name, context_catalog, context_schema);
             create_table(
@@ -181,6 +182,7 @@ pub(crate) async fn execute_catalog_statement(
                 location,
                 format,
                 access,
+                partitioned_by,
             )
             .await?
         }
@@ -719,6 +721,63 @@ fn resolve_columns(
     columns.map_err(CatalogStatementError::invalid_error)
 }
 
+/// The partition columns a table definition records: the keys the probe
+/// discovered in the location's paths, in path order, each typed as the
+/// table's column of that name. A declaration must name exactly those keys
+/// in that order; a declaration over a location without keys, or keys
+/// under no declaration, are both taken from the location.
+fn resolve_partitions(
+    declared: Option<&[String]>,
+    probed: &kaveon_storage::SourceStatistics,
+    columns: &[ColumnDefinition],
+    location: &str,
+) -> DdlResult<Vec<kaveon_core::PartitionColumn>> {
+    let discovered = probed
+        .parquet_listing
+        .as_ref()
+        .map(|listing| {
+            listing
+                .partitions
+                .iter()
+                .map(|column| column.name().to_owned())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if let Some(declared) = declared
+        && declared != discovered.as_slice()
+    {
+        let describe = |keys: &[String]| {
+            if keys.is_empty() {
+                "no key=value directories".to_owned()
+            } else {
+                keys.join("/")
+            }
+        };
+        return Err(CatalogStatementError::unreadable(format!(
+            "partitioned_by declares {} but the files at '{location}' lie under {}; the \
+             declaration must name the path's keys in their order",
+            describe(declared),
+            describe(&discovered)
+        )));
+    }
+    discovered
+        .iter()
+        .map(|key| {
+            let column = columns
+                .iter()
+                .find(|column| column.name() == key)
+                .ok_or_else(|| {
+                    CatalogStatementError::invalid(format!(
+                        "partition column '{key}' of '{location}' is not among the table's \
+                         columns; declare it in the column list or omit the list"
+                    ))
+                })?;
+            kaveon_core::PartitionColumn::new(key, column.data_type().clone())
+                .map_err(CatalogStatementError::invalid_error)
+        })
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn create_table(
     store: &CatalogStore,
@@ -729,6 +788,7 @@ async fn create_table(
     location: String,
     format: DataFormat,
     access: AccessPattern,
+    partitioned_by: Option<Vec<String>>,
 ) -> DdlResult<CatalogStatementResult> {
     let qualified = target.qualified();
     let (catalog, schema, existing) = locate_table(store, &target)?;
@@ -787,6 +847,8 @@ async fn create_table(
         let probed =
             probe_location(&catalog, &target.schema, &target.table, &location, format).await?;
         let columns = resolve_columns(columns, &probed.schema, &location)?;
+        let partitions =
+            resolve_partitions(partitioned_by.as_deref(), &probed, &columns, &location)?;
         let active = TableDefinition::new(
             draft.id().clone(),
             schema.id().clone(),
@@ -796,6 +858,8 @@ async fn create_table(
             format,
             columns,
         )
+        .map_err(CatalogStatementError::invalid_error)?
+        .partitioned_by(partitions)
         .map_err(CatalogStatementError::invalid_error)?
         .transition(CatalogLifecycle::Active)
         .map_err(CatalogStatementError::invalid_error)?;
@@ -900,6 +964,14 @@ async fn set_table_location(
         })
         .collect();
     resolve_columns(Some(declared), &probed.schema, &location)?;
+    // A partitioned table stays partitioned the same way: the new
+    // location's keys must be the stored ones.
+    let stored_keys = table
+        .partitions()
+        .iter()
+        .map(|column| column.name().to_owned())
+        .collect::<Vec<_>>();
+    resolve_partitions(Some(&stored_keys), &probed, table.columns(), &location)?;
     let relocated = table
         .with_location(&location)
         .map_err(CatalogStatementError::invalid_error)?;
@@ -932,12 +1004,18 @@ fn show_create_table(
             nullable: column.nullable(),
         })
         .collect::<Vec<_>>();
+    let partitioned_by = table
+        .partitions()
+        .iter()
+        .map(|column| column.name().to_owned())
+        .collect::<Vec<_>>();
     let statement = render_create_table(
         &QualifiedName(vec![target.catalog, target.schema, target.table]),
         &columns,
         table.location(),
         table.format(),
         table.access(),
+        &partitioned_by,
     );
     Ok(CatalogStatementResult {
         columns: vec![ColumnInfo {
@@ -1375,6 +1453,157 @@ mod tests {
             ok(&state, &analyst, "DESCRIBE orders").await,
             vec![vec![json!("id"), json!("bigint"), json!("NO")]]
         );
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    /// A Hive-partitioned directory registers with its keys as columns —
+    /// inferred, or declared with `partitioned_by` and the column list —
+    /// and the definition records them; a declaration that does not match
+    /// the paths, a key that is also a file column, and a relocation to a
+    /// differently partitioned directory are refused.
+    #[tokio::test]
+    async fn partitioned_directories_register_their_keys() {
+        let base = temporary_directory("partitioned");
+        for partition in [
+            "sales/dt=2026-09-01/region=eu",
+            "sales/dt=2026-09-02/region=us",
+            "sales/dt=__HIVE_DEFAULT_PARTITION__/region=eu",
+            "flat/dt=2026-09-01",
+        ] {
+            std::fs::create_dir_all(base.join(partition)).unwrap();
+            write_parquet(&base.join(partition).join("part-0.parquet"), 3);
+        }
+        let state = state_with_local_catalog(&base);
+        let analyst = identity(Role::Analyst);
+        ok(&state, &analyst, "CREATE SCHEMA sales").await;
+
+        // Inferred: the file columns, then the keys typed from their values.
+        ok(
+            &state,
+            &analyst,
+            "CREATE TABLE sales WITH (location = 'sales', format = 'parquet')",
+        )
+        .await;
+        assert_eq!(
+            ok(&state, &analyst, "DESCRIBE sales").await,
+            vec![
+                vec![json!("id"), json!("bigint"), json!("NO")],
+                vec![json!("name"), json!("varchar"), json!("YES")],
+                vec![json!("dt"), json!("date"), json!("YES")],
+                vec![json!("region"), json!("varchar"), json!("YES")],
+            ]
+        );
+        let shown = ok(&state, &analyst, "SHOW CREATE TABLE sales").await;
+        let statement = shown[0][0].as_str().unwrap();
+        assert!(
+            statement.contains("partitioned_by = ARRAY['dt', 'region']"),
+            "{statement}"
+        );
+        let catalog = state
+            .catalog_store
+            .catalog_by_name("lake")
+            .unwrap()
+            .unwrap();
+        let schema = state
+            .catalog_store
+            .list_schemas(catalog.id())
+            .unwrap()
+            .remove(0);
+        let stored = state
+            .catalog_store
+            .list_tables(schema.id())
+            .unwrap()
+            .into_iter()
+            .find(|table| table.name() == "sales")
+            .unwrap();
+        assert_eq!(
+            stored
+                .partitions()
+                .iter()
+                .map(|column| (column.name(), column.data_type().clone()))
+                .collect::<Vec<_>>(),
+            [("dt", DataType::Date32), ("region", DataType::Utf8)]
+        );
+        // The rendered statement re-registers the same definition.
+        ok(&state, &analyst, "DROP TABLE sales").await;
+        ok(&state, &analyst, statement).await;
+        assert_eq!(
+            ok(&state, &analyst, "DESCRIBE sales").await.len(),
+            4,
+            "{statement}"
+        );
+        ok(&state, &analyst, "DROP TABLE sales").await;
+
+        // Declared: the keys named, the date read as text by the column
+        // list's type.
+        ok(
+            &state,
+            &analyst,
+            "CREATE TABLE sales (id BIGINT, dt VARCHAR, region VARCHAR) WITH (location = 'sales', format = 'parquet', partitioned_by = ARRAY['dt', 'region'])",
+        )
+        .await;
+        assert_eq!(
+            ok(&state, &analyst, "DESCRIBE sales").await,
+            vec![
+                vec![json!("id"), json!("bigint"), json!("YES")],
+                vec![json!("dt"), json!("varchar"), json!("YES")],
+                vec![json!("region"), json!("varchar"), json!("YES")],
+            ]
+        );
+        ok(&state, &analyst, "DROP TABLE sales").await;
+
+        // A declaration must match the paths' keys and their order.
+        for (sql, expected) in [
+            (
+                "CREATE TABLE sales WITH (location = 'sales', format = 'parquet', partitioned_by = ARRAY['region', 'dt'])",
+                "region/dt",
+            ),
+            (
+                "CREATE TABLE sales WITH (location = 'sales', format = 'parquet', partitioned_by = ARRAY['dt'])",
+                "dt/region",
+            ),
+            (
+                "CREATE TABLE flat WITH (location = 'flat', format = 'parquet', partitioned_by = ARRAY['dt', 'region'])",
+                "lie under dt",
+            ),
+        ] {
+            let failure = err(&state, &analyst, sql).await;
+            assert_eq!(failure.code, "TABLE_NOT_READABLE", "{sql}");
+            assert!(
+                failure.message.contains(expected),
+                "{sql}: {}",
+                failure.message
+            );
+        }
+        assert!(published_tables(&state, "lake", "sales").await.is_empty());
+
+        // A key that is also a column inside the files has two sources.
+        std::fs::create_dir_all(base.join("dup/name=x")).unwrap();
+        write_parquet(&base.join("dup/name=x/part-0.parquet"), 2);
+        let failure = err(
+            &state,
+            &analyst,
+            "CREATE TABLE dup WITH (location = 'dup', format = 'parquet')",
+        )
+        .await;
+        assert_eq!(failure.code, "TABLE_NOT_READABLE");
+        assert!(
+            failure.message.contains("'name'") && failure.message.contains("name=x/part-0.parquet"),
+            "{}",
+            failure.message
+        );
+
+        // A relocation keeps the partitioning: the new location must carry
+        // the same keys.
+        ok(
+            &state,
+            &analyst,
+            "CREATE TABLE flat WITH (location = 'flat', format = 'parquet')",
+        )
+        .await;
+        let failure = err(&state, &analyst, "ALTER TABLE flat SET LOCATION 'sales'").await;
+        assert_eq!(failure.code, "TABLE_NOT_READABLE");
+        assert!(failure.message.contains("dt/region"), "{}", failure.message);
         std::fs::remove_dir_all(base).unwrap();
     }
 
