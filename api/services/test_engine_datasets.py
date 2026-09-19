@@ -124,6 +124,16 @@ class BindingTests(unittest.TestCase):
         self.assertEqual(payload["date_column"], "order_date")
         self.assertEqual(payload["dimensions"], [])
 
+    def test_binding_an_existing_dataset_keeps_its_stored_metrics_and_columns(self):
+        a, b, c = _bridge()
+        stored = {"id": "9", "columns": [{"column_name": "region"}], "date_column": "order_date",
+                  "metrics": [{"name": "Orders", "expression": "COUNT(*)", "metric_type": "count"}]}
+        with a, b, c:
+            payload = engine_datasets.apply_binding(
+                {"source": {"kind": "engine", "table_id": TABLE["id"]}}, "analyst@example.com", "Analyst",
+                existing=stored)
+        self.assertEqual(set(payload), {"source", "database_name", "schema_name", "table_name"})
+
     def test_a_warehouse_payload_is_untouched(self):
         payload = {"name": "Events", "database_name": "kaveon", "table_name": "events"}
         with patch.object(engine_bridge, "table_definition_by_id", side_effect=AssertionError("Engine reached")):
