@@ -18,6 +18,7 @@ mod scan_bench;
 pub mod scan_predicate;
 pub mod source_statistics;
 pub mod table_rewrite;
+pub mod table_statistics;
 
 pub use adls_commit::{
     AdlsConditionalCommit, CommitError, CommitErrorKind, CommitResult, ObjectVersion,
@@ -52,6 +53,10 @@ pub use source_statistics::{
 };
 pub use table_rewrite::{
     Recovery, RewriteGroup, RewriteKind, RewriteReport, RewriteTarget, Staging, TableFile,
+};
+pub use table_statistics::{
+    DataFile, FullScanOptions, SourceFiles, enumerate_source, full_statistics, metadata_statistics,
+    refresh_statistics, sketchable,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

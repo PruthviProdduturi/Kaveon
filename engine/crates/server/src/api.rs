@@ -3554,8 +3554,8 @@ fn statistics_document(
                 "name": column.name,
                 "type": kaveon_sql::ddl::sql_type_name(&column.data_type),
                 "nulls": column.nulls,
-                "min": column.min,
-                "max": column.max,
+                "min": column.min.as_ref().map(kaveon_storage::StatValue::to_json),
+                "max": column.max.as_ref().map(kaveon_storage::StatValue::to_json),
                 "compressed_bytes": column.compressed_bytes,
                 "distinct": distinct.get(&column.name),
             })

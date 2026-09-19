@@ -45,10 +45,16 @@ pub struct SourceColumnProfile {
     pub name: String,
     pub data_type: DataType,
     pub nulls: Option<u64>,
-    /// JSON of the logical type: numbers as numbers, text as text, dates and
-    /// timestamps as ISO 8601 strings, decimals as exact decimal text.
-    pub min: Option<Value>,
-    pub max: Option<Value>,
+    /// The bound in its logical type; `to_json` renders numbers as numbers,
+    /// text as text, dates and timestamps as ISO 8601 strings, decimals as
+    /// exact decimal text.
+    pub min: Option<StatValue>,
+    pub max: Option<StatValue>,
+    /// Whether `min` and `max` are the true extremes rather than bounds a
+    /// writer may have truncated: numeric bounds always, text bounds only
+    /// when a Parquet footer flags them exact (the Delta log and Iceberg
+    /// manifests carry no flag).
+    pub bounds_exact: bool,
     /// Compressed bytes of the column's chunks (Parquet footers only).
     pub compressed_bytes: Option<u64>,
 }
@@ -71,6 +77,8 @@ pub struct SourceProfile {
     /// epoch, when the store or log records one.
     pub last_modified_ms: Option<i64>,
     pub partition_columns: Vec<String>,
+    /// The Iceberg snapshot the profile describes.
+    pub iceberg_snapshot_id: Option<i64>,
     /// One entry per column of `statistics.schema`, in schema order.
     pub columns: Vec<SourceColumnProfile>,
     /// Whether the column facts were read. The row-count path skips the
@@ -299,6 +307,7 @@ fn parquet_profile(
         uncompressed_bytes: Some(footers.uncompressed_bytes),
         last_modified_ms: footers.last_modified_ms,
         partition_columns: Vec::new(),
+        iceberg_snapshot_id: None,
         columns,
         columns_profiled: true,
     }
@@ -323,7 +332,8 @@ fn delta_profile(
         .filter_map(|detail| detail.modification_time_ms)
         .max();
     if let Some(schema) = snapshot.schema.clone()
-        && let Some((row_count, columns)) = columns_from_delta_stats(&schema, &snapshot.details)
+        && let Some((row_count, columns)) =
+            column_facts_from_delta_stats(&schema, &snapshot.details)
     {
         return Ok(SourceProfile {
             statistics: SourceStatistics {
@@ -341,6 +351,7 @@ fn delta_profile(
             uncompressed_bytes: None,
             last_modified_ms,
             partition_columns: Vec::new(),
+            iceberg_snapshot_id: None,
             columns,
             columns_profiled: true,
         });
@@ -372,6 +383,7 @@ fn delta_profile(
         uncompressed_bytes: Some(metadata.profile.uncompressed_bytes),
         last_modified_ms: last_modified_ms.or(metadata.profile.last_modified_ms),
         partition_columns: Vec::new(),
+        iceberg_snapshot_id: None,
         columns,
         columns_profiled: true,
     })
@@ -419,6 +431,7 @@ fn iceberg_profile(
             .as_ref()
             .and_then(|footers| footers.last_modified_ms),
         partition_columns: snapshot.partition_columns,
+        iceberg_snapshot_id: snapshot.snapshot_id,
         columns,
         columns_profiled: footers.is_some(),
     }))
@@ -426,7 +439,7 @@ fn iceberg_profile(
 
 /// One entry per schema field from the merged footers, matched by field id
 /// when `by_field_id` (Iceberg) and by name otherwise.
-fn columns_from_footers(
+pub(crate) fn columns_from_footers(
     schema: &SchemaRef,
     footers: &FooterProfile,
     by_field_id: bool,
@@ -456,8 +469,9 @@ fn columns_from_footers(
                 name: field.name().clone(),
                 data_type: field.data_type().clone(),
                 nulls: profile.and_then(|column| column.nulls),
-                min: profile.and_then(|column| column.min.as_ref().map(StatValue::to_json)),
-                max: profile.and_then(|column| column.max.as_ref().map(StatValue::to_json)),
+                min: profile.and_then(|column| column.min.clone()),
+                max: profile.and_then(|column| column.max.clone()),
+                bounds_exact: profile.is_some_and(|column| column.bounds_exact),
                 compressed_bytes: profile.and_then(|column| column.compressed_bytes),
             }
         })
@@ -474,6 +488,7 @@ fn unprofiled_columns(schema: &SchemaRef) -> Vec<SourceColumnProfile> {
             nulls: None,
             min: None,
             max: None,
+            bounds_exact: false,
             compressed_bytes: None,
         })
         .collect()
@@ -482,7 +497,7 @@ fn unprofiled_columns(schema: &SchemaRef) -> Vec<SourceColumnProfile> {
 /// The row count and column facts from every active file's `stats`, or
 /// `None` when any file lacks `stats` or `numRecords`. A bound one file does
 /// not record is unknown for the table.
-fn columns_from_delta_stats(
+pub(crate) fn column_facts_from_delta_stats(
     schema: &SchemaRef,
     details: &[DeltaFileDetail],
 ) -> Option<(u64, Vec<SourceColumnProfile>)> {
@@ -556,12 +571,18 @@ fn columns_from_delta_stats(
                     }
                 }
             }
+            let min = min.filter(|_| min_known);
+            let max = max.filter(|_| max_known);
             SourceColumnProfile {
                 name: field.name().clone(),
                 data_type: field.data_type().clone(),
                 nulls,
-                min: min.filter(|_| min_known).map(|value| value.to_json()),
-                max: max.filter(|_| max_known).map(|value| value.to_json()),
+                // Delta writers truncate text bounds and record no flag.
+                bounds_exact: (min.is_some() || max.is_some())
+                    && !matches!(min, Some(StatValue::Text(_)))
+                    && !matches!(max, Some(StatValue::Text(_))),
+                min,
+                max,
                 compressed_bytes: None,
             }
         })
@@ -604,6 +625,9 @@ fn delta_stat_value(value: &Value, data_type: &DataType) -> Option<StatValue> {
                     .map(|value| StatValue::Int(i128::from(value)))
             })
             .or_else(|| number.as_f64().map(StatValue::Float)),
+        (Value::String(text), DataType::Date32) => kaveon_core::predicate::date_literal_days(text)
+            .and_then(|days| i32::try_from(days).ok())
+            .map(StatValue::Date),
         (Value::String(text), _) => Some(StatValue::Text(text.clone())),
         _ => None,
     }
@@ -665,7 +689,7 @@ fn cache_delta_statistics(location: &str, version: u64, statistics: SourceProfil
 fn digest(value: String) -> String {
     format!("{:x}", Sha256::digest(value.as_bytes()))
 }
-fn is_object(value: &str) -> bool {
+pub(crate) fn is_object(value: &str) -> bool {
     value.starts_with("abfss://") || value.starts_with("s3://")
 }
 
@@ -800,13 +824,13 @@ mod tests {
         assert_eq!(id.name, "id");
         assert_eq!(id.data_type, DataType::Int64);
         assert_eq!(id.nulls, Some(0));
-        assert_eq!(id.min, Some(serde_json::json!(2)));
-        assert_eq!(id.max, Some(serde_json::json!(11)));
+        assert_eq!(id.min, Some(StatValue::Int(2)));
+        assert_eq!(id.max, Some(StatValue::Int(11)));
         assert!(id.compressed_bytes.unwrap() > 0);
         let name = &profile.columns[1];
         assert_eq!(name.nulls, Some(1));
-        assert_eq!(name.min, Some(serde_json::json!("apple")));
-        assert_eq!(name.max, Some(serde_json::json!("zucchini")));
+        assert_eq!(name.min, Some(StatValue::Text("apple".into())));
+        assert_eq!(name.max, Some(StatValue::Text("zucchini".into())));
 
         // The row-count path shares the cached profile under one identity.
         let statistics = analyze_source(path.to_str().unwrap(), DataFormat::Parquet).unwrap();
@@ -848,8 +872,8 @@ mod tests {
                     .unwrap()
                     .len()
         );
-        assert_eq!(profile.columns[0].min, Some(serde_json::json!(0)));
-        assert_eq!(profile.columns[0].max, Some(serde_json::json!(4)));
+        assert_eq!(profile.columns[0].min, Some(StatValue::Int(0)));
+        assert_eq!(profile.columns[0].max, Some(StatValue::Int(4)));
         assert_eq!(profile.columns[1].nulls, Some(0));
 
         std::fs::write(
@@ -917,17 +941,17 @@ mod tests {
         let id = &profile.columns[0];
         assert_eq!(id.data_type, DataType::Int64);
         assert_eq!(id.nulls, Some(0));
-        assert_eq!(id.min, Some(serde_json::json!(1)));
-        assert_eq!(id.max, Some(serde_json::json!(9)));
+        assert_eq!(id.min, Some(StatValue::Int(1)));
+        assert_eq!(id.max, Some(StatValue::Int(9)));
         assert_eq!(id.compressed_bytes, None);
         let name = &profile.columns[1];
         assert_eq!(name.nulls, Some(3));
-        assert_eq!(name.min, Some(serde_json::json!("apple")));
-        assert_eq!(name.max, Some(serde_json::json!("pear")));
+        assert_eq!(name.min, Some(StatValue::Text("apple".into())));
+        assert_eq!(name.max, Some(StatValue::Text("pear".into())));
         let day = &profile.columns[2];
         assert_eq!(day.nulls, Some(1));
-        assert_eq!(day.min, Some(serde_json::json!("2023-12-31")));
-        assert_eq!(day.max, Some(serde_json::json!("2024-02-01")));
+        assert_eq!(day.min, Some(StatValue::Date(19_722)));
+        assert_eq!(day.max, Some(StatValue::Date(19_754)));
         assert_eq!(
             analyze_source(directory.to_str().unwrap(), DataFormat::Delta)
                 .unwrap()
@@ -961,8 +985,8 @@ mod tests {
         assert_eq!(first.statistics.row_count, 3);
         assert_eq!(first.statistics.delta_version, Some(0));
         assert_eq!(first.file_count, 1);
-        assert_eq!(first.columns[0].min, Some(serde_json::json!(0)));
-        assert_eq!(first.columns[0].max, Some(serde_json::json!(2)));
+        assert_eq!(first.columns[0].min, Some(StatValue::Int(0)));
+        assert_eq!(first.columns[0].max, Some(StatValue::Int(2)));
         assert_eq!(analyze_object_delta(&location, &reader).unwrap(), first);
 
         runtime
