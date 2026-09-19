@@ -1,0 +1,49 @@
+/* Governance — the settings card shape, with dense editable tables. */
+
+.tableWrap { overflow-x: auto; margin-top: 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-primary) }
+.table { width: 100%; border-collapse: collapse; font-size: 12.5px }
+.table th { text-align: left; padding: 8px 10px; font-size: 11px; font-weight: 600; color: var(--text-muted); background: var(--bg-elevated); border-bottom: 1px solid var(--border); white-space: nowrap }
+.table td { padding: 6px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; white-space: nowrap }
+.table tr:last-child td { border-bottom: 0 }
+.table td.num, .table th.num { text-align: right; font-family: var(--mono) }
+.table td.mono { font-family: var(--mono); font-size: 12px }
+.table td.wrap { white-space: normal; overflow-wrap: anywhere; min-width: 220px }
+
+.input, .select {
+  height: 28px; padding: 0 8px; font: 12.5px Inter, sans-serif; color: var(--text-primary);
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: 6px; min-width: 0;
+}
+.input:focus, .select:focus { outline: none; border-color: var(--border-hover); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .15) }
+.input.num { width: 72px; text-align: right; font-family: var(--mono) }
+.input.name { width: 124px }
+.input.wide { width: 184px; font-family: var(--mono) }
+.input[aria-invalid="true"] { border-color: var(--error) }
+.select { padding-right: 24px }
+
+.counter { font: 12px var(--mono); color: var(--text-secondary) }
+.counterHot { color: var(--warning) }
+
+.iconBtn { width: 26px; height: 26px; display: inline-grid; place-items: center; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text-muted); border-radius: 6px; cursor: pointer; font-size: 11px }
+.iconBtn:hover { color: var(--text-primary); border-color: var(--border-hover) }
+.iconBtn:disabled { opacity: .4; cursor: default }
+.rowActions { display: inline-flex; gap: 4px }
+
+.problem { margin-top: 12px; padding: 10px 12px; font-size: 12.5px; color: var(--error); background: rgba(239, 68, 68, .08); border: 1px solid rgba(239, 68, 68, .35); border-radius: 8px }
+.saved { margin-top: 12px; padding: 10px 12px; font-size: 12.5px; color: var(--success); background: rgba(16, 185, 129, .08); border: 1px solid rgba(16, 185, 129, .35); border-radius: 8px }
+
+.filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-top: 14px }
+.field { display: flex; flex-direction: column; gap: 4px }
+.fieldLabel { font-size: 11px; color: var(--text-muted) }
+
+.kind { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 6px; font: 600 11px Inter, sans-serif; border: 1px solid var(--border); color: var(--text-secondary); background: var(--bg-elevated) }
+.kindStatement { color: var(--accent); border-color: rgba(var(--accent-rgb), .35) }
+.kindFailed { color: var(--error); border-color: rgba(239, 68, 68, .35) }
+.kindCatalog { color: var(--success); border-color: rgba(16, 185, 129, .35) }
+.kindSettings { color: var(--warning); border-color: rgba(245, 158, 11, .35) }
+.kindAuth { color: var(--error); border-color: rgba(239, 68, 68, .35) }
+.detail { font: 11.5px var(--mono); color: var(--text-muted) }
+.stmt { font: 12px var(--mono); color: var(--text-primary); max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block }
+.link { color: var(--accent); text-decoration: none }
+.link:hover { text-decoration: underline }
+.foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; font-size: 12px; color: var(--text-muted) }
+.empty { padding: 28px; text-align: center; color: var(--text-muted); font-size: 13px }

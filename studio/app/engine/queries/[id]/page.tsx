@@ -51,9 +51,23 @@ function settingsSummary(q: QueryRecord): React.ReactNode {
 /** The time between arrival and admission, as the Engine measured it; a statement admitted on arrival waited for nothing. */
 function admissionWait(q: QueryRecord) {
   if (q.admission_wait_ms == null) return <span className={s.na}>Not recorded</span>;
-  if (q.state === "QUEUED") return <span className={s.na}>Waiting for memory</span>;
+  if (q.state === "QUEUED") return <span className={s.na}>Waiting in the admission queue</span>;
   if (q.admission_wait_ms === 0) return <span className={s.na}>Admitted on arrival</span>;
-  return <>{ms(q.admission_wait_ms)}<span className={s.na}> queued for memory</span></>;
+  return <>{ms(q.admission_wait_ms)}<span className={s.na}> in the admission queue</span></>;
+}
+
+/** The resource group the statement was admitted through and the limits that applied to it. */
+function resourceGroup(q: QueryRecord) {
+  const rg = q.context?.resource_group;
+  if (!rg) return <span className={s.na}>Not recorded</span>;
+  const limits = [
+    `${rg.max_concurrent} concurrent`,
+    rg.max_memory_bytes != null ? `${bytes(rg.max_memory_bytes)} share` : null,
+    `queue ${rg.max_queued} · wait ${rg.max_queue_wait_seconds} s`,
+    rg.max_local_parallelism != null ? `threads ≤ ${rg.max_local_parallelism}` : null,
+    rg.priority !== 1 ? `priority ${rg.priority}` : null,
+  ].filter(Boolean).join(" · ");
+  return <>{rg.name}<span className={s.na}> · {limits}</span></>;
 }
 
 function Definitions({ rows }: { rows: [string, React.ReactNode][] }) {
@@ -197,7 +211,10 @@ export default function EngineQueryPage() {
                   <Definitions rows={[
                     ["State", q.state], ["Elapsed", ms(q.elapsed_ms)],
                     ["Admission wait", admissionWait(q)],
-                    ["Rows in response", `${q.rows.length.toLocaleString()}${q.rows_are_preview ? " (preview)" : ""}`],
+                    ["Resource group", resourceGroup(q)],
+                    ["Rows", q.row_count != null
+                      ? <>{q.row_count.toLocaleString()}{q.rows.length < q.row_count ? <span key="pv" className={s.na}> · {q.rows.length.toLocaleString()} in the preview</span> : null}</>
+                      : `${q.rows.length.toLocaleString()}${q.rows_are_preview ? " (preview)" : ""}`],
                     ["Columns", String(q.columns.length)],
                     ["Ran on", placement(q)],
                     ["Settings", settingsSummary(q)],

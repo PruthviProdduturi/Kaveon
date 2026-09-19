@@ -97,6 +97,18 @@ export interface QueryContext {
   time_zone?: string | null; client_address?: string | null;
   client_tags?: string[]; result_delivery?: string | null;
   catalog_snapshot_id?: string;
+  /** The resource group the coordinator admitted the statement through, with the limits that applied. */
+  resource_group?: EffectiveResourceGroup;
+}
+
+export interface EffectiveResourceGroup {
+  name: string;
+  max_memory_bytes?: number;
+  max_concurrent: number;
+  max_queued: number;
+  max_queue_wait_seconds: number;
+  max_local_parallelism?: number;
+  priority: number;
 }
 
 export interface PlanNode {
@@ -133,7 +145,11 @@ export interface QueryRecord {
   cached_elapsed_ms?: number;
   /** How long the statement waited for memory admission before it ran; zero when admitted on arrival. Not part of `elapsed_ms`. */
   admission_wait_ms?: number;
+  /** Rows the whole result holds, when the statement produced one; `rows` is a preview. */
+  row_count?: number;
   error?: string | null;
+  /** The stable code of a refusal or classified failure, when the Engine has one. */
+  error_code?: string;
   elapsed_ms: number;
   submitted_at_ms: number;
   completed_at_ms: number;
