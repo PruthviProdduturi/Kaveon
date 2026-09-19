@@ -4291,8 +4291,10 @@ async fn execute_analyze(
             .await;
         }
     }
-    // The exact counts the previous document holds for the same source
-    // version stay; a column counted now takes the new count.
+    // What the previous document holds for the same source version stays:
+    // its exact counts, and — when it read the columns and this statement
+    // did not — its sketches and exact bounds. A column counted now takes
+    // the new count.
     let previous = match stored_table_statistics(state, &table.id) {
         Ok(previous) => previous,
         Err((status, code, message)) => {
@@ -4302,10 +4304,30 @@ async fn execute_analyze(
     if let Some(previous) = previous
         .filter(|previous| statistics.is_current_for(&previous.source_version.identity_sha256))
     {
+        let keep_read = previous.depth == kaveon_core::StatisticsDepth::Full
+            && statistics.depth == kaveon_core::StatisticsDepth::Metadata;
         for column in &mut statistics.columns {
-            if let Some(kept) = previous.column(&column.name).and_then(|c| c.distinct_exact) {
-                column.distinct_exact = Some(kept);
+            let Some(kept) = previous.column(&column.name) else {
+                continue;
+            };
+            if let Some(count) = kept.distinct_exact {
+                column.distinct_exact = Some(count);
             }
+            if keep_read && kept.data_type == column.data_type {
+                column.distinct = kept.distinct.clone();
+                column.quantiles = kept.quantiles.clone();
+                if kept.bounds_exact && !column.bounds_exact {
+                    column.min = kept.min.clone();
+                    column.max = kept.max.clone();
+                    column.bounds_exact = true;
+                }
+                if column.null_count.is_none() {
+                    column.null_count = kept.null_count;
+                }
+            }
+        }
+        if keep_read {
+            statistics.depth = kaveon_core::StatisticsDepth::Full;
         }
     }
     for column in &mut statistics.columns {
@@ -11326,6 +11348,78 @@ mod tests {
             "{}",
             record["execution"]
         );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// `WITH (sketches = true)` reads the columns once for the sketches;
+    /// a later metadata-only ANALYZE at the same version keeps them, a
+    /// new version drops them.
+    #[tokio::test]
+    async fn analyze_with_sketches_reads_the_columns_once_and_keeps_them_at_the_same_version() {
+        let (state, directory) = analyze_test_state().await;
+        register_events_directory(&state, &directory, 100).await;
+        let (status, body) = submit(
+            &state,
+            &admin(),
+            "ANALYZE events WITH (sketches = true)",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            body["data"],
+            serde_json::json!([["lake.sales.events", 300, 0]])
+        );
+        let full = stored_events_statistics(&state).unwrap();
+        assert_eq!(full.depth, kaveon_core::StatisticsDepth::Full);
+        let id = full.column("id").unwrap();
+        assert!(id.distinct.is_some() && id.quantiles.is_some());
+        let close = |estimate: Option<u64>, exact: u64| {
+            let estimate = estimate.expect("an estimate");
+            assert!(
+                estimate.abs_diff(exact) * 50 <= exact,
+                "{estimate} is not within 2 % of {exact}"
+            );
+        };
+        close(id.distinct_count(), 300);
+        assert!(id.bounds_exact);
+        let name = full.column("name").unwrap();
+        assert!(name.distinct.is_some() && name.quantiles.is_none());
+        close(name.distinct_count(), 97);
+        assert_eq!(name.null_count, Some(60));
+        assert!(name.bounds_exact);
+        assert!(full.column("day").unwrap().quantiles.is_some());
+        // SHOW STATS FOR presents the estimates.
+        let (body, _) = submit_and_record(&state, "SHOW STATS FOR events").await;
+        assert_eq!(body["data"][0][4], serde_json::json!(id.distinct_count()));
+        assert_eq!(body["data"][2][4], serde_json::json!(name.distinct_count()));
+        // A metadata-only ANALYZE at the same version keeps the sketches
+        // and adds its exact count.
+        let (status, body) = submit(
+            &state,
+            &admin(),
+            "ANALYZE events WITH (columns = ARRAY['name'])",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let again = stored_events_statistics(&state).unwrap();
+        assert_eq!(again.depth, kaveon_core::StatisticsDepth::Full);
+        assert_eq!(again.column("id").unwrap().distinct, id.distinct);
+        assert_eq!(again.column("id").unwrap().quantiles, id.quantiles);
+        assert_eq!(again.column("name").unwrap().distinct_exact, Some(97));
+        assert_eq!(again.column("name").unwrap().distinct, name.distinct);
+        // A new version: the sketches are gone until the next read (the
+        // automatic refresh folds added files into a full record).
+        write_events_file(&directory.join("events").join("d.parquet"), 300, 50);
+        let (status, body) =
+            submit(&state, &admin(), "ANALYZE events", serde_json::Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let moved = stored_events_statistics(&state).unwrap();
+        assert_eq!(moved.depth, kaveon_core::StatisticsDepth::Metadata);
+        assert_eq!(moved.rows, 350);
+        assert!(moved.column("id").unwrap().distinct.is_none());
+        assert!(moved.column("name").unwrap().distinct_exact.is_none());
         std::fs::remove_dir_all(directory).unwrap();
     }
 
