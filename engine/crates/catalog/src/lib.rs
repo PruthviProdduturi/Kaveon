@@ -7,7 +7,7 @@ pub mod product_transaction;
 
 use kaveon_core::{
     CatalogDefinition, CatalogId, CatalogRevision, KaveonError, Result, SchemaDefinition, SchemaId,
-    TableDefinition, TableId,
+    TableDefinition, TableId, TableStatistics,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -20,7 +20,7 @@ use std::{
 };
 
 const DATABASE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
-const MIGRATION_VERSION: i64 = 1;
+const MIGRATION_VERSION: i64 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CascadePolicy {
@@ -245,6 +245,151 @@ impl CatalogStore {
         )?;
         refresh_snapshot_identity(&transaction)?;
         transaction.commit().map_err(db_error)
+    }
+
+    /// The table named `catalog.schema.table`, whatever its lifecycle: the
+    /// way a resolved reference finds its durable id.
+    pub fn table_by_name(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+    ) -> Result<Option<TableDefinition>> {
+        let connection = self.connection()?;
+        let value: Option<String> = connection
+            .query_row(
+                "SELECT t.definition_json FROM tables t \
+                 JOIN schemas s ON s.id = t.schema_id \
+                 JOIN catalogs c ON c.id = s.catalog_id \
+                 WHERE c.name = ?1 AND s.name = ?2 AND t.name = ?3",
+                params![catalog, schema, table],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        value.map(|json| decode(&json)).transpose()
+    }
+
+    /// Store a table's statistics beside its definition, replacing the
+    /// statistics of any earlier source version. The table must exist; its
+    /// statistics are deleted with it. Statistics do not enter the catalog
+    /// snapshot identity: they describe the data, not the definitions.
+    pub fn put_table_statistics(&self, actor: &str, value: &TableStatistics) -> Result<()> {
+        validate_actor(actor)?;
+        let document = value.to_json_bytes()?;
+        let mut connection = self.connection()?;
+        let transaction = immediate(&mut connection)?;
+        let revision: Option<u64> = transaction
+            .query_row(
+                "SELECT revision FROM tables WHERE id = ?1",
+                [value.table_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        let Some(revision) = revision else {
+            return Err(catalog_error(format!(
+                "catalog object '{}' not found",
+                value.table_id.as_str()
+            )));
+        };
+        let depth = encode(&value.depth)?.trim_matches('"').to_owned();
+        transaction
+            .execute(
+                "INSERT INTO table_statistics(table_id, source_version, computed_at_ms, depth, document) \
+                 VALUES (?1, ?2, ?3, ?4, ?5) \
+                 ON CONFLICT(table_id) DO UPDATE SET source_version = excluded.source_version, \
+                 computed_at_ms = excluded.computed_at_ms, depth = excluded.depth, document = excluded.document",
+                params![
+                    value.table_id.as_str(),
+                    value.source_version.identity_sha256,
+                    value.computed_at_ms,
+                    depth,
+                    document,
+                ],
+            )
+            .map_err(db_error)?;
+        let details = BTreeMap::from([
+            (
+                "source_version".to_owned(),
+                value.source_version.identity_sha256.clone(),
+            ),
+            ("depth".to_owned(), depth),
+            ("rows".to_owned(), value.rows.to_string()),
+            ("files".to_owned(), value.files.to_string()),
+        ]);
+        audit_with_details(
+            &transaction,
+            actor,
+            "statistics",
+            "table",
+            value.table_id.as_str(),
+            CatalogRevision::new(revision)?,
+            &details,
+        )?;
+        transaction.commit().map_err(db_error)
+    }
+
+    /// The table's stored statistics, whatever source version they describe.
+    pub fn table_statistics(&self, id: &TableId) -> Result<Option<TableStatistics>> {
+        let connection = self.connection()?;
+        let document: Option<Vec<u8>> = connection
+            .query_row(
+                "SELECT document FROM table_statistics WHERE table_id = ?1",
+                [id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        document
+            .map(|bytes| TableStatistics::from_json_bytes(&bytes))
+            .transpose()
+    }
+
+    /// The source version the table's stored statistics describe, without
+    /// decoding the document.
+    pub fn table_statistics_version(&self, id: &TableId) -> Result<Option<String>> {
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "SELECT source_version FROM table_statistics WHERE table_id = ?1",
+                [id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)
+    }
+
+    /// Remove a table's statistics; `Ok(false)` when it had none.
+    pub fn delete_table_statistics(&self, actor: &str, id: &TableId) -> Result<bool> {
+        validate_actor(actor)?;
+        let mut connection = self.connection()?;
+        let transaction = immediate(&mut connection)?;
+        let changed = transaction
+            .execute(
+                "DELETE FROM table_statistics WHERE table_id = ?1",
+                [id.as_str()],
+            )
+            .map_err(db_error)?;
+        if changed == 1 {
+            let revision: u64 = transaction
+                .query_row(
+                    "SELECT revision FROM tables WHERE id = ?1",
+                    [id.as_str()],
+                    |row| row.get(0),
+                )
+                .map_err(db_error)?;
+            audit(
+                &transaction,
+                actor,
+                "statistics_delete",
+                "table",
+                id.as_str(),
+                CatalogRevision::new(revision)?,
+            )?;
+        }
+        transaction.commit().map_err(db_error)?;
+        Ok(changed == 1)
     }
 
     /// The actor of an object's `create` audit event, when the object was
@@ -539,6 +684,7 @@ fn migrate(connection: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS tables(id TEXT PRIMARY KEY, schema_id TEXT NOT NULL, name TEXT NOT NULL, revision INTEGER NOT NULL, definition_json TEXT NOT NULL, UNIQUE(schema_id,name), FOREIGN KEY(schema_id) REFERENCES schemas(id) ON DELETE CASCADE);
         CREATE TABLE IF NOT EXISTS audit_events(id INTEGER PRIMARY KEY AUTOINCREMENT, occurred_at_ms INTEGER NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, object_type TEXT NOT NULL, object_id TEXT NOT NULL, revision INTEGER NOT NULL, details_json TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS catalog_snapshot(singleton INTEGER PRIMARY KEY CHECK(singleton = 1), identity TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS table_statistics(table_id TEXT PRIMARY KEY, source_version TEXT NOT NULL, computed_at_ms INTEGER NOT NULL, depth TEXT NOT NULL, document BLOB NOT NULL, FOREIGN KEY(table_id) REFERENCES tables(id) ON DELETE CASCADE);
         INSERT OR IGNORE INTO catalog_snapshot(singleton, identity) VALUES (1, 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
         CREATE INDEX IF NOT EXISTS idx_audit_object ON audit_events(object_type, object_id, id);
         INSERT OR IGNORE INTO schema_migrations(version) VALUES ({MIGRATION_VERSION});
@@ -793,6 +939,128 @@ mod tests {
         drop(store);
         fs::remove_dir_all(directory).unwrap();
     }
+    fn statistics_for(table: &TableDefinition, identity: &str, rows: u64) -> TableStatistics {
+        use kaveon_core::{
+            ColumnStatistics, HllSketch, SourceVersion, SourceVersionKind, StatValue,
+            StatisticsDepth,
+        };
+        let mut distinct = HllSketch::default_precision();
+        for value in 0..rows {
+            distinct.insert_text(&value.to_string());
+        }
+        TableStatistics {
+            version: kaveon_core::statistics::TABLE_STATISTICS_VERSION,
+            table_id: table.id().clone(),
+            source_version: SourceVersion {
+                identity_sha256: identity.into(),
+                kind: SourceVersionKind::DeltaVersion { version: rows },
+            },
+            computed_at_ms: 1,
+            depth: StatisticsDepth::Full,
+            rows,
+            bytes: rows * 10,
+            files: 1,
+            columns: vec![ColumnStatistics {
+                name: "id".into(),
+                data_type: arrow_schema::DataType::Int64,
+                null_count: Some(0),
+                min: Some(StatValue::Int(0)),
+                max: Some(StatValue::Int(rows as i128)),
+                bounds_exact: true,
+                distinct: Some(distinct),
+                distinct_exact: None,
+                quantiles: None,
+                bytes: None,
+            }],
+            per_file: Vec::new(),
+            per_file_complete: false,
+        }
+    }
+
+    #[test]
+    fn table_statistics_are_stored_beside_the_definition_versioned_and_cascade() {
+        let directory =
+            std::env::temp_dir().join(format!("kaveon-catalog-stats-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("catalog.db");
+        let table = {
+            let store = CatalogStore::open(&path).unwrap();
+            let (_, _, table) = seed(&store);
+            assert_eq!(store.table_statistics(table.id()).unwrap(), None);
+            assert_eq!(store.table_statistics_version(table.id()).unwrap(), None);
+            let identity_before = store.snapshot_identity().unwrap();
+            let first = statistics_for(&table, "v1", 100);
+            store.put_table_statistics("analyzer", &first).unwrap();
+            assert_eq!(store.table_statistics(table.id()).unwrap(), Some(first));
+            assert_eq!(
+                store
+                    .table_statistics_version(table.id())
+                    .unwrap()
+                    .as_deref(),
+                Some("v1")
+            );
+            // Statistics do not move the definition identity.
+            assert_eq!(store.snapshot_identity().unwrap(), identity_before);
+            // A newer source version replaces the document.
+            let second = statistics_for(&table, "v2", 250);
+            store.put_table_statistics("analyzer", &second).unwrap();
+            let stored = store.table_statistics(table.id()).unwrap().unwrap();
+            assert_eq!(stored.source_version.identity_sha256, "v2");
+            assert_eq!(stored.rows, 250);
+            assert!((stored.columns[0].distinct_count().unwrap() as i64 - 250).abs() <= 5);
+            let events = store.audit_events(None, 100).unwrap();
+            let statistics_events = events
+                .iter()
+                .filter(|event| event.action == "statistics")
+                .collect::<Vec<_>>();
+            assert_eq!(statistics_events.len(), 2);
+            assert_eq!(statistics_events[1].details["source_version"], "v2");
+            assert_eq!(statistics_events[1].details["depth"], "full");
+            assert_eq!(statistics_events[1].details["rows"], "250");
+            assert_eq!(
+                store.table_by_name("local", "default", "orders").unwrap(),
+                Some(table.clone())
+            );
+            assert_eq!(
+                store.table_by_name("local", "default", "nope").unwrap(),
+                None
+            );
+            // An unknown table has nowhere to keep statistics.
+            let orphan = TableStatistics {
+                table_id: TableId::new("table-x").unwrap(),
+                ..statistics_for(&table, "v3", 1)
+            };
+            assert!(store.put_table_statistics("analyzer", &orphan).is_err());
+            table
+        };
+        // Durable across a reopen.
+        let store = CatalogStore::open(&path).unwrap();
+        assert_eq!(
+            store.table_statistics(table.id()).unwrap().unwrap().rows,
+            250
+        );
+        assert!(
+            store
+                .delete_table_statistics("analyzer", table.id())
+                .unwrap()
+        );
+        assert!(
+            !store
+                .delete_table_statistics("analyzer", table.id())
+                .unwrap()
+        );
+        store
+            .put_table_statistics("analyzer", &statistics_for(&table, "v3", 7))
+            .unwrap();
+        // Deleting the table deletes its statistics.
+        store
+            .delete_table("test", table.id(), table.revision())
+            .unwrap();
+        assert_eq!(store.table_statistics(table.id()).unwrap(), None);
+        drop(store);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
     #[test]
     fn duplicate_catalog_is_reported_as_conflict_semantics() {
         let store = CatalogStore::open_in_memory().unwrap();
