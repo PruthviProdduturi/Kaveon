@@ -543,7 +543,7 @@ fn avro_has_value(value: &Avro) -> bool {
 fn is_object(uri: &str) -> bool {
     uri.starts_with("s3://") || uri.starts_with("abfss://")
 }
-fn local_path(uri: &str) -> Result<PathBuf> {
+pub(crate) fn local_path(uri: &str) -> Result<PathBuf> {
     let path = uri.strip_prefix("file://").unwrap_or(uri);
     if path.contains("://") || path.contains(['?', '#']) {
         return Err(error("unsupported Iceberg file URI"));
