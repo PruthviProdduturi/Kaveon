@@ -993,6 +993,8 @@ fn aggregate_bindings(
                 AggregateFunction::Min => (AggFunc::Min, false),
                 AggregateFunction::Max => (AggFunc::Max, false),
                 AggregateFunction::Avg => (AggFunc::Avg, false),
+                AggregateFunction::ApproxDistinct => (AggFunc::ApproxDistinct, false),
+                AggregateFunction::ApproxPercentile => (AggFunc::ApproxPercentile, false),
             };
             let column = aggregate
                 .argument
@@ -1002,7 +1004,8 @@ fn aggregate_bindings(
                 .map(&resolve)
                 .transpose()?
                 .unwrap_or_else(|| "*".into());
-            let expression = AggExpr::new(function, column).with_alias(&aggregate.output);
+            let mut expression = AggExpr::new(function, column).with_alias(&aggregate.output);
+            expression.percentiles = aggregate.percentiles.clone();
             Ok(if distinct {
                 expression.distinct()
             } else {
@@ -1571,7 +1574,7 @@ fn finalized_aggregate_batch(
             ));
             columns.push(column);
         } else if output_types[index] == DataType::UInt64
-            && !matches!(aggregate.func, AggFunc::Count)
+            && !matches!(aggregate.func, AggFunc::Count | AggFunc::ApproxDistinct)
         {
             let values = groups
                 .iter()
@@ -1590,7 +1593,23 @@ fn finalized_aggregate_batch(
                 true,
             ));
             columns.push(Arc::new(UInt64Array::from(values)));
-        } else if matches!(aggregate.func, AggFunc::Count) {
+        } else if let DataType::List(_) = output_types[index] {
+            let values = groups
+                .iter()
+                .map(|group| match group.values.get(index) {
+                    Some(FinalAggregateValue::NumericList(value)) => Ok(value.clone()),
+                    _ => Err(exec_err(
+                        "final aggregate state layout does not match its plan",
+                    )),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            fields.push(Field::new(
+                aggregate_output_name(aggregate),
+                output_types[index].clone(),
+                true,
+            ));
+            columns.push(kaveon_exec::aggregate::percentile_list_column(values));
+        } else if matches!(aggregate.func, AggFunc::Count | AggFunc::ApproxDistinct) {
             let values = groups
                 .iter()
                 .map(|group| match group.values.get(index) {
@@ -2091,6 +2110,7 @@ mod tests {
                             function: AggregateFunction::CountDistinct,
                             argument: Some(Expr::Column("value".into())),
                             output: "unique_values".into(),
+                            percentiles: None,
                         }],
                     },
                 ),
@@ -2159,31 +2179,37 @@ mod tests {
                 function: AggregateFunction::Count,
                 argument: Some(Expr::Column("value".into())),
                 output: "count_value".into(),
+                percentiles: None,
             },
             AggregateSpec {
                 function: AggregateFunction::Sum,
                 argument: Some(Expr::Column("value".into())),
                 output: "sum_value".into(),
+                percentiles: None,
             },
             AggregateSpec {
                 function: AggregateFunction::Min,
                 argument: Some(Expr::Column("value".into())),
                 output: "min_value".into(),
+                percentiles: None,
             },
             AggregateSpec {
                 function: AggregateFunction::Max,
                 argument: Some(Expr::Column("value".into())),
                 output: "max_value".into(),
+                percentiles: None,
             },
             AggregateSpec {
                 function: AggregateFunction::Avg,
                 argument: Some(Expr::Column("value".into())),
                 output: "avg_value".into(),
+                percentiles: None,
             },
             AggregateSpec {
                 function: AggregateFunction::CountDistinct,
                 argument: Some(Expr::Column("value".into())),
                 output: "distinct_value".into(),
+                percentiles: None,
             },
         ];
         let fragment = |mode, exchange: &str| ExecutableFragment {
@@ -2328,11 +2354,13 @@ mod tests {
                                 function: AggregateFunction::Count,
                                 argument: None,
                                 output: "rows".into(),
+                                percentiles: None,
                             },
                             AggregateSpec {
                                 function: AggregateFunction::Sum,
                                 argument: Some(Expr::Column("value".into())),
                                 output: "total".into(),
+                                percentiles: None,
                             },
                         ],
                     },

@@ -5,18 +5,153 @@ use std::rc::Rc;
 use crate::parser::parse_sql;
 use kaveon_core::predicate::ScalarValue;
 use kaveon_core::{
-    BinaryOp, CastTarget, DateField, Expr, KaveonError, Result, WindowFrame, WindowFrameBound,
-    WindowFrameUnits,
+    BinaryOp, CastTarget, DateField, Expr, KaveonError, Percentiles, Result, WindowFrame,
+    WindowFrameBound, WindowFrameUnits, is_aggregate_function,
 };
 use sqlparser::ast;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AggregateExpr {
-    Count { expr: Expr, distinct: bool },
-    Sum { expr: Expr, distinct: bool },
-    Avg { expr: Expr, distinct: bool },
+    Count {
+        expr: Expr,
+        distinct: bool,
+    },
+    Sum {
+        expr: Expr,
+        distinct: bool,
+    },
+    Avg {
+        expr: Expr,
+        distinct: bool,
+    },
     Min(Expr),
     Max(Expr),
+    /// `APPROX_COUNT_DISTINCT(expr)` (`APPROX_DISTINCT` in Trino's name):
+    /// the distinct count from a HyperLogLog sketch. `as_count` marks a
+    /// `COUNT(DISTINCT expr)` the `approximate` session setting turned
+    /// into a sketch: the output keeps COUNT's name, so the projection
+    /// written over it still binds.
+    ApproxDistinct {
+        expr: Expr,
+        as_count: bool,
+    },
+    /// `APPROX_PERCENTILE(expr, p)` or `APPROX_PERCENTILE(expr, ARRAY[p, …])`:
+    /// the values at the fractions from a KLL sketch.
+    ApproxPercentile {
+        expr: Expr,
+        percentiles: Percentiles,
+    },
+}
+
+impl AggregateExpr {
+    /// The function's canonical upper-case name.
+    pub fn function_name(&self) -> &'static str {
+        match self {
+            Self::Count { .. } => "COUNT",
+            Self::Sum { .. } => "SUM",
+            Self::Avg { .. } => "AVG",
+            Self::Min(_) => "MIN",
+            Self::Max(_) => "MAX",
+            Self::ApproxDistinct { .. } => "APPROX_COUNT_DISTINCT",
+            Self::ApproxPercentile { .. } => "APPROX_PERCENTILE",
+        }
+    }
+
+    /// The expression the aggregate is over (`*` for `COUNT(*)`).
+    pub fn argument(&self) -> &Expr {
+        match self {
+            Self::Count { expr, .. }
+            | Self::Sum { expr, .. }
+            | Self::Avg { expr, .. }
+            | Self::Min(expr)
+            | Self::Max(expr)
+            | Self::ApproxDistinct { expr, .. }
+            | Self::ApproxPercentile { expr, .. } => expr,
+        }
+    }
+
+    pub fn argument_mut(&mut self) -> &mut Expr {
+        match self {
+            Self::Count { expr, .. }
+            | Self::Sum { expr, .. }
+            | Self::Avg { expr, .. }
+            | Self::Min(expr)
+            | Self::Max(expr)
+            | Self::ApproxDistinct { expr, .. }
+            | Self::ApproxPercentile { expr, .. } => expr,
+        }
+    }
+
+    /// The function name the statement wrote: `COUNT` for a distinct
+    /// count the `approximate` setting answers from a sketch.
+    pub fn written_name(&self) -> &'static str {
+        match self {
+            Self::ApproxDistinct { as_count: true, .. } => "COUNT",
+            other => other.function_name(),
+        }
+    }
+
+    /// The call's arguments as written: the expression, then for
+    /// `APPROX_PERCENTILE` the fraction (or `ARRAY[…]` of fractions) as
+    /// literals — what a projection's `Expr::Function` over the aggregate
+    /// carries, so both name the output alike.
+    pub fn arguments(&self) -> Vec<Expr> {
+        let mut args = vec![self.argument().clone()];
+        if let Self::ApproxPercentile { percentiles, .. } = self {
+            let literals = percentiles
+                .fractions
+                .iter()
+                .map(|fraction| Expr::Literal(ScalarValue::Float64(*fraction)))
+                .collect::<Vec<_>>();
+            args.push(if percentiles.list {
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: literals,
+                }
+            } else {
+                literals.into_iter().next().expect("validated non-empty")
+            });
+        }
+        args
+    }
+
+    /// The call as an expression, as a projection writes it.
+    pub fn as_function(&self) -> Expr {
+        Expr::Function {
+            name: self.function_name().into(),
+            args: self.arguments(),
+        }
+    }
+
+    /// The output column the planners name this aggregate by when the
+    /// statement gives no alias.
+    pub fn output_name(&self) -> String {
+        kaveon_core::aggregate_output_name(self.written_name(), &self.arguments())
+    }
+
+    /// Whether the result is an estimate from a sketch.
+    pub fn is_approximate(&self) -> bool {
+        matches!(
+            self,
+            Self::ApproxDistinct { .. } | Self::ApproxPercentile { .. }
+        )
+    }
+
+    /// `COUNT(DISTINCT expr)` as `APPROX_COUNT_DISTINCT(expr)`: what the
+    /// `approximate` session setting asks for. Every other aggregate is
+    /// unchanged.
+    pub fn approximated(self) -> Self {
+        match self {
+            Self::Count {
+                expr,
+                distinct: true,
+            } => Self::ApproxDistinct {
+                expr,
+                as_count: true,
+            },
+            other => other,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,6 +270,59 @@ impl TopNShape<'_> {
 }
 
 impl LogicalPlan {
+    /// The aggregates the plan computes, top down.
+    pub fn aggregates(&self) -> Vec<&AggregateExpr> {
+        let mut out = Vec::new();
+        if let LogicalPlan::Aggregate { aggregates, .. } = self {
+            out.extend(aggregates.iter());
+        }
+        for input in self.inputs() {
+            out.extend(input.aggregates());
+        }
+        out
+    }
+
+    /// The plan's direct inputs.
+    pub fn inputs(&self) -> Vec<&LogicalPlan> {
+        match self {
+            LogicalPlan::Scan { .. } => Vec::new(),
+            LogicalPlan::Filter { input, .. }
+            | LogicalPlan::Project { input, .. }
+            | LogicalPlan::Aggregate { input, .. }
+            | LogicalPlan::Sort { input, .. }
+            | LogicalPlan::Limit { input, .. }
+            | LogicalPlan::Offset { input, .. }
+            | LogicalPlan::Distinct { input }
+            | LogicalPlan::Window { input, .. } => vec![input.as_ref()],
+            LogicalPlan::Join { left, right, .. }
+            | LogicalPlan::Intersect { left, right }
+            | LogicalPlan::Except { left, right }
+            | LogicalPlan::SemiJoin { left, right, .. }
+            | LogicalPlan::AntiJoin { left, right, .. } => vec![left.as_ref(), right.as_ref()],
+            LogicalPlan::Union { inputs, .. } => inputs.iter().collect(),
+        }
+    }
+
+    pub fn inputs_mut(&mut self) -> Vec<&mut LogicalPlan> {
+        match self {
+            LogicalPlan::Scan { .. } => Vec::new(),
+            LogicalPlan::Filter { input, .. }
+            | LogicalPlan::Project { input, .. }
+            | LogicalPlan::Aggregate { input, .. }
+            | LogicalPlan::Sort { input, .. }
+            | LogicalPlan::Limit { input, .. }
+            | LogicalPlan::Offset { input, .. }
+            | LogicalPlan::Distinct { input }
+            | LogicalPlan::Window { input, .. } => vec![input.as_mut()],
+            LogicalPlan::Join { left, right, .. }
+            | LogicalPlan::Intersect { left, right }
+            | LogicalPlan::Except { left, right }
+            | LogicalPlan::SemiJoin { left, right, .. }
+            | LogicalPlan::AntiJoin { left, right, .. } => vec![left.as_mut(), right.as_mut()],
+            LogicalPlan::Union { inputs, .. } => inputs.iter_mut().collect(),
+        }
+    }
+
     /// `LIMIT n` straight over a sort, with or without an `OFFSET` between
     /// them: the shape a top-N serves without ever holding the whole
     /// sorted input. `ORDER BY … OFFSET 1000 LIMIT 10` keeps 1010 rows,
@@ -165,7 +353,7 @@ impl LogicalPlan {
 /// `l_orderkey` and answer wrongly, so a reference to the enclosing query
 /// is refused here. The embedded CLI planner takes this path.
 pub fn sql_to_logical_plan(sql: &str) -> Result<LogicalPlan> {
-    lower(sql, false)
+    lower(sql, false, false)
 }
 
 /// Lower `sql` for the binder (`kaveon_optim::binder::bind`), which runs
@@ -174,10 +362,18 @@ pub fn sql_to_logical_plan(sql: &str) -> Result<LogicalPlan> {
 /// join that brings the subquery in, or refuses it by name. Both API
 /// pipelines take this path; a plan lowered this way must not run unbound.
 pub fn sql_to_logical_plan_for_binder(sql: &str) -> Result<LogicalPlan> {
-    lower(sql, true)
+    lower(sql, true, false)
 }
 
-fn lower(sql: &str, outer_references: bool) -> Result<LogicalPlan> {
+/// [`sql_to_logical_plan_for_binder`] with every plain `COUNT(DISTINCT
+/// expr)` lowered as `APPROX_COUNT_DISTINCT` named as COUNT
+/// ([`AggregateExpr::approximated`]): the `approximate` session setting.
+/// Decided here, before a lone `COUNT(DISTINCT)` becomes a DISTINCT stage.
+pub fn sql_to_logical_plan_for_binder_approximate(sql: &str) -> Result<LogicalPlan> {
+    lower(sql, true, true)
+}
+
+fn lower(sql: &str, outer_references: bool, approximate: bool) -> Result<LogicalPlan> {
     let stmts = parse_sql(sql)?;
     if stmts.is_empty() {
         return Err(sql_err("empty query"));
@@ -190,6 +386,7 @@ fn lower(sql: &str, outer_references: bool) -> Result<LogicalPlan> {
             query,
             &Lowering {
                 outer_references,
+                approximate,
                 ..Lowering::default()
             },
         ),
@@ -206,6 +403,8 @@ struct Lowering {
     ctes: HashMap<String, ast::Query>,
     scalars: Rc<Cell<usize>>,
     outer_references: bool,
+    /// Plain distinct counts lower as sketches.
+    approximate: bool,
 }
 
 impl Lowering {
@@ -346,7 +545,7 @@ fn select_to_plan_with_bindings(
         || matches!(&select.group_by, ast::GroupByExpr::Expressions(exprs, _) if !exprs.is_empty());
 
     let plan = if has_aggregates {
-        build_aggregate(plan, select)?
+        build_aggregate(plan, select, ctes.approximate)?
     } else {
         plan
     };
@@ -800,7 +999,11 @@ fn scalar_subquery_plan(plan: LogicalPlan, name: &str) -> Result<LogicalPlan> {
     })
 }
 
-fn build_aggregate(plan: LogicalPlan, select: &ast::Select) -> Result<LogicalPlan> {
+fn build_aggregate(
+    plan: LogicalPlan,
+    select: &ast::Select,
+    approximate: bool,
+) -> Result<LogicalPlan> {
     let group_by_ast = match &select.group_by {
         ast::GroupByExpr::Expressions(exprs, _) => exprs.clone(),
         _ => Vec::new(),
@@ -825,6 +1028,12 @@ fn build_aggregate(plan: LogicalPlan, select: &ast::Select) -> Result<LogicalPla
                 aggregates.push(aggregate);
             }
         }
+    }
+    if approximate {
+        aggregates = aggregates
+            .into_iter()
+            .map(AggregateExpr::approximated)
+            .collect();
     }
 
     // GROUP BY over plain columns with nothing to aggregate is DISTINCT over
@@ -972,16 +1181,9 @@ fn lower_aggregate_expressions(
             mut aggregates,
         } => {
             let complex = group_by.iter().any(|e| !matches!(e, Expr::Column(_)))
-                || aggregates.iter().any(|a| {
-                    let e = match a {
-                        AggregateExpr::Count { expr, .. }
-                        | AggregateExpr::Sum { expr, .. }
-                        | AggregateExpr::Avg { expr, .. }
-                        | AggregateExpr::Min(expr)
-                        | AggregateExpr::Max(expr) => expr,
-                    };
-                    !matches!(e, Expr::Column(_) | Expr::Star)
-                });
+                || aggregates
+                    .iter()
+                    .any(|a| !matches!(a.argument(), Expr::Column(_) | Expr::Star));
             if !complex && !force {
                 return Ok((
                     LogicalPlan::Aggregate {
@@ -1008,30 +1210,17 @@ fn lower_aggregate_expressions(
                 *expr = column;
             }
             for (i, aggregate) in aggregates.iter_mut().enumerate() {
-                let (function, expr) = match aggregate {
-                    AggregateExpr::Count { expr, .. } => ("COUNT", expr),
-                    AggregateExpr::Sum { expr, .. } => ("SUM", expr),
-                    AggregateExpr::Avg { expr, .. } => ("AVG", expr),
-                    AggregateExpr::Min(expr) => ("MIN", expr),
-                    AggregateExpr::Max(expr) => ("MAX", expr),
-                };
-                if matches!(expr, Expr::Star) {
+                if matches!(aggregate.argument(), Expr::Star) {
                     continue;
                 }
-                let original = Expr::Function {
-                    name: function.into(),
-                    args: vec![expr.clone()],
-                };
+                let original = aggregate.as_function();
                 let name = format!("__kaveon_arg_{i}");
                 projection.push(Expr::Alias {
-                    expr: Box::new(expr.clone()),
+                    expr: Box::new(aggregate.argument().clone()),
                     name: name.clone(),
                 });
-                *expr = Expr::Column(name.clone());
-                bindings.push((
-                    original,
-                    Expr::Column(format!("{}_{name}", function.to_lowercase())),
-                ));
+                *aggregate.argument_mut() = Expr::Column(name.clone());
+                bindings.push((original, Expr::Column(aggregate.output_name())));
             }
             Ok((
                 LogicalPlan::Aggregate {
@@ -1406,6 +1595,17 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
         ast::Expr::IsNotNull(expr) => Ok(Expr::IsNotNull(Box::new(ast_expr_to_expr(expr)?))),
         ast::Expr::Nested(inner) => ast_expr_to_expr(inner),
         ast::Expr::Function(func) => ast_function_to_expr(func),
+        // `ARRAY[…]` is carried as a call named ARRAY: the only place it is
+        // accepted is an aggregate's argument list, where the aggregate
+        // reads the constants and the projection names the output by them.
+        ast::Expr::Array(array) => Ok(Expr::Function {
+            name: "ARRAY".into(),
+            args: array
+                .elem
+                .iter()
+                .map(ast_expr_to_expr)
+                .collect::<Result<_>>()?,
+        }),
         ast::Expr::Wildcard(_) => Ok(Expr::Star),
 
         // ── CASE ────────────────────────────────────────────────────────
@@ -1731,7 +1931,7 @@ fn ast_binop_to_binop(op: &ast::BinaryOperator) -> Option<BinaryOp> {
 }
 
 fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
-    let name = func.name.to_string().to_uppercase();
+    let name = canonical_function_name(func);
     let args: Vec<Expr> = match &func.args {
         ast::FunctionArguments::List(arg_list) => arg_list
             .args
@@ -1801,7 +2001,32 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         });
     }
 
+    let args = if name == "APPROX_PERCENTILE" {
+        args.into_iter().map(normalise_fraction).collect()
+    } else {
+        args
+    };
     Ok(Expr::Function { name, args })
+}
+
+/// A percentile as written (`0.5`, `1`, `ARRAY[0.9, 0.99]`) with its
+/// numbers as doubles: the form [`AggregateExpr::arguments`] renders, so a
+/// projection's call and the aggregate it stands for are the same
+/// expression.
+fn normalise_fraction(expr: Expr) -> Expr {
+    match expr {
+        Expr::Literal(ScalarValue::Int64(value)) => {
+            Expr::Literal(ScalarValue::Float64(value as f64))
+        }
+        Expr::Literal(ScalarValue::Decimal128 { value, scale, .. }) => Expr::Literal(
+            ScalarValue::Float64(value as f64 / 10f64.powi(i32::from(scale))),
+        ),
+        Expr::Function { name, args } if name == "ARRAY" => Expr::Function {
+            name,
+            args: args.into_iter().map(normalise_fraction).collect(),
+        },
+        other => other,
+    }
 }
 
 fn contains_aggregate_select_item(item: &ast::SelectItem) -> bool {
@@ -1819,8 +2044,7 @@ fn contains_aggregate_expr(expr: &ast::Expr) -> bool {
             if func.over.is_some() {
                 return false;
             }
-            let name = func.name.to_string().to_uppercase();
-            matches!(name.as_str(), "COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
+            is_aggregate_function(&canonical_function_name(func))
         }
         ast::Expr::BinaryOp { left, right, .. } => {
             contains_aggregate_expr(left) || contains_aggregate_expr(right)
@@ -1863,8 +2087,9 @@ fn collect_aggregates_from_ast_expr(expr: &ast::Expr, out: &mut Vec<AggregateExp
             if func.over.is_some() {
                 return Ok(());
             }
-            let name = func.name.to_string().to_uppercase();
-            if matches!(name.as_str(), "COUNT" | "SUM" | "AVG" | "MIN" | "MAX") {
+            let name = canonical_function_name(func);
+            if is_aggregate_function(&name) {
+                let approximate = name.starts_with("APPROX_");
                 let arg = match &func.args {
                     ast::FunctionArguments::List(args) => {
                         if args.args.is_empty() {
@@ -1883,6 +2108,9 @@ fn collect_aggregates_from_ast_expr(expr: &ast::Expr, out: &mut Vec<AggregateExp
                     }
                     _ => Expr::Star,
                 };
+                if approximate && matches!(arg, Expr::Star) {
+                    return Err(sql_err(format!("{name} requires a column argument")));
+                }
                 let distinct = matches!(
                     &func.args,
                     ast::FunctionArguments::List(args)
@@ -1891,7 +2119,7 @@ fn collect_aggregates_from_ast_expr(expr: &ast::Expr, out: &mut Vec<AggregateExp
                 if distinct && matches!(arg, Expr::Star) {
                     return Err(sql_err(format!("{name}(DISTINCT *) is not supported")));
                 }
-                if distinct && matches!(name.as_str(), "MIN" | "MAX") {
+                if distinct && (matches!(name.as_str(), "MIN" | "MAX") || approximate) {
                     return Err(sql_err(format!("DISTINCT is not supported for {name}")));
                 }
                 let agg = match name.as_str() {
@@ -1909,6 +2137,14 @@ fn collect_aggregates_from_ast_expr(expr: &ast::Expr, out: &mut Vec<AggregateExp
                     },
                     "MIN" => AggregateExpr::Min(arg),
                     "MAX" => AggregateExpr::Max(arg),
+                    "APPROX_COUNT_DISTINCT" => AggregateExpr::ApproxDistinct {
+                        expr: arg,
+                        as_count: false,
+                    },
+                    "APPROX_PERCENTILE" => AggregateExpr::ApproxPercentile {
+                        expr: arg,
+                        percentiles: approx_percentiles(func)?,
+                    },
                     _ => unreachable!(),
                 };
                 out.push(agg);
@@ -1944,6 +2180,66 @@ fn collect_aggregates_from_ast_expr(expr: &ast::Expr, out: &mut Vec<AggregateExp
         ast::Expr::Cast { expr, .. } => collect_aggregates_from_ast_expr(expr, out),
         _ => Ok(()),
     }
+}
+
+/// A function's upper-case name, Trino's `APPROX_DISTINCT` as
+/// `APPROX_COUNT_DISTINCT`.
+fn canonical_function_name(func: &ast::Function) -> String {
+    let name = func.name.to_string().to_uppercase();
+    if name == "APPROX_DISTINCT" {
+        "APPROX_COUNT_DISTINCT".to_owned()
+    } else {
+        name
+    }
+}
+
+/// `APPROX_PERCENTILE`'s second argument: a number in `[0, 1]`, or
+/// `ARRAY[…]` of them. Constants only — the fractions shape the result.
+fn approx_percentiles(func: &ast::Function) -> Result<Percentiles> {
+    let ast::FunctionArguments::List(args) = &func.args else {
+        return Err(sql_err(
+            "APPROX_PERCENTILE requires a column and a percentile",
+        ));
+    };
+    let [
+        _,
+        ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(second)),
+    ] = args.args.as_slice()
+    else {
+        return Err(sql_err(
+            "APPROX_PERCENTILE takes a column and one percentile or ARRAY[…] of percentiles",
+        ));
+    };
+    let fraction = |expr: &ast::Expr| -> Result<f64> {
+        let (negative, expr) = match expr {
+            ast::Expr::UnaryOp {
+                op: ast::UnaryOperator::Minus,
+                expr,
+            } => (true, expr.as_ref()),
+            other => (false, other),
+        };
+        let ast::Expr::Value(ast::Value::Number(text, _)) = expr else {
+            return Err(sql_err(
+                "APPROX_PERCENTILE percentiles must be numeric constants",
+            ));
+        };
+        let value = text
+            .parse::<f64>()
+            .map_err(|_| sql_err(format!("invalid number: {text}")))?;
+        Ok(if negative { -value } else { value })
+    };
+    let percentiles = match second {
+        ast::Expr::Array(array) => Percentiles {
+            fractions: array.elem.iter().map(fraction).collect::<Result<_>>()?,
+            list: true,
+        },
+        other => Percentiles {
+            fractions: vec![fraction(other)?],
+            list: false,
+        },
+    };
+    percentiles.validate()?;
+    Ok(percentiles)
 }
 
 fn collect_window_exprs(select: &ast::Select) -> Result<Vec<Expr>> {
@@ -2095,13 +2391,7 @@ fn validate_uncorrelated(plan: &LogicalPlan) -> Result<()> {
                 aggregates,
             } => {
                 expressions.extend(group_by);
-                expressions.extend(aggregates.iter().map(|a| match a {
-                    AggregateExpr::Count { expr, .. }
-                    | AggregateExpr::Sum { expr, .. }
-                    | AggregateExpr::Avg { expr, .. }
-                    | AggregateExpr::Min(expr)
-                    | AggregateExpr::Max(expr) => expr,
-                }));
+                expressions.extend(aggregates.iter().map(AggregateExpr::argument));
                 visit(input, relations, expressions);
             }
             LogicalPlan::Limit { input, .. }
@@ -3385,5 +3675,191 @@ mod tests {
             aggregates.as_slice(),
             [AggregateExpr::Avg { distinct: true, .. }]
         ));
+    }
+
+    fn aggregates_of(sql: &str) -> (Vec<Expr>, Vec<AggregateExpr>) {
+        let plan = sql_to_logical_plan(sql).unwrap();
+        let LogicalPlan::Project { input, columns } = plan else {
+            panic!("expected Project");
+        };
+        let LogicalPlan::Aggregate { aggregates, .. } = *input else {
+            panic!("expected Aggregate under Project");
+        };
+        (columns, aggregates)
+    }
+
+    #[test]
+    fn parses_approximate_aggregates_and_names_their_outputs() {
+        let (columns, aggregates) = aggregates_of(
+            "SELECT APPROX_COUNT_DISTINCT(user_id), approx_distinct(country) AS c, \
+             APPROX_PERCENTILE(latency, 0.5), APPROX_PERCENTILE(latency, ARRAY[0.9, 0.99]) \
+             FROM events",
+        );
+        assert_eq!(
+            aggregates,
+            vec![
+                AggregateExpr::ApproxDistinct {
+                    expr: Expr::Column("user_id".into()),
+                    as_count: false,
+                },
+                AggregateExpr::ApproxDistinct {
+                    expr: Expr::Column("country".into()),
+                    as_count: false,
+                },
+                AggregateExpr::ApproxPercentile {
+                    expr: Expr::Column("latency".into()),
+                    percentiles: Percentiles {
+                        fractions: vec![0.5],
+                        list: false
+                    }
+                },
+                AggregateExpr::ApproxPercentile {
+                    expr: Expr::Column("latency".into()),
+                    percentiles: Percentiles {
+                        fractions: vec![0.9, 0.99],
+                        list: true
+                    }
+                },
+            ]
+        );
+        assert!(aggregates.iter().all(AggregateExpr::is_approximate));
+        // The projection carries the calls under their canonical names, so
+        // the planners bind them to the same output columns the aggregate
+        // names itself by.
+        let names = aggregates
+            .iter()
+            .map(AggregateExpr::output_name)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            [
+                "approx_count_distinct_user_id",
+                "approx_count_distinct_country",
+                "approx_percentile_latency, 0.5",
+                "approx_percentile_latency, array[0.9, 0.99]",
+            ]
+        );
+        for (column, aggregate) in columns.iter().zip(&aggregates) {
+            let call = match column {
+                Expr::Alias { expr, .. } => expr.as_ref(),
+                other => other,
+            };
+            let Expr::Function { name, args } = call else {
+                panic!("projection carries the call: {column:?}");
+            };
+            assert_eq!(
+                kaveon_core::aggregate_output_name(name, args),
+                aggregate.output_name()
+            );
+        }
+    }
+
+    #[test]
+    fn approximate_aggregates_over_expressions_lower_like_exact_ones() {
+        let (columns, aggregates) =
+            aggregates_of("SELECT APPROX_PERCENTILE(latency * 2, 0.5) + 1 FROM events");
+        assert!(matches!(
+            &aggregates[0],
+            AggregateExpr::ApproxPercentile { expr: Expr::Column(name), .. } if name == "__kaveon_arg_0"
+        ));
+        assert_eq!(
+            columns[0],
+            Expr::BinaryOp {
+                left: Box::new(Expr::Column("approx_percentile___kaveon_arg_0, 0.5".into())),
+                op: BinaryOp::Plus,
+                right: Box::new(Expr::Literal(ScalarValue::Int64(1))),
+            }
+        );
+    }
+
+    #[test]
+    fn approximate_aggregates_refuse_what_they_cannot_answer() {
+        for (sql, message) in [
+            (
+                "SELECT APPROX_COUNT_DISTINCT(*) FROM events",
+                "requires a column argument",
+            ),
+            (
+                "SELECT APPROX_COUNT_DISTINCT(DISTINCT user_id) FROM events",
+                "DISTINCT is not supported",
+            ),
+            (
+                "SELECT APPROX_PERCENTILE(latency) FROM events",
+                "one percentile",
+            ),
+            (
+                "SELECT APPROX_PERCENTILE(latency, 1.5) FROM events",
+                "not between 0 and 1",
+            ),
+            (
+                "SELECT APPROX_PERCENTILE(latency, ARRAY[]) FROM events",
+                "at least one percentile",
+            ),
+            (
+                "SELECT APPROX_PERCENTILE(latency, p) FROM events",
+                "numeric constants",
+            ),
+        ] {
+            let error = sql_to_logical_plan(sql).unwrap_err().to_string();
+            assert!(error.contains(message), "{sql}: {error}");
+        }
+    }
+
+    #[test]
+    fn the_approximate_setting_turns_exact_distinct_counts_into_sketches() {
+        let sql = "SELECT COUNT(DISTINCT user_id), COUNT(user_id), SUM(DISTINCT n) FROM events";
+        let LogicalPlan::Project { input, .. } =
+            sql_to_logical_plan_for_binder_approximate(sql).unwrap()
+        else {
+            panic!("expected Project");
+        };
+        let LogicalPlan::Aggregate {
+            aggregates: approximated,
+            ..
+        } = *input
+        else {
+            panic!("expected Aggregate under Project");
+        };
+        // Without the setting the same statement keeps its exact count.
+        assert!(matches!(
+            aggregates_of(sql).1[0],
+            AggregateExpr::Count { distinct: true, .. }
+        ));
+        // A lone COUNT(DISTINCT) is otherwise a DISTINCT stage; the
+        // setting makes it a sketch instead.
+        let LogicalPlan::Project { input, .. } = sql_to_logical_plan_for_binder_approximate(
+            "SELECT COUNT(DISTINCT user_id) FROM events",
+        )
+        .unwrap() else {
+            panic!("expected Project");
+        };
+        assert!(matches!(
+            *input,
+            LogicalPlan::Aggregate { ref aggregates, ref input, .. }
+                if matches!(aggregates[0], AggregateExpr::ApproxDistinct { as_count: true, .. })
+                    && matches!(**input, LogicalPlan::Scan { .. })
+        ));
+        assert_eq!(
+            approximated[0].output_name(),
+            "count_user_id",
+            "the output keeps COUNT's name so the projection binds"
+        );
+        assert_eq!(
+            approximated,
+            vec![
+                AggregateExpr::ApproxDistinct {
+                    expr: Expr::Column("user_id".into()),
+                    as_count: true,
+                },
+                AggregateExpr::Count {
+                    expr: Expr::Column("user_id".into()),
+                    distinct: false
+                },
+                AggregateExpr::Sum {
+                    expr: Expr::Column("n".into()),
+                    distinct: true
+                },
+            ]
+        );
     }
 }

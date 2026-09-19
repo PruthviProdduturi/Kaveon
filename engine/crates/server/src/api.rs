@@ -50,7 +50,7 @@ struct QueryStore {
 }
 
 /// Where the query ran, and why, when it did not run on the workers.
-#[derive(Clone, Serialize, PartialEq, Eq, Debug)]
+#[derive(Clone, Serialize, PartialEq, Debug)]
 struct ExecutionPlacement {
     /// `pending`, `distributed`, `coordinator`, `cache` or `context`.
     mode: &'static str,
@@ -66,6 +66,70 @@ struct ExecutionPlacement {
     source_version: Option<kaveon_core::SourceVersion>,
     #[serde(skip_serializing_if = "Option::is_none")]
     current_source_version: Option<kaveon_core::SourceVersion>,
+    /// The results that are estimates from sketches — `APPROX_*`
+    /// functions, and `COUNT(DISTINCT)` under `settings.approximate` —
+    /// each with the error its sketch states. Absent when every result
+    /// is exact.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approximate: Option<Vec<ApproximateNote>>,
+}
+
+/// One approximate result on a query record: the function and argument
+/// as written, the sketch that answered, and the error it states —
+/// HyperLogLog's relative standard error of the estimate, or KLL's
+/// normalized rank error of each value. Zero when the statistics held an
+/// exact count for the column.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+struct ApproximateNote {
+    function: String,
+    argument: String,
+    sketch: String,
+    error: f64,
+    error_kind: &'static str,
+}
+
+impl ApproximateNote {
+    /// The note for an aggregate the executor computes.
+    fn computed(aggregate: &AggregateExpr) -> Option<Self> {
+        let argument = match aggregate.argument() {
+            kaveon_core::Expr::Column(name) => name.clone(),
+            other => format!("{other:?}"),
+        };
+        Some(match aggregate {
+            AggregateExpr::ApproxDistinct { .. } => {
+                let sketch = kaveon_core::HllSketch::default_precision();
+                Self {
+                    function: aggregate.written_name().to_owned(),
+                    argument,
+                    sketch: format!("hyperloglog p={}", sketch.precision()),
+                    error: sketch.standard_error(),
+                    error_kind: "relative_standard_error",
+                }
+            }
+            AggregateExpr::ApproxPercentile { .. } => {
+                let sketch = kaveon_core::KllSketch::default_k();
+                Self {
+                    function: aggregate.written_name().to_owned(),
+                    argument,
+                    sketch: format!("kll k={}", sketch.k()),
+                    error: sketch.rank_error(),
+                    error_kind: "rank_error",
+                }
+            }
+            _ => return None,
+        })
+    }
+}
+
+/// The approximate results a plan computes, in plan order; `None` when
+/// every aggregate is exact.
+fn approximate_notes(plan: &LogicalPlan) -> Option<Vec<ApproximateNote>> {
+    let notes = plan
+        .aggregates()
+        .into_iter()
+        .filter_map(ApproximateNote::computed)
+        .collect::<Vec<_>>();
+    (!notes.is_empty()).then_some(notes)
 }
 
 impl ExecutionPlacement {
@@ -75,6 +139,7 @@ impl ExecutionPlacement {
             detail: None,
             source_version: None,
             current_source_version: None,
+            approximate: None,
         }
     }
     fn distributed(path: &str) -> Self {
@@ -83,6 +148,7 @@ impl ExecutionPlacement {
             detail: Some(path.to_owned()),
             source_version: None,
             current_source_version: None,
+            approximate: None,
         }
     }
     fn coordinator(reason: Option<String>) -> Self {
@@ -91,6 +157,7 @@ impl ExecutionPlacement {
             detail: Some(reason.unwrap_or_else(|| "shape has no distributed plan".to_owned())),
             source_version: None,
             current_source_version: None,
+            approximate: None,
         }
     }
     /// Served from the coordinator's result cache: no worker work.
@@ -100,17 +167,39 @@ impl ExecutionPlacement {
             detail: Some("hit".to_owned()),
             source_version: None,
             current_source_version: None,
+            approximate: None,
         }
     }
     /// Answered from the table's statistics at the statement's pinned
     /// source version: no scan.
     fn context(answer: &ContextAnswer) -> Self {
+        let sketches = answer
+            .approximate
+            .iter()
+            .map(|note| note.sketch.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let detail = if sketches.is_empty() {
+            format!("statistics at {}", answer.source_version.label())
+        } else {
+            format!(
+                "statistics at {} ({})",
+                answer.source_version.label(),
+                sketches.into_iter().collect::<Vec<_>>().join(", ")
+            )
+        };
         Self {
             mode: "context",
-            detail: Some(format!("statistics at {}", answer.source_version.label())),
+            detail: Some(detail),
             source_version: Some(answer.source_version.clone()),
             current_source_version: Some(answer.current_source_version.clone()),
+            approximate: (!answer.approximate.is_empty()).then(|| answer.approximate.clone()),
         }
+    }
+    /// The same placement, noting the approximate results the statement
+    /// computes.
+    fn with_approximate(mut self, notes: Option<Vec<ApproximateNote>>) -> Self {
+        self.approximate = notes;
+        self
     }
 }
 
@@ -2745,7 +2834,14 @@ async fn run_statement(
     }
 
     let analysis_start = Instant::now();
-    let mut plan = match sql_to_logical_plan_for_binder(&sql) {
+    // `settings.approximate`: every plain COUNT(DISTINCT) lowers as a
+    // sketch, as APPROX_COUNT_DISTINCT would; the record says so.
+    let lowered = if settings.approximate() {
+        kaveon_sql::logical_plan::sql_to_logical_plan_for_binder_approximate(&sql)
+    } else {
+        sql_to_logical_plan_for_binder(&sql)
+    };
+    let mut plan = match lowered {
         Ok(p) => p,
         Err(e) => {
             let message = format!("SQL parse error: {e}");
@@ -2776,6 +2872,7 @@ async fn run_statement(
                 .into_response();
         }
     };
+    let approximate = approximate_notes(&plan);
     let analysis_us = elapsed_us(analysis_start);
     let logical_plan = crate::planner::logical_plan_tree(&plan);
     let plan = kaveon_optim::rules::push_filter_down(plan);
@@ -2883,9 +2980,9 @@ async fn run_statement(
         .into_response();
     }
 
-    // A COUNT(*), MIN or MAX with no predicate whose table's statistics
-    // describe exactly the version this statement is pinned to is answered
-    // from them: no scan, on any node.
+    // A COUNT(*), MIN or MAX with no predicate — or an APPROX_* aggregate
+    // — whose table's statistics describe exactly the version this
+    // statement is pinned to is answered from them: no scan, on any node.
     if let Some(answer) = context_answer(&plan, &planning_statistics) {
         let mut data = vec![answer.row.clone()];
         let next_uri = if paged {
@@ -3012,7 +3109,8 @@ async fn run_statement(
                 let record = QueryRecord {
                     rows_are_preview: true,
                     scan_metrics_complete,
-                    execution: ExecutionPlacement::distributed("fragments"),
+                    execution: ExecutionPlacement::distributed("fragments")
+                        .with_approximate(approximate.clone()),
                     settings: settings.clone(),
                     cached_from: None,
                     cached_elapsed_ms: None,
@@ -3128,7 +3226,8 @@ async fn run_statement(
                 let record = QueryRecord {
                     rows_are_preview: true,
                     scan_metrics_complete,
-                    execution: ExecutionPlacement::distributed("aggregate"),
+                    execution: ExecutionPlacement::distributed("aggregate")
+                        .with_approximate(approximate.clone()),
                     settings: settings.clone(),
                     cached_from: None,
                     cached_elapsed_ms: None,
@@ -3237,7 +3336,8 @@ async fn run_statement(
                 let record = QueryRecord {
                     rows_are_preview: true,
                     scan_metrics_complete,
-                    execution: ExecutionPlacement::distributed("top_n"),
+                    execution: ExecutionPlacement::distributed("top_n")
+                        .with_approximate(approximate.clone()),
                     settings: settings.clone(),
                     cached_from: None,
                     cached_elapsed_ms: None,
@@ -3405,7 +3505,8 @@ async fn run_statement(
             let record = QueryRecord {
                 rows_are_preview: true,
                 scan_metrics_complete: true,
-                execution: ExecutionPlacement::coordinator(placement_reason.clone()),
+                execution: ExecutionPlacement::coordinator(placement_reason.clone())
+                    .with_approximate(approximate.clone()),
                 settings: settings.clone(),
                 cached_from: None,
                 cached_elapsed_ms: None,
@@ -3505,7 +3606,8 @@ async fn run_statement(
     let record = QueryRecord {
         rows_are_preview: true,
         scan_metrics_complete: true,
-        execution: ExecutionPlacement::coordinator(placement_reason.clone()),
+        execution: ExecutionPlacement::coordinator(placement_reason.clone())
+            .with_approximate(approximate.clone()),
         settings: settings.clone(),
         cached_from: None,
         cached_elapsed_ms: None,
@@ -5600,6 +5702,16 @@ enum ContextAggregate {
     Count,
     Min(String),
     Max(String),
+    /// `APPROX_COUNT_DISTINCT(col)`, or `COUNT(DISTINCT col)` under
+    /// `settings.approximate` (`written` tells which): the record's
+    /// distinct-count sketch, or its exact count when `ANALYZE … WITH
+    /// (distinct = …)` counted it.
+    ApproxDistinct {
+        column: String,
+        written: &'static str,
+    },
+    /// `APPROX_PERCENTILE(col, …)`: the record's quantile sketch.
+    ApproxPercentile(String, kaveon_core::Percentiles),
 }
 
 /// The scan of a `SELECT COUNT(*) | MIN(col) | MAX(col) … FROM t` with no
@@ -5653,6 +5765,17 @@ fn context_answer_shape(plan: &LogicalPlan) -> Option<(&str, Vec<ContextAggregat
             AggregateExpr::Max(kaveon_core::Expr::Column(column)) => {
                 ContextAggregate::Max(column.clone())
             }
+            AggregateExpr::ApproxDistinct {
+                expr: kaveon_core::Expr::Column(column),
+                ..
+            } => ContextAggregate::ApproxDistinct {
+                column: column.clone(),
+                written: aggregate.written_name(),
+            },
+            AggregateExpr::ApproxPercentile {
+                expr: kaveon_core::Expr::Column(column),
+                percentiles,
+            } => ContextAggregate::ApproxPercentile(column.clone(), percentiles.clone()),
             _ => return None,
         });
     }
@@ -5663,16 +5786,7 @@ fn context_answer_shape(plan: &LogicalPlan) -> Option<(&str, Vec<ContextAggregat
 /// planner names them: an alias as written, else `count_*`, `min_col`,
 /// `max_col`.
 fn context_output_names(plan: &LogicalPlan) -> Vec<String> {
-    let name_of = |aggregate: &AggregateExpr| {
-        let (function, expr) = match aggregate {
-            AggregateExpr::Count { expr, .. } => ("COUNT", expr),
-            AggregateExpr::Sum { expr, .. } => ("SUM", expr),
-            AggregateExpr::Avg { expr, .. } => ("AVG", expr),
-            AggregateExpr::Min(expr) => ("MIN", expr),
-            AggregateExpr::Max(expr) => ("MAX", expr),
-        };
-        crate::planner::agg_output_name(function, std::slice::from_ref(expr))
-    };
+    let name_of = AggregateExpr::output_name;
     match plan {
         LogicalPlan::Project { columns, .. } => columns
             .iter()
@@ -5695,6 +5809,9 @@ struct ContextAnswer {
     row: Vec<serde_json::Value>,
     source_version: kaveon_core::SourceVersion,
     current_source_version: kaveon_core::SourceVersion,
+    /// The approximate results among the columns and the error each
+    /// states.
+    approximate: Vec<ApproximateNote>,
 }
 
 /// The answer to a `COUNT(*)`, `MIN` or `MAX` statement with no predicate
@@ -5716,16 +5833,74 @@ fn context_answer(plan: &LogicalPlan, planning: &PlanningStatistics) -> Option<C
     }
     let mut columns = Vec::with_capacity(shape.len());
     let mut row = Vec::with_capacity(shape.len());
+    let mut approximate = Vec::new();
+    let statistics_column = |column: &str| {
+        statistics
+            .column(column)
+            .or_else(|| statistics.column(column.rsplit('.').next().unwrap_or(column)))
+    };
     for (aggregate, name) in shape.iter().zip(names) {
         let (data_type, value) = match aggregate {
             ContextAggregate::Count => (
                 presented_type(&arrow::datatypes::DataType::UInt64),
                 serde_json::json!(statistics.rows),
             ),
+            // An exact count from ANALYZE answers before the sketch and is
+            // noted with no error; the sketch answers with its standard
+            // error. A record without either scans.
+            ContextAggregate::ApproxDistinct { column, written } => {
+                let stats = statistics_column(column)?;
+                let (value, sketch, error) = match (&stats.distinct_exact, &stats.distinct) {
+                    (Some(exact), _) => (*exact, "exact count".to_owned(), 0.0),
+                    (None, Some(sketch)) => (
+                        sketch.estimate(),
+                        format!("hyperloglog p={}", sketch.precision()),
+                        sketch.standard_error(),
+                    ),
+                    (None, None) => return None,
+                };
+                approximate.push(ApproximateNote {
+                    function: (*written).to_owned(),
+                    argument: column.clone(),
+                    sketch,
+                    error,
+                    error_kind: "relative_standard_error",
+                });
+                (
+                    presented_type(&arrow::datatypes::DataType::UInt64),
+                    serde_json::json!(value),
+                )
+            }
+            ContextAggregate::ApproxPercentile(column, percentiles) => {
+                let stats = statistics_column(column)?;
+                let sketch = stats.quantiles.as_ref()?;
+                let values = (!sketch.is_empty()).then(|| sketch.quantiles(&percentiles.fractions));
+                approximate.push(ApproximateNote {
+                    function: "APPROX_PERCENTILE".to_owned(),
+                    argument: column.clone(),
+                    sketch: format!("kll k={}", sketch.k()),
+                    error: sketch.rank_error(),
+                    error_kind: "rank_error",
+                });
+                let (data_type, value) = if percentiles.list {
+                    (
+                        presented_type(&kaveon_exec::aggregate::percentile_list_type()),
+                        values.map_or(serde_json::Value::Null, |values| {
+                            serde_json::Value::Array(
+                                values.into_iter().map(|v| serde_json::json!(v)).collect(),
+                            )
+                        }),
+                    )
+                } else {
+                    (
+                        presented_type(&arrow::datatypes::DataType::Float64),
+                        serde_json::json!(values.and_then(|values| values[0])),
+                    )
+                };
+                (data_type, value)
+            }
             ContextAggregate::Min(column) | ContextAggregate::Max(column) => {
-                let column = statistics
-                    .column(column)
-                    .or_else(|| statistics.column(column.rsplit('.').next().unwrap_or(column)))?;
+                let column = statistics_column(column)?;
                 let nulls = column.null_count?;
                 let bound = match aggregate {
                     ContextAggregate::Min(_) => column.min.as_ref(),
@@ -5750,6 +5925,7 @@ fn context_answer(plan: &LogicalPlan, planning: &PlanningStatistics) -> Option<C
         row,
         source_version: statistics.source_version.clone(),
         current_source_version: relation.current_version()?,
+        approximate,
     })
 }
 
@@ -8473,7 +8649,9 @@ fn aggregate_merge_contract(plan: &LogicalPlan) -> Option<(usize, Vec<MergeOpera
             AggregateExpr::Max(_) => Some(MergeOperation::Max),
             AggregateExpr::Avg { .. }
             | AggregateExpr::Count { distinct: true, .. }
-            | AggregateExpr::Sum { distinct: true, .. } => None,
+            | AggregateExpr::Sum { distinct: true, .. }
+            | AggregateExpr::ApproxDistinct { .. }
+            | AggregateExpr::ApproxPercentile { .. } => None,
         })
         .collect::<Option<Vec<_>>>()?;
     Some((group_by.len(), operations))
@@ -8513,27 +8691,20 @@ fn projected_aggregate_matches(expr: &kaveon_core::Expr, aggregate: &AggregateEx
     let kaveon_core::Expr::Function { name, args } = expr else {
         return false;
     };
-    let expected_name = match aggregate {
-        AggregateExpr::Count { .. } => "count",
-        AggregateExpr::Sum { .. } => "sum",
-        AggregateExpr::Avg { .. } => "avg",
-        AggregateExpr::Min(_) => "min",
-        AggregateExpr::Max(_) => "max",
-    };
-    if !name.eq_ignore_ascii_case(expected_name) || args.len() != 1 {
+    // The call as written (`COUNT` for a distinct count the `approximate`
+    // setting answers from a sketch), its first argument the aggregate's,
+    // and the rest — APPROX_PERCENTILE's fractions — labelled alike.
+    let expected = aggregate.arguments();
+    if !name.eq_ignore_ascii_case(aggregate.written_name()) || args.len() != expected.len() {
         return false;
     }
-    let expected_expr = match aggregate {
-        AggregateExpr::Count { expr, .. }
-        | AggregateExpr::Sum { expr, .. }
-        | AggregateExpr::Avg { expr, .. }
-        | AggregateExpr::Min(expr)
-        | AggregateExpr::Max(expr) => expr,
-    };
-    match (&args[0], expected_expr) {
+    let first = match (&args[0], aggregate.argument()) {
         (kaveon_core::Expr::Star, kaveon_core::Expr::Star) => true,
         (left, right) => expression_column(left) == expression_column(right),
-    }
+    };
+    first
+        && kaveon_core::aggregate_output_name(name, &args[1..])
+            == kaveon_core::aggregate_output_name(name, &expected[1..])
 }
 
 fn distributed_scan_input(plan: &LogicalPlan) -> bool {
@@ -8672,6 +8843,10 @@ fn compare_json_scalars(
 fn presented_type(data_type: &arrow::datatypes::DataType) -> String {
     match data_type {
         arrow::datatypes::DataType::Dictionary(_, values) => values.to_string(),
+        // `List(Float64)`, not the item field's Debug rendering.
+        arrow::datatypes::DataType::List(field) => {
+            format!("List({})", presented_type(field.data_type()))
+        }
         other => other.to_string(),
     }
 }
@@ -8744,6 +8919,15 @@ fn batches_to_json(batches: &[arrow::record_batch::RecordBatch]) -> Vec<Vec<serd
                     }
                     DataType::LargeUtf8 => {
                         serde_json::Value::String(arr.as_string::<i64>().value(row).to_owned())
+                    }
+                    // A list of doubles (`APPROX_PERCENTILE(col, ARRAY[…])`)
+                    // as a JSON array.
+                    DataType::List(field) if field.data_type() == &DataType::Float64 => {
+                        let items = arr.as_list::<i32>().value(row);
+                        let items = items.as_primitive::<Float64Type>();
+                        serde_json::Value::Array(
+                            items.iter().map(|item| serde_json::json!(item)).collect(),
+                        )
                     }
                     // Temporal and decimal values as their logical text —
                     // ISO 8601 dates, timestamps and times, exact decimal
@@ -9470,6 +9654,7 @@ mod tests {
             local_parallelism: Some(1),
             result_cache: None,
             admission_wait_seconds: None,
+            approximate: None,
         };
         let request = super::TaskRequest {
             query_id: "query-settings".into(),
@@ -12487,6 +12672,249 @@ mod tests {
             "{}",
             record["execution"]
         );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// `APPROX_*` aggregates compute from a sketch over the scan, then —
+    /// once the statistics carry sketches at the pinned version — answer
+    /// from those, within the error the record states; a moved source
+    /// scans again. Exact `COUNT(DISTINCT)` is unchanged unless
+    /// `settings.approximate` asks for the sketch.
+    #[tokio::test]
+    async fn approximate_aggregates_answer_from_statistics_within_their_stated_error() {
+        let (state, directory) = analyze_test_state().await;
+        register_events_directory(&state, &directory, 100).await;
+        let hll_error = kaveon_core::HllSketch::default_precision().standard_error();
+        let kll_error = kaveon_core::KllSketch::default_k().rank_error();
+        let statements = [
+            (
+                "SELECT APPROX_COUNT_DISTINCT(id) FROM events",
+                "APPROX_COUNT_DISTINCT",
+                hll_error,
+            ),
+            (
+                "SELECT APPROX_DISTINCT(name) AS names, COUNT(*) FROM events",
+                "APPROX_COUNT_DISTINCT",
+                hll_error,
+            ),
+            (
+                "SELECT APPROX_PERCENTILE(id, 0.5) AS median FROM events",
+                "APPROX_PERCENTILE",
+                kll_error,
+            ),
+            (
+                "SELECT APPROX_PERCENTILE(score, ARRAY[0.1, 0.9]) AS tails FROM events",
+                "APPROX_PERCENTILE",
+                kll_error,
+            ),
+        ];
+        let note_of = |record: &serde_json::Value, function: &str, error: f64| {
+            let notes = record["execution"]["approximate"]
+                .as_array()
+                .unwrap_or_else(|| panic!("no approximate note: {}", record["execution"]))
+                .clone();
+            assert_eq!(notes.len(), 1, "{notes:?}");
+            assert_eq!(notes[0]["function"], function);
+            assert!(
+                (notes[0]["error"].as_f64().unwrap() - error).abs() < 1e-9,
+                "{notes:?}"
+            );
+            notes[0].clone()
+        };
+        // Computed: no statistics on record. The record names the sketch
+        // and its error; the answers are within it.
+        let mut computed = Vec::new();
+        for (sql, function, error) in statements {
+            let (body, record) = submit_and_record(&state, sql).await;
+            assert_ne!(record["execution"]["mode"], "context", "{sql}");
+            let note = note_of(&record, function, error);
+            assert!(
+                note["sketch"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with(if function == "APPROX_PERCENTILE" {
+                        "kll"
+                    } else {
+                        "hyperloglog"
+                    }),
+                "{note}"
+            );
+            computed.push((body["columns"].clone(), body["data"].clone()));
+        }
+        let within = |estimate: f64, exact: f64, error: f64| {
+            assert!(
+                (estimate - exact).abs() <= 3.0 * error * exact.abs().max(1.0),
+                "{estimate} is not within {error} of {exact}"
+            );
+        };
+        within(computed[0].1[0][0].as_f64().unwrap(), 300.0, hll_error);
+        within(computed[1].1[0][0].as_f64().unwrap(), 97.0, hll_error);
+        assert_eq!(computed[1].1[0][1], 300);
+        // ids 0..299: the median's rank is within the rank error of 0.5.
+        within(
+            computed[2].1[0][0].as_f64().unwrap(),
+            149.5,
+            kll_error * 2.0,
+        );
+        assert_eq!(
+            computed[3].0[0]["type"], "List(Float64)",
+            "{}",
+            computed[3].0
+        );
+        let tails = computed[3].1[0][0].as_array().unwrap();
+        assert_eq!(tails.len(), 2);
+        assert!(tails[0].as_f64().unwrap() < tails[1].as_f64().unwrap());
+
+        // Exact COUNT(DISTINCT) is untouched and carries no note; under
+        // `approximate` it answers from the sketch under COUNT's name.
+        let (body, exact_record) =
+            submit_and_record(&state, "SELECT COUNT(DISTINCT id) FROM events").await;
+        assert_eq!(body["data"], serde_json::json!([[300]]));
+        assert!(
+            exact_record["execution"]["approximate"].is_null(),
+            "{}",
+            exact_record["execution"]
+        );
+        for settings in [
+            serde_json::json!({"result_cache": false, "approximate": true}),
+            serde_json::json!({"result_cache": false}),
+        ] {
+            let prefix = if settings["approximate"].is_null() {
+                "SET SESSION approximate = true; "
+            } else {
+                ""
+            };
+            let sql =
+                format!("{prefix}SELECT COUNT(DISTINCT id) AS n, COUNT(DISTINCT name) FROM events");
+            let (status, body) = submit(&state, &admin(), &sql, settings).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            let rewritten = record(body["id"].as_str().unwrap(), &admin()).await;
+            assert_eq!(rewritten["settings"]["approximate"], true);
+            assert_eq!(body["columns"][0]["name"], "n");
+            assert_eq!(body["columns"][1]["name"], "count_name");
+            let notes = rewritten["execution"]["approximate"].as_array().unwrap();
+            assert_eq!(notes.len(), 2, "{notes:?}");
+            assert!(notes.iter().all(|note| note["function"] == "COUNT"));
+            within(body["data"][0][0].as_f64().unwrap(), 300.0, hll_error);
+            within(body["data"][0][1].as_f64().unwrap(), 97.0, hll_error);
+            assert_eq!(
+                body["data"][0][0], computed[0].1[0][0],
+                "the same sketch, the same estimate"
+            );
+        }
+
+        // From statistics: ANALYZE reads the sketches; every statement of
+        // the set answers from them — the distinct counts identically
+        // (the same registers), the percentiles within the rank error —
+        // and the record names the sketch and its error.
+        let (status, body) = submit(
+            &state,
+            &admin(),
+            "ANALYZE events WITH (sketches = true)",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let stored = stored_events_statistics(&state).unwrap();
+        for ((sql, function, error), (columns, data)) in statements.iter().zip(&computed) {
+            let (body, record) = submit_and_record(&state, sql).await;
+            assert_eq!(
+                record["execution"]["mode"], "context",
+                "{sql}: {}",
+                record["execution"]
+            );
+            assert_eq!(&body["columns"], columns, "{sql}");
+            let note = note_of(&record, function, *error);
+            assert_eq!(
+                record["execution"]["detail"],
+                format!(
+                    "statistics at {} ({})",
+                    stored.source_version.label(),
+                    note["sketch"].as_str().unwrap()
+                ),
+                "{sql}"
+            );
+            assert!(record["scans"].as_array().unwrap().is_empty(), "{sql}");
+            if *function == "APPROX_COUNT_DISTINCT" {
+                assert_eq!(body["data"][0][0], data[0][0], "{sql}");
+            } else if body["data"][0][0].is_array() {
+                for (estimate, computed) in body["data"][0][0]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .zip(data[0][0].as_array().unwrap())
+                {
+                    within(
+                        estimate.as_f64().unwrap(),
+                        computed.as_f64().unwrap(),
+                        kll_error * 4.0,
+                    );
+                }
+            } else {
+                within(
+                    body["data"][0][0].as_f64().unwrap(),
+                    data[0][0].as_f64().unwrap(),
+                    kll_error * 4.0,
+                );
+            }
+        }
+        // The setting's rewritten COUNT(DISTINCT) answers from statistics too.
+        let (status, body) = submit(
+            &state,
+            &admin(),
+            "SELECT COUNT(DISTINCT id) AS n FROM events",
+            serde_json::json!({"result_cache": false, "approximate": true}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let rewritten = record(body["id"].as_str().unwrap(), &admin()).await;
+        assert_eq!(
+            rewritten["execution"]["mode"], "context",
+            "{}",
+            rewritten["execution"]
+        );
+        assert_eq!(body["data"][0][0], computed[0].1[0][0]);
+        assert_eq!(
+            rewritten["execution"]["approximate"][0]["function"],
+            "COUNT"
+        );
+        // Without the setting the exact count still scans.
+        let (body, still_exact) =
+            submit_and_record(&state, "SELECT COUNT(DISTINCT id) FROM events").await;
+        assert_eq!(body["data"], serde_json::json!([[300]]));
+        assert_ne!(still_exact["execution"]["mode"], "context");
+
+        // An exact count on record answers before the sketch, with no error.
+        let (status, body) = submit(
+            &state,
+            &admin(),
+            "ANALYZE events WITH (columns = ARRAY['name'])",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (body, exact_note) =
+            submit_and_record(&state, "SELECT APPROX_COUNT_DISTINCT(name) FROM events").await;
+        assert_eq!(
+            exact_note["execution"]["mode"], "context",
+            "{}",
+            exact_note["execution"]
+        );
+        assert_eq!(body["data"], serde_json::json!([[97]]));
+        assert_eq!(exact_note["execution"]["approximate"][0]["error"], 0.0);
+        assert_eq!(
+            exact_note["execution"]["approximate"][0]["sketch"],
+            "exact count"
+        );
+
+        // The source moves on: the statistics describe another version, so
+        // the statement computes — and is right about the new rows.
+        write_events_file(&directory.join("events").join("d.parquet"), 300, 50);
+        let (body, record) =
+            submit_and_record(&state, "SELECT APPROX_COUNT_DISTINCT(id) FROM events").await;
+        assert_ne!(record["execution"]["mode"], "context");
+        within(body["data"][0][0].as_f64().unwrap(), 350.0, hll_error);
+        note_of(&record, "APPROX_COUNT_DISTINCT", hll_error);
         std::fs::remove_dir_all(directory).unwrap();
     }
 

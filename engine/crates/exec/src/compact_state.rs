@@ -20,6 +20,65 @@ const TAG_INTEGER_SUM_DISTINCT: u8 = 13;
 const TAG_EXACT: u8 = 14;
 pub(crate) const TAG_UTF8_MIN: u8 = 15;
 pub(crate) const TAG_UTF8_MAX: u8 = 16;
+/// A HyperLogLog sketch: its compact bytes as one payload.
+pub(crate) const TAG_APPROX_DISTINCT: u8 = 17;
+/// A KLL sketch and what it answers, as one payload: the sketch's compact
+/// bytes behind their length, the list flag, and the fractions (a count,
+/// then each as a little-endian f64).
+pub(crate) const TAG_APPROX_PERCENTILE: u8 = 18;
+
+/// The payload of a sketch state, the same under both state encodings.
+pub(crate) fn sketch_payload(state: &AggregateState) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    match state {
+        AggregateState::ApproxDistinct(sketch) => out.extend(sketch.to_bytes()),
+        AggregateState::ApproxPercentile {
+            sketch,
+            percentiles,
+        } => {
+            payload(&mut out, &sketch.to_bytes())?;
+            out.push(u8::from(percentiles.list));
+            length(&mut out, percentiles.fractions.len())?;
+            for fraction in &percentiles.fractions {
+                out.extend(fraction.to_le_bytes());
+            }
+        }
+        _ => return Err(exec_err("sketch payload requested from a non-sketch state")),
+    }
+    Ok(out)
+}
+
+/// A sketch state from its tag and payload.
+pub(crate) fn sketch_state(tag: u8, bytes: &[u8]) -> Result<AggregateState> {
+    match tag {
+        TAG_APPROX_DISTINCT => Ok(AggregateState::ApproxDistinct(HllSketch::from_bytes(
+            bytes,
+        )?)),
+        TAG_APPROX_PERCENTILE => {
+            let mut input = Input(bytes);
+            let sketch = KllSketch::from_bytes(input.payload()?)?;
+            let list = input.flag()?;
+            let count = input.u32()? as usize;
+            if count > input.0.len() / 8 {
+                return Err(exec_err("APPROX_PERCENTILE fraction count exceeds payload"));
+            }
+            let mut fractions = Vec::with_capacity(count);
+            for _ in 0..count {
+                fractions.push(f64::from_le_bytes(input.fixed()?));
+            }
+            if !input.0.is_empty() {
+                return Err(exec_err("trailing APPROX_PERCENTILE state bytes"));
+            }
+            let percentiles = Percentiles { fractions, list };
+            percentiles.validate()?;
+            Ok(AggregateState::ApproxPercentile {
+                sketch,
+                percentiles,
+            })
+        }
+        _ => Err(exec_err("unknown sketch state tag")),
+    }
+}
 
 /// Append one group's states to `out`. The caller has validated the layout
 /// for the whole set of groups and checks cancellation per stride, so this
@@ -100,6 +159,14 @@ pub(crate) fn encode_into(states: &[AggregateState], out: &mut Vec<u8>) -> Resul
                 if let Some(value) = value {
                     out.extend(value.to_le_bytes());
                 }
+            }
+            AggregateState::ApproxDistinct(_) | AggregateState::ApproxPercentile { .. } => {
+                out.push(if matches!(state, AggregateState::ApproxDistinct(_)) {
+                    TAG_APPROX_DISTINCT
+                } else {
+                    TAG_APPROX_PERCENTILE
+                });
+                payload(out, &sketch_payload(state)?)?;
             }
             AggregateState::Exact {
                 function,
@@ -219,6 +286,7 @@ pub(crate) fn decode_into(bytes: &[u8], states: &mut Vec<AggregateState>) -> Res
                     AggregateState::IntegerMax(value)
                 }
             }
+            TAG_APPROX_DISTINCT | TAG_APPROX_PERCENTILE => sketch_state(tag, input.payload()?)?,
             TAG_EXACT => {
                 let function = match input.byte()? {
                     0 => AggFunc::Sum,
@@ -419,6 +487,26 @@ mod tests {
                 scale: Some(4),
                 value: None,
                 distinct: Some(HashSet::from([AggregateValue::Decimal128(12345, 4)])),
+            },
+            AggregateState::ApproxDistinct({
+                let mut sketch = HllSketch::default_precision();
+                for value in 0..10_000 {
+                    sketch.insert_text(&value.to_string());
+                }
+                sketch
+            }),
+            AggregateState::ApproxPercentile {
+                sketch: {
+                    let mut sketch = KllSketch::default_k();
+                    for value in 0..10_000 {
+                        sketch.update(f64::from(value));
+                    }
+                    sketch
+                },
+                percentiles: Percentiles {
+                    fractions: vec![0.5, 0.99],
+                    list: true,
+                },
             },
         ];
         let bytes = encode(&states).unwrap();

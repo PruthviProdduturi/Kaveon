@@ -8,7 +8,8 @@ use arrow::ipc::reader::StreamReader;
 use arrow::ipc::writer::StreamWriter;
 use arrow::record_batch::RecordBatch;
 use kaveon_core::{
-    BatchOperator, KaveonError, MemoryReservation, OperatorMemoryAccount, QueryMemoryPool, Result,
+    BatchOperator, HllSketch, KaveonError, KllSketch, MemoryReservation, OperatorMemoryAccount,
+    Percentiles, QueryMemoryPool, Result,
 };
 use std::collections::{HashMap, HashSet, hash_map::Entry};
 
@@ -74,6 +75,8 @@ const STATE_INTEGER_MAX: u8 = 12;
 const STATE_INTEGER_SUM_DISTINCT: u8 = 13;
 const STATE_UTF8_MIN: u8 = 15;
 const STATE_UTF8_MAX: u8 = 16;
+const STATE_APPROX_DISTINCT: u8 = 17;
+const STATE_APPROX_PERCENTILE: u8 = 18;
 pub(crate) const VALUE_BOOL: u8 = 1;
 pub(crate) const VALUE_INT32: u8 = 2;
 pub(crate) const VALUE_INT64: u8 = 3;
@@ -90,6 +93,21 @@ pub enum AggFunc {
     Min,
     Max,
     Avg,
+    /// `APPROX_COUNT_DISTINCT`: a HyperLogLog sketch over the column at the
+    /// statistics precision; the result is its estimate, within
+    /// [`HllSketch::standard_error`] of the exact count.
+    ApproxDistinct,
+    /// `APPROX_PERCENTILE`: a KLL sketch over the column at the statistics
+    /// `k`; the result is the value at each asked fraction, whose true rank
+    /// is within [`KllSketch::rank_error`] of it.
+    ApproxPercentile,
+}
+
+impl AggFunc {
+    /// Whether the result is an estimate from a sketch.
+    pub const fn is_approximate(self) -> bool {
+        matches!(self, Self::ApproxDistinct | Self::ApproxPercentile)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -98,6 +116,9 @@ pub struct AggExpr {
     pub column: String,
     pub alias: Option<String>,
     pub distinct: bool,
+    /// For `ApproxPercentile`: the fractions and whether they answer as
+    /// one list.
+    pub percentiles: Option<Percentiles>,
 }
 
 impl AggExpr {
@@ -107,6 +128,15 @@ impl AggExpr {
             column: column.into(),
             alias: None,
             distinct: false,
+            percentiles: None,
+        }
+    }
+
+    /// `APPROX_PERCENTILE(column, …)` over the given fractions.
+    pub fn approx_percentile(column: impl Into<String>, percentiles: Percentiles) -> Self {
+        Self {
+            percentiles: Some(percentiles),
+            ..Self::new(AggFunc::ApproxPercentile, column)
         }
     }
 
@@ -130,16 +160,36 @@ impl AggExpr {
             AggFunc::Min => "min",
             AggFunc::Max => "max",
             AggFunc::Avg => "avg",
+            AggFunc::ApproxDistinct => "approx_count_distinct",
+            AggFunc::ApproxPercentile => "approx_percentile",
         };
         format!("{func_name}_{}", self.column)
     }
 
     fn output_type(&self) -> DataType {
         match self.func {
-            AggFunc::Count => DataType::UInt64,
+            AggFunc::Count | AggFunc::ApproxDistinct => DataType::UInt64,
+            AggFunc::ApproxPercentile if self.percentiles.as_ref().is_some_and(|p| p.list) => {
+                percentile_list_type()
+            }
             _ => DataType::Float64,
         }
     }
+
+    /// The percentiles an `ApproxPercentile` answers; an error for any
+    /// other function or an unset list.
+    fn percentiles(&self) -> Result<&Percentiles> {
+        self.percentiles
+            .as_ref()
+            .filter(|_| matches!(self.func, AggFunc::ApproxPercentile))
+            .ok_or_else(|| exec_err("APPROX_PERCENTILE requires its percentiles"))
+    }
+}
+
+/// The result type of `APPROX_PERCENTILE(col, ARRAY[…])`: a list of
+/// doubles, one per fraction, in the order written.
+pub fn percentile_list_type() -> DataType {
+    DataType::List(Arc::new(Field::new("item", DataType::Float64, true)))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -190,6 +240,15 @@ pub enum AggregateState {
     CountDistinct(HashSet<AggregateValue>),
     SumDistinct(HashSet<AggregateValue>),
     AvgDistinct(HashSet<AggregateValue>),
+    /// `APPROX_COUNT_DISTINCT`: the HyperLogLog sketch of the values seen.
+    ApproxDistinct(HllSketch),
+    /// `APPROX_PERCENTILE`: the KLL sketch of the values seen and what it
+    /// answers, carried with the state so a merged group finalises on its
+    /// own.
+    ApproxPercentile {
+        sketch: KllSketch,
+        percentiles: Percentiles,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -202,6 +261,9 @@ pub fn aggregate_output_types(aggregates: &[AggExpr], input: &SchemaRef) -> Resu
     aggregates
         .iter()
         .map(|agg| {
+            if agg.func.is_approximate() {
+                return Ok(agg.output_type());
+            }
             if let Ok(field) = input.field_with_name(&agg.column)
                 && matches!(
                     logical_data_type(field.data_type()),
@@ -254,6 +316,9 @@ pub enum FinalAggregateValue {
     Decimal(Option<i128>, i8),
     Integer(Option<i128>),
     Utf8(Option<String>),
+    /// `APPROX_PERCENTILE(col, ARRAY[…])`: one value per fraction; `None`
+    /// for the whole list when no value was seen.
+    NumericList(Option<Vec<Option<f64>>>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -264,6 +329,9 @@ pub struct FinalizedAggregateGroup {
 
 impl AggregateState {
     pub fn new_typed(expression: &AggExpr, output_type: &DataType) -> Self {
+        if expression.func.is_approximate() {
+            return Self::new(expression);
+        }
         if output_type == &DataType::UInt64 && !matches!(expression.func, AggFunc::Count)
             || matches!(output_type, DataType::Decimal128(_, _))
                 && (expression.distinct || matches!(expression.func, AggFunc::Min | AggFunc::Max))
@@ -427,8 +495,86 @@ impl AggregateState {
             (AggFunc::Count, true) => Self::CountDistinct(HashSet::new()),
             (AggFunc::Sum, true) => Self::SumDistinct(HashSet::new()),
             (AggFunc::Avg, true) => Self::AvgDistinct(HashSet::new()),
+            (AggFunc::ApproxDistinct, _) => Self::ApproxDistinct(HllSketch::default_precision()),
+            (AggFunc::ApproxPercentile, _) => Self::ApproxPercentile {
+                sketch: KllSketch::default_k(),
+                percentiles: expression
+                    .percentiles
+                    .clone()
+                    .expect("aggregate validation requires the percentiles"),
+            },
             (_, true) => unreachable!("aggregate validation rejects unsupported DISTINCT"),
         }
+    }
+
+    /// Whether this state is a sketch: folded whole arrays or single rows
+    /// at a time through [`Self::fold_sketch`] / [`Self::fold_sketch_row`].
+    pub fn is_sketch(&self) -> bool {
+        matches!(
+            self,
+            Self::ApproxDistinct(_) | Self::ApproxPercentile { .. }
+        )
+    }
+
+    /// Bytes a sketch state holds, for accounting; zero for other states.
+    pub fn sketch_bytes(&self) -> u64 {
+        match self {
+            Self::ApproxDistinct(sketch) => sketch.memory_bytes() as u64,
+            Self::ApproxPercentile { sketch, .. } => sketch.memory_bytes() as u64,
+            _ => 0,
+        }
+    }
+
+    /// Fold every non-null value of `array` into the sketch.
+    pub fn fold_sketch(&mut self, array: &ArrayRef) -> Result<()> {
+        match self {
+            Self::ApproxDistinct(sketch) => kaveon_core::sketch::fold_distinct(array, sketch),
+            Self::ApproxPercentile { sketch, .. } => {
+                kaveon_core::sketch::fold_quantiles(array, sketch)
+            }
+            _ => Err(exec_err(
+                "sketch fold applied to a non-sketch aggregate state",
+            )),
+        }
+    }
+
+    /// Fold one row of `array` into the sketch; `text` is scratch kept
+    /// between rows.
+    pub fn fold_sketch_row(
+        &mut self,
+        array: &ArrayRef,
+        row: usize,
+        text: &mut String,
+    ) -> Result<()> {
+        match self {
+            Self::ApproxDistinct(sketch) => {
+                kaveon_core::sketch::fold_distinct_row(array, row, sketch, text)
+            }
+            Self::ApproxPercentile { sketch, .. } => {
+                kaveon_core::sketch::fold_quantiles_row(array, row, sketch)
+            }
+            _ => Err(exec_err(
+                "sketch fold applied to a non-sketch aggregate state",
+            )),
+        }
+    }
+
+    /// The estimates an `ApproxPercentile` state answers, one per
+    /// fraction; `None` when no value was folded in.
+    pub fn percentile_result(&self) -> Result<Option<Vec<Option<f64>>>> {
+        let Self::ApproxPercentile {
+            sketch,
+            percentiles,
+        } = self
+        else {
+            return Err(exec_err(
+                "percentile result requested from a non-percentile aggregate state",
+            ));
+        };
+        if sketch.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(sketch.quantiles(&percentiles.fractions)))
     }
 
     /// Fold a whole batch's worth of integers at once: `sum` over `count`
@@ -734,6 +880,26 @@ impl AggregateState {
             | (Self::AvgDistinct(values), Self::AvgDistinct(other)) => {
                 values.extend(other.iter().cloned());
             }
+            (Self::ApproxDistinct(sketch), Self::ApproxDistinct(other)) => {
+                sketch.merge(other)?;
+            }
+            (
+                Self::ApproxPercentile {
+                    sketch,
+                    percentiles,
+                },
+                Self::ApproxPercentile {
+                    sketch: other,
+                    percentiles: other_percentiles,
+                },
+            ) => {
+                if percentiles != other_percentiles {
+                    return Err(exec_err(
+                        "cannot merge APPROX_PERCENTILE states of different percentiles",
+                    ));
+                }
+                sketch.merge(other)?;
+            }
             _ => return Err(exec_err("cannot merge incompatible aggregate states")),
         }
         Ok(())
@@ -743,6 +909,7 @@ impl AggregateState {
         match self {
             Self::Count(count) => Ok(*count),
             Self::CountDistinct(values) => Ok(values.len() as u64),
+            Self::ApproxDistinct(sketch) => Ok(sketch.estimate()),
             _ => Err(exec_err(
                 "count result requested from a non-count aggregate state",
             )),
@@ -769,6 +936,10 @@ impl AggregateState {
                     Ok(Some(sum / values.len() as f64))
                 }
             }
+            Self::ApproxPercentile {
+                percentiles: Percentiles { list: false, .. },
+                ..
+            } => Ok(self.percentile_result()?.and_then(|values| values[0])),
             _ => Err(exec_err(
                 "numeric result requested from a count aggregate state",
             )),
@@ -999,7 +1170,13 @@ fn validate_state_output_types(states: &[AggregateState], output_types: &[DataTy
                 } if matches!(data_type, DataType::Decimal128(_, actual) if actual == scale) => {
                     data_type.clone()
                 }
-                AggregateState::Count(_) | AggregateState::CountDistinct(_) => DataType::UInt64,
+                AggregateState::Count(_)
+                | AggregateState::CountDistinct(_)
+                | AggregateState::ApproxDistinct(_) => DataType::UInt64,
+                AggregateState::ApproxPercentile {
+                    percentiles: Percentiles { list: true, .. },
+                    ..
+                } => percentile_list_type(),
                 AggregateState::DecimalSum { scale, .. } => DataType::Decimal128(38, *scale),
                 AggregateState::IntegerSum { .. } | AggregateState::IntegerSumDistinct(_) => {
                     DataType::Int64
@@ -1297,6 +1474,8 @@ fn state_layout(states: &[AggregateState]) -> Result<Vec<(u8, Option<i8>)>> {
                     AggregateState::CountDistinct(_) => STATE_COUNT_DISTINCT,
                     AggregateState::SumDistinct(_) => STATE_SUM_DISTINCT,
                     AggregateState::AvgDistinct(_) => STATE_AVG_DISTINCT,
+                    AggregateState::ApproxDistinct(_) => STATE_APPROX_DISTINCT,
+                    AggregateState::ApproxPercentile { .. } => STATE_APPROX_PERCENTILE,
                 },
                 match state {
                     AggregateState::DecimalSum { scale, .. } => Some(*scale),
@@ -1333,9 +1512,17 @@ pub fn finalize_grouped_aggregate_states(
                     | AggregateState::IntegerSumDistinct(_) => {
                         state.integer_result().map(FinalAggregateValue::Integer)
                     }
-                    AggregateState::Count(_) | AggregateState::CountDistinct(_) => {
+                    AggregateState::Count(_)
+                    | AggregateState::CountDistinct(_)
+                    | AggregateState::ApproxDistinct(_) => {
                         state.count_result().map(FinalAggregateValue::Count)
                     }
+                    AggregateState::ApproxPercentile {
+                        percentiles: Percentiles { list: true, .. },
+                        ..
+                    } => state
+                        .percentile_result()
+                        .map(FinalAggregateValue::NumericList),
                     AggregateState::Utf8Min(_) | AggregateState::Utf8Max(_) => {
                         state.utf8_result().map(FinalAggregateValue::Utf8)
                     }
@@ -1585,6 +1772,17 @@ pub fn encode_aggregate_states(states: &[AggregateState]) -> Result<Vec<u8>> {
                 extrema.push(None);
                 distinct_payloads.push(Some(encode_distinct_values(values)?));
             }
+            AggregateState::ApproxDistinct(_) | AggregateState::ApproxPercentile { .. } => {
+                kinds.push(if matches!(state, AggregateState::ApproxDistinct(_)) {
+                    STATE_APPROX_DISTINCT
+                } else {
+                    STATE_APPROX_PERCENTILE
+                });
+                sums.push(None);
+                counts.push(None);
+                extrema.push(None);
+                distinct_payloads.push(Some(compact_state::sketch_payload(state)?));
+            }
         }
     }
 
@@ -1780,6 +1978,12 @@ pub fn decode_aggregate_states(bytes: &[u8]) -> Result<Vec<AggregateState>> {
                         return Err(exec_err("AVG DISTINCT state payload cannot be null"));
                     }
                     AggregateState::AvgDistinct(decode_distinct_values(distinct.value(row))?)
+                }
+                kind @ (STATE_APPROX_DISTINCT | STATE_APPROX_PERCENTILE) => {
+                    if distinct.is_null(row) {
+                        return Err(exec_err("sketch state payload cannot be null"));
+                    }
+                    compact_state::sketch_state(kind, distinct.value(row))?
                 }
                 kind => return Err(exec_err(format!("unknown aggregate state kind {kind}"))),
             };
@@ -2046,6 +2250,10 @@ impl HashAggregate {
             }
             if agg.distinct && agg.column == "*" {
                 return Err(exec_err("COUNT(DISTINCT *) is not supported"));
+            }
+            if agg.func.is_approximate() {
+                validate_approximate(agg, &source_schema)?;
+                continue;
             }
             if !matches!(agg.func, AggFunc::Count) {
                 let index = source_schema.index_of(&agg.column).map_err(|_| {
@@ -2400,6 +2608,7 @@ impl HashAggregate {
         // seeds while materially reducing the hot-path cost of large GROUP BYs.
         let mut groups: AHashMap<InlineGroupKey, Vec<Accumulator>> = AHashMap::new();
         let mut reservations = ReservationSlab::default();
+        let mut sketch_text = String::new();
         // Every state a batch can be folded into with one call per group.
         let vectorisable_states = self.new_states().iter().all(|state| {
             matches!(
@@ -2446,7 +2655,12 @@ impl HashAggregate {
                 .map(|aggregate| {
                     (!(matches!(aggregate.func, AggFunc::Count) && aggregate.column == "*"))
                         .then(|| {
-                            day_numbers(batch.column(schema.index_of(&aggregate.column).unwrap()))
+                            let array = batch.column(schema.index_of(&aggregate.column).unwrap());
+                            if aggregate.func.is_approximate() {
+                                sketch_input(array)
+                            } else {
+                                day_numbers(array)
+                            }
                         })
                         .transpose()
                 })
@@ -2492,6 +2706,17 @@ impl HashAggregate {
                     }
                     let array =
                         aggregate_arrays[index].expect("non-count aggregate requires input");
+                    if state.is_sketch() {
+                        let before = state.sketch_bytes();
+                        state.fold_sketch(array)?;
+                        charge_sketch_growth(
+                            state,
+                            before,
+                            self.memory.as_ref(),
+                            &mut reservations,
+                        )?;
+                        continue;
+                    }
                     if !aggregate.distinct && fold_batch_into(state, array)? {
                         continue;
                     }
@@ -3027,6 +3252,15 @@ impl HashAggregate {
                             }
                         } else if matches!(aggregate.func, AggFunc::Count) {
                             accumulators[index].update_count()?;
+                        } else if accumulators[index].is_sketch() {
+                            let before = accumulators[index].sketch_bytes();
+                            accumulators[index].fold_sketch_row(array, row, &mut sketch_text)?;
+                            charge_sketch_growth(
+                                &accumulators[index],
+                                before,
+                                self.memory.as_ref(),
+                                &mut reservations,
+                            )?;
                         } else if matches!(accumulators[index], AggregateState::Exact { .. }) {
                             accumulators[index].update_exact(extract_key(array, row).into())?;
                         } else if matches!(
@@ -3378,6 +3612,93 @@ fn used_dictionary_indices(dictionary: &Int32DictionaryArray) -> impl Iterator<I
 
 /// Whether a whole batch of this column can be folded into an accumulator
 /// with one call: integers and floats for SUM/AVG/MIN/MAX/COUNT.
+/// An approximate aggregate's input for one batch: a dictionary whose keys
+/// the row folds do not read directly (anything but Int32) as its values;
+/// every other array as it is. Dates and timestamps fold as themselves.
+fn sketch_input(array: &ArrayRef) -> Result<ArrayRef> {
+    Ok(match array.data_type() {
+        DataType::Dictionary(key, values) if key.as_ref() != &DataType::Int32 => {
+            arrow::compute::cast(array, values)?
+        }
+        _ => Arc::clone(array),
+    })
+}
+
+/// Charge a sketch state's growth since `before` (its bytes before the
+/// fold) to the operator's slab. A sketch is bounded — a few kilobytes at
+/// the statistics precision — so the charge follows the fold.
+fn charge_sketch_growth(
+    state: &AggregateState,
+    before: u64,
+    memory: Option<&OperatorMemoryAccount>,
+    reservations: &mut ReservationSlab,
+) -> Result<()> {
+    if let Some(memory) = memory {
+        let after = state.sketch_bytes();
+        if after > before {
+            reservations.reserve(memory, after - before)?;
+        }
+    }
+    Ok(())
+}
+
+/// An approximate aggregate's argument must be a column the sketch can
+/// fold: any sketchable type for `APPROX_COUNT_DISTINCT`; a numeric type
+/// (integers, floats, decimals) for `APPROX_PERCENTILE`, which also needs
+/// its percentiles.
+fn validate_approximate(agg: &AggExpr, source_schema: &SchemaRef) -> Result<()> {
+    if agg.column == "*" {
+        return Err(exec_err(format!(
+            "{} requires a column argument",
+            agg.output_name()
+        )));
+    }
+    let index = source_schema
+        .index_of(&agg.column)
+        .map_err(|_| exec_err(format!("aggregate column '{}' not in input", agg.column)))?;
+    let data_type = source_schema.field(index).data_type();
+    match agg.func {
+        AggFunc::ApproxDistinct => {
+            if !kaveon_core::sketch::sketchable(data_type) {
+                return Err(exec_err(format!(
+                    "APPROX_COUNT_DISTINCT cannot sketch a column of type {data_type}"
+                )));
+            }
+        }
+        AggFunc::ApproxPercentile => {
+            let logical = logical_data_type(data_type);
+            if !kaveon_core::sketch::quantile_sketchable(data_type)
+                || matches!(logical, DataType::Date32 | DataType::Timestamp(_, _))
+            {
+                return Err(exec_err(format!(
+                    "APPROX_PERCENTILE requires a numeric column, got {data_type}"
+                )));
+            }
+            agg.percentiles()?.validate()?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// The `APPROX_PERCENTILE(col, ARRAY[…])` column: one list per group, null
+/// when the group saw no value.
+pub fn percentile_list_column(values: Vec<Option<Vec<Option<f64>>>>) -> ArrayRef {
+    let mut builder = arrow::array::ListBuilder::new(arrow::array::Float64Builder::new());
+    for value in values {
+        match value {
+            Some(items) => {
+                for item in items {
+                    builder.values().append_option(item);
+                }
+                builder.append(true);
+            }
+            None => builder.append(false),
+        }
+    }
+    Arc::new(builder.finish())
+}
+
 fn foldable(array: &ArrayRef) -> bool {
     matches!(
         array.data_type(),
@@ -3680,6 +4001,13 @@ impl BatchOperator for HashAggregate {
                             .map(|value| value.as_deref())
                             .collect::<Vec<_>>(),
                     )));
+                }
+                DataType::List(_) => {
+                    let values = entries
+                        .iter()
+                        .map(|(_, states)| states[ai].percentile_result())
+                        .collect::<Result<Vec<_>>>()?;
+                    columns.push(percentile_list_column(values));
                 }
                 _ => {
                     let values: Result<Vec<Option<f64>>> = entries
@@ -6086,5 +6414,317 @@ mod tests {
         let numbers: ArrayRef = Arc::new(Int64Array::from(vec![7, 8]));
         assert!(matches!(prepare_keys(&numbers), PreparedKeys::Direct(_)));
         assert_eq!(prepare_keys(&numbers).key(1), GroupKey::Int64(8));
+    }
+
+    /// One million rows of a skewed integer column, a text column of the
+    /// same values, and a two-valued group key, in 8192-row batches.
+    fn approximate_input() -> (SchemaRef, Vec<RecordBatch>) {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("g", DataType::Int64, false),
+            Field::new("v", DataType::Int64, true),
+            Field::new("t", DataType::Utf8, true),
+        ]));
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut batches = Vec::new();
+        let mut row = 0_usize;
+        while row < 1_000_000 {
+            let rows = (1_000_000 - row).min(8192);
+            let mut groups = Vec::with_capacity(rows);
+            let mut values = Vec::with_capacity(rows);
+            let mut texts = Vec::with_capacity(rows);
+            for _ in 0..rows {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                let uniform = (state >> 11) as f64 / (1u64 << 53) as f64;
+                // Values 0..=999 999, skewed towards the low end; one row
+                // in 64 is null.
+                let value = (uniform * uniform * 1_000_000.0) as i64;
+                groups.push((row % 2) as i64);
+                if state.is_multiple_of(64) {
+                    values.push(None);
+                    texts.push(None);
+                } else {
+                    values.push(Some(value));
+                    texts.push(Some(format!("v{value}")));
+                }
+                row += 1;
+            }
+            batches.push(
+                RecordBatch::try_new(
+                    schema.clone(),
+                    vec![
+                        Arc::new(Int64Array::from(groups)),
+                        Arc::new(Int64Array::from(values)),
+                        Arc::new(StringArray::from(texts)),
+                    ],
+                )
+                .unwrap(),
+            );
+        }
+        (schema, batches)
+    }
+
+    fn exact_distinct_and_quantiles(
+        batches: &[RecordBatch],
+        group: Option<i64>,
+    ) -> (u64, Vec<f64>) {
+        let mut seen = HashSet::new();
+        let mut values = Vec::new();
+        for batch in batches {
+            let groups = batch.column(0).as_primitive::<Int64Type>();
+            let column = batch.column(1).as_primitive::<Int64Type>();
+            for row in 0..batch.num_rows() {
+                if group.is_some_and(|g| groups.value(row) != g) || column.is_null(row) {
+                    continue;
+                }
+                seen.insert(column.value(row));
+                values.push(column.value(row) as f64);
+            }
+        }
+        values.sort_by(f64::total_cmp);
+        (seen.len() as u64, values)
+    }
+
+    fn rank_of(sorted: &[f64], value: f64) -> f64 {
+        sorted.partition_point(|v| *v <= value) as f64 / sorted.len() as f64
+    }
+
+    struct Batches {
+        schema: SchemaRef,
+        batches: VecDeque<RecordBatch>,
+    }
+    impl BatchOperator for Batches {
+        fn schema(&self) -> &SchemaRef {
+            &self.schema
+        }
+        fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+            Ok(self.batches.pop_front())
+        }
+    }
+
+    fn approximate_expressions() -> Vec<AggExpr> {
+        vec![
+            AggExpr::new(AggFunc::ApproxDistinct, "v"),
+            AggExpr::new(AggFunc::ApproxDistinct, "t"),
+            AggExpr::approx_percentile(
+                "v",
+                Percentiles {
+                    fractions: vec![0.5],
+                    list: false,
+                },
+            ),
+            AggExpr::approx_percentile(
+                "v",
+                Percentiles {
+                    fractions: vec![0.1, 0.9, 0.99],
+                    list: true,
+                },
+            ),
+        ]
+    }
+
+    #[test]
+    fn approximate_aggregates_are_within_their_stated_error_over_a_million_rows() {
+        let (schema, batches) = approximate_input();
+        let (exact_distinct, sorted) = exact_distinct_and_quantiles(&batches, None);
+        let expressions = approximate_expressions();
+        let types = aggregate_output_types(&expressions, &schema).unwrap();
+        assert_eq!(
+            types,
+            vec![
+                DataType::UInt64,
+                DataType::UInt64,
+                DataType::Float64,
+                percentile_list_type()
+            ]
+        );
+        let mut aggregate = HashAggregate::new(
+            Box::new(Batches {
+                schema: schema.clone(),
+                batches: batches.iter().cloned().collect(),
+            }),
+            vec![],
+            expressions.clone(),
+        )
+        .unwrap();
+        let result = aggregate.next_batch().unwrap().unwrap();
+        let hll_error = HllSketch::default_precision().standard_error();
+        let kll_error = KllSketch::default_k().rank_error();
+        for column in 0..2 {
+            let estimate = result
+                .column(column)
+                .as_primitive::<arrow::datatypes::UInt64Type>()
+                .value(0);
+            let relative = (estimate as f64 - exact_distinct as f64).abs() / exact_distinct as f64;
+            // Three standard errors: the bound the statement states is one.
+            assert!(
+                relative <= 3.0 * hll_error,
+                "column {column}: estimate {estimate}, exact {exact_distinct}, error {relative}"
+            );
+        }
+        let median = result.column(2).as_primitive::<Float64Type>().value(0);
+        assert!(
+            (rank_of(&sorted, median) - 0.5).abs() <= kll_error,
+            "median {median} has rank {}",
+            rank_of(&sorted, median)
+        );
+        let list = result.column(3).as_list::<i32>().value(0);
+        let list = list.as_primitive::<Float64Type>();
+        for (index, fraction) in [0.1, 0.9, 0.99].into_iter().enumerate() {
+            let rank = rank_of(&sorted, list.value(index));
+            assert!(
+                (rank - fraction).abs() <= kll_error,
+                "p{fraction}: {} has rank {rank}",
+                list.value(index)
+            );
+        }
+
+        // The grouped path, per group, through the exchange encoding: half
+        // the batches as one partial, half as another, merged.
+        let grouped = |batches: &[RecordBatch]| -> Vec<GroupedAggregateState> {
+            HashAggregate::new(
+                Box::new(Batches {
+                    schema: schema.clone(),
+                    batches: batches.iter().cloned().collect(),
+                }),
+                vec!["g".into()],
+                expressions.clone(),
+            )
+            .unwrap()
+            .into_grouped_states()
+            .unwrap()
+        };
+        let (left, right) = batches.split_at(batches.len() / 2);
+        let mut partials = Vec::new();
+        for half in [left, right] {
+            let encoded = grouped_aggregate_states_to_schema_batch(
+                &grouped(half),
+                &[DataType::Int64],
+                &types,
+            )
+            .unwrap();
+            assert_eq!(
+                grouped_aggregate_output_types(&encoded.schema()).unwrap(),
+                types
+            );
+            partials.extend(grouped_aggregate_states_from_batches(&[encoded]).unwrap());
+        }
+        let merged = merge_grouped_aggregate_states(partials).unwrap();
+        assert_eq!(merged.len(), 2);
+        let whole = grouped(&batches);
+        for group in &merged {
+            let AggregateValue::Int64(key) = group.group_keys[0] else {
+                panic!("integer key")
+            };
+            let (exact_distinct, sorted) = exact_distinct_and_quantiles(&batches, Some(key));
+            let sequential = whole
+                .iter()
+                .find(|g| g.group_keys == group.group_keys)
+                .unwrap();
+            // HyperLogLog registers merge exactly: the two-partial estimate is
+            // the sequential one.
+            assert_eq!(
+                group.states[0].count_result().unwrap(),
+                sequential.states[0].count_result().unwrap()
+            );
+            let estimate = group.states[0].count_result().unwrap();
+            let relative = (estimate as f64 - exact_distinct as f64).abs() / exact_distinct as f64;
+            assert!(
+                relative <= 3.0 * hll_error,
+                "group {key}: {estimate} vs {exact_distinct}"
+            );
+            let finalized = finalize_grouped_aggregate_states(std::slice::from_ref(group)).unwrap();
+            let FinalAggregateValue::Numeric(Some(median)) = finalized[0].values[2] else {
+                panic!("scalar percentile")
+            };
+            assert!((rank_of(&sorted, median) - 0.5).abs() <= kll_error);
+            let FinalAggregateValue::NumericList(Some(list)) = &finalized[0].values[3] else {
+                panic!("list percentile")
+            };
+            for (value, fraction) in list.iter().zip([0.1, 0.9, 0.99]) {
+                let rank = rank_of(&sorted, value.unwrap());
+                assert!(
+                    (rank - fraction).abs() <= kll_error,
+                    "group {key} p{fraction}: rank {rank}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn approximate_aggregates_over_no_values_are_zero_and_null() {
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, true)]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int64Array::from(vec![None, None]))],
+        )
+        .unwrap();
+        let expressions = approximate_expressions()
+            .into_iter()
+            .filter(|e| e.column == "v")
+            .collect::<Vec<_>>();
+        let mut aggregate =
+            HashAggregate::new(Box::new(Input::new(batch)), vec![], expressions).unwrap();
+        let result = aggregate.next_batch().unwrap().unwrap();
+        assert_eq!(
+            result
+                .column(0)
+                .as_primitive::<arrow::datatypes::UInt64Type>()
+                .value(0),
+            0
+        );
+        assert!(result.column(1).is_null(0));
+        assert!(result.column(2).is_null(0));
+    }
+
+    #[test]
+    fn approximate_aggregates_refuse_what_a_sketch_cannot_fold() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("d", DataType::Date32, true),
+            Field::new("t", DataType::Utf8, true),
+            Field::new("n", DataType::Int64, true),
+        ]));
+        let batch = RecordBatch::new_empty(schema);
+        let refused = |expression: AggExpr| {
+            HashAggregate::new(
+                Box::new(Input::new(batch.clone())),
+                vec![],
+                vec![expression],
+            )
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_default()
+        };
+        assert!(refused(AggExpr::new(AggFunc::ApproxDistinct, "*")).contains("column argument"));
+        assert!(
+            refused(AggExpr::approx_percentile(
+                "t",
+                Percentiles {
+                    fractions: vec![0.5],
+                    list: false
+                }
+            ))
+            .contains("numeric column")
+        );
+        assert!(
+            refused(AggExpr::approx_percentile(
+                "d",
+                Percentiles {
+                    fractions: vec![0.5],
+                    list: false
+                }
+            ))
+            .contains("numeric column")
+        );
+        assert!(refused(AggExpr::new(AggFunc::ApproxPercentile, "n")).contains("percentiles"));
+        assert!(
+            HashAggregate::new(
+                Box::new(Input::new(batch.clone())),
+                vec![],
+                vec![AggExpr::new(AggFunc::ApproxDistinct, "d")]
+            )
+            .is_ok()
+        );
     }
 }

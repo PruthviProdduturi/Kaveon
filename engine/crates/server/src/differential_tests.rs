@@ -392,6 +392,73 @@ const CASES: &[(&str, &str, bool)] = &[
     ),
 ];
 
+/// Approximate cases: (name, statement, ordered, tolerance). Cells that
+/// parse as numbers compare within `tolerance` of each other (relative to
+/// the larger magnitude, absolute below one); lists element by element;
+/// everything else exactly. HyperLogLog registers merge exactly, so a
+/// distinct count is the same on every path and its tolerance is zero;
+/// a KLL sketch merged from partials compacts differently from one built
+/// in sequence, so a percentile's paths agree only within its rank error
+/// — a tenth of the value over these uniform columns.
+const APPROXIMATE_CASES: &[(&str, &str, bool, f64)] = &[
+    (
+        "approx_distinct_global",
+        "SELECT APPROX_COUNT_DISTINCT(user_id) AS u, APPROX_DISTINCT(country) AS c, COUNT(DISTINCT user_id) AS exact FROM {T}",
+        false,
+        0.0,
+    ),
+    (
+        "approx_distinct_grouped_and_filtered",
+        "SELECT region, APPROX_COUNT_DISTINCT(user_id) AS u, COUNT(*) AS n FROM {T} WHERE actions > 5 GROUP BY region ORDER BY region",
+        true,
+        0.0,
+    ),
+    (
+        "approx_percentile_grouped",
+        "SELECT platform, APPROX_PERCENTILE(latency_p75_ms, 0.5) AS p50, APPROX_PERCENTILE(latency_p75_ms, ARRAY[0.9, 0.99]) AS tail FROM {T} GROUP BY platform ORDER BY platform",
+        true,
+        0.1,
+    ),
+    (
+        "approx_percentile_global_expression",
+        "SELECT APPROX_PERCENTILE(duration_sec, 0.25) + 1 AS q1 FROM {T}",
+        false,
+        0.1,
+    ),
+];
+
+/// Whether two canonical rows differ beyond `tolerance` (see
+/// [`APPROXIMATE_CASES`]); zero tolerance is the exact comparison.
+fn rows_differ(left: &[String], right: &[String], tolerance: f64) -> bool {
+    if tolerance == 0.0 {
+        return left != right;
+    }
+    if left.len() != right.len() {
+        return true;
+    }
+    left.iter().zip(right).any(|(left, right)| {
+        let (left, right) = (left.split('\u{1f}'), right.split('\u{1f}'));
+        left.zip(right).any(|(a, b)| {
+            if a == b {
+                return false;
+            }
+            let numbers = |cell: &str| -> Option<Vec<f64>> {
+                cell.trim_matches(|c| c == '[' || c == ']')
+                    .split(',')
+                    .map(|item| item.trim().parse::<f64>().ok())
+                    .collect()
+            };
+            match (numbers(a), numbers(b)) {
+                (Some(a), Some(b)) if a.len() == b.len() => a
+                    .iter()
+                    .zip(&b)
+                    .any(|(a, b)| (a - b).abs() > tolerance * a.abs().max(b.abs()).max(1.0)),
+                _ => true,
+            }
+        })
+    })
+}
+
 const SURFACES: [&str; 6] = [
     "API",
     "Chart Builder",
@@ -886,14 +953,20 @@ fn the_differential_sweep_matches_across_parquet_encodings_and_execution_paths()
     let mut manager = CatalogManager::new("lake", "events");
     manager.register_catalog(Box::new(catalog));
 
-    let optimized = |statement: &str| -> LogicalPlan {
-        let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan_for_binder(statement).unwrap();
+    let optimized_as = |statement: &str, approximate: bool| -> LogicalPlan {
+        let mut plan = if approximate {
+            kaveon_sql::logical_plan::sql_to_logical_plan_for_binder_approximate(statement)
+        } else {
+            kaveon_sql::logical_plan::sql_to_logical_plan_for_binder(statement)
+        }
+        .unwrap();
         crate::planner::qualify_tables(&mut plan, "lake", "events");
         let plan = kaveon_optim::binder::bind(plan, &manager)
             .unwrap_or_else(|error| panic!("{statement}: {error}"));
         let plan = kaveon_optim::rules::push_filter_down(plan);
         kaveon_optim::rules::push_projection_down(plan)
     };
+    let optimized = |statement: &str| optimized_as(statement, false);
     let local = |statement: &str, ordered: bool| -> Vec<String> {
         let plan = optimized(statement);
         let pool = QueryMemoryPool::new("differential", 256 * 1024 * 1024).unwrap();
@@ -921,7 +994,12 @@ fn the_differential_sweep_matches_across_parquet_encodings_and_execution_paths()
         canonical_rows(&batches, ordered)
     };
     let mut mismatches = Vec::new();
-    for (name, template, ordered) in CASES {
+    let cases = CASES
+        .iter()
+        .map(|(name, template, ordered)| (*name, *template, *ordered, 0.0))
+        .chain(APPROXIMATE_CASES.iter().copied())
+        .collect::<Vec<_>>();
+    for (name, template, ordered, tolerance) in &cases {
         let statement = |table: &str| template.replace("{T}", table).replace("{U}", "users");
         let dictionary = local(&statement("events_dictionary"), *ordered);
         let plain = local(&statement("events_plain"), *ordered);
@@ -933,55 +1011,94 @@ fn the_differential_sweep_matches_across_parquet_encodings_and_execution_paths()
         let partitioned_fragments = distributed(&statement("events_partitioned"), *ordered);
         let clustered_fragments = distributed(&statement("events_clustered"), *ordered);
         assert!(!dictionary.is_empty(), "{name} returned no rows");
-        if dictionary != plain {
+        if rows_differ(&dictionary, &plain, *tolerance) {
             mismatches.push(format!(
                 "{name}: dictionary {:?} versus plain {:?}",
                 dictionary.iter().take(3).collect::<Vec<_>>(),
                 plain.iter().take(3).collect::<Vec<_>>()
             ));
         }
-        if parts != plain {
+        if rows_differ(&parts, &plain, *tolerance) {
             mismatches.push(format!(
                 "{name}: directory of three files {:?} versus one file {:?}",
                 parts.iter().take(3).collect::<Vec<_>>(),
                 plain.iter().take(3).collect::<Vec<_>>()
             ));
         }
-        if clustered != plain {
+        if rows_differ(&clustered, &plain, *tolerance) {
             mismatches.push(format!(
                 "{name}: clustered layout {:?} versus one file {:?}",
                 clustered.iter().take(3).collect::<Vec<_>>(),
                 plain.iter().take(3).collect::<Vec<_>>()
             ));
         }
-        if dictionary != fragments {
+        if rows_differ(&dictionary, &fragments, *tolerance) {
             mismatches.push(format!(
                 "{name}: local {:?} versus distributed {:?}",
                 dictionary.iter().take(3).collect::<Vec<_>>(),
                 fragments.iter().take(3).collect::<Vec<_>>()
             ));
         }
-        if partitioned != hive_order {
+        if rows_differ(&partitioned, &hive_order, *tolerance) {
             mismatches.push(format!(
                 "{name}: partitioned directory {:?} versus one file in its column order {:?}",
                 partitioned.iter().take(3).collect::<Vec<_>>(),
                 hive_order.iter().take(3).collect::<Vec<_>>()
             ));
         }
-        if partitioned != partitioned_fragments {
+        if rows_differ(&partitioned, &partitioned_fragments, *tolerance) {
             mismatches.push(format!(
                 "{name}: partitioned directory local {:?} versus distributed {:?}",
                 partitioned.iter().take(3).collect::<Vec<_>>(),
                 partitioned_fragments.iter().take(3).collect::<Vec<_>>()
             ));
         }
-        if clustered != clustered_fragments {
+        if rows_differ(&clustered, &clustered_fragments, *tolerance) {
             mismatches.push(format!(
                 "{name}: clustered layout local {:?} versus distributed {:?}",
                 clustered.iter().take(3).collect::<Vec<_>>(),
                 clustered_fragments.iter().take(3).collect::<Vec<_>>()
             ));
         }
+    }
+    // The `approximate` setting: a plain COUNT(DISTINCT) rewritten to a
+    // sketch answers what APPROX_COUNT_DISTINCT answers, under COUNT's
+    // output name, on both paths.
+    {
+        let sql = "SELECT region, COUNT(DISTINCT user_id) AS u, COUNT(DISTINCT country) FROM events_dictionary GROUP BY region ORDER BY region";
+        let approx_sql = "SELECT region, APPROX_COUNT_DISTINCT(user_id) AS u, APPROX_COUNT_DISTINCT(country) FROM events_dictionary GROUP BY region ORDER BY region";
+        let plan = optimized_as(sql, true);
+        assert_eq!(plan.aggregates().len(), 2);
+        assert!(
+            plan.aggregates()
+                .iter()
+                .all(|aggregate| aggregate.is_approximate())
+        );
+        let pool = QueryMemoryPool::new("differential-approximate", 256 * 1024 * 1024).unwrap();
+        let mut planned = crate::planner::plan_query_with_memory(&plan, &manager, &pool).unwrap();
+        assert_eq!(
+            planned
+                .operator
+                .schema()
+                .fields()
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect::<Vec<_>>(),
+            ["region", "u", "count_country"]
+        );
+        let rewritten = canonical_rows(&drain(planned.operator.as_mut()), true);
+        drop(planned);
+        assert_eq!(rewritten, local(approx_sql, true));
+        let batches =
+            execute_distributed("differential-approximate", &plan, &manager, 2, &pool).unwrap();
+        assert_eq!(canonical_rows(&batches, true), rewritten);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+        // Exact and approximate counts of 900 users agree within the
+        // sketch's standard error, and the sketch is not the exact count.
+        let exact = local(sql, true);
+        let error = kaveon_core::HllSketch::default_precision().standard_error();
+        assert!(rows_differ(&exact, &rewritten, 0.0));
+        assert!(!rows_differ(&exact, &rewritten, 3.0 * error));
     }
     let _ = std::fs::remove_dir_all(&directory);
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));

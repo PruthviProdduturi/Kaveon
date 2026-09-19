@@ -108,6 +108,48 @@ pub enum AggregateFunction {
     Max,
     Avg,
     CountDistinct,
+    /// `APPROX_COUNT_DISTINCT`: a HyperLogLog sketch of the argument, the
+    /// estimate as the result.
+    ApproxDistinct,
+    /// `APPROX_PERCENTILE`: a KLL sketch of the argument, the values at
+    /// the spec's `percentiles` as the result.
+    ApproxPercentile,
+}
+
+impl AggregateFunction {
+    /// Whether the result is an estimate from a sketch.
+    pub const fn is_approximate(self) -> bool {
+        matches!(self, Self::ApproxDistinct | Self::ApproxPercentile)
+    }
+}
+
+/// The fractions an `APPROX_PERCENTILE` answers, and whether it answers
+/// them as one list (`ARRAY[…]` was written) or as one value.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Percentiles {
+    pub fractions: Vec<f64>,
+    pub list: bool,
+}
+
+impl Percentiles {
+    /// Every fraction must lie in `[0, 1]`; a list must not be empty.
+    pub fn validate(&self) -> crate::Result<()> {
+        if self.fractions.is_empty() {
+            return Err(crate::KaveonError::Sql(
+                "APPROX_PERCENTILE requires at least one percentile".into(),
+            ));
+        }
+        if let Some(fraction) = self
+            .fractions
+            .iter()
+            .find(|fraction| !(0.0..=1.0).contains(*fraction))
+        {
+            return Err(crate::KaveonError::Sql(format!(
+                "APPROX_PERCENTILE percentile {fraction} is not between 0 and 1"
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -115,6 +157,9 @@ pub struct AggregateSpec {
     pub function: AggregateFunction,
     pub argument: Option<Expr>,
     pub output: String,
+    /// For `ApproxPercentile`: what it answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub percentiles: Option<Percentiles>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

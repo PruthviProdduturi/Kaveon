@@ -320,6 +320,11 @@ impl IncrementalAggregateMerger {
                 0
             };
             for (position, state) in incoming.iter().enumerate() {
+                // A new group keeps the incoming sketch as it is; a merge
+                // into an existing one is charged by what it grew after.
+                if existing.is_none() {
+                    growth = growth.saturating_add(state.sketch_bytes());
+                }
                 if let Some(values) = distinct_values(state) {
                     let previous = existing
                         .and_then(|slot| self.states[slot as usize].get(position))
@@ -342,8 +347,16 @@ impl IncrementalAggregateMerger {
                     if current.len() != incoming.len() {
                         return Err(error("aggregate state count mismatch"));
                     }
+                    let mut grown = 0_u64;
                     for (state, other) in current.iter_mut().zip(&incoming) {
+                        let before = state.sketch_bytes();
                         state.merge(other)?;
+                        grown = grown.saturating_add(state.sketch_bytes().saturating_sub(before));
+                    }
+                    if grown != 0
+                        && let Some(memory) = &self.memory
+                    {
+                        self.reservations.reserve(memory, grown)?;
                     }
                 }
                 None => {

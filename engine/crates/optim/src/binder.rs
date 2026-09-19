@@ -1031,6 +1031,16 @@ impl Binder<'_> {
             },
             AggregateExpr::Min(expr) => AggregateExpr::Min(self.bind_expr(expr, scope, None)?),
             AggregateExpr::Max(expr) => AggregateExpr::Max(self.bind_expr(expr, scope, None)?),
+            AggregateExpr::ApproxDistinct { expr, as_count } => AggregateExpr::ApproxDistinct {
+                expr: self.bind_expr(expr, scope, None)?,
+                as_count,
+            },
+            AggregateExpr::ApproxPercentile { expr, percentiles } => {
+                AggregateExpr::ApproxPercentile {
+                    expr: self.bind_expr(expr, scope, None)?,
+                    percentiles,
+                }
+            }
         })
     }
 
@@ -1609,24 +1619,12 @@ fn uncorrelated(bound: &Bound, clause: &str) -> Result<()> {
 }
 
 fn is_aggregate(name: &str) -> bool {
-    matches!(name, "COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
+    kaveon_core::is_aggregate_function(name)
 }
 
 /// The aggregate's output column as the local planner names it.
 fn aggregate_output_name(aggregate: &AggregateExpr) -> String {
-    let (function, expr) = match aggregate {
-        AggregateExpr::Count { expr, .. } => ("count", expr),
-        AggregateExpr::Sum { expr, .. } => ("sum", expr),
-        AggregateExpr::Avg { expr, .. } => ("avg", expr),
-        AggregateExpr::Min(expr) => ("min", expr),
-        AggregateExpr::Max(expr) => ("max", expr),
-    };
-    let argument = match expr {
-        Expr::Column(name) => name.as_str(),
-        Expr::Star => "*",
-        _ => "expr",
-    };
-    format!("{function}_{argument}")
+    aggregate.output_name()
 }
 
 fn conjuncts(expr: Expr) -> Vec<Expr> {

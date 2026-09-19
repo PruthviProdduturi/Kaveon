@@ -19,7 +19,7 @@ use kaveon_exec::union::UnionOperator;
 use kaveon_exec::window::WindowOperator;
 use kaveon_optim::rules::to_storage_predicate;
 use kaveon_sql::logical_plan::{AggregateExpr, JoinDistribution, JoinType, LogicalPlan};
-const AGGREGATE_FUNCTIONS: &[&str] = &["COUNT", "SUM", "AVG", "MIN", "MAX"];
+const AGGREGATE_FUNCTIONS: &[&str] = kaveon_core::AGGREGATE_FUNCTION_NAMES;
 use kaveon_storage::{
     AdlsParquetReader, DeltaTableReader, DirectoryListing, ObjectDeltaReader,
     ObjectDirectoryReader, ObjectParquetReader, ParquetReader, ScanPartition,
@@ -1010,6 +1010,10 @@ fn bind_aggregate_references_as(
     }
 }
 
+/// The output column a fragment names an aggregate by: the function, the
+/// first argument's column (`star` for `*`), and — for `APPROX_PERCENTILE`
+/// — the fractions as the node-local rule labels them, so two percentiles
+/// of one column stay distinct.
 fn fragment_aggregate_output_name(function: &str, arguments: &[Expr]) -> String {
     let suffix = arguments.first().map_or("star".to_owned(), |argument| {
         if matches!(argument, Expr::Star) {
@@ -1018,39 +1022,45 @@ fn fragment_aggregate_output_name(function: &str, arguments: &[Expr]) -> String 
             expression_column(argument).unwrap_or_else(|_| "expr".to_owned())
         }
     });
-    format!("{}_{}", function.to_ascii_lowercase(), suffix)
+    let mut name = format!("{}_{}", function.to_ascii_lowercase(), suffix);
+    if arguments.len() > 1 {
+        let rest = kaveon_core::aggregate_output_name("", &arguments[1..]);
+        name.push_str(", ");
+        name.push_str(rest.trim_start_matches('_'));
+    }
+    name
 }
 
 fn aggregate_specs(aggregates: &[AggregateExpr]) -> Vec<AggregateSpec> {
     aggregates
         .iter()
         .map(|aggregate| {
-            let (function, argument, name) = match aggregate {
-                AggregateExpr::Count { expr, distinct } => (
-                    if *distinct {
-                        AggregateFunction::CountDistinct
-                    } else {
-                        AggregateFunction::Count
-                    },
-                    (!matches!(expr, Expr::Star)).then(|| expr.clone()),
-                    "count",
-                ),
-                AggregateExpr::Sum { expr, .. } => {
-                    (AggregateFunction::Sum, Some(expr.clone()), "sum")
-                }
-                AggregateExpr::Min(expr) => (AggregateFunction::Min, Some(expr.clone()), "min"),
-                AggregateExpr::Max(expr) => (AggregateFunction::Max, Some(expr.clone()), "max"),
-                AggregateExpr::Avg { expr, .. } => {
-                    (AggregateFunction::Avg, Some(expr.clone()), "avg")
-                }
+            let function = match aggregate {
+                AggregateExpr::Count { distinct: true, .. } => AggregateFunction::CountDistinct,
+                AggregateExpr::Count { .. } => AggregateFunction::Count,
+                AggregateExpr::Sum { .. } => AggregateFunction::Sum,
+                AggregateExpr::Min(_) => AggregateFunction::Min,
+                AggregateExpr::Max(_) => AggregateFunction::Max,
+                AggregateExpr::Avg { .. } => AggregateFunction::Avg,
+                AggregateExpr::ApproxDistinct { .. } => AggregateFunction::ApproxDistinct,
+                AggregateExpr::ApproxPercentile { .. } => AggregateFunction::ApproxPercentile,
             };
-            let suffix = argument.as_ref().map_or("star".into(), |expression| {
-                expression_column(expression).unwrap_or_else(|_| "expr".into())
-            });
+            let argument = match aggregate.argument() {
+                Expr::Star => None,
+                expr => Some(expr.clone()),
+            };
+            let percentiles = match aggregate {
+                AggregateExpr::ApproxPercentile { percentiles, .. } => Some(percentiles.clone()),
+                _ => None,
+            };
             AggregateSpec {
                 function,
                 argument,
-                output: format!("{name}_{suffix}"),
+                output: fragment_aggregate_output_name(
+                    aggregate.written_name(),
+                    &aggregate.arguments(),
+                ),
+                percentiles,
             }
         })
         .collect()
@@ -2086,6 +2096,8 @@ fn logical_agg_to_exec(
         AggregateExpr::Avg { expr, distinct } => (AggFunc::Avg, expr, *distinct),
         AggregateExpr::Min(e) => (AggFunc::Min, e, false),
         AggregateExpr::Max(e) => (AggFunc::Max, e, false),
+        AggregateExpr::ApproxDistinct { expr, .. } => (AggFunc::ApproxDistinct, expr, false),
+        AggregateExpr::ApproxPercentile { expr, .. } => (AggFunc::ApproxPercentile, expr, false),
     };
 
     let column = match expr {
@@ -2098,7 +2110,15 @@ fn logical_agg_to_exec(
         }
     };
 
-    let expression = AggExpr::new(func, column);
+    let mut expression = AggExpr::new(func, column);
+    if let AggregateExpr::ApproxPercentile { percentiles, .. } = agg {
+        expression.percentiles = Some(percentiles.clone());
+    }
+    // Every planner names the output by the same rule the projection binds
+    // by: the function and its arguments as written.
+    if expression.output_name() != agg.output_name() {
+        expression = expression.with_alias(agg.output_name());
+    }
     Ok(if distinct {
         expression.distinct()
     } else {
@@ -2197,16 +2217,7 @@ fn relation_qualifier(plan: &LogicalPlan) -> Option<String> {
 }
 
 pub(crate) fn agg_output_name(func_name: &str, args: &[Expr]) -> String {
-    let arg_str = args
-        .iter()
-        .map(|a| match a {
-            Expr::Column(c) => c.clone(),
-            Expr::Star => "*".into(),
-            _ => "expr".into(),
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("{}_{}", func_name.to_lowercase(), arg_str)
+    kaveon_core::aggregate_output_name(func_name, args)
 }
 
 #[cfg(test)]

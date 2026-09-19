@@ -31,7 +31,7 @@ pub use expr::{
 pub use fragment::{
     AggregateFunction, AggregateMode, AggregateSpec, EXECUTABLE_FRAGMENT_VERSION, ExchangeInput,
     ExchangeOutput, ExecutableFragment, FragmentNode, FragmentNodeId, FragmentOperator, JoinSpec,
-    JoinType, NamedExpr, ScanSpec, ScanTable, SortSpec,
+    JoinType, NamedExpr, Percentiles, ScanSpec, ScanTable, SortSpec,
 };
 pub use memory::{
     AdmissionGroupPolicy, AdmissionGroupStats, AdmissionRefusal, AdmissionStats, AdmissionWait,
