@@ -101,6 +101,53 @@ All paths below are relative to the FastAPI origin.
   that fails before any row is retried as any task. Inline delivery keeps
   the collected path: each root task answers once with its whole result.
 
+### DLM answers and their evidence
+
+`POST /api/v1/dlm/ask` takes `{question, limit?, choices?, frame?}` and answers
+`ok: true` with the routed dataset, the answer's shape (`columns`, `rows` when
+the DLM has them, `chartType`, `xAxis`, `yAxis`, `title`, `note`, `frame`),
+its lane (`route: "context" | "cache" | "live"`, `from_context`), or `ok:
+false` with a `reason` (`clarify` with a `clarification` to answer,
+`out_of_scope`, `no_dataset`, `dataset_not_found`, `query_failed` with a
+`message`). Every `ok: true` answer — over a warehouse dataset or an Engine
+table — carries an **`evidence`** object:
+
+| Field | Meaning |
+|---|---|
+| `sql` | The statement that ran, or that would compute a context answer — in the source's dialect |
+| `dataset` | `{id, name}` |
+| `source` | `{kind: "engine", table_id, catalog, schema, table}` for a dataset bound to an Engine table (or over a native catalog), `{kind: "warehouse", database, schema, table}` otherwise |
+| `source_version` | What the answer reflects. Engine: the record's `execution.source_version` for a context answer, the table's `GET /v1/catalog/tables/{id}/version` for a read (`{identity_sha256, kind: delta_version \| iceberg_snapshot \| listing \| file, …}`). Warehouse: `{kind: "postgresql_change_counter", table, row_count, mods_since_analyze, last_analyze, observed_at}` — the snapshot the artifact was compiled against for a context answer, the counter as read now for a live one; `{kind: "unavailable"}` on a source without the counter |
+| `lane` | `context` (answered without reading the rows: the Engine's cube or statistics, or the DLM's precomputed cells), `cache` (the Engine's result cache), `live` (the rows were read) |
+| `execution` | The Engine's query-record `execution` object verbatim (`mode`, `detail`, `source_version`, `current_source_version`, `approximate[]`); `null` on the warehouse |
+| `settings` | The per-statement settings the DLM chose on the Engine: `result_cache` per the dataset's freshness policy, `use_statistics: true`, `approximate: true` only for a metric the context spec marks approximate; `null` on the warehouse |
+| `principal` | The identity the Engine statement ran as (the caller when their role can submit statements, else the platform service principal) |
+| `query_id`, `elapsed_ms`, `rows` | The Engine's query id and elapsed, and the rows returned. A warehouse `live` answer is run by the client (through `/api/v1/sql/execute` or `/api/v1/sql/engine`), which fills `elapsed_ms` and `rows` itself; every other lane is complete as returned |
+| `reproduce` | `{sql, database, schema, engine, settings}` — the same statement as a live read: on the Engine with `{use_statistics: false, result_cache: false}` so neither the cube, the statistics nor a cached result may answer; `settings: null` on the warehouse |
+
+An Engine-backed answer is executed by the DLM itself (`executed: true`,
+`engine: true`, the rows in the response); the lane and the estimate label
+(`approx`) come from the Engine's `execution.mode` and `execution.approximate`,
+never from the DLM's own scoring. `POST /api/v1/dlm/reproduce` (Analyst or
+above) takes `{dataset_id, sql}` — an answer's `reproduce` block — and runs it
+under the same guards as SQL Lab (one read-only statement, no platform tables,
+the caller's rate limit), answering `{ok, columns, rows, evidence, duration_ms}`
+with the evidence of that run, so a client can set the live number beside the
+context one. `GET /api/v1/datasets/{id}/freshness` reports `signal:
+"engine_source_version"` with `source_version`, `current_source_version` and
+`observed_at_ms` for an Engine-backed dataset (`postgresql_change_counter`
+otherwise).
+
+A dataset is bound to an Engine table with `source: {kind: "engine", table_id}`
+on `POST`/`PUT`/`PATCH /api/v1/datasets`: the catalog, schema and table names,
+the column list and — when the table declares a shape — the dimensions,
+measures and date column are read from `GET /v1/catalog/tables/{id}` and
+never typed by hand; columns and metrics the caller (or the stored dataset)
+already has are kept. The binding is returned as `source` on the dataset.
+The DLM's context spec (`GET`/`PUT /api/v1/datasets/{id}/dlm/context`) gains
+`approximate` per metric and a dataset-level `freshness_policy` (`cached` |
+`live`) for these datasets. See [Over Engine tables](../guides/nl-to-sql.md#over-engine-tables).
+
 ### Streamed SQL Lab statements (KaveonDB)
 
 SQL Lab on a KaveonDB source submits every statement this way, so the grid
