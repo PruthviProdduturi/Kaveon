@@ -6589,7 +6589,8 @@ fn validate_new_table(value: &TableDefinition) -> kaveon_core::Result<()> {
         value.format(),
         columns,
     )?
-    .with_layout(value.layout().clone())?;
+    .with_layout(value.layout().clone())?
+    .with_shape(value.shape().clone())?;
     if value.lifecycle() != CatalogLifecycle::Draft
         || value.revision() != CatalogRevision::initial()
         || &validated != value
@@ -6620,7 +6621,8 @@ fn validate_table_fields(value: &TableDefinition) -> kaveon_core::Result<()> {
         value.format(),
         columns,
     )?
-    .with_layout(value.layout().clone())?;
+    .with_layout(value.layout().clone())?
+    .with_shape(value.shape().clone())?;
     Ok(())
 }
 

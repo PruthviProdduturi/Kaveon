@@ -1,4 +1,5 @@
 pub mod catalog;
+pub mod cube;
 pub mod error;
 pub mod exchange;
 pub mod expr;
@@ -7,6 +8,7 @@ pub mod memory;
 pub mod operator;
 pub mod predicate;
 pub mod process_memory;
+pub mod shape;
 pub mod sketch;
 pub mod statistics;
 pub mod telemetry;
@@ -18,6 +20,10 @@ pub use catalog::{
     ColumnDefinition, CredentialKind, CredentialReference, DataFormat, MemoryCatalog,
     PartitionColumn, ResolvedTable, SchemaDefinition, SchemaId, StorageType, TableDefinition,
     TableId, TableLayout, TableMeta, TableReference,
+};
+pub use cube::{
+    CellMeasure, CubeCell, CubeGrouping, ExcludedAxis, FileCubePartial, TABLE_CUBE_VERSION,
+    TableCube,
 };
 pub use error::{KaveonError, Result};
 pub use exchange::{
@@ -41,6 +47,9 @@ pub use memory::{
 pub use operator::{BatchOperator, BatchSource, collect_batches};
 pub use predicate::{CompareOp, ScalarValue, StoragePredicate};
 pub use process_memory::{CountingAllocator, ProcessMemory};
+pub use shape::{
+    MeasureAggregate, ShapeAxis, ShapeDimension, ShapeMeasure, ShapeTime, TableShape, TimeGrain,
+};
 pub use sketch::{HllSketch, KllSketch};
 pub use statistics::{
     ColumnSketches, ColumnStatistics, FileColumnSketches, FileColumnStatistics, FileStatistics,
