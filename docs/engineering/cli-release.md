@@ -74,7 +74,7 @@ Once the release exists, `KAVEON_VERSION=X.Y.Z` with
 [the install scripts](../guides/engine-cli.md#install) installs it with
 checksum verification; no script change is needed per release.
 
-## 3. Package managers — optional, not part of a release
+## 3. Package managers — a later item, no timeline
 
 The release is complete once the assets are up and the install scripts
 resolve the version. Two more files are rendered for the day a

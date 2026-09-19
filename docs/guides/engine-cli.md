@@ -746,8 +746,10 @@ for the SQL surface.
 Everything `.help` lists is implemented. What the client does not do yet:
 per-operator statistics inside a plan (`EXPLAIN ANALYZE` is per task);
 spooling to object storage; Kerberos, JWT and HTTP-proxy options;
-package-manager listings (a winget manifest and a Homebrew formula are
-rendered with every release for whenever that is wanted). Rows appear while a
+package-manager listings — a later item with no timeline: the winget
+manifest and Homebrew formula are rendered with every release, the
+submissions are described in [Cutting a CLI release](../engineering/cli-release.md).
+Rows appear while a
 statement runs only where the plan's root emits them early: a scan, a
 filter, a projection, a `LIMIT` without `ORDER BY` and a join's probe
 output stream from their first batch, on one node and across workers
