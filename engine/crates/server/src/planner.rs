@@ -39,6 +39,10 @@ use std::sync::Arc;
 pub struct SourcePins {
     pub delta_versions: BTreeMap<String, u64>,
     pub parquet_directories: BTreeMap<String, Arc<DirectoryListing>>,
+    /// Files of a pinned directory listing the table's statistics proved
+    /// empty of matches, already left out of the listing: reported on the
+    /// coordinator-local scan as skipped (considered, never opened).
+    pub files_skipped: BTreeMap<String, u64>,
 }
 
 const GROUPED_AGGREGATE_STATE_KEY_COLUMN: &str = "group_keys";
@@ -214,6 +218,7 @@ pub fn build_executable_fragments_with_delta_versions(
         &SourcePins {
             delta_versions: analyzed_delta_versions.clone(),
             parquet_directories: BTreeMap::new(),
+            files_skipped: BTreeMap::new(),
         },
     )
 }
@@ -1506,6 +1511,21 @@ fn plan_query_inner(
     plan_query_with_predicate(plan, catalog, None, partition, memory, pins)
 }
 
+/// Count the files planning left out of a pinned listing on the strength
+/// of the table's statistics: on the whole scan, once, not per partition.
+fn report_skipped_files(
+    metrics: &kaveon_storage::ScanMetrics,
+    pins: &SourcePins,
+    path: &str,
+    partition: Option<ScanPartition>,
+) {
+    if partition.is_none()
+        && let Some(skipped) = pins.files_skipped.get(path)
+    {
+        metrics.files_skipped(*skipped);
+    }
+}
+
 fn plan_query_with_predicate(
     plan: &LogicalPlan,
     catalog: &CatalogManager,
@@ -1547,6 +1567,7 @@ fn plan_query_with_predicate(
                             KaveonError::Execution(format!("failed to open '{path}': {error}"))
                         })?;
                         let metrics = source.metrics();
+                        report_skipped_files(&metrics, pins, &path, partition);
                         return Ok(PlannedQuery {
                             operator: Box::new(ScanOperator::new(
                                 Box::new(source),
@@ -1618,6 +1639,7 @@ fn plan_query_with_predicate(
                         KaveonError::Execution(format!("failed to open '{path}': {e}"))
                     })?;
                     let metrics = source.metrics();
+                    report_skipped_files(&metrics, pins, &path, partition);
                     (Box::new(source), vec![metrics])
                 }
                 DataFormat::Delta => {
@@ -2171,7 +2193,7 @@ fn relation_qualifier(plan: &LogicalPlan) -> Option<String> {
     }
 }
 
-fn agg_output_name(func_name: &str, args: &[Expr]) -> String {
+pub(crate) fn agg_output_name(func_name: &str, args: &[Expr]) -> String {
     let arg_str = args
         .iter()
         .map(|a| match a {
@@ -3002,14 +3024,14 @@ mod tests {
         .unwrap();
         qualify_tables(&mut plan, "test", "default");
         let plan = kaveon_optim::statistics::optimize_with_statistics(plan, &mut |table| {
-            Some(kaveon_optim::statistics::RelationStatistics {
-                rows: if table.ends_with("customers") {
+            Some(kaveon_optim::statistics::RelationStatistics::exact(
+                if table.ends_with("customers") {
                     10
                 } else {
                     10_000
                 },
-                columns: vec!["id".into(), "name".into()],
-            })
+                vec!["id".into(), "name".into()],
+            ))
         });
 
         let graph = build_stage_graph("broadcast-query", &plan, 4).unwrap();
@@ -3270,6 +3292,7 @@ mod tests {
         let pinned = SourcePins {
             delta_versions: BTreeMap::new(),
             parquet_directories: BTreeMap::from([(source.clone(), listing)]),
+            files_skipped: BTreeMap::new(),
         };
         let pool = QueryMemoryPool::new("directory", 64 * 1024 * 1024).unwrap();
         let mut at_pin = plan_query_with_pins(&plan, &fixture.catalog, &pool, &pinned).unwrap();
@@ -3448,6 +3471,7 @@ mod tests {
         let pins = SourcePins {
             delta_versions: BTreeMap::new(),
             parquet_directories: BTreeMap::from([(source.clone(), Arc::new(pinned))]),
+            files_skipped: BTreeMap::new(),
         };
         let pool = QueryMemoryPool::new("partitioned", 64 * 1024 * 1024).unwrap();
         let mut at_pin = plan_query_with_pins(&plan, &fixture.catalog, &pool, &pins).unwrap();

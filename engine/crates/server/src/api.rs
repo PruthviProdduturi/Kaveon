@@ -10,13 +10,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Extension, Json, Router};
 use futures::StreamExt;
-use kaveon_catalog::{
-    CascadePolicy,
-    product_commit::{CommitOutcome, ProductDocuments},
-    product_manifest::{
-        CatalogChange, ImmutableFileRef, PrepareChange, RuntimeTableSourceRef, TableStatisticsRef,
-    },
-};
+use kaveon_catalog::CascadePolicy;
 use kaveon_core::collect_batches;
 use kaveon_core::{
     AdmittedQueryMemory, CatalogDefinition, CatalogId, CatalogLifecycle, CatalogRevision,
@@ -31,6 +25,7 @@ use kaveon_sql::parser::{
     NativeTransactionalStatement, adapt_product_dml, parse_native_transactional,
 };
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap};
@@ -57,12 +52,20 @@ struct QueryStore {
 /// Where the query ran, and why, when it did not run on the workers.
 #[derive(Clone, Serialize, PartialEq, Eq, Debug)]
 struct ExecutionPlacement {
-    /// `pending`, `distributed`, `coordinator` or `cache`.
+    /// `pending`, `distributed`, `coordinator`, `cache` or `context`.
     mode: &'static str,
     /// The distributed path taken (`fragments`, `aggregate`, `top_n`), the
-    /// reason the coordinator ran it instead, or `hit` for a cached result.
+    /// reason the coordinator ran it instead, `hit` for a cached result,
+    /// or the statistics version a `context` answer came from.
     #[serde(skip_serializing_if = "Option::is_none")]
     detail: Option<String>,
+    /// For a `context` answer: the source version the statistics that
+    /// answered describe, and the source's version as observed by this
+    /// statement — equal by construction.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_version: Option<kaveon_core::SourceVersion>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_source_version: Option<kaveon_core::SourceVersion>,
 }
 
 impl ExecutionPlacement {
@@ -70,18 +73,24 @@ impl ExecutionPlacement {
         Self {
             mode: "pending",
             detail: None,
+            source_version: None,
+            current_source_version: None,
         }
     }
     fn distributed(path: &str) -> Self {
         Self {
             mode: "distributed",
             detail: Some(path.to_owned()),
+            source_version: None,
+            current_source_version: None,
         }
     }
     fn coordinator(reason: Option<String>) -> Self {
         Self {
             mode: "coordinator",
             detail: Some(reason.unwrap_or_else(|| "shape has no distributed plan".to_owned())),
+            source_version: None,
+            current_source_version: None,
         }
     }
     /// Served from the coordinator's result cache: no worker work.
@@ -89,6 +98,18 @@ impl ExecutionPlacement {
         Self {
             mode: "cache",
             detail: Some("hit".to_owned()),
+            source_version: None,
+            current_source_version: None,
+        }
+    }
+    /// Answered from the table's statistics at the statement's pinned
+    /// source version: no scan.
+    fn context(answer: &ContextAnswer) -> Self {
+        Self {
+            mode: "context",
+            detail: Some(format!("statistics at {}", answer.source_version.label())),
+            source_version: Some(answer.source_version.clone()),
+            current_source_version: Some(answer.current_source_version.clone()),
         }
     }
 }
@@ -206,6 +227,7 @@ struct TaskScanMetrics {
     files_considered: u64,
     files_opened: u64,
     files_pruned_by_partition: u64,
+    files_skipped: u64,
     decoded_batch_cache_hits: u64,
     decoded_batch_cache_misses: u64,
     decoded_batch_cache_evictions: u64,
@@ -258,6 +280,10 @@ struct ScanTelemetry {
     /// Files of a partitioned directory table the scan predicate ruled
     /// out by their path values; never opened, never considered.
     files_pruned_by_partition: u64,
+    /// Files the scan predicate ruled out from their recorded bounds —
+    /// the Delta log's add-action stats, or the table's statistics —
+    /// before any footer was read; considered, never opened.
+    files_skipped: u64,
     decoded_batch_cache_hits: u64,
     decoded_batch_cache_misses: u64,
     decoded_batch_cache_evictions: u64,
@@ -394,6 +420,14 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             get(get_table_definition)
                 .put(replace_table_definition)
                 .delete(delete_table_definition),
+        )
+        .route(
+            "/v1/catalog/tables/{table_id}/statistics",
+            get(get_table_statistics),
+        )
+        .route(
+            "/v1/catalog/tables/{table_id}/version",
+            get(get_table_version),
         )
         .route("/v1/catalog/{catalog}/schema", get(list_schemas))
         .route(
@@ -2461,10 +2495,18 @@ async fn run_statement(
         // for its distinct counts are admitted in their own right — memory,
         // principal and resource group — so a single-slot coordinator does
         // not wait on itself.
-        drop(query_memory);
         drop(_group_permit);
         drop(_principal_permit);
-        return execute_analyze(&state, &identity, &query_id, &context, statement, start).await;
+        return execute_analyze(
+            &state,
+            &identity,
+            &query_id,
+            &context,
+            statement,
+            start,
+            query_memory,
+        )
+        .await;
     }
     if let Some(statement) = statistics_statement {
         return execute_statistics_statement(&state, &query_id, &context, statement, start).await;
@@ -2506,7 +2548,7 @@ async fn run_statement(
     let logical_plan = crate::planner::logical_plan_tree(&plan);
     let plan = kaveon_optim::rules::push_filter_down(plan);
     let plan = kaveon_optim::rules::push_projection_down(plan);
-    let (plan, planning_source_pins) =
+    let (plan, planning_source_pins, planning_statistics) =
         optimize_with_durable_statistics(&state, plan, &catalog_snapshot).await;
     let optimized_plan = crate::planner::optimized_plan_tree(&plan);
     let physical_plan = crate::planner::physical_plan_tree(&plan);
@@ -2600,6 +2642,83 @@ async fn run_statement(
             id: query_id,
             state: QueryState::Finished,
             columns: Some(hit.columns.clone()),
+            data: Some(data),
+            error: None,
+            elapsed_ms: elapsed,
+        })
+        .into_response();
+    }
+
+    // A COUNT(*), MIN or MAX with no predicate whose table's statistics
+    // describe exactly the version this statement is pinned to is answered
+    // from them: no scan, on any node.
+    if let Some(answer) = context_answer(&plan, &planning_statistics) {
+        let mut data = vec![answer.row.clone()];
+        let next_uri = if paged {
+            match spool_rows(&state, &query_id, result_writer.take(), &mut data) {
+                Ok(uri) => Some(uri),
+                Err(error) => {
+                    finish_failed_query(
+                        &query_id,
+                        error.to_string(),
+                        start,
+                        Some(analysis_us),
+                        None,
+                        None,
+                    )
+                    .await;
+                    return task_failure_response(
+                        StatusCode::INSUFFICIENT_STORAGE,
+                        "result disk quota or write failure",
+                    );
+                }
+            }
+        } else {
+            None
+        };
+        let elapsed = start.elapsed().as_millis() as u64;
+        let record = QueryRecord {
+            rows_are_preview: true,
+            scan_metrics_complete: true,
+            execution: ExecutionPlacement::context(&answer),
+            settings: settings.clone(),
+            cached_from: None,
+            cached_elapsed_ms: None,
+            admission_wait_ms,
+            next_uri: paged_next_uri(&query_id, &context),
+            id: query_id.clone(),
+            sql,
+            state: QueryState::Finished,
+            columns: answer.columns.clone(),
+            rows: history_preview(&data),
+            error: None,
+            elapsed_ms: elapsed,
+            submitted_at_ms,
+            completed_at_ms: unix_time_ms(),
+            timings: QueryTimings {
+                analysis_us: Some(analysis_us),
+                planning_us: None,
+                execution_us: None,
+                result_serialization_us: None,
+            },
+            plan: QueryPlan {
+                logical: Some(logical_plan),
+                optimized: Some(optimized_plan),
+                physical: Some(physical_plan),
+            },
+            scans: vec![],
+            stages: vec![],
+            context,
+        };
+        if !commit_query_record(record).await {
+            state.results.remove(&query_id);
+            return canceled_task_response();
+        }
+        return Json(StatementResponse {
+            next_uri,
+            id: query_id,
+            state: QueryState::Finished,
+            columns: Some(answer.columns),
             data: Some(data),
             error: None,
             elapsed_ms: elapsed,
@@ -3302,11 +3421,14 @@ enum DistinctColumns {
 }
 
 /// `ANALYZE [catalog.][schema.]table [WITH (distinct = true | columns =
-/// ARRAY['a', 'b'])]`, parsed.
+/// ARRAY['a', 'b'] [, sketches = true])]`, parsed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AnalyzeStatement {
     table: String,
     distinct: DistinctColumns,
+    /// Read every sketchable column once for the distinct-count and
+    /// quantile sketches and exact bounds.
+    sketches: bool,
 }
 
 /// `None` when the statement is not an `ANALYZE`; `Err` with the reason for
@@ -3335,6 +3457,7 @@ fn parse_analyze_body(body: &str) -> Result<AnalyzeStatement, String> {
         return Ok(AnalyzeStatement {
             table,
             distinct: DistinctColumns::None,
+            sketches: false,
         });
     }
     let properties = tail
@@ -3346,10 +3469,20 @@ fn parse_analyze_body(body: &str) -> Result<AnalyzeStatement, String> {
         .and_then(|rest| rest.strip_prefix('('))
         .and_then(|rest| rest.trim_end().strip_suffix(')'))
         .ok_or_else(|| {
-            "ANALYZE accepts WITH (distinct = true) or WITH (columns = ARRAY['a', 'b']) after the table name".to_owned()
+            "ANALYZE accepts WITH (distinct = true), WITH (columns = ARRAY['a', 'b']) or WITH (sketches = true) after the table name".to_owned()
         })?;
     let mut distinct = None;
     let mut columns = None;
+    let mut sketches = None;
+    let flag = |name: &str, value: &str| -> Result<bool, String> {
+        match value {
+            v if v.eq_ignore_ascii_case("true") => Ok(true),
+            v if v.eq_ignore_ascii_case("false") => Ok(false),
+            other => Err(format!(
+                "ANALYZE property {name} must be true or false, not {other}"
+            )),
+        }
+    };
     for entry in split_property_entries(properties)? {
         let (key, value) = entry
             .split_once('=')
@@ -3359,23 +3492,20 @@ fn parse_analyze_body(body: &str) -> Result<AnalyzeStatement, String> {
             if distinct.is_some() {
                 return Err("ANALYZE property distinct is given twice".into());
             }
-            distinct = Some(match value {
-                v if v.eq_ignore_ascii_case("true") => true,
-                v if v.eq_ignore_ascii_case("false") => false,
-                other => {
-                    return Err(format!(
-                        "ANALYZE property distinct must be true or false, not {other}"
-                    ));
-                }
-            });
+            distinct = Some(flag("distinct", value)?);
         } else if key.eq_ignore_ascii_case("columns") {
             if columns.is_some() {
                 return Err("ANALYZE property columns is given twice".into());
             }
             columns = Some(parse_column_array(value)?);
+        } else if key.eq_ignore_ascii_case("sketches") {
+            if sketches.is_some() {
+                return Err("ANALYZE property sketches is given twice".into());
+            }
+            sketches = Some(flag("sketches", value)?);
         } else {
             return Err(format!(
-                "unknown ANALYZE property '{key}'; the properties are distinct and columns"
+                "unknown ANALYZE property '{key}'; the properties are distinct, columns and sketches"
             ));
         }
     }
@@ -3387,7 +3517,11 @@ fn parse_analyze_body(body: &str) -> Result<AnalyzeStatement, String> {
         (Some(false), None) | (None, None) => DistinctColumns::None,
         (None, Some(columns)) => DistinctColumns::Named(columns),
     };
-    Ok(AnalyzeStatement { table, distinct })
+    Ok(AnalyzeStatement {
+        table,
+        distinct,
+        sketches: sketches.unwrap_or(false),
+    })
 }
 
 /// The comma-separated `key = value` entries of a property list, commas
@@ -3533,72 +3667,83 @@ fn qualify_table(context: &QueryContext, table: &str) -> String {
     }
 }
 
-/// The version of the statistics document `ANALYZE` writes.
-const STATISTICS_DOCUMENT_VERSION: u64 = 2;
+/// The table a statistics statement names, resolved twice: through the
+/// published catalog for its location and format, and through the durable
+/// store for the id its statistics are kept under.
+struct StatisticsTable {
+    qualified: String,
+    id: TableId,
+    location: String,
+    format: kaveon_core::DataFormat,
+}
 
-/// The statistics document for a profiled source: what `ANALYZE` stores at
-/// `statistics/<operation>.json` and `SHOW STATS FOR` / `DESCRIBE DETAIL`
-/// read back.
-fn statistics_document(
+/// A statement's failure before it answered: status, code, message.
+type StatementFailure = (StatusCode, &'static str, String);
+
+async fn resolve_statistics_table(
+    state: &AppState,
     qualified: &str,
-    catalog_snapshot_sha256: &str,
-    location: &str,
-    profile: &kaveon_storage::SourceProfile,
-    distinct: &BTreeMap<String, u64>,
-) -> serde_json::Value {
-    let columns = profile
-        .columns
-        .iter()
-        .map(|column| {
-            serde_json::json!({
-                "name": column.name,
-                "type": kaveon_sql::ddl::sql_type_name(&column.data_type),
-                "nulls": column.nulls,
-                "min": column.min.as_ref().map(kaveon_storage::StatValue::to_json),
-                "max": column.max.as_ref().map(kaveon_storage::StatValue::to_json),
-                "compressed_bytes": column.compressed_bytes,
-                "distinct": distinct.get(&column.name),
-            })
-        })
-        .collect::<Vec<_>>();
-    serde_json::json!({
-        "version": STATISTICS_DOCUMENT_VERSION,
-        "table": qualified,
-        "analyzed_at_ms": unix_time_ms(),
-        "catalog_snapshot_sha256": catalog_snapshot_sha256,
-        "source_identity_sha256": profile.statistics.identity_sha256,
-        "format": format_name(profile.format),
-        "location": location,
-        "delta_version": profile.statistics.delta_version,
-        "row_count": profile.statistics.row_count,
-        "file_count": profile.file_count,
-        "row_group_count": profile.row_group_count,
-        "compressed_bytes": profile.compressed_bytes,
-        "uncompressed_bytes": profile.uncompressed_bytes,
-        "last_modified_ms": profile.last_modified_ms,
-        "partition_columns": partition_column_names(profile),
-        "columns": columns,
+) -> Result<StatisticsTable, StatementFailure> {
+    let resolved = state
+        .catalog
+        .read()
+        .await
+        .resolve_table(&kaveon_core::TableReference::parse(qualified))
+        .map_err(|error| {
+            (
+                StatusCode::BAD_REQUEST,
+                "TABLE_NOT_FOUND",
+                error.to_string(),
+            )
+        })?;
+    let definition = state
+        .catalog_store
+        .table_by_name(&resolved.catalog, &resolved.schema, &resolved.table.name)
+        .map_err(|error| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "CATALOG_UNAVAILABLE",
+                error.to_string(),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                "TABLE_NOT_FOUND",
+                format!("{qualified} is not in the durable catalog"),
+            )
+        })?;
+    Ok(StatisticsTable {
+        qualified: format!(
+            "{}.{}.{}",
+            resolved.catalog, resolved.schema, resolved.table.name
+        ),
+        id: definition.id().clone(),
+        location: resolved.full_path(),
+        format: resolved.table.format,
     })
 }
 
-/// The partition columns a profiled source carries: the Delta log's, or the
-/// `key=value` keys of a partitioned Parquet directory.
-fn partition_column_names(profile: &kaveon_storage::SourceProfile) -> Vec<String> {
-    if !profile.partition_columns.is_empty() {
-        return profile.partition_columns.clone();
-    }
-    profile
-        .statistics
-        .parquet_listing
-        .as_ref()
-        .map(|listing| {
-            listing
-                .partitions
-                .iter()
-                .map(|column| column.name().to_owned())
-                .collect()
+/// The table's statistics on record, whatever source version they
+/// describe; `None` when the table was never analyzed.
+fn stored_table_statistics(
+    state: &AppState,
+    id: &TableId,
+) -> Result<Option<Arc<kaveon_core::TableStatistics>>, StatementFailure> {
+    state
+        .catalog_store
+        .table_statistics(id)
+        .map(|value| value.map(Arc::new))
+        .map_err(|error| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "STATISTICS_INVALID",
+                format!(
+                    "stored statistics for {} are not readable: {error}",
+                    id.as_str()
+                ),
+            )
         })
-        .unwrap_or_default()
 }
 
 fn format_name(format: kaveon_core::DataFormat) -> &'static str {
@@ -3610,7 +3755,7 @@ fn format_name(format: kaveon_core::DataFormat) -> &'static str {
 }
 
 /// Milliseconds since the epoch as ISO 8601 UTC text, for the timestamp
-/// columns of `DESCRIBE DETAIL`.
+/// columns of `SHOW STATS FOR` and `DESCRIBE DETAIL`.
 fn iso_utc_ms(value: Option<i64>) -> serde_json::Value {
     value
         .map(|value| {
@@ -3625,11 +3770,11 @@ fn iso_utc_ms(value: Option<i64>) -> serde_json::Value {
 }
 
 /// A statistics bound as `SHOW STATS FOR` presents it: text.
-fn bound_text(value: &serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Null => serde_json::Value::Null,
-        serde_json::Value::String(text) => serde_json::Value::String(text.clone()),
-        other => serde_json::Value::String(other.to_string()),
+fn bound_text(value: Option<&kaveon_storage::StatValue>) -> serde_json::Value {
+    match value.map(kaveon_storage::StatValue::to_json) {
+        None | Some(serde_json::Value::Null) => serde_json::Value::Null,
+        Some(serde_json::Value::String(text)) => serde_json::Value::String(text),
+        Some(other) => serde_json::Value::String(other.to_string()),
     }
 }
 
@@ -3656,13 +3801,24 @@ fn timestamp(name: &str) -> ColumnInfo {
     }
 }
 
-/// `SHOW STATS FOR` over a stored statistics document: Trino's columns, one
-/// row per column and a summary row whose `column_name` is null and which
+/// The Delta version a statistics document describes, when its source is
+/// a Delta table.
+fn delta_version_of(statistics: &kaveon_core::TableStatistics) -> serde_json::Value {
+    match statistics.source_version.kind {
+        kaveon_core::SourceVersionKind::DeltaVersion { version } => serde_json::json!(version),
+        _ => serde_json::Value::Null,
+    }
+}
+
+/// `SHOW STATS FOR` over the table's statistics: Trino's columns, one row
+/// per column and a summary row whose `column_name` is null and which
 /// carries the table's `row_count` and total `data_size`; `analyzed_at` is
-/// the same on every row. A version 1 document (row count and column names
-/// only) yields name-only rows and no `analyzed_at`.
+/// the same on every row. `distinct_values_count` is the exact count when
+/// `ANALYZE … WITH (distinct = true | columns = …)` counted the column, else
+/// the sketch's estimate when `ANALYZE … WITH (sketches = true)` read it,
+/// else null.
 fn show_stats_result(
-    document: &serde_json::Value,
+    statistics: &kaveon_core::TableStatistics,
 ) -> (Vec<ColumnInfo>, Vec<Vec<serde_json::Value>>) {
     let columns = vec![
         varchar("column_name"),
@@ -3678,69 +3834,54 @@ fn show_stats_result(
         bigint("row_count"),
         timestamp("analyzed_at"),
     ];
-    let row_count = document["row_count"].as_u64();
-    let analyzed_at = iso_utc_ms(document["analyzed_at_ms"].as_i64());
-    let mut rows = document["columns"]
-        .as_array()
-        .map(|columns| {
-            columns
-                .iter()
-                .map(|column| {
-                    let (name, column) = match column {
-                        serde_json::Value::String(name) => (name.clone(), None),
-                        other => (
-                            other["name"].as_str().unwrap_or_default().to_owned(),
-                            Some(other),
-                        ),
-                    };
-                    let nulls = column.and_then(|column| column["nulls"].as_u64());
-                    let nulls_fraction = match (nulls, row_count) {
-                        (Some(nulls), Some(rows)) if rows > 0 => {
-                            serde_json::json!(nulls as f64 / rows as f64)
-                        }
-                        _ => serde_json::Value::Null,
-                    };
-                    let field = |key: &str| {
-                        column
-                            .map(|column| column[key].clone())
-                            .unwrap_or(serde_json::Value::Null)
-                    };
-                    vec![
-                        serde_json::json!(name),
-                        field("type"),
-                        field("compressed_bytes"),
-                        nulls_fraction,
-                        field("distinct"),
-                        bound_text(&field("min")),
-                        bound_text(&field("max")),
-                        serde_json::Value::Null,
-                        analyzed_at.clone(),
-                    ]
-                })
-                .collect::<Vec<_>>()
+    let analyzed_at = iso_utc_ms(i64::try_from(statistics.computed_at_ms).ok());
+    let mut rows = statistics
+        .columns
+        .iter()
+        .map(|column| {
+            let nulls_fraction = match column.null_count {
+                Some(nulls) if statistics.rows > 0 => {
+                    serde_json::json!(nulls as f64 / statistics.rows as f64)
+                }
+                _ => serde_json::Value::Null,
+            };
+            vec![
+                serde_json::json!(column.name),
+                serde_json::json!(kaveon_sql::ddl::sql_type_name(&column.data_type)),
+                serde_json::json!(column.bytes),
+                nulls_fraction,
+                serde_json::json!(column.distinct_count()),
+                bound_text(column.min.as_ref()),
+                bound_text(column.max.as_ref()),
+                serde_json::Value::Null,
+                analyzed_at.clone(),
+            ]
         })
-        .unwrap_or_default();
+        .collect::<Vec<_>>();
     rows.push(vec![
         serde_json::Value::Null,
         serde_json::Value::Null,
-        document["compressed_bytes"].clone(),
+        serde_json::json!(statistics.bytes),
         serde_json::Value::Null,
         serde_json::Value::Null,
         serde_json::Value::Null,
         serde_json::Value::Null,
-        serde_json::json!(row_count),
+        serde_json::json!(statistics.rows),
         analyzed_at,
     ]);
     (columns, rows)
 }
 
-/// `DESCRIBE DETAIL`: the table-level facts, from the stored document when
-/// the table was analyzed and from a fresh metadata read otherwise.
+/// `DESCRIBE DETAIL`: the table-level facts, from the statistics on record
+/// when the table was analyzed and from a fresh metadata read otherwise;
+/// `catalog_snapshot` is the published catalog the statement resolved the
+/// table under.
 fn describe_detail_result(
     format: kaveon_core::DataFormat,
     location: &str,
-    document: Option<&serde_json::Value>,
+    statistics: Option<&kaveon_core::TableStatistics>,
     fresh: Option<&kaveon_storage::SourceProfile>,
+    catalog_snapshot: &str,
 ) -> (Vec<ColumnInfo>, Vec<Vec<serde_json::Value>>) {
     let columns = vec![
         varchar("format"),
@@ -3755,30 +3896,19 @@ fn describe_detail_result(
         timestamp("analyzed_at"),
         varchar("catalog_snapshot"),
     ];
-    let row = match (document, fresh) {
-        (Some(document), _) => vec![
+    let row = match (statistics, fresh) {
+        (Some(statistics), _) => vec![
             serde_json::json!(format_name(format)),
             serde_json::json!(location),
             serde_json::Value::Null,
-            iso_utc_ms(document["last_modified_ms"].as_i64()),
-            document["file_count"].clone(),
-            document["compressed_bytes"].clone(),
-            document["row_count"].clone(),
-            document["delta_version"].clone(),
-            document["partition_columns"]
-                .as_array()
-                .map(|names| {
-                    serde_json::json!(
-                        names
-                            .iter()
-                            .filter_map(serde_json::Value::as_str)
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    )
-                })
-                .unwrap_or(serde_json::Value::Null),
-            iso_utc_ms(document["analyzed_at_ms"].as_i64()),
-            document["catalog_snapshot_sha256"].clone(),
+            iso_utc_ms(statistics.last_modified_ms),
+            serde_json::json!(statistics.files),
+            serde_json::json!(statistics.bytes),
+            serde_json::json!(statistics.rows),
+            delta_version_of(statistics),
+            serde_json::json!(statistics.partition_columns.join(",")),
+            iso_utc_ms(i64::try_from(statistics.computed_at_ms).ok()),
+            serde_json::json!(catalog_snapshot),
         ],
         (None, Some(profile)) => vec![
             serde_json::json!(format_name(format)),
@@ -3789,9 +3919,9 @@ fn describe_detail_result(
             serde_json::json!(profile.compressed_bytes),
             serde_json::Value::Null,
             serde_json::json!(profile.statistics.delta_version),
-            serde_json::json!(partition_column_names(profile).join(",")),
+            serde_json::json!(kaveon_storage::partition_column_names(profile).join(",")),
             serde_json::Value::Null,
-            serde_json::Value::Null,
+            serde_json::json!(catalog_snapshot),
         ],
         (None, None) => Vec::new(),
     };
@@ -3811,62 +3941,38 @@ async fn execute_statistics_statement(
         StatisticsStatement::ShowStats(table) => (table, true),
         StatisticsStatement::DescribeDetail(table) => (table, false),
     };
-    let qualified = qualify_table(context, &table);
-    let resolved = match state
-        .catalog
-        .read()
-        .await
-        .resolve_table(&kaveon_core::TableReference::parse(&qualified))
-    {
-        Ok(value) => value,
-        Err(error) => {
-            return analyze_failure(
-                query_id,
-                started,
-                StatusCode::BAD_REQUEST,
-                "TABLE_NOT_FOUND",
-                error.to_string(),
-            )
-            .await;
+    let table = match resolve_statistics_table(state, &qualify_table(context, &table)).await {
+        Ok(table) => table,
+        Err((status, code, message)) => {
+            return analyze_failure(query_id, started, status, code, message).await;
         }
     };
-    let location = resolved.full_path();
-    let format = resolved.table.format;
-    let stored = match state.product_transactions.catalog() {
-        Some(commit) => match stored_statistics_document(&commit, &qualified).await {
-            Ok(document) => document,
-            Err((status, code, message)) => {
-                return analyze_failure(query_id, started, status, code, message).await;
-            }
-        },
-        None if show_stats => {
-            return analyze_failure(
-                query_id,
-                started,
-                StatusCode::SERVICE_UNAVAILABLE,
-                "STATISTICS_DISABLED",
-                "durable statistics are disabled".into(),
-            )
-            .await;
+    let stored = match stored_table_statistics(state, &table.id) {
+        Ok(stored) => stored,
+        Err((status, code, message)) => {
+            return analyze_failure(query_id, started, status, code, message).await;
         }
-        None => None,
     };
     let (columns, rows) = if show_stats {
-        let Some(document) = stored else {
+        let Some(statistics) = stored else {
             return analyze_failure(
                 query_id,
                 started,
                 StatusCode::BAD_REQUEST,
                 "STATISTICS_UNAVAILABLE",
-                format!("no statistics for {qualified}; run ANALYZE {qualified}"),
+                format!(
+                    "no statistics for {}; run ANALYZE {}",
+                    table.qualified, table.qualified
+                ),
             )
             .await;
         };
-        show_stats_result(&document)
+        show_stats_result(&statistics)
     } else {
         let fresh = if stored.is_none() {
             let read = tokio::task::spawn_blocking({
-                let location = location.clone();
+                let location = table.location.clone();
+                let format = table.format;
                 move || kaveon_storage::profile_source(&location, format)
             })
             .await;
@@ -3896,51 +4002,15 @@ async fn execute_statistics_statement(
         } else {
             None
         };
-        describe_detail_result(format, &location, stored.as_ref(), fresh.as_ref())
+        describe_detail_result(
+            table.format,
+            &table.location,
+            stored.as_deref(),
+            fresh.as_ref(),
+            &context.catalog_snapshot_id,
+        )
     };
     finish_inline_statement(query_id, started, columns, rows).await
-}
-
-/// The table's stored statistics document, parsed; `None` when the table
-/// was never analyzed.
-async fn stored_statistics_document(
-    commit: &kaveon_catalog::product_commit::ProductCatalogCommit,
-    qualified: &str,
-) -> Result<Option<serde_json::Value>, (StatusCode, &'static str, String)> {
-    let snapshot = commit.read_current().await.map_err(|_| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "CATALOG_UNAVAILABLE",
-            "cannot read product catalog head".to_owned(),
-        )
-    })?;
-    statistics_document_in(commit, &snapshot, qualified).await
-}
-
-/// The table's statistics document under `snapshot`, parsed; `None` when
-/// the snapshot holds none.
-async fn statistics_document_in(
-    commit: &kaveon_catalog::product_commit::ProductCatalogCommit,
-    snapshot: &kaveon_catalog::product_manifest::CatalogSnapshot,
-    qualified: &str,
-) -> Result<Option<serde_json::Value>, (StatusCode, &'static str, String)> {
-    let Some(stored) = snapshot.table_statistics.get(qualified) else {
-        return Ok(None);
-    };
-    let unreadable = || {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "STATISTICS_INVALID",
-            format!("stored statistics for {qualified} are not readable"),
-        )
-    };
-    let bytes = commit
-        .fetch_immutable_file(&stored.document)
-        .await
-        .map_err(|_| unreadable())?;
-    serde_json::from_slice::<serde_json::Value>(&bytes)
-        .map(Some)
-        .map_err(|_| unreadable())
 }
 
 /// Finishes a statement that answered on the coordinator: the record and
@@ -3972,13 +4042,21 @@ async fn finish_inline_statement(
     .into_response()
 }
 
-/// `ANALYZE`: the metadata profile, then — for `WITH (distinct = true)` or
-/// `WITH (columns = ARRAY[…])` — one `SELECT COUNT(DISTINCT "column")`
-/// statement per selected column through [`run_statement`], sequentially,
-/// cancelled with this statement; then the source identity is read again
-/// and one document is committed. A column not counted by this statement
-/// keeps the count of the previous document when the source identity is
-/// unchanged, else it is null.
+/// Files read at once when `ANALYZE … WITH (sketches = true)` reads the
+/// columns.
+const ANALYZE_SKETCH_THREADS: usize = 8;
+
+/// `ANALYZE`: the table's statistics from its metadata (footers, the Delta
+/// log, Iceberg manifests — no data read), or with `WITH (sketches =
+/// true)` every sketchable column read once on the coordinator for the
+/// distinct-count and quantile sketches and exact bounds; then — for `WITH
+/// (distinct = true)` or `WITH (columns = ARRAY[…])` — one `SELECT
+/// COUNT(DISTINCT "column")` statement per selected column through
+/// [`run_statement`], a few at a time, cancelled with this statement; then
+/// the source version is read again and the document is stored in the
+/// durable catalog beside the table definition. A column not counted by
+/// this statement keeps the exact count of the previous document when the
+/// source version is unchanged.
 async fn execute_analyze(
     state: &Arc<AppState>,
     identity: &Identity,
@@ -3986,6 +4064,7 @@ async fn execute_analyze(
     context: &QueryContext,
     statement: Result<AnalyzeStatement, String>,
     started: Instant,
+    memory: AdmittedQueryMemory,
 ) -> Response {
     if identity.role != crate::security::Role::Admin {
         finish_failed_query(
@@ -4003,24 +4082,6 @@ async fn execute_analyze(
         )
             .into_response();
     }
-    let Some(commit) = state.product_transactions.catalog() else {
-        finish_failed_query(
-            query_id,
-            "native ANALYZE is disabled".into(),
-            started,
-            None,
-            None,
-            None,
-        )
-        .await;
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(
-                serde_json::json!({"error":"native ANALYZE is disabled","code":"ANALYZE_DISABLED"}),
-            ),
-        )
-            .into_response();
-    };
     let statement = match statement {
         Ok(statement) => statement,
         Err(message) => {
@@ -4034,29 +4095,41 @@ async fn execute_analyze(
             .await;
         }
     };
-    let qualified = qualify_table(context, &statement.table);
-    let resolved = match state
-        .catalog
-        .read()
-        .await
-        .resolve_table(&kaveon_core::TableReference::parse(&qualified))
-    {
-        Ok(value) => value,
-        Err(error) => {
-            return analyze_failure(
-                query_id,
-                started,
-                StatusCode::BAD_REQUEST,
-                "TABLE_NOT_FOUND",
-                error.to_string(),
-            )
-            .await;
+    let table =
+        match resolve_statistics_table(state, &qualify_table(context, &statement.table)).await {
+            Ok(table) => table,
+            Err((status, code, message)) => {
+                return analyze_failure(query_id, started, status, code, message).await;
+            }
+        };
+    let qualified = table.qualified.clone();
+    let built = tokio::task::spawn_blocking({
+        let location = table.location.clone();
+        let format = table.format;
+        let id = table.id.clone();
+        let sketches = statement.sketches;
+        move || -> kaveon_core::Result<kaveon_core::TableStatistics> {
+            if sketches {
+                let options = kaveon_storage::FullScanOptions {
+                    memory: Some(memory.pool().operator("analyze-sketches")?),
+                    threads: ANALYZE_SKETCH_THREADS,
+                    columns: None,
+                };
+                let statistics = kaveon_storage::full_statistics(&location, format, id, &options);
+                drop(memory);
+                statistics
+            } else {
+                // The metadata read reserves nothing; the permits go back
+                // before the counts, which are admitted in their own right.
+                drop(memory);
+                kaveon_storage::metadata_statistics(&location, format, id)
+            }
         }
-    };
-    let location = resolved.full_path();
-    let first = match kaveon_storage::profile_source(&location, resolved.table.format) {
-        Ok(value) => value,
-        Err(error) => {
+    })
+    .await;
+    let mut statistics = match built {
+        Ok(Ok(statistics)) => statistics,
+        Ok(Err(error)) => {
             return analyze_failure(
                 query_id,
                 started,
@@ -4066,19 +4139,22 @@ async fn execute_analyze(
             )
             .await;
         }
+        Err(_) => {
+            return analyze_failure(
+                query_id,
+                started,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "ANALYZE_FAILED",
+                "statistics build did not complete".into(),
+            )
+            .await;
+        }
     };
     let selected = match &statement.distinct {
         DistinctColumns::None => Vec::new(),
-        DistinctColumns::All => first
-            .columns
-            .iter()
-            .map(|column| column.name.clone())
-            .collect(),
+        DistinctColumns::All => statistics.column_names(),
         DistinctColumns::Named(names) => {
-            if let Some(unknown) = names
-                .iter()
-                .find(|name| !first.columns.iter().any(|column| column.name == **name))
-            {
+            if let Some(unknown) = names.iter().find(|name| statistics.column(name).is_none()) {
                 return analyze_failure(
                     query_id,
                     started,
@@ -4175,9 +4251,16 @@ async fn execute_analyze(
             } => analyze_failure(query_id, started, status, &code, message).await,
         };
     }
-    let second = match kaveon_storage::profile_source(&location, resolved.table.format) {
-        Ok(value) if value.statistics.identity_sha256 == first.statistics.identity_sha256 => value,
-        Ok(_) => {
+    // The counts must have seen the version the document describes.
+    let after = tokio::task::spawn_blocking({
+        let location = table.location.clone();
+        let format = table.format;
+        move || kaveon_storage::current_source_version(&location, format)
+    })
+    .await;
+    match after {
+        Ok(Ok(after)) if statistics.is_current_for(&after.identity_sha256) => {}
+        Ok(Ok(_)) => {
             return analyze_failure(
                 query_id,
                 started,
@@ -4187,7 +4270,7 @@ async fn execute_analyze(
             )
             .await;
         }
-        Err(error) => {
+        Ok(Err(error)) => {
             return analyze_failure(
                 query_id,
                 started,
@@ -4197,115 +4280,52 @@ async fn execute_analyze(
             )
             .await;
         }
-    };
-    let catalog_snapshot_sha256 = format!(
-        "{:x}",
-        Sha256::digest(context.catalog_snapshot_id.as_bytes())
-    );
-    let current = match commit.read_current().await {
-        Ok(v) => v,
         Err(_) => {
             return analyze_failure(
                 query_id,
                 started,
-                StatusCode::SERVICE_UNAVAILABLE,
-                "CATALOG_UNAVAILABLE",
-                "cannot read product catalog head".into(),
-            )
-            .await;
-        }
-    };
-    // The counts the previous document holds for the same source identity
-    // stay; a column counted now takes the new count.
-    let mut distinct = match statistics_document_in(&commit, &current, &qualified).await {
-        Ok(previous) => previous
-            .filter(|previous| {
-                previous["source_identity_sha256"] == second.statistics.identity_sha256
-            })
-            .map(|previous| preserved_distinct_counts(&previous))
-            .unwrap_or_default(),
-        Err((status, code, message)) => {
-            return analyze_failure(query_id, started, status, code, message).await;
-        }
-    };
-    distinct.extend(measured);
-    let document = serde_json::to_vec(&statistics_document(
-        &qualified,
-        &catalog_snapshot_sha256,
-        &location,
-        &second,
-        &distinct,
-    ))
-    .unwrap();
-    let row_count = second.statistics.row_count;
-    let source_identity_sha256 = second.statistics.identity_sha256;
-    let document_sha = format!("{:x}", Sha256::digest(&document));
-    let operation = Uuid::new_v4().simple().to_string();
-    let path = format!("statistics/{operation}.json");
-    let request = PrepareChange {
-        base: current.reference(),
-        snapshot_id: format!("analyze-{operation}"),
-        operation_id: format!("analyze-{operation}"),
-        request_digest: document_sha.clone(),
-        changes: vec![
-            CatalogChange::PutRuntimeTableSource {
-                table: qualified.clone(),
-                source: RuntimeTableSourceRef {
-                    catalog_snapshot_sha256: catalog_snapshot_sha256.clone(),
-                    source_identity_sha256: source_identity_sha256.clone(),
-                },
-            },
-            CatalogChange::PutStatistics {
-                table: qualified.clone(),
-                statistics: TableStatisticsRef {
-                    catalog_snapshot_sha256,
-                    source_identity_sha256,
-                    document: ImmutableFileRef {
-                        path: path.clone(),
-                        sha256: document_sha,
-                    },
-                    row_count,
-                },
-            },
-        ],
-    };
-    match commit
-        .commit_with_documents(request, ProductDocuments::from([(path, document)]))
-        .await
-    {
-        CommitOutcome::Committed(_) | CommitOutcome::Replayed(_) => {}
-        CommitOutcome::Conflict => {
-            return analyze_failure(
-                query_id,
-                started,
-                StatusCode::CONFLICT,
-                "CATALOG_CONFLICT",
-                "catalog head changed during ANALYZE; retry".into(),
-            )
-            .await;
-        }
-        CommitOutcome::Rejected => {
-            return analyze_failure(
-                query_id,
-                started,
-                StatusCode::BAD_REQUEST,
-                "ANALYZE_REJECTED",
-                "statistics publication was rejected".into(),
-            )
-            .await;
-        }
-        CommitOutcome::Indeterminate => {
-            return analyze_failure(
-                query_id,
-                started,
-                StatusCode::SERVICE_UNAVAILABLE,
-                "ANALYZE_INDETERMINATE",
-                "statistics publication outcome is indeterminate".into(),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "ANALYZE_FAILED",
+                "source version read did not complete".into(),
             )
             .await;
         }
     }
-    let elapsed = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+    // The exact counts the previous document holds for the same source
+    // version stay; a column counted now takes the new count.
+    let previous = match stored_table_statistics(state, &table.id) {
+        Ok(previous) => previous,
+        Err((status, code, message)) => {
+            return analyze_failure(query_id, started, status, code, message).await;
+        }
+    };
+    if let Some(previous) = previous
+        .filter(|previous| statistics.is_current_for(&previous.source_version.identity_sha256))
+    {
+        for column in &mut statistics.columns {
+            if let Some(kept) = previous.column(&column.name).and_then(|c| c.distinct_exact) {
+                column.distinct_exact = Some(kept);
+            }
+        }
+    }
+    for column in &mut statistics.columns {
+        if let Some(count) = measured.get(&column.name) {
+            column.distinct_exact = Some(*count);
+        }
+    }
+    if let Err(error) = state
+        .catalog_store
+        .put_table_statistics(&identity.principal, &statistics)
+    {
+        return analyze_failure(
+            query_id,
+            started,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "CATALOG_UNAVAILABLE",
+            format!("statistics could not be stored: {error}"),
+        )
+        .await;
+    }
     let columns = vec![
         varchar("table"),
         bigint("row_count"),
@@ -4313,27 +4333,10 @@ async fn execute_analyze(
     ];
     let rows = vec![vec![
         serde_json::json!(qualified),
-        serde_json::json!(row_count),
+        serde_json::json!(statistics.rows),
         serde_json::json!(selected.len()),
     ]];
-    if let Some(record) = QUERY_STORE.write().await.queries.get_mut(query_id) {
-        record.state = QueryState::Finished;
-        record.next_uri = None;
-        record.columns = columns.clone();
-        record.rows = rows.clone();
-        record.elapsed_ms = elapsed;
-        record.completed_at_ms = unix_time_ms();
-    }
-    Json(StatementResponse {
-        next_uri: None,
-        id: query_id.into(),
-        state: QueryState::Finished,
-        columns: Some(columns),
-        data: Some(rows),
-        error: None,
-        elapsed_ms: elapsed,
-    })
-    .into_response()
+    finish_inline_statement(query_id, started, columns, rows).await
 }
 
 /// A catalog statement (`CREATE`/`DROP`/`ALTER` on the durable catalog,
@@ -4381,25 +4384,6 @@ async fn finish_catalog_result(
                 .into_response()
         }
     }
-}
-
-/// The distinct counts of a stored document: column name to count, for
-/// the columns that carry one.
-fn preserved_distinct_counts(document: &serde_json::Value) -> BTreeMap<String, u64> {
-    document["columns"]
-        .as_array()
-        .map(|columns| {
-            columns
-                .iter()
-                .filter_map(|column| {
-                    Some((
-                        column["name"].as_str()?.to_owned(),
-                        column["distinct"].as_u64()?,
-                    ))
-                })
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 /// Why a statement `ANALYZE` ran on its behalf did not answer with a value.
@@ -4663,7 +4647,7 @@ async fn whoami(
 async fn capabilities(State(state): State<Arc<AppState>>) -> Json<EngineCapabilities> {
     let transactions_enabled = state.product_transactions.catalog().is_some();
     Json(EngineCapabilities {
-        native_analyze: state.config.coordinator && transactions_enabled,
+        native_analyze: state.config.coordinator,
         transactions: TransactionCapabilities {
             enabled: transactions_enabled,
             supported_statements: [
@@ -4690,12 +4674,19 @@ const MAX_DIAGNOSTIC_STATISTICS: usize = 100;
 #[derive(Debug, Serialize)]
 struct StatisticsDiagnostic {
     table: String,
+    table_id: String,
     row_count: u64,
-    catalog_digest_prefix: String,
-    source_digest_prefix: String,
+    /// The source version the statistics describe, labelled.
+    source_version: String,
+    depth: kaveon_core::StatisticsDepth,
+    computed_at: serde_json::Value,
+    /// Whether the source is still at that version.
     current: bool,
 }
 
+/// Administrators only: every table with statistics on record and whether
+/// the source is still at the version they describe. Bounded to
+/// [`MAX_DIAGNOSTIC_STATISTICS`] rows.
 async fn statistics_diagnostics(
     State(state): State<Arc<AppState>>,
     Extension(identity): Extension<Identity>,
@@ -4703,46 +4694,330 @@ async fn statistics_diagnostics(
     if identity.role != crate::security::Role::Admin {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let Some(commit) = state.product_transactions.catalog() else {
-        return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error":"durable statistics are disabled","code":"STATISTICS_DISABLED"}))).into_response();
-    };
-    let snapshot = match commit.read_current().await {
+    let summaries = match state.catalog_store.list_table_statistics() {
         Ok(value) => value,
-        Err(_) => return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error":"cannot read durable statistics","code":"STATISTICS_UNAVAILABLE"}))).into_response(),
+        Err(error) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": format!("cannot read statistics: {error}"), "code": "STATISTICS_UNAVAILABLE"})),
+            )
+                .into_response();
+        }
     };
     let catalog = state.catalog.read().await.clone();
-    let total = snapshot.table_statistics.len();
-    let statistics = snapshot
-        .table_statistics
-        .iter()
-        .take(MAX_DIAGNOSTIC_STATISTICS)
-        .map(|(table, stored)| StatisticsDiagnostic {
-            table: table.clone(),
-            row_count: stored.row_count,
-            catalog_digest_prefix: stored.catalog_snapshot_sha256.chars().take(12).collect(),
-            source_digest_prefix: stored.source_identity_sha256.chars().take(12).collect(),
-            current: durable_relation_statistics(&catalog, &snapshot, table).is_some(),
+    let total = summaries.len();
+    let mut statistics = Vec::with_capacity(total.min(MAX_DIAGNOSTIC_STATISTICS));
+    for summary in summaries.into_iter().take(MAX_DIAGNOSTIC_STATISTICS) {
+        let qualified = summary.name.qualified();
+        let current = tokio::task::spawn_blocking({
+            let catalog = Arc::clone(&catalog);
+            let qualified = qualified.clone();
+            let identity = summary.source_version.identity_sha256.clone();
+            move || {
+                catalog
+                    .resolve_table(&kaveon_core::TableReference::parse(&qualified))
+                    .ok()
+                    .and_then(|resolved| {
+                        kaveon_storage::current_source_version(
+                            &resolved.full_path(),
+                            resolved.table.format,
+                        )
+                        .ok()
+                    })
+                    .is_some_and(|version| version.identity_sha256 == identity)
+            }
         })
-        .collect::<Vec<_>>();
+        .await
+        .unwrap_or(false);
+        statistics.push(StatisticsDiagnostic {
+            table: qualified,
+            table_id: summary.table_id.as_str().to_owned(),
+            row_count: summary.rows,
+            source_version: summary.source_version.label(),
+            depth: summary.depth,
+            computed_at: iso_utc_ms(i64::try_from(summary.computed_at_ms).ok()),
+            current,
+        });
+    }
     Json(serde_json::json!({"statistics":statistics,"total":total,"truncated":total > MAX_DIAGNOSTIC_STATISTICS})).into_response()
 }
 
-async fn optimize_with_durable_statistics(
+/// The table's statistics document with the source's version as observed
+/// now: `GET /v1/catalog/tables/{id}/statistics`.
+async fn get_table_statistics(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    let id = match TableId::new(id) {
+        Ok(id) => id,
+        Err(error) => return catalog_error_response(error),
+    };
+    let statistics = match state.catalog_store.table_statistics(&id) {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            if let Ok(None) = state.catalog_store.table(&id) {
+                return StatusCode::NOT_FOUND.into_response();
+            }
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({
+                    "error": format!("no statistics for {}; run ANALYZE", id.as_str()),
+                    "code": "STATISTICS_UNAVAILABLE"
+                })),
+            )
+                .into_response();
+        }
+        Err(error) => return catalog_error_response(error),
+    };
+    let observed = match observe_table_version(&state, &id).await {
+        Ok(observed) => observed,
+        Err(response) => return *response,
+    };
+    let stale = !statistics.is_current_for(&observed.version.identity_sha256);
+    Json(serde_json::json!({
+        "table_id": id.as_str(),
+        "table": observed.table,
+        "source_version": statistics.source_version,
+        "current_source_version": observed.version,
+        "observed_at_ms": observed.observed_at_ms,
+        "stale": stale,
+        "statistics": statistics,
+    }))
+    .into_response()
+}
+
+/// The table's current source version, from the least metadata that
+/// establishes it: `GET /v1/catalog/tables/{id}/version`. Cheap enough to
+/// call before every answer.
+async fn get_table_version(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    let id = match TableId::new(id) {
+        Ok(id) => id,
+        Err(error) => return catalog_error_response(error),
+    };
+    match observe_table_version(&state, &id).await {
+        Ok(observed) => Json(serde_json::json!({
+            "table_id": id.as_str(),
+            "table": observed.table,
+            "source_version": observed.version,
+            "observed_at_ms": observed.observed_at_ms,
+        }))
+        .into_response(),
+        Err(response) => *response,
+    }
+}
+
+/// A table's source version as observed now.
+struct ObservedVersion {
+    table: String,
+    version: kaveon_core::SourceVersion,
+    observed_at_ms: u64,
+}
+
+async fn observe_table_version(
     state: &AppState,
+    id: &TableId,
+) -> Result<ObservedVersion, Box<Response>> {
+    let name = match state.catalog_store.table_name(id) {
+        Ok(Some(name)) => name,
+        Ok(None) => return Err(Box::new(StatusCode::NOT_FOUND.into_response())),
+        Err(error) => return Err(Box::new(catalog_error_response(error))),
+    };
+    let qualified = name.qualified();
+    // The published catalog resolves the location the way a statement
+    // does; a table it does not publish (a draft, a retired one) has no
+    // version to observe.
+    let resolved = state
+        .catalog
+        .read()
+        .await
+        .resolve_table(&kaveon_core::TableReference::parse(&qualified));
+    let (location, format) = match resolved {
+        Ok(resolved) => (resolved.full_path(), resolved.table.format),
+        Err(_) => {
+            return Err(Box::new(
+                (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({
+                        "error": format!("{qualified} is not published (a draft or retired table)"),
+                        "code": "TABLE_NOT_PUBLISHED"
+                    })),
+                )
+                    .into_response(),
+            ));
+        }
+    };
+    let version = tokio::task::spawn_blocking(move || {
+        kaveon_storage::current_source_version(&location, format)
+    })
+    .await;
+    match version {
+        Ok(Ok(version)) => Ok(ObservedVersion {
+            table: qualified,
+            version,
+            observed_at_ms: unix_time_ms(),
+        }),
+        Ok(Err(error)) => Err(Box::new(
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({
+                    "error": format!("source version of {qualified} is unreadable: {error}"),
+                    "code": "SOURCE_UNAVAILABLE"
+                })),
+            )
+                .into_response(),
+        )),
+        Err(_) => Err(Box::new(
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": "source version read did not complete",
+                    "code": "SOURCE_UNAVAILABLE"
+                })),
+            )
+                .into_response(),
+        )),
+    }
+}
+
+/// What planning learned about one relation of the statement.
+#[derive(Clone)]
+struct PlannedRelation {
+    table_id: Option<TableId>,
+    location: String,
+    format: kaveon_core::DataFormat,
+    /// The source's current version and exact row count, as read now.
+    current: Option<kaveon_storage::SourceStatistics>,
+    /// The statistics on record, whatever version they describe.
+    statistics: Option<Arc<kaveon_core::TableStatistics>>,
+}
+
+impl PlannedRelation {
+    /// The statistics on record when they describe the source's current
+    /// version: the only ones that may answer rather than cost.
+    fn current_statistics(&self) -> Option<&Arc<kaveon_core::TableStatistics>> {
+        let current = self.current.as_ref()?;
+        self.statistics
+            .as_ref()
+            .filter(|statistics| statistics.is_current_for(&current.identity_sha256))
+    }
+
+    fn current_version(&self) -> Option<kaveon_core::SourceVersion> {
+        let current = self.current.as_ref()?;
+        let kind = match (self.format, current.delta_version) {
+            (kaveon_core::DataFormat::Delta, version) => {
+                kaveon_core::SourceVersionKind::DeltaVersion {
+                    version: version.unwrap_or(0),
+                }
+            }
+            (kaveon_core::DataFormat::Iceberg, _) => {
+                // The profile's snapshot id is not on the row-count read;
+                // the statistics on record name it when they are current.
+                kaveon_core::SourceVersionKind::IcebergSnapshot {
+                    snapshot_id: self
+                        .current_statistics()
+                        .and_then(|statistics| match statistics.source_version.kind {
+                            kaveon_core::SourceVersionKind::IcebergSnapshot { snapshot_id } => {
+                                snapshot_id
+                            }
+                            _ => None,
+                        }),
+                }
+            }
+            (kaveon_core::DataFormat::Parquet, _) => match &current.parquet_listing {
+                Some(listing) => kaveon_core::SourceVersionKind::Listing {
+                    files: listing.files.len() as u64,
+                },
+                None => kaveon_core::SourceVersionKind::File,
+            },
+        };
+        Some(kaveon_core::SourceVersion {
+            identity_sha256: current.identity_sha256.clone(),
+            kind,
+        })
+    }
+}
+
+/// The relations planning read, by the name the plan scans them under.
+#[derive(Clone, Default)]
+struct PlanningStatistics {
+    relations: BTreeMap<String, PlannedRelation>,
+}
+
+/// Tables whose statistics are being refreshed in the background, so one
+/// new source version starts one refresh.
+static STATISTICS_REFRESHES: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashSet<String>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Files read at once by an automatic refresh.
+const REFRESH_SCAN_THREADS: usize = 4;
+
+/// Bring the table's statistics to the source's current version in the
+/// background: files added to a full document are read and folded in, a
+/// removal or a metadata-only document is recomputed at the document's
+/// depth. One refresh per table at a time; a refresh that fails leaves
+/// the previous document, which still costs.
+fn schedule_statistics_refresh(state: &Arc<AppState>, relation: &PlannedRelation) {
+    let (Some(table_id), Some(statistics)) = (&relation.table_id, &relation.statistics) else {
+        return;
+    };
+    let key = table_id.as_str().to_owned();
+    if !STATISTICS_REFRESHES.lock().unwrap().insert(key.clone()) {
+        return;
+    }
+    let state = Arc::clone(state);
+    let previous = Arc::clone(statistics);
+    let location = relation.location.clone();
+    let format = relation.format;
+    tokio::task::spawn_blocking(move || {
+        let refreshed = kaveon_storage::refresh_statistics(
+            &previous,
+            &location,
+            format,
+            &kaveon_storage::FullScanOptions {
+                memory: None,
+                threads: REFRESH_SCAN_THREADS,
+                columns: None,
+            },
+        );
+        match refreshed {
+            Ok(next) if next.source_version != previous.source_version => {
+                if let Err(error) = state
+                    .catalog_store
+                    .put_table_statistics("engine-statistics-refresh", &next)
+                {
+                    eprintln!("statistics refresh of {key} could not be stored: {error}");
+                }
+            }
+            Ok(_) => {}
+            Err(error) => eprintln!("statistics refresh of {key} failed: {error}"),
+        }
+        STATISTICS_REFRESHES.lock().unwrap().remove(&key);
+    });
+}
+
+async fn optimize_with_durable_statistics(
+    state: &Arc<AppState>,
     plan: LogicalPlan,
     catalog: &crate::PublishedCatalog,
-) -> (LogicalPlan, SourcePins) {
+) -> (LogicalPlan, SourcePins, PlanningStatistics) {
     let mut tables = std::collections::BTreeSet::new();
     collect_join_statistics_tables(&plan, &mut tables);
-    if tables.is_empty() {
-        return (plan, SourcePins::default());
+    if let Some(table) = context_answer_table(&plan) {
+        tables.insert(table.to_owned());
     }
     let mut scan_predicates = BTreeMap::new();
     collect_scan_predicates(&plan, &mut scan_predicates);
-    let durable = match state.product_transactions.catalog() {
-        Some(commit) => commit.read_current().await.ok(),
-        None => None,
-    };
+    // A filtered scan is read too: its statistics, when current, say
+    // which files of a directory the predicate can skip.
+    for (table, scans) in &scan_predicates {
+        if scans.iter().any(Option::is_some) {
+            tables.insert(table.clone());
+        }
+    }
+    if tables.is_empty() {
+        return (plan, SourcePins::default(), PlanningStatistics::default());
+    }
     let mut loads = tokio::task::JoinSet::new();
     for table in tables {
         let Ok(resolved) = catalog.resolve_table(&kaveon_core::TableReference::parse(&table))
@@ -4751,21 +5026,41 @@ async fn optimize_with_durable_statistics(
         };
         let location = resolved.full_path();
         let format = resolved.table.format;
-        let qualified = format!(
-            "{}.{}.{}",
-            resolved.catalog, resolved.schema, resolved.table.name
-        );
+        let table_id = state
+            .catalog_store
+            .table_by_name(&resolved.catalog, &resolved.schema, &resolved.table.name)
+            .ok()
+            .flatten()
+            .map(|definition| definition.id().clone());
+        let statistics = table_id
+            .as_ref()
+            .and_then(|id| state.catalog_store.table_statistics(id).ok().flatten())
+            .map(Arc::new);
         let predicate = known_scan_predicate(&scan_predicates, &table);
         let catalog_schema = Arc::clone(&resolved.table.arrow_schema);
         loads.spawn_blocking(move || {
             let current = kaveon_storage::analyze_source(&location, format).ok();
             // A directory table under a known predicate is pinned at the
-            // files that survive partition pruning, and its row count is
-            // theirs: the statistics see what the scan will read.
+            // files that survive partition pruning and — when the
+            // statistics on record are current and carry every file's
+            // bounds — the files the bounds prove empty of matches; its
+            // row count is the kept files': the statistics see what the
+            // scan will read.
             let pruned = current.as_ref().and_then(|current| {
                 let listing = current.parquet_listing.as_ref()?;
                 let predicate = predicate.as_ref()?;
-                let pruned = listing.pruned_by(Some(&catalog_schema), predicate).ok()?;
+                let mut pruned = listing.pruned_by(Some(&catalog_schema), predicate).ok()?;
+                let mut skipped = 0;
+                if let Some((kept, count)) = statistics
+                    .as_ref()
+                    .filter(|statistics| statistics.is_current_for(&current.identity_sha256))
+                    .and_then(|statistics| {
+                        kaveon_storage::skip_listing_files(&pruned, statistics, predicate)
+                    })
+                {
+                    pruned = kept;
+                    skipped = count;
+                }
                 if pruned.files.len() == listing.files.len() {
                     return None;
                 }
@@ -4776,57 +5071,243 @@ async fn optimize_with_durable_statistics(
                     Some(Arc::clone(&catalog_schema)),
                 )
                 .ok()?;
-                Some((pruned, rows))
+                Some((pruned, rows, skipped))
             });
-            (table, qualified, location, current, pruned)
+            (
+                table,
+                PlannedRelation {
+                    table_id,
+                    location,
+                    format,
+                    current,
+                    statistics,
+                },
+                pruned,
+            )
         });
     }
-    let catalog_digest = format!("{:x}", Sha256::digest(catalog.snapshot_id.as_bytes()));
     let mut cache = HashMap::new();
     let mut pins = SourcePins::default();
+    let mut planning = PlanningStatistics::default();
     while let Some(loaded) = loads.join_next().await {
-        let Ok((table, qualified, location, current, pruned)) = loaded else {
+        let Ok((table, relation, pruned)) = loaded else {
             continue;
         };
-        if let Some(version) = current.as_ref().and_then(|value| value.delta_version) {
-            pins.delta_versions.insert(location.clone(), version);
+        if let Some(version) = relation
+            .current
+            .as_ref()
+            .and_then(|value| value.delta_version)
+        {
+            pins.delta_versions
+                .insert(relation.location.clone(), version);
         }
         if let Some(listing) = pruned
             .as_ref()
-            .map(|(listing, _)| Arc::clone(listing))
+            .map(|(listing, _, _)| Arc::clone(listing))
             .or_else(|| {
-                current
+                relation
+                    .current
                     .as_ref()
                     .and_then(|value| value.parquet_listing.clone())
             })
         {
-            pins.parquet_directories.insert(location, listing);
+            pins.parquet_directories
+                .insert(relation.location.clone(), listing);
         }
-        let value = current.map(|current| {
+        if let Some((_, _, skipped)) = &pruned
+            && *skipped > 0
+        {
+            pins.files_skipped
+                .insert(relation.location.clone(), *skipped);
+        }
+        // Statistics behind the source refresh in the background; until
+        // then they still cost — they never answer.
+        if state.config.statistics_auto_refresh
+            && relation.statistics.is_some()
+            && relation.current.is_some()
+            && relation.current_statistics().is_none()
+        {
+            schedule_statistics_refresh(state, &relation);
+        }
+        let value = relation.current.as_ref().map(|current| {
             let rows = match &pruned {
-                Some((_, rows)) => *rows,
-                None => durable
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.table_statistics.get(&qualified))
-                    .filter(|stored| {
-                        stored.catalog_snapshot_sha256 == catalog_digest
-                            && stored.source_identity_sha256 == current.identity_sha256
-                    })
-                    .map_or(current.row_count, |stored| stored.row_count),
+                Some((_, rows, _)) => *rows,
+                None => current.row_count,
             };
             kaveon_optim::statistics::RelationStatistics {
                 rows,
-                columns: current.columns,
+                columns: current.columns.clone(),
+                table: relation.statistics.clone(),
             }
         });
-        cache.insert(table, value);
+        cache.insert(table.clone(), value);
+        planning.relations.insert(table, relation);
     }
     (
         kaveon_optim::statistics::optimize_with_statistics(plan, &mut |table| {
             cache.get(table).cloned().flatten()
         }),
         pins,
+        planning,
     )
+}
+
+/// The aggregates a statement answered from statistics computes.
+enum ContextAggregate {
+    Count,
+    Min(String),
+    Max(String),
+}
+
+/// The scan of a `SELECT COUNT(*) | MIN(col) | MAX(col) … FROM t` with no
+/// predicate and no grouping — the shape statistics can answer — or
+/// `None`.
+fn context_answer_table(plan: &LogicalPlan) -> Option<&str> {
+    context_answer_shape(plan).map(|(table, _)| table)
+}
+
+fn context_answer_shape(plan: &LogicalPlan) -> Option<(&str, Vec<ContextAggregate>)> {
+    let aggregate = match plan {
+        LogicalPlan::Project { input, columns } => {
+            // The projection must keep the aggregates as they are: one
+            // output per aggregate, in order, renamed at most.
+            let LogicalPlan::Aggregate { aggregates, .. } = input.as_ref() else {
+                return None;
+            };
+            if columns.len() != aggregates.len()
+                || !projection_preserves_aggregate_order(columns, &[], aggregates)
+            {
+                return None;
+            }
+            input.as_ref()
+        }
+        other => other,
+    };
+    let LogicalPlan::Aggregate {
+        input,
+        group_by,
+        aggregates,
+    } = aggregate
+    else {
+        return None;
+    };
+    let LogicalPlan::Scan { table, .. } = input.as_ref() else {
+        return None;
+    };
+    if !group_by.is_empty() || aggregates.is_empty() {
+        return None;
+    }
+    let mut shape = Vec::with_capacity(aggregates.len());
+    for aggregate in aggregates {
+        shape.push(match aggregate {
+            AggregateExpr::Count {
+                expr: kaveon_core::Expr::Star,
+                distinct: false,
+            } => ContextAggregate::Count,
+            AggregateExpr::Min(kaveon_core::Expr::Column(column)) => {
+                ContextAggregate::Min(column.clone())
+            }
+            AggregateExpr::Max(kaveon_core::Expr::Column(column)) => {
+                ContextAggregate::Max(column.clone())
+            }
+            _ => return None,
+        });
+    }
+    Some((table, shape))
+}
+
+/// The output names of a context-answerable plan, as the node-local
+/// planner names them: an alias as written, else `count_*`, `min_col`,
+/// `max_col`.
+fn context_output_names(plan: &LogicalPlan) -> Vec<String> {
+    let name_of = |aggregate: &AggregateExpr| {
+        let (function, expr) = match aggregate {
+            AggregateExpr::Count { expr, .. } => ("COUNT", expr),
+            AggregateExpr::Sum { expr, .. } => ("SUM", expr),
+            AggregateExpr::Avg { expr, .. } => ("AVG", expr),
+            AggregateExpr::Min(expr) => ("MIN", expr),
+            AggregateExpr::Max(expr) => ("MAX", expr),
+        };
+        crate::planner::agg_output_name(function, std::slice::from_ref(expr))
+    };
+    match plan {
+        LogicalPlan::Project { columns, .. } => columns
+            .iter()
+            .map(|column| match column {
+                kaveon_core::Expr::Alias { name, .. } => name.clone(),
+                kaveon_core::Expr::Function { name, args } => {
+                    crate::planner::agg_output_name(name, args)
+                }
+                other => format!("{other:?}"),
+            })
+            .collect(),
+        LogicalPlan::Aggregate { aggregates, .. } => aggregates.iter().map(name_of).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// A statement answered from statistics: the columns and the one row.
+struct ContextAnswer {
+    columns: Vec<ColumnInfo>,
+    row: Vec<serde_json::Value>,
+    source_version: kaveon_core::SourceVersion,
+    current_source_version: kaveon_core::SourceVersion,
+}
+
+/// The answer to a `COUNT(*)`, `MIN` or `MAX` statement with no predicate
+/// from the table's statistics — only when they describe exactly the
+/// source version the statement is pinned to, and, for a bound, when the
+/// bound is the column's true extreme and its null count is known. Any
+/// other case scans.
+fn context_answer(plan: &LogicalPlan, planning: &PlanningStatistics) -> Option<ContextAnswer> {
+    let (table, shape) = context_answer_shape(plan)?;
+    let relation = planning.relations.get(table)?;
+    let statistics = relation.current_statistics()?;
+    let current = relation.current.as_ref()?;
+    if statistics.rows != current.row_count {
+        return None;
+    }
+    let names = context_output_names(plan);
+    if names.len() != shape.len() {
+        return None;
+    }
+    let mut columns = Vec::with_capacity(shape.len());
+    let mut row = Vec::with_capacity(shape.len());
+    for (aggregate, name) in shape.iter().zip(names) {
+        let (data_type, value) = match aggregate {
+            ContextAggregate::Count => (
+                presented_type(&arrow::datatypes::DataType::UInt64),
+                serde_json::json!(statistics.rows),
+            ),
+            ContextAggregate::Min(column) | ContextAggregate::Max(column) => {
+                let column = statistics
+                    .column(column)
+                    .or_else(|| statistics.column(column.rsplit('.').next().unwrap_or(column)))?;
+                let nulls = column.null_count?;
+                let bound = match aggregate {
+                    ContextAggregate::Min(_) => column.min.as_ref(),
+                    _ => column.max.as_ref(),
+                };
+                let value = if statistics.rows == 0 || nulls == statistics.rows {
+                    serde_json::Value::Null
+                } else {
+                    if !column.bounds_exact {
+                        return None;
+                    }
+                    bound?.to_json()
+                };
+                (presented_type(&column.data_type), value)
+            }
+        };
+        columns.push(ColumnInfo { name, data_type });
+        row.push(value);
+    }
+    Some(ContextAnswer {
+        columns,
+        row,
+        source_version: statistics.source_version.clone(),
+        current_source_version: relation.current_version()?,
+    })
 }
 
 /// The storage predicate each scan of the plan carries, per table: the
@@ -4888,20 +5369,31 @@ fn known_scan_predicate(
         .then(|| first.clone())
 }
 
-/// Collects only relations for which the statistics optimizer will request
-/// exact cardinality. Metadata reads are independent and can safely overlap;
-/// every result remains bound to its own immutable source identity.
+/// Collects the relations the statistics optimizer will cost: a scan, or
+/// a filter straight over one, on either side of a join. Metadata reads
+/// are independent and can safely overlap; every result remains bound to
+/// its own immutable source identity.
 fn collect_join_statistics_tables(
     plan: &LogicalPlan,
     tables: &mut std::collections::BTreeSet<String>,
 ) {
+    fn scan_of(plan: &LogicalPlan) -> Option<&str> {
+        match plan {
+            LogicalPlan::Scan { table, .. } => Some(table),
+            LogicalPlan::Filter { input, .. } => match input.as_ref() {
+                LogicalPlan::Scan { table, .. } => Some(table),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
     match plan {
         LogicalPlan::Join { left, right, .. } => {
-            if let LogicalPlan::Scan { table, .. } = left.as_ref() {
-                tables.insert(table.clone());
+            if let Some(table) = scan_of(left) {
+                tables.insert(table.to_owned());
             }
-            if let LogicalPlan::Scan { table, .. } = right.as_ref() {
-                tables.insert(table.clone());
+            if let Some(table) = scan_of(right) {
+                tables.insert(table.to_owned());
             }
             collect_join_statistics_tables(left, tables);
             collect_join_statistics_tables(right, tables);
@@ -4928,53 +5420,6 @@ fn collect_join_statistics_tables(
         }
         LogicalPlan::Scan { .. } => {}
     }
-}
-
-/// Derives exact planning statistics directly from the immutable source
-/// metadata when no current ANALYZE publication exists. The caller caches the
-/// result for the planning pass, so repeated references to one relation do not
-/// reopen its metadata. Failures stay conservative and retain partitioned joins.
-#[cfg(test)]
-fn exact_source_statistics(
-    catalog: &crate::PublishedCatalog,
-    table: &str,
-) -> Option<kaveon_optim::statistics::RelationStatistics> {
-    let resolved = catalog
-        .resolve_table(&kaveon_core::TableReference::parse(table))
-        .ok()?;
-    let current =
-        kaveon_storage::analyze_source(&resolved.full_path(), resolved.table.format).ok()?;
-    Some(kaveon_optim::statistics::RelationStatistics {
-        rows: current.row_count,
-        columns: current.columns,
-    })
-}
-
-fn durable_relation_statistics(
-    catalog: &crate::PublishedCatalog,
-    durable: &kaveon_catalog::product_manifest::CatalogSnapshot,
-    table: &str,
-) -> Option<kaveon_optim::statistics::RelationStatistics> {
-    let resolved = catalog
-        .resolve_table(&kaveon_core::TableReference::parse(table))
-        .ok()?;
-    let qualified = format!(
-        "{}.{}.{}",
-        resolved.catalog, resolved.schema, resolved.table.name
-    );
-    let stored = durable.table_statistics.get(&qualified)?;
-    let catalog_digest = format!("{:x}", Sha256::digest(catalog.snapshot_id.as_bytes()));
-    if stored.catalog_snapshot_sha256 != catalog_digest {
-        return None;
-    }
-    let current =
-        kaveon_storage::analyze_source(&resolved.full_path(), resolved.table.format).ok()?;
-    (current.identity_sha256 == stored.source_identity_sha256).then_some(
-        kaveon_optim::statistics::RelationStatistics {
-            rows: stored.row_count,
-            columns: current.columns,
-        },
-    )
 }
 
 async fn commit_query_record(record: QueryRecord) -> bool {
@@ -7851,6 +8296,67 @@ fn batches_to_json(batches: &[arrow::record_batch::RecordBatch]) -> Vec<Vec<serd
                     DataType::LargeUtf8 => {
                         serde_json::Value::String(arr.as_string::<i64>().value(row).to_owned())
                     }
+                    // Temporal and decimal values as their logical text —
+                    // ISO 8601 dates, timestamps and times, exact decimal
+                    // digits — the rendering the statistics use, so an
+                    // answer from statistics reads as a scanned one.
+                    DataType::Date32 => {
+                        kaveon_storage::StatValue::Date(arr.as_primitive::<Date32Type>().value(row))
+                            .to_json()
+                    }
+                    DataType::Date64 => kaveon_storage::StatValue::Date(
+                        arr.as_primitive::<Date64Type>()
+                            .value(row)
+                            .div_euclid(86_400_000) as i32,
+                    )
+                    .to_json(),
+                    DataType::Timestamp(unit, zone) => {
+                        let value = match unit {
+                            TimeUnit::Second => {
+                                arr.as_primitive::<TimestampSecondType>().value(row)
+                            }
+                            TimeUnit::Millisecond => {
+                                arr.as_primitive::<TimestampMillisecondType>().value(row)
+                            }
+                            TimeUnit::Microsecond => {
+                                arr.as_primitive::<TimestampMicrosecondType>().value(row)
+                            }
+                            TimeUnit::Nanosecond => {
+                                arr.as_primitive::<TimestampNanosecondType>().value(row)
+                            }
+                        };
+                        kaveon_storage::StatValue::Timestamp {
+                            value,
+                            unit: *unit,
+                            utc: zone.is_some(),
+                        }
+                        .to_json()
+                    }
+                    DataType::Time32(unit) => {
+                        let value = match unit {
+                            TimeUnit::Second => arr.as_primitive::<Time32SecondType>().value(row),
+                            _ => arr.as_primitive::<Time32MillisecondType>().value(row),
+                        };
+                        kaveon_storage::StatValue::Time {
+                            value: i64::from(value),
+                            unit: *unit,
+                        }
+                        .to_json()
+                    }
+                    DataType::Time64(unit) => {
+                        let value = match unit {
+                            TimeUnit::Microsecond => {
+                                arr.as_primitive::<Time64MicrosecondType>().value(row)
+                            }
+                            _ => arr.as_primitive::<Time64NanosecondType>().value(row),
+                        };
+                        kaveon_storage::StatValue::Time { value, unit: *unit }.to_json()
+                    }
+                    DataType::Decimal128(_, scale) => kaveon_storage::StatValue::Decimal {
+                        unscaled: arr.as_primitive::<Decimal128Type>().value(row),
+                        scale: *scale,
+                    }
+                    .to_json(),
                     _ => serde_json::Value::String(format!("{:?}", arr.slice(row, 1))),
                 };
                 cells.push(val);
@@ -7884,6 +8390,7 @@ fn scan_telemetry(metrics: &kaveon_storage::ScanMetrics) -> ScanTelemetry {
         files_considered: snapshot.files_considered,
         files_opened: snapshot.files_opened,
         files_pruned_by_partition: snapshot.files_pruned_by_partition,
+        files_skipped: snapshot.files_skipped,
         decoded_batch_cache_hits: snapshot.decoded_batch_cache_hits,
         decoded_batch_cache_misses: snapshot.decoded_batch_cache_misses,
         decoded_batch_cache_evictions: snapshot.decoded_batch_cache_evictions,
@@ -7946,6 +8453,7 @@ fn merge_task_scan_metrics<'a>(
         total.files_considered += snapshot.files_considered;
         total.files_opened += snapshot.files_opened;
         total.files_pruned_by_partition += snapshot.files_pruned_by_partition;
+        total.files_skipped += snapshot.files_skipped;
         total.decoded_batch_cache_hits += snapshot.decoded_batch_cache_hits;
         total.decoded_batch_cache_misses += snapshot.decoded_batch_cache_misses;
         total.decoded_batch_cache_evictions += snapshot.decoded_batch_cache_evictions;
@@ -8074,6 +8582,7 @@ fn distributed_scan_telemetry(stages: &[StageTelemetry]) -> (Vec<ScanTelemetry>,
             total.files_considered += scan.files_considered;
             total.files_opened += scan.files_opened;
             total.files_pruned_by_partition += scan.files_pruned_by_partition;
+            total.files_skipped += scan.files_skipped;
             total.decoded_batch_cache_hits += scan.decoded_batch_cache_hits;
             total.decoded_batch_cache_misses += scan.decoded_batch_cache_misses;
             total.decoded_batch_cache_evictions += scan.decoded_batch_cache_evictions;
@@ -8120,6 +8629,7 @@ fn distributed_scan_telemetry(stages: &[StageTelemetry]) -> (Vec<ScanTelemetry>,
             files_considered: total.files_considered,
             files_opened: total.files_opened,
             files_pruned_by_partition: total.files_pruned_by_partition,
+            files_skipped: total.files_skipped,
             decoded_batch_cache_hits: total.decoded_batch_cache_hits,
             decoded_batch_cache_misses: total.decoded_batch_cache_misses,
             decoded_batch_cache_evictions: total.decoded_batch_cache_evictions,
@@ -8631,16 +9141,15 @@ mod tests {
         AnalyzeStatement, ColumnInfo, DistinctColumns, MergeOperation, StatisticsStatement,
         TaskRequest, TaskResponse, aggregate_merge_contract, await_task_memory, capabilities,
         catalog_test_state, collect_join_statistics_tables, decode_arrow_stream,
-        durable_relation_statistics, encode_arrow_stream, exact_metadata_count_plan,
-        exact_source_statistics, execute_analyze, general_distributed_eligible, iso_utc_ms,
-        merge_partial_aggregates, mutation_actor, parse_analyze_statement,
-        parse_statistics_statement, statistics_diagnostics, task_request_from_dispatch,
-        top_n_merge_contract, transaction_api_guidance, validate_replacement,
+        encode_arrow_stream, exact_metadata_count_plan, execute_analyze,
+        general_distributed_eligible, iso_utc_ms, merge_partial_aggregates, mutation_actor,
+        parse_analyze_statement, parse_statistics_statement, statistics_diagnostics,
+        task_request_from_dispatch, top_n_merge_contract, transaction_api_guidance,
+        validate_replacement,
     };
     use crate::security::Role;
     use arrow::array::{Int64Array, StringArray};
     use axum::http::StatusCode;
-    use sha2::{Digest, Sha256};
 
     fn analyze(sql: &str) -> Result<AnalyzeStatement, String> {
         parse_analyze_statement(sql).expect("an ANALYZE statement")
@@ -8650,6 +9159,7 @@ mod tests {
         Ok(AnalyzeStatement {
             table: table.into(),
             distinct,
+            sketches: false,
         })
     }
 
@@ -8714,7 +9224,31 @@ mod tests {
         );
         assert_eq!(
             error("ANALYZE orders WITH (sample = 1)"),
-            "unknown ANALYZE property 'sample'; the properties are distinct and columns"
+            "unknown ANALYZE property 'sample'; the properties are distinct, columns and sketches"
+        );
+        assert_eq!(
+            analyze("ANALYZE orders WITH (sketches = true)"),
+            Ok(AnalyzeStatement {
+                table: "orders".into(),
+                distinct: DistinctColumns::None,
+                sketches: true,
+            })
+        );
+        assert_eq!(
+            analyze("ANALYZE orders WITH (columns = ARRAY['a'], sketches = TRUE)"),
+            Ok(AnalyzeStatement {
+                table: "orders".into(),
+                distinct: named(&["a"]),
+                sketches: true,
+            })
+        );
+        assert_eq!(
+            error("ANALYZE orders WITH (sketches = maybe)"),
+            "ANALYZE property sketches must be true or false, not maybe"
+        );
+        assert_eq!(
+            error("ANALYZE orders WITH (sketches = true, sketches = false)"),
+            "ANALYZE property sketches is given twice"
         );
         assert_eq!(
             error("ANALYZE orders WITH (columns = ARRAY[])"),
@@ -8774,13 +9308,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn statistics_statements_read_the_published_document() {
-        let (state, commit, directory) = analyze_test_state().await;
-        let admin = crate::security::Identity {
-            principal: "admin".into(),
-            display_identity: None,
-            role: Role::Admin,
-        };
+    async fn statistics_statements_read_the_stored_statistics() {
+        let (state, directory) = analyze_test_state().await;
+        let admin = admin();
         let analyst = crate::security::Identity {
             principal: "analyst".into(),
             display_identity: None,
@@ -8789,6 +9319,7 @@ mod tests {
         let file_bytes = std::fs::metadata(directory.join("orders.parquet"))
             .unwrap()
             .len();
+        let catalog_snapshot = state.catalog.read().await.snapshot_id.clone();
 
         // Before ANALYZE: no statistics to show, but the detail answers from
         // a fresh metadata read.
@@ -8849,10 +9380,11 @@ mod tests {
         assert!(row[7].is_null());
         assert_eq!(row[8], "");
         assert!(row[9].is_null());
-        assert!(row[10].is_null());
+        assert_eq!(row[10], catalog_snapshot);
         assert_eq!(body["data"].as_array().unwrap().len(), 1);
 
-        // ANALYZE keeps its result and writes the version 2 document.
+        // ANALYZE keeps its result and stores the statistics beside the
+        // table definition, versioned by the source version.
         let (status, body) =
             submit(&state, &analyst, "ANALYZE orders", serde_json::Value::Null).await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
@@ -8864,48 +9396,44 @@ mod tests {
             serde_json::json!([["lake.sales.orders", 3, 0]])
         );
         assert_eq!(body["columns"][2]["name"], "distinct_columns");
-        let snapshot = commit.read_current().await.unwrap();
-        let stored = &snapshot.table_statistics["lake.sales.orders"];
-        assert_eq!(stored.row_count, 3);
-        assert!(stored.document.path.starts_with("statistics/"));
-        let document: serde_json::Value =
-            serde_json::from_slice(&commit.fetch_immutable_file(&stored.document).await.unwrap())
-                .unwrap();
-        assert_eq!(document["version"], 2);
-        assert_eq!(document["table"], "lake.sales.orders");
-        assert!(document["analyzed_at_ms"].as_i64().unwrap() > 0);
+        let stored = stored_statistics(&state).expect("statistics on record");
         assert_eq!(
-            document["catalog_snapshot_sha256"],
-            format!("{:x}", Sha256::digest(b"sha256:catalog-one"))
+            stored.version,
+            kaveon_core::statistics::TABLE_STATISTICS_VERSION
+        );
+        assert_eq!(stored.depth, kaveon_core::StatisticsDepth::Metadata);
+        assert_eq!(stored.format, kaveon_core::DataFormat::Parquet);
+        assert!(stored.location.ends_with("orders.parquet"));
+        assert_eq!(
+            stored.source_version.kind,
+            kaveon_core::SourceVersionKind::File
         );
         assert_eq!(
-            document["source_identity_sha256"],
-            stored.source_identity_sha256
-        );
-        assert_eq!(document["format"], "parquet");
-        assert!(
-            document["location"]
-                .as_str()
+            stored.source_version.identity_sha256,
+            kaveon_storage::analyze_source(&stored.location, stored.format)
                 .unwrap()
-                .ends_with("orders.parquet")
+                .identity_sha256
         );
-        assert!(document["delta_version"].is_null());
-        assert_eq!(document["row_count"], 3);
-        assert_eq!(document["file_count"], 1);
-        assert_eq!(document["row_group_count"], 1);
-        assert_eq!(document["compressed_bytes"], file_bytes);
-        assert!(document["uncompressed_bytes"].as_u64().unwrap() > 0);
-        assert!(document["last_modified_ms"].as_i64().unwrap() > 0);
-        assert_eq!(document["partition_columns"], serde_json::json!([]));
-        let column = &document["columns"][0];
-        assert_eq!(column["name"], "id");
-        assert_eq!(column["type"], "bigint");
-        assert_eq!(column["nulls"], 0);
-        assert_eq!(column["min"], 1);
-        assert_eq!(column["max"], 3);
-        assert!(column["compressed_bytes"].as_u64().unwrap() > 0);
-        assert!(column["distinct"].is_null());
-        assert_eq!(document["columns"].as_array().unwrap().len(), 1);
+        assert!(stored.computed_at_ms > 0);
+        assert_eq!(stored.rows, 3);
+        assert_eq!(stored.files, 1);
+        assert_eq!(stored.row_groups, Some(1));
+        assert_eq!(stored.bytes, file_bytes);
+        assert!(stored.uncompressed_bytes.unwrap() > 0);
+        assert!(stored.last_modified_ms.unwrap() > 0);
+        assert!(stored.partition_columns.is_empty());
+        assert!(stored.per_file_complete);
+        assert_eq!(stored.per_file.len(), 1);
+        let column = &stored.columns[0];
+        assert_eq!(column.name, "id");
+        assert_eq!(column.data_type, DataType::Int64);
+        assert_eq!(column.null_count, Some(0));
+        assert_eq!(column.min, Some(kaveon_core::StatValue::Int(1)));
+        assert_eq!(column.max, Some(kaveon_core::StatValue::Int(3)));
+        assert!(column.bounds_exact);
+        assert!(column.bytes.unwrap() > 0);
+        assert!(column.distinct_count().is_none());
+        assert_eq!(stored.columns.len(), 1);
 
         // SHOW STATS FOR: one row per column and the summary row.
         let (status, body) = submit(
@@ -8941,7 +9469,7 @@ mod tests {
                 ("analyzed_at".into(), "TIMESTAMP".into()),
             ]
         );
-        let analyzed_at = iso_utc_ms(document["analyzed_at_ms"].as_i64());
+        let analyzed_at = iso_utc_ms(Some(stored.computed_at_ms as i64));
         assert!(analyzed_at.as_str().unwrap().ends_with('Z'));
         assert_eq!(
             body["data"],
@@ -8949,7 +9477,7 @@ mod tests {
                 [
                     "id",
                     "bigint",
-                    column["compressed_bytes"],
+                    column.bytes,
                     0.0,
                     null,
                     "1",
@@ -8975,7 +9503,7 @@ mod tests {
         assert_eq!(finished["columns"][8]["name"], "analyzed_at");
         assert_eq!(finished["rows"], body["data"]);
 
-        // DESCRIBE DETAIL after ANALYZE answers from the document.
+        // DESCRIBE DETAIL after ANALYZE answers from the statistics.
         let (status, body) = submit(
             &state,
             &analyst,
@@ -8992,7 +9520,62 @@ mod tests {
         assert!(row[7].is_null());
         assert_eq!(row[8], "");
         assert_eq!(row[9], analyzed_at);
-        assert_eq!(row[10], document["catalog_snapshot_sha256"]);
+        assert_eq!(row[10], catalog_snapshot);
+
+        // The statistics endpoint: the document, the version on record and
+        // the version observed now.
+        let table_id = stored.table_id.as_str().to_owned();
+        let response = super::get_table_statistics(
+            axum::extract::State(state.clone()),
+            axum::extract::Path(table_id.clone()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_body(response).await;
+        assert_eq!(body["table"], "lake.sales.orders");
+        assert_eq!(body["table_id"], table_id);
+        assert_eq!(body["stale"], false);
+        assert_eq!(body["source_version"], body["current_source_version"]);
+        assert_eq!(body["source_version"]["kind"], "file");
+        assert!(body["observed_at_ms"].as_u64().unwrap() > 0);
+        assert_eq!(body["statistics"]["rows"], 3);
+        assert_eq!(body["statistics"]["columns"][0]["name"], "id");
+        let response = super::get_table_version(
+            axum::extract::State(state.clone()),
+            axum::extract::Path(table_id.clone()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let version = json_body(response).await;
+        assert_eq!(version["table"], "lake.sales.orders");
+        assert_eq!(version["source_version"], body["current_source_version"]);
+        assert!(version["observed_at_ms"].as_u64().unwrap() > 0);
+
+        // The source replaced: the version endpoint sees the new identity,
+        // the statistics endpoint reports the record stale.
+        write_orders(&directory, &[10, 11, 12, 13]);
+        let response = super::get_table_version(
+            axum::extract::State(state.clone()),
+            axum::extract::Path(table_id.clone()),
+        )
+        .await;
+        let changed = json_body(response).await;
+        assert_ne!(changed["source_version"], version["source_version"]);
+        let response = super::get_table_statistics(
+            axum::extract::State(state.clone()),
+            axum::extract::Path(table_id.clone()),
+        )
+        .await;
+        let body = json_body(response).await;
+        assert_eq!(body["stale"], true);
+        assert_eq!(body["current_source_version"], changed["source_version"]);
+        assert_eq!(body["source_version"], version["source_version"]);
+        let response = super::get_table_statistics(
+            axum::extract::State(state.clone()),
+            axum::extract::Path("table:nope".to_owned()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
         let (status, body) = submit(
             &state,
@@ -9013,6 +9596,18 @@ mod tests {
              JOIN customers c2 ON e.customer_id = c2.id",
         )
         .unwrap();
+        let mut tables = std::collections::BTreeSet::new();
+        collect_join_statistics_tables(&plan, &mut tables);
+        assert_eq!(
+            tables.into_iter().collect::<Vec<_>>(),
+            ["customers".to_owned(), "events".to_owned()]
+        );
+        // A filter straight over a scan is costed from the scan's statistics.
+        let plan = kaveon_sql::logical_plan::sql_to_logical_plan(
+            "SELECT * FROM events e JOIN customers c ON e.customer_id = c.id WHERE e.id = 1",
+        )
+        .unwrap();
+        let plan = kaveon_optim::rules::push_filter_down(plan);
         let mut tables = std::collections::BTreeSet::new();
         collect_join_statistics_tables(&plan, &mut tables);
         assert_eq!(
@@ -9101,7 +9696,7 @@ mod tests {
     /// queue, run once it is released, and record the wait.
     #[tokio::test]
     async fn a_statement_waits_for_admission_then_runs_and_records_the_wait() {
-        let (state, _commit, directory) = admission_test_state(2).await;
+        let (state, directory) = admission_test_state(2).await;
         let occupied = state
             .memory_admission
             .admit("occupying", state.config.query_memory_limit_bytes)
@@ -9173,7 +9768,7 @@ mod tests {
     /// queue is refused on arrival.
     #[tokio::test]
     async fn an_expired_admission_wait_is_a_429_with_the_wait_recorded() {
-        let (state, _commit, directory) = admission_test_state(1).await;
+        let (state, directory) = admission_test_state(1).await;
         let _occupied = state
             .memory_admission
             .admit("occupying", state.config.query_memory_limit_bytes)
@@ -9272,7 +9867,7 @@ mod tests {
     /// answers the submitter with the cancellation.
     #[tokio::test]
     async fn a_queued_statement_can_be_cancelled_by_id() {
-        let (state, _commit, directory) = admission_test_state(2).await;
+        let (state, directory) = admission_test_state(2).await;
         let occupied = state
             .memory_admission
             .admit("occupying", state.config.query_memory_limit_bytes)
@@ -9327,14 +9922,8 @@ mod tests {
 
     /// The analyze test state with an admission limit of one statement's
     /// budget, a queue of `queue` and a long configured wait.
-    async fn admission_test_state(
-        queue: usize,
-    ) -> (
-        crate::AppState,
-        kaveon_catalog::product_commit::ProductCatalogCommit,
-        std::path::PathBuf,
-    ) {
-        let (state, commit, directory) = analyze_test_state().await;
+    async fn admission_test_state(queue: usize) -> (crate::AppState, std::path::PathBuf) {
+        let (state, directory) = analyze_test_state().await;
         let mut state = Arc::try_unwrap(state).unwrap_or_else(|_| unreachable!());
         state.config.query_memory_limit_bytes = 1 << 20;
         state.config.memory_admission_limit_bytes = 1 << 20;
@@ -9343,14 +9932,10 @@ mod tests {
         state.memory_admission = kaveon_core::MemoryAdmissionController::new(1 << 20)
             .unwrap()
             .with_queue_limit(queue);
-        (state, commit, directory)
+        (state, directory)
     }
 
-    async fn analyze_test_state() -> (
-        Arc<crate::AppState>,
-        kaveon_catalog::product_commit::ProductCatalogCommit,
-        std::path::PathBuf,
-    ) {
+    async fn analyze_test_state() -> (Arc<crate::AppState>, std::path::PathBuf) {
         let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
         let batch = RecordBatch::try_new(
             schema.clone(),
@@ -9360,73 +9945,86 @@ mod tests {
         analyze_test_state_over(schema, batch).await
     }
 
-    /// A coordinator over the durable product catalog with one Parquet
-    /// table `lake.sales.orders` holding `batch`.
+    /// `orders.parquet` under `directory` holding one `id` column of
+    /// `values`.
+    fn write_orders(directory: &std::path::Path, values: &[i64]) {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int64Array::from(values.to_vec()))],
+        )
+        .unwrap();
+        write_batch(&directory.join("orders.parquet"), schema, &batch);
+    }
+
+    fn write_batch(path: &std::path::Path, schema: Arc<Schema>, batch: &RecordBatch) {
+        let mut writer = parquet::arrow::ArrowWriter::try_new(
+            std::fs::File::create(path).unwrap(),
+            schema,
+            None,
+        )
+        .unwrap();
+        writer.write(batch).unwrap();
+        writer.close().unwrap();
+    }
+
+    /// A coordinator over the durable catalog with one Parquet table
+    /// `lake.sales.orders` holding `batch`, registered through the catalog
+    /// statements the way a client registers one.
     async fn analyze_test_state_over(
         schema: Arc<Schema>,
         batch: RecordBatch,
-    ) -> (
-        Arc<crate::AppState>,
-        kaveon_catalog::product_commit::ProductCatalogCommit,
-        std::path::PathBuf,
-    ) {
-        use kaveon_core::CatalogProvider;
-        use parquet::arrow::ArrowWriter;
+    ) -> (Arc<crate::AppState>, std::path::PathBuf) {
+        analyze_test_state_configured(schema, batch, |_| {}).await
+    }
+
+    /// [`analyze_test_state_over`] with the server configuration adjusted
+    /// before the state is built.
+    async fn analyze_test_state_configured(
+        schema: Arc<Schema>,
+        batch: RecordBatch,
+        configure: impl FnOnce(&mut crate::config::ServerConfig),
+    ) -> (Arc<crate::AppState>, std::path::PathBuf) {
         let directory =
             std::env::temp_dir().join(format!("kaveon-server-analyze-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
-        let path = directory.join("orders.parquet");
-        let mut writer =
-            ArrowWriter::try_new(std::fs::File::create(&path).unwrap(), schema.clone(), None)
-                .unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-        let storage = kaveon_storage::AdlsConditionalCommit::new(Arc::new(
-            object_store::memory::InMemory::new(),
-        ));
-        let commit = kaveon_catalog::product_commit::ProductCatalogCommit::new(
-            storage,
-            "product",
-            Arc::new(kaveon_catalog::product_metrics::TransactionMetrics::default()),
-        )
-        .unwrap();
-        assert!(matches!(
-            commit
-                .initialize(
-                    kaveon_catalog::product_manifest::CatalogSnapshot::empty("genesis").unwrap()
-                )
-                .await,
-            kaveon_catalog::product_commit::CommitOutcome::Committed(_)
-        ));
-        let mut manager = kaveon_core::CatalogManager::new("lake", "sales");
-        let mut provider = kaveon_core::MemoryCatalog::new(
+        write_batch(&directory.join("orders.parquet"), schema, &batch);
+        let mut state = catalog_test_state();
+        configure(&mut state.config);
+        let catalog = kaveon_core::CatalogDefinition::new(
+            kaveon_core::CatalogId::new("catalog:lake").unwrap(),
             "lake",
+            kaveon_core::CatalogAdapter::Native,
             kaveon_core::StorageType::Local {
                 base_path: directory.clone(),
             },
         )
-        .with_schema("sales");
-        provider
-            .register_table(
-                "sales",
-                kaveon_core::TableMeta {
-                    name: "orders".into(),
-                    arrow_schema: schema,
-                    location: "orders.parquet".into(),
-                    access: kaveon_core::AccessPattern::Optimized,
-                    format: kaveon_core::DataFormat::Parquet,
-                },
-            )
+        .unwrap()
+        .transition(kaveon_core::CatalogLifecycle::Active)
+        .unwrap();
+        state
+            .catalog_store
+            .create_catalog("test", &catalog)
             .unwrap();
-        manager.register_catalog(Box::new(provider));
-        let mut state = catalog_test_state();
-        state.catalog = tokio::sync::RwLock::new(Arc::new(crate::PublishedCatalog {
-            manager,
-            snapshot_id: "sha256:catalog-one".into(),
-        }));
-        state.product_transactions =
-            crate::transaction_api::TransactionRegistry::enabled(commit.clone());
-        (Arc::new(state), commit, directory)
+        let state = Arc::new(state);
+        for sql in [
+            "CREATE SCHEMA lake.sales",
+            "CREATE TABLE orders WITH (location = 'orders.parquet', format = 'parquet')",
+        ] {
+            let (status, body) = submit(&state, &admin(), sql, serde_json::Value::Null).await;
+            assert_eq!(status, StatusCode::OK, "{sql}: {body}");
+        }
+        (state, directory)
+    }
+
+    /// The statistics on record for `lake.sales.orders`.
+    fn stored_statistics(state: &crate::AppState) -> Option<kaveon_core::TableStatistics> {
+        let table = state
+            .catalog_store
+            .table_by_name("lake", "sales", "orders")
+            .unwrap()
+            .expect("the orders table");
+        state.catalog_store.table_statistics(table.id()).unwrap()
     }
 
     use axum::response::IntoResponse as _;
@@ -9606,7 +10204,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_paged_statement_is_not_kept_in_the_result_cache() {
-        let (state, _commit, _directory) = analyze_test_state().await;
+        let (state, _directory) = analyze_test_state().await;
         let analyst = crate::security::Identity {
             principal: "analyst".into(),
             display_identity: None,
@@ -9684,7 +10282,7 @@ mod tests {
 
         // While the statement runs, the page it has not flushed yet is a 202
         // the client retries; the record and its pages are owner-scoped.
-        let (state, _commit, _directory) = analyze_test_state().await;
+        let (state, _directory) = analyze_test_state().await;
         let analyst = crate::security::Identity {
             principal: "analyst".into(),
             display_identity: None,
@@ -9791,7 +10389,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_repeated_statement_is_served_from_the_result_cache() {
-        let (state, _commit, directory) = analyze_test_state().await;
+        let (state, directory) = analyze_test_state().await;
         let analyst = crate::security::Identity {
             principal: "analyst".into(),
             display_identity: None,
@@ -9943,7 +10541,7 @@ mod tests {
     /// position next to the unchanged error text.
     #[tokio::test]
     async fn a_parse_error_carries_its_position() {
-        let (state, _commit, directory) = analyze_test_state().await;
+        let (state, directory) = analyze_test_state().await;
         let analyst = crate::security::Identity {
             principal: "analyst".into(),
             display_identity: None,
@@ -10013,23 +10611,20 @@ mod tests {
         }
     }
 
-    /// The stored document's `distinct` per column name.
-    async fn stored_distinct(
-        commit: &kaveon_catalog::product_commit::ProductCatalogCommit,
-    ) -> Vec<(String, serde_json::Value)> {
-        let document = super::stored_statistics_document(commit, "lake.sales.orders")
-            .await
-            .unwrap()
-            .expect("a statistics document");
-        assert_eq!(document["version"], 2);
-        document["columns"]
-            .as_array()
-            .unwrap()
+    /// The stored statistics' exact distinct count per column name.
+    fn stored_distinct(state: &crate::AppState) -> Vec<(String, serde_json::Value)> {
+        let statistics = stored_statistics(state).expect("statistics on record");
+        assert_eq!(
+            statistics.version,
+            kaveon_core::statistics::TABLE_STATISTICS_VERSION
+        );
+        statistics
+            .columns
             .iter()
             .map(|column| {
                 (
-                    column["name"].as_str().unwrap().to_owned(),
-                    column["distinct"].clone(),
+                    column.name.clone(),
+                    serde_json::json!(column.distinct_exact),
                 )
             })
             .collect()
@@ -10080,7 +10675,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let (state, commit, directory) = analyze_test_state_over(schema, batch).await;
+        let (state, directory) = analyze_test_state_over(schema, batch).await;
         let admin = admin();
         let null = serde_json::Value::Null;
 
@@ -10109,7 +10704,7 @@ mod tests {
             serde_json::json!([["lake.sales.orders", 5, 3]])
         );
         assert_eq!(
-            stored_distinct(&commit).await,
+            stored_distinct(&state),
             [
                 ("id".to_owned(), serde_json::json!(3)),
                 ("region".into(), serde_json::json!(2)),
@@ -10196,7 +10791,7 @@ mod tests {
             1
         );
         assert_eq!(
-            stored_distinct(&commit).await,
+            stored_distinct(&state),
             [
                 ("id".to_owned(), serde_json::json!(3)),
                 ("region".into(), serde_json::json!(2)),
@@ -10218,7 +10813,7 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(
-            stored_distinct(&commit).await,
+            stored_distinct(&state),
             [
                 ("id".to_owned(), serde_json::json!(3)),
                 ("region".into(), serde_json::json!(2)),
@@ -10228,7 +10823,7 @@ mod tests {
 
         // An unknown column is refused before any count, the record failed,
         // the document untouched; so are both properties together.
-        let before = commit.read_current().await.unwrap();
+        let before = stored_statistics(&state).unwrap();
         let (status, body) = submit(
             &state,
             &admin,
@@ -10261,10 +10856,7 @@ mod tests {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
         assert_eq!(body["code"], "SYNTAX_ERROR");
         assert_eq!(body["error"], "ANALYZE takes distinct or columns, not both");
-        assert_eq!(
-            commit.read_current().await.unwrap().table_statistics["lake.sales.orders"],
-            before.table_statistics["lake.sales.orders"]
-        );
+        assert_eq!(stored_statistics(&state).unwrap(), before);
 
         // A changed source: the counts of the columns not measured are
         // gone, the measured one is fresh.
@@ -10282,14 +10874,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let mut writer = parquet::arrow::ArrowWriter::try_new(
-            std::fs::File::create(directory.join("orders.parquet")).unwrap(),
-            schema,
-            None,
-        )
-        .unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
+        write_batch(&directory.join("orders.parquet"), schema, &batch);
         let (status, body) =
             submit(&state, &admin, "ANALYZE orders", serde_json::Value::Null).await;
         assert_eq!(status, StatusCode::OK, "{body}");
@@ -10298,7 +10883,7 @@ mod tests {
             serde_json::json!([["lake.sales.orders", 2, 0]])
         );
         assert_eq!(
-            stored_distinct(&commit).await,
+            stored_distinct(&state),
             [
                 ("id".to_owned(), null.clone()),
                 ("region".into(), null.clone()),
@@ -10318,7 +10903,7 @@ mod tests {
             serde_json::json!([["lake.sales.orders", 2, 1]])
         );
         assert_eq!(
-            stored_distinct(&commit).await,
+            stored_distinct(&state),
             [
                 ("id".to_owned(), null.clone()),
                 ("region".into(), serde_json::json!(1)),
@@ -10350,7 +10935,7 @@ mod tests {
                 .collect(),
         )
         .unwrap();
-        let (state, commit, directory) = analyze_test_state_over(schema, batch).await;
+        let (state, directory) = analyze_test_state_over(schema, batch).await;
         let admin = admin();
         let parent = format!("analyze-parent-{}", uuid::Uuid::new_v4());
         let running = {
@@ -10436,31 +11021,23 @@ mod tests {
             children.last().unwrap().state,
             super::QueryState::Canceled
         ));
-        assert!(
-            commit
-                .read_current()
-                .await
-                .unwrap()
-                .table_statistics
-                .is_empty()
-        );
+        assert!(stored_statistics(&state).is_none());
         std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[tokio::test]
-    async fn analyze_requires_admin_and_publishes_exact_durable_binding() {
-        let (state, commit, directory) = analyze_test_state().await;
-        let catalog = state.catalog.read().await.clone();
-        assert_eq!(
-            exact_source_statistics(&catalog, "lake.sales.orders")
-                .unwrap()
-                .rows,
-            3
-        );
+    async fn analyze_requires_admin_and_stores_versioned_statistics() {
+        let (state, directory) = analyze_test_state().await;
         let reader = crate::security::Identity {
             principal: "reader".into(),
             display_identity: None,
             role: Role::Reader,
+        };
+        let memory = || {
+            state
+                .memory_admission
+                .admit(uuid::Uuid::new_v4().to_string(), 1 << 20)
+                .unwrap()
         };
         let denied = execute_analyze(
             &state,
@@ -10469,22 +11046,12 @@ mod tests {
             &analyze_context(),
             analyze("ANALYZE orders"),
             std::time::Instant::now(),
+            memory(),
         )
         .await;
         assert_eq!(denied.status(), axum::http::StatusCode::FORBIDDEN);
-        assert!(
-            commit
-                .read_current()
-                .await
-                .unwrap()
-                .table_statistics
-                .is_empty()
-        );
-        let admin = crate::security::Identity {
-            principal: "admin".into(),
-            display_identity: None,
-            role: Role::Admin,
-        };
+        assert!(stored_statistics(&state).is_none());
+        let admin = admin();
         let response = execute_analyze(
             &state,
             &admin,
@@ -10492,80 +11059,48 @@ mod tests {
             &analyze_context(),
             analyze("ANALYZE orders"),
             std::time::Instant::now(),
+            memory(),
         )
         .await;
         assert_eq!(response.status(), axum::http::StatusCode::OK);
-        let snapshot = commit.read_current().await.unwrap();
-        let stats = &snapshot.table_statistics["lake.sales.orders"];
-        assert_eq!(stats.row_count, 3);
-        assert_eq!(
-            snapshot.runtime_table_sources["lake.sales.orders"].source_identity_sha256,
-            stats.source_identity_sha256
-        );
-        assert_eq!(
-            durable_relation_statistics(&catalog, &snapshot, "lake.sales.orders")
-                .unwrap()
-                .rows,
-            3
-        );
+        let stored = stored_statistics(&state).unwrap();
+        assert_eq!(stored.rows, 3);
         let diagnostic = statistics_diagnostics(
             axum::extract::State(state.clone()),
             axum::Extension(admin.clone()),
         )
         .await;
-        let body = axum::body::to_bytes(diagnostic.into_body(), 64 * 1024)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let json = json_body(diagnostic).await;
+        assert_eq!(json["total"], 1);
+        assert_eq!(json["truncated"], false);
         assert_eq!(json["statistics"][0]["table"], "lake.sales.orders");
+        assert_eq!(json["statistics"][0]["table_id"], stored.table_id.as_str());
         assert_eq!(json["statistics"][0]["row_count"], 3);
+        assert_eq!(json["statistics"][0]["depth"], "metadata");
         assert_eq!(json["statistics"][0]["current"], true);
-        assert_eq!(
-            json["statistics"][0]["catalog_digest_prefix"]
+        assert!(
+            json["statistics"][0]["source_version"]
                 .as_str()
                 .unwrap()
-                .len(),
-            12
+                .starts_with("file (")
         );
-        assert_eq!(
-            json["statistics"][0]["source_digest_prefix"]
+        assert!(
+            json["statistics"][0]["computed_at"]
                 .as_str()
                 .unwrap()
-                .len(),
-            12
+                .ends_with('Z')
         );
-        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(Int64Array::from(vec![10, 11, 12, 13]))],
-        )
-        .unwrap();
-        let mut writer = parquet::arrow::ArrowWriter::try_new(
-            std::fs::File::create(directory.join("orders.parquet")).unwrap(),
-            schema,
-            None,
-        )
-        .unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-        assert!(durable_relation_statistics(&catalog, &snapshot, "lake.sales.orders").is_none());
-        assert_eq!(
-            exact_source_statistics(&catalog, "lake.sales.orders")
-                .unwrap()
-                .rows,
-            4
-        );
+        // The source replaced: the record is stale until the next ANALYZE.
+        write_orders(&directory, &[10, 11, 12, 13]);
         let stale =
             statistics_diagnostics(axum::extract::State(state.clone()), axum::Extension(admin))
                 .await;
-        let body = axum::body::to_bytes(stale.into_body(), 64 * 1024)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let json = json_body(stale).await;
         assert_eq!(json["statistics"][0]["current"], false);
+        assert_eq!(json["statistics"][0]["row_count"], 3);
         let enabled = capabilities(axum::extract::State(state)).await.0;
         assert!(enabled.native_analyze);
-        assert!(enabled.transactions.enabled);
+        assert!(!enabled.transactions.enabled);
         assert_eq!(enabled.transactions.supported_statements[0], "BEGIN");
         assert!(enabled.transactions.single_statement_per_request);
         assert!(!enabled.transactions.parameter_binding);
@@ -10578,11 +11113,336 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn capability_is_false_without_durable_statistics_authority() {
-        let state = Arc::new(catalog_test_state());
+    async fn native_analyze_is_a_coordinator_capability() {
+        let mut state = catalog_test_state();
+        state.config.coordinator = false;
+        let state = Arc::new(state);
         let capabilities = capabilities(axum::extract::State(state)).await.0;
         assert!(!capabilities.native_analyze);
         assert!(!capabilities.transactions.enabled);
+    }
+
+    /// `events/` under the lake directory: three files of `rows` rows each
+    /// over `id` (dense from `start`), `score` (null every seventh row),
+    /// `name` (null every fifth), `day` (dates), registered as
+    /// `lake.sales.events`.
+    async fn register_events_directory(
+        state: &Arc<crate::AppState>,
+        directory: &std::path::Path,
+        rows: i64,
+    ) {
+        let events = directory.join("events");
+        std::fs::create_dir_all(&events).unwrap();
+        for (index, name) in ["a", "b", "c"].iter().enumerate() {
+            let start = index as i64 * rows;
+            write_events_file(&events.join(format!("{name}.parquet")), start, rows);
+        }
+        let (status, body) = submit(
+            state,
+            &admin(),
+            "CREATE TABLE events WITH (location = 'events', format = 'parquet')",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+
+    fn events_schema() -> Arc<Schema> {
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("score", DataType::Float64, true),
+            Field::new("name", DataType::Utf8, true),
+            Field::new("day", DataType::Date32, false),
+        ]))
+    }
+
+    fn write_events_file(path: &std::path::Path, start: i64, rows: i64) {
+        use arrow::array::{Date32Array, Float64Array};
+        let schema = events_schema();
+        let ids = (start..start + rows).collect::<Vec<_>>();
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(ids.clone())),
+                Arc::new(Float64Array::from(
+                    ids.iter()
+                        .map(|id| (id % 7 != 3).then_some(*id as f64 * 0.5 + 0.25))
+                        .collect::<Vec<_>>(),
+                )),
+                Arc::new(StringArray::from(
+                    ids.iter()
+                        .map(|id| (id % 5 != 2).then(|| format!("name-{:04}", id % 97)))
+                        .collect::<Vec<_>>(),
+                )),
+                Arc::new(Date32Array::from(
+                    ids.iter()
+                        .map(|id| 19_700 + (*id as i32 % 400))
+                        .collect::<Vec<_>>(),
+                )),
+            ],
+        )
+        .unwrap();
+        write_batch(path, schema, &batch);
+    }
+
+    /// The statistics on record for `lake.sales.events`.
+    fn stored_events_statistics(state: &crate::AppState) -> Option<kaveon_core::TableStatistics> {
+        let table = state
+            .catalog_store
+            .table_by_name("lake", "sales", "events")
+            .unwrap()
+            .expect("the events table");
+        state.catalog_store.table_statistics(table.id()).unwrap()
+    }
+
+    /// A statement's response and its finished record, the result cache
+    /// off so every run is planned and placed afresh.
+    async fn submit_and_record(
+        state: &Arc<crate::AppState>,
+        sql: &str,
+    ) -> (serde_json::Value, serde_json::Value) {
+        let (status, body) = submit(
+            state,
+            &admin(),
+            sql,
+            serde_json::json!({"result_cache": false}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{sql}: {body}");
+        let record = record(body["id"].as_str().unwrap(), &admin()).await;
+        (body, record)
+    }
+
+    /// Every statement statistics may answer equals the scanned answer —
+    /// columns and rows — and is answered from statistics only while they
+    /// describe the statement's pinned version exactly.
+    #[tokio::test]
+    async fn context_answers_equal_the_scanned_answers_and_refuse_a_changed_source() {
+        let (state, directory) = analyze_test_state().await;
+        register_events_directory(&state, &directory, 100).await;
+        let statements = [
+            "SELECT COUNT(*) FROM events",
+            "SELECT COUNT(*) AS n FROM events",
+            "SELECT MIN(id), MAX(id) FROM events",
+            "SELECT MIN(score), MAX(score) AS top FROM events",
+            "SELECT MIN(name), MAX(name) FROM events",
+            "SELECT MIN(day), MAX(day) FROM events",
+            "SELECT COUNT(*), MIN(id), MAX(day) FROM events",
+        ];
+        // Scanned: no statistics on record yet.
+        let mut scanned = Vec::new();
+        for sql in statements {
+            let (body, record) = submit_and_record(&state, sql).await;
+            assert_ne!(record["execution"]["mode"], "context", "{sql}");
+            scanned.push((body["columns"].clone(), body["data"].clone()));
+        }
+        assert_eq!(scanned[0].1, serde_json::json!([[300]]));
+        assert_eq!(scanned[2].1, serde_json::json!([[0, 299]]));
+
+        // From statistics: the same columns and rows, no scan, the version
+        // on the record.
+        let (_, body) = submit(&state, &admin(), "ANALYZE events", serde_json::Value::Null).await;
+        assert_eq!(body["data"][0][1], 300, "{body}");
+        let stored = stored_events_statistics(&state).unwrap();
+        let mut from_context = 0;
+        for (sql, (columns, data)) in statements.iter().zip(&scanned) {
+            let (body, record) = submit_and_record(&state, sql).await;
+            assert_eq!(&body["columns"], columns, "{sql}");
+            assert_eq!(&body["data"], data, "{sql}");
+            assert_eq!(record["columns"], *columns, "{sql}");
+            assert_eq!(record["rows"], *data, "{sql}");
+            if record["execution"]["mode"] == "context" {
+                from_context += 1;
+                assert_eq!(
+                    record["execution"]["detail"],
+                    format!("statistics at {}", stored.source_version.label()),
+                    "{sql}"
+                );
+                assert_eq!(
+                    record["execution"]["source_version"],
+                    serde_json::to_value(&stored.source_version).unwrap(),
+                    "{sql}"
+                );
+                assert_eq!(
+                    record["execution"]["current_source_version"],
+                    record["execution"]["source_version"],
+                    "{sql}"
+                );
+                assert_eq!(record["execution"]["source_version"]["kind"], "listing");
+                assert_eq!(record["execution"]["source_version"]["files"], 3);
+                assert!(record["scans"].as_array().unwrap().is_empty(), "{sql}");
+            }
+        }
+        // Counts and numeric, text and date bounds all came from the
+        // statistics: every statement of the set.
+        assert_eq!(from_context, statements.len());
+
+        // A predicate, a grouping or another aggregate scans.
+        for sql in [
+            "SELECT COUNT(*) FROM events WHERE id > 5",
+            "SELECT MIN(id) FROM events GROUP BY name",
+            "SELECT SUM(id) FROM events",
+            "SELECT COUNT(DISTINCT id) FROM events",
+            "SELECT COUNT(*) FROM events e JOIN orders o ON e.id = o.id",
+        ] {
+            let (_, record) = submit_and_record(&state, sql).await;
+            assert_ne!(record["execution"]["mode"], "context", "{sql}");
+        }
+
+        // The source moves on: the statistics on record no longer describe
+        // the pinned version, so the count scans — and comes back right.
+        write_events_file(&directory.join("events").join("d.parquet"), 300, 50);
+        let (body, record) = submit_and_record(&state, "SELECT COUNT(*) FROM events").await;
+        assert_eq!(body["data"], serde_json::json!([[350]]));
+        assert_ne!(record["execution"]["mode"], "context");
+
+        // Planning saw the new version and refreshed the statistics in the
+        // background: the added file folded in, the rest not re-read.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let refreshed = loop {
+            let current = stored_events_statistics(&state).unwrap();
+            if current.source_version != stored.source_version {
+                break current;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "statistics were not refreshed"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        };
+        assert_eq!(refreshed.rows, 350);
+        assert_eq!(refreshed.files, 4);
+        assert_eq!(refreshed.depth, kaveon_core::StatisticsDepth::Metadata);
+        assert_eq!(
+            refreshed.column("id").unwrap().max,
+            Some(kaveon_core::StatValue::Int(349))
+        );
+        let (body, record) =
+            submit_and_record(&state, "SELECT COUNT(*), MAX(id) FROM events").await;
+        assert_eq!(body["data"], serde_json::json!([[350, 349]]));
+        assert_eq!(record["execution"]["mode"], "context");
+        assert_eq!(
+            record["execution"]["source_version"]["files"], 4,
+            "{}",
+            record["execution"]
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// With the automatic refresh off, statistics behind the source stay
+    /// as they are: they still cost a join, they never answer.
+    #[tokio::test]
+    async fn stale_statistics_cost_but_never_answer() {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
+        )
+        .unwrap();
+        let (state, directory) = analyze_test_state_configured(schema, batch, |config| {
+            config.statistics_auto_refresh = false;
+        })
+        .await;
+        register_events_directory(&state, &directory, 100).await;
+        let (_, body) = submit(&state, &admin(), "ANALYZE events", serde_json::Value::Null).await;
+        assert_eq!(body["data"][0][1], 300, "{body}");
+        let stored = stored_events_statistics(&state).unwrap();
+        let (_, record) = submit_and_record(&state, "SELECT COUNT(*) FROM events").await;
+        assert_eq!(record["execution"]["mode"], "context");
+
+        write_events_file(&directory.join("events").join("d.parquet"), 300, 50);
+        for sql in [
+            "SELECT COUNT(*) FROM events",
+            "SELECT MAX(id) FROM events",
+            "SELECT MIN(day), MAX(day) FROM events",
+        ] {
+            let (body, record) = submit_and_record(&state, sql).await;
+            assert_ne!(record["execution"]["mode"], "context", "{sql}");
+            if sql.starts_with("SELECT COUNT") {
+                assert_eq!(body["data"], serde_json::json!([[350]]));
+            }
+        }
+        // A join over the stale table still plans from its statistics.
+        let (body, record) = submit_and_record(
+            &state,
+            "SELECT COUNT(*) FROM orders o JOIN events e ON o.id = e.id WHERE e.id = 2",
+        )
+        .await;
+        assert_eq!(body["data"], serde_json::json!([[1]]));
+        assert_ne!(record["execution"]["mode"], "context");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(stored_events_statistics(&state).unwrap(), stored);
+        // The statistics endpoint says so.
+        let response = super::get_table_statistics(
+            axum::extract::State(state.clone()),
+            axum::extract::Path(stored.table_id.as_str().to_owned()),
+        )
+        .await;
+        let body = json_body(response).await;
+        assert_eq!(body["stale"], true);
+        assert_eq!(body["current_source_version"]["files"], 4);
+        assert_eq!(body["source_version"]["files"], 3);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// A filtered scan of a directory table opens only the files whose
+    /// recorded bounds admit the predicate, once the table's statistics
+    /// are current; the skipped files are on the record.
+    #[tokio::test]
+    async fn current_statistics_skip_directory_files_by_their_bounds() {
+        let (state, directory) = analyze_test_state().await;
+        register_events_directory(&state, &directory, 100).await;
+        let sql = "SELECT id FROM events WHERE id >= 250 ORDER BY id";
+        let (body, record) = submit_and_record(&state, sql).await;
+        assert_eq!(body["data"].as_array().unwrap().len(), 50);
+        assert_eq!(body["data"][0], serde_json::json!([250]));
+        let scan = &record["scans"][0];
+        // Without statistics every file is opened; row groups are pruned
+        // from the footers.
+        assert_eq!(scan["files_considered"], 3, "{scan}");
+        assert_eq!(scan["files_opened"], 3, "{scan}");
+        assert_eq!(scan["files_skipped"], 0, "{scan}");
+
+        let (_, body) = submit(&state, &admin(), "ANALYZE events", serde_json::Value::Null).await;
+        assert_eq!(body["data"][0][1], 300, "{body}");
+        let (body, record) = submit_and_record(&state, sql).await;
+        assert_eq!(body["data"].as_array().unwrap().len(), 50);
+        assert_eq!(body["data"][0], serde_json::json!([250]));
+        assert_eq!(body["data"][49], serde_json::json!([299]));
+        let scan = &record["scans"][0];
+        assert_eq!(scan["files_considered"], 3, "{scan}");
+        assert_eq!(scan["files_opened"], 1, "{scan}");
+        assert_eq!(scan["files_skipped"], 2, "{scan}");
+
+        // Bounds on a text column and on a nullable column skip too, and a
+        // file the bounds admit is opened.
+        let (body, record) =
+            submit_and_record(&state, "SELECT COUNT(*) FROM events WHERE score < 10").await;
+        assert_eq!(body["data"], serde_json::json!([[17]]));
+        assert_eq!(record["scans"][0]["files_skipped"], 2);
+        let (body, record) =
+            submit_and_record(&state, "SELECT COUNT(*) FROM events WHERE score IS NULL").await;
+        assert_eq!(body["data"], serde_json::json!([[43]]));
+        assert_eq!(record["scans"][0]["files_skipped"], 0);
+        let (body, record) = submit_and_record(
+            &state,
+            "SELECT COUNT(*) FROM events WHERE id BETWEEN 90 AND 110",
+        )
+        .await;
+        assert_eq!(body["data"], serde_json::json!([[21]]));
+        assert_eq!(record["scans"][0]["files_skipped"], 1);
+        assert_eq!(record["scans"][0]["files_opened"], 2);
+
+        // A file that lands after ANALYZE makes the statistics stale: no
+        // skipping — nothing is judged from bounds of another version —
+        // and the new rows are read.
+        write_events_file(&directory.join("events").join("d.parquet"), 300, 50);
+        let (body, record) = submit_and_record(&state, sql).await;
+        assert_eq!(body["data"].as_array().unwrap().len(), 100);
+        let scan = &record["scans"][0];
+        assert_eq!(scan["files_considered"], 4, "{scan}");
+        assert_eq!(scan["files_skipped"], 0, "{scan}");
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
@@ -10610,7 +11470,7 @@ mod tests {
 
     #[tokio::test]
     async fn statistics_diagnostics_require_admin() {
-        let (state, _, directory) = analyze_test_state().await;
+        let (state, directory) = analyze_test_state().await;
         let reader = crate::security::Identity {
             principal: "reader".into(),
             display_identity: None,
