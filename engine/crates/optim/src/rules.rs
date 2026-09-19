@@ -161,14 +161,7 @@ fn prune_columns(plan: LogicalPlan, required: Option<HashSet<String>>) -> Logica
                 collect_columns(expression, &mut input_columns);
             }
             for aggregate in &aggregates {
-                let expression = match aggregate {
-                    kaveon_sql::logical_plan::AggregateExpr::Count { expr, .. }
-                    | kaveon_sql::logical_plan::AggregateExpr::Sum { expr, .. }
-                    | kaveon_sql::logical_plan::AggregateExpr::Avg { expr, .. }
-                    | kaveon_sql::logical_plan::AggregateExpr::Min(expr)
-                    | kaveon_sql::logical_plan::AggregateExpr::Max(expr) => expr,
-                };
-                collect_columns(expression, &mut input_columns);
+                collect_columns(aggregate.argument(), &mut input_columns);
             }
             LogicalPlan::Aggregate {
                 input: Box::new(prune_columns(*input, Some(input_columns))),

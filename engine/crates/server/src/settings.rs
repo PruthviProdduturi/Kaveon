@@ -33,6 +33,13 @@ pub struct QuerySettings {
     /// the budget does not fit on arrival.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admission_wait_seconds: Option<u64>,
+    /// `true` lets the planner answer a plain `COUNT(DISTINCT col)` from a
+    /// HyperLogLog sketch — computed, or stored in the table's statistics
+    /// — as `APPROX_COUNT_DISTINCT` would, the estimate's error stated on
+    /// the query record. Off by default; `APPROX_*` functions need no
+    /// setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approximate: Option<bool>,
 }
 
 impl QuerySettings {
@@ -53,6 +60,11 @@ impl QuerySettings {
     /// Whether the result cache may serve or keep this statement.
     pub fn result_cache_enabled(&self) -> bool {
         self.result_cache.unwrap_or(true)
+    }
+
+    /// Whether exact distinct counts may be answered from sketches.
+    pub fn approximate(&self) -> bool {
+        self.approximate.unwrap_or(false)
     }
 
     /// How long the statement waits for memory admission: its own bound
@@ -102,6 +114,9 @@ impl QuerySettings {
                 }
                 "result_cache" => {
                     validated.result_cache = Some(boolean(key, value)?);
+                }
+                "approximate" => {
+                    validated.approximate = Some(boolean(key, value)?);
                 }
                 "admission_wait_seconds" => {
                     let seconds = unsigned(key, value)?;
@@ -456,6 +471,30 @@ mod tests {
             QuerySettings::from_request(&map(json!({"result_cache": false})), &config).unwrap();
         assert!(!settings.result_cache_enabled());
         assert!(QuerySettings::default().result_cache_enabled());
+    }
+
+    #[test]
+    fn approximate_is_a_boolean_off_by_default() {
+        let config = config();
+        assert!(!QuerySettings::default().approximate());
+        let settings =
+            QuerySettings::from_request(&map(json!({"approximate": true})), &config).unwrap();
+        assert!(settings.approximate());
+        assert_eq!(
+            serde_json::to_value(&settings).unwrap(),
+            json!({"approximate": true})
+        );
+        let error =
+            QuerySettings::from_request(&map(json!({"approximate": 1})), &config).unwrap_err();
+        assert_eq!(error.0, "setting 'approximate' must be true or false");
+        let prefix = split_session_prefix("SET SESSION approximate = true; SELECT 1").unwrap();
+        let mut settings = map(json!({}));
+        merge_session_prefix(&mut settings, &prefix).unwrap();
+        assert!(
+            QuerySettings::from_request(&settings, &config)
+                .unwrap()
+                .approximate()
+        );
     }
 
     #[test]

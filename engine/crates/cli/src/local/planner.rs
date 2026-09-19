@@ -19,7 +19,7 @@ use kaveon_exec::window::WindowOperator;
 use kaveon_sql::logical_plan::{AggregateExpr, JoinType, LogicalPlan};
 use kaveon_storage::{DeltaTableReader, ObjectDeltaReader, ObjectParquetReader, ParquetReader};
 
-const AGGREGATE_FUNCTIONS: &[&str] = &["COUNT", "SUM", "AVG", "MIN", "MAX"];
+const AGGREGATE_FUNCTIONS: &[&str] = kaveon_core::AGGREGATE_FUNCTION_NAMES;
 
 pub fn plan_to_operator(
     plan: &LogicalPlan,
@@ -355,6 +355,8 @@ fn logical_agg_to_exec(
         AggregateExpr::Avg { expr, distinct } => (AggFunc::Avg, expr, *distinct),
         AggregateExpr::Min(e) => (AggFunc::Min, e, false),
         AggregateExpr::Max(e) => (AggFunc::Max, e, false),
+        AggregateExpr::ApproxDistinct { expr, .. } => (AggFunc::ApproxDistinct, expr, false),
+        AggregateExpr::ApproxPercentile { expr, .. } => (AggFunc::ApproxPercentile, expr, false),
     };
 
     let column = match expr {
@@ -367,7 +369,15 @@ fn logical_agg_to_exec(
         }
     };
 
-    let expression = AggExpr::new(func, column);
+    let mut expression = AggExpr::new(func, column);
+    if let AggregateExpr::ApproxPercentile { percentiles, .. } = agg {
+        expression.percentiles = Some(percentiles.clone());
+    }
+    // Every planner names the output by the same rule the projection binds
+    // by: the function and its arguments as written.
+    if expression.output_name() != agg.output_name() {
+        expression = expression.with_alias(agg.output_name());
+    }
     Ok(if distinct {
         expression.distinct()
     } else {
@@ -456,14 +466,5 @@ fn relation_qualifier(plan: &LogicalPlan) -> Option<String> {
 }
 
 fn agg_output_name(func_name: &str, args: &[Expr]) -> String {
-    let arg_str = args
-        .iter()
-        .map(|a| match a {
-            Expr::Column(c) => c.clone(),
-            Expr::Star => "*".into(),
-            _ => "expr".into(),
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("{}_{}", func_name.to_lowercase(), arg_str)
+    kaveon_core::aggregate_output_name(func_name, args)
 }
