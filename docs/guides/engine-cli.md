@@ -452,6 +452,8 @@ a coordinator statement; everything else is SQL for `POST /v1/statement`.
 | `ANALYZE [catalog.][schema.]table [WITH (…)]` | Coordinator statement (admin role): collects the table's row count, file count and bytes, and each column's null fraction, minimum, maximum and data size from metadata alone. `WITH (distinct = true)` also counts the distinct values of every column, `WITH (columns = ARRAY['a', 'b'])` of the columns named — exact, one `COUNT(DISTINCT)` statement per column through the cluster, cancellable with the `ANALYZE`; a column not counted keeps its previous count while the table's files are unchanged. The result adds `distinct_columns`, how many were counted. |
 | `SHOW STATS FOR [catalog.][schema.]table` | Coordinator statement: the column statistics of the last `ANALYZE`, one row per column plus a summary row with the table's row count. The shell shows a header line (`catalog.schema.table · 3,000,000 rows · 40.2 MiB`) over the columns with nulls as a percentage and sizes humanised; `SHOW STAT FOR` is accepted. A table never analyzed answers `Not found: no statistics for …; run ANALYZE …`. |
 | `DESCRIBE DETAIL [catalog.][schema.]table` | Coordinator statement: format, location, created and modified times, file count, size, row count, Delta version, partition columns, when it was analyzed and the catalog snapshot, shown in the shell as a `field \| value` list |
+| `OPTIMIZE [catalog.][schema.]table [WITH (…)] [WHERE …]` | Coordinator statement (admin role): rewrites a Parquet table's files in the layout its definition declares — sorted by its `clustered_by` columns, 128 MiB / 1 M-row row groups with a page index and Bloom filters (`WITH (row_group_rows = …, row_group_bytes = …, file_bytes = …)` overrides the sizes); `WHERE` selects the files to rewrite by partition values and footer statistics. One row: files replaced and written, rows, row groups, bytes before and after, the clustering, and how many interrupted rewrites were recovered. Delta and Iceberg tables are refused: their files are named by a log the Engine does not write. See [Layout](../engine/storage-and-catalogs.md#layout) |
+| `ALTER TABLE [catalog.][schema.]table SET CLUSTERED BY (a, b)` | Coordinator statement (analyst or admin role): records the clustering the next `OPTIMIZE` writes; `()` clears it |
 | `USE [catalog.]schema`, `USE catalog` | Validates the target before switching. A bare name is the schema in the current catalog when it exists, else the catalog of that name (keeping the current schema when it has it, or its only schema). |
 | `EXPLAIN <statement>` | Runs the statement with the result cache off, discards the rows and prints the logical plan as an indented tree, then the summary |
 | `EXPLAIN ANALYZE <statement>` | The same over the optimized plan (pruned columns, pushed filters), followed by what the run cost: the coordinator's analysis, planning and execution times and, per stage, one row per task — node, elapsed, CPU, peak memory, rows and bytes scanned, rows out, exchange bytes in and out, bytes spilled — exactly as the query record reports them. See [Analyzing a run](#analyzing-a-run) |
@@ -570,6 +572,8 @@ kaveon table list Benchmarks.tpch_sf100 [--like 'pattern']
 kaveon table register Benchmarks.tpch_sf100.lineitem --location tpch/sf100/lineitem --format delta
 kaveon table register Benchmarks.clickbench.hits --location clickbench/hits.parquet --format parquet \
     --columns 'WatchID bigint, JavaEnable smallint, Title varchar'
+kaveon -e "ALTER TABLE Benchmarks.clickbench.hits SET CLUSTERED BY (EventDate, CounterID)"
+kaveon -e "OPTIMIZE Benchmarks.clickbench.hits"       # admin: rewrite the files in that layout
 kaveon table relocate Benchmarks.tpch_sf100.lineitem --location tpch/sf100-v2/lineitem
 kaveon table describe Benchmarks.tpch_sf100.lineitem
 kaveon table show-create Benchmarks.tpch_sf100.lineitem
@@ -595,6 +599,12 @@ error and registers nothing. `--location` is a path within the catalog's
 storage root (a container-relative path for ADLS, a directory under
 `base_path` for a local catalog), not a URI. A mistaken option is reported
 by the client, naming the option, before anything reaches the coordinator.
+
+The layout of a table — `clustered_by` and `bloom` — is part of its
+definition (`CREATE TABLE … WITH (…, clustered_by = ARRAY['a'], bloom =
+ARRAY['b'])`, `ALTER TABLE … SET CLUSTERED BY (…)`), and `OPTIMIZE` writes
+it; the CLI has no data-writing command of its own, so there is no
+`--cluster-by` flag: the statements run in the shell or with `-e` as above.
 
 The same statements run in the shell and with `-e`, so a script of
 `CREATE SCHEMA` / `CREATE TABLE … WITH (…)` statements registers a catalog's

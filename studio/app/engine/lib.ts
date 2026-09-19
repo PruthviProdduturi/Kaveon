@@ -68,6 +68,8 @@ export interface ScanTelemetry {
   /** Files of a partitioned directory table the predicate ruled out by their path values before any opened. */
   files_pruned_by_partition?: number;
   row_groups_considered: number; row_groups_read: number; row_groups_pruned: number;
+  /** Of the pruned, the row groups a Bloom filter ruled out after the statistics kept them, and the filters read to decide it. */
+  row_groups_pruned_by_bloom?: number; bloom_filters_read?: number; bloom_filter_bytes_read?: number;
   rows_selected: number; rows_emitted: number;
   compressed_bytes_selected: number;
   compressed_bytes_per_second?: number; rows_per_second?: number;
