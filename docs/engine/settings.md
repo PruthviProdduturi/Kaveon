@@ -53,7 +53,7 @@ container's CPU quota on Linux.
 |---|---|---|---|---|---|---|
 | `KAVEON_HASH_SPILL_ROOT` | none | unset: memory-only execution, no spill | directory path | Where the partitioned hash aggregate, join, sort and TopN spill their partitions and runs. Setting it turns the spill paths on for every query on the node; it must not be empty. | worker, coordinator | `/tmp/spill` (chart, both roles) |
 | `KAVEON_HASH_SPILL_BYTES` | none | 10737418240 (10 GiB) | bytes | One query's spill budget across all its spilling operators on this node (a `SpillManager` shared through the query pool). Not a process-wide quota. | worker, coordinator | 4294967296 (4 GiB, chart `spillDiskLimitBytes`) |
-| `KAVEON_HASH_SPILL_PARTITIONS` | none | 16 | partitions | Spill partition count per partitioned operator; 1 to 256. | worker, coordinator | not set |
+| `KAVEON_HASH_SPILL_PARTITIONS` | none | 16 | partitions | Spill partition count per partitioned operator; 1 to 256. For a join it is the fan-out of every repartitioning level: a partition whose build is still refused is split this many ways again, to three levels (`MAX_JOIN_SPILL_DEPTH`), after which the join fails closed. | worker, coordinator | not set |
 
 ## Exchange
 

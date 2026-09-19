@@ -335,6 +335,14 @@ struct TaskExecutionMetrics {
     spill_compaction_input_bytes: u64,
     spill_write_us: u64,
     spill_read_us: u64,
+    /// Bytes the task's joins wrote as spill partitions, the partitions
+    /// written, and the deepest repartitioning a refused build took.
+    #[serde(default)]
+    join_spill_bytes_written: u64,
+    #[serde(default)]
+    join_spill_partitions: u64,
+    #[serde(default)]
+    join_spill_depth: u64,
 }
 
 #[derive(Default)]
@@ -2024,6 +2032,12 @@ async fn execute_fragment_task(
         metrics.spill_write_us = after.write_us.saturating_sub(before.write_us);
         metrics.spill_read_us = after.read_us.saturating_sub(before.read_us);
     }
+    let join_spill = kaveon_exec::partitioned::join_spill_metrics(memory)
+        .map_err(|error| error.to_string())?
+        .snapshot();
+    metrics.join_spill_bytes_written = join_spill.bytes_written;
+    metrics.join_spill_partitions = join_spill.partitions;
+    metrics.join_spill_depth = join_spill.max_depth;
     Ok((
         execution.result_schema,
         execution.result_batches,

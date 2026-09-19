@@ -5,11 +5,13 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{collections::VecDeque, sync::Arc};
 
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use kaveon_core::{
-    BatchOperator, KaveonError, MemoryReservation, OperatorMemoryAccount, QueryMemoryPool, Result,
+    BatchOperator, Expr, KaveonError, MemoryReservation, OperatorMemoryAccount, QueryMemoryPool,
+    Result,
 };
 
 use crate::{
@@ -18,7 +20,8 @@ use crate::{
         grouped_aggregate_states_to_schema_batch,
     },
     exchange::HashPartitioner,
-    join::{HashJoin, JoinType},
+    join::{BuiltSide, HashJoin, JoinType},
+    semijoin::{BuildFacts, SemiJoinOperator},
     spill::{SpillManager, SpillRun, SpillRunReader},
 };
 
@@ -277,6 +280,27 @@ pub fn spill_from_environment(memory: &QueryMemoryPool) -> Result<Option<(SpillM
     Ok(Some((resource.0.clone(), resource.1)))
 }
 
+/// Attach a spill to the query: every spill-capable operator of the
+/// query uses it, whatever the environment says. Refused once one is
+/// attached.
+pub fn register_spill(
+    memory: &QueryMemoryPool,
+    spill: SpillManager,
+    partitions: usize,
+) -> Result<()> {
+    validate_partitions(partitions)?;
+    if memory
+        .shared_resource_if_present::<(SpillManager, usize)>("kaveon.exec.hash-spill.v1")?
+        .is_some()
+    {
+        return Err(KaveonError::Execution(
+            "the query already has a spill attached".into(),
+        ));
+    }
+    memory.shared_resource("kaveon.exec.hash-spill.v1", || Ok((spill, partitions)))?;
+    Ok(())
+}
+
 fn environment_integer(name: &str, default: u64) -> Result<u64> {
     match std::env::var(name) {
         Ok(value) => value
@@ -490,6 +514,49 @@ fn partition_input_with_flush(
             crate::exchange::SPILL_PARTITION_SALT,
         )?)
     };
+    let mut split = |batch: &RecordBatch| match &partitioner {
+        Some(partitioner) => partitioner.partition(batch),
+        None => Ok(vec![batch.clone()]),
+    };
+    partition_input_by(
+        input,
+        &mut split,
+        count,
+        memory,
+        spill,
+        input_reserved,
+        flush_bytes,
+    )
+}
+
+/// `partition_input_with_flush` under one repartitioning level's salt.
+fn partition_input_salted(
+    input: &mut dyn BatchOperator,
+    keys: &[String],
+    count: usize,
+    salt: u64,
+    memory: &OperatorMemoryAccount,
+    spill: &SpillManager,
+    flush_bytes: u64,
+) -> Result<Vec<Vec<SpillRun>>> {
+    let partitioner = HashPartitioner::try_new_salted(input.schema(), keys, count, salt)?;
+    let mut split = |batch: &RecordBatch| partitioner.partition(batch);
+    partition_input_by(input, &mut split, count, memory, spill, false, flush_bytes)
+}
+
+/// Spool an input into `count` partitions of runs, each batch split by
+/// `split` (one batch per partition, empty ones allowed), buffering
+/// several batches per run.
+fn partition_input_by(
+    input: &mut dyn BatchOperator,
+    split: &mut dyn FnMut(&RecordBatch) -> Result<Vec<RecordBatch>>,
+    count: usize,
+    memory: &OperatorMemoryAccount,
+    spill: &SpillManager,
+    input_reserved: bool,
+    flush_bytes: u64,
+) -> Result<Vec<Vec<SpillRun>>> {
+    let schema = Arc::clone(input.schema());
     let mut partitions: Vec<Vec<SpillRun>> = (0..count).map(|_| Vec::new()).collect();
     let mut buffered: Vec<Vec<RecordBatch>> = (0..count).map(|_| Vec::new()).collect();
     let mut buffered_memory = Vec::new();
@@ -536,10 +603,8 @@ fn partition_input_with_flush(
                 KaveonError::Execution("spill partition memory estimate overflow".into())
             })?;
         let reservation = memory.reserve(bytes)?;
-        let batches = match &partitioner {
-            Some(partitioner) => partitioner.partition(&batch)?,
-            None => vec![batch],
-        };
+        let batches = split(&batch)?;
+        drop(batch);
         for (index, batch) in batches.into_iter().enumerate() {
             if batch.num_rows() == 0 {
                 continue;
@@ -1242,6 +1307,202 @@ impl BatchOperator for PartitionedHashAggregate {
     }
 }
 
+/// Repartitionings a join partition may take before its build must fit.
+/// A partition at this depth is one of `count^(depth + 1)` — 65 536 at
+/// the default sixteen — and a build that still does not fit there is
+/// key skew no partitioning resolves: the join fails closed with the
+/// budget's message rather than repartitioning forever.
+pub const MAX_JOIN_SPILL_DEPTH: u32 = 3;
+
+const JOIN_SPILL_METRICS_RESOURCE: &str = "kaveon.exec.join-spill-metrics.v1";
+
+/// What the joins of one query wrote to the spill: bytes of runs,
+/// partitions written (non-empty, at every depth) and the deepest
+/// repartitioning any of them took.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct JoinSpillSnapshot {
+    pub bytes_written: u64,
+    pub partitions: u64,
+    pub max_depth: u64,
+}
+
+#[derive(Default)]
+pub struct JoinSpillMetrics {
+    bytes_written: AtomicU64,
+    partitions: AtomicU64,
+    max_depth: AtomicU64,
+}
+
+impl JoinSpillMetrics {
+    #[must_use]
+    pub fn snapshot(&self) -> JoinSpillSnapshot {
+        JoinSpillSnapshot {
+            bytes_written: self.bytes_written.load(Ordering::Acquire),
+            partitions: self.partitions.load(Ordering::Acquire),
+            max_depth: self.max_depth.load(Ordering::Acquire),
+        }
+    }
+
+    fn record(&self, runs: &[Vec<SpillRun>], depth: u32) {
+        let bytes = runs
+            .iter()
+            .flatten()
+            .map(SpillRun::bytes)
+            .fold(0_u64, u64::saturating_add);
+        self.bytes_written.fetch_add(bytes, Ordering::Relaxed);
+        self.partitions.fetch_add(
+            runs.iter().filter(|runs| !runs.is_empty()).count() as u64,
+            Ordering::Relaxed,
+        );
+        self.max_depth
+            .fetch_max(u64::from(depth), Ordering::Relaxed);
+    }
+}
+
+/// The query's join spill counters.
+pub fn join_spill_metrics(memory: &QueryMemoryPool) -> Result<Arc<JoinSpillMetrics>> {
+    memory.shared_resource(JOIN_SPILL_METRICS_RESOURCE, || {
+        Ok(JoinSpillMetrics::default())
+    })
+}
+
+/// The salt of one repartitioning level: the first level is the
+/// aggregate's spill salt, every deeper level its own, so a partition's
+/// sub-partitions spread instead of all landing in one.
+fn spill_salt(depth: u32) -> u64 {
+    if depth == 0 {
+        crate::exchange::SPILL_PARTITION_SALT
+    } else {
+        crate::exchange::mix(
+            crate::exchange::SPILL_PARTITION_SALT
+                .wrapping_add(u64::from(depth).wrapping_mul(0x9E37_79B9_7F4A_7C15)),
+        ) | 1
+    }
+}
+
+/// The level a refused build partitions to: the first for a whole
+/// input, one deeper for a partition, and the failure past the limit.
+fn next_depth(depth: Option<u32>, count: usize, operator: &str, error: &str) -> Result<u32> {
+    match depth {
+        None => Ok(0),
+        Some(depth) if depth < MAX_JOIN_SPILL_DEPTH => Ok(depth + 1),
+        Some(depth) => Err(KaveonError::MemoryLimit(format!(
+            "{operator} build side partition does not fit the memory budget after {depth} repartitionings ({}-way): {error}",
+            (count as u64).saturating_pow(depth + 1)
+        ))),
+    }
+}
+
+/// One partition of a join's two inputs on disk, and how many
+/// repartitionings made it.
+struct JoinPartition {
+    left: Vec<SpillRun>,
+    right: Vec<SpillRun>,
+    depth: u32,
+}
+
+/// A build the budget refused: what was collected (a refused batch
+/// unaccounted at the end), the unread rest, and why.
+struct Refusal {
+    batches: Vec<RecordBatch>,
+    guards: Vec<Option<MemoryReservation>>,
+    tail: Option<Box<dyn BatchOperator>>,
+    error: String,
+}
+
+impl Refusal {
+    /// The collected batches and their rest as one source again.
+    fn replay(self, schema: SchemaRef) -> Box<dyn BatchOperator> {
+        Box::new(ReplayInput {
+            schema,
+            batches: self.batches.into(),
+            tail: self.tail,
+            guards: self.guards.into(),
+            active_guard: None,
+        })
+    }
+}
+
+/// Every batch of a build side, each held by its guard.
+type Collected = (Vec<RecordBatch>, Vec<Option<MemoryReservation>>);
+
+/// A semi join's refused build: the probe input back, and the refusal.
+type SemiRefusal = (Box<dyn BatchOperator>, Refusal);
+
+/// Collect a build side while the budget admits it. A build is refused
+/// when a batch's reservation is, or when what is held would leave the
+/// probe less than half of the budget that was free when the build
+/// began: `footprint` says what the built form of the held bytes and
+/// rows will take, and the probe side, the output and the operators
+/// downstream have to run beside it.
+fn collect_build(
+    mut source: Box<dyn BatchOperator>,
+    memory: &OperatorMemoryAccount,
+    footprint: impl Fn(u64, u64) -> u64,
+) -> Result<std::result::Result<Collected, Refusal>> {
+    let snapshot = memory.query().snapshot();
+    let ceiling = snapshot.limit_bytes.saturating_sub(snapshot.current_bytes) / 2;
+    let mut batches = Vec::new();
+    let mut guards = Vec::new();
+    let mut bytes = 0_u64;
+    let mut rows = 0_u64;
+    loop {
+        memory.check_cancelled()?;
+        let Some(batch) = source.next_batch()? else {
+            return Ok(Ok((batches, guards)));
+        };
+        if batch.num_rows() == 0 {
+            continue;
+        }
+        let batch_bytes = batch.get_array_memory_size() as u64;
+        bytes = bytes.saturating_add(batch_bytes);
+        rows = rows.saturating_add(batch.num_rows() as u64);
+        match memory.reserve(batch_bytes) {
+            Ok(guard) => {
+                batches.push(batch);
+                guards.push(Some(guard));
+            }
+            Err(KaveonError::MemoryLimit(error)) => {
+                batches.push(batch);
+                guards.push(None);
+                return Ok(Err(Refusal {
+                    batches,
+                    guards,
+                    tail: Some(source),
+                    error,
+                }));
+            }
+            Err(error) => return Err(error),
+        }
+        let needed = footprint(bytes, rows);
+        if needed > ceiling {
+            return Ok(Err(Refusal {
+                batches,
+                guards,
+                tail: Some(source),
+                error: format!(
+                    "a build side of {bytes} bytes in {rows} rows needs {needed} bytes, more than half of the {} bytes free",
+                    ceiling.saturating_mul(2)
+                ),
+            }));
+        }
+    }
+}
+
+/// A hash join whose build side spills when the budget refuses it. The
+/// right input is collected while the budget admits it and built in
+/// memory (`BuiltSide`); a refusal — of a batch's reservation, of the
+/// concatenated copy, of the index, or of more than half of the free
+/// budget — partitions both inputs by the join keys' hash (salted, as the
+/// aggregate's spill is) into `count` partitions on disk, and each
+/// partition is built and probed on its own within the budget, its
+/// memory exact through the operator's account. A partition whose build
+/// is refused in turn is repartitioned under the next level's salt, to
+/// `MAX_JOIN_SPILL_DEPTH`; after that it fails closed. Inner, left, right
+/// and full joins partition alike: a key's rows are all in one partition,
+/// so each partition's unmatched rows are the join's. A cross join has no
+/// key to partition by and fails closed at the first refusal. A broadcast
+/// join builds the same table on every task, so each task spills its own.
 pub struct PartitionedHashJoin {
     left: Option<Box<dyn BatchOperator>>,
     right: Option<Box<dyn BatchOperator>>,
@@ -1250,15 +1511,16 @@ pub struct PartitionedHashJoin {
     schema: SchemaRef,
     join_type: JoinType,
     keys: Vec<(String, String)>,
+    key_indices: Vec<(usize, usize)>,
     left_qualifier: Option<String>,
     right_qualifier: Option<String>,
     memory: OperatorMemoryAccount,
     spill: SpillManager,
     count: usize,
-    partitions: VecDeque<(Vec<SpillRun>, Vec<SpillRun>)>,
+    partitions: VecDeque<JoinPartition>,
     failed: bool,
     active: Option<HashJoin>,
-    adaptive_bytes: Option<u64>,
+    metrics: Arc<JoinSpillMetrics>,
 }
 
 impl PartitionedHashJoin {
@@ -1295,6 +1557,8 @@ impl PartitionedHashJoin {
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
+        let key_indices = crate::join::resolve_join_keys(&left_schema, &right_schema, &keys)?;
+        let metrics = join_spill_metrics(memory.query())?;
         Ok(Self {
             left: Some(left),
             right: Some(right),
@@ -1303,6 +1567,7 @@ impl PartitionedHashJoin {
             schema: Arc::clone(probe.schema()),
             join_type,
             keys,
+            key_indices,
             left_qualifier: left_qualifier.map(str::to_owned),
             right_qualifier: right_qualifier.map(str::to_owned),
             memory,
@@ -1315,121 +1580,168 @@ impl PartitionedHashJoin {
             partitions: VecDeque::new(),
             failed: false,
             active: None,
-            adaptive_bytes: None,
+            metrics,
         })
     }
 
-    fn execute_next(&mut self) -> Result<Option<RecordBatch>> {
-        if let Some(active) = &mut self.active {
-            if let Some(batch) = active.next_batch()? {
-                return Ok(Some(batch));
+    /// The build in memory, or what to partition.
+    fn build(
+        &self,
+        right: Box<dyn BatchOperator>,
+    ) -> Result<std::result::Result<BuiltSide, Refusal>> {
+        // The built form: the concatenated copy beside the batches, and
+        // the index's key copy and per-row overhead.
+        let (batches, guards) = match collect_build(right, &self.memory, |bytes, rows| {
+            bytes
+                .saturating_mul(2)
+                .saturating_add(rows.saturating_mul(64))
+        })? {
+            Ok(collected) => collected,
+            Err(refused) => return Ok(Err(refused)),
+        };
+        match BuiltSide::build(
+            &self.right_schema,
+            &batches,
+            &self.key_indices,
+            self.join_type,
+            Some(&self.memory),
+        ) {
+            Ok(built) => {
+                drop(guards);
+                Ok(Ok(built))
             }
-            self.active = None;
+            Err(KaveonError::MemoryLimit(error)) => Ok(Err(Refusal {
+                batches,
+                guards,
+                tail: None,
+                error,
+            })),
+            Err(error) => Err(error),
         }
-        if let Some(left) = self.left.take() {
-            let limit = self.adaptive_bytes.unwrap_or(adaptive_limit(&self.memory)?) / 2;
-            let right = self
-                .right
-                .take()
-                .expect("right input exists before partitioning");
-            let right_prefix = BufferedPrefix::collect(right, &self.memory, limit)?;
-            // HashJoin retains only its build side and streams the probe. A
-            // large probe therefore must not force disk partitioning merely
-            // because it exceeds the small adaptive prefix. This was creating
-            // hundreds of Arrow runs for the 5M-row grouped join even though
-            // the 100k-row build side fit comfortably in memory.
-            if right_prefix.complete && streaming_build_fits(&right_prefix, &self.memory)? {
-                let mut operator = HashJoin::try_new_qualified_with_memory(
-                    left,
-                    right_prefix.replay(),
-                    self.join_type,
-                    self.keys.clone(),
-                    self.left_qualifier.as_deref(),
-                    self.right_qualifier.as_deref(),
-                    self.memory.clone(),
-                )?;
-                let batch = operator.next_batch()?;
-                self.active = Some(operator);
-                return Ok(batch);
-            }
-            let mut left = left;
-            let mut right = right_prefix.replay();
-            let left_keys = self
-                .keys
-                .iter()
-                .map(|(key, _)| key.clone())
-                .collect::<Vec<_>>();
-            let right_keys = self
-                .keys
-                .iter()
-                .map(|(_, key)| key.clone())
-                .collect::<Vec<_>>();
-            let left_runs = partition_input(
-                left.as_mut(),
-                &left_keys,
-                self.count,
-                &self.memory,
-                &self.spill,
-                false,
-            )?;
-            let right_runs = partition_input(
-                right.as_mut(),
-                &right_keys,
-                self.count,
-                &self.memory,
-                &self.spill,
-                false,
-            )?;
-            self.partitions = left_runs.into_iter().zip(right_runs).collect();
-        }
-        while let Some((left, right)) = self.partitions.pop_front() {
-            if left.is_empty() && right.is_empty() {
-                continue;
-            }
-            let mut operator = HashJoin::try_new_qualified_with_memory(
-                Box::new(RunSource::new(Arc::clone(&self.left_schema), left)),
-                Box::new(RunSource::new(Arc::clone(&self.right_schema), right)),
-                self.join_type,
-                self.keys.clone(),
-                self.left_qualifier.as_deref(),
-                self.right_qualifier.as_deref(),
-                self.memory.clone(),
-            )?;
-            let batch = operator.next_batch()?;
-            self.active = Some(operator);
-            if batch.is_none() {
-                self.active = None;
-                continue;
-            }
-            return Ok(batch);
-        }
-        Ok(None)
     }
-}
 
-fn streaming_build_fits(prefix: &BufferedPrefix, memory: &OperatorMemoryAccount) -> Result<bool> {
-    let (bytes, rows) =
-        prefix
-            .batches
+    fn probe(&self, left: Box<dyn BatchOperator>, built: BuiltSide) -> Result<HashJoin> {
+        HashJoin::try_new_built(
+            left,
+            Arc::clone(&self.right_schema),
+            built,
+            self.join_type,
+            self.keys.clone(),
+            self.left_qualifier.as_deref(),
+            self.right_qualifier.as_deref(),
+            Some(self.memory.clone()),
+        )
+    }
+
+    /// Both inputs to disk, partitioned by the keys under `depth`'s salt.
+    fn partition_pair(
+        &self,
+        mut left: Box<dyn BatchOperator>,
+        mut right: Box<dyn BatchOperator>,
+        depth: u32,
+    ) -> Result<VecDeque<JoinPartition>> {
+        let left_keys = self
+            .keys
             .iter()
-            .try_fold((0_u64, 0_u64), |(bytes, rows), batch| {
-                Ok::<_, KaveonError>((
-                    bytes
-                        .checked_add(batch.get_array_memory_size() as u64)
-                        .ok_or_else(|| KaveonError::Execution("join build size overflow".into()))?,
-                    rows.checked_add(batch.num_rows() as u64).ok_or_else(|| {
-                        KaveonError::Execution("join build row count overflow".into())
-                    })?,
-                ))
-            })?;
-    // HashJoin reserves a concatenated build copy plus key/index storage. Keep
-    // half of currently available query memory for probe/output operators.
-    let required = bytes
-        .checked_mul(2)
-        .and_then(|value| value.checked_add(rows.saturating_mul(64)))
-        .ok_or_else(|| KaveonError::Execution("join build estimate overflow".into()))?;
-    let snapshot = memory.query().snapshot();
-    Ok(required <= snapshot.limit_bytes.saturating_sub(snapshot.current_bytes) / 2)
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        let right_keys = self
+            .keys
+            .iter()
+            .map(|(_, key)| key.clone())
+            .collect::<Vec<_>>();
+        let flush = adaptive_limit(&self.memory)?;
+        let left_runs = partition_input_salted(
+            left.as_mut(),
+            &left_keys,
+            self.count,
+            spill_salt(depth),
+            &self.memory,
+            &self.spill,
+            flush,
+        )?;
+        let right_runs = partition_input_salted(
+            right.as_mut(),
+            &right_keys,
+            self.count,
+            spill_salt(depth),
+            &self.memory,
+            &self.spill,
+            flush,
+        )?;
+        self.metrics.record(&left_runs, depth);
+        self.metrics.record(&right_runs, depth);
+        Ok(left_runs
+            .into_iter()
+            .zip(right_runs)
+            .map(|(left, right)| JoinPartition { left, right, depth })
+            .collect())
+    }
+
+    /// The refusal of a build with `left` still in hand: partition the
+    /// pair one level deeper, or fail closed at the depth limit.
+    fn repartition(
+        &mut self,
+        left: Box<dyn BatchOperator>,
+        refused: Refusal,
+        depth: Option<u32>,
+    ) -> Result<()> {
+        if self.join_type == JoinType::Cross {
+            return Err(KaveonError::MemoryLimit(format!(
+                "cross join build side does not fit the memory budget and cannot be partitioned: {}",
+                refused.error
+            )));
+        }
+        let next = next_depth(depth, self.count, "join", &refused.error)?;
+        let right = refused.replay(Arc::clone(&self.right_schema));
+        let partitions = self.partition_pair(left, right, next)?;
+        // A repartitioned partition's pieces are next, so the runs of a
+        // partition are consumed before another's are opened.
+        for partition in partitions.into_iter().rev() {
+            self.partitions.push_front(partition);
+        }
+        Ok(())
+    }
+
+    fn execute_next(&mut self) -> Result<Option<RecordBatch>> {
+        loop {
+            if let Some(active) = &mut self.active {
+                if let Some(batch) = active.next_batch()? {
+                    return Ok(Some(batch));
+                }
+                self.active = None;
+            }
+            if let Some(left) = self.left.take() {
+                let right = self
+                    .right
+                    .take()
+                    .expect("right input exists before the build");
+                match self.build(right)? {
+                    Ok(built) => self.active = Some(self.probe(left, built)?),
+                    Err(refused) => self.repartition(left, refused, None)?,
+                }
+                continue;
+            }
+            let Some(partition) = self.partitions.pop_front() else {
+                return Ok(None);
+            };
+            if partition.left.is_empty() && partition.right.is_empty() {
+                continue;
+            }
+            let left: Box<dyn BatchOperator> = Box::new(RunSource::new(
+                Arc::clone(&self.left_schema),
+                partition.left,
+            ));
+            let right: Box<dyn BatchOperator> = Box::new(RunSource::new(
+                Arc::clone(&self.right_schema),
+                partition.right,
+            ));
+            match self.build(right)? {
+                Ok(built) => self.active = Some(self.probe(left, built)?),
+                Err(refused) => self.repartition(left, refused, Some(partition.depth))?,
+            }
+        }
+    }
 }
 
 impl BatchOperator for PartitionedHashJoin {
@@ -1450,6 +1762,372 @@ impl BatchOperator for PartitionedHashJoin {
         }
         result
     }
+}
+
+/// A semi or anti join operator: spill-safe under the query's spill,
+/// the in-memory operator otherwise.
+#[allow(clippy::too_many_arguments)]
+pub fn semi_join(
+    left: Box<dyn BatchOperator>,
+    right: Box<dyn BatchOperator>,
+    left_key: Expr,
+    right_key: Expr,
+    anti: bool,
+    residual: Option<Expr>,
+    memory: Option<OperatorMemoryAccount>,
+) -> Result<Box<dyn BatchOperator>> {
+    if let Some(memory) = memory {
+        if let Some((spill, count)) = spill_from_environment(memory.query())? {
+            return Ok(Box::new(PartitionedSemiJoin::new(
+                left, right, left_key, right_key, anti, residual, memory, spill, count,
+            )?));
+        }
+        let mut operator = SemiJoinOperator::new(left, right, left_key, right_key, anti)?;
+        if let Some(residual) = residual {
+            operator = operator.with_residual(residual)?;
+        }
+        return Ok(Box::new(operator.with_memory(memory)));
+    }
+    let mut operator = SemiJoinOperator::new(left, right, left_key, right_key, anti)?;
+    if let Some(residual) = residual {
+        operator = operator.with_residual(residual)?;
+    }
+    Ok(Box::new(operator))
+}
+
+/// A semi or anti join whose build side spills when the budget refuses
+/// it, as `PartitionedHashJoin` does: the right input is collected while
+/// the budget admits it and built (a key set, or the rows by key under a
+/// residual); a refusal partitions both inputs by the hash of the key
+/// expression's value — the same equality the build uses, so a
+/// dictionary and a plain column, or two integer widths, land together —
+/// and each partition is built and probed on its own, repartitioned to
+/// `MAX_JOIN_SPILL_DEPTH` when refused again. NOT IN's rules read the
+/// whole right input, so the partitioning records whether any right key
+/// was NULL and whether any was not, and every partition is probed with
+/// those facts.
+pub struct PartitionedSemiJoin {
+    left: Option<Box<dyn BatchOperator>>,
+    right: Option<Box<dyn BatchOperator>>,
+    left_schema: SchemaRef,
+    right_schema: SchemaRef,
+    left_key: Expr,
+    right_key: Expr,
+    anti: bool,
+    residual: Option<Expr>,
+    memory: OperatorMemoryAccount,
+    spill: SpillManager,
+    count: usize,
+    partitions: VecDeque<JoinPartition>,
+    facts: BuildFacts,
+    failed: bool,
+    active: Option<SemiJoinOperator>,
+    metrics: Arc<JoinSpillMetrics>,
+}
+
+impl PartitionedSemiJoin {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        left: Box<dyn BatchOperator>,
+        right: Box<dyn BatchOperator>,
+        left_key: Expr,
+        right_key: Expr,
+        anti: bool,
+        residual: Option<Expr>,
+        memory: OperatorMemoryAccount,
+        spill: SpillManager,
+        partition_count: usize,
+    ) -> Result<Self> {
+        validate_partitions(partition_count)?;
+        let left_schema = Arc::clone(left.schema());
+        let right_schema = Arc::clone(right.schema());
+        // Validate the shape once, and take the keys as the operator
+        // normalises them (`*` to the column, a numeric cast), so the
+        // partitioning evaluates what the build compares.
+        let mut probe = SemiJoinOperator::new(
+            Box::new(RunSource::new(Arc::clone(&left_schema), Vec::new())),
+            Box::new(RunSource::new(Arc::clone(&right_schema), Vec::new())),
+            left_key,
+            right_key,
+            anti,
+        )?;
+        if let Some(residual) = &residual {
+            probe = probe.with_residual(residual.clone())?;
+        }
+        let (left_key, right_key, _, _) = probe.shape();
+        let metrics = join_spill_metrics(memory.query())?;
+        Ok(Self {
+            left: Some(left),
+            right: Some(right),
+            left_schema,
+            right_schema,
+            left_key,
+            right_key,
+            anti,
+            residual,
+            memory,
+            spill,
+            count: partition_count,
+            partitions: VecDeque::new(),
+            facts: BuildFacts::default(),
+            failed: false,
+            active: None,
+            metrics,
+        })
+    }
+
+    fn operator(
+        &self,
+        left: Box<dyn BatchOperator>,
+        right: Box<dyn BatchOperator>,
+        partitioned: bool,
+    ) -> Result<SemiJoinOperator> {
+        let mut operator = SemiJoinOperator::new(
+            left,
+            right,
+            self.left_key.clone(),
+            self.right_key.clone(),
+            self.anti,
+        )?;
+        if let Some(residual) = &self.residual {
+            operator = operator.with_residual(residual.clone())?;
+        }
+        operator = operator.with_memory(self.memory.clone());
+        if partitioned {
+            operator = operator.with_build_facts(self.facts);
+        }
+        Ok(operator)
+    }
+
+    /// The build in memory with `left` as its probe, or `left` back with
+    /// what to partition.
+    fn build(
+        &self,
+        left: Box<dyn BatchOperator>,
+        right: Box<dyn BatchOperator>,
+        partitioned: bool,
+    ) -> Result<std::result::Result<SemiJoinOperator, SemiRefusal>> {
+        // The built form beside the batches: the key set or the retained
+        // rows, at most the batches again with an entry per row.
+        let (batches, guards) = match collect_build(right, &self.memory, |bytes, rows| {
+            bytes
+                .saturating_mul(2)
+                .saturating_add(rows.saturating_mul(128))
+        })? {
+            Ok(collected) => collected,
+            Err(refused) => return Ok(Err((left, refused))),
+        };
+        let trial: Box<dyn BatchOperator> = Box::new(ReplayInput {
+            schema: Arc::clone(&self.right_schema),
+            batches: batches.clone().into(),
+            tail: None,
+            guards: VecDeque::new(),
+            active_guard: None,
+        });
+        let mut operator = self.operator(left, trial, partitioned)?;
+        match operator.build() {
+            Ok(()) => {
+                drop(guards);
+                Ok(Ok(operator))
+            }
+            Err(KaveonError::MemoryLimit(error)) => {
+                let (left, _) = operator.into_inputs();
+                Ok(Err((
+                    left,
+                    Refusal {
+                        batches,
+                        guards,
+                        tail: None,
+                        error,
+                    },
+                )))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Both inputs to disk, partitioned by the key's value under
+    /// `depth`'s salt; the first level records the right input's facts.
+    fn partition_pair(
+        &mut self,
+        mut left: Box<dyn BatchOperator>,
+        mut right: Box<dyn BatchOperator>,
+        depth: u32,
+    ) -> Result<VecDeque<JoinPartition>> {
+        let flush = adaptive_limit(&self.memory)?;
+        let salt = spill_salt(depth);
+        let count = self.count;
+        let memory = self.memory.clone();
+        let left_runs = crate::expr_eval::with_expression_memory(Some(&memory), || {
+            let key = &self.left_key;
+            let mut split = |batch: &RecordBatch| split_by_key(batch, key, count, salt, None);
+            partition_input_by(
+                left.as_mut(),
+                &mut split,
+                count,
+                &memory,
+                &self.spill,
+                false,
+                flush,
+            )
+        })?;
+        let mut facts = if depth == 0 {
+            Some(BuildFacts::default())
+        } else {
+            None
+        };
+        let right_runs = crate::expr_eval::with_expression_memory(Some(&memory), || {
+            let key = &self.right_key;
+            let mut split =
+                |batch: &RecordBatch| split_by_key(batch, key, count, salt, facts.as_mut());
+            partition_input_by(
+                right.as_mut(),
+                &mut split,
+                count,
+                &memory,
+                &self.spill,
+                false,
+                flush,
+            )
+        })?;
+        if let Some(facts) = facts {
+            self.facts = facts;
+        }
+        self.metrics.record(&left_runs, depth);
+        self.metrics.record(&right_runs, depth);
+        Ok(left_runs
+            .into_iter()
+            .zip(right_runs)
+            .map(|(left, right)| JoinPartition { left, right, depth })
+            .collect())
+    }
+
+    fn repartition(
+        &mut self,
+        left: Box<dyn BatchOperator>,
+        refused: Refusal,
+        depth: Option<u32>,
+    ) -> Result<()> {
+        let next = next_depth(depth, self.count, "semi join", &refused.error)?;
+        let right = refused.replay(Arc::clone(&self.right_schema));
+        let partitions = self.partition_pair(left, right, next)?;
+        for partition in partitions.into_iter().rev() {
+            self.partitions.push_front(partition);
+        }
+        Ok(())
+    }
+
+    fn execute_next(&mut self) -> Result<Option<RecordBatch>> {
+        loop {
+            if let Some(active) = &mut self.active {
+                if let Some(batch) = active.next_batch()? {
+                    return Ok(Some(batch));
+                }
+                self.active = None;
+            }
+            if let Some(left) = self.left.take() {
+                let right = self
+                    .right
+                    .take()
+                    .expect("right input exists before the build");
+                match self.build(left, right, false)? {
+                    Ok(operator) => self.active = Some(operator),
+                    Err((left, refused)) => self.repartition(left, refused, None)?,
+                }
+                continue;
+            }
+            let Some(partition) = self.partitions.pop_front() else {
+                return Ok(None);
+            };
+            // A partition with no left rows emits nothing; one with no
+            // right rows still probes (an anti join keeps its rows).
+            if partition.left.is_empty() {
+                continue;
+            }
+            let left: Box<dyn BatchOperator> = Box::new(RunSource::new(
+                Arc::clone(&self.left_schema),
+                partition.left,
+            ));
+            let right: Box<dyn BatchOperator> = Box::new(RunSource::new(
+                Arc::clone(&self.right_schema),
+                partition.right,
+            ));
+            match self.build(left, right, true)? {
+                Ok(operator) => self.active = Some(operator),
+                Err((left, refused)) => self.repartition(left, refused, Some(partition.depth))?,
+            }
+        }
+    }
+}
+
+impl BatchOperator for PartitionedSemiJoin {
+    fn schema(&self) -> &SchemaRef {
+        &self.left_schema
+    }
+    fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        if self.failed {
+            return Ok(None);
+        }
+        let result = self.execute_next();
+        if result.is_err() {
+            self.failed = true;
+            self.active = None;
+            self.partitions.clear();
+            self.left = None;
+            self.right = None;
+        }
+        result
+    }
+}
+
+/// A batch split into `count` partitions by the hash of `key`'s value
+/// per row (NULL keys to the first), recording in `facts` whether any
+/// key was NULL and whether any was not.
+fn split_by_key(
+    batch: &RecordBatch,
+    key: &Expr,
+    count: usize,
+    salt: u64,
+    mut facts: Option<&mut BuildFacts>,
+) -> Result<Vec<RecordBatch>> {
+    let values = crate::expr_eval::evaluate(key, batch)?;
+    let mut indices = (0..count)
+        .map(|_| arrow::array::UInt32Builder::new())
+        .collect::<Vec<_>>();
+    for row in 0..batch.num_rows() {
+        if row % 1024 == 0 {
+            crate::expr_eval::check_expression_cancelled()?;
+        }
+        let partition = match crate::semijoin::key_hash_at(values.as_ref(), row)? {
+            Some(hash) => {
+                if let Some(facts) = facts.as_deref_mut() {
+                    facts.nonempty = true;
+                }
+                (crate::exchange::mix(hash ^ salt) % count as u64) as usize
+            }
+            None => {
+                if let Some(facts) = facts.as_deref_mut() {
+                    facts.has_null = true;
+                }
+                0
+            }
+        };
+        indices[partition].append_value(u32::try_from(row).map_err(|_| {
+            KaveonError::Execution("record batch exceeds Arrow UInt32 row capacity".into())
+        })?);
+    }
+    indices
+        .into_iter()
+        .map(|mut indices| {
+            let indices = indices.finish();
+            let columns = batch
+                .columns()
+                .iter()
+                .map(|column| arrow::compute::take(column.as_ref(), &indices, None))
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            Ok(RecordBatch::try_new(batch.schema(), columns)?)
+        })
+        .collect()
 }
 
 fn resolve_key(schema: &SchemaRef, name: &str) -> Result<String> {
@@ -2232,11 +2910,14 @@ mod tests {
 
     #[test]
     fn adaptive_and_spilled_joins_drain_every_streaming_output_batch() {
-        for adaptive_bytes in [0, 512 * 1024] {
-            let pool = QueryMemoryPool::new("streaming-partition-join", 4 * 1024 * 1024).unwrap();
+        // The 9 001-row build needs about 720 KiB built: more than half
+        // of a 1 MiB budget, so it spills (nine keys, so its partitions
+        // fit); well inside a 4 MiB one.
+        for (budget, spills) in [(1 << 20, true), (4 << 20, false)] {
+            let pool = QueryMemoryPool::new("streaming-partition-join", budget).unwrap();
             let spill = spill();
-            let mut right = vec![Some(1); 9_000];
-            right.push(Some(2));
+            let mut right = (0..9_000).map(|value| Some(value % 9)).collect::<Vec<_>>();
+            right.push(Some(20));
             let mut join = PartitionedHashJoin::new(
                 input(vec![Some(1), Some(1), Some(1), None], 4),
                 input(right, 9_001),
@@ -2249,20 +2930,26 @@ mod tests {
                 8,
             )
             .unwrap();
-            join.adaptive_bytes = Some(adaptive_bytes);
             let rows = join_rows(&mut join);
-            assert_eq!(rows.len(), 27_002);
+            // Three left rows of key 1 against a thousand: 3 000 pairs;
+            // the 8 001 right rows of other keys and the NULL left row
+            // come out unmatched.
+            assert_eq!(rows.len(), 11_002);
             assert_eq!(
                 rows.iter()
                     .filter(|(left, right)| *left == Some(1) && *right == Some(1))
                     .count(),
-                27_000
+                3_000
             );
             assert!(rows.contains(&(None, None)));
-            assert!(rows.contains(&(None, Some(2))));
+            assert!(rows.contains(&(None, Some(20))));
             assert_eq!(pool.snapshot().current_bytes, 0);
             assert_eq!(spill.snapshot().current_bytes, 0);
-            assert_eq!(spill.snapshot().peak_bytes > 0, adaptive_bytes == 0);
+            assert_eq!(spill.snapshot().peak_bytes > 0, spills);
+            assert_eq!(
+                join_spill_metrics(&pool).unwrap().snapshot().partitions > 0,
+                spills
+            );
         }
     }
 
@@ -2296,32 +2983,38 @@ mod tests {
 
     #[test]
     fn partitioned_join_matches_all_join_modes_with_nulls_and_duplicates() {
-        let left = vec![Some(1), Some(1), Some(2), None];
-        let right = vec![Some(1), Some(1), Some(3), None];
+        // Every keyed join type under a budget that refuses its build:
+        // every key sixteen times on each side, half of the keys on one
+        // side only, a NULL key in every eighth row — the rows are the
+        // in-memory join's, and the disk was used. The 8 192-row build
+        // needs some 650 KiB built, more than half of the 1 MiB budget;
+        // an eighth of it fits.
+        let keyed = |offset: i64| {
+            (0..8_192)
+                .map(|row| (row % 8 != 7).then_some(row % 512 + offset))
+                .collect::<Vec<_>>()
+        };
+        let left = keyed(0);
+        let right = keyed(256);
         for kind in [
             JoinType::Inner,
             JoinType::Left,
             JoinType::Right,
             JoinType::Full,
-            JoinType::Cross,
         ] {
-            let keys = if kind == JoinType::Cross {
-                vec![]
-            } else {
-                vec![("id".into(), "id".into())]
-            };
+            let keys = vec![("id".into(), "id".into())];
             let mut reference = HashJoin::try_new(
-                input(left.clone(), 2),
-                input(right.clone(), 2),
+                input(left.clone(), 256),
+                input(right.clone(), 256),
                 kind,
                 keys.clone(),
             )
             .unwrap();
-            let pool = QueryMemoryPool::new("partition-join", 128 * 1024).unwrap();
+            let pool = QueryMemoryPool::new("partition-join", 1 << 20).unwrap();
             let spill = spill();
             let mut partitioned = PartitionedHashJoin::new(
-                input(left.clone(), 2),
-                input(right.clone(), 2),
+                input(left.clone(), 256),
+                input(right.clone(), 256),
                 kind,
                 keys,
                 None,
@@ -2331,7 +3024,6 @@ mod tests {
                 8,
             )
             .unwrap();
-            partitioned.adaptive_bytes = Some(0);
             assert_eq!(
                 join_rows(&mut partitioned),
                 join_rows(&mut reference),
@@ -2339,7 +3031,331 @@ mod tests {
             );
             assert_eq!(pool.snapshot().current_bytes, 0);
             assert_eq!(spill.snapshot().current_bytes, 0);
-            assert!(spill.snapshot().peak_bytes > 0);
+            assert!(spill.snapshot().peak_bytes > 0, "{kind:?} did not spill");
+            let metrics = join_spill_metrics(&pool).unwrap().snapshot();
+            assert!(
+                metrics.partitions > 0 && metrics.bytes_written > 0,
+                "{kind:?}"
+            );
+        }
+        // A cross join has no key to partition by: in memory it matches
+        // the reference, and a budget that refuses its build fails closed.
+        let small_left = vec![Some(1), Some(1), Some(2), None];
+        let small_right = vec![Some(1), Some(1), Some(3), None];
+        let mut reference = HashJoin::try_new(
+            input(small_left.clone(), 2),
+            input(small_right.clone(), 2),
+            JoinType::Cross,
+            vec![],
+        )
+        .unwrap();
+        let pool = QueryMemoryPool::new("cross-join", 128 * 1024).unwrap();
+        let spill = spill();
+        let mut cross = PartitionedHashJoin::new(
+            input(small_left, 2),
+            input(small_right, 2),
+            JoinType::Cross,
+            vec![],
+            None,
+            None,
+            pool.operator("join").unwrap(),
+            spill.clone(),
+            8,
+        )
+        .unwrap();
+        assert_eq!(join_rows(&mut cross), join_rows(&mut reference));
+        assert_eq!(spill.snapshot().peak_bytes, 0);
+        let pool = QueryMemoryPool::new("cross-join-refused", 1 << 20).unwrap();
+        let mut cross = PartitionedHashJoin::new(
+            input(left, 256),
+            input(right, 256),
+            JoinType::Cross,
+            vec![],
+            None,
+            None,
+            pool.operator("join").unwrap(),
+            spill.clone(),
+            8,
+        )
+        .unwrap();
+        let error = cross.next_batch().unwrap_err().to_string();
+        assert!(error.contains("cannot be partitioned"), "{error}");
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn a_skewed_partition_repartitions_to_the_depth_limit_and_names_it() {
+        // Every key equal: no partitioning separates them, so the join
+        // repartitions the one live partition to the limit and fails
+        // closed with the depth in its message; every run is removed.
+        let pool = QueryMemoryPool::new("skew-depth", 64 * 1024).unwrap();
+        let spill = spill();
+        let mut join = PartitionedHashJoin::new(
+            input(vec![Some(7); 800], 50),
+            input(vec![Some(7); 800], 50),
+            JoinType::Left,
+            vec![("id".into(), "id".into())],
+            None,
+            None,
+            pool.operator("join").unwrap(),
+            spill.clone(),
+            16,
+        )
+        .unwrap();
+        let error = join.next_batch().unwrap_err().to_string();
+        assert!(
+            error.contains(&format!(
+                "after {MAX_JOIN_SPILL_DEPTH} repartitionings ({}-way)",
+                16_u64.pow(MAX_JOIN_SPILL_DEPTH + 1)
+            )),
+            "{error}"
+        );
+        let metrics = join_spill_metrics(&pool).unwrap().snapshot();
+        assert_eq!(metrics.max_depth, u64::from(MAX_JOIN_SPILL_DEPTH));
+        assert!(join.next_batch().unwrap().is_none());
+        assert_eq!(pool.snapshot().current_bytes, 0);
+        assert_eq!(spill.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn a_partitioned_join_output_matches_across_keys_that_share_a_hash_partition() {
+        // Many distinct keys, both sides larger than the budget admits,
+        // repeated on the probe: each partition builds within budget and
+        // the union of the partitions is the in-memory join.
+        let left = (0..6_000)
+            .map(|value| Some(value % 1_500))
+            .collect::<Vec<_>>();
+        let right = (0..3_000)
+            .map(|value| Some(value % 2_000))
+            .collect::<Vec<_>>();
+        let mut reference = HashJoin::try_new(
+            input(left.clone(), 500),
+            input(right.clone(), 500),
+            JoinType::Full,
+            vec![("id".into(), "id".into())],
+        )
+        .unwrap();
+        let pool = QueryMemoryPool::new("partition-join-wide", 96 * 1024).unwrap();
+        let spill = spill();
+        let mut partitioned = PartitionedHashJoin::new(
+            input(left, 500),
+            input(right, 500),
+            JoinType::Full,
+            vec![("id".into(), "id".into())],
+            None,
+            None,
+            pool.operator("join").unwrap(),
+            spill.clone(),
+            16,
+        )
+        .unwrap();
+        assert_eq!(join_rows(&mut partitioned), join_rows(&mut reference));
+        let metrics = join_spill_metrics(&pool).unwrap().snapshot();
+        assert!(metrics.partitions >= 16, "{metrics:?}");
+        assert_eq!(pool.snapshot().current_bytes, 0);
+        assert_eq!(spill.snapshot().current_bytes, 0);
+    }
+
+    fn semi_rows(operator: &mut dyn BatchOperator) -> Vec<Option<i64>> {
+        let mut rows = Vec::new();
+        while let Some(batch) = operator.next_batch().unwrap() {
+            let ids = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap();
+            rows.extend((0..ids.len()).map(|i| (!ids.is_null(i)).then(|| ids.value(i))));
+        }
+        rows.sort();
+        rows
+    }
+
+    #[test]
+    fn a_partitioned_semi_or_anti_join_matches_the_in_memory_operator_under_a_refusing_budget() {
+        use kaveon_core::Expr;
+        let key = || Expr::Column("id".into());
+        // Left: every key 0..1 500 four times and NULLs; right: 0..1 000
+        // three times, 2 000.. once, and NULLs, so a key can be on one
+        // side only, on both, or NULL on either — and NOT IN's rule for a
+        // NULL in the set must hold across partitions.
+        let left = (0..6_000)
+            .map(|value| (value % 400 != 399).then_some(value % 1_500))
+            .collect::<Vec<_>>();
+        for right_nulls in [false, true] {
+            let right = (0..4_000)
+                .map(|value| {
+                    if right_nulls && value % 500 == 499 {
+                        None
+                    } else if value < 3_000 {
+                        Some(value % 1_000)
+                    } else {
+                        Some(value - 1_000)
+                    }
+                })
+                .collect::<Vec<_>>();
+            for anti in [false, true] {
+                let mut reference = SemiJoinOperator::new(
+                    input(left.clone(), 500),
+                    input(right.clone(), 500),
+                    key(),
+                    key(),
+                    anti,
+                )
+                .unwrap();
+                let pool = QueryMemoryPool::new("partition-semi", 96 * 1024).unwrap();
+                let spill = spill();
+                let mut partitioned = PartitionedSemiJoin::new(
+                    input(left.clone(), 500),
+                    input(right.clone(), 500),
+                    key(),
+                    key(),
+                    anti,
+                    None,
+                    pool.operator("semi").unwrap(),
+                    spill.clone(),
+                    16,
+                )
+                .unwrap();
+                let expected = semi_rows(&mut reference);
+                assert_eq!(
+                    semi_rows(&mut partitioned),
+                    expected,
+                    "anti {anti}, right nulls {right_nulls}"
+                );
+                if anti && right_nulls {
+                    assert!(expected.is_empty(), "a NULL in the set empties NOT IN");
+                } else {
+                    assert!(!expected.is_empty());
+                }
+                assert!(spill.snapshot().peak_bytes > 0, "did not spill");
+                assert_eq!(pool.snapshot().current_bytes, 0);
+                assert_eq!(spill.snapshot().current_bytes, 0);
+            }
+        }
+        // In memory under a budget that admits the build: no disk.
+        let pool = QueryMemoryPool::new("semi-in-memory", 8 << 20).unwrap();
+        let spill = spill();
+        let right = (0..4_000)
+            .map(|value| Some(value % 1_000))
+            .collect::<Vec<_>>();
+        let mut reference = SemiJoinOperator::new(
+            input(left.clone(), 500),
+            input(right.clone(), 500),
+            key(),
+            key(),
+            true,
+        )
+        .unwrap();
+        let mut partitioned = PartitionedSemiJoin::new(
+            input(left, 500),
+            input(right, 500),
+            key(),
+            key(),
+            true,
+            None,
+            pool.operator("semi").unwrap(),
+            spill.clone(),
+            16,
+        )
+        .unwrap();
+        assert_eq!(semi_rows(&mut partitioned), semi_rows(&mut reference));
+        assert_eq!(spill.snapshot().peak_bytes, 0);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn a_partitioned_semi_join_with_a_residual_matches_the_in_memory_operator() {
+        use arrow::array::StringArray;
+        use kaveon_core::Expr;
+        // Q21's shape: EXISTS (… WHERE o.k = t.k AND o.s <> t.s) and its
+        // NOT EXISTS, over two-column inputs, the build refused.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int64, true),
+            Field::new("s", DataType::Utf8, true),
+        ]));
+        let rows = |count: i64, keys: i64, suppliers: i64| -> Box<dyn BatchOperator> {
+            let batches = (0..count)
+                .collect::<Vec<_>>()
+                .chunks(400)
+                .map(|chunk| {
+                    RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![
+                            Arc::new(Int64Array::from_iter(
+                                chunk
+                                    .iter()
+                                    .map(|value| (value % 97 != 96).then_some(value % keys)),
+                            )),
+                            Arc::new(StringArray::from_iter(
+                                chunk
+                                    .iter()
+                                    .map(|value| Some(format!("supplier-{}", value % suppliers))),
+                            )),
+                        ],
+                    )
+                    .unwrap()
+                })
+                .collect::<VecDeque<_>>();
+            Box::new(Input {
+                schema: Arc::clone(&schema),
+                batches,
+            })
+        };
+        let residual = Expr::BinaryOp {
+            left: Box::new(Expr::Column("s".into())),
+            op: kaveon_core::BinaryOp::Ne,
+            right: Box::new(Expr::Column("o_s".into())),
+        };
+        let rename = |source: Box<dyn BatchOperator>| -> Box<dyn BatchOperator> {
+            Box::new(
+                crate::project::ProjectOperator::new(
+                    source,
+                    vec![
+                        Expr::Alias {
+                            expr: Box::new(Expr::Column("k".into())),
+                            name: "o_k".into(),
+                        },
+                        Expr::Alias {
+                            expr: Box::new(Expr::Column("s".into())),
+                            name: "o_s".into(),
+                        },
+                    ],
+                )
+                .unwrap(),
+            )
+        };
+        for anti in [false, true] {
+            let mut reference = SemiJoinOperator::new(
+                rows(6_000, 1_200, 5),
+                rename(rows(4_000, 1_500, 3)),
+                Expr::Column("k".into()),
+                Expr::Column("o_k".into()),
+                anti,
+            )
+            .unwrap()
+            .with_residual(residual.clone())
+            .unwrap();
+            let pool = QueryMemoryPool::new("partition-semi-residual", 128 * 1024).unwrap();
+            let spill = spill();
+            let mut partitioned = PartitionedSemiJoin::new(
+                rows(6_000, 1_200, 5),
+                rename(rows(4_000, 1_500, 3)),
+                Expr::Column("k".into()),
+                Expr::Column("o_k".into()),
+                anti,
+                Some(residual.clone()),
+                pool.operator("semi").unwrap(),
+                spill.clone(),
+                16,
+            )
+            .unwrap();
+            let expected = semi_rows(&mut reference);
+            assert!(!expected.is_empty());
+            assert_eq!(semi_rows(&mut partitioned), expected, "anti {anti}");
+            assert!(spill.snapshot().peak_bytes > 0, "did not spill");
+            assert!(join_spill_metrics(&pool).unwrap().snapshot().partitions > 0);
+            assert_eq!(pool.snapshot().current_bytes, 0);
+            assert_eq!(spill.snapshot().current_bytes, 0);
         }
     }
 
@@ -2780,7 +3796,6 @@ mod tests {
             16,
         )
         .unwrap();
-        join.adaptive_bytes = Some(32 * 1024);
         let mut rows = 0;
         while let Some(batch) = join.next_batch().unwrap() {
             rows += batch.num_rows();

@@ -495,9 +495,11 @@ struct OrderRows {
     dates: Vec<i32>,
 }
 
-/// A third of the customers place no orders, as in the specification.
-fn order_rows() -> OrderRows {
-    let keys: Vec<i64> = (1..=ORDERS).collect();
+/// The order rows for a fixture of `orders` orders (the gate's `ORDERS`,
+/// or another scale of the same shape). A third of the customers place
+/// no orders, as in the specification.
+fn order_rows_for(orders: i64) -> OrderRows {
+    let keys: Vec<i64> = (1..=orders).collect();
     let custkeys = keys
         .iter()
         .map(|k| {
@@ -710,12 +712,17 @@ fn lineitem(rows: &OrderRows, retail: &[f64]) -> (Table, Vec<f64>) {
 }
 
 fn tables() -> Vec<Table> {
+    tables_for(ORDERS)
+}
+
+/// Every table, with `orders` orders and their lineitems.
+fn tables_for(order_count: i64) -> Vec<Table> {
     let part = part();
     let retail: Vec<f64> = match &part.columns[7].1 {
         Column::Float64(values) => values.clone(),
         _ => unreachable!("p_retailprice is the eighth column"),
     };
-    let rows = order_rows();
+    let rows = order_rows_for(order_count);
     let (lineitem, totals) = lineitem(&rows, &retail);
     vec![
         region(),
@@ -875,6 +882,12 @@ pub(crate) struct Fixture {
 
 impl Fixture {
     pub(crate) fn new(label: &str) -> Self {
+        Self::scaled(label, ORDERS)
+    }
+
+    /// The gate's tables with `orders` orders: the same generator at
+    /// another scale, for a test that needs a build side of a size.
+    pub(crate) fn scaled(label: &str, orders: i64) -> Self {
         let directory =
             std::env::temp_dir().join(format!("kaveon-tpch-{label}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
@@ -885,7 +898,7 @@ impl Fixture {
             },
         )
         .with_schema("tiny");
-        for table in tables() {
+        for table in tables_for(orders) {
             let meta = write(&directory, &table);
             catalog.register_table("tiny", meta).unwrap();
         }
@@ -1574,6 +1587,97 @@ fn q21_is_an_anti_join_over_a_semi_join_each_with_a_residual() {
         })
         .count();
     assert_eq!(residuals, 2);
+}
+
+/// `orders ⋈ lineitem` on the gate data — Q3, Q4, Q9 and Q21's shape:
+/// the join whose build fell over on Trino at SF100 — under a budget
+/// that refuses the build, with a spill attached: the join spills (the
+/// counters say so), on the node-local path and through the fragments,
+/// and answers what the ample budget answers.
+#[test]
+fn orders_lineitem_spills_under_a_refusing_budget_and_matches() {
+    // Six thousand orders, some twenty-four thousand lineitems: a build
+    // of the lineitems needs more than half of a 4 MiB budget on every
+    // statement below, and an eighth of it fits.
+    let fixture = Fixture::scaled("join-spill", 6_000);
+    // The lineitem build carries its wide columns (a filter over both
+    // sides keeps them on the join), and nothing over the join holds a
+    // budget of its own, so the budget is the join's. Rows are compared
+    // sorted: the partitions come out in the key hash's order.
+    let statements = [
+        // Inner, Q3/Q9's shape.
+        "SELECT o_orderkey, l_linenumber, l_quantity FROM orders JOIN lineitem ON l_orderkey = o_orderkey WHERE l_comment <> o_clerk AND l_shipinstruct <> o_orderstatus",
+        // Left: the orders of one line have no second, and stay.
+        "SELECT o_orderkey, l_linenumber FROM orders LEFT JOIN lineitem ON l_orderkey = o_orderkey AND l_linenumber > 1 WHERE l_comment IS NULL OR l_comment <> o_clerk",
+        // Semi and anti with a residual, Q21's shape.
+        "SELECT o_orderkey, o_orderpriority FROM orders WHERE EXISTS (SELECT * FROM lineitem WHERE l_orderkey = o_orderkey AND l_commitdate < l_receiptdate AND l_comment <> o_clerk)",
+        "SELECT o_orderkey FROM orders WHERE NOT EXISTS (SELECT * FROM lineitem WHERE l_orderkey = o_orderkey AND l_receiptdate > l_commitdate AND l_comment <> o_clerk)",
+    ];
+    let spill_root = fixture.directory.join("spill");
+    let run = |statement: &str, budgets: Option<(u64, u64)>| -> (Vec<String>, Vec<String>, u64) {
+        let plan = fixture.optimized(statement).unwrap();
+        let pool_for = |budget: u64| {
+            let pool = QueryMemoryPool::new("tpch-join-spill", budget).unwrap();
+            if budgets.is_some() {
+                // One thread per operator: the parallel operators' queues
+                // are sized for a budget the tiny data does not need.
+                kaveon_exec::local_parallel::set_query_parallelism(&pool, 1).unwrap();
+                kaveon_exec::partitioned::register_spill(
+                    &pool,
+                    kaveon_exec::spill::SpillManager::new(&spill_root, 64 << 20).unwrap(),
+                    8,
+                )
+                .unwrap();
+            }
+            pool
+        };
+        let (local_budget, distributed_budget) = budgets.unwrap_or((256 << 20, 256 << 20));
+        let pool = pool_for(local_budget);
+        let mut planned =
+            crate::planner::plan_query_with_memory(&plan, &fixture.manager, &pool).unwrap();
+        let mut local = rows(planned.operator.as_mut()).unwrap();
+        local.sort();
+        drop(planned);
+        assert_eq!(pool.snapshot().current_bytes, 0, "leaked reservations");
+        let mut partitions = kaveon_exec::partitioned::join_spill_metrics(&pool)
+            .unwrap()
+            .snapshot()
+            .partitions;
+        let pool = pool_for(distributed_budget);
+        let mut distributed = batch_rows(
+            &crate::differential_tests::execute_distributed(
+                "tpch-join-spill",
+                &plan,
+                &fixture.manager,
+                2,
+                &pool,
+            )
+            .unwrap_or_else(|error| panic!("{statement}: {error}")),
+        )
+        .unwrap();
+        distributed.sort();
+        assert_eq!(pool.snapshot().current_bytes, 0, "leaked reservations");
+        partitions += kaveon_exec::partitioned::join_spill_metrics(&pool)
+            .unwrap()
+            .snapshot()
+            .partitions;
+        (local, distributed, partitions)
+    };
+    for statement in statements {
+        let (local, distributed, partitions) = run(statement, None);
+        assert_eq!(partitions, 0);
+        assert_eq!(local, distributed, "{statement}");
+        assert!(local.len() > 1, "{statement}");
+        // The lineitem build needs more than half of these budgets.
+        let (spilled_local, spilled_distributed, partitions) =
+            run(statement, Some((4 << 20, 4 << 20)));
+        assert!(partitions > 0, "{statement}: the build was not spilled");
+        assert_eq!(spilled_local, local, "{statement}: spilled local");
+        assert_eq!(
+            spilled_distributed, local,
+            "{statement}: spilled distributed"
+        );
+    }
 }
 
 /// The time one statement may take to plan and execute; a statement over

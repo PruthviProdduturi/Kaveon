@@ -30,6 +30,96 @@ pub struct HashJoin {
     emitted: bool,
     state: Option<JoinState>,
     output_memory: Option<MemoryReservation>,
+    /// A right side built by the caller, taken at the first probe.
+    prebuilt: Option<BuiltSide>,
+}
+
+/// The right side of a hash join, built: the rows as one batch, the
+/// index over the keys, the match bitmap an outer join keeps, and the
+/// reservations that hold them.
+pub(crate) struct BuiltSide {
+    right: RecordBatch,
+    index: Option<JoinIndex>,
+    matched_right: Vec<bool>,
+    reservations: Vec<MemoryReservation>,
+}
+
+impl BuiltSide {
+    /// Build from batches the caller holds (and has accounted for): the
+    /// concatenated copy, then the index, then the bitmap, each reserved
+    /// before it is made. On a refusal nothing is retained, and the caller
+    /// still has its batches.
+    pub(crate) fn build(
+        schema: &SchemaRef,
+        batches: &[RecordBatch],
+        keys: &[(usize, usize)],
+        join_type: JoinType,
+        memory: Option<&OperatorMemoryAccount>,
+    ) -> Result<Self> {
+        let mut reservations = Vec::new();
+        // The built side holds its rows on its own reservation, so the
+        // caller's per-batch guards can go once it exists.
+        let total = batches.iter().try_fold(0_u64, |total, batch| {
+            total
+                .checked_add(batch.get_array_memory_size() as u64)
+                .ok_or_else(|| exec_err("join input memory estimate overflow"))
+        })?;
+        reservations.extend(reserve_bytes(memory, total)?);
+        let right = match batches {
+            [] => RecordBatch::new_empty(Arc::clone(schema)),
+            [batch] => batch.clone(),
+            batches => concat_batches(schema, batches)?,
+        };
+        reservations.extend(reserve_join_index(memory, &right, keys)?);
+        let index = if join_type == JoinType::Cross {
+            None
+        } else {
+            Some(JoinIndex::build(&right, keys, memory)?)
+        };
+        let needs_matches = matches!(join_type, JoinType::Right | JoinType::Full);
+        reservations.extend(reserve_bytes(
+            memory,
+            if needs_matches {
+                right.num_rows() as u64
+            } else {
+                0
+            },
+        )?);
+        let matched_right = if needs_matches {
+            vec![false; right.num_rows()]
+        } else {
+            Vec::new()
+        };
+        Ok(Self {
+            right,
+            index,
+            matched_right,
+            reservations,
+        })
+    }
+}
+
+/// The key columns of a join, resolved on each side after the join's
+/// ambiguity checks, with their types checked equal.
+pub(crate) fn resolve_join_keys(
+    left_schema: &SchemaRef,
+    right_schema: &SchemaRef,
+    keys: &[(String, String)],
+) -> Result<Vec<(usize, usize)>> {
+    keys.iter()
+        .map(|(left_name, right_name)| {
+            let left_index = resolve_column(left_schema, left_name, "left")?;
+            let right_index = resolve_column(right_schema, right_name, "right")?;
+            let left_type = left_schema.field(left_index).data_type();
+            let right_type = right_schema.field(right_index).data_type();
+            if left_type != right_type {
+                return Err(exec_err(format!(
+                    "join key types differ: {left_name} is {left_type}, {right_name} is {right_type}"
+                )));
+            }
+            Ok((left_index, right_index))
+        })
+        .collect()
 }
 
 struct JoinState {
@@ -41,9 +131,7 @@ struct JoinState {
     match_offset: usize,
     unmatched_right_row: usize,
     probe_finished: bool,
-    _right_memory: Option<MemoryReservation>,
-    _index_memory: Option<MemoryReservation>,
-    _matched_memory: Option<MemoryReservation>,
+    _build_memory: Vec<MemoryReservation>,
     left_memory: Option<MemoryReservation>,
 }
 
@@ -70,21 +158,7 @@ impl HashJoin {
         }
         let left_schema = Arc::clone(left.schema());
         let right_schema = Arc::clone(right.schema());
-        let key_indices = keys
-            .iter()
-            .map(|(left_name, right_name)| {
-                let left_index = resolve_column(&left_schema, left_name, "left")?;
-                let right_index = resolve_column(&right_schema, right_name, "right")?;
-                let left_type = left_schema.field(left_index).data_type();
-                let right_type = right_schema.field(right_index).data_type();
-                if left_type != right_type {
-                    return Err(exec_err(format!(
-                        "join key types differ: {left_name} is {left_type}, {right_name} is {right_type}"
-                    )));
-                }
-                Ok((left_index, right_index))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let key_indices = resolve_join_keys(&left_schema, &right_schema, &keys)?;
         let fields = left_schema
             .fields()
             .iter()
@@ -106,7 +180,34 @@ impl HashJoin {
             emitted: false,
             state: None,
             output_memory: None,
+            prebuilt: None,
         })
+    }
+
+    /// A join whose right side the caller built (`BuiltSide::build`): the
+    /// right source is never read.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn try_new_built(
+        left: Box<dyn BatchOperator>,
+        right_schema: SchemaRef,
+        built: BuiltSide,
+        join_type: JoinType,
+        keys: Vec<(String, String)>,
+        left_qualifier: Option<&str>,
+        right_qualifier: Option<&str>,
+        memory: Option<OperatorMemoryAccount>,
+    ) -> Result<Self> {
+        let mut operator = Self::try_new_qualified(
+            left,
+            Box::new(crate::local_parallel::EmptyInput(right_schema)),
+            join_type,
+            keys,
+            left_qualifier,
+            right_qualifier,
+        )?;
+        operator.memory = memory;
+        operator.prebuilt = Some(built);
+        Ok(operator)
     }
 
     pub fn try_new_qualified_with_memory(
@@ -177,39 +278,32 @@ impl BatchOperator for HashJoin {
         }
         let result = (|| {
             if self.state.is_none() {
-                let (right, right_memory) = collect_input(&mut self.right, self.memory.as_ref())?;
-                let index_memory = reserve_join_index(self.memory.as_ref(), &right, &self.keys)?;
-                let index = if self.join_type == JoinType::Cross {
-                    None
-                } else {
-                    Some(JoinIndex::build(&right, &self.keys, self.memory.as_ref())?)
-                };
-                let needs_matches = matches!(self.join_type, JoinType::Right | JoinType::Full);
-                let matched_memory = reserve_bytes(
-                    self.memory.as_ref(),
-                    if needs_matches {
-                        right.num_rows() as u64
-                    } else {
-                        0
-                    },
-                )?;
-                let matched_right = if needs_matches {
-                    vec![false; right.num_rows()]
-                } else {
-                    Vec::new()
+                let built = match self.prebuilt.take() {
+                    Some(built) => built,
+                    None => {
+                        let (batches, batch_memory) =
+                            collect_input(&mut self.right, self.memory.as_ref())?;
+                        let built = BuiltSide::build(
+                            self.right.schema(),
+                            &batches,
+                            &self.keys,
+                            self.join_type,
+                            self.memory.as_ref(),
+                        )?;
+                        drop(batch_memory);
+                        built
+                    }
                 };
                 self.state = Some(JoinState {
-                    right,
-                    index,
-                    matched_right,
+                    right: built.right,
+                    index: built.index,
+                    matched_right: built.matched_right,
                     left: None,
                     left_row: 0,
                     match_offset: 0,
                     unmatched_right_row: 0,
                     probe_finished: false,
-                    _right_memory: right_memory,
-                    _index_memory: index_memory,
-                    _matched_memory: matched_memory,
+                    _build_memory: built.reservations,
                     left_memory: None,
                 });
             }
@@ -359,39 +453,23 @@ impl BatchOperator for HashJoin {
     }
 }
 
+/// Every batch of the build side, each reserved as it arrives.
 fn collect_input(
     source: &mut Box<dyn BatchOperator>,
     memory: Option<&OperatorMemoryAccount>,
-) -> Result<(RecordBatch, Option<MemoryReservation>)> {
-    let schema = Arc::clone(source.schema());
+) -> Result<(Vec<RecordBatch>, Vec<MemoryReservation>)> {
     let mut batches = Vec::new();
     let mut batch_reservations = Vec::new();
-    let mut total_bytes = 0_u64;
     while let Some(batch) = source.next_batch()? {
         check_cancelled(memory)?;
         let bytes = u64::try_from(batch.get_array_memory_size())
             .map_err(|_| exec_err("join input batch memory size exceeds u64"))?;
-        total_bytes = total_bytes
-            .checked_add(bytes)
-            .ok_or_else(|| exec_err("join input memory estimate overflow"))?;
         if let Some(reservation) = reserve_bytes(memory, bytes)? {
             batch_reservations.push(reservation);
         }
         batches.push(batch);
     }
-    if batches.is_empty() {
-        Ok((RecordBatch::new_empty(schema), reserve_bytes(memory, 0)?))
-    } else if batches.len() == 1 {
-        Ok((
-            batches.pop().expect("one build batch"),
-            batch_reservations.pop(),
-        ))
-    } else {
-        let concatenated_reservation = reserve_bytes(memory, total_bytes)?;
-        let concatenated = concat_batches(&schema, &batches)?;
-        drop(batch_reservations);
-        Ok((concatenated, concatenated_reservation))
-    }
+    Ok((batches, batch_reservations))
 }
 
 pub(crate) fn estimated_output_bytes(batch: &RecordBatch, indices: &[Option<u64>]) -> Result<u64> {
@@ -421,6 +499,20 @@ pub(crate) fn estimated_output_bytes(batch: &RecordBatch, indices: &[Option<u64>
         if let Some(width) = width {
             return width
                 .checked_mul(indices.len() as u64)
+                .and_then(|bytes| bytes.checked_add(256))
+                .and_then(|bytes| total.checked_add(bytes))
+                .ok_or_else(|| exec_err("join output memory estimate overflow"));
+        }
+        // `take` over a dictionary column takes its keys and shares its
+        // values: the output holds a key per row and the values once.
+        // (A one-row slice reports the whole values buffer, which
+        // charged every row for the dictionary.)
+        if let DataType::Dictionary(key_type, _) = column.data_type() {
+            let key_width = key_type.primitive_width().unwrap_or(8) as u64 + 1;
+            let values = column.as_any_dictionary().values().get_array_memory_size() as u64;
+            return key_width
+                .checked_mul(indices.len() as u64)
+                .and_then(|bytes| bytes.checked_add(values))
                 .and_then(|bytes| bytes.checked_add(256))
                 .and_then(|bytes| total.checked_add(bytes))
                 .ok_or_else(|| exec_err("join output memory estimate overflow"));

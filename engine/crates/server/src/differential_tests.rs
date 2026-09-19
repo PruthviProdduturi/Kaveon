@@ -1221,6 +1221,111 @@ fn the_pass_through_partial_matches_the_aggregating_partial() {
     let _ = std::fs::remove_dir_all(&directory);
 }
 
+/// A join whose build side the budget refuses spills and answers what
+/// the in-memory join answers: inner and left joins of the events with
+/// themselves on `user_id` (a build of every row), a semi and an anti
+/// join with a residual (Q21's shape) and a `NOT IN` whose set holds
+/// every user, each through the node-local planner and through the
+/// fragments with a spill registered and a budget that refuses the
+/// build, against the same statements with an ample budget. The join
+/// spill counters say the spill happened.
+#[test]
+fn a_join_under_a_refusing_budget_spills_and_matches_the_in_memory_join() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-join-spill-{}", uuid::Uuid::new_v4()));
+    let manager = events_catalog(&directory);
+    let spill_root = directory.join("spill");
+    let cases: [(&str, bool); 6] = [
+        (
+            "SELECT t.country, COUNT(*) AS n, SUM(o.actions) AS a FROM events t JOIN events o ON o.user_id = t.user_id WHERE t.event_date = '2026-07-04' GROUP BY t.country ORDER BY t.country",
+            true,
+        ),
+        (
+            "SELECT t.country, COUNT(*) AS n, COUNT(o.user_id) AS m FROM events t LEFT JOIN events o ON o.user_id = t.actions WHERE t.event_date = '2026-07-04' GROUP BY t.country ORDER BY t.country",
+            true,
+        ),
+        (
+            "SELECT t.country, COUNT(*) AS n FROM events t WHERE t.event_date = '2026-07-04' AND EXISTS (SELECT * FROM events o WHERE o.user_id = t.user_id AND o.country <> t.country) GROUP BY t.country ORDER BY t.country",
+            true,
+        ),
+        (
+            "SELECT t.country, COUNT(*) AS n FROM events t WHERE t.event_date = '2026-07-04' AND NOT EXISTS (SELECT * FROM events o WHERE o.user_id = t.user_id AND o.country <> t.country AND o.actions > t.actions) GROUP BY t.country ORDER BY t.country",
+            true,
+        ),
+        (
+            "SELECT COUNT(*) AS n FROM events t WHERE t.event_date = '2026-07-04' AND t.user_id NOT IN (SELECT user_id FROM events WHERE actions > 5)",
+            false,
+        ),
+        (
+            "SELECT t.country, COUNT(*) AS n FROM events t WHERE t.event_date = '2026-07-04' AND t.user_id IN (SELECT user_id FROM events WHERE platform <> 'Web') GROUP BY t.country ORDER BY t.country",
+            true,
+        ),
+    ];
+    // (local budget, distributed budget): the fragments' final stage
+    // holds more beside the join, so its budget is a little larger; a
+    // build of every event row needs more than half of either.
+    let run = |statement: &str,
+               ordered: bool,
+               budgets: (u64, u64),
+               spill: bool|
+     -> (Vec<String>, Vec<String>, u64) {
+        let plan = bound_plan(statement, &manager);
+        let pools = |budget: u64| -> QueryMemoryPool {
+            let pool = QueryMemoryPool::new("join-spill", budget).unwrap();
+            if spill {
+                kaveon_exec::partitioned::register_spill(
+                    &pool,
+                    kaveon_exec::spill::SpillManager::new(&spill_root, 256 << 20).unwrap(),
+                    8,
+                )
+                .unwrap();
+            }
+            pool
+        };
+        let pool = pools(budgets.0);
+        let mut planned = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+            .unwrap_or_else(|error| panic!("{statement}: {error}"));
+        let local = canonical_rows(&drain(planned.operator.as_mut()), ordered);
+        drop(planned);
+        assert_eq!(pool.snapshot().current_bytes, 0, "{statement} leaked");
+        let local_spill = kaveon_exec::partitioned::join_spill_metrics(&pool)
+            .unwrap()
+            .snapshot();
+        let pool = pools(budgets.1);
+        let batches = execute_distributed("join-spill", &plan, &manager, 2, &pool)
+            .unwrap_or_else(|error| panic!("{statement} (distributed): {error}"));
+        assert_eq!(
+            pool.snapshot().current_bytes,
+            0,
+            "{statement} (distributed) leaked"
+        );
+        let distributed_spill = kaveon_exec::partitioned::join_spill_metrics(&pool)
+            .unwrap()
+            .snapshot();
+        (
+            local,
+            canonical_rows(&batches, ordered),
+            local_spill.partitions + distributed_spill.partitions,
+        )
+    };
+    for (statement, ordered) in cases {
+        let (local, distributed, partitions) =
+            run(statement, ordered, (256 << 20, 256 << 20), false);
+        assert_eq!(partitions, 0);
+        assert_eq!(local, distributed, "{statement}: local versus distributed");
+        assert!(!local.is_empty(), "{statement}");
+        let (spilled_local, spilled_distributed, partitions) =
+            run(statement, ordered, (3 << 20, 4 << 20), true);
+        assert!(partitions > 0, "{statement}: the build was not spilled");
+        assert_eq!(spilled_local, local, "{statement}: spilled local");
+        assert_eq!(
+            spilled_distributed, local,
+            "{statement}: spilled distributed"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
 /// The statements the cube answers over the events directory, each with
 /// the scanned statement it must equal: the same text, or — for a
 /// distinct count the `approximate` setting lowers — the `APPROX_*`

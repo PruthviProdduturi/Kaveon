@@ -64,16 +64,22 @@ behaviour of refusing on arrival.
 | Operator | Current behavior |
 |---|---|
 | Hash aggregate | Columnar table (typed key vectors, flat accumulator columns, open-addressed slot index) with reservations per batch: the worst case ensured before a batch is applied, the actual cost charged after, each index doubling reserved before it happens. Grouped partials flush their groups to the exchange at a sixth of their budget share and continue (`FlushingPartialAggregate`), and judge each flush round: one that made a group for four in five of its rows stops aggregating and passes rows through as their own partial rows through a small table cleared per batch (`PartialBatchEncoder`), re-judging an aggregating round after every pass-through window (`KAVEON_ADAPTIVE_PARTIAL_AGGREGATION`); the final stage is a hybrid merge that, when a batch is refused, spills its own table as encoded partial rows into salted sub-partitions and continues from the row the refusal fell on, then returns each sub-partition as a unit of complete groups (`HybridFinalMerge`); nothing is read twice. The global `COUNT(DISTINCT)` partial and the spill-capable `PartitionedHashAggregate` keep the bounded partitioned path. |
-| DISTINCT, semi/anti join, set operations | Keys through the columnar table on several threads, reservations in 64 KiB slabs; fail closed at the budget |
-| Hash join | Accounted inputs, build index, match bitmap and output growth; `PartitionedHashJoin` spills partitions to disk under `KAVEON_HASH_SPILL_ROOT`; each partition must fit the budget (no recursive repartitioning) |
+| DISTINCT, set operations | Keys through the columnar table on several threads, reservations in 64 KiB slabs; fail closed at the budget |
+| Hash join | Accounted inputs, build index, match bitmap and output growth. Under `KAVEON_HASH_SPILL_ROOT` the build side is spill-safe on every path the planner emits (broadcast and partitioned; inner, left, right, full): `PartitionedHashJoin` collects the build while the budget admits it and builds it in memory (`BuiltSide`: the concatenated rows, the index, the outer bitmap, each reserved before it is made); a refusal — of a batch's reservation, of the built form, or of a build that would take more than half of the budget free when it began — partitions both inputs by the join keys' hash (salted, as the aggregate's spill is) into `KAVEON_HASH_SPILL_PARTITIONS` partitions on disk, builds and probes each within the budget with its memory exact through the operator's account, and repartitions a partition whose build is refused in turn under the next level's salt, to `MAX_JOIN_SPILL_DEPTH` = 3 (65 536-way at the default sixteen). Past that depth — key skew no partitioning resolves — it fails closed with the budget's message. A cross join has no key to partition by and fails closed at the first refusal. A broadcast build is the same rows on every task, so each task spills its own. Task metrics: `join_spill_bytes_written`, `join_spill_partitions`, `join_spill_depth`. |
+| Semi / anti join | The right input built as a key set, or as its rows by key under a residual (Q21's shape), the left probed batch by batch. Under `KAVEON_HASH_SPILL_ROOT` `PartitionedSemiJoin` gives the build the same spill: a refusal partitions both inputs by the hash of the key expression's value (the equality the build uses, so a dictionary and a plain column, or two integer widths, land together), builds and probes each partition on its own, repartitions to the same depth limit. `NOT IN`'s rules read the whole set, so the partitioning records whether any right key was NULL and whether any was not, and every partition is probed with those facts. |
 | Sort / TopN | Accounted input and merge workspaces; bounded Arrow IPC spill runs with fixed-fan-in multi-pass merge |
 | Exchange | Streamed output in 4 MiB chunks through a bounded channel; disk stores with node and per-query byte ceilings; received payloads spooled to disk (12 GiB per process) and decoded one producer per thread with the active batch charged to query memory |
 | Scan | Decoder lanes read into bounded channels; full-object and decoded-batch caches are process-wide and explicit (256 MiB each) |
 
 Spill for every operator is enabled by `KAVEON_HASH_SPILL_ROOT` (the AKS
 chart sets `/tmp/spill` with a 4 GiB per-query budget); without it, an
-accounted operator fails closed at its budget. Qualification of aggregate
-and join spill under skew and disk exhaustion is still open.
+accounted operator fails closed at its budget. The join spill is
+verified in process (every join type, semi and anti with and without a
+residual, `NOT IN` with a NULL in the set, the depth limit under total
+skew, the differential of six join shapes and of `orders ⋈ lineitem` at
+six thousand orders on both paths under a budget that refuses the
+build); its qualification on the cluster under skew and disk exhaustion
+is still open, as is the aggregate's.
 
 ## Admission lifecycle
 
