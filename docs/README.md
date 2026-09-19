@@ -18,6 +18,7 @@ are planned rather than executable.
 
 - [Engine technical manual](engine/README.md)
 - [Engineer 2 continuation brief](engineering/codex-continuation.md)
+- [The 9/10 program](engineering/nine-of-ten-program.md) — the 2026-09-18 baseline scores per area, what 9 means, and the ordered workstreams
 - [Run the full stack locally with Docker](guides/local-stack.md)
 - [Use the Engine CLI](guides/engine-cli.md)
 - [Deploy and connect to the Engine on AKS](engineering/azure-deployment-guide.md)
