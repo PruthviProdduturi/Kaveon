@@ -19,6 +19,13 @@
 //! filter skips, pages the offset index skips) against the single-file
 //! reader; the fragment path exercises the stage planner, the exchanges
 //! and the fragment compiler.
+//!
+//! A second sweep holds the cube to the row path: every statement the
+//! cube answers over the events directory (declared shape, cube built by
+//! the storage builder) equals the scanned answer — exactly for the row
+//! count and the additive measures, bit-identically for the distinct
+//! sketches against `APPROX_COUNT_DISTINCT`, and within the sketch's
+//! error against the exact `COUNT(DISTINCT)`.
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::path::PathBuf;
@@ -1099,6 +1106,204 @@ fn the_differential_sweep_matches_across_parquet_encodings_and_execution_paths()
         let error = kaveon_core::HllSketch::default_precision().standard_error();
         assert!(rows_differ(&exact, &rewritten, 0.0));
         assert!(!rows_differ(&exact, &rewritten, 3.0 * error));
+    }
+    let _ = std::fs::remove_dir_all(&directory);
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// The statements the cube answers over the events directory, each with
+/// the scanned statement it must equal: the same text, or — for a
+/// distinct count the `approximate` setting lowers — the `APPROX_*`
+/// spelling on the row path and the exact spelling within the error.
+const CUBE_CASES: &[(&str, &str)] = &[
+    (
+        "cube_grand_total",
+        "SELECT COUNT(*), SUM(actions), COUNT(actions), MIN(latency_p75_ms), MAX(latency_p75_ms), SUM(errors) FROM {T}",
+    ),
+    (
+        "cube_subset_of_measures",
+        "SELECT MAX(latency_p75_ms) AS slowest FROM {T}",
+    ),
+    (
+        "cube_one_dimension",
+        "SELECT region, SUM(actions), COUNT(*) FROM {T} GROUP BY region",
+    ),
+    (
+        "cube_null_dimension",
+        "SELECT industry, COUNT(*) AS n, MIN(latency_p75_ms) FROM {T} GROUP BY industry",
+    ),
+    (
+        "cube_two_dimensions",
+        "SELECT platform, region, SUM(errors), MAX(latency_p75_ms) FROM {T} GROUP BY region, platform",
+    ),
+    (
+        "cube_time_grain",
+        "SELECT event_date, COUNT(*), SUM(actions) FROM {T} GROUP BY event_date",
+    ),
+    (
+        "cube_time_and_dimension",
+        "SELECT event_date, platform, SUM(actions) FROM {T} GROUP BY event_date, platform",
+    ),
+    (
+        "cube_predicate_grand_total",
+        "SELECT COUNT(*), SUM(actions) FROM {T} WHERE region = 'Europe'",
+    ),
+    (
+        "cube_predicate_in_rolled_up",
+        "SELECT platform, SUM(actions), COUNT(actions) FROM {T} WHERE region IN ('Europe', 'North America') GROUP BY platform",
+    ),
+    (
+        "cube_predicate_and_group_same_axis",
+        "SELECT region, MIN(latency_p75_ms) FROM {T} WHERE region = 'Asia' GROUP BY region",
+    ),
+    (
+        "cube_predicate_no_match",
+        "SELECT COUNT(*), SUM(actions), MAX(latency_p75_ms) FROM {T} WHERE platform = 'Console'",
+    ),
+    (
+        "cube_two_predicates",
+        "SELECT SUM(errors) FROM {T} WHERE region = 'Europe' AND platform = 'Web'",
+    ),
+    (
+        "cube_approx_distinct",
+        "SELECT region, APPROX_COUNT_DISTINCT(user_id) AS users FROM {T} GROUP BY region",
+    ),
+    (
+        "cube_approx_distinct_filtered",
+        "SELECT APPROX_COUNT_DISTINCT(user_id) FROM {T} WHERE platform IN ('Web', 'Mobile')",
+    ),
+];
+
+#[test]
+fn the_cube_answers_what_the_row_path_answers() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-differential-cube-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let events = events();
+    let mut catalog = MemoryCatalog::new(
+        "lake",
+        StorageType::Local {
+            base_path: PathBuf::from(&directory),
+        },
+    )
+    .with_schema("events");
+    let parts = write_directory(&directory, "events_parts", &batch(&events, false), 3);
+    let schema = parts.arrow_schema.clone();
+    catalog.register_table("events", parts).unwrap();
+    let mut manager = CatalogManager::new("lake", "events");
+    manager.register_catalog(Box::new(catalog));
+    let shape = kaveon_core::TableShape::parse(
+        &[
+            "region:10".into(),
+            "platform:5".into(),
+            "industry:10".into(),
+        ],
+        &[
+            "actions:sum,count".into(),
+            "latency_p75_ms:min,max".into(),
+            "errors:sum".into(),
+            "user_id:count_distinct".into(),
+        ],
+        Some("event_date:day:40"),
+    )
+    .unwrap();
+    let built = kaveon_storage::build_cube(
+        directory.join("events_parts").to_str().unwrap(),
+        DataFormat::Parquet,
+        kaveon_core::TableId::new("table:lake:events:events_parts").unwrap(),
+        &shape,
+        &kaveon_storage::CubeBuildOptions {
+            memory: None,
+            threads: 3,
+            max_cells: 100_000,
+        },
+    )
+    .unwrap();
+    assert!(built.cube.excluded.is_empty(), "{:?}", built.cube.excluded);
+    let optimized_as = |statement: &str, approximate: bool| -> LogicalPlan {
+        let mut plan = if approximate {
+            kaveon_sql::logical_plan::sql_to_logical_plan_for_binder_approximate(statement)
+        } else {
+            kaveon_sql::logical_plan::sql_to_logical_plan_for_binder(statement)
+        }
+        .unwrap();
+        crate::planner::qualify_tables(&mut plan, "lake", "events");
+        let plan = kaveon_optim::binder::bind(plan, &manager)
+            .unwrap_or_else(|error| panic!("{statement}: {error}"));
+        let plan = kaveon_optim::rules::push_filter_down(plan);
+        kaveon_optim::rules::push_projection_down(plan)
+    };
+    let scanned = |plan: &LogicalPlan, statement: &str| -> (Vec<String>, Vec<String>) {
+        let pool = QueryMemoryPool::new("differential-cube", 256 * 1024 * 1024).unwrap();
+        let mut planned = crate::planner::plan_query_with_memory(plan, &manager, &pool)
+            .unwrap_or_else(|error| panic!("{statement}: {error}"));
+        let columns = planned
+            .operator
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| format!("{}:{}", field.name(), field.data_type()))
+            .collect();
+        let rows = canonical_rows(&drain(planned.operator.as_mut()), false);
+        drop(planned);
+        (columns, rows)
+    };
+    let from_cube = |plan: &LogicalPlan, statement: &str| -> (Vec<String>, Vec<String>) {
+        let query = kaveon_optim::cube::match_cube_query(plan, &shape, &schema)
+            .unwrap_or_else(|| panic!("{statement}: the cube does not cover it"));
+        let batch = kaveon_optim::cube::answer(&query, &built.cube, &schema)
+            .unwrap()
+            .unwrap_or_else(|| panic!("{statement}: the cube holds no grouping for it"));
+        let columns = batch
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| format!("{}:{}", field.name(), field.data_type()))
+            .collect();
+        (columns, canonical_rows(&[batch], false))
+    };
+    let mut mismatches = Vec::new();
+    for (name, template) in CUBE_CASES {
+        let statement = template.replace("{T}", "events_parts");
+        let plan = optimized_as(&statement, false);
+        let (scanned_columns, scanned_rows) = scanned(&plan, &statement);
+        let (cube_columns, cube_rows) = from_cube(&plan, &statement);
+        assert!(!scanned_rows.is_empty(), "{name} returned no rows");
+        if scanned_columns != cube_columns {
+            mismatches.push(format!(
+                "{name}: scanned columns {scanned_columns:?} versus cube {cube_columns:?}"
+            ));
+        }
+        // Additive measures and the row count are exact; the distinct
+        // sketches merge exactly, so the estimates are the same numbers.
+        if rows_differ(&scanned_rows, &cube_rows, 0.0) {
+            mismatches.push(format!(
+                "{name}: scanned {:?} versus cube {:?}",
+                scanned_rows.iter().take(3).collect::<Vec<_>>(),
+                cube_rows.iter().take(3).collect::<Vec<_>>()
+            ));
+        }
+    }
+    // A plain COUNT(DISTINCT) under the `approximate` setting: the cube
+    // answers under COUNT's name what the sketch computes, and within the
+    // sketch's error of the exact count.
+    {
+        let statement = "SELECT region, COUNT(DISTINCT user_id) AS users, COUNT(*) AS n FROM events_parts GROUP BY region";
+        let approximate = optimized_as(statement, true);
+        let (cube_columns, cube_rows) = from_cube(&approximate, statement);
+        let (computed_columns, computed_rows) = scanned(&approximate, statement);
+        assert_eq!(cube_columns, computed_columns);
+        assert_eq!(cube_columns[1], "users:UInt64");
+        assert!(!rows_differ(&computed_rows, &cube_rows, 0.0));
+        let (_, exact_rows) = scanned(&optimized_as(statement, false), statement);
+        let error = kaveon_core::HllSketch::default_precision().standard_error();
+        assert!(rows_differ(&exact_rows, &cube_rows, 0.0));
+        assert!(!rows_differ(&exact_rows, &cube_rows, 3.0 * error));
+        // The exact spelling is never answered from the cube.
+        assert!(
+            kaveon_optim::cube::match_cube_query(&optimized_as(statement, false), &shape, &schema)
+                .is_none()
+        );
     }
     let _ = std::fs::remove_dir_all(&directory);
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));

@@ -170,8 +170,8 @@ impl ExecutionPlacement {
             approximate: None,
         }
     }
-    /// Answered from the table's statistics at the statement's pinned
-    /// source version: no scan.
+    /// Answered from the table's statistics or cube at the statement's
+    /// pinned source version: no scan.
     fn context(answer: &ContextAnswer) -> Self {
         let sketches = answer
             .approximate
@@ -179,10 +179,11 @@ impl ExecutionPlacement {
             .map(|note| note.sketch.as_str())
             .collect::<std::collections::BTreeSet<_>>();
         let detail = if sketches.is_empty() {
-            format!("statistics at {}", answer.source_version.label())
+            format!("{} at {}", answer.source, answer.source_version.label())
         } else {
             format!(
-                "statistics at {} ({})",
+                "{} at {} ({})",
+                answer.source,
                 answer.source_version.label(),
                 sketches.into_iter().collect::<Vec<_>>().join(", ")
             )
@@ -2994,12 +2995,15 @@ async fn run_statement(
     // A COUNT(*), MIN or MAX with no predicate — or an APPROX_* aggregate
     // — whose table's statistics describe exactly the version this
     // statement is pinned to is answered from them: no scan, on any node.
-    // `settings.use_statistics = false` stands the answer aside and reads
-    // the rows; the record says the statistics would have answered.
-    let statistics_answer = context_answer(&plan, &planning_statistics);
+    // A grouped aggregate over a table's declared shape whose cube is
+    // current for that version is answered from the cube's cells.
+    // `settings.use_statistics = false` stands both aside and reads the
+    // rows; the record says the statistics would have answered.
+    let statistics_answer = context_answer(&plan, &planning_statistics)
+        .or_else(|| cube_answer(&plan, &planning_statistics));
     let statistics_bypassed = statistics_answer.is_some() && !settings.use_statistics();
     if let Some(answer) = statistics_answer.filter(|_| settings.use_statistics()) {
-        let mut data = vec![answer.row.clone()];
+        let mut data = answer.rows.clone();
         let next_uri = if paged {
             match spool_rows(&state, &query_id, result_writer.take(), &mut data) {
                 Ok(uri) => Some(uri),
@@ -3968,6 +3972,8 @@ struct AnalyzeStatement {
     /// Read every sketchable column once for the distinct-count and
     /// quantile sketches and exact bounds.
     sketches: bool,
+    /// Build the table's cube over its declared shape: one scan.
+    cube: bool,
 }
 
 /// `None` when the statement is not an `ANALYZE`; `Err` with the reason for
@@ -3997,6 +4003,7 @@ fn parse_analyze_body(body: &str) -> Result<AnalyzeStatement, String> {
             table,
             distinct: DistinctColumns::None,
             sketches: false,
+            cube: false,
         });
     }
     let properties = tail
@@ -4008,11 +4015,12 @@ fn parse_analyze_body(body: &str) -> Result<AnalyzeStatement, String> {
         .and_then(|rest| rest.strip_prefix('('))
         .and_then(|rest| rest.trim_end().strip_suffix(')'))
         .ok_or_else(|| {
-            "ANALYZE accepts WITH (distinct = true), WITH (columns = ARRAY['a', 'b']) or WITH (sketches = true) after the table name".to_owned()
+            "ANALYZE accepts WITH (distinct = true), WITH (columns = ARRAY['a', 'b']), WITH (sketches = true) or WITH (cube = true) after the table name".to_owned()
         })?;
     let mut distinct = None;
     let mut columns = None;
     let mut sketches = None;
+    let mut cube = None;
     let flag = |name: &str, value: &str| -> Result<bool, String> {
         match value {
             v if v.eq_ignore_ascii_case("true") => Ok(true),
@@ -4042,9 +4050,14 @@ fn parse_analyze_body(body: &str) -> Result<AnalyzeStatement, String> {
                 return Err("ANALYZE property sketches is given twice".into());
             }
             sketches = Some(flag("sketches", value)?);
+        } else if key.eq_ignore_ascii_case("cube") {
+            if cube.is_some() {
+                return Err("ANALYZE property cube is given twice".into());
+            }
+            cube = Some(flag("cube", value)?);
         } else {
             return Err(format!(
-                "unknown ANALYZE property '{key}'; the properties are distinct, columns and sketches"
+                "unknown ANALYZE property '{key}'; the properties are distinct, columns, sketches and cube"
             ));
         }
     }
@@ -4060,6 +4073,7 @@ fn parse_analyze_body(body: &str) -> Result<AnalyzeStatement, String> {
         table,
         distinct,
         sketches: sketches.unwrap_or(false),
+        cube: cube.unwrap_or(false),
     })
 }
 
@@ -4214,6 +4228,7 @@ struct StatisticsTable {
     id: TableId,
     location: String,
     format: kaveon_core::DataFormat,
+    shape: kaveon_core::TableShape,
 }
 
 /// A statement's failure before it answered: status, code, message.
@@ -4260,6 +4275,7 @@ async fn resolve_statistics_table(
         id: definition.id().clone(),
         location: resolved.full_path(),
         format: resolved.table.format,
+        shape: definition.shape().clone(),
     })
 }
 
@@ -4643,12 +4659,47 @@ async fn execute_analyze(
             }
         };
     let qualified = table.qualified.clone();
+    // The cube, when asked for, is built under the statement's admission
+    // before the statistics: it needs the declared shape, and a table
+    // without one fails the statement before anything is read.
+    let cube_shape = if statement.cube {
+        let shape = table.shape.clone();
+        if shape.is_empty() {
+            return analyze_failure(
+                query_id,
+                started,
+                StatusCode::BAD_REQUEST,
+                "SHAPE_UNDECLARED",
+                format!("{qualified} declares no shape; ALTER TABLE … SET SHAPE (…) first"),
+            )
+            .await;
+        }
+        Some(shape)
+    } else {
+        None
+    };
     let built = tokio::task::spawn_blocking({
         let location = table.location.clone();
         let format = table.format;
         let id = table.id.clone();
         let sketches = statement.sketches;
-        move || -> kaveon_core::Result<kaveon_core::TableStatistics> {
+        let max_cells = state.config.cube_max_cells;
+        move || -> kaveon_core::Result<(kaveon_core::TableStatistics, Option<kaveon_storage::CubeBuild>)> {
+            let cube = cube_shape
+                .map(|shape| {
+                    kaveon_storage::build_cube(
+                        &location,
+                        format,
+                        id.clone(),
+                        &shape,
+                        &kaveon_storage::CubeBuildOptions {
+                            memory: Some(memory.pool().operator("analyze-cube")?),
+                            threads: ANALYZE_SKETCH_THREADS,
+                            max_cells,
+                        },
+                    )
+                })
+                .transpose()?;
             if sketches {
                 let options = kaveon_storage::FullScanOptions {
                     memory: Some(memory.pool().operator("analyze-sketches")?),
@@ -4657,18 +4708,18 @@ async fn execute_analyze(
                 };
                 let statistics = kaveon_storage::full_statistics(&location, format, id, &options);
                 drop(memory);
-                statistics
+                Ok((statistics?, cube))
             } else {
                 // The metadata read reserves nothing; the permits go back
                 // before the counts, which are admitted in their own right.
                 drop(memory);
-                kaveon_storage::metadata_statistics(&location, format, id)
+                Ok((kaveon_storage::metadata_statistics(&location, format, id)?, cube))
             }
         }
     })
     .await;
-    let mut statistics = match built {
-        Ok(Ok(statistics)) => statistics,
+    let (mut statistics, cube) = match built {
+        Ok(Ok(built)) => built,
         Ok(Err(error)) => {
             return analyze_failure(
                 query_id,
@@ -4888,17 +4939,99 @@ async fn execute_analyze(
         )
         .await;
     }
+    // The cube describes the version the counts saw too (its build read
+    // the identity again at its end).
+    let cube_cells = match &cube {
+        Some(built)
+            if built
+                .cube
+                .is_current_for(&statistics.source_version.identity_sha256) =>
+        {
+            if let Err(error) = store_cube(state, &identity.principal, built) {
+                return analyze_failure(
+                    query_id,
+                    started,
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "CATALOG_UNAVAILABLE",
+                    format!("cube could not be stored: {error}"),
+                )
+                .await;
+            }
+            serde_json::json!(built.cube.cell_count())
+        }
+        Some(_) => {
+            return analyze_failure(
+                query_id,
+                started,
+                StatusCode::CONFLICT,
+                "SOURCE_CHANGED",
+                "table source changed during ANALYZE".into(),
+            )
+            .await;
+        }
+        None => serde_json::Value::Null,
+    };
     let columns = vec![
         varchar("table"),
         bigint("row_count"),
         bigint("distinct_columns"),
+        bigint("cube_cells"),
     ];
     let rows = vec![vec![
         serde_json::json!(qualified),
         serde_json::json!(statistics.rows),
         serde_json::json!(selected.len()),
+        cube_cells,
     ]];
     finish_inline_statement(query_id, started, columns, rows).await
+}
+
+/// Store a built or refreshed cube and its partials, and drop the cached
+/// copy so the next planning reads the new one.
+fn store_cube(
+    state: &AppState,
+    actor: &str,
+    built: &kaveon_storage::CubeBuild,
+) -> kaveon_core::Result<()> {
+    state.catalog_store.put_table_cube(
+        actor,
+        &built.cube,
+        &built.document,
+        &built.partials,
+        built.replace_partials,
+        &built.removed_paths,
+    )?;
+    CUBE_CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(built.cube.table_id.as_str());
+    Ok(())
+}
+
+/// Decoded cubes by table id, so a document is parsed once per version:
+/// an entry is served while the store's version is the one it decodes.
+static CUBE_CACHE: std::sync::LazyLock<
+    std::sync::Mutex<HashMap<String, Arc<kaveon_core::TableCube>>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// The table's stored cube, whatever version it describes, through the
+/// cache; `None` when it has none.
+fn cached_table_cube(state: &AppState, id: &TableId) -> Option<Arc<kaveon_core::TableCube>> {
+    let stored_version = state.catalog_store.table_cube_version(id).ok().flatten()?;
+    if let Some(cached) = CUBE_CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(id.as_str())
+        .filter(|cube| cube.source_version.identity_sha256 == stored_version)
+    {
+        return Some(Arc::clone(cached));
+    }
+    let cube = Arc::new(state.catalog_store.table_cube(id).ok().flatten()?);
+    CUBE_CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(id.as_str().to_owned(), Arc::clone(&cube));
+    Some(cube)
 }
 
 /// A catalog statement (`CREATE`/`DROP`/`ALTER` on the durable catalog,
@@ -5450,10 +5583,17 @@ struct PlannedRelation {
     table_id: Option<TableId>,
     location: String,
     format: kaveon_core::DataFormat,
+    /// The table's columns as the catalog declares them.
+    schema: arrow::datatypes::SchemaRef,
     /// The source's current version and exact row count, as read now.
     current: Option<kaveon_storage::SourceStatistics>,
     /// The statistics on record, whatever version they describe.
     statistics: Option<Arc<kaveon_core::TableStatistics>>,
+    /// The declared shape; empty when none.
+    shape: kaveon_core::TableShape,
+    /// The cube on record, whatever version it describes; read only for
+    /// the statement's cube candidate.
+    cube: Option<Arc<kaveon_core::TableCube>>,
 }
 
 impl PlannedRelation {
@@ -5464,6 +5604,16 @@ impl PlannedRelation {
         self.statistics
             .as_ref()
             .filter(|statistics| statistics.is_current_for(&current.identity_sha256))
+    }
+
+    /// The cube on record when it describes the source's current version
+    /// and was built over the shape as declared now.
+    fn current_cube(&self) -> Option<&Arc<kaveon_core::TableCube>> {
+        let current = self.current.as_ref()?;
+        self.cube
+            .as_ref()
+            .filter(|cube| cube.is_current_for(&current.identity_sha256))
+            .filter(|cube| cube.shape == self.shape)
     }
 
     fn current_version(&self) -> Option<kaveon_core::SourceVersion> {
@@ -5561,6 +5711,62 @@ fn schedule_statistics_refresh(state: &Arc<AppState>, relation: &PlannedRelation
     });
 }
 
+/// Tables whose cubes are being refreshed in the background, so one new
+/// source version starts one refresh.
+static CUBE_REFRESHES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Bring the table's cube to the source's current version in the
+/// background, under the statistics refresh knob: added files are read
+/// and folded in; removed files are taken out from the partials, or the
+/// cube is rebuilt when a distinct-count measure is declared (see
+/// `kaveon_storage::cube`). One refresh per table at a time; a refresh
+/// that fails leaves the previous cube, which then answers nothing.
+fn schedule_cube_refresh(state: &Arc<AppState>, relation: &PlannedRelation) {
+    let (Some(table_id), Some(cube)) = (&relation.table_id, &relation.cube) else {
+        return;
+    };
+    let key = table_id.as_str().to_owned();
+    if !CUBE_REFRESHES.lock().unwrap().insert(key.clone()) {
+        return;
+    }
+    let state = Arc::clone(state);
+    let previous = Arc::clone(cube);
+    let table_id = table_id.clone();
+    let location = relation.location.clone();
+    let format = relation.format;
+    let shape = relation.shape.clone();
+    tokio::task::spawn_blocking(move || {
+        let refreshed = state
+            .catalog_store
+            .table_cube_partials(&table_id)
+            .and_then(|partials| {
+                kaveon_storage::refresh_cube(
+                    &previous,
+                    &partials,
+                    &location,
+                    format,
+                    &shape,
+                    &kaveon_storage::CubeBuildOptions {
+                        memory: None,
+                        threads: REFRESH_SCAN_THREADS,
+                        max_cells: state.config.cube_max_cells,
+                    },
+                )
+            });
+        match refreshed {
+            Ok(Some(built)) => {
+                if let Err(error) = store_cube(&state, "engine-cube-refresh", &built) {
+                    eprintln!("cube refresh of {key} could not be stored: {error}");
+                }
+            }
+            Ok(None) => {}
+            Err(error) => eprintln!("cube refresh of {key} failed: {error}"),
+        }
+        CUBE_REFRESHES.lock().unwrap().remove(&key);
+    });
+}
+
 async fn optimize_with_durable_statistics(
     state: &Arc<AppState>,
     plan: LogicalPlan,
@@ -5570,6 +5776,10 @@ async fn optimize_with_durable_statistics(
     collect_join_statistics_tables(&plan, &mut tables);
     if let Some(table) = context_answer_table(&plan) {
         tables.insert(table.to_owned());
+    }
+    let cube_candidate = kaveon_optim::cube::cube_candidate_table(&plan).map(str::to_owned);
+    if let Some(table) = &cube_candidate {
+        tables.insert(table.clone());
     }
     let mut scan_predicates = BTreeMap::new();
     collect_scan_predicates(&plan, &mut scan_predicates);
@@ -5591,16 +5801,28 @@ async fn optimize_with_durable_statistics(
         };
         let location = resolved.full_path();
         let format = resolved.table.format;
-        let table_id = state
+        let definition = state
             .catalog_store
             .table_by_name(&resolved.catalog, &resolved.schema, &resolved.table.name)
             .ok()
-            .flatten()
+            .flatten();
+        let table_id = definition
+            .as_ref()
             .map(|definition| definition.id().clone());
+        let shape = definition
+            .as_ref()
+            .map(|definition| definition.shape().clone())
+            .unwrap_or_default();
         let statistics = table_id
             .as_ref()
             .and_then(|id| state.catalog_store.table_statistics(id).ok().flatten())
             .map(Arc::new);
+        // The cube is read for the statement's one cube-shaped scan, when
+        // the table declares a shape.
+        let cube = table_id
+            .as_ref()
+            .filter(|_| !shape.is_empty() && cube_candidate.as_deref() == Some(table.as_str()))
+            .and_then(|id| cached_table_cube(state, id));
         let predicate = known_scan_predicate(&scan_predicates, &table);
         let catalog_schema = Arc::clone(&resolved.table.arrow_schema);
         loads.spawn_blocking(move || {
@@ -5644,8 +5866,11 @@ async fn optimize_with_durable_statistics(
                     table_id,
                     location,
                     format,
+                    schema: catalog_schema,
                     current,
                     statistics,
+                    shape,
+                    cube,
                 },
                 pruned,
             )
@@ -5693,6 +5918,15 @@ async fn optimize_with_durable_statistics(
             && relation.current_statistics().is_none()
         {
             schedule_statistics_refresh(state, &relation);
+        }
+        // A cube behind the source (or built over another shape) refreshes
+        // under the same knob; until then it answers nothing.
+        if state.config.statistics_auto_refresh
+            && relation.cube.is_some()
+            && relation.current.is_some()
+            && relation.current_cube().is_none()
+        {
+            schedule_cube_refresh(state, &relation);
         }
         let value = relation.current.as_ref().map(|current| {
             let rows = match &pruned {
@@ -5823,15 +6057,64 @@ fn context_output_names(plan: &LogicalPlan) -> Vec<String> {
     }
 }
 
-/// A statement answered from statistics: the columns and the one row.
+/// A statement answered from statistics (one row) or from the cube (a
+/// row per cell): the columns and the rows.
 struct ContextAnswer {
+    /// What answered: `statistics` or `cube`.
+    source: &'static str,
     columns: Vec<ColumnInfo>,
-    row: Vec<serde_json::Value>,
+    rows: Vec<Vec<serde_json::Value>>,
     source_version: kaveon_core::SourceVersion,
     current_source_version: kaveon_core::SourceVersion,
     /// The approximate results among the columns and the error each
     /// states.
     approximate: Vec<ApproximateNote>,
+}
+
+/// The answer to a grouped aggregate over a table's declared shape from
+/// its cube — only when the cube describes exactly the source version the
+/// statement is pinned to and was built over the shape as declared now,
+/// and the cube holds the grouping the statement needs (see
+/// `kaveon_optim::cube` for the statements covered). Any other case
+/// scans.
+fn cube_answer(plan: &LogicalPlan, planning: &PlanningStatistics) -> Option<ContextAnswer> {
+    let table = kaveon_optim::cube::cube_candidate_table(plan)?;
+    let relation = planning.relations.get(table)?;
+    let cube = relation.current_cube()?;
+    let query = kaveon_optim::cube::match_cube_query(plan, &relation.shape, &relation.schema)?;
+    let batch = kaveon_optim::cube::answer(&query, cube, &relation.schema).ok()??;
+    let columns = batch
+        .schema()
+        .fields()
+        .iter()
+        .map(|field| ColumnInfo {
+            name: field.name().clone(),
+            data_type: presented_type(field.data_type()),
+        })
+        .collect();
+    let rows = batches_to_json(std::slice::from_ref(&batch));
+    let approximate = query
+        .approximate_outputs()
+        .into_iter()
+        .map(|(written, column)| ApproximateNote {
+            function: written.to_owned(),
+            argument: column,
+            sketch: format!(
+                "hyperloglog p={}",
+                kaveon_core::sketch::HLL_DEFAULT_PRECISION
+            ),
+            error: kaveon_core::HllSketch::default_precision().standard_error(),
+            error_kind: "relative_standard_error",
+        })
+        .collect();
+    Some(ContextAnswer {
+        source: "cube",
+        columns,
+        rows,
+        source_version: cube.source_version.clone(),
+        current_source_version: relation.current_version()?,
+        approximate,
+    })
 }
 
 /// The answer to a `COUNT(*)`, `MIN` or `MAX` statement with no predicate
@@ -5941,8 +6224,9 @@ fn context_answer(plan: &LogicalPlan, planning: &PlanningStatistics) -> Option<C
         row.push(value);
     }
     Some(ContextAnswer {
+        source: "statistics",
         columns,
-        row,
+        rows: vec![row],
         source_version: statistics.source_version.clone(),
         current_source_version: relation.current_version()?,
         approximate,
@@ -9832,6 +10116,7 @@ mod tests {
             table: table.into(),
             distinct,
             sketches: false,
+            cube: false,
         })
     }
 
@@ -9896,7 +10181,7 @@ mod tests {
         );
         assert_eq!(
             error("ANALYZE orders WITH (sample = 1)"),
-            "unknown ANALYZE property 'sample'; the properties are distinct, columns and sketches"
+            "unknown ANALYZE property 'sample'; the properties are distinct, columns, sketches and cube"
         );
         assert_eq!(
             analyze("ANALYZE orders WITH (sketches = true)"),
@@ -9904,6 +10189,7 @@ mod tests {
                 table: "orders".into(),
                 distinct: DistinctColumns::None,
                 sketches: true,
+                cube: false,
             })
         );
         assert_eq!(
@@ -9912,7 +10198,21 @@ mod tests {
                 table: "orders".into(),
                 distinct: named(&["a"]),
                 sketches: true,
+                cube: false,
             })
+        );
+        assert_eq!(
+            analyze("ANALYZE orders WITH (cube = true, sketches = true)"),
+            Ok(AnalyzeStatement {
+                table: "orders".into(),
+                distinct: DistinctColumns::None,
+                sketches: true,
+                cube: true,
+            })
+        );
+        assert_eq!(
+            error("ANALYZE orders WITH (cube = true, cube = false)"),
+            "ANALYZE property cube is given twice"
         );
         assert_eq!(
             error("ANALYZE orders WITH (sketches = maybe)"),
@@ -10065,7 +10365,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(
             body["data"],
-            serde_json::json!([["lake.sales.orders", 3, 0]])
+            serde_json::json!([["lake.sales.orders", 3, 0, null]])
         );
         assert_eq!(body["columns"][2]["name"], "distinct_columns");
         let stored = stored_statistics(&state).expect("statistics on record");
@@ -12065,12 +12365,12 @@ mod tests {
                 .iter()
                 .map(|column| column["name"].as_str().unwrap())
                 .collect::<Vec<_>>(),
-            ["table", "row_count", "distinct_columns"]
+            ["table", "row_count", "distinct_columns", "cube_cells"]
         );
         assert_eq!(body["columns"][2]["type"], "BIGINT");
         assert_eq!(
             body["data"],
-            serde_json::json!([["lake.sales.orders", 5, 3]])
+            serde_json::json!([["lake.sales.orders", 5, 3, null]])
         );
         assert_eq!(
             stored_distinct(&state),
@@ -12151,7 +12451,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(
             body["data"],
-            serde_json::json!([["lake.sales.orders", 5, 1]])
+            serde_json::json!([["lake.sales.orders", 5, 1, null]])
         );
         assert_eq!(
             sub_statement_records(body["id"].as_str().unwrap())
@@ -12174,7 +12474,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(
             body["data"],
-            serde_json::json!([["lake.sales.orders", 5, 0]])
+            serde_json::json!([["lake.sales.orders", 5, 0, null]])
         );
         assert!(
             sub_statement_records(body["id"].as_str().unwrap())
@@ -12249,7 +12549,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(
             body["data"],
-            serde_json::json!([["lake.sales.orders", 2, 0]])
+            serde_json::json!([["lake.sales.orders", 2, 0, null]])
         );
         assert_eq!(
             stored_distinct(&state),
@@ -12269,7 +12569,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(
             body["data"],
-            serde_json::json!([["lake.sales.orders", 2, 1]])
+            serde_json::json!([["lake.sales.orders", 2, 1, null]])
         );
         assert_eq!(
             stored_distinct(&state),
@@ -12698,6 +12998,263 @@ mod tests {
         std::fs::remove_dir_all(directory).unwrap();
     }
 
+    /// The cube on record for `lake.sales.events`.
+    fn stored_events_cube(state: &crate::AppState) -> Option<kaveon_core::TableCube> {
+        let table = state
+            .catalog_store
+            .table_by_name("lake", "sales", "events")
+            .unwrap()
+            .expect("the events table");
+        state.catalog_store.table_cube(table.id()).unwrap()
+    }
+
+    /// A result's rows as sorted text: a grouped statement without
+    /// `ORDER BY` returns its rows in no particular order.
+    fn sorted_rows(data: &serde_json::Value) -> Vec<String> {
+        let mut rows: Vec<String> = data
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row.to_string())
+            .collect();
+        rows.sort();
+        rows
+    }
+
+    /// Every statement the cube may answer equals the scanned answer —
+    /// columns and rows, the distinct estimate bit-identical to the
+    /// computed sketch — and is answered from the cube only while it
+    /// describes the statement's pinned version; what the cube does not
+    /// cover scans; a new source version scans, refreshes the cube in the
+    /// background by folding the added file in, then answers again.
+    #[tokio::test]
+    async fn cube_answers_equal_the_scanned_answers_refuse_a_changed_source_and_refresh() {
+        let (state, directory) = analyze_test_state().await;
+        register_events_directory(&state, &directory, 100).await;
+        let statements = [
+            // The grand total, a subset of the measures.
+            "SELECT SUM(score), COUNT(id) FROM events",
+            "SELECT SUM(id) AS total FROM events",
+            // One dimension, two, the time grain.
+            "SELECT name, SUM(id), COUNT(*) FROM events GROUP BY name",
+            "SELECT name, day, COUNT(*) AS n, MAX(score) FROM events GROUP BY name, day",
+            "SELECT day, MIN(id), MAX(id) FROM events GROUP BY day",
+            // A predicate on a dimension: rolled up, and grouped.
+            "SELECT COUNT(*), SUM(id) FROM events WHERE name = 'name-0001'",
+            "SELECT day, SUM(score) FROM events WHERE name IN ('name-0001', 'name-0002') GROUP BY day",
+            "SELECT COUNT(*) FROM events WHERE name = 'nobody'",
+            // A distinct count from the cell sketches.
+            "SELECT name, APPROX_COUNT_DISTINCT(id) AS ids FROM events GROUP BY name",
+            "SET SESSION approximate = true; SELECT COUNT(DISTINCT id) FROM events WHERE name = 'name-0003'",
+        ];
+        let uncovered = [
+            // An exact distinct count, an undeclared aggregate, a predicate
+            // on a measure, a non-dimension key, ordering.
+            "SELECT name, COUNT(DISTINCT id) FROM events GROUP BY name",
+            "SELECT AVG(id) FROM events GROUP BY name",
+            "SELECT name, COUNT(*) FROM events WHERE id > 5 GROUP BY name",
+            "SELECT id, COUNT(*) FROM events GROUP BY id",
+            "SELECT name, SUM(id) FROM events GROUP BY name ORDER BY name",
+        ];
+        // Scanned: no shape, no cube yet.
+        let mut scanned = Vec::new();
+        for sql in statements {
+            let (body, record) = submit_and_record(&state, sql).await;
+            assert_ne!(record["execution"]["mode"], "context", "{sql}");
+            scanned.push((body["columns"].clone(), body["data"].clone()));
+        }
+        assert_eq!(scanned[1].1, serde_json::json!([[44850]]));
+
+        // The shape, then the cube.
+        let (status, body) = submit(
+            &state,
+            &admin(),
+            "ALTER TABLE events SET SHAPE (dimensions = ARRAY['name:100'], \
+             measures = ARRAY['id:sum,count,min,max,count_distinct', 'score:sum,max'], time = 'day:day:500')",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let table = state
+            .catalog_store
+            .table_by_name("lake", "sales", "events")
+            .unwrap()
+            .unwrap();
+        // The table document carries the shape.
+        let response = super::get_table_definition(
+            axum::extract::State(state.clone()),
+            axum::extract::Path(table.id().as_str().to_owned()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let document = json_body(response).await;
+        assert_eq!(document["shape"]["dimensions"][0]["name"], "name");
+        assert_eq!(document["shape"]["dimensions"][0]["cap"], 100);
+        assert_eq!(
+            document["shape"]["measures"][0]["aggregates"][4],
+            "count_distinct"
+        );
+        assert_eq!(document["shape"]["time"]["grain"], "day");
+        // A shape alone answers nothing.
+        let (_, record) = submit_and_record(&state, statements[2]).await;
+        assert_ne!(record["execution"]["mode"], "context");
+
+        let (status, body) = submit(
+            &state,
+            &admin(),
+            "ANALYZE events WITH (cube = true)",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["columns"][3]["name"], "cube_cells");
+        let stored = stored_events_cube(&state).expect("the cube");
+        assert_eq!(body["data"][0][3], stored.cell_count());
+        assert!(stored.excluded.is_empty(), "{:?}", stored.excluded);
+        // (), name, day, name×day.
+        assert_eq!(stored.groupings.len(), 4);
+
+        // From the cube: the same columns and rows, no scan, the version
+        // on the record.
+        for (sql, (columns, data)) in statements.iter().zip(&scanned) {
+            let (body, record) = submit_and_record(&state, sql).await;
+            assert_eq!(&body["columns"], columns, "{sql}");
+            assert_eq!(sorted_rows(&body["data"]), sorted_rows(data), "{sql}");
+            assert_eq!(record["execution"]["mode"], "context", "{sql}");
+            let detail = record["execution"]["detail"].as_str().unwrap();
+            assert!(
+                detail.starts_with(&format!("cube at {}", stored.source_version.label())),
+                "{sql}: {detail}"
+            );
+            assert_eq!(
+                record["execution"]["source_version"],
+                serde_json::to_value(&stored.source_version).unwrap(),
+                "{sql}"
+            );
+            assert_eq!(
+                record["execution"]["current_source_version"],
+                record["execution"]["source_version"],
+                "{sql}"
+            );
+            assert!(record["scans"].as_array().unwrap().is_empty(), "{sql}");
+            if sql.contains("DISTINCT") {
+                assert!(detail.ends_with("(hyperloglog p=12)"), "{sql}: {detail}");
+                assert_eq!(record["execution"]["approximate"][0]["argument"], "id");
+                assert_eq!(
+                    record["execution"]["approximate"][0]["error_kind"],
+                    "relative_standard_error"
+                );
+            } else {
+                assert!(record["execution"]["approximate"].is_null(), "{sql}");
+            }
+        }
+        // What the cube does not cover scans.
+        for sql in uncovered {
+            let (_, record) = submit_and_record(&state, sql).await;
+            assert_ne!(record["execution"]["mode"], "context", "{sql}");
+        }
+        // `use_statistics = false` stands the cube aside and reads the rows.
+        let (status, body) = submit(
+            &state,
+            &admin(),
+            statements[2],
+            serde_json::json!({"result_cache": false, "use_statistics": false}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let bypassed = self::record(body["id"].as_str().unwrap(), &admin()).await;
+        assert_ne!(bypassed["execution"]["mode"], "context");
+        assert!(
+            bypassed["execution"]["detail"]
+                .as_str()
+                .unwrap()
+                .ends_with("; statistics bypassed"),
+            "{}",
+            bypassed["execution"]
+        );
+        assert_eq!(sorted_rows(&body["data"]), sorted_rows(&scanned[2].1));
+
+        // The source moves on: the cube no longer describes the pinned
+        // version, so the statement scans — and comes back right.
+        write_events_file(&directory.join("events").join("d.parquet"), 300, 50);
+        let (body, record) = submit_and_record(&state, statements[1]).await;
+        assert_eq!(
+            body["data"],
+            serde_json::json!([[44850 + (300..350).sum::<i64>()]])
+        );
+        assert_ne!(record["execution"]["mode"], "context");
+
+        // Planning saw the new version and refreshed the cube in the
+        // background: the added file folded in.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let refreshed = loop {
+            let current = stored_events_cube(&state).unwrap();
+            if current.source_version != stored.source_version {
+                break current;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the cube was not refreshed"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        };
+        assert_eq!(refreshed.files.len(), 4);
+        assert!(refreshed.per_file_complete);
+        assert_eq!(
+            state
+                .catalog_store
+                .table_cube_partials(table.id())
+                .unwrap()
+                .len(),
+            4
+        );
+        let (body, record) = submit_and_record(&state, statements[1]).await;
+        assert_eq!(
+            body["data"],
+            serde_json::json!([[44850 + (300..350).sum::<i64>()]])
+        );
+        assert_eq!(
+            record["execution"]["mode"], "context",
+            "{}",
+            record["execution"]
+        );
+        assert_eq!(record["execution"]["source_version"]["files"], 4);
+        // The refreshed cube equals a rebuild.
+        let (status, body) = submit(
+            &state,
+            &admin(),
+            "ANALYZE events WITH (cube = true)",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let rebuilt = stored_events_cube(&state).unwrap();
+        assert_eq!(rebuilt.groupings, refreshed.groupings);
+
+        // A changed shape drops the cube; ANALYZE without a shape refuses.
+        let (status, _) = submit(
+            &state,
+            &admin(),
+            "ALTER TABLE events DROP SHAPE",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(stored_events_cube(&state).is_none());
+        let (status, body) = submit(
+            &state,
+            &admin(),
+            "ANALYZE events WITH (cube = true)",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["code"], "SHAPE_UNDECLARED");
+        let (_, record) = submit_and_record(&state, statements[2]).await;
+        assert_ne!(record["execution"]["mode"], "context");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     /// `APPROX_*` aggregates compute from a sketch over the scan, then —
     /// once the statistics carry sketches at the pinned version — answer
     /// from those, within the error the record states; a moved source
@@ -12953,7 +13510,7 @@ mod tests {
             };
             let (status, body) = submit(&state, &admin(), sql, settings).await;
             assert_eq!(status, StatusCode::OK, "{sql}: {body}");
-            let bypassed = record(body["id"].as_str().unwrap(), &admin()).await;
+            let bypassed = self::record(body["id"].as_str().unwrap(), &admin()).await;
             assert_ne!(bypassed["execution"]["mode"], "context", "{sql}");
             assert!(
                 bypassed["execution"]["detail"]
@@ -13022,7 +13579,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(
             body["data"],
-            serde_json::json!([["lake.sales.events", 300, 0]])
+            serde_json::json!([["lake.sales.events", 300, 0, null]])
         );
         let full = stored_events_statistics(&state).unwrap();
         assert_eq!(full.depth, kaveon_core::StatisticsDepth::Full);
