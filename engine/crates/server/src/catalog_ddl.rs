@@ -20,6 +20,7 @@ use kaveon_core::{
     AccessPattern, CatalogAdapter, CatalogDefinition, CatalogId, CatalogLifecycle,
     ColumnDefinition, CredentialKind, CredentialReference, DataFormat, KaveonError, ResolvedTable,
     SchemaDefinition, SchemaId, StorageType, TableDefinition, TableId, TableLayout, TableMeta,
+    TableShape,
 };
 use kaveon_sql::ddl::{
     CatalogStatement, CatalogStorageSpec, ColumnSpec, CredentialSpec, QualifiedName,
@@ -173,9 +174,13 @@ pub(crate) async fn execute_catalog_statement(
             partitioned_by,
             clustered_by,
             bloom,
+            shape,
         } => {
             let target = table_target(&name, context_catalog, context_schema);
             let layout = TableLayout::new(clustered_by, bloom)
+                .map_err(CatalogStatementError::invalid_error)?;
+            shape
+                .check_cell_limit(state.config.cube_max_cells)
                 .map_err(CatalogStatementError::invalid_error)?;
             create_table(
                 store,
@@ -188,6 +193,7 @@ pub(crate) async fn execute_catalog_statement(
                 access,
                 partitioned_by,
                 layout,
+                shape,
             )
             .await?
         }
@@ -210,6 +216,17 @@ pub(crate) async fn execute_catalog_statement(
         } => {
             let target = table_target(&name, context_catalog, context_schema);
             set_table_clustering(store, actor, target, if_exists, columns)?
+        }
+        CatalogStatement::AlterTableSetShape {
+            name,
+            if_exists,
+            shape,
+        } => {
+            let target = table_target(&name, context_catalog, context_schema);
+            shape
+                .check_cell_limit(state.config.cube_max_cells)
+                .map_err(CatalogStatementError::invalid_error)?;
+            set_table_shape(store, actor, target, if_exists, shape)?
         }
         CatalogStatement::Optimize { .. } => {
             // Routed by the statement handler to `crate::optimize` before
@@ -815,6 +832,7 @@ async fn create_table(
     access: AccessPattern,
     partitioned_by: Option<Vec<String>>,
     layout: TableLayout,
+    shape: TableShape,
 ) -> DdlResult<CatalogStatementResult> {
     let qualified = target.qualified();
     let (catalog, schema, existing) = locate_table(store, &target)?;
@@ -890,9 +908,13 @@ async fn create_table(
         .partitioned_by(partitions)
         .map_err(CatalogStatementError::invalid_error)?
         .with_layout(layout.clone())
-        .map_err(CatalogStatementError::invalid_error)?
-        .transition(CatalogLifecycle::Active)
         .map_err(CatalogStatementError::invalid_error)?;
+        check_shape_columns(&active, &shape)?;
+        let active = active
+            .with_shape(shape.clone())
+            .map_err(CatalogStatementError::invalid_error)?
+            .transition(CatalogLifecycle::Active)
+            .map_err(CatalogStatementError::invalid_error)?;
         store
             .replace_table(actor, draft.revision(), &active)
             .map_err(CatalogStatementError::store)
@@ -1052,6 +1074,80 @@ fn set_table_clustering(
     Ok(outcome("table", qualified, "clustered"))
 }
 
+/// A shape's columns must be columns of the files: a partition column is
+/// read from the files' paths, which the cube's scan does not see.
+fn check_shape_columns(table: &TableDefinition, shape: &TableShape) -> DdlResult<()> {
+    let mut named: Vec<&str> = shape
+        .dimensions
+        .iter()
+        .map(|dimension| dimension.name.as_str())
+        .collect();
+    named.extend(shape.measures.iter().map(|measure| measure.column.as_str()));
+    if let Some(time) = &shape.time {
+        named.push(time.column.as_str());
+    }
+    if let Some(partition) = table
+        .partitions()
+        .iter()
+        .find(|partition| named.contains(&partition.name()))
+    {
+        return Err(CatalogStatementError::invalid(format!(
+            "'{}' is a partition column, read from the files' paths; the shape names columns of the files",
+            partition.name()
+        )));
+    }
+    Ok(())
+}
+
+fn set_table_shape(
+    store: &CatalogStore,
+    actor: &str,
+    target: TableTarget,
+    if_exists: bool,
+    shape: TableShape,
+) -> DdlResult<CatalogStatementResult> {
+    let qualified = target.qualified();
+    let located = match locate_table(store, &target) {
+        Ok(located) => located,
+        Err(error) if if_exists && error.code.ends_with("_NOT_FOUND") => {
+            return Ok(outcome("table", qualified, "absent"));
+        }
+        Err(error) => return Err(error),
+    };
+    let Some(table) = located.2 else {
+        if if_exists {
+            return Ok(outcome("table", qualified, "absent"));
+        }
+        return Err(CatalogStatementError::not_found(
+            "TABLE_NOT_FOUND",
+            format!("table {qualified} not found"),
+        ));
+    };
+    if table.shape() == &shape {
+        return Ok(outcome("table", qualified, "unchanged"));
+    }
+    check_shape_columns(&table, &shape)?;
+    let shaped = table
+        .with_shape_revision(shape.clone())
+        .map_err(CatalogStatementError::invalid_error)?;
+    store
+        .replace_table(actor, table.revision(), &shaped)
+        .map_err(CatalogStatementError::store)?;
+    // A cube built over the previous shape answers nothing under this one.
+    store
+        .delete_table_cube(actor, table.id())
+        .map_err(CatalogStatementError::store)?;
+    Ok(outcome(
+        "table",
+        qualified,
+        if shape.is_empty() {
+            "unshaped"
+        } else {
+            "shaped"
+        },
+    ))
+}
+
 // --- metadata reads ---
 
 fn show_create_table(
@@ -1080,6 +1176,7 @@ fn show_create_table(
         .iter()
         .map(|column| column.name().to_owned())
         .collect::<Vec<_>>();
+    let (dimensions, measures, time) = table.shape().render();
     let statement = render_create_table(
         &QualifiedName(vec![target.catalog, target.schema, target.table]),
         &columns,
@@ -1090,6 +1187,9 @@ fn show_create_table(
             partitioned_by: &partitioned_by,
             clustered_by: table.layout().clustered_by(),
             bloom: table.layout().bloom(),
+            dimensions: &dimensions,
+            measures: &measures,
+            time: time.as_deref(),
         },
     );
     Ok(CatalogStatementResult {
@@ -1780,6 +1880,132 @@ mod tests {
                 &state,
                 &analyst,
                 "ALTER TABLE IF EXISTS missing SET CLUSTERED BY (id)"
+            )
+            .await,
+            vec![vec![json!("lake.sales.missing"), json!("absent")]]
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn the_shape_is_declared_validated_shown_and_dropped() {
+        let base = temporary_directory("shape");
+        write_parquet(&base.join("orders.parquet"), 5);
+        let state = state_with_local_catalog(&base);
+        let analyst = identity(Role::Analyst);
+        ok(&state, &analyst, "CREATE SCHEMA lake.sales").await;
+
+        // A shape over a column the source does not have, or of a type its
+        // role refuses, registers nothing.
+        for (sql, expected) in [
+            (
+                "CREATE TABLE orders WITH (location = 'orders.parquet', format = 'parquet', dimensions = ARRAY['region'])",
+                "'region' is not a column",
+            ),
+            (
+                "CREATE TABLE orders WITH (location = 'orders.parquet', format = 'parquet', measures = ARRAY['name:sum'])",
+                "cannot be kept under sum",
+            ),
+            (
+                "CREATE TABLE orders WITH (location = 'orders.parquet', format = 'parquet', time = 'name:day')",
+                "cannot be bucketed",
+            ),
+        ] {
+            let error = err(&state, &analyst, sql).await;
+            assert_eq!(error.code, "CATALOG_INVALID", "{sql}");
+            assert!(error.message.contains(expected), "{sql}: {}", error.message);
+        }
+        assert!(published_tables(&state, "lake", "sales").await.is_empty());
+
+        ok(
+            &state,
+            &analyst,
+            "CREATE TABLE orders WITH (location = 'orders.parquet', format = 'parquet', dimensions = ARRAY['name:20'], measures = ARRAY['id:sum,count'])",
+        )
+        .await;
+        let created = ok(&state, &analyst, "SHOW CREATE TABLE orders").await;
+        let rendered = created[0][0].as_str().unwrap().to_owned();
+        assert!(
+            rendered.contains("dimensions = ARRAY['name:20']")
+                && rendered.contains("measures = ARRAY['id:sum,count']"),
+            "{rendered}"
+        );
+        let target = TableTarget {
+            catalog: "lake".into(),
+            schema: "sales".into(),
+            table: "orders".into(),
+        };
+        let stored = locate_table(&state.catalog_store, &target)
+            .unwrap()
+            .2
+            .unwrap();
+        assert_eq!(stored.shape().dimensions[0].cap, 20);
+        let revision = stored.revision();
+
+        // SHOW CREATE TABLE output re-registers the same shape.
+        ok(&state, &analyst, "DROP TABLE orders").await;
+        ok(&state, &analyst, &rendered).await;
+        let again = ok(&state, &analyst, "SHOW CREATE TABLE orders").await;
+        assert_eq!(again[0][0].as_str().unwrap(), rendered);
+
+        assert_eq!(
+            ok(
+                &state,
+                &analyst,
+                "ALTER TABLE orders SET SHAPE (dimensions = ARRAY['name'], measures = ARRAY['id:min,max'])"
+            )
+            .await,
+            vec![vec![json!("lake.sales.orders"), json!("shaped")]]
+        );
+        assert_eq!(
+            ok(
+                &state,
+                &analyst,
+                "ALTER TABLE orders SET SHAPE (dimensions = ARRAY['name'], measures = ARRAY['id:min,max'])"
+            )
+            .await,
+            vec![vec![json!("lake.sales.orders"), json!("unchanged")]]
+        );
+        let altered = locate_table(&state.catalog_store, &target)
+            .unwrap()
+            .2
+            .unwrap();
+        assert_eq!(altered.shape().dimensions[0].cap, 10_000);
+        assert_eq!(altered.revision().value(), revision.value() + 1);
+        for (sql, expected) in [
+            (
+                "ALTER TABLE orders SET SHAPE (dimensions = ARRAY['nope'])",
+                "not a column",
+            ),
+            (
+                "ALTER TABLE orders SET SHAPE (dimensions = ARRAY['name:2000000'], measures = ARRAY['id:sum'])",
+                "KAVEON_CUBE_MAX_CELLS",
+            ),
+        ] {
+            let error = err(&state, &analyst, sql).await;
+            assert_eq!(error.code, "CATALOG_INVALID", "{sql}");
+            assert!(error.message.contains(expected), "{sql}: {}", error.message);
+        }
+        assert_eq!(
+            ok(&state, &analyst, "ALTER TABLE orders DROP SHAPE").await,
+            vec![vec![json!("lake.sales.orders"), json!("unshaped")]]
+        );
+        let cleared = locate_table(&state.catalog_store, &target)
+            .unwrap()
+            .2
+            .unwrap();
+        assert!(cleared.shape().is_empty());
+        assert!(
+            !ok(&state, &analyst, "SHOW CREATE TABLE orders").await[0][0]
+                .as_str()
+                .unwrap()
+                .contains("dimensions")
+        );
+        assert_eq!(
+            ok(
+                &state,
+                &analyst,
+                "ALTER TABLE IF EXISTS missing SET SHAPE (dimensions = ARRAY['id'])"
             )
             .await,
             vec![vec![json!("lake.sales.missing"), json!("absent")]]

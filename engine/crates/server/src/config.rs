@@ -84,6 +84,11 @@ pub struct ServerConfig {
     /// record: added files folded in, a removal recomputed at the
     /// document's depth. Off, statistics change only through `ANALYZE`.
     pub statistics_auto_refresh: bool,
+    /// The most cells a table's cube may hold (`KAVEON_CUBE_MAX_CELLS`): a
+    /// declared shape whose planned cells exceed it is refused, and a
+    /// build or refresh that exceeds it fails. The encoded document is
+    /// bounded with it (see `kaveon_core::cube`).
+    pub cube_max_cells: u64,
     pub product_transactions: ProductTransactionsConfig,
 }
 
@@ -169,6 +174,7 @@ impl Default for ServerConfig {
             result_disk_limit_bytes: crate::results::DEFAULT_PROCESS_BYTES,
             result_cache_ttl_seconds: DEFAULT_RESULT_CACHE_TTL_SECONDS,
             statistics_auto_refresh: true,
+            cube_max_cells: kaveon_core::shape::DEFAULT_CUBE_MAX_CELLS,
             product_transactions: ProductTransactionsConfig::default(),
         }
     }
@@ -628,6 +634,13 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
         config.statistics_auto_refresh = value
             .parse()
             .map_err(|_| anyhow::anyhow!("KAVEON_STATISTICS_AUTO_REFRESH must be true or false"))?;
+    }
+    if let Ok(value) = std::env::var("KAVEON_CUBE_MAX_CELLS") {
+        config.cube_max_cells = value
+            .parse::<u64>()
+            .ok()
+            .filter(|cells| *cells > 0)
+            .ok_or_else(|| anyhow::anyhow!("KAVEON_CUBE_MAX_CELLS must be a positive integer"))?;
     }
     if let Ok(value) = std::env::var("KAVEON_RESULT_CACHE_TTL_SECONDS") {
         config.result_cache_ttl_seconds = value.parse().map_err(|_| {

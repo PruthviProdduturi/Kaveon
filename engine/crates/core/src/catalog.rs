@@ -1,4 +1,5 @@
 use crate::Result;
+use crate::shape::TableShape;
 use arrow::datatypes::SchemaRef;
 use arrow_schema::DataType;
 use serde::{Deserialize, Serialize};
@@ -555,6 +556,11 @@ pub struct TableDefinition {
     /// no Bloom filters.
     #[serde(default, skip_serializing_if = "TableLayout::is_empty")]
     layout: TableLayout,
+    /// The declared shape the cube is built over; absent (no dimensions,
+    /// no measures, no time) when none is declared, and in definitions
+    /// stored before shapes existed.
+    #[serde(default, skip_serializing_if = "TableShape::is_empty")]
+    shape: TableShape,
 }
 
 impl TableDefinition {
@@ -594,6 +600,7 @@ impl TableDefinition {
             partitions: Vec::new(),
             lifecycle: CatalogLifecycle::Draft,
             layout: TableLayout::default(),
+            shape: TableShape::default(),
         })
     }
     /// The definition with its partition columns declared: each must name
@@ -700,6 +707,27 @@ impl TableDefinition {
         layout.check_against(&self.columns)?;
         let mut next = self.clone();
         next.layout = layout;
+        next.revision = self.revision.next()?;
+        Ok(next)
+    }
+    /// The declared shape; empty when none is declared.
+    pub const fn shape(&self) -> &TableShape {
+        &self.shape
+    }
+    /// This definition, at the same revision, with `shape`; every column
+    /// the shape names must be a column of the table with a type its role
+    /// accepts. What `CREATE TABLE … WITH (dimensions = …)` stores.
+    pub fn with_shape(mut self, shape: TableShape) -> Result<Self> {
+        shape.check_against(&self.columns)?;
+        self.shape = shape;
+        Ok(self)
+    }
+    /// The next revision of this definition with another shape: what
+    /// `ALTER TABLE … SET SHAPE (…)` and `DROP SHAPE` publish.
+    pub fn with_shape_revision(&self, shape: TableShape) -> Result<Self> {
+        shape.check_against(&self.columns)?;
+        let mut next = self.clone();
+        next.shape = shape;
         next.revision = self.revision.next()?;
         Ok(next)
     }

@@ -1,6 +1,7 @@
 //! Catalog statements: the Trino-shaped DDL and metadata surface over the
 //! Engine's durable catalog (`CREATE SCHEMA`, `CREATE TABLE … WITH (…)`,
-//! `DROP`, `ALTER TABLE … SET LOCATION | SET CLUSTERED BY (…)`, `SHOW …`,
+//! `DROP`, `ALTER TABLE … SET LOCATION | SET CLUSTERED BY (…) | SET SHAPE (…)
+//! | DROP SHAPE`, `SHOW …`,
 //! `DESCRIBE`, `CALL system.register_table`) and the table maintenance
 //! statement `OPTIMIZE`. This module only recognises and validates the
 //! statement shape; the coordinator lowers it onto catalog definitions.
@@ -11,7 +12,7 @@
 //! not parse is an error naming what was expected.
 
 use arrow::datatypes::{DataType, TimeUnit};
-use kaveon_core::{AccessPattern, DataFormat, KaveonError, Result};
+use kaveon_core::{AccessPattern, DataFormat, KaveonError, Result, TableShape};
 use sqlparser::ast::{self, ObjectName};
 use sqlparser::dialect::GenericDialect;
 use sqlparser::keywords::Keyword;
@@ -125,6 +126,9 @@ pub enum CatalogStatement {
         /// `bloom = ARRAY['c']`: columns that carry a Bloom filter per row
         /// group beyond the clustering columns.
         bloom: Vec<String>,
+        /// `dimensions = ARRAY[…]`, `measures = ARRAY[…]`, `time = '…'`:
+        /// the declared shape the cube is built over; empty when none.
+        shape: TableShape,
     },
     DropTable {
         name: QualifiedName,
@@ -141,6 +145,15 @@ pub enum CatalogStatement {
         name: QualifiedName,
         if_exists: bool,
         columns: Vec<String>,
+    },
+    /// `ALTER TABLE t SET SHAPE (dimensions = ARRAY[…], measures = ARRAY[…],
+    /// time = '…')`, or `ALTER TABLE t DROP SHAPE` (an empty shape). The
+    /// shape is checked for form here and against the table's columns and
+    /// types when it is lowered.
+    AlterTableSetShape {
+        name: QualifiedName,
+        if_exists: bool,
+        shape: TableShape,
     },
     /// `OPTIMIZE t [WITH (…)] [WHERE predicate]`: rewrite the table's files
     /// in its clustering layout. The predicate, when given, is kept as SQL
@@ -183,6 +196,7 @@ impl CatalogStatement {
                 | Self::DropTable { .. }
                 | Self::AlterTableSetLocation { .. }
                 | Self::AlterTableSetClusteredBy { .. }
+                | Self::AlterTableSetShape { .. }
         )
     }
 
@@ -299,6 +313,7 @@ fn parse_create(parser: &mut Parser<'_>) -> Result<Option<CatalogStatement>> {
             partitioned_by,
             clustered_by,
             bloom,
+            shape,
         } = table_options(options)?;
         if let Some(columns) = &columns {
             if let Some(partitioned_by) = &partitioned_by {
@@ -331,6 +346,7 @@ fn parse_create(parser: &mut Parser<'_>) -> Result<Option<CatalogStatement>> {
             partitioned_by,
             clustered_by,
             bloom,
+            shape,
         }));
     }
     // CREATE VIEW, CREATE INDEX, … are not catalog statements; the query
@@ -419,8 +435,24 @@ fn parse_alter(parser: &mut Parser<'_>) -> Result<Option<CatalogStatement>> {
             columns,
         }));
     }
+    if parser.parse_keyword(Keyword::SET) && parse_word(parser, "SHAPE") {
+        let options = parse_with_options(parser, "SET SHAPE")?;
+        let shape = shape_options(options, "SET SHAPE")?;
+        return Ok(Some(CatalogStatement::AlterTableSetShape {
+            name,
+            if_exists,
+            shape,
+        }));
+    }
+    if parser.parse_keyword(Keyword::DROP) && parse_word(parser, "SHAPE") {
+        return Ok(Some(CatalogStatement::AlterTableSetShape {
+            name,
+            if_exists,
+            shape: TableShape::default(),
+        }));
+    }
     Err(sql_error(
-        "ALTER TABLE supports SET LOCATION '…' and SET CLUSTERED BY (…) only; columns come from the table itself",
+        "ALTER TABLE supports SET LOCATION '…', SET CLUSTERED BY (…), SET SHAPE (…) and DROP SHAPE only; columns come from the table itself",
     ))
 }
 
@@ -476,6 +508,41 @@ fn parse_optimize(parser: &mut Parser<'_>) -> Result<Option<CatalogStatement>> {
         filter,
         options,
     }))
+}
+
+/// Consume the next token when it is the bare word `word` (a name
+/// sqlparser has no keyword for), case-insensitively.
+fn parse_word(parser: &mut Parser<'_>, word: &str) -> bool {
+    match parser.peek_token().token {
+        Token::Word(ref found) if found.value.eq_ignore_ascii_case(word) => {
+            parser.next_token();
+            true
+        }
+        _ => false,
+    }
+}
+
+/// The shape from `dimensions = ARRAY[…]`, `measures = ARRAY[…]` and
+/// `time = '…'` options; no options is the empty shape.
+fn shape_options(options: Vec<(String, OptionValue)>, statement: &str) -> Result<TableShape> {
+    let mut dimensions = Vec::new();
+    let mut measures = Vec::new();
+    let mut time = None;
+    for (key, value) in options {
+        let lowered = key.to_ascii_lowercase();
+        match lowered.as_str() {
+            "dimensions" => dimensions = value.list(&lowered)?,
+            "measures" => measures = value.list(&lowered)?,
+            "time" => time = Some(value.text(&lowered)?),
+            other => {
+                return Err(sql_error(&format!(
+                    "{statement} option '{other}' is not supported; use dimensions, measures and time"
+                )));
+            }
+        }
+    }
+    TableShape::parse(&dimensions, &measures, time.as_deref())
+        .map_err(|error| sql_error(&format!("{statement}: {error}")))
 }
 
 fn unique_columns(option: &str, columns: &[String]) -> Result<()> {
@@ -672,6 +739,7 @@ fn parse_call(parser: &mut Parser<'_>) -> Result<Option<CatalogStatement>> {
         partitioned_by: None,
         clustered_by: Vec::new(),
         bloom: Vec::new(),
+        shape: TableShape::default(),
     }))
 }
 
@@ -799,6 +867,7 @@ struct TableOptions {
     partitioned_by: Option<Vec<String>>,
     clustered_by: Vec<String>,
     bloom: Vec<String>,
+    shape: TableShape,
 }
 
 fn table_options(options: Vec<(String, OptionValue)>) -> Result<TableOptions> {
@@ -808,6 +877,7 @@ fn table_options(options: Vec<(String, OptionValue)>) -> Result<TableOptions> {
     let mut partitioned_by = None;
     let mut clustered_by = Vec::new();
     let mut bloom = Vec::new();
+    let mut shape_options_seen = Vec::new();
     for (key, value) in options {
         let lowered = key.to_ascii_lowercase();
         match lowered.as_str() {
@@ -847,14 +917,16 @@ fn table_options(options: Vec<(String, OptionValue)>) -> Result<TableOptions> {
             }
             "clustered_by" => clustered_by = value.list(&lowered)?,
             "bloom" => bloom = value.list(&lowered)?,
+            "dimensions" | "measures" | "time" => shape_options_seen.push((lowered, value)),
             other => {
                 return Err(sql_error(&format!(
                     "table option '{other}' is not supported; use location, format, access, \
-                     partitioned_by, clustered_by and bloom"
+                     partitioned_by, clustered_by, bloom, dimensions, measures and time"
                 )));
             }
         }
     }
+    let shape = shape_options(shape_options_seen, "CREATE TABLE")?;
     let location =
         location.ok_or_else(|| sql_error("CREATE TABLE requires the location = '…' option"))?;
     validate_location(&location)?;
@@ -874,6 +946,7 @@ fn table_options(options: Vec<(String, OptionValue)>) -> Result<TableOptions> {
         partitioned_by,
         clustered_by,
         bloom,
+        shape,
     })
 }
 
@@ -1156,13 +1229,18 @@ pub fn quote_identifier(name: &str) -> String {
 }
 
 /// The column lists a rendered `CREATE TABLE` carries after its location,
-/// format and access: the partition keys read from the paths, if any, and
-/// the layout (`clustered_by`, `bloom`). Empty lists render nothing.
+/// format and access: the partition keys read from the paths, if any, the
+/// layout (`clustered_by`, `bloom`) and the declared shape (`dimensions`,
+/// `measures`, `time`, as [`TableShape::render`] spells them). Empty
+/// lists render nothing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TableColumnLists<'a> {
     pub partitioned_by: &'a [String],
     pub clustered_by: &'a [String],
     pub bloom: &'a [String],
+    pub dimensions: &'a [String],
+    pub measures: &'a [String],
+    pub time: Option<&'a str>,
 }
 
 /// Render a definition as the `CREATE TABLE` statement that recreates it,
@@ -1179,6 +1257,9 @@ pub fn render_create_table(
         partitioned_by,
         clustered_by,
         bloom,
+        dimensions,
+        measures,
+        time,
     } = lists;
     let mut text = format!("CREATE TABLE {name} (\n");
     for (index, column) in columns.iter().enumerate() {
@@ -1206,10 +1287,18 @@ pub fn render_create_table(
             render_array(partitioned_by)
         ));
     }
-    for (key, values) in [("clustered_by", clustered_by), ("bloom", bloom)] {
+    for (key, values) in [
+        ("clustered_by", clustered_by),
+        ("bloom", bloom),
+        ("dimensions", dimensions),
+        ("measures", measures),
+    ] {
         if !values.is_empty() {
             text.push_str(&format!(",\n   {key} = {}", render_array(values)));
         }
+    }
+    if let Some(time) = time {
+        text.push_str(&format!(",\n   time = '{}'", time.replace('\'', "''")));
     }
     text.push_str("\n)");
     text
@@ -1318,6 +1407,7 @@ mod tests {
                 partitioned_by: None,
                 clustered_by: Vec::new(),
                 bloom: Vec::new(),
+                shape: TableShape::default(),
             }
         );
         assert_eq!(
@@ -1334,6 +1424,7 @@ mod tests {
                 partitioned_by: None,
                 clustered_by: Vec::new(),
                 bloom: Vec::new(),
+                shape: TableShape::default(),
             }
         );
     }
@@ -1370,6 +1461,7 @@ mod tests {
                 partitioned_by: Some(vec!["dt".into(), "region".into()]),
                 clustered_by: Vec::new(),
                 bloom: Vec::new(),
+                shape: TableShape::default(),
             }
         );
         // Without a column list the keys are declared by name and typed by
@@ -1447,6 +1539,7 @@ mod tests {
                 partitioned_by: None,
                 clustered_by: vec!["event_time".into(), "url".into()],
                 bloom: vec!["user_id".into()],
+                shape: TableShape::default(),
             }
         );
         // Inferred columns: the layout is checked by the coordinator
@@ -1485,6 +1578,108 @@ mod tests {
                 .to_string();
             assert!(error.contains(expected), "{sql}: {error}");
         }
+    }
+
+    #[test]
+    fn the_shape_is_declared_on_create_altered_dropped_and_rendered() {
+        use kaveon_core::{MeasureAggregate, TimeGrain};
+        let expected = TableShape::parse(
+            &["region".into(), "status:50".into()],
+            &["total:sum,count".into(), "user_id:count_distinct".into()],
+            Some("order_date:day"),
+        )
+        .unwrap();
+        assert_eq!(
+            parse(
+                "ALTER TABLE lake.sales.orders SET SHAPE (dimensions = ARRAY['region', 'status:50'], \
+                 measures = ARRAY['total:sum,count', 'user_id:count_distinct'], time = 'order_date:day')"
+            ),
+            CatalogStatement::AlterTableSetShape {
+                name: name(&["lake", "sales", "orders"]),
+                if_exists: false,
+                shape: expected.clone(),
+            }
+        );
+        assert_eq!(
+            parse("ALTER TABLE IF EXISTS orders DROP SHAPE"),
+            CatalogStatement::AlterTableSetShape {
+                name: name(&["orders"]),
+                if_exists: true,
+                shape: TableShape::default(),
+            }
+        );
+        let CatalogStatement::CreateTable { shape, .. } = parse(
+            "CREATE TABLE orders WITH (location = 'orders', format = 'parquet', \
+             dimensions = ARRAY['region'], measures = ARRAY['total:sum'], time = 'at:month:60')",
+        ) else {
+            panic!("CREATE TABLE");
+        };
+        assert_eq!(shape.dimensions[0].name, "region");
+        assert_eq!(shape.measures[0].aggregates, vec![MeasureAggregate::Sum]);
+        let time = shape.time.unwrap();
+        assert_eq!((time.grain, time.cap), (TimeGrain::Month, 60));
+        for (sql, expected) in [
+            (
+                "ALTER TABLE orders SET SHAPE (measures = ARRAY['total'])",
+                "column:aggregate",
+            ),
+            (
+                "ALTER TABLE orders SET SHAPE (measures = ARRAY['total:avg'])",
+                "not one of",
+            ),
+            (
+                "ALTER TABLE orders SET SHAPE (time = 'd:week')",
+                "not day or month",
+            ),
+            (
+                "ALTER TABLE orders SET SHAPE (colour = 'blue')",
+                "not supported",
+            ),
+            (
+                "ALTER TABLE orders SET SHAPE (dimensions = 'region')",
+                "expects ARRAY",
+            ),
+            ("ALTER TABLE orders SET SHAPE", "parenthesised"),
+        ] {
+            let error = parse_catalog_statement(sql).unwrap_err().to_string();
+            assert!(error.contains(expected), "{sql}: {error}");
+        }
+        let (dimensions, measures, time) = expected.render();
+        let rendered = render_create_table(
+            &name(&["lake", "sales", "orders"]),
+            &[ColumnSpec {
+                name: "region".into(),
+                data_type: DataType::Utf8,
+                nullable: true,
+            }],
+            "orders",
+            DataFormat::Parquet,
+            AccessPattern::Shortcut,
+            TableColumnLists {
+                partitioned_by: &[],
+                clustered_by: &[],
+                bloom: &[],
+                dimensions: &dimensions,
+                measures: &measures,
+                time: time.as_deref(),
+            },
+        );
+        assert!(
+            rendered.contains("dimensions = ARRAY['region', 'status:50']"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("measures = ARRAY['total:sum,count', 'user_id:count_distinct']"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.ends_with("time = 'order_date:day'\n)"),
+            "{rendered}"
+        );
+        let CatalogStatement::CreateTable { shape, .. } = parse(&rendered) else {
+            panic!("rendered CREATE TABLE parses");
+        };
+        assert_eq!(shape, expected);
     }
 
     #[test]
@@ -1804,6 +1999,7 @@ mod tests {
                 partitioned_by: None,
                 clustered_by: Vec::new(),
                 bloom: Vec::new(),
+                shape: TableShape::default(),
             }
         );
         assert_eq!(
@@ -1820,6 +2016,7 @@ mod tests {
                 partitioned_by: None,
                 clustered_by: Vec::new(),
                 bloom: Vec::new(),
+                shape: TableShape::default(),
             }
         );
         assert_eq!(
@@ -1962,6 +2159,9 @@ mod tests {
                 partitioned_by: &[],
                 clustered_by: &["Region Name".to_owned(), "id".to_owned()],
                 bloom: &["wide".to_owned()],
+                dimensions: &[],
+                measures: &[],
+                time: None,
             },
         );
         assert!(rendered.starts_with("CREATE TABLE \"OpenSource\".nyc_taxi.yellow_trips (\n"));
@@ -1979,6 +2179,7 @@ mod tests {
                 partitioned_by: None,
                 clustered_by: vec!["Region Name".into(), "id".into()],
                 bloom: vec!["wide".into()],
+                shape: TableShape::default(),
             }
         );
         // A partitioned table renders its keys and reads back the same.
@@ -2006,6 +2207,7 @@ mod tests {
                 partitioned_by: Some(vec!["Region Name".into(), "id".into()]),
                 clustered_by: Vec::new(),
                 bloom: Vec::new(),
+                shape: TableShape::default(),
             }
         );
         let plain = render_create_table(

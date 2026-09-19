@@ -6,8 +6,8 @@ pub mod product_metrics;
 pub mod product_transaction;
 
 use kaveon_core::{
-    CatalogDefinition, CatalogId, CatalogRevision, KaveonError, Result, SchemaDefinition, SchemaId,
-    TableDefinition, TableId, TableStatistics,
+    CatalogDefinition, CatalogId, CatalogRevision, FileCubePartial, KaveonError, Result,
+    SchemaDefinition, SchemaId, TableCube, TableDefinition, TableId, TableStatistics,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -20,7 +20,7 @@ use std::{
 };
 
 const DATABASE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
-const MIGRATION_VERSION: i64 = 2;
+const MIGRATION_VERSION: i64 = 3;
 
 /// A table's `catalog.schema.table` name as the store holds it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -484,6 +484,184 @@ impl CatalogStore {
         Ok(changed == 1)
     }
 
+    /// Store a table's cube beside its statistics, replacing the cube of
+    /// any earlier source version, with its per-file partials: `partials`
+    /// replaces every partial on record when `replace_partials`, else adds
+    /// the given ones and removes `removed_paths`. One transaction, so the
+    /// cube and its partials never describe different versions. The table
+    /// must exist; the cube is deleted with it.
+    pub fn put_table_cube(
+        &self,
+        actor: &str,
+        value: &TableCube,
+        document: &[u8],
+        partials: &[FileCubePartial],
+        replace_partials: bool,
+        removed_paths: &[String],
+    ) -> Result<()> {
+        validate_actor(actor)?;
+        let mut connection = self.connection()?;
+        let transaction = immediate(&mut connection)?;
+        let revision: Option<u64> = transaction
+            .query_row(
+                "SELECT revision FROM tables WHERE id = ?1",
+                [value.table_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        let Some(revision) = revision else {
+            return Err(catalog_error(format!(
+                "catalog object '{}' not found",
+                value.table_id.as_str()
+            )));
+        };
+        transaction
+            .execute(
+                "INSERT INTO table_cubes(table_id, source_version, computed_at_ms, cells, document) \
+                 VALUES (?1, ?2, ?3, ?4, ?5) \
+                 ON CONFLICT(table_id) DO UPDATE SET source_version = excluded.source_version, \
+                 computed_at_ms = excluded.computed_at_ms, cells = excluded.cells, document = excluded.document",
+                params![
+                    value.table_id.as_str(),
+                    value.source_version.identity_sha256,
+                    value.computed_at_ms,
+                    value.cell_count(),
+                    document,
+                ],
+            )
+            .map_err(db_error)?;
+        if replace_partials {
+            transaction
+                .execute(
+                    "DELETE FROM table_cube_files WHERE table_id = ?1",
+                    [value.table_id.as_str()],
+                )
+                .map_err(db_error)?;
+        }
+        for path in removed_paths {
+            transaction
+                .execute(
+                    "DELETE FROM table_cube_files WHERE table_id = ?1 AND path = ?2",
+                    params![value.table_id.as_str(), path],
+                )
+                .map_err(db_error)?;
+        }
+        for partial in partials {
+            transaction
+                .execute(
+                    "INSERT INTO table_cube_files(table_id, path, document) VALUES (?1, ?2, ?3) \
+                     ON CONFLICT(table_id, path) DO UPDATE SET document = excluded.document",
+                    params![
+                        value.table_id.as_str(),
+                        partial.path,
+                        partial.to_json_bytes()?
+                    ],
+                )
+                .map_err(db_error)?;
+        }
+        let details = BTreeMap::from([
+            (
+                "source_version".to_owned(),
+                value.source_version.identity_sha256.clone(),
+            ),
+            ("cells".to_owned(), value.cell_count().to_string()),
+            ("files".to_owned(), value.files.len().to_string()),
+        ]);
+        audit_with_details(
+            &transaction,
+            actor,
+            "cube",
+            "table",
+            value.table_id.as_str(),
+            CatalogRevision::new(revision)?,
+            &details,
+        )?;
+        transaction.commit().map_err(db_error)
+    }
+
+    /// The table's stored cube, whatever source version it describes.
+    pub fn table_cube(&self, id: &TableId) -> Result<Option<TableCube>> {
+        let connection = self.connection()?;
+        let document: Option<Vec<u8>> = connection
+            .query_row(
+                "SELECT document FROM table_cubes WHERE table_id = ?1",
+                [id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        document
+            .map(|bytes| TableCube::from_json_bytes(&bytes))
+            .transpose()
+    }
+
+    /// The source version the table's stored cube describes, without
+    /// decoding the document.
+    pub fn table_cube_version(&self, id: &TableId) -> Result<Option<String>> {
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "SELECT source_version FROM table_cubes WHERE table_id = ?1",
+                [id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)
+    }
+
+    /// The per-file partials of the table's cube, by path.
+    pub fn table_cube_partials(&self, id: &TableId) -> Result<Vec<FileCubePartial>> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare("SELECT document FROM table_cube_files WHERE table_id = ?1 ORDER BY path")
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map([id.as_str()], |row| row.get::<_, Vec<u8>>(0))
+            .map_err(db_error)?;
+        let mut partials = Vec::new();
+        for row in rows {
+            partials.push(FileCubePartial::from_json_bytes(&row.map_err(db_error)?)?);
+        }
+        Ok(partials)
+    }
+
+    /// Remove a table's cube and its partials; `Ok(false)` when it had
+    /// none.
+    pub fn delete_table_cube(&self, actor: &str, id: &TableId) -> Result<bool> {
+        validate_actor(actor)?;
+        let mut connection = self.connection()?;
+        let transaction = immediate(&mut connection)?;
+        let changed = transaction
+            .execute("DELETE FROM table_cubes WHERE table_id = ?1", [id.as_str()])
+            .map_err(db_error)?;
+        transaction
+            .execute(
+                "DELETE FROM table_cube_files WHERE table_id = ?1",
+                [id.as_str()],
+            )
+            .map_err(db_error)?;
+        if changed == 1 {
+            let revision: u64 = transaction
+                .query_row(
+                    "SELECT revision FROM tables WHERE id = ?1",
+                    [id.as_str()],
+                    |row| row.get(0),
+                )
+                .map_err(db_error)?;
+            audit(
+                &transaction,
+                actor,
+                "cube_delete",
+                "table",
+                id.as_str(),
+                CatalogRevision::new(revision)?,
+            )?;
+        }
+        transaction.commit().map_err(db_error)?;
+        Ok(changed == 1)
+    }
+
     /// The actor of an object's `create` audit event, when the object was
     /// created through this store.
     pub fn creator(&self, object_type: &str, object_id: &str) -> Result<Option<String>> {
@@ -777,6 +955,8 @@ fn migrate(connection: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS audit_events(id INTEGER PRIMARY KEY AUTOINCREMENT, occurred_at_ms INTEGER NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, object_type TEXT NOT NULL, object_id TEXT NOT NULL, revision INTEGER NOT NULL, details_json TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS catalog_snapshot(singleton INTEGER PRIMARY KEY CHECK(singleton = 1), identity TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS table_statistics(table_id TEXT PRIMARY KEY, source_version TEXT NOT NULL, computed_at_ms INTEGER NOT NULL, depth TEXT NOT NULL, document BLOB NOT NULL, FOREIGN KEY(table_id) REFERENCES tables(id) ON DELETE CASCADE);
+        CREATE TABLE IF NOT EXISTS table_cubes(table_id TEXT PRIMARY KEY, source_version TEXT NOT NULL, computed_at_ms INTEGER NOT NULL, cells INTEGER NOT NULL, document BLOB NOT NULL, FOREIGN KEY(table_id) REFERENCES tables(id) ON DELETE CASCADE);
+        CREATE TABLE IF NOT EXISTS table_cube_files(table_id TEXT NOT NULL, path TEXT NOT NULL, document BLOB NOT NULL, PRIMARY KEY(table_id, path), FOREIGN KEY(table_id) REFERENCES tables(id) ON DELETE CASCADE);
         INSERT OR IGNORE INTO catalog_snapshot(singleton, identity) VALUES (1, 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
         CREATE INDEX IF NOT EXISTS idx_audit_object ON audit_events(object_type, object_id, id);
         INSERT OR IGNORE INTO schema_migrations(version) VALUES ({MIGRATION_VERSION});
@@ -1172,6 +1352,166 @@ mod tests {
         assert_eq!(store.table_statistics(table.id()).unwrap(), None);
         drop(store);
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    fn cube_for(table: &TableDefinition, identity: &str, files: &[&str]) -> TableCube {
+        use kaveon_core::{
+            CellMeasure, CubeCell, CubeGrouping, SourceVersion, SourceVersionKind, StatValue,
+            TableShape,
+        };
+        let shape = TableShape::parse(&["id".into()], &["id:sum".into()], None).unwrap();
+        TableCube {
+            version: kaveon_core::TABLE_CUBE_VERSION,
+            table_id: table.id().clone(),
+            source_version: SourceVersion {
+                identity_sha256: identity.into(),
+                kind: SourceVersionKind::Listing {
+                    files: files.len() as u64,
+                },
+            },
+            computed_at_ms: 1,
+            slots: shape.measure_slots(),
+            shape,
+            groupings: vec![CubeGrouping {
+                axes: vec![],
+                cells: vec![CubeCell {
+                    key: vec![],
+                    rows: files.len() as u64,
+                    measures: vec![CellMeasure::Sum(Some(StatValue::Int(3)))],
+                }],
+            }],
+            excluded: Vec::new(),
+            files: files.iter().map(|f| (*f).to_owned()).collect(),
+            per_file_complete: true,
+        }
+    }
+
+    fn partial_for(path: &str) -> FileCubePartial {
+        use kaveon_core::{CellMeasure, CubeCell, CubeGrouping, StatValue};
+        FileCubePartial {
+            path: path.into(),
+            rows: 1,
+            groupings: vec![CubeGrouping {
+                axes: vec![],
+                cells: vec![CubeCell {
+                    key: vec![],
+                    rows: 1,
+                    measures: vec![CellMeasure::Sum(Some(StatValue::Int(1)))],
+                }],
+            }],
+        }
+    }
+
+    #[test]
+    fn table_cubes_and_their_partials_are_stored_versioned_and_cascade() {
+        let store = CatalogStore::open_in_memory().unwrap();
+        let (_, _, table) = seed(&store);
+        assert_eq!(store.table_cube(table.id()).unwrap(), None);
+        assert_eq!(store.table_cube_version(table.id()).unwrap(), None);
+        assert!(store.table_cube_partials(table.id()).unwrap().is_empty());
+        let identity_before = store.snapshot_identity().unwrap();
+        let first = cube_for(&table, "v1", &["a", "b"]);
+        let document = first.to_json_bytes().unwrap();
+        store
+            .put_table_cube(
+                "analyzer",
+                &first,
+                &document,
+                &[partial_for("a"), partial_for("b")],
+                true,
+                &[],
+            )
+            .unwrap();
+        assert_eq!(store.table_cube(table.id()).unwrap(), Some(first.clone()));
+        assert_eq!(
+            store.table_cube_version(table.id()).unwrap().as_deref(),
+            Some("v1")
+        );
+        assert_eq!(
+            store
+                .table_cube_partials(table.id())
+                .unwrap()
+                .iter()
+                .map(|p| p.path.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+        // The cube does not move the definition identity.
+        assert_eq!(store.snapshot_identity().unwrap(), identity_before);
+
+        // A refresh: one file added, one removed, the rest kept.
+        let second = cube_for(&table, "v2", &["b", "c"]);
+        let document = second.to_json_bytes().unwrap();
+        store
+            .put_table_cube(
+                "engine-cube-refresh",
+                &second,
+                &document,
+                &[partial_for("c")],
+                false,
+                &["a".to_owned()],
+            )
+            .unwrap();
+        assert_eq!(store.table_cube(table.id()).unwrap(), Some(second));
+        assert_eq!(
+            store
+                .table_cube_partials(table.id())
+                .unwrap()
+                .iter()
+                .map(|p| p.path.as_str())
+                .collect::<Vec<_>>(),
+            ["b", "c"]
+        );
+        let events = store.audit_events(None, 20).unwrap();
+        let cube_events = events
+            .iter()
+            .filter(|event| event.action == "cube")
+            .collect::<Vec<_>>();
+        assert_eq!(cube_events.len(), 2);
+        assert_eq!(cube_events[1].details["source_version"], "v2");
+        assert_eq!(cube_events[1].details["cells"], "1");
+        assert_eq!(cube_events[1].details["files"], "2");
+
+        // An unknown table has nowhere to keep a cube.
+        let orphan = TableCube {
+            table_id: TableId::new("table:x:y:missing").unwrap(),
+            ..cube_for(&table, "v3", &[])
+        };
+        assert!(
+            store
+                .put_table_cube(
+                    "analyzer",
+                    &orphan,
+                    &orphan.to_json_bytes().unwrap(),
+                    &[],
+                    true,
+                    &[]
+                )
+                .is_err()
+        );
+
+        assert!(store.delete_table_cube("analyzer", table.id()).unwrap());
+        assert_eq!(store.table_cube(table.id()).unwrap(), None);
+        assert!(store.table_cube_partials(table.id()).unwrap().is_empty());
+        assert!(!store.delete_table_cube("analyzer", table.id()).unwrap());
+
+        // Deleting the table deletes its cube and partials.
+        let third = cube_for(&table, "v3", &["a"]);
+        store
+            .put_table_cube(
+                "analyzer",
+                &third,
+                &third.to_json_bytes().unwrap(),
+                &[partial_for("a")],
+                true,
+                &[],
+            )
+            .unwrap();
+        store
+            .delete_table("test", table.id(), table.revision())
+            .unwrap();
+        assert_eq!(store.table_cube(table.id()).unwrap(), None);
+        assert!(store.table_cube_partials(table.id()).unwrap().is_empty());
     }
 
     #[test]
