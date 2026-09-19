@@ -1,0 +1,611 @@
+{
+ "engine": "trino@sha256:db58cc93e593a2706553745f276bb119c9810e69918be56ecde088ba7ccb0534",
+ "suite": "TPC-H SF100 on KaveonDB",
+ "tables": "benchmarks/tpch/v2/sf100 (Delta, standard column names)",
+ "repetitions": 3,
+ "memory": "query.max-memory-per-node=3GB, 3 workers Standard_D4s_v3",
+ "date": "2026-09-18",
+ "statements": 22,
+ "measured": 21,
+ "records": [
+  {
+   "id": "q1",
+   "seconds": [
+    35.648,
+    43.386,
+    40.739
+   ],
+   "rows": 4,
+   "error": null,
+   "adapted": false,
+   "sample": [
+    [
+     "A",
+     "F",
+     "3775127758.0",
+     "5660776097194.464",
+     "5377736398183.965",
+     "5592847429515.914",
+     "25.499370423275426",
+     "38236.11698430499",
+     "0.050002243530819244",
+     "148047881"
+    ],
+    [
+     "N",
+     "F",
+     "98553062.0",
+     "147771098385.98004",
+     "140384965965.03464",
+     "145999793032.7759",
+     "25.501556956882876",
+     "38237.19938880452",
+     "0.04998528433804412",
+     "3864590"
+    ],
+    [
+     "N",
+     "O",
+     "7436302976.0",
+     "11150725681373.68",
+     "10593195308234.846",
+     "11016932248183.63",
+     "25.500009404374193",
+     "38237.22764636125",
+     "0.049997918315478194",
+     "291619617"
+    ]
+   ],
+   "result_sha256": "d7ea2c6bcad67644734902a6e6a72cb3b9369711070c9894cedd55f42de31674",
+   "median_seconds": 40.739
+  },
+  {
+   "id": "q2",
+   "seconds": [
+    13.389,
+    12.239,
+    11.493
+   ],
+   "rows": 100,
+   "error": null,
+   "adapted": false,
+   "sample": [
+    [
+     "9999.7",
+     "Supplier#000239544",
+     "UNITED KINGDOM",
+     "6739531",
+     "Manufacturer#4",
+     ",6oexY7ft68JKJCN1SQ LUO5Xf ",
+     "33-509-584-9496",
+     "ets are. blithely special accounts wake across t"
+    ],
+    [
+     "9999.65",
+     "Supplier#000143654",
+     "FRANCE",
+     "2393647",
+     "Manufacturer#3",
+     "HhHCZ,RosE8He4uYvyIDqsPZe,7cZiJh1y9,",
+     "16-166-504-5864",
+     " special accounts. never dogged deposits"
+    ],
+    [
+     "9999.49",
+     "Supplier#000615014",
+     "GERMANY",
+     "12365001",
+     "Manufacturer#3",
+     "4C,uOuJDig7z,4e",
+     "17-780-902-4027",
+     " pinto beans affix along th"
+    ]
+   ],
+   "result_sha256": "70c505641f97b5a3d4e81e6d5b1a9c205ea066c0692d82f39ccedde299921c23",
+   "median_seconds": 12.239
+  },
+  {
+   "id": "q3",
+   "seconds": [
+    40.453,
+    41.609,
+    37.478
+   ],
+   "rows": 10,
+   "error": null,
+   "adapted": false,
+   "sample": [
+    [
+     "249739810",
+     "492136.85370000004",
+     "1995-02-28",
+     "0"
+    ],
+    [
+     "165214338",
+     "485645.5293",
+     "1995-03-09",
+     "0"
+    ],
+    [
+     "507274210",
+     "485256.2466999999",
+     "1995-03-10",
+     "0"
+    ]
+   ],
+   "result_sha256": "6cad3771a77395eb741330ea7194c8f1bab77e6657b066689bc779668b9ab2ae",
+   "median_seconds": 40.453
+  },
+  {
+   "id": "q4",
+   "seconds": [
+    32.241,
+    34.539,
+    33.216
+   ],
+   "rows": 5,
+   "error": null,
+   "adapted": false,
+   "sample": [
+    [
+     "1-URGENT",
+     "1051801"
+    ],
+    [
+     "2-HIGH",
+     "1051366"
+    ],
+    [
+     "3-MEDIUM",
+     "1051587"
+    ]
+   ],
+   "result_sha256": "ccae31b6bd533d59848be7319f0e8e6d9019e7c1dc4bf4717134f09bd937655c",
+   "median_seconds": 33.216
+  },
+  {
+   "id": "q5",
+   "seconds": [
+    76.248,
+    77.812,
+    72.931
+   ],
+   "rows": 5,
+   "error": null,
+   "adapted": false,
+   "sample": [
+    [
+     "VIETNAM",
+     "5310749966.866997"
+    ],
+    [
+     "INDIA",
+     "5296094837.7503"
+    ],
+    [
+     "JAPAN",
+     "5282184528.825387"
+    ]
+   ],
+   "result_sha256": "c0ebb56184665d80d730afa8dc69acf38bd17d09aba310e9a38041f9947d4374",
+   "median_seconds": 76.248
+  },
+  {
+   "id": "q6",
+   "seconds": [
+    14.267,
+    16.05,
+    15.01
+   ],
+   "rows": 1,
+   "error": null,
+   "adapted": false,
+   "sample": [
+    [
+     "12330426888.463728"
+    ]
+   ],
+   "result_sha256": "3e514b9f225f0365e2cc68d24f4746a1bdd129837469f5582018af2b6ca7797a",
+   "median_seconds": 15.01
+  },
+  {
+   "id": "q7",
+   "seconds": [
+    43.475,
+    41.24,
+    43.01
+   ],
+   "rows": 4,
+   "error": null,
+   "adapted": false,
+   "sample": [
+    [
+     "FRANCE",
+     "GERMANY",
+     "1995",
+     "5296106289.740721"
+    ],
+    [
+     "FRANCE",
+     "GERMANY",
+     "1996",
+     "5313955237.565006"
+    ],
+    [
+     "GERMANY",
+     "FRANCE",
+     "1995",
+     "5286060012.210793"
+    ]
+   ],
+   "result_sha256": "e3210025c1dcd7f0a886aa87294861611c9b9bb07d8179b18965b78621d0b091",
+   "median_seconds": 43.01
+  },
+  {
+   "id": "q8",
+   "seconds": [
+    42.329,
+    42.799,
+    51.26
+   ],
+   "rows": 2,
+   "error": null,
+   "adapted": false,
+   "sample": [
+    [
+     "1995",
+     "0.039535108776109405"
+    ],
+    [
+     "1996",
+     "0.03897424492526491"
+    ]
+   ],
+   "result_sha256": "e3dbaaac417b2b9da059b135f1e0d310f684e0a28bb42cdca318353a156c5aec",
+   "median_seconds": 42.799
+  },
+  {
+   "id": "q9",
+   "seconds": [],
+   "rows": null,
+   "error": "Query exceeded per-node memory limit of 3GB [Allocated: 3.00GB, Delta: 3.75MB, Top Consumers: {HashBuilderOperator=2.78GB, ScanFilterAndProjectOperator-ConnectorPageSource=141MB, ExchangeOperator=45.81MB}]",
+   "adapted": false
+  },
+  {
+   "id": "q10",
+   "seconds": [
+    45.393,
+    45.623,
+    49.503
+   ],
+   "rows": 20,
+   "error": null,
+   "adapted": false,
+   "sample": [
+    [
+     "7450894",
+     "Customer#007450894",
+     "936768.8469000002",
+     "927.18",
+     "ARGENTINA",
+     "hxPXtdJ84fyOre7gMSCv2rzBvt cw5G3S4aivxm",
+     "11-833-256-7879",
+     "packages are inside the finally bold requests. final, ironic ideas doze slyly re"
+    ],
+    [
+     "9739771",
+     "Customer#009739771",
+     "842966.5284999998",
+     "1286.48",
+     "JORDAN",
+     "tC7c8bZ7 By6nEoHRL",
+     "23-281-450-4794",
+     "p furiously deposits? deposits affix furiously: pinto beans are blithely after t"
+    ],
+    [
+     "4571035",
+     "Customer#004571035",
+     "838705.6168",
+     "6704.13",
+     "UNITED KINGDOM",
+     "20IDf0Fx1ahSqImFXAEMSopHx3ic,h8Lj",
+     "33-138-285-3770",
+     "e carefully across the quickly ironic requests! fluffily close instructions cajo"
+    ]
+   ],
+   "result_sha256": "d3509e7441ff2609160c4db8334ea3effac7ea09512c5827d7e5fc4c2e929854",
+   "median_seconds": 45.623
+  },
+  {
+   "id": "q11",
+   "seconds": [
+    6.997,
+    7.249,
+    7.051
+   ],
+   "rows": 0,
+   "error": null,
+   "adapted": false,
+   "sample": [],
+   "result_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "median_seconds": 7.051
+  },
+  {
+   "id": "q12",
+   "seconds": [
+    23.871,
+    22.18,
+    24.782
+   ],
+   "rows": 2,
+   "error": null,
+   "adapted": false,
+   "sample": [
+    [
+     "MAIL",
+     "623115",
+     "934713"
+    ],
+    [
+     "SHIP",
+     "622979",
+     "934534"
+    ]
+   ],
+   "result_sha256": "79903502c6eaffd9f42697a64d5810afaf13d985d636df3f09bb2ec8bead0c8e",
+   "median_seconds": 23.871
+  },
+  {
+   "id": "q13",
+   "seconds": [
+    59.642,
+    53.622,
+    51.644
+   ],
+   "rows": 45,
+   "error": null,
+   "adapted": false,
+   "sample": [
+    [
+     "0",
+     "5000183"
+    ],
+    [
+     "10",
+     "677063"
+    ],
+    [
+     "9",
+     "663581"
+    ]
+   ],
+   "result_sha256": "50e70df10ce400a6b8ffb5fcce681564f5c4f6b5f8085992f53e6ddfc4b9b07d",
+   "median_seconds": 53.622
+  },
+  {
+   "id": "q14",
+   "seconds": [
+    22.39,
+    20.005,
+    22.978
+   ],
+   "rows": 1,
+   "error": null,
+   "adapted": false,
+   "sample": [
+    [
+     "16.640357433254383"
+    ]
+   ],
+   "result_sha256": "dfe64372ea1bee3edc7b11b5777c42219574cd293f959f54abbe055a12680cc9",
+   "median_seconds": 22.39
+  },
+  {
+   "id": "q15",
+   "seconds": [
+    40.909,
+    38.096,
+    39.582
+   ],
+   "rows": 0,
+   "error": null,
+   "adapted": false,
+   "sample": [],
+   "result_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "median_seconds": 39.582
+  },
+  {
+   "id": "q16",
+   "seconds": [
+    15.715,
+    18.803,
+    17.033
+   ],
+   "rows": 27840,
+   "error": null,
+   "adapted": false,
+   "sample": [
+    [
+     "Brand#14",
+     "SMALL BRUSHED BRASS",
+     "45",
+     "596"
+    ],
+    [
+     "Brand#34",
+     "ECONOMY BURNISHED STEEL",
+     "23",
+     "592"
+    ],
+    [
+     "Brand#44",
+     "PROMO POLISHED NICKEL",
+     "49",
+     "592"
+    ]
+   ],
+   "result_sha256": "9195ef4cdc1b864c2f14b85a39785d06279b0a87b7183149024c8786ab11f5b0",
+   "median_seconds": 17.033
+  },
+  {
+   "id": "q17",
+   "seconds": [
+    64.981,
+    68.03,
+    63.063
+   ],
+   "rows": 1,
+   "error": null,
+   "adapted": false,
+   "sample": [
+    [
+     "32087018.998571463"
+    ]
+   ],
+   "result_sha256": "8cf7e6270957f2f944c626c9866b88d759f5de5f5a465b1715505afc14888412",
+   "median_seconds": 64.981
+  },
+  {
+   "id": "q18",
+   "seconds": [
+    60.866,
+    59.273,
+    62.446
+   ],
+   "rows": 100,
+   "error": null,
+   "adapted": false,
+   "sample": [
+    [
+     "Customer#011472112",
+     "11472112",
+     "458304292",
+     "1998-02-05",
+     "591036.15",
+     "322.0"
+    ],
+    [
+     "Customer#012090925",
+     "12090925",
+     "501322081",
+     "1995-02-04",
+     "586945.44",
+     "319.0"
+    ],
+    [
+     "Customer#001392379",
+     "1392379",
+     "332381222",
+     "1998-01-24",
+     "575600.0",
+     "311.0"
+    ]
+   ],
+   "result_sha256": "67cb57c5ee3581a836d6c20fa52077bed3932437925877bc9e3a161646ce99c2",
+   "median_seconds": 60.866
+  },
+  {
+   "id": "q19",
+   "seconds": [
+    25.073,
+    30.235,
+    32.445
+   ],
+   "rows": 1,
+   "error": null,
+   "adapted": false,
+   "sample": [
+    [
+     "298937728.88200015"
+    ]
+   ],
+   "result_sha256": "64b56c2b1d4e0fad40e526b2d6fc04996e3a442907b32af2064dbe1db8394cf6",
+   "median_seconds": 30.235
+  },
+  {
+   "id": "q20",
+   "seconds": [
+    30.051,
+    30.619,
+    30.879
+   ],
+   "rows": 17971,
+   "error": null,
+   "adapted": false,
+   "sample": [
+    [
+     "Supplier#000000091",
+     "YV45D7TkfdQanOOZ7q9QxkyGUapU1oOWU6q3"
+    ],
+    [
+     "Supplier#000000157",
+     ",mEGorBfVIm"
+    ],
+    [
+     "Supplier#000000197",
+     "YC2Acon6kjY3zj3Fbxs2k4Vdf7X0cd2F"
+    ]
+   ],
+   "result_sha256": "08efb72e9a4251b82a671a907d7822354cddf0d54137869ca7140651cec344e6",
+   "median_seconds": 30.619
+  },
+  {
+   "id": "q21",
+   "seconds": [
+    152.701,
+    152.559,
+    168.678
+   ],
+   "rows": 100,
+   "error": null,
+   "adapted": false,
+   "sample": [
+    [
+     "Supplier#000747754",
+     "26"
+    ],
+    [
+     "Supplier#000458746",
+     "25"
+    ],
+    [
+     "Supplier#000571158",
+     "25"
+    ]
+   ],
+   "result_sha256": "73de1bf9300fd7b182eaff46eb61c39bdee390d99f766c20f6ea1419db3df67d",
+   "median_seconds": 152.701
+  },
+  {
+   "id": "q22",
+   "seconds": [
+    13.753,
+    14.564,
+    13.119
+   ],
+   "rows": 7,
+   "error": null,
+   "adapted": false,
+   "sample": [
+    [
+     "13",
+     "90748",
+     "679530260.7999995"
+    ],
+    [
+     "17",
+     "91314",
+     "685030261.9100018"
+    ],
+    [
+     "18",
+     "91293",
+     "684593250.4200007"
+    ]
+   ],
+   "result_sha256": "dfd64fb6402ded4e5806b766452a1c31df0429c7049d72fe4d2f046af419a044",
+   "median_seconds": 13.753
+  }
+ ]
+}
