@@ -9,6 +9,7 @@ import { KaveonLoading } from "../../components/KaveonLoading";
 import { ContextBanner } from "../../components/ContextBanner";
 import { nlToSql, DatasetSchema } from "../../utils/nlToSql";
 import { InlineChart } from "../../components/chat/InlineChart";
+import { EvidencePanel, Evidence, Row, headlineOf } from "../../components/chat/EvidencePanel";
 import { API_BASE } from "../../config";
 import { useRecents } from "../../hooks/useRecents";
 import { useSearchParams } from "next/navigation";
@@ -31,6 +32,11 @@ interface RouteMeta {
   elementsChecked?: number;
   approx?: boolean;
   datasetName?: string;
+  /** The lane the DLM's answer took — the Engine's word for an Engine-backed
+   *  dataset (`execution.mode`), the DLM's own for a warehouse one. */
+  lane?: "context" | "cache" | "live";
+  evidence?: Evidence;
+  headline?: Row | null;
 }
 
 interface ContextHint { label: string; value: number | string | null }
@@ -271,8 +277,9 @@ function ChatHistorySidebar({
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function Home() {
-  const { account } = useAuth();
+  const { account, role } = useAuth();
   const { isSetupOk } = useSetup();
+  const canRunLive = role === "Analyst" || role === "Editor" || role === "Admin";
 
   const [query, setQuery] = useState("");
   const [data, setData] = useState<PageData | null>(null);
@@ -429,8 +436,10 @@ export default function Home() {
   }, [startNewChat]);
 
   const email = account?.email ?? "";
-  const hasData = data !== null && data.sourceCount > 0;
-  const isEmpty = data !== null && data.sourceCount === 0;
+  // A dataset over an Engine table is askable with no registered data
+  // source, so the platform is empty only when it holds neither.
+  const hasData = data !== null && (data.sourceCount > 0 || datasets.length > 0);
+  const isEmpty = data !== null && data.sourceCount === 0 && datasets.length === 0;
   const inConversation = messages.length > 0;
 
   // ── Data fetching ────────────────────────────────────────────────────────────
@@ -465,7 +474,7 @@ export default function Home() {
           tableCount = active.dataSources.reduce((sum: number, s: any) => sum + (typeof s.table_count === "number" ? s.table_count : 0), 0);
         }
 
-        const datasetCount = summary.dataset_count ?? summary.datasets_count ?? summary.datasetCount ?? 0;
+        const datasetCount = summary.dataset_count ?? summary.datasets_count ?? summary.datasetCount ?? (Array.isArray(summary.datasets) ? summary.datasets.length : 0);
 
         setData({
           datasetCount,
@@ -788,6 +797,19 @@ export default function Home() {
             }]);
             return;
           }
+          if (!dlm?.ok && dlm?.reason === "query_failed") {
+            const failMsg = `The query could not be completed: ${String(dlm.message || "the Engine refused the statement")}.`;
+            if (sid) {
+              void saveMessage(sid, "user", text.trim());
+              void saveMessage(sid, "assistant", failMsg, { sql_query: dlm.sql, route: "error" });
+            }
+            setMessages(prev => [...prev.slice(0, -1), {
+              role: "assistant",
+              content: failMsg,
+              ...(dlm.evidence ? { routeMeta: { route: "dlm", lane: "live", evidence: dlm.evidence, datasetName: dlm.dataset_name } } : {}),
+            }]);
+            return;
+          }
           if (!dlm?.ok && dlm?.reason === "out_of_scope") {
             const names: string[] = dlm.datasets || [];
             const scopeMsg = dlm.hint
@@ -802,13 +824,16 @@ export default function Home() {
             setMessages(prev => [...prev.slice(0, -1), { role: "assistant", content: scopeMsg }]);
             return;
           }
-          if (dlm?.ok && (dlm.from_context || dlm.sql)) {
+          if (dlm?.ok && (dlm.from_context || dlm.executed || dlm.sql)) {
             if (dlm.frame) lastFrame.current = dlm.frame;
-            // Answered from precomputed context (no DB trip) vs a live query.
+            // Answered from context (no scan), executed on the Engine by the
+            // DLM itself (rows and evidence in hand), or a warehouse statement
+            // the browser runs now.
             let rows: (string | number | null)[][] = [];
             let columns: string[] = [];
             let got = false;
-            if (dlm.from_context) {
+            const evidence: Evidence | undefined = dlm.evidence;
+            if (dlm.from_context || dlm.executed) {
               rows = dlm.rows || [];
               columns = dlm.columns || [];
               got = true;
@@ -836,10 +861,17 @@ export default function Home() {
                 rows = execData.rows || execData.data || [];
                 columns = execData.columns || execData.column_names || [];
                 got = true;
+                // The warehouse live lane runs here: complete its evidence.
+                if (evidence) {
+                  evidence.elapsed_ms = typeof execData.duration_ms === "number" ? execData.duration_ms : Math.round(performance.now() - dlmT0);
+                  evidence.rows = rows.length;
+                  if (execData.query_id) evidence.query_id = String(execData.query_id);
+                }
               }
             }
             if (got && (resultHasData(rows) || dlm.note)) {
-              const route = dlm.from_context ? "context" : "dlm";
+              const lane: RouteMeta["lane"] = evidence?.lane ?? (dlm.from_context ? "context" : "live");
+              const route = lane === "context" ? "context" : "dlm";
               const parsedLike = { sql: dlm.sql, chartType: dlm.chartType, xAxis: dlm.xAxis, yAxis: dlm.yAxis, title: dlm.title, confidence: dlm.confidence ?? 0.5 };
               const insight = generateInsight(rows, columns, parsedLike, question);
               const summary = dlm.note ? `${dlm.note}\n\n${insight}` : insight;
@@ -853,7 +885,7 @@ export default function Home() {
                 role: "assistant",
                 content: summary,
                 ...(wantsChart ? { chart: { rows, columns, chartType: dlm.chartType, xAxis: dlm.xAxis, yAxis: dlm.yAxis, title: dlm.title, sql: dlm.sql } } : {}),
-                routeMeta: { route, durationMs: Math.round(performance.now() - dlmT0), approx: !!dlm.approx, datasetName: dlm.dataset_name },
+                routeMeta: { route, lane, evidence, headline: headlineOf(rows), durationMs: Math.round(performance.now() - dlmT0), approx: !!dlm.approx, datasetName: dlm.dataset_name },
               }]);
               return;
             }
@@ -1296,14 +1328,17 @@ export default function Home() {
                               fontWeight: 600,
                             }}>
                               <i className={`fas ${m.routeMeta.route === "context" ? "fa-bolt" : m.routeMeta.route === "direct" ? "fa-database" : "fa-route"}`} style={{ fontSize: 8 }} />
-                              {m.routeMeta.route === "context" ? (m.routeMeta.approx ? "From sketch" : "From context") : m.routeMeta.route === "direct" ? "Live query" : m.routeMeta.route === "hybrid" ? "Hybrid" : "Live query"}
+                              {m.routeMeta.route === "context" ? (m.routeMeta.approx ? "From sketch" : "From context") : m.routeMeta.route === "direct" ? "Live query" : m.routeMeta.route === "hybrid" ? "Hybrid" : m.routeMeta.lane === "cache" ? "From cache" : "Live query"}
                             </span>
                             {m.routeMeta.durationMs != null && <span>{m.routeMeta.durationMs >= 1000 ? (m.routeMeta.durationMs / 1000).toFixed(1) + "s" : m.routeMeta.durationMs + "ms"}</span>}
-                            {m.routeMeta.route === "context" && !m.routeMeta.approx && <span style={{ color: "#10b981" }}>&middot; no DB scan</span>}
-                            {m.routeMeta.route === "context" && m.routeMeta.approx && <span style={{ color: "#10b981" }} title="HyperLogLog sketch estimate (~1-2% error), no database scan">&middot; ≈ estimate &middot; no DB scan</span>}
+                            {m.routeMeta.route === "context" && !m.routeMeta.approx && <span style={{ color: "#10b981" }}>&middot; no scan</span>}
+                            {m.routeMeta.route === "context" && m.routeMeta.approx && <span style={{ color: "#10b981" }} title="Sketch estimate with its error stated in the evidence; no scan">&middot; ≈ estimate &middot; no scan</span>}
                             {m.routeMeta.elementsChecked != null && <span>&middot; {m.routeMeta.elementsChecked} elements</span>}
                             {m.routeMeta.datasetName && <span>&middot; {m.routeMeta.datasetName}</span>}
                           </div>
+                        )}
+                        {m.routeMeta?.evidence && (
+                          <EvidencePanel evidence={m.routeMeta.evidence} headline={m.routeMeta.headline ?? null} canRunLive={canRunLive} />
                         )}
                       </>
                     )}
