@@ -3544,9 +3544,29 @@ fn statistics_document(
         "compressed_bytes": profile.compressed_bytes,
         "uncompressed_bytes": profile.uncompressed_bytes,
         "last_modified_ms": profile.last_modified_ms,
-        "partition_columns": profile.partition_columns,
+        "partition_columns": partition_column_names(profile),
         "columns": columns,
     })
+}
+
+/// The partition columns a profiled source carries: the Delta log's, or the
+/// `key=value` keys of a partitioned Parquet directory.
+fn partition_column_names(profile: &kaveon_storage::SourceProfile) -> Vec<String> {
+    if !profile.partition_columns.is_empty() {
+        return profile.partition_columns.clone();
+    }
+    profile
+        .statistics
+        .parquet_listing
+        .as_ref()
+        .map(|listing| {
+            listing
+                .partitions
+                .iter()
+                .map(|column| column.name().to_owned())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn format_name(format: kaveon_core::DataFormat) -> &'static str {
@@ -3737,7 +3757,7 @@ fn describe_detail_result(
             serde_json::json!(profile.compressed_bytes),
             serde_json::Value::Null,
             serde_json::json!(profile.statistics.delta_version),
-            serde_json::json!(profile.partition_columns.join(",")),
+            serde_json::json!(partition_column_names(profile).join(",")),
             serde_json::Value::Null,
             serde_json::Value::Null,
         ],
