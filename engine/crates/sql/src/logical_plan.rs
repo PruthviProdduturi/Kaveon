@@ -41,6 +41,13 @@ pub enum AggregateExpr {
         expr: Expr,
         percentiles: Percentiles,
     },
+    /// `APPROX_COUNT_DISTINCT_STATE(expr)`: the HyperLogLog sketch itself,
+    /// as base64 text of its compact encoding, mergeable with any other.
+    ApproxDistinctState(Expr),
+    /// `COLUMN_STATISTICS(expr)`: the column's read profile over the rows
+    /// aggregated — null count, exact bounds, the distinct-count and
+    /// quantile sketches — as the JSON `ANALYZE` stores per column.
+    ColumnStatistics(Expr),
 }
 
 impl AggregateExpr {
@@ -54,6 +61,8 @@ impl AggregateExpr {
             Self::Max(_) => "MAX",
             Self::ApproxDistinct { .. } => "APPROX_COUNT_DISTINCT",
             Self::ApproxPercentile { .. } => "APPROX_PERCENTILE",
+            Self::ApproxDistinctState(_) => "APPROX_COUNT_DISTINCT_STATE",
+            Self::ColumnStatistics(_) => "COLUMN_STATISTICS",
         }
     }
 
@@ -66,7 +75,9 @@ impl AggregateExpr {
             | Self::Min(expr)
             | Self::Max(expr)
             | Self::ApproxDistinct { expr, .. }
-            | Self::ApproxPercentile { expr, .. } => expr,
+            | Self::ApproxPercentile { expr, .. }
+            | Self::ApproxDistinctState(expr)
+            | Self::ColumnStatistics(expr) => expr,
         }
     }
 
@@ -78,7 +89,9 @@ impl AggregateExpr {
             | Self::Min(expr)
             | Self::Max(expr)
             | Self::ApproxDistinct { expr, .. }
-            | Self::ApproxPercentile { expr, .. } => expr,
+            | Self::ApproxPercentile { expr, .. }
+            | Self::ApproxDistinctState(expr)
+            | Self::ColumnStatistics(expr) => expr,
         }
     }
 
@@ -2089,7 +2102,9 @@ fn collect_aggregates_from_ast_expr(expr: &ast::Expr, out: &mut Vec<AggregateExp
             }
             let name = canonical_function_name(func);
             if is_aggregate_function(&name) {
-                let approximate = name.starts_with("APPROX_");
+                // A sketch needs a column and folds every value: no `*`,
+                // no DISTINCT.
+                let approximate = name.starts_with("APPROX_") || name == "COLUMN_STATISTICS";
                 let arg = match &func.args {
                     ast::FunctionArguments::List(args) => {
                         if args.args.is_empty() {
@@ -2145,6 +2160,8 @@ fn collect_aggregates_from_ast_expr(expr: &ast::Expr, out: &mut Vec<AggregateExp
                         expr: arg,
                         percentiles: approx_percentiles(func)?,
                     },
+                    "APPROX_COUNT_DISTINCT_STATE" => AggregateExpr::ApproxDistinctState(arg),
+                    "COLUMN_STATISTICS" => AggregateExpr::ColumnStatistics(arg),
                     _ => unreachable!(),
                 };
                 out.push(agg);

@@ -26,12 +26,20 @@ pub(crate) const TAG_APPROX_DISTINCT: u8 = 17;
 /// bytes behind their length, the list flag, and the fractions (a count,
 /// then each as a little-endian f64).
 pub(crate) const TAG_APPROX_PERCENTILE: u8 = 18;
+/// A HyperLogLog sketch answered as itself (`APPROX_COUNT_DISTINCT_STATE`):
+/// its compact bytes as one payload.
+pub(crate) const TAG_DISTINCT_SKETCH: u8 = 19;
+/// A column profile (`COLUMN_STATISTICS`): its JSON as one payload.
+pub(crate) const TAG_COLUMN_PROFILE: u8 = 20;
 
 /// The payload of a sketch state, the same under both state encodings.
 pub(crate) fn sketch_payload(state: &AggregateState) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     match state {
-        AggregateState::ApproxDistinct(sketch) => out.extend(sketch.to_bytes()),
+        AggregateState::ApproxDistinct(sketch) | AggregateState::DistinctSketch(sketch) => {
+            out.extend(sketch.to_bytes())
+        }
+        AggregateState::ColumnReadProfile(profile) => out.extend(profile.to_json_bytes()?),
         AggregateState::ApproxPercentile {
             sketch,
             percentiles,
@@ -54,6 +62,12 @@ pub(crate) fn sketch_state(tag: u8, bytes: &[u8]) -> Result<AggregateState> {
         TAG_APPROX_DISTINCT => Ok(AggregateState::ApproxDistinct(HllSketch::from_bytes(
             bytes,
         )?)),
+        TAG_DISTINCT_SKETCH => Ok(AggregateState::DistinctSketch(HllSketch::from_bytes(
+            bytes,
+        )?)),
+        TAG_COLUMN_PROFILE => Ok(AggregateState::ColumnReadProfile(Box::new(
+            kaveon_storage::ColumnReadProfile::from_json_bytes(bytes)?,
+        ))),
         TAG_APPROX_PERCENTILE => {
             let mut input = Input(bytes);
             let sketch = KllSketch::from_bytes(input.payload()?)?;
@@ -160,11 +174,15 @@ pub(crate) fn encode_into(states: &[AggregateState], out: &mut Vec<u8>) -> Resul
                     out.extend(value.to_le_bytes());
                 }
             }
-            AggregateState::ApproxDistinct(_) | AggregateState::ApproxPercentile { .. } => {
-                out.push(if matches!(state, AggregateState::ApproxDistinct(_)) {
-                    TAG_APPROX_DISTINCT
-                } else {
-                    TAG_APPROX_PERCENTILE
+            AggregateState::ApproxDistinct(_)
+            | AggregateState::ApproxPercentile { .. }
+            | AggregateState::DistinctSketch(_)
+            | AggregateState::ColumnReadProfile(_) => {
+                out.push(match state {
+                    AggregateState::ApproxDistinct(_) => TAG_APPROX_DISTINCT,
+                    AggregateState::ApproxPercentile { .. } => TAG_APPROX_PERCENTILE,
+                    AggregateState::DistinctSketch(_) => TAG_DISTINCT_SKETCH,
+                    _ => TAG_COLUMN_PROFILE,
                 });
                 payload(out, &sketch_payload(state)?)?;
             }
@@ -286,7 +304,10 @@ pub(crate) fn decode_into(bytes: &[u8], states: &mut Vec<AggregateState>) -> Res
                     AggregateState::IntegerMax(value)
                 }
             }
-            TAG_APPROX_DISTINCT | TAG_APPROX_PERCENTILE => sketch_state(tag, input.payload()?)?,
+            TAG_APPROX_DISTINCT
+            | TAG_APPROX_PERCENTILE
+            | TAG_DISTINCT_SKETCH
+            | TAG_COLUMN_PROFILE => sketch_state(tag, input.payload()?)?,
             TAG_EXACT => {
                 let function = match input.byte()? {
                     0 => AggFunc::Sum,
@@ -508,6 +529,27 @@ mod tests {
                     list: true,
                 },
             },
+            AggregateState::DistinctSketch({
+                let mut sketch = HllSketch::default_precision();
+                for value in 0..100 {
+                    sketch.insert_text(&value.to_string());
+                }
+                sketch
+            }),
+            AggregateState::ColumnReadProfile(Box::new({
+                let mut profile = kaveon_storage::ColumnReadProfile::untyped();
+                let array: ArrayRef = Arc::new(arrow::array::Int64Array::from(vec![
+                    Some(3),
+                    None,
+                    Some(-7),
+                    Some(12),
+                ]));
+                profile.fold_array(&array).unwrap();
+                profile
+            })),
+            AggregateState::ColumnReadProfile(Box::new(
+                kaveon_storage::ColumnReadProfile::untyped(),
+            )),
         ];
         let bytes = encode(&states).unwrap();
         assert_eq!(decode(&bytes).unwrap(), states);

@@ -1830,3 +1830,225 @@ fn the_cube_answers_what_the_row_path_answers() {
     let _ = std::fs::remove_dir_all(&directory);
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }
+
+/// `ANALYZE … WITH (sketches = true)` on the workers is the coordinator's
+/// read: the one `COLUMN_STATISTICS` statement over the single-file
+/// dictionary table, its scan split by row group across two in-process
+/// workers, folded into the metadata document, against the storage
+/// builder's full read of the same file — rows, bounds, null counts and
+/// exactness flags equal, the HyperLogLog registers identical (merges are
+/// exact whatever the partitioning), the KLL sketches agreeing on every
+/// decile within the sketch's rank error.
+#[test]
+fn the_distributed_statistics_read_matches_the_coordinator_build() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-differential-statistics-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let manager = events_catalog(&directory);
+    let location = directory.join("events.parquet");
+    let table_id = kaveon_core::TableId::new("table:lake:events:events").unwrap();
+    let local = kaveon_storage::full_statistics(
+        location.to_str().unwrap(),
+        DataFormat::Parquet,
+        table_id.clone(),
+        &kaveon_storage::FullScanOptions {
+            memory: None,
+            threads: 1,
+            columns: None,
+        },
+    )
+    .unwrap();
+    let mut distributed = kaveon_storage::metadata_statistics(
+        location.to_str().unwrap(),
+        DataFormat::Parquet,
+        table_id,
+    )
+    .unwrap();
+    let selected = kaveon_storage::sketched_columns(&distributed, None).unwrap();
+    assert_eq!(selected.len(), distributed.columns.len());
+    let statement = crate::api::statistics_read_sql(&distributed, &selected, "events");
+    assert!(statement.starts_with("SELECT COUNT(*), COLUMN_STATISTICS(\"user_id\"), "));
+    let plan = bound_plan(&statement, &manager);
+    let pool = QueryMemoryPool::new("differential-statistics", 256 * 1024 * 1024).unwrap();
+    // Two workers over one file: each scan task takes the row groups of
+    // its partition, so the rows are read once between them.
+    let batches = execute_distributed(&statement, &plan, &manager, 2, &pool).unwrap();
+    let rows = crate::api::batches_to_json(&batches);
+    assert_eq!(rows.len(), 1);
+    crate::api::apply_statistics_read_row(&mut distributed, &selected, &rows[0]).unwrap();
+
+    assert_eq!(distributed.depth, kaveon_core::StatisticsDepth::Full);
+    assert_eq!(distributed.rows, local.rows);
+    assert_eq!(distributed.rows, ROWS as u64);
+    assert_eq!(distributed.source_version, local.source_version);
+    assert_eq!(distributed.per_file, local.per_file);
+    for (column, expected) in distributed.columns.iter().zip(&local.columns) {
+        assert_eq!(column.name, expected.name);
+        assert_eq!(column.null_count, expected.null_count, "{}", column.name);
+        assert_eq!(column.min, expected.min, "{}", column.name);
+        assert_eq!(column.max, expected.max, "{}", column.name);
+        assert!(column.bounds_exact, "{}", column.name);
+        assert_eq!(column.distinct, expected.distinct, "{}", column.name);
+        assert_eq!(column.distinct_exact, None);
+        match (&column.quantiles, &expected.quantiles) {
+            (Some(theirs), Some(ours)) => {
+                assert_eq!(theirs.count(), ours.count(), "{}", column.name);
+                // Each sketch's rank of a value is within its error of the
+                // true rank, so the two agree within twice it — at every
+                // decile of the coordinator's sketch (a value's rank, not
+                // the decile itself: the columns hold ties).
+                let error = 2.0 * ours.rank_error();
+                for decile in 1..10 {
+                    let fraction = f64::from(decile) / 10.0;
+                    let value = ours.quantile(fraction).unwrap();
+                    let (rank, expected) = (theirs.rank(value), ours.rank(value));
+                    assert!(
+                        (rank - expected).abs() <= error,
+                        "{}: {value} ranks {rank} in the workers' sketch, {expected} in the coordinator's",
+                        column.name
+                    );
+                }
+            }
+            (None, None) => assert!(!kaveon_core::sketch::quantile_sketchable(&column.data_type)),
+            (theirs, ours) => panic!("{}: {theirs:?} versus {ours:?}", column.name),
+        }
+    }
+    // What the document says is what a client reads back.
+    let bytes = distributed.to_json_bytes().unwrap();
+    assert_eq!(
+        kaveon_core::TableStatistics::from_json_bytes(&bytes).unwrap(),
+        distributed
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// `ANALYZE … WITH (cube = true)` on the workers is the coordinator's
+/// build: every grouping of the declared shape as one `GROUP BY`
+/// statement through the two-worker fragments, its rows typed back into
+/// cells, against the storage builder's cube over the same directory —
+/// cell for cell, the additive measures exact and the distinct sketches
+/// bit-identical. An axis over its cap is excluded the same way: the
+/// single-axis statement reads one row past the cap and stops.
+#[test]
+fn the_distributed_cube_read_matches_the_coordinator_build() {
+    let directory = std::env::temp_dir().join(format!(
+        "kaveon-differential-cube-read-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let events = events();
+    let mut catalog = MemoryCatalog::new(
+        "lake",
+        StorageType::Local {
+            base_path: PathBuf::from(&directory),
+        },
+    )
+    .with_schema("events");
+    let parts = write_directory(&directory, "events_parts", &batch(&events, false), 3);
+    catalog.register_table("events", parts).unwrap();
+    let mut manager = CatalogManager::new("lake", "events");
+    manager.register_catalog(Box::new(catalog));
+    let location = directory.join("events_parts");
+    let table_id = kaveon_core::TableId::new("table:lake:events:events_parts").unwrap();
+    let statistics = kaveon_storage::metadata_statistics(
+        location.to_str().unwrap(),
+        DataFormat::Parquet,
+        table_id.clone(),
+    )
+    .unwrap();
+    let pool = QueryMemoryPool::new("differential-cube-read", 256 * 1024 * 1024).unwrap();
+    let dimensions = |country: Option<&str>| {
+        let mut dimensions = vec![
+            "region:10".to_owned(),
+            "platform:5".into(),
+            "industry:10".into(),
+        ];
+        dimensions.extend(country.map(str::to_owned));
+        dimensions
+    };
+    let measures = [
+        "actions:sum,count".to_owned(),
+        "latency_p75_ms:min,max".into(),
+        "errors:sum".into(),
+        "user_id:count_distinct".into(),
+    ];
+    // Within every cap, and with a country axis over its cap of three.
+    for country in [None, Some("country:3")] {
+        let shape = kaveon_core::TableShape::parse(
+            &dimensions(country),
+            &measures,
+            Some("event_date:day:40"),
+        )
+        .unwrap();
+        let local = kaveon_storage::build_cube(
+            location.to_str().unwrap(),
+            DataFormat::Parquet,
+            table_id.clone(),
+            &shape,
+            &kaveon_storage::CubeBuildOptions {
+                memory: None,
+                threads: 3,
+                max_cells: 100_000,
+            },
+        )
+        .unwrap()
+        .cube;
+        let axes = shape.axes();
+        let mut excluded = Vec::new();
+        let mut read = Vec::new();
+        for grouping in shape.groupings() {
+            if grouping.iter().any(|axis| excluded.contains(axis)) {
+                continue;
+            }
+            let statement = crate::api::cube_grouping_read(
+                &shape,
+                &statistics.columns,
+                &grouping,
+                "events_parts",
+            );
+            let plan = bound_plan(&statement.sql, &manager);
+            let batches = execute_distributed(&statement.sql, &plan, &manager, 2, &pool)
+                .unwrap_or_else(|error| panic!("{}: {error}", statement.sql));
+            let rows = crate::api::batches_to_json(&batches);
+            if let (Some(limit), [axis]) = (statement.limit, grouping.as_slice())
+                && rows.len() as u64 >= limit
+            {
+                excluded.push(*axis);
+                assert_eq!(axes[*axis].column, "country");
+                continue;
+            }
+            read.push(
+                crate::api::cube_grouping_from_rows(&shape, &statistics.columns, &grouping, &rows)
+                    .unwrap(),
+            );
+        }
+        assert_eq!(
+            local
+                .excluded
+                .iter()
+                .map(|axis| axis.column.as_str())
+                .collect::<Vec<_>>(),
+            excluded
+                .iter()
+                .map(|axis| axes[*axis].column.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(read.len(), local.groupings.len());
+        // (), the four axes within their caps, their six pairs.
+        assert_eq!(read.len(), 11);
+        for (grouping, expected) in read.iter().zip(&local.groupings) {
+            assert_eq!(grouping.axes, expected.axes);
+            assert_eq!(
+                grouping.cells.len(),
+                expected.cells.len(),
+                "grouping {:?}",
+                grouping.axes
+            );
+            for (cell, expected) in grouping.cells.iter().zip(&expected.cells) {
+                assert_eq!(cell, expected, "grouping {:?}", grouping.axes);
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(&directory);
+}

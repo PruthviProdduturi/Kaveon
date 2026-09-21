@@ -1213,6 +1213,8 @@ fn aggregate_specs(aggregates: &[AggregateExpr]) -> Vec<AggregateSpec> {
                 AggregateExpr::Avg { .. } => AggregateFunction::Avg,
                 AggregateExpr::ApproxDistinct { .. } => AggregateFunction::ApproxDistinct,
                 AggregateExpr::ApproxPercentile { .. } => AggregateFunction::ApproxPercentile,
+                AggregateExpr::ApproxDistinctState(_) => AggregateFunction::ApproxDistinctState,
+                AggregateExpr::ColumnStatistics(_) => AggregateFunction::ColumnStatistics,
             };
             let argument = match aggregate.argument() {
                 Expr::Star => None,
@@ -2264,6 +2266,8 @@ fn logical_agg_to_exec(
         AggregateExpr::Max(e) => (AggFunc::Max, e, false),
         AggregateExpr::ApproxDistinct { expr, .. } => (AggFunc::ApproxDistinct, expr, false),
         AggregateExpr::ApproxPercentile { expr, .. } => (AggFunc::ApproxPercentile, expr, false),
+        AggregateExpr::ApproxDistinctState(e) => (AggFunc::ApproxDistinctState, e, false),
+        AggregateExpr::ColumnStatistics(e) => (AggFunc::ColumnStatistics, e, false),
     };
 
     let column = match expr {
