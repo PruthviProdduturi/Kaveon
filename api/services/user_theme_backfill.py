@@ -52,18 +52,20 @@ def capture_snapshot():
     validate_snapshot(snapshot); return snapshot
 
 def apply_and_reconcile(snapshot):
-    validate_snapshot(snapshot); created=already_present=0
+    validate_snapshot(snapshot); created=already_present=repaired=0
     for record in snapshot.records:
         target=product_store.migration_read("user_theme",record.record_id,record.record_id,"Admin")
         if target is not None and target.get("document")==record.document: already_present+=1; continue
-        if target is not None: raise RuntimeError(f"KaveonDB user theme {record.record_id} diverges")
-        try: product_store.migration_transact([product_store.ProductMutation("create","user_theme",record.record_id,record.document)],record.record_id,"Admin")
+        revision=target.get("revision") if target is not None else None
+        if target is not None and (type(revision) is not int or revision<1): raise RuntimeError(f"KaveonDB user theme {record.record_id} has an invalid revision")
+        try: product_store.migration_transact([product_store.ProductMutation("update" if target is not None else "create","user_theme",record.record_id,record.document,revision)],record.record_id,"Admin")
         except HTTPException as error:
             resolved=product_store.migration_read("user_theme",record.record_id,record.record_id,"Admin")
             if error.status_code!=409 or resolved is None or resolved.get("document")!=record.document: raise
-        created+=1
+        if target is None: created+=1
+        else: repaired+=1
     for record in snapshot.records:
         target=product_store.migration_read("user_theme",record.record_id,record.record_id,"Admin")
         if target is None or target.get("document")!=record.document: raise RuntimeError(f"KaveonDB user theme {record.record_id} failed reconciliation")
     return {"family":"user_themes","source_watermark":snapshot.source_watermark,"source_count":len(snapshot.records),
-            "created":created,"already_present":already_present,"reconciled":len(snapshot.records),"snapshot_sha256":snapshot.snapshot_sha256}
+            "created":created,"already_present":already_present,"repaired":repaired,"reconciled":len(snapshot.records),"snapshot_sha256":snapshot.snapshot_sha256}

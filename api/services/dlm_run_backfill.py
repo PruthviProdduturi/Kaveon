@@ -213,7 +213,7 @@ def restage_artifacts(snapshot: RunSnapshot, artifact_root: Path) -> None:
 
 def apply_and_reconcile(snapshot: RunSnapshot) -> dict:
     validate_snapshot(snapshot)
-    created = already_present = 0
+    created = already_present = repaired = 0
     for record in snapshot.records:
         target = product_store.migration_read("dlm_run", record.record_id, record.owner_principal, "Admin")
         if target is not None and target.get("document") == record.document:
@@ -235,8 +235,8 @@ def apply_and_reconcile(snapshot: RunSnapshot) -> dict:
             already_present += 1
             continue
         revision = target.get("revision")
-        if target.get("document") != building or type(revision) is not int or revision < 1:
-            raise RuntimeError(f"KaveonDB DLM run {record.record_id} diverges")
+        if type(revision) is not int or revision < 1:
+            raise RuntimeError(f"KaveonDB DLM run {record.record_id} has an invalid revision")
         try:
             product_store.migration_transact([
                 product_store.ProductMutation("update", "dlm_run", record.record_id,
@@ -247,7 +247,8 @@ def apply_and_reconcile(snapshot: RunSnapshot) -> dict:
                                           record.owner_principal, "Admin")
             if error.status_code != 409 or resolved is None or resolved.get("document") != record.document:
                 raise
-        created += 1
+        if target.get("document") == building: created += 1
+        else: repaired += 1
     for record in snapshot.records:
         target = product_store.migration_read("dlm_run", record.record_id, record.owner_principal, "Admin")
         if target is None or target.get("document") != record.document:
@@ -255,5 +256,6 @@ def apply_and_reconcile(snapshot: RunSnapshot) -> dict:
     return {"family": "dlm_runs", "source_watermark": snapshot.source_watermark,
             "definition_snapshot_id": snapshot.definition_snapshot_id,
             "source_count": len(snapshot.records), "created": created,
-            "already_present": already_present, "reconciled": len(snapshot.records),
+            "already_present": already_present, "repaired": repaired,
+            "reconciled": len(snapshot.records),
             "snapshot_sha256": snapshot.snapshot_sha256}

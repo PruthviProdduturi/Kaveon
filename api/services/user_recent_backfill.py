@@ -42,16 +42,18 @@ def capture_snapshot():
   records.append(Record(record_id(owner,document["item_id"]),owner,document,canonical(document)))
  records=tuple(sorted(records,key=lambda r:r.record_id));s=Snapshot(int(wm.get("watermark") or 0),records,digest(records));validate(s);return s
 def apply_and_reconcile(s):
- validate(s);created=present=0
+ validate(s);created=present=repaired=0
  for r in s.records:
   target=product_store.migration_read("user_recent",r.record_id,r.owner_principal,"Admin")
   if target is not None and target.get("document")==r.document:present+=1;continue
-  if target is not None:raise RuntimeError("KaveonDB user recent diverges")
-  try:product_store.migration_transact([product_store.ProductMutation("create","user_recent",r.record_id,r.document)],r.owner_principal,"Admin")
+  revision=target.get("revision") if target is not None else None
+  if target is not None and (type(revision) is not int or revision<1):raise RuntimeError("KaveonDB user recent has an invalid revision")
+  try:product_store.migration_transact([product_store.ProductMutation("update" if target is not None else "create","user_recent",r.record_id,r.document,revision)],r.owner_principal,"Admin")
   except HTTPException as error:
    target=product_store.migration_read("user_recent",r.record_id,r.owner_principal,"Admin")
    if error.status_code!=409 or target is None or target.get("document")!=r.document:raise
-  created+=1
+  if target is None:created+=1
+  else:repaired+=1
  for r in s.records:
   if (product_store.migration_read("user_recent",r.record_id,r.owner_principal,"Admin") or {}).get("document")!=r.document:raise RuntimeError("user recent reconciliation failed")
- return {"family":"user_recents","source_watermark":s.source_watermark,"source_count":len(s.records),"created":created,"already_present":present,"reconciled":len(s.records),"snapshot_sha256":s.snapshot_sha256}
+ return {"family":"user_recents","source_watermark":s.source_watermark,"source_count":len(s.records),"created":created,"already_present":present,"repaired":repaired,"reconciled":len(s.records),"snapshot_sha256":s.snapshot_sha256}

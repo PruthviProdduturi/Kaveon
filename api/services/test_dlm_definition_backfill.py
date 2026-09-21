@@ -79,7 +79,7 @@ class DlmDefinitionBackfillTests(unittest.TestCase):
         value = snapshot()
         with patch.object(backfill.product_store, "read", return_value={"document": {"dataset_id": "7", "dataset_revision": 2}}), \
              patch.object(backfill.product_store, "transact") as transact:
-            with self.assertRaisesRegex(RuntimeError, "diverges"): backfill.apply_and_reconcile(value)
+            with self.assertRaisesRegex(RuntimeError, "invalid revision"): backfill.apply_and_reconcile(value)
         transact.assert_not_called()
         corrupt = backfill.DefinitionSnapshot(value.source_watermark, value.dataset_snapshot_id, value.records, "0" * 64)
         with patch.object(backfill.product_store, "read") as read:
