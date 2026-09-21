@@ -26,6 +26,14 @@ class Tests(unittest.TestCase):
   with patch.object(b.db,"transaction",return_value=transaction(tx)):snapshot=b.capture_snapshot()
   with patch.object(b.product_store,"read",side_effect=[None,{"document":snapshot.records[0].document}]),patch.object(b.product_store,"transact") as transact:self.assertEqual(b.apply_and_reconcile(snapshot)["created"],1)
   transact.assert_called_once()
+ def test_divergent_record_is_repaired_with_revision_guard(self):
+  tx=Tx(rows=[[row()]])
+  with patch.object(b.db,"transaction",return_value=transaction(tx)):snapshot=b.capture_snapshot()
+  exact={"document":snapshot.records[0].document,"revision":8}
+  with patch.object(b.product_store,"migration_read",side_effect=[{"document":{},"revision":7},exact]),patch.object(b.product_store,"migration_transact") as transact:
+   report=b.apply_and_reconcile(snapshot)
+  self.assertEqual(report["repaired"],1);mutation=transact.call_args.args[0][0]
+  self.assertEqual((mutation.operation,mutation.expected_revision),("update",7))
  def test_writer_default_off_and_enabled_failure_uses_same_transaction(self):
   tx=Tx(ones=[row()])
   with patch.dict("os.environ",{},clear=True),patch.object(catalog_sources.db,"execute") as execute,patch.object(catalog_sources.product_outbox,"enqueue") as enqueue:catalog_sources._audit("created","c1","Lake","owner")

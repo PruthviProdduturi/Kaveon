@@ -23,6 +23,12 @@ class Tests(unittest.TestCase):
   targets=[None,None,*({"document":r.document} for r in snapshot.records)]
   with patch.object(b.product_store,"read",side_effect=targets),patch.object(b.product_store,"transact") as transact:self.assertEqual(b.apply_and_reconcile(snapshot)["created"],2)
   self.assertEqual(transact.call_count,2)
+ def test_divergent_record_is_repaired_with_revision_guard(self):
+  doc=b.session_document(session());record=b.Record("chat_session","1","owner",doc,b.canonical(doc));snapshot=b.Snapshot(1,(record,),b.digest((record,)))
+  with patch.object(b.product_store,"migration_read",side_effect=[{"document":{},"revision":3},{"document":doc,"revision":4}]),patch.object(b.product_store,"migration_transact") as transact:
+   report=b.apply_and_reconcile(snapshot)
+  self.assertEqual(report["repaired"],1);mutation=transact.call_args.args[0][0]
+  self.assertEqual((mutation.operation,mutation.expected_revision),("update",3))
  def test_orphan_message_fails_closed(self):
   doc=b.message_document(message());record=b.Record("chat_message","2","owner",doc,b.canonical(doc));snapshot=b.Snapshot(1,(record,),b.digest((record,)))
   with self.assertRaisesRegex(RuntimeError,"session is missing"):b.validate(snapshot)

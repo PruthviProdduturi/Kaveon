@@ -38,6 +38,13 @@ class Tests(unittest.TestCase):
   with patch.object(b.product_store,"read",side_effect=[None,target]),patch.object(b.product_store,"transact") as transact:
    self.assertEqual(b.apply_and_reconcile(s)["created"],1)
   transact.assert_called_once()
+ def test_divergent_record_is_repaired_with_revision_guard(self):
+  with patch.object(b.db,"transaction",return_value=transaction([row()])):s=b.capture_snapshot()
+  document=s.records[0].document
+  with patch.object(b.product_store,"migration_read",side_effect=[{"document":{},"revision":2},{"document":document,"revision":3}]),patch.object(b.product_store,"migration_transact") as transact:
+   report=b.apply_and_reconcile(s)
+  self.assertEqual(report["repaired"],1);mutation=transact.call_args.args[0][0]
+  self.assertEqual((mutation.operation,mutation.expected_revision),("update",2))
  def test_checkpoint_resume_and_apply_gate(self):
   with patch.object(b.db,"transaction",return_value=transaction([row()])):snapshot=b.capture_snapshot()
   with tempfile.TemporaryDirectory() as directory:

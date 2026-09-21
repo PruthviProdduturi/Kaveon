@@ -15,6 +15,12 @@ def snap():
  d={"user_email":"owner","object_type":"dataset","object_id":"7","object_name":"Orders"};rid=favorites._record_id("owner","dataset","7")
  r=backfill.FavoriteRecord(rid,"owner",d,backfill._canonical(d)[1]);return backfill.FavoriteSnapshot(5,"snap",(r,),backfill.snapshot_digest((r,),"snap"))
 class FavoriteMigrationTests(unittest.TestCase):
+ def test_divergent_record_is_repaired_with_revision_guard(self):
+  value=snap();document=value.records[0].document
+  with patch.object(backfill.product_store,"migration_read",side_effect=[{"document":{},"revision":5},{"document":document,"revision":6}]),patch.object(backfill.product_store,"migration_transact") as transact:
+   report=backfill.apply_and_reconcile(value)
+  self.assertEqual(report["repaired"],1);mutation=transact.call_args.args[0][0]
+  self.assertEqual((mutation.operation,mutation.expected_revision),("update",5))
  def test_source_create_delete_are_atomic_and_data_source_is_explicitly_not_migrated(self):
   tx=Tx()
   with patch.object(favorites.db,"transaction",return_value=transaction(tx)),patch.object(favorites.product_outbox,"enqueue") as enqueue:
