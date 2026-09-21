@@ -56,11 +56,34 @@ resource network 'Microsoft.Network/virtualNetworks@2024-05-01' = {
   tags: tags
   properties: { addressSpace: { addressPrefixes: ['10.224.0.0/16'] } }
 }
+// Egress is explicit: the subnet has no default outbound access (the
+// tenant closes it out on 2026-09-30), so the nodes leave through a NAT
+// Gateway with one static address — the address the storage account's
+// firewall admits.
+resource egressIp 'Microsoft.Network/publicIPAddresses@2024-05-01' = {
+  name: 'kaveon-test-egress-ip'
+  location: location
+  tags: tags
+  sku: { name: 'Standard', tier: 'Regional' }
+  properties: { publicIPAllocationMethod: 'Static', publicIPAddressVersion: 'IPv4' }
+}
+resource egress 'Microsoft.Network/natGateways@2024-05-01' = {
+  name: 'kaveon-test-egress'
+  location: location
+  tags: tags
+  sku: { name: 'Standard' }
+  properties: {
+    idleTimeoutInMinutes: 10
+    publicIpAddresses: [{ id: egressIp.id }]
+  }
+}
 resource subnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' = {
   parent: network
   name: 'aks'
   properties: {
     addressPrefix: '10.224.0.0/20'
+    defaultOutboundAccess: false
+    natGateway: { id: egress.id }
     serviceEndpoints: [
       { service: 'Microsoft.Storage' }
       { service: 'Microsoft.KeyVault' }
@@ -130,7 +153,7 @@ resource cluster 'Microsoft.ContainerService/managedClusters@2025-01-01' = {
       serviceCidr: '10.0.0.0/16'
       dnsServiceIP: '10.0.0.10'
       loadBalancerSku: 'standard'
-      outboundType: 'loadBalancer'
+      outboundType: 'userAssignedNATGateway'
     }
   }
   dependsOn: [networkRole]
