@@ -103,6 +103,17 @@ class ProductStoreTests(unittest.TestCase):
             product_store.read("source", "source-1", "system", "Admin")
         self.assertEqual(request.call_args.args[3], "system")
 
+    def test_migration_create_retains_canonical_record_owner(self):
+        environment = {
+            "KAVEON_MIGRATION_OWNER_PRINCIPAL": "prproddu-test",
+            "KAVEON_MIGRATION_OWNER_ALLOWLIST": "prproddu-test",
+        }
+        mutation = product_store.ProductMutation("create", "user_recent", "recent-1", {"id": "1"})
+        with patch.dict("os.environ", environment, clear=False), \
+             patch.object(product_store, "transact", return_value={}) as transact:
+            product_store.migration_transact([mutation], "user@example.com", "Admin")
+        transact.assert_called_once_with((mutation,), "user@example.com", "Admin")
+
     def test_rejects_unknown_role_and_unsafe_identifier(self):
         with self.assertRaises(HTTPException) as role_error:
             product_store.read("dataset", "safe", "alice@example.com", "Owner")

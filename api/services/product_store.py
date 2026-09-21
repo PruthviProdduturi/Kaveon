@@ -143,8 +143,11 @@ def transact(mutations: Iterable[ProductMutation], actor: str, role: str) -> dic
 
 
 def migration_transact(mutations: Iterable[ProductMutation], actor: str, role: str) -> dict:
-    """Backfill-only transaction using an optional, explicit owner override."""
-    return transact(mutations, _migration_actor(actor), role)
+    """Backfill-only CAS repair; creates retain their canonical record owner."""
+    staged = tuple(mutations)
+    selected_actor = actor if staged and all(item.operation == "create" for item in staged) \
+        else _migration_actor(actor)
+    return transact(staged, selected_actor, role)
 
 
 def read(kind: ProductKind, record_id: str, actor: str, role: str) -> Optional[dict]:
