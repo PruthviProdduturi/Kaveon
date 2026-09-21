@@ -43,6 +43,10 @@ api:
     # exclusive. Runtime validation rejects incomplete evidence or family sets.
     retirementMode: false
     restartRehearsalMode: false
+    # Keep the PostgreSQL StatefulSet, Service, and PVC rendered during the
+    # non-destructive restart rehearsal.  The PostgreSQL ingress policy is
+    # tightened separately so the API cannot use it.
+    retainPostgresDuringRestart: false
     authorityFamilies: ""
     readAuthorityFamilies: ""
     evidencePvc: ""

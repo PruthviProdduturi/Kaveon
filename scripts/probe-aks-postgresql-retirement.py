@@ -27,7 +27,20 @@ def workload(context,namespace,selector,action,*args):
     if not pod:raise RuntimeError("AKS API pod identity is missing")
     return kube(context,namespace,"exec",pod,"--","python","-m","services.aks_retirement_live_probe",action,*args,json_output=True)
 
-def pg_unavailable(context,namespace):
+def pg_unavailable(context,namespace,retain=False):
+    if retain:
+        sts=kube(context,namespace,"get","statefulset","kaveon-postgres","-o","json",json_output=True)
+        svc=kube(context,namespace,"get","service","kaveon-postgres","-o","json",json_output=True)
+        pods=kube(context,namespace,"get","pod","-l","app=kaveon-postgres","-o","json",json_output=True)
+        items=pods.get("items",[])
+        if sts.get("metadata",{}).get("name")!="kaveon-postgres" or svc.get("metadata",{}).get("name")!="kaveon-postgres" or len(items)!=1:
+            raise RuntimeError("retained PostgreSQL resources are incomplete")
+        if not all(s.get("ready") is True for s in (items[0].get("status",{}).get("containerStatuses") or [])):
+            raise RuntimeError("retained PostgreSQL pod is not ready")
+        policy=kube(context,namespace,"get","networkpolicy","kaveon-portal-postgres-ingress","-o","json",json_output=True)
+        if policy.get("spec",{}).get("ingress") != []:
+            raise RuntimeError("retained PostgreSQL ingress is not isolated")
+        return {"postgresql_unavailable":True,"postgresql_resources_retained":True,"postgresql_ingress_isolated":True}
     for resource in ("statefulset","service"):
         value=kube(context,namespace,"get",resource,"-o","json",json_output=True)
         names={item.get("metadata",{}).get("name") for item in value.get("items",[])}
@@ -77,7 +90,8 @@ def main():
     select=lambda name: commands.add_parser(name).add_argument("--selector",required=True)
     select("pods");select("state-inventory")
     smoke_command=commands.add_parser("smoke-report");smoke_command.add_argument("--selector",required=True);smoke_command.add_argument("--identity",required=True);smoke_command.add_argument("--dataset-id",required=True);smoke_command.add_argument("--question",required=True)
-    commands.add_parser("postgresql-unavailable");commands.add_parser("restart");commands.add_parser("target-fence")
+    pg=commands.add_parser("postgresql-unavailable");pg.add_argument("--retain",action="store_true")
+    commands.add_parser("restart");commands.add_parser("target-fence")
     health=commands.add_parser("api-health");health.add_argument("--authority",required=True,choices=("kaveondb","postgresql"));health.add_argument("--selector",default="app=kaveon-api,!job")
     rb=commands.add_parser("rollback");rb.add_argument("--helm",required=True);rb.add_argument("--release",required=True);rb.add_argument("--revision",required=True,type=int)
     commands.add_parser("source-reads");commands.add_parser("source-writes")
@@ -86,7 +100,7 @@ def main():
         if args.command=="pods":value=pods(args.context,args.namespace,args.selector)
         elif args.command=="state-inventory":value=workload(args.context,args.namespace,args.selector,"state-inventory")
         elif args.command=="smoke-report":value=smoke_report(args.context,args.namespace,args.selector,args.identity,args.dataset_id,args.question)
-        elif args.command=="postgresql-unavailable":value=pg_unavailable(args.context,args.namespace)
+        elif args.command=="postgresql-unavailable":value=pg_unavailable(args.context,args.namespace,args.retain)
         elif args.command=="restart":restart(args.context,args.namespace);value=None
         elif args.command=="target-fence":value=target_fence(args.context,args.namespace)
         elif args.command=="api-health":value=workload(args.context,args.namespace,args.selector,"api-health","--authority",args.authority)

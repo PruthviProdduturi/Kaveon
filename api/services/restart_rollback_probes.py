@@ -56,7 +56,7 @@ def restart(manifest,runner=subprocess.run):
  if not isinstance(manifest,dict) or set(manifest)!=keys:raise RuntimeError("restart probe manifest is invalid")
  before=inventory(run(manifest["state_before"],runner));api_before=pods(run(manifest["api_pods_before"],runner),"API");studio_before=pods(run(manifest["studio_pods_before"],runner),"Studio")
  pg=run(manifest["postgresql_unavailable"],runner)
- if pg!={"postgresql_unavailable":True}:raise RuntimeError("PostgreSQL unavailable state was not proven")
+ if not isinstance(pg,dict) or pg.get("postgresql_unavailable") is not True:raise RuntimeError("PostgreSQL unavailable state was not proven")
  run(manifest["restart"],runner,json_output=False)
  api_after=pods(run(manifest["api_pods_after"],runner),"API");studio_after=pods(run(manifest["studio_pods_after"],runner),"Studio")
  if api_before&api_after or studio_before&studio_after:raise RuntimeError("API or Studio pods were not replaced")
