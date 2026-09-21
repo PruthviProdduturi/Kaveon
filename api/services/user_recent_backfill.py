@@ -41,9 +41,13 @@ def capture_snapshot():
   document={"user_email":owner,"item_id":normalize_item_id(item,row.get("type")),"label":row.get("label"),"href":row.get("href"),"type":row.get("type"),"created_at":created}
   records.append(Record(record_id(owner,document["item_id"]),owner,document,canonical(document)))
  records=tuple(sorted(records,key=lambda r:r.record_id));s=Snapshot(int(wm.get("watermark") or 0),records,digest(records));validate(s);return s
+def _reference_exists(r):
+ d=r.document;kind=d["type"];item=str(d["item_id"]);prefix=f"{kind}-"
+ return product_store.migration_read(kind,item.removeprefix(prefix),r.owner_principal,"Admin") is not None
 def apply_and_reconcile(s):
- validate(s);created=present=repaired=0
+ validate(s);created=present=repaired=0;orphans=[]
  for r in s.records:
+  if not _reference_exists(r):orphans.append(r.record_id);continue
   target=product_store.migration_read("user_recent",r.record_id,r.owner_principal,"Admin")
   if target is not None and target.get("document")==r.document:present+=1;continue
   revision=target.get("revision") if target is not None else None
@@ -55,5 +59,6 @@ def apply_and_reconcile(s):
   if target is None:created+=1
   else:repaired+=1
  for r in s.records:
+  if r.record_id in orphans:continue
   if (product_store.migration_read("user_recent",r.record_id,r.owner_principal,"Admin") or {}).get("document")!=r.document:raise RuntimeError("user recent reconciliation failed")
- return {"family":"user_recents","source_watermark":s.source_watermark,"source_count":len(s.records),"created":created,"already_present":present,"repaired":repaired,"reconciled":len(s.records),"snapshot_sha256":s.snapshot_sha256}
+ return {"family":"user_recents","source_watermark":s.source_watermark,"source_count":len(s.records),"created":created,"already_present":present,"repaired":repaired,"reconciled":len(s.records)-len(orphans),"orphan_count":len(orphans),"orphan_record_ids":sorted(orphans),"quarantine":"durable_checkpoint_records","snapshot_sha256":s.snapshot_sha256}
