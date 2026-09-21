@@ -87,6 +87,50 @@ for (const source of sourceSvgs) {
   else if (sha256(source) !== sha256(publicCopy)) failures.push(`${relative(repositoryRoot, source)}: public copy differs`);
 }
 
+// The settings reference names every environment variable the Engine reads,
+// and the connectors page names every table format and storage type the
+// catalog accepts: both are read from the code so the pages cannot drift.
+const engineCrates = join(repositoryRoot, "engine", "crates");
+const rustFiles = [];
+const collectRust = (directory) => {
+  for (const entry of readdirSync(directory)) {
+    const path = join(directory, entry);
+    if (statSync(path).isDirectory()) {
+      if (entry !== "target") collectRust(path);
+    } else if (entry.endsWith(".rs")) rustFiles.push(path);
+  }
+};
+collectRust(engineCrates);
+const readVariables = new Set();
+const benchOnly = /(_bench|scan_bench)\.rs$/;
+for (const file of rustFiles) {
+  if (benchOnly.test(file)) continue;
+  const text = readFileSync(file, "utf8");
+  for (const match of text.matchAll(/std::env::var(?:_os)?\(\s*"(KAVEON_[A-Z0-9_]+)"/g)) readVariables.add(match[1]);
+  for (const match of text.matchAll(/env_var\(\s*"(KAVEON_[A-Z0-9_]+)"/g)) readVariables.add(match[1]);
+}
+const settingsPage = readFileSync(join(repositoryRoot, "docs", "engine", "settings.md"), "utf8");
+const documentedVariables = new Set([...settingsPage.matchAll(/`(KAVEON_[A-Z0-9_]+)`/g)].map((match) => match[1]));
+for (const name of [...readVariables].sort()) {
+  if (!documentedVariables.has(name)) failures.push(`docs/engine/settings.md: no row for ${name}, which the Engine reads`);
+}
+const catalogSource = readFileSync(join(engineCrates, "core", "src", "catalog.rs"), "utf8");
+const connectorsPage = readFileSync(join(repositoryRoot, "docs", "reference", "connector-capabilities.md"), "utf8");
+const variantsOf = (enumName) => {
+  const body = catalogSource.match(new RegExp(`pub enum ${enumName} \{([^}]*)\}`));
+  return body ? [...body[1].matchAll(/^\s*([A-Z][A-Za-z0-9]*)/gm)].map((match) => match[1]) : [];
+};
+const formatNames = { Parquet: "Parquet", Delta: "Delta", Iceberg: "Iceberg" };
+for (const variant of variantsOf("DataFormat")) {
+  const name = formatNames[variant] ?? variant;
+  if (!connectorsPage.includes(`**${name}`)) failures.push(`docs/reference/connector-capabilities.md: no row for table format ${variant}`);
+}
+const storageNames = { Local: "Local disk", AdlsGen2: "ADLS Gen2", S3: "S3" };
+for (const variant of variantsOf("StorageType")) {
+  const name = storageNames[variant] ?? variant;
+  if (!connectorsPage.includes(`**${name}`)) failures.push(`docs/reference/connector-capabilities.md: no row for storage type ${variant}`);
+}
+
 if (failures.length > 0) {
   console.error(`Documentation validation failed (${failures.length}):`);
   failures.forEach((failure) => console.error(`- ${failure}`));
