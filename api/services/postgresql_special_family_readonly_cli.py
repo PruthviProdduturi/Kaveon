@@ -21,12 +21,13 @@ def _load(path: Path) -> dict:
 def main(argv=None, *, client_factory=adls_artifact_client.AzureArtifactClient.from_env):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", required=True, type=Path)
-    parser.add_argument("--migration-evidence", required=True, type=Path)
+    parser.add_argument("--migration-evidence", type=Path)
     parser.add_argument("--prefix", required=True)
     parser.add_argument("--output-directory", required=True, type=Path)
     args = parser.parse_args(argv)
     return verifier.run(baseline=_load(args.baseline),
-        migration_evidence=_load(args.migration_evidence), prefix=args.prefix,
+        migration_evidence=_load(args.migration_evidence) if args.migration_evidence else None,
+        prefix=args.prefix,
         output_directory=args.output_directory, client=client_factory())
 
 

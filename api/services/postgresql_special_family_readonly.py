@@ -71,13 +71,19 @@ def _capture(baseline: dict) -> dict:
         pool.return_connection(connection)
 
 
-def _readback(client, prefix: str, baseline: dict, evidence: dict) -> dict:
+def _readback(client, prefix: str, baseline: dict, evidence: dict | None) -> dict:
     prefix = prefix.strip("/")
     if (not prefix or any(part in {"", ".", ".."} for part in prefix.split("/"))):
         raise RuntimeError("special-family ADLS prefix is invalid")
-    identity = migration.verify_evidence(evidence, baseline)
+    identity = migration.verify_evidence(evidence, baseline) if evidence is not None \
+        else migration.verify_baseline(baseline)
     table_by_name = {table["name"]: table for table in baseline["tables"]}
-    for name, receipt in zip(TABLES, evidence["objects"]):
+    objects = evidence["objects"] if evidence is not None else [{
+        "path": f"objects/{identity['baseline_evidence_id']}/{name}.json",
+        "sha256": hashlib.sha256(migration._canonical(
+            migration._table_object(identity, table_by_name[name]))).hexdigest(),
+    } for name in TABLES]
+    for name, receipt in zip(TABLES, objects):
         body = migration._canonical(migration._table_object(identity, table_by_name[name]))
         observed = client.read(f"{prefix}/{receipt['path']}", len(body))
         if observed != body or hashlib.sha256(observed or b"").hexdigest() != receipt["sha256"]:
@@ -87,14 +93,14 @@ def _readback(client, prefix: str, baseline: dict, evidence: dict) -> dict:
         "baseline_evidence_id": identity["baseline_evidence_id"],
         "source_snapshot_id": identity["source_snapshot_id"],
         "global_content_sha256": identity["global_content_sha256"],
-        "tables": [{"table": name, "path": evidence["objects"][index]["path"],
-                    "sha256": evidence["objects"][index]["sha256"],
+        "tables": [{"table": name, "path": objects[index]["path"],
+                    "sha256": objects[index]["sha256"],
                     **identity["table_identities"][name]}
                    for index, name in enumerate(TABLES)],
     }
     manifest_body = migration._canonical(manifest_value)
     digest = hashlib.sha256(manifest_body).hexdigest()
-    if digest != evidence["manifest"]["sha256"]:
+    if evidence is not None and digest != evidence["manifest"]["sha256"]:
         raise RuntimeError("special-family manifest digest mismatch")
     observed_manifest = client.read(f"{prefix}/manifests/{digest}.json", len(manifest_body))
     if observed_manifest != manifest_body:
@@ -133,14 +139,15 @@ def _write_new(path: Path, value: dict) -> None:
         handle.write(encoded); handle.flush(); os.fsync(handle.fileno())
 
 
-def run(*, baseline: dict, migration_evidence: dict, prefix: str, output_directory: Path,
+def run(*, baseline: dict, migration_evidence: dict | None, prefix: str, output_directory: Path,
         client, now: datetime | None = None, capture=None) -> dict:
     if os.getenv("KAVEON_SPECIAL_FAMILY_READONLY_ENABLED") != "true":
         raise RuntimeError("read-only special-family verification requires explicit enablement")
     identity = migration.verify_baseline(baseline)
     if identity["baseline_evidence_id"] != QUALIFIED_BASELINE_SHA256:
         raise RuntimeError("special-family baseline is not the qualified Sep14 baseline")
-    migration.verify_evidence(migration_evidence, baseline)
+    if migration_evidence is not None:
+        migration.verify_evidence(migration_evidence, baseline)
     captured = (capture or _capture)(baseline)
     if captured.get("table_identities") != identity["table_identities"]:
         raise RuntimeError("live PostgreSQL special-family identity differs from qualified baseline")
