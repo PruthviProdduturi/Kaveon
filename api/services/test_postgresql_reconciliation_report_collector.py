@@ -74,6 +74,7 @@ class CollectorTests(unittest.TestCase):
                                                  snapshot_sha256=(name[0] * 64))
                           for name, records in self.records.items()}
         self.extra_chart = False
+        self.empty_user_recents = False
         for name in collector.CHECKPOINTS:
             (self.root / f"{name}.json").write_text("{}")
         (self.root / "inventory.json").write_text(json.dumps(inventory()), encoding="utf-8")
@@ -100,6 +101,8 @@ class CollectorTests(unittest.TestCase):
                    "chat_message": self.records["chat_history"][1:],
                    "dlm_definition": self.records["dlm_definitions"], "dlm_run": self.records["dlm_runs"]}
         records = [{"id": r.record_id, "document": r.document} for r in mapping[kind]]
+        if kind == "user_recent" and self.empty_user_recents:
+            records = []
         if kind == "chart" and self.extra_chart:
             records.append({"id": "extra", "document": {"id": "extra"}})
         return {"snapshot_id": "snapshot-42", "records": records, "next_cursor": None}
@@ -137,6 +140,26 @@ class CollectorTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "still contains"):
             self.run_collect()
         self.assertFalse((self.root / "reports").exists())
+
+    def test_user_recent_quarantine_is_bound_to_checkpoint_payload(self):
+        record = self.snapshots["user_recents"].records[0]
+        record.payload_sha256 = "a" * 64
+        unsigned = {"schema_version": 1, "family": "user_recents",
+                    "checkpoint_snapshot_sha256": self.snapshots["user_recents"].snapshot_sha256,
+                    "records": [{"record_id": record.record_id,
+                                 "payload_sha256": record.payload_sha256}]}
+        quarantine = {**unsigned, "quarantine_sha256": hashlib.sha256(
+            collector._canonical(unsigned)).hexdigest()}
+        (self.root / "user-recents-quarantine.json").write_text(json.dumps(quarantine))
+        manifest = json.loads(self.manifest.read_text())
+        manifest["quarantines"] = {"user_recents": "user-recents-quarantine.json"}
+        self.manifest.write_text(json.dumps(manifest))
+        self.empty_user_recents = True
+        result = self.run_collect()
+        self.assertEqual(result["family_count"], 16)
+        report = json.loads((self.root / "reports/user_recents.json").read_text())
+        self.assertEqual((report["source_count"], report["target_count"]), (1, 0))
+        self.assertIn(quarantine["quarantine_sha256"], report["provenance"]["source_snapshot"])
 
     def test_extra_target_and_tampered_special_report_fail_closed(self):
         self.extra_chart = True
