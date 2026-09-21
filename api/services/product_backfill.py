@@ -144,15 +144,18 @@ def apply_and_reconcile(snapshot: DatasetSnapshot) -> dict:
     validate_snapshot(snapshot)
     created = 0
     already_present = 0
+    repaired = 0
     for record in snapshot.records:
         target = product_store.migration_read("dataset", record.record_id, record.owner_principal, "Admin")
         if _target_matches(target, record):
             already_present += 1
             continue
-        if target is not None:
-            raise RuntimeError(f"KaveonDB dataset {record.record_id} differs from PostgreSQL snapshot")
+        revision = target.get("revision") if target is not None else None
+        if target is not None and (type(revision) is not int or revision < 1):
+            raise RuntimeError(f"KaveonDB dataset {record.record_id} has an invalid revision")
         mutation = product_store.ProductMutation(
-            "create", "dataset", record.record_id, record.document
+            "update" if target is not None else "create", "dataset", record.record_id,
+            record.document, revision,
         )
         try:
             product_store.migration_transact([mutation], record.owner_principal, "Admin")
@@ -166,7 +169,10 @@ def apply_and_reconcile(snapshot: DatasetSnapshot) -> dict:
                 raise RuntimeError(
                     f"KaveonDB dataset {record.record_id} conflict did not reconcile"
                 ) from error
-        created += 1
+        if target is None:
+            created += 1
+        else:
+            repaired += 1
 
     target_generations = []
     for record in snapshot.records:
@@ -180,6 +186,7 @@ def apply_and_reconcile(snapshot: DatasetSnapshot) -> dict:
         "source_count": len(snapshot.records),
         "created": created,
         "already_present": already_present,
+        "repaired": repaired,
         "reconciled": len(snapshot.records),
         "snapshot_sha256": snapshot.snapshot_sha256,
         "max_target_generation": max(target_generations, default=0),
