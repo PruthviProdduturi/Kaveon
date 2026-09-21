@@ -110,7 +110,7 @@ class UserThemeBackfillTests(unittest.TestCase):
 
         with patch.object(backfill.product_store, "read", return_value={"document": {}}), \
                 patch.object(backfill.product_store, "transact") as transact:
-            with self.assertRaisesRegex(RuntimeError, "diverges"):
+            with self.assertRaisesRegex(RuntimeError, "invalid revision"):
                 backfill.apply_and_reconcile(value)
         transact.assert_not_called()
 
@@ -122,6 +122,15 @@ class UserThemeBackfillTests(unittest.TestCase):
                 ):
             report = backfill.apply_and_reconcile(value)
         self.assertEqual(report["reconciled"], 1)
+
+    def test_divergent_record_is_repaired_with_revision_guard(self):
+        value=snapshot();document=value.records[0].document
+        with patch.object(backfill.product_store,"migration_read",side_effect=[{"document":{},"revision":4},{"document":document,"revision":5}]), \
+                patch.object(backfill.product_store,"migration_transact") as transact:
+            report=backfill.apply_and_reconcile(value)
+        self.assertEqual(report["repaired"],1)
+        mutation=transact.call_args.args[0][0]
+        self.assertEqual((mutation.operation,mutation.expected_revision),("update",4))
 
     def test_checkpoint_is_tamper_evident_and_resume_is_gated(self):
         value = snapshot()
