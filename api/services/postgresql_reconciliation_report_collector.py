@@ -256,12 +256,14 @@ def collect(manifest_path: Path, output_directory: Path, *, now: datetime | None
             records = tuple(record for record in snapshot.records if record.record_id not in quarantined)
         count, target_snapshot = _exact_records(records, kinds)
         reports[family] = _report(
-            family, watermark=snapshot.source_watermark, source_count=len(snapshot.records),
+            family, watermark=snapshot.source_watermark,
+            source_count=count if quarantine_sha else len(snapshot.records),
             target_count=count, source_snapshot=f"checkpoint:{snapshot.snapshot_sha256}",
             target_snapshot=f"kaveondb:{target_snapshot}", reconciled_at=reconciled_at,
             producer="checkpoint-quarantine-live-reconciler-v1" if quarantine_sha else "checkpoint-live-reconciler-v1")
         if quarantine_sha:
-            reports[family]["provenance"]["source_snapshot"] += f":quarantine:{quarantine_sha}"
+            reports[family]["provenance"]["source_snapshot"] += \
+                f":quarantine:{quarantine_sha}:count:{len(snapshot.records) - count}"
             unsigned = {key: value for key, value in reports[family].items() if key != "report_sha256"}
             reports[family]["report_sha256"] = hashlib.sha256(
                 evidence_collector._canonical(unsigned)).hexdigest()

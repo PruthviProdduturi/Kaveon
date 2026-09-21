@@ -158,8 +158,9 @@ class CollectorTests(unittest.TestCase):
         result = self.run_collect()
         self.assertEqual(result["family_count"], 16)
         report = json.loads((self.root / "reports/user_recents.json").read_text())
-        self.assertEqual((report["source_count"], report["target_count"]), (1, 0))
+        self.assertEqual((report["source_count"], report["target_count"]), (0, 0))
         self.assertIn(quarantine["quarantine_sha256"], report["provenance"]["source_snapshot"])
+        self.assertIn(":count:1", report["provenance"]["source_snapshot"])
 
     def test_extra_target_and_tampered_special_report_fail_closed(self):
         self.extra_chart = True
