@@ -24,6 +24,18 @@ kubectl -n kaveon rollout status sts/kaveon-coordinator && kubectl -n kaveon rol
 kubectl -n kaveon rollout status deploy/kaveon-api
 ```
 
+After a sign-out the CLI needs three logins before everything answers —
+ARM (`az login --tenant <tenant>`), AKS (`--scope
+6dae42f8-4368-4678-94ff-3960e28e3630/.default`) and the registry
+(`--scope https://containerregistry.azure.net/.default`); the tenant's
+token-protection policy revokes each scope's token independently. A full
+rebuild (2026-09-21: 5 min Bicep, ~30 min images, ~10 min charts and
+catalogs) is `az deployment group create … aks-test.bicep`, the secrets
+from the private directory, `helm upgrade --install` of `kaveon-test` and
+`kaveon-portal-test` with digest-pinned values, then the three catalog
+registrations from an API pod (`register-curated-catalog.py`,
+`register-clickbench-catalog.py`, `register-tpch-catalog.py`).
+
 After a start, verify before benchmarking: the Engine answers
 `SELECT COUNT(*) FROM clickbench.hits` on catalog `Benchmarks` (99,997,497)
 and `SELECT COUNT(*) FROM tpch_sf100.lineitem` (600,037,902) — both through
