@@ -8,7 +8,7 @@ use arrow::record_batch::RecordBatch;
 use kaveon_core::{
     AggregateFunction, AggregateMode, BatchOperator, CatalogManager, DataFormat, ExchangeId,
     ExecutableFragment, Expr, FragmentNode, FragmentNodeId, FragmentOperator, KaveonError,
-    Partitioning, QueryMemoryPool, Result,
+    Partitioning, QueryMemoryPool, Result, ScanFile, ScanListing,
 };
 use kaveon_exec::aggregate::{
     AggExpr, AggFunc, AggregateState, FinalAggregateValue, GroupedAggregateState, HashAggregate,
@@ -33,8 +33,8 @@ use kaveon_exec::sort::SortExpr;
 use kaveon_exec::union::UnionOperator;
 use kaveon_exec::window::WindowOperator;
 use kaveon_storage::{
-    AdlsParquetReader, DeltaTableReader, ObjectDeltaReader, ObjectParquetReader, ParquetReader,
-    ScanMetrics, ScanPartition,
+    AdlsParquetReader, AssignedFile, AssignedFiles, DeltaTableReader, ObjectDeltaReader,
+    ObjectDirectoryReader, ObjectParquetReader, ParquetReader, ScanMetrics, ScanPartition,
 };
 
 pub struct ExchangeBatches {
@@ -243,6 +243,57 @@ pub fn execute_fragment_streaming_root(
     })
 }
 
+/// How a task reads a directory table whose listing the fragment carries:
+/// at the coordinator's assignment for this partition, or — a listing too
+/// large to travel — at its own listing, held to the coordinator's digest.
+enum DirectoryRead {
+    Assigned(Arc<AssignedFiles>),
+    Verified(Arc<kaveon_storage::DirectoryListing>),
+}
+
+/// The task's share of a count the coordinator made for the whole scan:
+/// dealt round-robin over the partitions, so the tasks sum to it.
+fn partition_share(total: u64, partition: ScanPartition) -> u64 {
+    let count = partition.count as u64;
+    total / count + u64::from(total % count > partition.index as u64)
+}
+
+fn directory_read(
+    source_uri: &str,
+    listing: &ScanListing,
+    partition: ScanPartition,
+) -> Result<DirectoryRead> {
+    let Some(assignment) = &listing.assignment else {
+        return kaveon_storage::verify_listing(source_uri, &listing.source)
+            .map(DirectoryRead::Verified);
+    };
+    if assignment.partitions.len() != partition.count {
+        return Err(exec_err(format!(
+            "the fragment assigns the files of '{source_uri}' to {} scan partitions but the task \
+             runs as partition {} of {}",
+            assignment.partitions.len(),
+            partition.index,
+            partition.count
+        )));
+    }
+    let assigned = |file: &ScanFile| AssignedFile {
+        path: file.path.clone(),
+        size: file.size,
+        partition_values: file.partition_values.clone(),
+        row_groups: file.row_groups.clone(),
+    };
+    Ok(DirectoryRead::Assigned(Arc::new(AssignedFiles {
+        partition_columns: listing.partition_columns.clone(),
+        first: assigned(&assignment.first),
+        files: assignment.partitions[partition.index]
+            .iter()
+            .map(assigned)
+            .collect(),
+        files_pruned_by_partition: partition_share(listing.files_pruned_by_partition, partition),
+        files_skipped: partition_share(listing.files_skipped, partition),
+    })))
+}
+
 fn compile_node(
     id: FragmentNodeId,
     nodes: &HashMap<FragmentNodeId, &FragmentNode>,
@@ -268,6 +319,63 @@ fn compile_node(
                         })
                         .ok()
                         .map(|resolved| Arc::clone(&resolved.table.arrow_schema));
+                    // A directory table whose listing travelled with the
+                    // plan is read at that listing: the task lists
+                    // nothing (or, for a listing too large to travel,
+                    // lists once and checks the digest).
+                    if let Some(listing) = &scan.listing {
+                        let read = directory_read(&scan.source_uri, listing, scan_partition)?;
+                        let metrics = ScanMetrics::default();
+                        if scan.source_uri.starts_with("s3://")
+                            || scan.source_uri.starts_with("abfss://")
+                        {
+                            let mut reader = ObjectDirectoryReader::from_uri(&scan.source_uri)?
+                                .with_metrics(metrics.clone());
+                            reader = match read {
+                                DirectoryRead::Assigned(assigned) => {
+                                    reader.with_assigned_files(assigned)
+                                }
+                                DirectoryRead::Verified(listing) => {
+                                    reader.with_listing(listing).with_partition(scan_partition)
+                                }
+                            };
+                            if let Some(schema) = catalog_schema {
+                                reader = reader.with_catalog_schema(schema);
+                            }
+                            if !scan.projection.is_empty() {
+                                reader = reader.with_columns(scan.projection.clone());
+                            }
+                            if let Some(predicate) = &scan.predicate {
+                                reader = reader.with_predicate(predicate.clone());
+                            }
+                            scan_metrics.push(metrics);
+                            return Ok(Box::new(ScanOperator::new(
+                                Box::new(reader.read_blocking()?),
+                                None,
+                            )?));
+                        }
+                        let path = local_path(&scan.source_uri)?;
+                        let mut reader = ParquetReader::new(path).with_metrics(metrics.clone());
+                        reader = match read {
+                            DirectoryRead::Assigned(assigned) => {
+                                reader.with_assigned_files(assigned)
+                            }
+                            DirectoryRead::Verified(listing) => {
+                                reader.with_listing(listing).with_partition(scan_partition)
+                            }
+                        };
+                        if let Some(schema) = catalog_schema {
+                            reader = reader.with_catalog_schema(schema);
+                        }
+                        if !scan.projection.is_empty() {
+                            reader = reader.with_columns(scan.projection.clone());
+                        }
+                        if let Some(predicate) = &scan.predicate {
+                            reader = reader.with_predicate(predicate.clone());
+                        }
+                        scan_metrics.push(metrics);
+                        return Ok(Box::new(ScanOperator::new(Box::new(reader.read()?), None)?));
+                    }
                     if scan.source_uri.starts_with("s3://") {
                         let mut reader = ObjectParquetReader::from_uri(&scan.source_uri)?
                             .with_partition(scan_partition);
@@ -3149,6 +3257,7 @@ mod tests {
                     },
                     projection: vec![],
                     predicate: None,
+                    listing: None,
                 }),
             )],
         };
@@ -3247,6 +3356,7 @@ mod tests {
                     },
                     projection: vec!["value".into()],
                     predicate: None,
+                    listing: None,
                 }),
             )],
         };

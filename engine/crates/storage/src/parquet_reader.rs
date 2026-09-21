@@ -56,8 +56,8 @@ struct DirectoryScanFile {
     path: PathBuf,
     /// Listing-relative path, for messages.
     relative: String,
-    /// Whether the scan partition applies inside the file.
-    split: bool,
+    /// How the scan partition reads the file.
+    slice: crate::parquet_directory::FileSlice,
     /// What the predicate leaves to the file's own columns.
     residual: Option<StoragePredicate>,
     values: Vec<crate::parquet_directory::PartitionValue>,
@@ -94,10 +94,16 @@ impl DirectoryFiles {
         if let Some(predicate) = &file.residual {
             reader = reader.with_predicate(predicate.clone());
         }
-        if file.split
-            && let Some(partition) = self.partition
-        {
-            reader = reader.with_partition(partition);
+        match &file.slice {
+            crate::parquet_directory::FileSlice::Whole => {}
+            crate::parquet_directory::FileSlice::Partitioned => {
+                if let Some(partition) = self.partition {
+                    reader = reader.with_partition(partition);
+                }
+            }
+            crate::parquet_directory::FileSlice::RowGroups(row_groups) => {
+                reader = reader.with_row_groups(row_groups.clone());
+            }
         }
         let footer_started = Instant::now();
         let builder = reader.open_builder()?;
@@ -187,7 +193,11 @@ pub struct ParquetReader {
     predicate: Option<StoragePredicate>,
     metrics: Option<ScanMetrics>,
     partition: Option<ScanPartition>,
+    /// The row groups to read of one file, decided by the caller; the
+    /// partition, if set, applies among them.
+    row_groups: Option<Vec<usize>>,
     listing: Option<Arc<crate::DirectoryListing>>,
+    assigned: Option<Arc<crate::AssignedFiles>>,
     catalog_schema: Option<SchemaRef>,
 }
 
@@ -200,7 +210,9 @@ impl ParquetReader {
             predicate: None,
             metrics: None,
             partition: None,
+            row_groups: None,
             listing: None,
+            assigned: None,
             catalog_schema: None,
         }
     }
@@ -208,6 +220,21 @@ impl ParquetReader {
     /// Read a directory table at a listing already taken for this query.
     pub fn with_listing(mut self, listing: Arc<crate::DirectoryListing>) -> Self {
         self.listing = Some(listing);
+        self
+    }
+
+    /// Read a directory table at exactly the files the coordinator
+    /// assigned to this task, at the row groups it assigned, listing
+    /// nothing; the partition, if set, applies to nothing.
+    pub fn with_assigned_files(mut self, value: Arc<crate::AssignedFiles>) -> Self {
+        self.assigned = Some(value);
+        self
+    }
+
+    /// Read only these row groups of one file (the footer's statistics,
+    /// Bloom filters and the partition still prune among them).
+    pub fn with_row_groups(mut self, value: Vec<usize>) -> Self {
+        self.row_groups = Some(value);
         self
     }
 
@@ -219,11 +246,15 @@ impl ParquetReader {
         self
     }
 
-    /// The pinned listing, or the directory listed now.
+    /// The pinned listing, the assignment's files, or the directory listed
+    /// now.
     fn listing(&self) -> Result<Arc<crate::DirectoryListing>> {
-        match &self.listing {
-            Some(listing) => Ok(Arc::clone(listing)),
-            None => local_directory_listing(&self.path).map(Arc::new),
+        match (&self.listing, &self.assigned) {
+            (Some(listing), _) => Ok(Arc::clone(listing)),
+            (None, Some(assigned)) => assigned
+                .listing_under(&object_store::path::Path::default())
+                .map(Arc::new),
+            (None, None) => local_directory_listing(&self.path).map(Arc::new),
         }
     }
 
@@ -304,14 +335,20 @@ impl ParquetReader {
                 self.path.display()
             )));
         }
-        let layout =
-            crate::parquet_directory::PartitionLayout::of(&listing, self.catalog_schema.as_ref())?;
-        let pruned = crate::parquet_directory::prune_files(&layout, self.predicate.as_ref());
-        metrics.files_pruned_by_partition(pruned.pruned_share(self.partition));
-        let files =
-            crate::parquet_directory::assign_kept_files(&pruned, &layout.sizes, self.partition);
-        metrics.files_considered(files.len() as u64);
-        let first = &listing.files[pruned.kept.first().map_or(0, |file| file.index)];
+        let crate::parquet_directory::DirectoryScan {
+            listing,
+            layout,
+            files,
+            first,
+        } = crate::parquet_directory::plan_directory_scan(
+            listing,
+            self.catalog_schema.as_ref(),
+            self.predicate.as_ref(),
+            self.partition,
+            self.assigned.as_deref(),
+            &metrics,
+        )?;
+        let first = &listing.files[first];
         let head = ParquetReader::new(self.path.join(first.path.as_ref())).metadata()?;
         let file_schema = head.schema;
         crate::parquet_directory::check_partition_columns_absent(
@@ -328,12 +365,12 @@ impl ParquetReader {
         )?;
         let files = files
             .into_iter()
-            .map(|(kept, split)| {
+            .map(|(kept, slice)| {
                 let relative = listing.files[kept.index].path.to_string();
                 DirectoryScanFile {
                     path: self.path.join(&relative),
                     relative,
-                    split,
+                    slice,
                     residual: kept.residual,
                     values: layout.values[kept.index].clone(),
                 }
@@ -501,6 +538,9 @@ impl ParquetReader {
         } else {
             (0..builder.metadata().num_row_groups()).collect()
         };
+        if let Some(row_groups) = &self.row_groups {
+            groups.retain(|group| row_groups.contains(group));
+        }
         if let Some(partition) = self.partition {
             groups.retain(|group| partition.contains(*group));
         }
@@ -531,7 +571,7 @@ impl ParquetReader {
             let row_filter = plan.row_filter(builder.parquet_schema(), metrics);
             builder = builder.with_row_filter(row_filter);
         }
-        if self.predicate.is_some() || self.partition.is_some() {
+        if self.predicate.is_some() || self.partition.is_some() || self.row_groups.is_some() {
             builder = builder.with_row_groups(groups);
         }
         Ok(builder)

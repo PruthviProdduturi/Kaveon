@@ -6039,18 +6039,29 @@ async fn optimize_with_durable_statistics(
             pins.delta_versions
                 .insert(relation.location.clone(), version);
         }
-        if let Some(listing) = pruned
+        let whole = relation
+            .current
             .as_ref()
-            .map(|(listing, _, _)| Arc::clone(listing))
-            .or_else(|| {
-                relation
-                    .current
-                    .as_ref()
-                    .and_then(|value| value.parquet_listing.clone())
-            })
-        {
-            pins.parquet_directories
-                .insert(relation.location.clone(), listing);
+            .and_then(|value| value.parquet_listing.clone());
+        match (&pruned, whole) {
+            // A pruned listing is what the query reads; the whole
+            // directory's digest goes with it for a task that has to list
+            // the location itself.
+            (Some((listing, _, _)), Some(whole)) => {
+                pins.parquet_directories
+                    .insert(relation.location.clone(), Arc::clone(listing));
+                pins.parquet_directory_sources
+                    .insert(relation.location.clone(), whole.digest());
+            }
+            (Some((listing, _, _)), None) => {
+                pins.parquet_directories
+                    .insert(relation.location.clone(), Arc::clone(listing));
+            }
+            (None, Some(whole)) => {
+                pins.parquet_directories
+                    .insert(relation.location.clone(), whole);
+            }
+            (None, None) => {}
         }
         if let Some((_, _, skipped)) = &pruned
             && *skipped > 0
