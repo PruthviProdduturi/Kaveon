@@ -115,7 +115,9 @@ class TableCreate(BaseModel):
     location: str = Field(..., min_length=1, max_length=1024)
     format: str = Field(..., description="Parquet, Delta or Iceberg")
     access: Access = "Shortcut"
-    columns: list[ColumnSpec] = Field(..., min_length=1, max_length=2000)
+    # Empty = the Engine reads the columns from the table's own metadata
+    # (Delta log, Iceberg metadata, the first Parquet footer).
+    columns: list[ColumnSpec] = Field(default_factory=list, max_length=2000)
     id: Optional[str] = Field(default=None, min_length=1, max_length=255)
     verify: bool = True
 

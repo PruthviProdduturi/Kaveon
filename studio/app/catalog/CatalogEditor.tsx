@@ -98,7 +98,7 @@ export function RegisterSheet({ kind: initialKind, catalog: initialCatalog, sche
   const nameError = !name ? "A name is required." : !IDENT.test(name) ? "Use letters, digits and underscores, starting with a letter." : null;
   const locationError = kind === "table" && !location.trim() ? "A location is required."
     : /:\/\//.test(location) ? "Write the path relative to the catalog root, not a URI." : null;
-  const columnsError = kind === "table" ? (parsed.error ?? (parsed.columns.length ? null : "At least one column is required.")) : null;
+  const columnsError = kind === "table" ? parsed.error ?? null : null;
   const catalogNote = definitionsError ? definitionsError
     : definitions && !definition && catalog ? `${catalog} is registered on the platform but not yet synchronized with KaveonDB. Synchronize it under Settings → Storage first.`
     : definition && definition.lifecycle !== "Active" ? `${catalog} is ${definition.lifecycle.toLowerCase()} on KaveonDB; activate it before adding to it.`
@@ -236,10 +236,10 @@ export function RegisterSheet({ kind: initialKind, catalog: initialCatalog, sche
                   </div>
 
                   <div className={s.field}>
-                    <label className={s.label} htmlFor={`${titleId}-columns`}>Columns <small>one per line</small></label>
+                    <label className={s.label} htmlFor={`${titleId}-columns`}>Columns <small>optional, one per line</small></label>
                     <textarea id={`${titleId}-columns`} className={`${s.textarea} ${s.mono}`} value={columnsText} onChange={e => setColumnsText(e.target.value)} placeholder={"order_id bigint not null\ncustomer_id bigint\norder_date date\ntotal decimal(18, 2)\nstatus varchar"} spellCheck={false} disabled={busy} />
                     {err(columnsError)}
-                    <div className={s.hint}>Name, then type, then <code>not null</code> where a column never holds nulls. Types: {COLUMN_TYPES}. The columns declare the schema KaveonDB reads the table with; every file at the location must carry them in this order.</div>
+                    <div className={s.hint}>Leave empty and KaveonDB reads the columns from the table itself — the Delta log, the Iceberg metadata or the first Parquet file. To declare them: name, then type, then <code>not null</code> where a column never holds nulls. Types: {COLUMN_TYPES}. Declared columns must exist in the table by name.</div>
                   </div>
                 </>
               )}

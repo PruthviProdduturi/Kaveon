@@ -629,6 +629,46 @@ def delete_table(table_id, revision, actor):
     catalog_request("DELETE", "/v1/catalog/tables/" + quote(table_id, safe=""), actor, revision=revision)
 
 
+def create_table_inferred(catalog, schema, table, location, fmt, actor, role, timeout=120):
+    """Register a table through the Engine's own statement path — `CREATE
+    TABLE … WITH (location, format)` with no column list — so the columns come
+    from the table's metadata (the Delta log, the Iceberg metadata, the first
+    Parquet footer) and the Engine's Draft → metadata probe → Active sequence
+    runs in one statement: an unreadable location registers nothing. Returns
+    {"ok": True, "result"} or {"ok": False, "message", "code"} with the
+    Engine's error verbatim."""
+    roles = {"Editor": "analyst", "Admin": "admin"}
+    if role not in roles:
+        raise HTTPException(403, "The Editor role is required to register a table")
+    if not all(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", part) for part in (schema, table)):
+        raise HTTPException(422, "Schema and table names must be plain SQL identifiers")
+    ddl_format = str(fmt).lower()
+    if ddl_format not in ("parquet", "delta", "iceberg"):
+        raise HTTPException(422, "format must be parquet, delta or iceberg")
+    quoted_location = location.replace("'", "''")
+    sql = (f"CREATE TABLE {schema}.{table} "
+           f"WITH (location = '{quoted_location}', format = '{ddl_format}')")
+    tag = "kaveon-api:catalog-create:" + uuid.uuid4().hex
+    payload = {"query": sql, "catalog": catalog, "schema": schema, "source": "studio",
+               "client": "kaveon-api", "client_tags": [tag]}
+    try:
+        response = _send("POST", "/v1/statement", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
+                         payload=payload, role=roles[role], timeout=timeout)
+    except HTTPException as error:
+        if error.status_code == 504:
+            cancel_tagged(tag, actor, roles[role])
+        raise
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+    if not response.is_success or (isinstance(body, dict) and body.get("error")):
+        message = _engine_message(response, "Engine could not register the table")
+        code = body.get("code") if isinstance(body, dict) and isinstance(body.get("code"), str) else None
+        return {"ok": False, "message": message, "code": code}
+    return {"ok": True, "result": body}
+
+
 def probe_table(catalog, schema, table, actor, role, timeout=120):
     """Read the table once through the Engine — `SELECT COUNT(*)`, result cache
     bypassed — so registration proves the location is readable. Parquet and
