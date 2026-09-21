@@ -3,9 +3,9 @@
 {{- if not (regexMatch "^sha256:[a-f0-9]{64}$" $digest) }}{{ fail "image.digest must be sha256 plus 64 lowercase hex digits" }}{{ end -}}
 {{- $client := required "workloadIdentity.clientId is required" .Values.workloadIdentity.clientId -}}
 {{- if .Values.productTransactions.enabled -}}
-{{- required "productTransactions.account is required when enabled" .Values.productTransactions.account -}}
-{{- required "productTransactions.container is required when enabled" .Values.productTransactions.container -}}
-{{- required "productTransactions.prefix is required when enabled" .Values.productTransactions.prefix -}}
+{{- $_ := required "productTransactions.account is required when enabled" .Values.productTransactions.account -}}
+{{- $_ := required "productTransactions.container is required when enabled" .Values.productTransactions.container -}}
+{{- $_ := required "productTransactions.prefix is required when enabled" .Values.productTransactions.prefix -}}
 {{- end -}}
 {{- if .Values.serviceAccount.create }}
 apiVersion: v1
