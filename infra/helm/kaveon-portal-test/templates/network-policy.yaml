@@ -14,7 +14,7 @@ spec:
       ports:
         - {protocol: TCP, port: 8080}
 ---
-{{- if not (or .Values.api.cutover.retirementMode .Values.api.cutover.restartRehearsalMode) }}
+{{- if or (not (or .Values.api.cutover.retirementMode .Values.api.cutover.restartRehearsalMode)) (and .Values.api.cutover.restartRehearsalMode .Values.api.cutover.retainPostgresDuringRestart) }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -24,10 +24,16 @@ spec:
   podSelector:
     matchLabels: {app: kaveon-postgres}
   policyTypes: [Ingress]
+{{- if and .Values.api.cutover.restartRehearsalMode .Values.api.cutover.retainPostgresDuringRestart }}
+  # Preserve the database resources and PVC while denying API ingress. The
+  # StatefulSet's local readiness probe remains available.
+  ingress: []
+{{- else }}
   ingress:
     - from:
         - podSelector: {matchLabels: {app: kaveon-api}}
         - podSelector: {matchLabels: {app: kaveon-portal-init}}
       ports:
         - {protocol: TCP, port: 5432}
+{{- end }}
 {{- end }}

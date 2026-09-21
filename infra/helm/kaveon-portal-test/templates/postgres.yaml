@@ -1,4 +1,4 @@
-{{- if not (or .Values.api.cutover.retirementMode .Values.api.cutover.restartRehearsalMode) }}
+{{- if or (not (or .Values.api.cutover.retirementMode .Values.api.cutover.restartRehearsalMode)) (and .Values.api.cutover.restartRehearsalMode .Values.api.cutover.retainPostgresDuringRestart) }}
 apiVersion: v1
 kind: Service
 metadata:
