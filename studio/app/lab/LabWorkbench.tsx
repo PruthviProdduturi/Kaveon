@@ -2091,7 +2091,11 @@ return;
   // "From context" / "Live query" pair so a served result is never mistaken
   // for a measurement.
   const executionLabel = results?.execution
-    ? (results.execution.mode === "cache" ? "From cache" : "Live query") + " · "
+    ? (results.execution.mode === "cache"
+        ? "From cache"
+        : results.execution.mode === "context"
+          ? "From context · no scan"
+          : "Live query") + " · "
     : "";
   const sortedRows = getSortedRows();
   const filteredRows = resultFilter.trim()

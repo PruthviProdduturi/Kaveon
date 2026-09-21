@@ -144,6 +144,25 @@ def create_table_definition(body: TableCreate, ctx: UserContext = Depends(requir
     if body.verify and (catalog.get("lifecycle") != _ACTIVE or schema.get("lifecycle") != _ACTIVE):
         raise HTTPException(409, {"code": "parent_inactive",
                                   "message": "The catalog and schema must be active for the table to be verified."})
+    if not body.columns:
+        # No column list: the Engine's CREATE TABLE infers the columns from the
+        # table's metadata and registers only a readable location.
+        created = engine_bridge.create_table_inferred(
+            catalog["name"], schema["name"], body.name, body.location, body.format, ctx.email, ctx.role)
+        if not created["ok"]:
+            raise HTTPException(422, {
+                "code": "table_unreadable", "message": created["message"], "engineCode": created["code"],
+                "table": {"id": None, "name": body.name, "location": body.location, "format": body.format},
+                "removed": True,
+            })
+        table = next((t for t in engine_bridge.table_definitions(body.schema_id, ctx.email, ctx.role) or []
+                      if isinstance(t, dict) and t.get("name") == body.name), None)
+        if not body.verify:
+            return {"success": True, "table": table, "probe": None}
+        probe = engine_bridge.probe_table(catalog["name"], schema["name"], body.name, ctx.email, ctx.role)
+        return {"success": True, "table": table,
+                "probe": ({"rowCount": probe["row_count"], "elapsedMs": probe["elapsed_ms"],
+                           "queryId": probe["query_id"]} if probe["ok"] else None)}
     definition = {
         "id": body.id or f"{body.schema_id}-{body.name}", "schema_id": body.schema_id, "name": body.name,
         "location": body.location, "access": body.access, "format": body.format,

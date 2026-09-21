@@ -44,8 +44,9 @@ class TypeMappingTests(unittest.TestCase):
             TableCreate(**{**TABLE_BODY, "location": "abfss://c@a.dfs.core.windows.net/x"})
         with self.assertRaises(ValidationError):
             TableCreate(**{**TABLE_BODY, "name": "bad name"})
-        with self.assertRaises(ValidationError):
-            TableCreate(**{**TABLE_BODY, "columns": []})
+        # No columns is a valid body: the Engine infers them from the table.
+        self.assertEqual(TableCreate(**{**TABLE_BODY, "columns": []}).columns, [])
+        self.assertEqual(TableCreate(**{k: v for k, v in TABLE_BODY.items() if k != "columns"}).columns, [])
         with self.assertRaises(ValidationError):
             TableCreate(**{**TABLE_BODY, "columns": [{"name": "a", "type": "bigint"}, {"name": "a", "type": "bigint"}]})
         with self.assertRaises(ValidationError):
@@ -74,6 +75,31 @@ class TableRegistrationTests(unittest.TestCase):
             {"name": "r_name", "data_type": "Utf8", "nullable": True},
         ])
         probe.assert_called_once_with("Benchmarks", "tpch_sf1", "region", "editor@example.com", "Editor")
+        delete.assert_not_called()
+
+    def test_a_table_without_columns_is_registered_by_the_engine_statement_with_inferred_columns(self):
+        inferred = {"id": "table:Benchmarks:tpch_sf1:region", "schema_id": SCHEMA["id"], "name": "region",
+                    "revision": 2, "lifecycle": "Active", "format": "Delta",
+                    "columns": [{"name": "r_regionkey", "data_type": "Int64", "nullable": True}]}
+        with patch.object(engine_bridge, "schema_definition", return_value=SCHEMA),              patch.object(engine_bridge, "catalog_definition", return_value=CATALOG),              patch.object(engine_bridge, "create_table_inferred", return_value={"ok": True, "result": {}}) as create,              patch.object(engine_bridge, "table_definitions", return_value=[inferred]),              patch.object(engine_bridge, "probe_table", return_value={"ok": True, "row_count": 5, "elapsed_ms": 9, "query_id": "q2"}),              patch.object(engine_bridge, "create_table") as create_with_columns:
+            body = TableCreate(**{k: v for k, v in TABLE_BODY.items() if k != "columns"})
+            result = engine_catalog.create_table_definition(body, EDITOR)
+        self.assertEqual(result["table"], inferred)
+        self.assertEqual(result["probe"], {"rowCount": 5, "elapsedMs": 9, "queryId": "q2"})
+        create.assert_called_once_with("Benchmarks", "tpch_sf1", "region", TABLE_BODY["location"], "Delta",
+                                       "editor@example.com", "Editor")
+        create_with_columns.assert_not_called()
+
+    def test_an_inferred_registration_the_engine_refuses_registers_nothing(self):
+        message = "storage: object not found: benchmarks/tpch/sf1/region/_delta_log"
+        with patch.object(engine_bridge, "schema_definition", return_value=SCHEMA),              patch.object(engine_bridge, "catalog_definition", return_value=CATALOG),              patch.object(engine_bridge, "create_table_inferred",
+                          return_value={"ok": False, "message": message, "code": "TABLE_NOT_READABLE"}),              patch.object(engine_bridge, "delete_table") as delete:
+            with self.assertRaises(HTTPException) as error:
+                engine_catalog.create_table_definition(
+                    TableCreate(**{k: v for k, v in TABLE_BODY.items() if k != "columns"}), EDITOR)
+        detail = error.exception.detail
+        self.assertEqual((error.exception.status_code, detail["code"], detail["message"], detail["removed"]),
+                         (422, "table_unreadable", message, True))
         delete.assert_not_called()
 
     def test_unreadable_table_is_removed_and_the_storage_error_returned_verbatim(self):
