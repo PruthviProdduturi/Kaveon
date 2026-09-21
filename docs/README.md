@@ -18,6 +18,7 @@ are planned rather than executable.
 
 - [Engine technical manual](engine/README.md)
 - [Engineer 2 continuation brief](engineering/codex-continuation.md)
+- [Iceberg reader qualification, local](qualification/iceberg/local-2026-09-21.md) — a pyiceberg v2 table with a delete, read against its Parquet twin
 - [The 9/10 program](engineering/nine-of-ten-program.md) — the 2026-09-18 baseline scores per area, what 9 means, and the ordered workstreams
 - [Decision log](engineering/decision-log.md) — the dated non-obvious calls with their reasons and consequences, each cited to a commit or HANDSHAKE row
 - [Run the full stack locally with Docker](guides/local-stack.md)
