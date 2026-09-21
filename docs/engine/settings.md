@@ -66,11 +66,13 @@ container's CPU quota on Linux.
 | `KAVEON_EXCHANGE_QUERY_DISK_LIMIT_BYTES` | none | 8589934592 (8 GiB) | bytes | One query's share of the disk exchange store. Must be positive and is expected to be at most the store's total. | coordinator or worker, whichever spools | workers 6442450944 (6 GiB); coordinator 17179869184 (16 GiB); chart values `<role>.exchange.queryDiskLimitBytes` |
 | `KAVEON_IPC_SPOOL_ROOT` | none | the system temporary directory | directory path | Where a consumer spools a received Arrow IPC payload before decoding it (`transport.rs`). The directory must exist. | worker (final and join stages), coordinator (result collection) | `/state` on the workers (chart); the coordinator uses the default |
 | `KAVEON_EXCHANGE_TOKEN` | `exchange.token` | none (required for a cluster) | bearer token | The credential workers and the coordinator present on `/v1/task`, `/v1/exchange/*`, `/v1/node/heartbeat` and `/v1/internal/*`. Must be nonempty and distinct from every other token. | coordinator, worker | from the `kaveon-engine-auth` secret |
+| `KAVEON_STAGE_RETRY_LIMIT` | none | 2 | re-executions per stage per query | How many times one stage's finished output may be produced again for one query because a worker holding its consumers' exchange spools was lost. A lost worker's tasks move to survivors and the producers of every consumer partition whose spool was on it run again as the next attempt (down to the scans when their own inputs were released); beyond the limit the query fails, naming the lost worker and the stage. `0` keeps task retry and refuses stage re-execution. | coordinator | not set (default 2; not yet measured on the cluster) |
 
 Fixed exchange limits that are not settings: a streamed output partition is
 at most 8 GiB in 4 MiB chunks (2048 chunks); a received payload is at most
 8 GiB; the process-wide IPC spool holds at most 12 GiB at once; a task is
-attempted at most 3 times.
+attempted at most 3 times (failures of its own; an attempt created by a
+worker loss is not one).
 
 ## Storage, catalogs and scans
 
@@ -177,6 +179,7 @@ so that an operator knows what bounds a run. Changing one is a code change.
 | `REMOTE_TASK_TIMEOUT` | 600 s | `api.rs` | One task request from the coordinator to a worker. A task that times out is not retried; finishing the query cancels its orphaned tasks on the workers. |
 | `HEARTBEAT_INTERVAL` | 10 s | `cluster.rs` | How often a worker heartbeats to the coordinator. |
 | `NODE_EXPIRY` | 30 s | `cluster.rs` | A worker with no heartbeat for this long leaves the cluster view. |
+| `WORKER_LOSS_MISSED_HEARTBEATS`, `WORKER_PROBE_TIMEOUT` | 2 intervals (20 s), 5 s | `cluster.rs`, `api.rs` | When a running query treats a worker as lost: a refused or reset connection to it (the task call or a `/v1/node` probe after a retryable task failure), or a heartbeat lapsed by two intervals with a probe unanswered within 5 s. A worker that answers the probe is not lost, whatever its task said. |
 | Result store TTL | 900 s | `results.rs` | How long paged results stay readable. |
 | Disk exchange TTL | 900 s | `disk_exchange.rs` | How long an exchange partition stays on disk after its query. |
 | Cleanup loop | 30 s | `main.rs` | How often expired results and exchange partitions are removed and the audit ledger's retention is applied. |

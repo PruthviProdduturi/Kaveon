@@ -35,6 +35,90 @@ visible when reporting a rating.
 > the declared rounds of `benchmark-program.md`, so the 1.90× gate and the
 > performance score stand as written until a campaign record exists.
 
+### Worker loss — September 21
+
+What the September 10 gates qualified was task-level retry: a task whose
+worker is force-deleted runs again as the next attempt on another worker.
+That left one measured gap. Exchange partitions are spooled on the worker
+that consumes them, so when a worker is lost mid-query its spools go with
+it: every producer still writing to it failed with `cannot upload
+exchange`, every consumer placed on it could not fetch what it had
+received, and the retried attempts pointed at the same lost spool until the
+attempt budget ran out and the query failed (the rolling restart of
+2026-09-18 failed ClickBench q13 and q14 this way, with `worker
+'kaveon-worker-1' is unavailable … cannot upload exchange`).
+
+The coordinator now recovers a whole stage from a worker loss, exactly and
+within a bound (`engine/crates/server/src/orchestrator.rs`,
+`runtime.rs`, `cluster.rs`, `api.rs`), verified in process, not yet on
+AKS:
+
+- **The loss rule.** A worker is lost when the coordinator's connection to
+  it is refused or reset (the task call, or a probe of its `/v1/node`
+  after any retryable task failure — the failed task's worker and every
+  worker its exchange inputs and outputs named), or when its heartbeat has
+  lapsed by two intervals (20 s) and the probe does not answer within
+  5 s. A worker's own task error is never a loss: a worker that answers
+  the probe stays in the query, whatever its task said.
+- **The recovery rule.** A lost worker is dispatched to no more for the
+  rest of the query. Its running tasks are superseded by the next attempt
+  on a surviving worker, and its pending ones move. Every consumer spool
+  placed on it moves to a surviving worker, and for each such consumer
+  partition that has not finished, every producer task of that stage runs
+  again as the next attempt on the surviving workers, so the moved spool
+  is filled again; a producer stage whose own inputs were released when it
+  finished re-executes its producers too, down to the scans (the release
+  of consumed exchanges is unchanged, so the cascade is what keeps the
+  recovery exact; its cost is bounded by the query's own plan). A consumer
+  that already holds its complete input on a surviving worker keeps it
+  and is left running; a consumer that failed fetching is retried with the
+  new producer attempts at their new locations. Re-dispatched tasks go
+  through worker admission like any task.
+- **Exactness.** Attempt numbers are part of the exchange identity, so a
+  chunk a superseded attempt uploads late lands under its own key and is
+  never what a consumer fetching the current attempt receives; a producer
+  re-execution produces the same partition contents (hash partitioning is
+  deterministic; a scan partition re-reads the same row groups). A
+  worker that comes back starts a fresh spool store (a new directory, an
+  empty index — `disk_exchange.rs`), so nothing it held before the loss
+  is served; it is dispatched to by later queries once it heartbeats, and
+  never again by the query that lost it. A stale attempt's outcome, success
+  or failure, is dropped by the coordinator.
+- **The bound.** `KAVEON_STAGE_RETRY_LIMIT` (default 2) is how many times
+  one stage's finished output may be produced again for one query. Beyond
+  it the query fails closed, naming the lost worker and the stage:
+  `worker 'w' was lost and stage N would be re-executed a 3rd time for
+  this query, beyond KAVEON_STAGE_RETRY_LIMIT=2`. Task attempts keep their
+  own budget of three failures per slot; an attempt a loss created is not
+  a failure of that slot.
+- **The record.** A recovered statement's `execution.detail` reads
+  `fragments; recovered from the loss of worker 'w'; stage 0 re-executed;
+  3 task attempts created`, and `recovery` carries `lost_workers`,
+  `moved_spools` (`stage`, `partition`, `from`, `to`), `stage_retries`
+  (`stage`, `partition`, `from`, `to`, `attempt`, in creation order) and
+  `reexecuted_stages`; `/v1/queries/{id}` serves both.
+
+What is **not** recovered: the loss of the coordinator; a streamed root
+task that already delivered rows to the pages (the statement fails as
+before with `rows already delivered; the statement is not retried`); a
+loss during the final stage's own output when that output is inline is
+recovered like any task, but a paged one is the previous case; the
+distributed TopN and single-aggregate paths, which retry a task on the next
+worker and have no stage re-execution; a loss that leaves no surviving
+worker. Old-attempt spools at surviving consumers are released with the
+query, not at the re-execution.
+
+Evidence: in-process tests over two loopback workers with a real
+graceful shutdown of one — lost between the producers and the consumers
+(the exact 40,000-row grouped result, `stage_retries` of the moved
+consumer and both producers, stage 0 re-executed once), lost while the
+producers run (both producer attempts superseded, exact result), lost
+beyond the limit (fails closed naming worker and stage) — plus the
+orchestrator's own cases (consumer keeps a complete input, cascade through
+a released exchange, coordinator-relayed exchanges move only tasks, the
+last worker) and the exchange store's refusal of a superseded attempt.
+The AKS rolling-restart gate on this build is the next measurement.
+
 ### Assessment — September 10
 
 The evidence-backed score for the current integrated direction is **80/100
