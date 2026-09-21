@@ -35,7 +35,7 @@ interchangeable.
 
 All qualification processes stopped after the final soak. Development is paused
 at the user's request; only the authorized checkpoint commit/push follows. The
-local Compose environment remains available. The [AKS deployment plan](aks-deployment-plan.md)
+local Compose environment remains available. The [AKS deployment plan](aks-test-deployment.md#design-record-the-2026-09-08-plan)
 records infrastructure prerequisites and missing inputs; no AKS resources were
 provisioned or deployed.
 
@@ -70,5 +70,5 @@ provisioned or deployed.
    coverage must not be inferred from local fixtures.
 
 See [readiness evidence](engine-readiness-qualification.md),
-[memory and spill](engine-memory-and-spill.md), and
+[memory and spill](../reference/engine-memory-management.md#evidence-and-remaining-limits-2026-09-10-qualification), and
 [security/integration](engine-security-integration.md).

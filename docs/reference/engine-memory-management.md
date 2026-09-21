@@ -113,3 +113,55 @@ the Engine reads the cgroup limit.
   deriving values (the final merge's spilled tables and groups are not yet on
   the task metrics);
 - performance tests cover both in-memory and forced-spill execution.
+
+## Evidence and remaining limits (2026-09-10 qualification)
+
+Carried from the memory-and-spill qualification page; the settings it tabulated are in [`../engine/settings.md`](../engine/settings.md). The join spill, the hybrid final merge and the resource groups of 2026-09-18/19 are described above and in `engine/DISTRIBUTED_EXECUTION_STATUS.md`; the evidence below predates them.
+
+Focused regression coverage includes all join modes with duplicates/NULLs;
+2,000 aggregate groups under 64 KiB where memory-only aggregation fails; typed
+final aggregation under 4 MiB; incremental repeated scalar/distinct merging
+under 256 KiB and distinct-growth rejection; skew and
+disk-limit errors; early-drop file cleanup; 16 KiB sort/TopN spill; oversized
+sort input rejection; DISTINCT/semi/window/set-operation budget rejection;
+projection string expansion; and admission surviving cancellation with live
+worker reservations.
+
+These are **operator accounting estimates, not a process RSS guarantee**. Arrow
+IPC decoding, storage decompression, allocator overhead, arbitrary expression
+scratch space and transport buffers still require separate accounting and
+process isolation. A source may allocate its batch before a consumer sees and
+reserves it. Callers retaining emitted batches must reserve those buffers;
+`RecordBatch` does not carry a memory reservation with it. Transport/result
+delivery has separate quotas and validation.
+
+Broad window frames still have quadratic CPU cost. Oversized batches, unusually
+wide rows and skew can fail even with spill enabled. Normal completion, errors,
+and dropping operators remove spill files through RAII; abrupt process death
+can leave directories requiring operational cleanup. Production scale,
+concurrency, process-RSS and worker-loss evidence remain qualification work,
+not a capability inferred from the unit tests.
+
+The native pressure harness is `engine/qualification/pressure.py`. It captures
+fixture and executable SHA-256 hashes, DuckDB correctness comparisons, per-PID
+RSS samples, observed spill, rejection errors and cleanup. The
+`tmp/pressure-local-blocking-fixed/report.json` checkpoint passes all 11 local
+cases with a 32 MiB pool for mixed operators. Active window cancellation after
+297 ms recovered admission in 93 ms. Earlier cancellation and eager-exchange
+prefetch failure reports are retained for comparison. Lazy exchange consumers
+now decode one producer stream at a time with wire and decoded memory accounts;
+local and worker CPU execution use blocking tasks so cancellation endpoints stay
+responsive. These tests do not establish a hard process RSS ceiling.
+
+The two-worker 100,000-row pressure suite with 256 MiB pools passes all ten
+cases at `tmp/pressure-two-workers-compact-final/report.json` (binary SHA-256
+`e5a25a1901194d12d3217251e163e51e07ce59fa34dca7572c36c5087ee57bb5`).
+Unique-group aggregation returns 100,000 rows matching DuckDB, observes
+4,869,136 spill bytes and cleans every spill file. Sampled worker RSS peaks are
+46,219,264 and 46,272,512 bytes. The same debug pressure query took 4.547 seconds
+after compact encoding and per-batch type validation, versus 12.906 seconds and
+157,891,328 sampled spill bytes with incremental merging and nested IPC states
+(`tmp/pressure-two-workers-incremental/report.json`). These individual debug
+runs establish pressure behavior and regression direction, not matched release
+performance claims. All 88 executor tests and 14 fragment execution tests pass
+at this checkpoint; strict executor/server Clippy also passes.

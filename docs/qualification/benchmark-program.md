@@ -191,3 +191,24 @@ hashes, the co-tenant snapshot, the per-round table, per-query medians and
 p95 with the ratio, the coverage list, and a section titled "What this run is
 and is not". The scorecard in `docs/engineering/` quotes only records that
 completed every declared round.
+
+## History: the 1.90× proposal (2026-09-03 to 09-17)
+
+Before the cluster program, the comparison was defined as a single-node
+Docker contract in `engine/qualification/same_files.py`: both engines read
+the same two Parquet files (SHA-256 recorded, DuckDB the exact reference),
+a fixed twelve-query corpus (count, selective filter, arithmetic projection,
+low/medium/high-cardinality aggregation, multi-aggregate, exact distinct,
+TopN, equi-join, grouped join), 4 CPU / 8 GiB per container with the Docker
+resource fields compared exactly, concurrency four, at least five warm-ups
+and thirty measured executions per query, six alternating engine-order
+rounds, warm cache only (cold and warm never combined), every result fully
+consumed and hash-checked. Its proposed primary metric was successful
+exact-result queries per second with a 1.90× gate
+(`engine/qualification/trino_claim_gate.py`; `trino_benchmark_preflight.py`
+records the prerequisites). The AKS harness that grew from it ran five of six
+rounds on 2026-09-15 at 1.45× (`kaveon-trino-aks-2026-09-15.md`); the 1.90×
+gate was not met and the metric was never accepted. This program — three
+tiers, rounds, the throughput tier, the result cache and statistics off —
+supersedes that contract for every published number; the single-node scripts
+remain in `engine/qualification/` for local regression, not for claims.

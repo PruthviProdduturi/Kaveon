@@ -190,4 +190,4 @@ These are the things neither Trino nor PostgreSQL offers, and they are why the c
 
 ---
 
-*Sources: `HANDSHAKE.md` Log rows dated 2026-09-10 and 2026-09-11 (query IDs `3dfd7cc9…`, `112ad163…`, `63a8630e…`, `08948cdc…`, `15ab4798…`); `engine/DISTRIBUTED_EXECUTION_STATUS.md`; `docs/engineering/engine-readiness-qualification.md` (80/100 rubric); `docs/engineering/trino-90-percent-benchmark.md`; `engine/crates/sql/src/{parser,logical_plan}.rs`; Trino 483 documentation; PostgreSQL 18 documentation.*
+*Sources: `HANDSHAKE.md` Log rows dated 2026-09-10 and 2026-09-11 (query IDs `3dfd7cc9…`, `112ad163…`, `63a8630e…`, `08948cdc…`, `15ab4798…`); `engine/DISTRIBUTED_EXECUTION_STATUS.md`; `docs/engineering/engine-readiness-qualification.md` (80/100 rubric); `docs/qualification/benchmark-program.md` (History: the 1.90× proposal); `engine/crates/sql/src/{parser,logical_plan}.rs`; Trino 483 documentation; PostgreSQL 18 documentation.*
