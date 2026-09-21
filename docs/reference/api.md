@@ -415,14 +415,24 @@ fourth that builds the cube. They combine: `sketches = true` with
   SQLite catalog, deleted with the table). A source that moves between
   the build and the store is 409 `SOURCE_CHANGED`. Its result is one row,
   `table (VARCHAR), row_count (BIGINT), distinct_columns (BIGINT),
-  cube_cells (BIGINT)` — `distinct_columns` is how many columns this
-  statement counted distinct values for, `0` for the metadata-only form;
-  `cube_cells` the cells of the cube it built, null when it built none.
+  cube_cells (BIGINT), full_read (VARCHAR)` — `distinct_columns` is how
+  many columns this statement counted distinct values for, `0` for the
+  metadata-only form; `cube_cells` the cells of the cube it built, null
+  when it built none; `full_read` where the columns were read
+  (`workers`, `coordinator`), null when they were not.
 - **`ANALYZE … WITH (sketches = true)`** reads every sketchable column
-  once on the coordinator (files in parallel, batches reserved through
-  the statement's memory admission) for a HyperLogLog distinct-count
-  sketch per column, a KLL quantile sketch per numeric or temporal column
-  and exact bounds and null counts; `depth` becomes `full`. A source that
+  once — on the workers, as one `SELECT COUNT(*), COLUMN_STATISTICS(…) …`
+  statement whose scan partitions across them by row group, when the
+  cluster can run a distributed statement, else on the coordinator
+  (files in parallel, batches reserved through the statement's memory
+  admission); the result's `full_read` column (`workers` /
+  `coordinator`) and the record's `execution` say which — for a
+  HyperLogLog distinct-count sketch per column, a KLL quantile sketch
+  per numeric or temporal column and exact bounds and null counts;
+  `depth` becomes `full`. `WITH (cube = true)` follows the same rule:
+  one `GROUP BY` statement per grouping on the workers (see
+  [`ANALYZE`](../engine/learning-engine.md#analyze)), one coordinator
+  scan otherwise. A source that
   changes under the read is refused rather than mixed. The sketches are
   what the planner estimates selectivity from and what
   `APPROX_COUNT_DISTINCT` and `APPROX_PERCENTILE` answer from without a
