@@ -194,11 +194,40 @@ def _special_report(path: Path, family: str) -> dict:
     return {"schema_version": evidence_collector.REPORT_SCHEMA_VERSION, **normalized}
 
 
+def _quarantined_records(path: Path, snapshot) -> tuple[set[str], str]:
+    value = _load_json(path, "user-recents quarantine", 4 * 1024 * 1024)
+    claimed = value.get("quarantine_sha256")
+    unsigned = {key: item for key, item in value.items() if key != "quarantine_sha256"}
+    records = unsigned.get("records")
+    if (set(unsigned) != {"schema_version", "family", "checkpoint_snapshot_sha256", "records"}
+            or unsigned.get("schema_version") != 1 or unsigned.get("family") != "user_recents"
+            or unsigned.get("checkpoint_snapshot_sha256") != snapshot.snapshot_sha256
+            or not isinstance(records, list) or not records
+            or not isinstance(claimed, str) or len(claimed) != 64 or set(claimed) - HEX
+            or hashlib.sha256(_canonical(unsigned)).hexdigest() != claimed):
+        raise RuntimeError("user-recents quarantine schema or digest is invalid")
+    source = {record.record_id: record for record in snapshot.records}
+    identities = set()
+    for item in records:
+        if (not isinstance(item, dict) or set(item) != {"record_id", "payload_sha256"}
+                or not isinstance(item.get("record_id"), str)
+                or not isinstance(item.get("payload_sha256"), str)
+                or len(item["payload_sha256"]) != 64 or set(item["payload_sha256"]) - HEX
+                or item["record_id"] in identities):
+            raise RuntimeError("user-recents quarantine record is invalid")
+        record = source.get(item["record_id"])
+        if record is None or record.payload_sha256 != item["payload_sha256"]:
+            raise RuntimeError("user-recents quarantine does not match its checkpoint")
+        identities.add(item["record_id"])
+    return identities, claimed
+
+
 def collect(manifest_path: Path, output_directory: Path, *, now: datetime | None = None) -> dict:
     if os.getenv("KAVEON_RECONCILIATION_REPORT_COLLECTION_ENABLED") != "true":
         raise RuntimeError("report collection requires explicit enablement")
     manifest = _load_json(manifest_path, "reconciliation manifest")
-    if set(manifest) != {"schema_version", "checkpoints", "live_inventory", "special_reports"} \
+    if set(manifest) not in ({"schema_version", "checkpoints", "live_inventory", "special_reports"},
+                             {"schema_version", "checkpoints", "live_inventory", "special_reports", "quarantines"}) \
             or manifest.get("schema_version") != SCHEMA_VERSION:
         raise RuntimeError("reconciliation manifest schema is invalid")
     checkpoints = manifest["checkpoints"]
@@ -215,11 +244,27 @@ def collect(manifest_path: Path, output_directory: Path, *, now: datetime | None
     reports = {}
     for family, kinds in DIRECT_KINDS.items():
         snapshot = snapshots[family]
-        count, target_snapshot = _exact_records(snapshot.records, kinds)
+        quarantine_sha = None
+        records = snapshot.records
+        if family == "user_recents" and "quarantines" in manifest:
+            quarantines = manifest["quarantines"]
+            if not isinstance(quarantines, dict) or set(quarantines) != {"user_recents"} \
+                    or not isinstance(quarantines["user_recents"], str):
+                raise RuntimeError("reconciliation quarantine coverage is invalid")
+            quarantined, quarantine_sha = _quarantined_records(
+                (base / quarantines["user_recents"]).resolve(), snapshot)
+            records = tuple(record for record in snapshot.records if record.record_id not in quarantined)
+        count, target_snapshot = _exact_records(records, kinds)
         reports[family] = _report(
             family, watermark=snapshot.source_watermark, source_count=len(snapshot.records),
             target_count=count, source_snapshot=f"checkpoint:{snapshot.snapshot_sha256}",
-            target_snapshot=f"kaveondb:{target_snapshot}", reconciled_at=reconciled_at)
+            target_snapshot=f"kaveondb:{target_snapshot}", reconciled_at=reconciled_at,
+            producer="checkpoint-quarantine-live-reconciler-v1" if quarantine_sha else "checkpoint-live-reconciler-v1")
+        if quarantine_sha:
+            reports[family]["provenance"]["source_snapshot"] += f":quarantine:{quarantine_sha}"
+            unsigned = {key: value for key, value in reports[family].items() if key != "report_sha256"}
+            reports[family]["report_sha256"] = hashlib.sha256(
+                evidence_collector._canonical(unsigned)).hexdigest()
 
     source_snapshot = snapshots["sources"]
     source_groups = {
