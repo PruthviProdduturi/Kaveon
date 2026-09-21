@@ -42,14 +42,14 @@ def capture_snapshot():
 def apply_and_reconcile(snapshot):
  validate(snapshot);created=present=0
  for r in snapshot.records:
-  target=product_store.read("query_history",r.record_id,r.owner_principal,"Admin")
+  target=product_store.migration_read("query_history",r.record_id,r.owner_principal,"Admin")
   if target is not None and target.get("document")==r.document:present+=1;continue
   if target is not None:raise RuntimeError("KaveonDB query history diverges")
-  try:product_store.transact([product_store.ProductMutation("create","query_history",r.record_id,r.document)],r.owner_principal,"Admin")
+  try:product_store.migration_transact([product_store.ProductMutation("create","query_history",r.record_id,r.document)],r.owner_principal,"Admin")
   except HTTPException as error:
-   target=product_store.read("query_history",r.record_id,r.owner_principal,"Admin")
+   target=product_store.migration_read("query_history",r.record_id,r.owner_principal,"Admin")
    if error.status_code!=409 or target is None or target.get("document")!=r.document:raise
   created+=1
  for r in snapshot.records:
-  if (product_store.read("query_history",r.record_id,r.owner_principal,"Admin") or {}).get("document")!=r.document:raise RuntimeError("query history reconciliation failed")
+  if (product_store.migration_read("query_history",r.record_id,r.owner_principal,"Admin") or {}).get("document")!=r.document:raise RuntimeError("query history reconciliation failed")
  return {"family":"query_history","source_watermark":snapshot.source_watermark,"source_count":len(snapshot.records),"created":created,"already_present":present,"reconciled":len(snapshot.records),"snapshot_sha256":snapshot.snapshot_sha256}

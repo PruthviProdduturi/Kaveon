@@ -168,7 +168,7 @@ def capture_snapshot(artifact_root: Path) -> RunSnapshot:
         artifact_bytes = dlm_compiled_artifact._canonical(compiled)
         relative_path = f"dlm/{dataset_id}/v{version}/compiled.json"
         _stage(artifact_root, relative_path, artifact_bytes)
-        definition = product_store.read("dlm_definition", dataset_id, owner, "Admin")
+        definition = product_store.migration_read("dlm_definition", dataset_id, owner, "Admin")
         if definition is None:
             raise RuntimeError(f"KaveonDB DLM definition {dataset_id} is missing")
         current_snapshot, revision = str(definition.get("snapshot_id") or ""), definition.get("revision")
@@ -215,19 +215,19 @@ def apply_and_reconcile(snapshot: RunSnapshot) -> dict:
     validate_snapshot(snapshot)
     created = already_present = 0
     for record in snapshot.records:
-        target = product_store.read("dlm_run", record.record_id, record.owner_principal, "Admin")
+        target = product_store.migration_read("dlm_run", record.record_id, record.owner_principal, "Admin")
         if target is not None and target.get("document") == record.document:
             already_present += 1
             continue
         building = {**record.document, "status": "building", "artifact": None}
         if target is None:
             try:
-                product_store.transact([
+                product_store.migration_transact([
                     product_store.ProductMutation("create", "dlm_run", record.record_id, building),
                 ], record.owner_principal, "Admin")
                 target = {"document": building, "revision": 1}
             except HTTPException as error:
-                target = product_store.read("dlm_run", record.record_id,
+                target = product_store.migration_read("dlm_run", record.record_id,
                                             record.owner_principal, "Admin")
                 if error.status_code != 409 or target is None:
                     raise
@@ -238,18 +238,18 @@ def apply_and_reconcile(snapshot: RunSnapshot) -> dict:
         if target.get("document") != building or type(revision) is not int or revision < 1:
             raise RuntimeError(f"KaveonDB DLM run {record.record_id} diverges")
         try:
-            product_store.transact([
+            product_store.migration_transact([
                 product_store.ProductMutation("update", "dlm_run", record.record_id,
                                               record.document, expected_revision=revision),
             ], record.owner_principal, "Admin")
         except HTTPException as error:
-            resolved = product_store.read("dlm_run", record.record_id,
+            resolved = product_store.migration_read("dlm_run", record.record_id,
                                           record.owner_principal, "Admin")
             if error.status_code != 409 or resolved is None or resolved.get("document") != record.document:
                 raise
         created += 1
     for record in snapshot.records:
-        target = product_store.read("dlm_run", record.record_id, record.owner_principal, "Admin")
+        target = product_store.migration_read("dlm_run", record.record_id, record.owner_principal, "Admin")
         if target is None or target.get("document") != record.document:
             raise RuntimeError(f"KaveonDB DLM run {record.record_id} failed reconciliation")
     return {"family": "dlm_runs", "source_watermark": snapshot.source_watermark,

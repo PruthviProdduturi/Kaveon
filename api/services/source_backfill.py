@@ -87,23 +87,23 @@ def _compatible_legacy_catalog(current,desired):
 def apply_and_reconcile(s):
  validate_snapshot(s);created=present=repaired=0
  for r in s.records:
-  target=product_store.read("source",r.record_id,r.owner_principal,"Admin")
+  target=product_store.migration_read("source",r.record_id,r.owner_principal,"Admin")
   if target is not None and target.get("document")==r.document:present+=1;continue
   if target is not None:
    revision=target.get("revision")
    if not _compatible_legacy_catalog(target.get("document"),r.document) or type(revision) is not int or revision<1:
     raise RuntimeError(f"KaveonDB source {r.record_id} diverges")
-   try:product_store.transact([product_store.ProductMutation("update","source",r.record_id,r.document,revision)],r.owner_principal,"Admin")
+   try:product_store.migration_transact([product_store.ProductMutation("update","source",r.record_id,r.document,revision)],r.owner_principal,"Admin")
    except HTTPException as e:
-    resolved=product_store.read("source",r.record_id,r.owner_principal,"Admin")
+    resolved=product_store.migration_read("source",r.record_id,r.owner_principal,"Admin")
     if e.status_code not in (409,412) or resolved is None or resolved.get("document")!=r.document:raise
    repaired+=1;continue
-  try:product_store.transact([product_store.ProductMutation("create","source",r.record_id,r.document)],r.owner_principal,"Admin")
+  try:product_store.migration_transact([product_store.ProductMutation("create","source",r.record_id,r.document)],r.owner_principal,"Admin")
   except HTTPException as e:
-   resolved=product_store.read("source",r.record_id,r.owner_principal,"Admin")
+   resolved=product_store.migration_read("source",r.record_id,r.owner_principal,"Admin")
    if e.status_code!=409 or resolved is None or resolved.get("document")!=r.document:raise
   created+=1
  for r in s.records:
-  target=product_store.read("source",r.record_id,r.owner_principal,"Admin")
+  target=product_store.migration_read("source",r.record_id,r.owner_principal,"Admin")
   if target is None or target.get("document")!=r.document:raise RuntimeError("source reconciliation failed")
  return {"family":"sources","source_watermark":s.source_watermark,"source_count":len(s.records),"created":created,"already_present":present,"repaired":repaired,"reconciled":len(s.records),"snapshot_sha256":s.snapshot_sha256}

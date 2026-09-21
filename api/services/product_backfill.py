@@ -145,7 +145,7 @@ def apply_and_reconcile(snapshot: DatasetSnapshot) -> dict:
     created = 0
     already_present = 0
     for record in snapshot.records:
-        target = product_store.read("dataset", record.record_id, record.owner_principal, "Admin")
+        target = product_store.migration_read("dataset", record.record_id, record.owner_principal, "Admin")
         if _target_matches(target, record):
             already_present += 1
             continue
@@ -155,11 +155,11 @@ def apply_and_reconcile(snapshot: DatasetSnapshot) -> dict:
             "create", "dataset", record.record_id, record.document
         )
         try:
-            product_store.transact([mutation], record.owner_principal, "Admin")
+            product_store.migration_transact([mutation], record.owner_principal, "Admin")
         except HTTPException as error:
             if error.status_code != 409:
                 raise
-            resolved = product_store.read(
+            resolved = product_store.migration_read(
                 "dataset", record.record_id, record.owner_principal, "Admin"
             )
             if not _target_matches(resolved, record):
@@ -170,7 +170,7 @@ def apply_and_reconcile(snapshot: DatasetSnapshot) -> dict:
 
     target_generations = []
     for record in snapshot.records:
-        target = product_store.read("dataset", record.record_id, record.owner_principal, "Admin")
+        target = product_store.migration_read("dataset", record.record_id, record.owner_principal, "Admin")
         if not _target_matches(target, record):
             raise RuntimeError(f"KaveonDB dataset {record.record_id} failed reconciliation")
         target_generations.append(int(target["generation"]))

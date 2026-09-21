@@ -45,16 +45,16 @@ def apply_and_reconcile(s):
   if apply_record(r):created+=1
   else:present+=1
  for r in s.records:
-  if (product_store.read(r.kind,r.record_id,r.owner_principal,"Admin") or {}).get("document")!=r.document:raise RuntimeError("chat reconciliation failed")
+  if (product_store.migration_read(r.kind,r.record_id,r.owner_principal,"Admin") or {}).get("document")!=r.document:raise RuntimeError("chat reconciliation failed")
  return {"family":"chat_history","source_watermark":s.source_watermark,"source_count":len(s.records),"created":created,"already_present":present,"reconciled":len(s.records),"snapshot_sha256":s.snapshot_sha256}
 def apply_record(r):
  if r.kind not in {"chat_session","chat_message"} or not r.owner_principal or canonical(r.document)!=r.payload_sha256:raise RuntimeError("chat record is invalid")
- target=product_store.read(r.kind,r.record_id,r.owner_principal,"Admin")
+ target=product_store.migration_read(r.kind,r.record_id,r.owner_principal,"Admin")
  if target is not None and target.get("document")==r.document:return False
  if target is not None:raise RuntimeError("KaveonDB chat record diverges")
- try:product_store.transact([product_store.ProductMutation("create",r.kind,r.record_id,r.document)],r.owner_principal,"Admin")
+ try:product_store.migration_transact([product_store.ProductMutation("create",r.kind,r.record_id,r.document)],r.owner_principal,"Admin")
  except HTTPException as error:
-  target=product_store.read(r.kind,r.record_id,r.owner_principal,"Admin")
+  target=product_store.migration_read(r.kind,r.record_id,r.owner_principal,"Admin")
   if error.status_code!=409 or target is None or target.get("document")!=r.document:raise
  return True
 

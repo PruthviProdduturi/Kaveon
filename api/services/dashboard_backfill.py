@@ -68,7 +68,7 @@ def capture_snapshot():
             raise RuntimeError(f"dashboard {record_id} chart references are invalid")
         revisions = {}
         for chart_id in sorted(str(value) for value in chart_ids):
-            chart = product_store.read("chart", chart_id, owner, "Admin")
+            chart = product_store.migration_read("chart", chart_id, owner, "Admin")
             if chart is None: raise RuntimeError(f"KaveonDB chart {chart_id} is missing for dashboard")
             snapshot_id, revision = str(chart.get("snapshot_id") or ""), chart.get("revision")
             if not snapshot_id or (target_snapshot is not None and snapshot_id != target_snapshot) \
@@ -93,17 +93,17 @@ def capture_snapshot():
 def apply_and_reconcile(snapshot):
     validate_snapshot(snapshot); created = already_present = 0
     for record in snapshot.records:
-        target = product_store.read("dashboard", record.record_id, record.owner_principal, "Admin")
+        target = product_store.migration_read("dashboard", record.record_id, record.owner_principal, "Admin")
         if target is not None and target.get("document") == record.document: already_present += 1; continue
         if target is not None: raise RuntimeError(f"KaveonDB dashboard {record.record_id} diverges")
-        try: product_store.transact([product_store.ProductMutation("create", "dashboard", record.record_id,
+        try: product_store.migration_transact([product_store.ProductMutation("create", "dashboard", record.record_id,
              record.document)], record.owner_principal, "Admin")
         except HTTPException as error:
-            resolved = product_store.read("dashboard", record.record_id, record.owner_principal, "Admin")
+            resolved = product_store.migration_read("dashboard", record.record_id, record.owner_principal, "Admin")
             if error.status_code != 409 or resolved is None or resolved.get("document") != record.document: raise
         created += 1
     for record in snapshot.records:
-        target = product_store.read("dashboard", record.record_id, record.owner_principal, "Admin")
+        target = product_store.migration_read("dashboard", record.record_id, record.owner_principal, "Admin")
         if target is None or target.get("document") != record.document:
             raise RuntimeError(f"KaveonDB dashboard {record.record_id} failed reconciliation")
     return {"family": "dashboards", "source_watermark": snapshot.source_watermark,

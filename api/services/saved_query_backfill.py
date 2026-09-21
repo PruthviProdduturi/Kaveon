@@ -128,7 +128,7 @@ def apply_and_reconcile(snapshot: SavedQuerySnapshot) -> dict:
     validate_snapshot(snapshot)
     created = already_present = 0
     for record in snapshot.records:
-        target = product_store.read("saved_query", record.record_id,
+        target = product_store.migration_read("saved_query", record.record_id,
                                     record.owner_principal, "Admin")
         if target is not None and target.get("document") == record.document:
             already_present += 1
@@ -136,18 +136,18 @@ def apply_and_reconcile(snapshot: SavedQuerySnapshot) -> dict:
         if target is not None:
             raise RuntimeError(f"KaveonDB saved query {record.record_id} diverges")
         try:
-            product_store.transact([product_store.ProductMutation(
+            product_store.migration_transact([product_store.ProductMutation(
                 "create", "saved_query", record.record_id, record.document,
             )], record.owner_principal, "Admin")
         except HTTPException as error:
-            resolved = product_store.read("saved_query", record.record_id,
+            resolved = product_store.migration_read("saved_query", record.record_id,
                                           record.owner_principal, "Admin")
             if (error.status_code != 409 or resolved is None
                     or resolved.get("document") != record.document):
                 raise
         created += 1
     for record in snapshot.records:
-        target = product_store.read("saved_query", record.record_id,
+        target = product_store.migration_read("saved_query", record.record_id,
                                     record.owner_principal, "Admin")
         if target is None or target.get("document") != record.document:
             raise RuntimeError(f"KaveonDB saved query {record.record_id} failed reconciliation")
