@@ -76,7 +76,8 @@ measurements. They are not substitutes for current capability status. Performanc
 numbers require their original dataset, hardware, cache state, version, and date
 before they can be treated as reproducible benchmarks.
 
-## Historical implementation plans
+## Archive
 
-Files under `superpowers/` record prior designs and execution plans. They may
-describe superseded UI structure or future work and are not current product docs.
+[`archive/`](archive/README.md) holds prior designs and execution plans
+(Studio and CLI, August–September 2026). They describe superseded structure
+or work since done and are not current product documentation.

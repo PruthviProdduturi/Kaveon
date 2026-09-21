@@ -134,7 +134,7 @@ docker compose -f engine/qualification/compose.yml stop
 
 For performance work follow the [benchmark protocol](../benches/README.md).
 The proposed 1.90× metric, fail-closed evaluator, cache policy and AKS boundary
-are defined in the [Trino comparison proposal](../../docs/engineering/trino-90-percent-benchmark.md).
+were defined in the 1.90× proposal, now the history section of the [benchmark program](../../docs/qualification/benchmark-program.md#history-the-190-proposal-2026-09-03-to-09-17), which supersedes it for every published number.
 When local Docker/WSL is unavailable, the three-worker AKS path is defined by
 the [resource-matched Trino chart](../../infra/helm/kaveon-trino-benchmark/README.md).
 It builds the same extended fixture, records DuckDB result hashes, verifies the
