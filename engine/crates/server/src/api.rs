@@ -202,6 +202,18 @@ impl ExecutionPlacement {
         self.approximate = notes;
         self
     }
+    /// The same placement, its detail carrying the account of the worker
+    /// losses the statement recovered from.
+    fn recovered(mut self, recovery: Option<&QueryRecovery>) -> Self {
+        if let Some(recovery) = recovery {
+            let summary = recovery.summary();
+            self.detail = Some(match self.detail.take() {
+                Some(detail) => format!("{detail}; {summary}"),
+                None => summary,
+            });
+        }
+        self
+    }
     /// The same placement, its detail saying the statistics would have
     /// answered had `settings.use_statistics` not stood them aside.
     fn bypassing_statistics(mut self, bypassed: bool) -> Self {
@@ -215,11 +227,91 @@ impl ExecutionPlacement {
     }
 }
 
+/// What a distributed statement recovered from: the workers it lost while
+/// it ran and every attempt those losses created. Absent when no worker
+/// was lost.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+struct QueryRecovery {
+    lost_workers: Vec<String>,
+    /// Consumer spools moved off a lost worker.
+    moved_spools: Vec<crate::orchestrator::SpoolMove>,
+    /// Every attempt a loss created, in the order it was created.
+    stage_retries: Vec<crate::orchestrator::StageRetry>,
+    /// The stages whose finished output was produced again.
+    reexecuted_stages: Vec<u32>,
+}
+
+impl QueryRecovery {
+    fn from_losses(losses: Vec<crate::orchestrator::WorkerLossRecovery>) -> Option<Self> {
+        if losses.is_empty() {
+            return None;
+        }
+        let mut recovery = Self {
+            lost_workers: Vec::new(),
+            moved_spools: Vec::new(),
+            stage_retries: Vec::new(),
+            reexecuted_stages: Vec::new(),
+        };
+        for loss in losses {
+            recovery.lost_workers.push(loss.worker);
+            recovery.moved_spools.extend(loss.moved_spools);
+            recovery.stage_retries.extend(loss.stage_retries);
+            for stage in loss.reexecuted_stages {
+                if !recovery.reexecuted_stages.contains(&stage) {
+                    recovery.reexecuted_stages.push(stage);
+                }
+            }
+        }
+        Some(recovery)
+    }
+
+    /// The one-line account the placement detail carries.
+    fn summary(&self) -> String {
+        let mut summary = format!(
+            "recovered from the loss of {}",
+            self.lost_workers
+                .iter()
+                .map(|worker| format!("worker '{worker}'"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        if !self.reexecuted_stages.is_empty() {
+            summary.push_str(&format!(
+                "; stage{} {} re-executed",
+                if self.reexecuted_stages.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+                self.reexecuted_stages
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        summary.push_str(&format!(
+            "; {} task attempt{} created",
+            self.stage_retries.len(),
+            if self.stage_retries.len() == 1 {
+                ""
+            } else {
+                "s"
+            }
+        ));
+        summary
+    }
+}
+
 #[derive(Clone, Serialize)]
 struct QueryRecord {
     rows_are_preview: bool,
     scan_metrics_complete: bool,
     execution: ExecutionPlacement,
+    /// The worker losses a distributed statement recovered from; absent
+    /// when it lost none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery: Option<QueryRecovery>,
     /// What the statement set for itself; absent when it set nothing.
     #[serde(skip_serializing_if = "QuerySettings::is_default")]
     settings: QuerySettings,
@@ -997,6 +1089,13 @@ type RootReady = Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<Result
 /// error fails the task there.
 #[cfg(test)]
 type RootStreamProbe = Arc<dyn Fn(usize) -> Result<(), String> + Send + Sync>;
+/// A test's hook into the coordinator's dispatch loop, keyed by query:
+/// called with each wave of ready tasks before any of them is started.
+#[cfg(test)]
+type DispatchProbe = Arc<dyn Fn(&[TaskDispatch]) + Send + Sync>;
+#[cfg(test)]
+static DISPATCH_PROBES: std::sync::LazyLock<std::sync::Mutex<HashMap<String, DispatchProbe>>> =
+    std::sync::LazyLock::new(Default::default);
 #[cfg(test)]
 static ROOT_STREAM_PROBES: std::sync::LazyLock<std::sync::Mutex<HashMap<String, RootStreamProbe>>> =
     std::sync::LazyLock::new(Default::default);
@@ -2402,6 +2501,7 @@ fn pending_query_record(
 ) -> QueryRecord {
     QueryRecord {
         rows_are_preview: true,
+        recovery: None,
         scan_metrics_complete: false,
         execution: ExecutionPlacement::pending(),
         settings: settings.clone(),
@@ -2983,6 +3083,7 @@ async fn run_statement(
         let elapsed = start.elapsed().as_millis() as u64;
         let record = QueryRecord {
             rows_are_preview: true,
+            recovery: None,
             scan_metrics_complete: true,
             execution: ExecutionPlacement::cache(),
             settings: settings.clone(),
@@ -3069,6 +3170,7 @@ async fn run_statement(
         let elapsed = start.elapsed().as_millis() as u64;
         let record = QueryRecord {
             rows_are_preview: true,
+            recovery: None,
             scan_metrics_complete: true,
             execution: ExecutionPlacement::context(&answer),
             settings: settings.clone(),
@@ -3136,7 +3238,7 @@ async fn run_statement(
     .await
     {
         match distributed {
-            Ok((result, stages, planning_us)) => {
+            Ok((result, stages, planning_us, recovery)) => {
                 let mut result = result;
                 keep_result(&state, &cache_key, &result, start, &query_id, paged);
                 let next_uri = if paged {
@@ -3169,8 +3271,10 @@ async fn run_statement(
                     rows_are_preview: true,
                     scan_metrics_complete,
                     execution: ExecutionPlacement::distributed("fragments")
+                        .recovered(recovery.as_ref())
                         .with_approximate(approximate.clone())
                         .bypassing_statistics(statistics_bypassed),
+                    recovery,
                     settings: settings.clone(),
                     cached_from: None,
                     cached_elapsed_ms: None,
@@ -3285,6 +3389,7 @@ async fn run_statement(
                 let (scans, scan_metrics_complete) = distributed_scan_telemetry(&stages);
                 let record = QueryRecord {
                     rows_are_preview: true,
+                    recovery: None,
                     scan_metrics_complete,
                     execution: ExecutionPlacement::distributed("aggregate")
                         .with_approximate(approximate.clone())
@@ -3396,6 +3501,7 @@ async fn run_statement(
                 let (scans, scan_metrics_complete) = distributed_scan_telemetry(&stages);
                 let record = QueryRecord {
                     rows_are_preview: true,
+                    recovery: None,
                     scan_metrics_complete,
                     execution: ExecutionPlacement::distributed("top_n")
                         .with_approximate(approximate.clone())
@@ -3566,6 +3672,7 @@ async fn run_statement(
             let elapsed = start.elapsed().as_millis() as u64;
             let record = QueryRecord {
                 rows_are_preview: true,
+                recovery: None,
                 scan_metrics_complete: true,
                 execution: ExecutionPlacement::coordinator(placement_reason.clone())
                     .with_approximate(approximate.clone())
@@ -3668,6 +3775,7 @@ async fn run_statement(
 
     let record = QueryRecord {
         rows_are_preview: true,
+        recovery: None,
         scan_metrics_complete: true,
         execution: ExecutionPlacement::coordinator(placement_reason.clone())
             .with_approximate(approximate.clone())
@@ -7578,6 +7686,10 @@ struct RemoteTaskFailure {
     /// Rows of a streamed root task already in the statement's pages when
     /// it failed: a retry would deliver them again, so there is none.
     rows_delivered: usize,
+    /// The coordinator could not connect to the worker (refused, reset,
+    /// or the connection dropped before an answer): the worker is lost by
+    /// the cluster's rule, without a probe.
+    connection_lost: bool,
 }
 
 /// The message a statement fails with when a streamed root task failed
@@ -7607,6 +7719,7 @@ async fn execute_remote_task(
         message,
         retryable: false,
         rows_delivered: 0,
+        connection_lost: false,
     })?;
     Ok((schema, batches, elapsed_us, output_bytes, scan, execution))
 }
@@ -7642,6 +7755,7 @@ async fn send_task_request(
             // the first attempt is still running until the query is finished.
             retryable: !error.is_timeout(),
             rows_delivered: 0,
+            connection_lost: !error.is_timeout(),
         })?;
     if !response.status().is_success() {
         let status = response.status();
@@ -7663,6 +7777,7 @@ async fn send_task_request(
             ),
             retryable,
             rows_delivered: 0,
+            connection_lost: false,
         });
     }
     Ok(response)
@@ -7714,6 +7829,7 @@ async fn execute_remote_task_payload(
             retryable: message.starts_with("network receive:"),
             message,
             rows_delivered: 0,
+            connection_lost: false,
         })?;
     Ok((payload, elapsed_us, scan, execution))
 }
@@ -7858,12 +7974,14 @@ async fn streamed_task_failure(
             message: format!("worker '{}' failed task: {error}", worker.node_id),
             retryable: true,
             rows_delivered,
+            connection_lost: false,
         };
     }
     RemoteTaskFailure {
         retryable: transport_message.starts_with("network receive:"),
         message: transport_message,
         rows_delivered,
+        connection_lost: false,
     }
 }
 
@@ -7907,6 +8025,7 @@ async fn execute_remote_root_task_streamed(
                     message: "root tasks returned incompatible schemas".into(),
                     retryable: false,
                     rows_delivered: 0,
+                    connection_lost: false,
                 });
             }
             Some(_) => false,
@@ -7932,12 +8051,14 @@ async fn execute_remote_root_task_streamed(
                     message: "result writer unavailable".into(),
                     retryable: false,
                     rows_delivered: output_rows,
+                    connection_lost: false,
                 })?;
                 let Some(writer) = writer.as_mut() else {
                     return Err(RemoteTaskFailure {
                         message: "the statement's result was closed while its rows streamed".into(),
                         retryable: false,
                         rows_delivered: output_rows,
+                        connection_lost: false,
                     });
                 };
                 for row in rows {
@@ -7945,6 +8066,7 @@ async fn execute_remote_root_task_streamed(
                         message: error.to_string(),
                         retryable: false,
                         rows_delivered: output_rows,
+                        connection_lost: false,
                     })?;
                     output_rows += 1;
                 }
@@ -7981,6 +8103,7 @@ async fn execute_remote_root_task_streamed(
                     ),
                     retryable: false,
                     rows_delivered: output_rows,
+                    connection_lost: false,
                 });
             }
             Err(error) => {
@@ -8013,8 +8136,63 @@ impl StreamedRootSink {
             message: "result schema unavailable".into(),
             retryable: false,
             rows_delivered: 0,
+            connection_lost: false,
         })
     }
+}
+
+/// Whether `worker` is lost by the cluster's rule: the coordinator's
+/// connection to it was refused or reset (`connection_lost`, from the task
+/// call), or a probe of its `/v1/node` is refused, or its heartbeat has
+/// lapsed (two intervals) and the probe does not answer in time. A
+/// worker that answers the probe is not lost, whatever its task said.
+async fn worker_is_lost(
+    state: &Arc<AppState>,
+    client: &reqwest::Client,
+    worker: &NodeInfo,
+    connection_lost: bool,
+) -> bool {
+    if connection_lost {
+        return true;
+    }
+    let url = format!("{}/v1/node", worker.address.trim_end_matches('/'));
+    match client
+        .get(url)
+        .timeout(crate::cluster::WORKER_PROBE_TIMEOUT)
+        .send()
+        .await
+    {
+        Ok(_) => false,
+        Err(error) if error.is_timeout() => {
+            state.cluster.read().await.heartbeat_lapsed(&worker.node_id)
+        }
+        Err(_) => true,
+    }
+}
+
+/// The workers a failed dispatch depended on, the task's own first: the
+/// ones its exchange inputs were fetched from and its outputs written to.
+fn workers_behind_dispatch(
+    dispatch: &TaskDispatch,
+    task_worker: &NodeInfo,
+    live: &[NodeInfo],
+) -> Vec<NodeInfo> {
+    let mut workers = vec![task_worker.clone()];
+    for location in dispatch
+        .exchange_inputs
+        .iter()
+        .chain(dispatch.exchange_outputs.iter())
+    {
+        let uri = location.worker_uri.trim_end_matches('/');
+        if let Some(worker) = live
+            .iter()
+            .find(|worker| worker.address.trim_end_matches('/') == uri)
+            && !workers.iter().any(|known| known.node_id == worker.node_id)
+        {
+            workers.push(worker.clone());
+        }
+    }
+    workers
 }
 
 async fn cleanup_distributed_query(state: &Arc<AppState>, query_id: &str) {
@@ -8083,7 +8261,17 @@ async fn execute_distributed_fragments(
     catalog_snapshot: &kaveon_core::CatalogManager,
     pins: &SourcePins,
     sink: DistributedSink<'_>,
-) -> Option<Result<(TaskResponse, Vec<StageTelemetry>, u64), String>> {
+) -> Option<
+    Result<
+        (
+            TaskResponse,
+            Vec<StageTelemetry>,
+            u64,
+            Option<QueryRecovery>,
+        ),
+        String,
+    >,
+> {
     let DistributedSink {
         placement_reason,
         result_writer,
@@ -8155,6 +8343,7 @@ async fn execute_distributed_fragments(
     if state.disk_exchange_store.is_some() {
         orchestrator.set_exchange_store_uri(state.cluster.read().await.this_node.address.clone());
     }
+    orchestrator.set_stage_retry_limit(state.config.stage_retry_limit);
     let cancellation = match state.lifecycle.cancellations.token(query_id) {
         Ok(cancellation) => cancellation,
         Err(error) => return Some(Err(error.to_string())),
@@ -8164,6 +8353,7 @@ async fn execute_distributed_fragments(
     let mut stage_started = BTreeMap::<StageId, Instant>::new();
     let mut stage_tasks = BTreeMap::<StageId, Vec<TaskTelemetry>>::new();
     let mut task_failures = Vec::new();
+    let mut losses: Vec<crate::orchestrator::WorkerLossRecovery> = Vec::new();
     // Exchange deletion is best-effort housekeeping. A consumed exchange cannot
     // be read by a later stage, so overlap its HTTP deletes with the next ready
     // stage instead of leaving every worker idle between stage waves. We still
@@ -8191,6 +8381,16 @@ async fn execute_distributed_fragments(
             Ok(_) => return Some(Err("distributed stage graph made no progress".into())),
             Err(error) => return Some(Err(format!("cannot schedule ready tasks: {error}"))),
         };
+        #[cfg(test)]
+        {
+            let probe = DISPATCH_PROBES
+                .lock()
+                .ok()
+                .and_then(|probes| probes.get(query_id).cloned());
+            if let Some(probe) = probe {
+                probe(&dispatches);
+            }
+        }
         let mut tasks = tokio::task::JoinSet::new();
         for dispatch in dispatches {
             if let Err(error) = orchestrator.start_task(&dispatch.assignment.task_id) {
@@ -8199,7 +8399,8 @@ async fn execute_distributed_fragments(
             stage_started
                 .entry(dispatch.assignment.task_id.stage_id)
                 .or_insert_with(Instant::now);
-            let Some(worker) = workers
+            let Some(worker) = orchestrator
+                .live_workers()
                 .iter()
                 .find(|worker| worker.node_id == dispatch.assignment.worker_id)
                 .cloned()
@@ -8243,6 +8444,14 @@ async fn execute_distributed_fragments(
                 }
             };
             let task_id = &dispatch.assignment.task_id;
+            // An attempt a worker loss superseded: whatever it did is
+            // stale — its output went to a lost spool or carries an
+            // attempt no consumer reads — and its slot is already pending
+            // again.
+            if !orchestrator.is_current_attempt(task_id) {
+                release_dispatch_outputs(&client, &token, &dispatch).await;
+                continue;
+            }
             match result {
                 Ok(output) => {
                     let (elapsed_us, output_rows, output_batches, output_bytes, scan, execution) =
@@ -8347,6 +8556,42 @@ async fn execute_distributed_fragments(
                         orchestrator.cancel();
                         return Some(Err(failure.message));
                     }
+                    // A worker this task depended on may be gone: the loss
+                    // rule decides, not the task's error. A lost worker's
+                    // tasks and spools move; a stage whose output was on
+                    // it runs again, within the stage retry limit.
+                    let mut lost = Vec::new();
+                    for candidate in
+                        workers_behind_dispatch(&dispatch, &worker, orchestrator.live_workers())
+                    {
+                        let connection_lost =
+                            failure.connection_lost && candidate.node_id == worker.node_id;
+                        if worker_is_lost(state, &client, &candidate, connection_lost).await {
+                            lost.push(candidate.node_id);
+                        }
+                    }
+                    for node_id in lost {
+                        match orchestrator.lose_worker(&node_id) {
+                            Ok(recovery) if recovery.is_empty() => {}
+                            Ok(recovery) => {
+                                eprintln!(
+                                    "query {query_id}: worker '{node_id}' is lost; {} task attempt(s) created, {} spool(s) moved, stage(s) re-executed: {:?}",
+                                    recovery.stage_retries.len(),
+                                    recovery.moved_spools.len(),
+                                    recovery.reexecuted_stages
+                                );
+                                losses.push(recovery);
+                            }
+                            Err(error) => {
+                                orchestrator.cancel();
+                                return Some(Err(format!("{}; {error}", failure.message)));
+                            }
+                        }
+                    }
+                    if !orchestrator.is_current_attempt(task_id) {
+                        // The loss superseded this attempt with the next.
+                        continue;
+                    }
                     match orchestrator.fail_task(task_id, &failure.message) {
                         Ok(true) => {}
                         Ok(false) => return Some(Err(task_failures.join("; "))),
@@ -8419,6 +8664,7 @@ async fn execute_distributed_fragments(
         },
         stages,
         planning_us,
+        QueryRecovery::from_losses(losses),
     )))
 }
 
@@ -14930,6 +15176,29 @@ mod streamed_root_tests {
         Arc::new(state)
     }
 
+    /// The stop of every worker spawned here, by address: sending it
+    /// closes the worker's listener and its idle connections, which is a
+    /// worker lost as the coordinator sees it.
+    static WORKER_STOPS: std::sync::LazyLock<
+        std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>,
+    > = std::sync::LazyLock::new(Default::default);
+
+    /// Stop the worker at `address` and return once its port refuses
+    /// connections. Called from a dispatch probe on a multi-thread
+    /// runtime, so the server's shutdown proceeds while this blocks.
+    fn stop_worker(address: &str) {
+        let stop = WORKER_STOPS.lock().unwrap().remove(address);
+        if let Some(stop) = stop {
+            let _ = stop.send(());
+        }
+        let socket = address.trim_start_matches("http://").to_owned();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while std::net::TcpStream::connect(&socket).is_ok() {
+            assert!(Instant::now() < deadline, "worker {address} did not stop");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     /// A worker over the table, served on a loopback port.
     async fn spawn_worker(
         manager: CatalogManager,
@@ -14939,7 +15208,19 @@ mod streamed_root_tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let app = build_router(Arc::clone(&state));
-        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        WORKER_STOPS
+            .lock()
+            .unwrap()
+            .insert(format!("http://{address}"), stop);
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async move {
+                    let _ = stopped.await;
+                })
+                .await
+                .unwrap()
+        });
         let mut info = state.cluster.read().await.this_node.clone();
         info.node_id = node_id.to_owned();
         info.address = format!("http://{address}");
@@ -15177,16 +15458,242 @@ mod streamed_root_tests {
         crate::results::ResultWriter,
         Vec<tokio::task::JoinHandle<()>>,
     ) {
+        let (state, servers, _) = cluster_with_stage_retry_limit(
+            directory,
+            crate::orchestrator::DEFAULT_STAGE_RETRY_LIMIT,
+        )
+        .await;
+        let writer = state.results.begin(query_id, "alice").unwrap();
+        (state, writer, servers)
+    }
+
+    /// A coordinator over two workers, `worker-a` and `worker-b`, with the
+    /// stage retry limit given; the workers' addresses come last.
+    async fn cluster_with_stage_retry_limit(
+        directory: &std::path::Path,
+        stage_retry_limit: u32,
+    ) -> (
+        Arc<AppState>,
+        Vec<tokio::task::JoinHandle<()>>,
+        Vec<NodeInfo>,
+    ) {
         let (first, first_server) = spawn_worker(table(directory), "worker-a").await;
         let (second, second_server) = spawn_worker(table(directory), "worker-b").await;
-        let state = state_over(table(directory), true, "coordinator");
+        let mut state = catalog_test_state();
+        state.config.coordinator = true;
+        state.config.node_id = "coordinator".to_owned();
+        state.config.stage_retry_limit = stage_retry_limit;
+        *state.catalog.get_mut() = Arc::new(crate::PublishedCatalog {
+            manager: table(directory),
+            snapshot_id: SNAPSHOT.into(),
+        });
+        let state = Arc::new(state);
         {
             let mut cluster = state.cluster.write().await;
-            cluster.register_worker(first);
-            cluster.register_worker(second);
+            cluster.register_worker(first.clone());
+            cluster.register_worker(second.clone());
         }
-        let writer = state.results.begin(query_id, "alice").unwrap();
-        (state, writer, vec![first_server, second_server])
+        (
+            state,
+            vec![first_server, second_server],
+            vec![first, second],
+        )
+    }
+
+    /// Run a grouped statement with inline delivery: two scan tasks, a
+    /// partial aggregate each, a hash exchange to two final tasks.
+    async fn run_grouped_inline(
+        state: &Arc<AppState>,
+        query_id: &str,
+    ) -> Result<
+        (
+            TaskResponse,
+            Vec<StageTelemetry>,
+            u64,
+            Option<QueryRecovery>,
+        ),
+        String,
+    > {
+        let mut context = context();
+        context.result_delivery = None;
+        let snapshot = Arc::clone(&*state.catalog.read().await);
+        let plan = plan("SELECT v, COUNT(*) AS c FROM numbers GROUP BY v", &snapshot);
+        let mut reason = None;
+        execute_distributed_fragments(
+            state,
+            query_id,
+            &context,
+            &plan,
+            &snapshot,
+            &SourcePins::default(),
+            DistributedSink {
+                placement_reason: &mut reason,
+                result_writer: &mut None,
+            },
+        )
+        .await
+        .expect("distributed")
+    }
+
+    /// The grouped statement's exact result: every value once, counted once.
+    fn assert_grouped_result_exact(response: &TaskResponse) {
+        assert_eq!(response.columns.len(), 2);
+        assert_eq!(response.data.len(), (ROW_GROUPS * ROWS_PER_GROUP) as usize);
+        let mut sum = 0i64;
+        for row in &response.data {
+            sum += row[0].as_i64().unwrap();
+            assert_eq!(row[1].as_i64(), Some(1));
+        }
+        let n = ROW_GROUPS * ROWS_PER_GROUP;
+        assert_eq!(sum, n * (n - 1) / 2);
+    }
+
+    /// Stop `address` the first time a wave holds a task of `stage`.
+    fn stop_worker_when_stage_dispatches(query_id: &str, stage: u32, address: String) {
+        let probe: DispatchProbe = Arc::new(move |dispatches: &[TaskDispatch]| {
+            if dispatches
+                .iter()
+                .any(|dispatch| dispatch.assignment.task_id.stage_id == StageId(stage))
+            {
+                stop_worker(&address);
+            }
+        });
+        DISPATCH_PROBES
+            .lock()
+            .unwrap()
+            .insert(query_id.to_owned(), probe);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_worker_lost_between_the_producers_and_the_consumers_is_recovered_exactly() {
+        let directory = std::env::temp_dir().join(format!("kaveon-loss-after-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let (state, servers, workers) = cluster_with_stage_retry_limit(
+            &directory,
+            crate::orchestrator::DEFAULT_STAGE_RETRY_LIMIT,
+        )
+        .await;
+        // worker-b holds the spool of final partition 1 once the scan
+        // stage has finished; it goes as the final stage is dispatched.
+        stop_worker_when_stage_dispatches("q-loss-after", 1, workers[1].address.clone());
+        let (response, stages, _, recovery) = run_grouped_inline(&state, "q-loss-after")
+            .await
+            .expect("the statement completes");
+        assert_grouped_result_exact(&response);
+        let recovery = recovery.expect("the loss is on the record");
+        assert_eq!(recovery.lost_workers, vec!["worker-b"]);
+        assert_eq!(recovery.reexecuted_stages, vec![0]);
+        assert_eq!(
+            recovery
+                .moved_spools
+                .iter()
+                .map(|moved| (moved.stage, moved.partition, moved.to.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(1, 1, "worker-a")]
+        );
+        assert_eq!(
+            recovery
+                .stage_retries
+                .iter()
+                .map(|retry| (
+                    retry.stage,
+                    retry.partition,
+                    retry.from.as_str(),
+                    retry.to.as_str(),
+                    retry.attempt
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (1, 1, "worker-b", "worker-a", 1),
+                (0, 0, "worker-a", "worker-a", 1),
+                (0, 1, "worker-b", "worker-a", 1),
+            ]
+        );
+        assert!(
+            recovery.summary().contains("worker 'worker-b'"),
+            "{}",
+            recovery.summary()
+        );
+        // The final stage ran on the survivor alone; the scan stage's
+        // telemetry keeps the attempts that completed before the loss.
+        let final_stage = stages.iter().find(|stage| stage.stage_id == 1).unwrap();
+        assert_eq!(final_stage.tasks.len(), 2);
+        assert!(
+            final_stage
+                .tasks
+                .iter()
+                .all(|task| task.node_id == "worker-a")
+        );
+        let scan_stage = stages.iter().find(|stage| stage.stage_id == 0).unwrap();
+        assert_eq!(scan_stage.tasks.len(), 4);
+        let json = serde_json::to_value(&recovery).unwrap();
+        assert_eq!(json["stage_retries"][0]["stage"], 1);
+        assert_eq!(json["stage_retries"][0]["from"], "worker-b");
+        DISPATCH_PROBES.lock().unwrap().remove("q-loss-after");
+        for server in servers {
+            server.abort();
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_worker_lost_while_the_producers_run_is_recovered_exactly() {
+        let directory = std::env::temp_dir().join(format!("kaveon-loss-during-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let (state, servers, workers) = cluster_with_stage_retry_limit(
+            &directory,
+            crate::orchestrator::DEFAULT_STAGE_RETRY_LIMIT,
+        )
+        .await;
+        stop_worker_when_stage_dispatches("q-loss-during", 0, workers[1].address.clone());
+        let (response, _, _, recovery) = run_grouped_inline(&state, "q-loss-during")
+            .await
+            .expect("the statement completes");
+        assert_grouped_result_exact(&response);
+        let recovery = recovery.expect("the loss is on the record");
+        assert_eq!(recovery.lost_workers, vec!["worker-b"]);
+        assert_eq!(recovery.reexecuted_stages, vec![0]);
+        // Both scan attempts run again on worker-a: the one that was on
+        // worker-b, and the one that was writing partition 1 to it.
+        let mut retried = recovery
+            .stage_retries
+            .iter()
+            .map(|retry| {
+                (
+                    retry.stage,
+                    retry.partition,
+                    retry.to.as_str(),
+                    retry.attempt,
+                )
+            })
+            .collect::<Vec<_>>();
+        retried.sort_unstable();
+        assert_eq!(retried, vec![(0, 0, "worker-a", 1), (0, 1, "worker-a", 1)]);
+        DISPATCH_PROBES.lock().unwrap().remove("q-loss-during");
+        for server in servers {
+            server.abort();
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_loss_beyond_the_stage_retry_limit_fails_the_statement_naming_worker_and_stage() {
+        let directory = std::env::temp_dir().join(format!("kaveon-loss-limit-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let (state, servers, workers) = cluster_with_stage_retry_limit(&directory, 0).await;
+        stop_worker_when_stage_dispatches("q-loss-limit", 1, workers[1].address.clone());
+        let error = match run_grouped_inline(&state, "q-loss-limit").await {
+            Ok(_) => panic!("the statement fails closed"),
+            Err(error) => error,
+        };
+        assert!(error.contains("worker 'worker-b'"), "{error}");
+        assert!(error.contains("stage 0"), "{error}");
+        assert!(error.contains("KAVEON_STAGE_RETRY_LIMIT=0"), "{error}");
+        DISPATCH_PROBES.lock().unwrap().remove("q-loss-limit");
+        for server in servers {
+            server.abort();
+        }
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     fn alice() -> Identity {
@@ -15202,7 +15709,17 @@ mod streamed_root_tests {
         state: &Arc<AppState>,
         query_id: &str,
         writer: crate::results::ResultWriter,
-    ) -> Option<Result<(TaskResponse, Vec<StageTelemetry>, u64), String>> {
+    ) -> Option<
+        Result<
+            (
+                TaskResponse,
+                Vec<StageTelemetry>,
+                u64,
+                Option<QueryRecovery>,
+            ),
+            String,
+        >,
+    > {
         let context = context();
         let snapshot = Arc::clone(&*state.catalog.read().await);
         let plan = plan("SELECT v FROM numbers", &snapshot);
@@ -15250,7 +15767,9 @@ mod streamed_root_tests {
         let (page, outcome) = tokio::join!(watch, run);
         assert_eq!(page["complete"], serde_json::Value::Bool(false));
         assert_eq!(page["data"].as_array().unwrap().len(), 1_000);
-        let (response, stages, _) = outcome.expect("distributed").expect("statement succeeds");
+        let (response, stages, _, recovery) =
+            outcome.expect("distributed").expect("statement succeeds");
+        assert!(recovery.is_none());
         assert_eq!(response.columns[0].name, "v");
         assert!(response.data.is_empty());
         let root = stages.last().unwrap();

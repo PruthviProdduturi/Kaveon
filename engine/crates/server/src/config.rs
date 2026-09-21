@@ -68,6 +68,9 @@ pub struct ServerConfig {
     /// How long a statement waits for admission on the coordinator before
     /// it is refused; the ceiling of the per-request setting.
     pub memory_admission_wait_seconds: u64,
+    /// How many times one stage's finished output may be produced again
+    /// for one query after worker losses (`KAVEON_STAGE_RETRY_LIMIT`).
+    pub stage_retry_limit: u32,
     /// The process's memory limit: the container's cgroup limit unless
     /// `KAVEON_PROCESS_MEMORY_LIMIT_BYTES` says otherwise; None when the
     /// process is not limited.
@@ -168,6 +171,7 @@ impl Default for ServerConfig {
             memory_admission_limit_bytes: DEFAULT_MEMORY_ADMISSION_LIMIT_BYTES,
             memory_admission_queue: DEFAULT_MEMORY_ADMISSION_QUEUE,
             memory_admission_wait_seconds: DEFAULT_MEMORY_ADMISSION_WAIT_SECONDS,
+            stage_retry_limit: crate::orchestrator::DEFAULT_STAGE_RETRY_LIMIT,
             process_memory_limit_bytes: None,
             result_cache_bytes: DEFAULT_RESULT_CACHE_BYTES,
             result_query_disk_limit_bytes: crate::results::DEFAULT_QUERY_BYTES,
@@ -487,6 +491,11 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
         config.memory_admission_queue == 0 || config.memory_admission_wait_seconds > 0,
         "a memory admission queue needs a positive KAVEON_MEMORY_ADMISSION_WAIT_SECONDS"
     );
+    if let Ok(value) = std::env::var("KAVEON_STAGE_RETRY_LIMIT") {
+        config.stage_retry_limit = value
+            .parse()
+            .map_err(|_| anyhow::anyhow!("KAVEON_STAGE_RETRY_LIMIT must be an unsigned integer"))?;
+    }
 
     if let Ok(value) = std::env::var("KAVEON_SECURITY_JSON") {
         config.security = serde_json::from_str(&value)?;
