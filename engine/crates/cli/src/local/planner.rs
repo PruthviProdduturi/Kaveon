@@ -357,6 +357,8 @@ fn logical_agg_to_exec(
         AggregateExpr::Max(e) => (AggFunc::Max, e, false),
         AggregateExpr::ApproxDistinct { expr, .. } => (AggFunc::ApproxDistinct, expr, false),
         AggregateExpr::ApproxPercentile { expr, .. } => (AggFunc::ApproxPercentile, expr, false),
+        AggregateExpr::ApproxDistinctState(e) => (AggFunc::ApproxDistinctState, e, false),
+        AggregateExpr::ColumnStatistics(e) => (AggFunc::ColumnStatistics, e, false),
     };
 
     let column = match expr {

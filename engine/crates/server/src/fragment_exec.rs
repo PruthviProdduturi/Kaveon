@@ -1104,6 +1104,8 @@ fn aggregate_bindings(
                 AggregateFunction::Avg => (AggFunc::Avg, false),
                 AggregateFunction::ApproxDistinct => (AggFunc::ApproxDistinct, false),
                 AggregateFunction::ApproxPercentile => (AggFunc::ApproxPercentile, false),
+                AggregateFunction::ApproxDistinctState => (AggFunc::ApproxDistinctState, false),
+                AggregateFunction::ColumnStatistics => (AggFunc::ColumnStatistics, false),
             };
             let column = aggregate
                 .argument

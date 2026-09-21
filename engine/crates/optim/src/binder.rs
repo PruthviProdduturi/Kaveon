@@ -1041,6 +1041,12 @@ impl Binder<'_> {
                     percentiles,
                 }
             }
+            AggregateExpr::ApproxDistinctState(expr) => {
+                AggregateExpr::ApproxDistinctState(self.bind_expr(expr, scope, None)?)
+            }
+            AggregateExpr::ColumnStatistics(expr) => {
+                AggregateExpr::ColumnStatistics(self.bind_expr(expr, scope, None)?)
+            }
         })
     }
 

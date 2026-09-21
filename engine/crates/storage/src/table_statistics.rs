@@ -3,6 +3,12 @@
 //! (every column read once, streamed, in parallel across files, to build
 //! the distinct-count and quantile sketches and exact bounds), plus the
 //! incremental refresh that folds added files in.
+//!
+//! What the full read finds for one column is a [`ColumnReadProfile`]: the
+//! executor's `COLUMN_STATISTICS` aggregate folds the same profile over a
+//! scan partition and merges it across partitions, so the full read of a
+//! coordinator with workers runs as one distributed statement and lands in
+//! the same document through [`apply_profiles`].
 
 use crate::{
     DirectoryListing, FooterProfile, IcebergReader, ObjectDeltaReader, ObjectLocation,
@@ -22,6 +28,7 @@ use kaveon_core::{
     statistics::MAX_PER_FILE_STATISTICS,
 };
 use object_store::{ObjectStore, path::Path as ObjectPath};
+use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
     collections::BTreeSet,
@@ -512,14 +519,14 @@ pub fn full_statistics(
     let mut statistics = statistics_from_source(&source, table_id)?;
     let selected = sketch_columns(&statistics, options.columns.as_deref())?;
     let scanned = scan_files(&source.files, &statistics, &selected, options)?;
-    apply_scan(&mut statistics, &selected, scanned);
+    let (rows, profiles) = merge_scans(&statistics, &selected, scanned)?;
+    apply_profiles(&mut statistics, &selected, rows, profiles)?;
     let after = crate::analyze_source(location, format)?;
     if after.identity_sha256 != statistics.source_version.identity_sha256 {
         return Err(KaveonError::Storage(
             "table source changed while its statistics were being computed".into(),
         ));
     }
-    statistics.depth = StatisticsDepth::Full;
     statistics.computed_at_ms = now_ms();
     Ok(statistics)
 }
@@ -731,15 +738,273 @@ fn sketch_columns(
 /// What one file's scan found for the selected columns.
 struct FileScan {
     rows: u64,
-    columns: Vec<ColumnScan>,
+    columns: Vec<ColumnReadProfile>,
 }
 
-struct ColumnScan {
-    nulls: u64,
-    min: Option<StatValue>,
-    max: Option<StatValue>,
-    distinct: Option<HllSketch>,
-    quantiles: Option<KllSketch>,
+/// What a read of one column finds over the rows it saw: the null count,
+/// the exact bounds, the distinct-count sketch and — for a column on a
+/// number line — the quantile sketch. Folded one array at a time
+/// ([`ColumnReadProfile::fold_array`]) and merged across files, threads or
+/// workers ([`ColumnReadProfile::merge`]); the executor's `COLUMN_STATISTICS`
+/// aggregate carries one as its state, so the profile a distributed read
+/// hands back is what the local read computes. The JSON encoding
+/// ([`ColumnReadProfile::to_json_bytes`]) is the aggregate's result and its
+/// exchange payload.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ColumnReadProfile {
+    pub nulls: u64,
+    pub min: Option<StatValue>,
+    pub max: Option<StatValue>,
+    /// `None` once a sketch could not be kept (a precision mismatch on
+    /// merge); the distinct count is then unknown.
+    pub distinct: Option<HllSketch>,
+    /// `None` for a column the quantile sketch does not cover.
+    pub quantiles: Option<KllSketch>,
+}
+
+impl ColumnReadProfile {
+    /// The empty profile of a column of `data_type`; an error for a type
+    /// the sketches cannot fold.
+    pub fn new(data_type: &DataType) -> Result<Self> {
+        if !sketchable(data_type) {
+            return Err(KaveonError::Storage(format!(
+                "column type {data_type} cannot be sketched"
+            )));
+        }
+        Ok(Self {
+            nulls: 0,
+            min: None,
+            max: None,
+            distinct: Some(HllSketch::default_precision()),
+            quantiles: numeric(data_type).then(KllSketch::default_k),
+        })
+    }
+
+    /// The empty profile of a column whose type is not yet known — the
+    /// executor's state before its first array: the quantile sketch is
+    /// added when the first array shows a column on a number line. Until
+    /// an array folds in, the profile is the identity under
+    /// [`ColumnReadProfile::merge`].
+    pub fn untyped() -> Self {
+        Self {
+            nulls: 0,
+            min: None,
+            max: None,
+            distinct: Some(HllSketch::default_precision()),
+            quantiles: None,
+        }
+    }
+
+    /// Whether nothing has folded in.
+    pub fn is_empty(&self) -> bool {
+        self.nulls == 0
+            && self.min.is_none()
+            && self.max.is_none()
+            && self.distinct.as_ref().is_none_or(HllSketch::is_empty)
+            && self.quantiles.as_ref().is_none_or(KllSketch::is_empty)
+    }
+
+    /// Bytes the profile holds, for accounting: the sketches, and the
+    /// bounds' text.
+    pub fn memory_bytes(&self) -> usize {
+        let bounds = |value: &Option<StatValue>| match value {
+            Some(StatValue::Text(text)) => text.len(),
+            _ => std::mem::size_of::<StatValue>(),
+        };
+        self.distinct.as_ref().map_or(0, HllSketch::memory_bytes)
+            + self.quantiles.as_ref().map_or(0, KllSketch::memory_bytes)
+            + bounds(&self.min)
+            + bounds(&self.max)
+    }
+
+    /// Fold one array in: its null count, its exact bounds through the
+    /// executor's kernels, every non-null value into the sketches (the
+    /// core's folds, shared with the executor's approximate aggregates).
+    pub fn fold_array(&mut self, array: &ArrayRef) -> Result<()> {
+        let array: ArrayRef = match array.data_type() {
+            DataType::Dictionary(_, values) => compute::cast(array, values)?,
+            _ => Arc::clone(array),
+        };
+        if !sketchable(array.data_type()) {
+            return Err(KaveonError::Storage(format!(
+                "column type {} cannot be sketched",
+                array.data_type()
+            )));
+        }
+        if self.quantiles.is_none() && self.is_empty() && numeric(array.data_type()) {
+            self.quantiles = Some(KllSketch::default_k());
+        }
+        self.nulls += array.null_count() as u64;
+        if array.null_count() == array.len() {
+            return Ok(());
+        }
+        macro_rules! primitive_bounds {
+            ($array:expr, $to_stat:expr) => {{
+                let values = $array;
+                self.widen(
+                    compute::min(values).map($to_stat),
+                    compute::max(values).map($to_stat),
+                );
+            }};
+        }
+        match array.data_type() {
+            DataType::Boolean => {
+                let values = array.as_boolean();
+                self.widen(
+                    compute::min_boolean(values).map(StatValue::Bool),
+                    compute::max_boolean(values).map(StatValue::Bool),
+                );
+            }
+            DataType::Int8 => primitive_bounds!(
+                array.as_primitive::<arrow::datatypes::Int8Type>(),
+                |v: i8| StatValue::Int(i128::from(v))
+            ),
+            DataType::Int16 => primitive_bounds!(
+                array.as_primitive::<arrow::datatypes::Int16Type>(),
+                |v: i16| StatValue::Int(i128::from(v))
+            ),
+            DataType::Int32 => primitive_bounds!(
+                array.as_primitive::<arrow::datatypes::Int32Type>(),
+                |v: i32| StatValue::Int(i128::from(v))
+            ),
+            DataType::Int64 => primitive_bounds!(
+                array.as_primitive::<arrow::datatypes::Int64Type>(),
+                |v: i64| StatValue::Int(i128::from(v))
+            ),
+            DataType::UInt8 => primitive_bounds!(
+                array.as_primitive::<arrow::datatypes::UInt8Type>(),
+                |v: u8| StatValue::Int(i128::from(v))
+            ),
+            DataType::UInt16 => primitive_bounds!(
+                array.as_primitive::<arrow::datatypes::UInt16Type>(),
+                |v: u16| StatValue::Int(i128::from(v))
+            ),
+            DataType::UInt32 => primitive_bounds!(
+                array.as_primitive::<arrow::datatypes::UInt32Type>(),
+                |v: u32| StatValue::Int(i128::from(v))
+            ),
+            DataType::UInt64 => primitive_bounds!(
+                array.as_primitive::<arrow::datatypes::UInt64Type>(),
+                |v: u64| StatValue::Int(i128::from(v))
+            ),
+            DataType::Float32 => primitive_bounds!(
+                array.as_primitive::<arrow::datatypes::Float32Type>(),
+                |v: f32| StatValue::Float(f64::from(v))
+            ),
+            DataType::Float64 => primitive_bounds!(
+                array.as_primitive::<arrow::datatypes::Float64Type>(),
+                StatValue::Float
+            ),
+            DataType::Date32 => primitive_bounds!(
+                array.as_primitive::<arrow::datatypes::Date32Type>(),
+                StatValue::Date
+            ),
+            DataType::Timestamp(unit, zone) => {
+                let (unit, utc) = (*unit, zone.is_some());
+                let values = kaveon_core::sketch::timestamp_values(&array, unit);
+                let to_stat = move |value: i64| StatValue::Timestamp { value, unit, utc };
+                self.widen(
+                    compute::min(&values).map(to_stat),
+                    compute::max(&values).map(to_stat),
+                );
+            }
+            DataType::Decimal128(_, scale) => {
+                let scale = *scale;
+                primitive_bounds!(
+                    array.as_primitive::<arrow::datatypes::Decimal128Type>(),
+                    move |unscaled: i128| StatValue::Decimal { unscaled, scale }
+                )
+            }
+            DataType::Utf8 => {
+                let values = array.as_string::<i32>();
+                self.widen(
+                    compute::min_string(values).map(|v| StatValue::Text(v.to_owned())),
+                    compute::max_string(values).map(|v| StatValue::Text(v.to_owned())),
+                );
+            }
+            DataType::LargeUtf8 => {
+                let values = array.as_string::<i64>();
+                self.widen(
+                    compute::min_string(values).map(|v| StatValue::Text(v.to_owned())),
+                    compute::max_string(values).map(|v| StatValue::Text(v.to_owned())),
+                );
+            }
+            other => {
+                return Err(KaveonError::Storage(format!(
+                    "column type {other} cannot be sketched"
+                )));
+            }
+        }
+        if let Some(distinct) = self.distinct.as_mut() {
+            kaveon_core::sketch::fold_distinct(&array, distinct)?;
+        }
+        if let Some(quantiles) = self.quantiles.as_mut() {
+            kaveon_core::sketch::fold_quantiles(&array, quantiles)?;
+        }
+        Ok(())
+    }
+
+    /// Fold another profile of the same column in: null counts add, the
+    /// bounds widen, the sketches merge. A side that saw nothing is the
+    /// identity; otherwise a sketch either side lacks is unknown in the
+    /// result, and a sketch that cannot merge is an error.
+    pub fn merge(&mut self, other: &ColumnReadProfile) -> Result<()> {
+        if other.is_empty() {
+            return Ok(());
+        }
+        if self.is_empty() {
+            *self = other.clone();
+            return Ok(());
+        }
+        self.nulls = self
+            .nulls
+            .checked_add(other.nulls)
+            .ok_or_else(|| KaveonError::Execution("null count overflows".into()))?;
+        self.widen(other.min.clone(), other.max.clone());
+        match (self.distinct.as_mut(), &other.distinct) {
+            (Some(mine), Some(theirs)) => mine.merge(theirs)?,
+            _ => self.distinct = None,
+        }
+        match (self.quantiles.as_mut(), &other.quantiles) {
+            (Some(mine), Some(theirs)) => mine.merge(theirs)?,
+            (Some(_), None) => self.quantiles = None,
+            (None, _) => {}
+        }
+        Ok(())
+    }
+
+    fn widen(&mut self, min: Option<StatValue>, max: Option<StatValue>) {
+        if let Some(min) = min {
+            self.min = match self.min.take() {
+                None => Some(min),
+                Some(current) => match current.partial_cmp(&min) {
+                    Some(Ordering::Greater) => Some(min),
+                    _ => Some(current),
+                },
+            };
+        }
+        if let Some(max) = max {
+            self.max = match self.max.take() {
+                None => Some(max),
+                Some(current) => match current.partial_cmp(&max) {
+                    Some(Ordering::Less) => Some(max),
+                    _ => Some(current),
+                },
+            };
+        }
+    }
+
+    /// The profile as JSON: the fields above, the sketches base64 in
+    /// their compact encoding — the statistics document's own rendering.
+    pub fn to_json_bytes(&self) -> Result<Vec<u8>> {
+        serde_json::to_vec(self)
+            .map_err(|error| KaveonError::Execution(format!("column profile encode: {error}")))
+    }
+
+    pub fn from_json_bytes(bytes: &[u8]) -> Result<Self> {
+        serde_json::from_slice(bytes)
+            .map_err(|error| KaveonError::Execution(format!("column profile decode: {error}")))
+    }
 }
 
 /// Read the selected columns of every file, `options.threads` files at a
@@ -822,16 +1087,10 @@ fn scan_file(
 ) -> Result<FileScan> {
     let mut source = file.open(Some(names))?;
     let mut rows = 0u64;
-    let mut columns: Vec<ColumnScan> = types
+    let mut columns = types
         .iter()
-        .map(|data_type| ColumnScan {
-            nulls: 0,
-            min: None,
-            max: None,
-            distinct: Some(HllSketch::default_precision()),
-            quantiles: numeric(data_type).then(KllSketch::default_k),
-        })
-        .collect();
+        .map(ColumnReadProfile::new)
+        .collect::<Result<Vec<_>>>()?;
     while let Some(batch) = source.next_batch()? {
         let reservation = memory
             .map(|memory| {
@@ -844,214 +1103,74 @@ fn scan_file(
             let array = batch.column_by_name(name).ok_or_else(|| {
                 KaveonError::Storage(format!("column '{name}' missing from '{}'", file.label))
             })?;
-            fold_array(array, &mut columns[slot])?;
+            columns[slot].fold_array(array)?;
         }
         drop(reservation);
     }
     Ok(FileScan { rows, columns })
 }
 
-/// Fold one array into the column's scan: null count, exact bounds through
-/// the executor's kernels, every non-null value into the sketches (the
-/// core's folds, shared with the executor's approximate aggregates).
-fn fold_array(array: &ArrayRef, scan: &mut ColumnScan) -> Result<()> {
-    let array: ArrayRef = match array.data_type() {
-        DataType::Dictionary(_, values) => compute::cast(array, values)?,
-        _ => Arc::clone(array),
-    };
-    scan.nulls += array.null_count() as u64;
-    if array.null_count() == array.len() {
-        return Ok(());
-    }
-    macro_rules! primitive_bounds {
-        ($array:expr, $to_stat:expr) => {{
-            let values = $array;
-            widen_bounds(
-                scan,
-                compute::min(values).map($to_stat),
-                compute::max(values).map($to_stat),
-            );
-        }};
-    }
-    match array.data_type() {
-        DataType::Boolean => {
-            let values = array.as_boolean();
-            widen_bounds(
-                scan,
-                compute::min_boolean(values).map(StatValue::Bool),
-                compute::max_boolean(values).map(StatValue::Bool),
-            );
-        }
-        DataType::Int8 => primitive_bounds!(
-            array.as_primitive::<arrow::datatypes::Int8Type>(),
-            |v: i8| StatValue::Int(i128::from(v))
-        ),
-        DataType::Int16 => primitive_bounds!(
-            array.as_primitive::<arrow::datatypes::Int16Type>(),
-            |v: i16| StatValue::Int(i128::from(v))
-        ),
-        DataType::Int32 => primitive_bounds!(
-            array.as_primitive::<arrow::datatypes::Int32Type>(),
-            |v: i32| StatValue::Int(i128::from(v))
-        ),
-        DataType::Int64 => primitive_bounds!(
-            array.as_primitive::<arrow::datatypes::Int64Type>(),
-            |v: i64| StatValue::Int(i128::from(v))
-        ),
-        DataType::UInt8 => primitive_bounds!(
-            array.as_primitive::<arrow::datatypes::UInt8Type>(),
-            |v: u8| StatValue::Int(i128::from(v))
-        ),
-        DataType::UInt16 => primitive_bounds!(
-            array.as_primitive::<arrow::datatypes::UInt16Type>(),
-            |v: u16| StatValue::Int(i128::from(v))
-        ),
-        DataType::UInt32 => primitive_bounds!(
-            array.as_primitive::<arrow::datatypes::UInt32Type>(),
-            |v: u32| StatValue::Int(i128::from(v))
-        ),
-        DataType::UInt64 => primitive_bounds!(
-            array.as_primitive::<arrow::datatypes::UInt64Type>(),
-            |v: u64| StatValue::Int(i128::from(v))
-        ),
-        DataType::Float32 => primitive_bounds!(
-            array.as_primitive::<arrow::datatypes::Float32Type>(),
-            |v: f32| StatValue::Float(f64::from(v))
-        ),
-        DataType::Float64 => primitive_bounds!(
-            array.as_primitive::<arrow::datatypes::Float64Type>(),
-            StatValue::Float
-        ),
-        DataType::Date32 => primitive_bounds!(
-            array.as_primitive::<arrow::datatypes::Date32Type>(),
-            StatValue::Date
-        ),
-        DataType::Timestamp(unit, zone) => {
-            let (unit, utc) = (*unit, zone.is_some());
-            let values = kaveon_core::sketch::timestamp_values(&array, unit);
-            let to_stat = move |value: i64| StatValue::Timestamp { value, unit, utc };
-            widen_bounds(
-                scan,
-                compute::min(&values).map(to_stat),
-                compute::max(&values).map(to_stat),
-            );
-        }
-        DataType::Decimal128(_, scale) => {
-            let scale = *scale;
-            primitive_bounds!(
-                array.as_primitive::<arrow::datatypes::Decimal128Type>(),
-                move |unscaled: i128| StatValue::Decimal { unscaled, scale }
-            )
-        }
-        DataType::Utf8 => {
-            let values = array.as_string::<i32>();
-            widen_bounds(
-                scan,
-                compute::min_string(values).map(|v| StatValue::Text(v.to_owned())),
-                compute::max_string(values).map(|v| StatValue::Text(v.to_owned())),
-            );
-        }
-        DataType::LargeUtf8 => {
-            let values = array.as_string::<i64>();
-            widen_bounds(
-                scan,
-                compute::min_string(values).map(|v| StatValue::Text(v.to_owned())),
-                compute::max_string(values).map(|v| StatValue::Text(v.to_owned())),
-            );
-        }
-        other => {
-            return Err(KaveonError::Storage(format!(
-                "column type {other} cannot be sketched"
-            )));
+/// The files' scans as one profile per selected column, and the rows the
+/// scan saw.
+fn merge_scans(
+    statistics: &TableStatistics,
+    selected: &[usize],
+    scanned: Vec<FileScan>,
+) -> Result<(u64, Vec<ColumnReadProfile>)> {
+    let rows = scanned.iter().map(|scan| scan.rows).sum();
+    let mut profiles = selected
+        .iter()
+        .map(|slot| ColumnReadProfile::new(&statistics.columns[*slot].data_type))
+        .collect::<Result<Vec<_>>>()?;
+    for scan in &scanned {
+        for (profile, found) in profiles.iter_mut().zip(&scan.columns) {
+            profile.merge(found)?;
         }
     }
-    if let Some(distinct) = scan.distinct.as_mut() {
-        kaveon_core::sketch::fold_distinct(&array, distinct)?;
+    Ok((rows, profiles))
+}
+
+/// Fold what a full read found — `rows` seen, one profile per column of
+/// `selected` — into the document: exact bounds and null counts, the
+/// merged sketches, the row count, and the full depth. What every full
+/// build ends with, whether the columns were read here or on the workers.
+pub fn apply_profiles(
+    statistics: &mut TableStatistics,
+    selected: &[usize],
+    rows: u64,
+    profiles: Vec<ColumnReadProfile>,
+) -> Result<()> {
+    if profiles.len() != selected.len() {
+        return Err(KaveonError::Execution(format!(
+            "{} column profiles for {} selected columns",
+            profiles.len(),
+            selected.len()
+        )));
     }
-    if let Some(quantiles) = scan.quantiles.as_mut() {
-        kaveon_core::sketch::fold_quantiles(&array, quantiles)?;
+    if !selected.is_empty() {
+        statistics.rows = rows;
     }
+    for (slot, profile) in selected.iter().zip(profiles) {
+        let column = &mut statistics.columns[*slot];
+        column.null_count = Some(profile.nulls);
+        column.min = profile.min;
+        column.max = profile.max;
+        column.bounds_exact = true;
+        column.distinct = profile.distinct;
+        column.distinct_exact = None;
+        column.quantiles = profile.quantiles;
+    }
+    statistics.depth = StatisticsDepth::Full;
     Ok(())
 }
 
-fn widen_bounds(scan: &mut ColumnScan, min: Option<StatValue>, max: Option<StatValue>) {
-    if let Some(min) = min {
-        scan.min = match scan.min.take() {
-            None => Some(min),
-            Some(current) => match current.partial_cmp(&min) {
-                Some(Ordering::Greater) => Some(min),
-                _ => Some(current),
-            },
-        };
-    }
-    if let Some(max) = max {
-        scan.max = match scan.max.take() {
-            None => Some(max),
-            Some(current) => match current.partial_cmp(&max) {
-                Some(Ordering::Less) => Some(max),
-                _ => Some(current),
-            },
-        };
-    }
-}
-
-/// Fold the files' scans into the table: exact bounds and null counts for
-/// the selected columns, merged sketches, and the row count the scan saw.
-fn apply_scan(statistics: &mut TableStatistics, selected: &[usize], scanned: Vec<FileScan>) {
-    if selected.is_empty() {
-        return;
-    }
-    let rows: u64 = scanned.iter().map(|scan| scan.rows).sum();
-    statistics.rows = rows;
-    for (position, slot) in selected.iter().enumerate() {
-        let column = &mut statistics.columns[*slot];
-        let mut nulls = 0u64;
-        let mut min: Option<StatValue> = None;
-        let mut max: Option<StatValue> = None;
-        let mut distinct: Option<HllSketch> = Some(HllSketch::default_precision());
-        let mut quantiles: Option<KllSketch> =
-            numeric(&column.data_type).then(KllSketch::default_k);
-        for scan in &scanned {
-            let Some(found) = scan.columns.get(position) else {
-                continue;
-            };
-            nulls += found.nulls;
-            let mut bounds = ColumnScan {
-                nulls: 0,
-                min: min.take(),
-                max: max.take(),
-                distinct: None,
-                quantiles: None,
-            };
-            widen_bounds(&mut bounds, found.min.clone(), found.max.clone());
-            min = bounds.min;
-            max = bounds.max;
-            match (&mut distinct, &found.distinct) {
-                (Some(mine), Some(theirs)) => {
-                    if mine.merge(theirs).is_err() {
-                        distinct = None;
-                    }
-                }
-                _ => distinct = None,
-            }
-            match (&mut quantiles, &found.quantiles) {
-                (Some(mine), Some(theirs)) => {
-                    if mine.merge(theirs).is_err() {
-                        quantiles = None;
-                    }
-                }
-                (Some(_), None) => quantiles = None,
-                (None, _) => {}
-            }
-        }
-        column.null_count = Some(nulls);
-        column.min = min;
-        column.max = max;
-        column.bounds_exact = true;
-        column.distinct = distinct;
-        column.distinct_exact = None;
-        column.quantiles = quantiles;
-    }
+/// The column indexes a full read sketches: every sketchable column, or
+/// the named ones.
+pub fn sketched_columns(
+    statistics: &TableStatistics,
+    requested: Option<&[String]>,
+) -> Result<Vec<usize>> {
+    sketch_columns(statistics, requested)
 }
 
 #[cfg(test)]

@@ -11,6 +11,7 @@ use kaveon_core::{
     BatchOperator, HllSketch, KaveonError, KllSketch, MemoryReservation, OperatorMemoryAccount,
     Percentiles, QueryMemoryPool, Result,
 };
+use kaveon_storage::ColumnReadProfile;
 use std::collections::{HashMap, HashSet, hash_map::Entry};
 
 use crate::columnar_aggregate::{self, ColumnarGroups};
@@ -110,6 +111,8 @@ const STATE_UTF8_MIN: u8 = 15;
 const STATE_UTF8_MAX: u8 = 16;
 const STATE_APPROX_DISTINCT: u8 = 17;
 const STATE_APPROX_PERCENTILE: u8 = 18;
+const STATE_DISTINCT_SKETCH: u8 = 19;
+const STATE_COLUMN_PROFILE: u8 = 20;
 pub(crate) const VALUE_BOOL: u8 = 1;
 pub(crate) const VALUE_INT32: u8 = 2;
 pub(crate) const VALUE_INT64: u8 = 3;
@@ -134,12 +137,33 @@ pub enum AggFunc {
     /// `k`; the result is the value at each asked fraction, whose true rank
     /// is within [`KllSketch::rank_error`] of it.
     ApproxPercentile,
+    /// `APPROX_COUNT_DISTINCT_STATE`: the same HyperLogLog sketch, answered
+    /// as itself — its compact bytes, base64 — so a client, or `ANALYZE`,
+    /// merges it with others.
+    ApproxDistinctState,
+    /// `COLUMN_STATISTICS`: the column's profile over the rows aggregated —
+    /// null count, exact bounds, the distinct-count and quantile sketches
+    /// — as the JSON the statistics document holds per column
+    /// ([`ColumnReadProfile`]); `ANALYZE`'s full read as a statement.
+    ColumnStatistics,
 }
 
 impl AggFunc {
     /// Whether the result is an estimate from a sketch.
     pub const fn is_approximate(self) -> bool {
         matches!(self, Self::ApproxDistinct | Self::ApproxPercentile)
+    }
+
+    /// Whether the state is a sketch folded whole arrays at a time: the
+    /// approximate functions and the state-returning ones.
+    pub const fn is_sketched(self) -> bool {
+        matches!(
+            self,
+            Self::ApproxDistinct
+                | Self::ApproxPercentile
+                | Self::ApproxDistinctState
+                | Self::ColumnStatistics
+        )
     }
 }
 
@@ -195,13 +219,19 @@ impl AggExpr {
             AggFunc::Avg => "avg",
             AggFunc::ApproxDistinct => "approx_count_distinct",
             AggFunc::ApproxPercentile => "approx_percentile",
+            AggFunc::ApproxDistinctState => "approx_count_distinct_state",
+            AggFunc::ColumnStatistics => "column_statistics",
         };
         format!("{func_name}_{}", self.column)
     }
 
-    fn output_type(&self) -> DataType {
+    /// The result type the function itself fixes; the input-typed
+    /// functions (SUM, MIN, MAX) answer in the input's type through
+    /// [`aggregate_output_types`].
+    pub fn output_type(&self) -> DataType {
         match self.func {
             AggFunc::Count | AggFunc::ApproxDistinct => DataType::UInt64,
+            AggFunc::ApproxDistinctState | AggFunc::ColumnStatistics => DataType::Utf8,
             AggFunc::ApproxPercentile if self.percentiles.as_ref().is_some_and(|p| p.list) => {
                 percentile_list_type()
             }
@@ -282,6 +312,14 @@ pub enum AggregateState {
         sketch: KllSketch,
         percentiles: Percentiles,
     },
+    /// `APPROX_COUNT_DISTINCT_STATE`: the HyperLogLog sketch of the values
+    /// seen, answered as its bytes.
+    DistinctSketch(HllSketch),
+    /// `COLUMN_STATISTICS`: the column's profile over the values seen,
+    /// answered as its JSON. Untyped until the first array folds in (the
+    /// quantile sketch exists for a column on a number line); an untyped
+    /// profile that saw nothing merges as the identity.
+    ColumnReadProfile(Box<ColumnReadProfile>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -294,7 +332,7 @@ pub fn aggregate_output_types(aggregates: &[AggExpr], input: &SchemaRef) -> Resu
     aggregates
         .iter()
         .map(|agg| {
-            if agg.func.is_approximate() {
+            if agg.func.is_sketched() {
                 return Ok(agg.output_type());
             }
             if let Ok(field) = input.field_with_name(&agg.column)
@@ -362,7 +400,7 @@ pub struct FinalizedAggregateGroup {
 
 impl AggregateState {
     pub fn new_typed(expression: &AggExpr, output_type: &DataType) -> Self {
-        if expression.func.is_approximate() {
+        if expression.func.is_sketched() {
             return Self::new(expression);
         }
         if output_type == &DataType::UInt64 && !matches!(expression.func, AggFunc::Count)
@@ -536,6 +574,12 @@ impl AggregateState {
                     .clone()
                     .expect("aggregate validation requires the percentiles"),
             },
+            (AggFunc::ApproxDistinctState, _) => {
+                Self::DistinctSketch(HllSketch::default_precision())
+            }
+            (AggFunc::ColumnStatistics, _) => {
+                Self::ColumnReadProfile(Box::new(ColumnReadProfile::untyped()))
+            }
             (_, true) => unreachable!("aggregate validation rejects unsupported DISTINCT"),
         }
     }
@@ -545,26 +589,36 @@ impl AggregateState {
     pub fn is_sketch(&self) -> bool {
         matches!(
             self,
-            Self::ApproxDistinct(_) | Self::ApproxPercentile { .. }
+            Self::ApproxDistinct(_)
+                | Self::ApproxPercentile { .. }
+                | Self::DistinctSketch(_)
+                | Self::ColumnReadProfile(_)
         )
     }
 
     /// Bytes a sketch state holds, for accounting; zero for other states.
     pub fn sketch_bytes(&self) -> u64 {
         match self {
-            Self::ApproxDistinct(sketch) => sketch.memory_bytes() as u64,
+            Self::ApproxDistinct(sketch) | Self::DistinctSketch(sketch) => {
+                sketch.memory_bytes() as u64
+            }
             Self::ApproxPercentile { sketch, .. } => sketch.memory_bytes() as u64,
+            Self::ColumnReadProfile(profile) => profile.memory_bytes() as u64,
             _ => 0,
         }
     }
 
-    /// Fold every non-null value of `array` into the sketch.
+    /// Fold every non-null value of `array` into the sketch (a column
+    /// profile counts the nulls too).
     pub fn fold_sketch(&mut self, array: &ArrayRef) -> Result<()> {
         match self {
-            Self::ApproxDistinct(sketch) => kaveon_core::sketch::fold_distinct(array, sketch),
+            Self::ApproxDistinct(sketch) | Self::DistinctSketch(sketch) => {
+                kaveon_core::sketch::fold_distinct(array, sketch)
+            }
             Self::ApproxPercentile { sketch, .. } => {
                 kaveon_core::sketch::fold_quantiles(array, sketch)
             }
+            Self::ColumnReadProfile(profile) => profile.fold_array(array),
             _ => Err(exec_err(
                 "sketch fold applied to a non-sketch aggregate state",
             )),
@@ -580,12 +634,15 @@ impl AggregateState {
         text: &mut String,
     ) -> Result<()> {
         match self {
-            Self::ApproxDistinct(sketch) => {
+            Self::ApproxDistinct(sketch) | Self::DistinctSketch(sketch) => {
                 kaveon_core::sketch::fold_distinct_row(array, row, sketch, text)
             }
             Self::ApproxPercentile { sketch, .. } => {
                 kaveon_core::sketch::fold_quantiles_row(array, row, sketch)
             }
+            // The profile folds arrays: the row as a one-row slice (its
+            // buffers shared, not copied).
+            Self::ColumnReadProfile(profile) => profile.fold_array(&array.slice(row, 1)),
             _ => Err(exec_err(
                 "sketch fold applied to a non-sketch aggregate state",
             )),
@@ -933,6 +990,12 @@ impl AggregateState {
                 }
                 sketch.merge(other)?;
             }
+            (Self::DistinctSketch(sketch), Self::DistinctSketch(other)) => {
+                sketch.merge(other)?;
+            }
+            (Self::ColumnReadProfile(profile), Self::ColumnReadProfile(other)) => {
+                profile.merge(other)?;
+            }
             _ => return Err(exec_err("cannot merge incompatible aggregate states")),
         }
         Ok(())
@@ -979,9 +1042,18 @@ impl AggregateState {
         }
     }
 
+    /// The text result: a MIN/MAX over text, a distinct sketch's compact
+    /// bytes in base64, a column profile's JSON.
     pub fn utf8_result(&self) -> Result<Option<String>> {
         match self {
             Self::Utf8Min(value) | Self::Utf8Max(value) => Ok(value.clone()),
+            Self::DistinctSketch(sketch) => {
+                Ok(Some(kaveon_core::sketch::base64_encode(&sketch.to_bytes())))
+            }
+            Self::ColumnReadProfile(profile) => Ok(Some(
+                String::from_utf8(profile.to_json_bytes()?)
+                    .map_err(|_| exec_err("column profile JSON is not UTF-8"))?,
+            )),
             _ => Err(exec_err(
                 "UTF-8 result requested from a non-UTF-8 aggregate state",
             )),
@@ -1210,6 +1282,9 @@ fn validate_state_output_types(states: &[AggregateState], output_types: &[DataTy
                     percentiles: Percentiles { list: true, .. },
                     ..
                 } => percentile_list_type(),
+                AggregateState::DistinctSketch(_) | AggregateState::ColumnReadProfile(_) => {
+                    DataType::Utf8
+                }
                 AggregateState::DecimalSum { scale, .. } => DataType::Decimal128(38, *scale),
                 AggregateState::IntegerSum { .. } | AggregateState::IntegerSumDistinct(_) => {
                     DataType::Int64
@@ -1509,6 +1584,8 @@ fn state_layout(states: &[AggregateState]) -> Result<Vec<(u8, Option<i8>)>> {
                     AggregateState::AvgDistinct(_) => STATE_AVG_DISTINCT,
                     AggregateState::ApproxDistinct(_) => STATE_APPROX_DISTINCT,
                     AggregateState::ApproxPercentile { .. } => STATE_APPROX_PERCENTILE,
+                    AggregateState::DistinctSketch(_) => STATE_DISTINCT_SKETCH,
+                    AggregateState::ColumnReadProfile(_) => STATE_COLUMN_PROFILE,
                 },
                 match state {
                     AggregateState::DecimalSum { scale, .. } => Some(*scale),
@@ -1556,7 +1633,10 @@ pub fn finalize_grouped_aggregate_states(
                     } => state
                         .percentile_result()
                         .map(FinalAggregateValue::NumericList),
-                    AggregateState::Utf8Min(_) | AggregateState::Utf8Max(_) => {
+                    AggregateState::Utf8Min(_)
+                    | AggregateState::Utf8Max(_)
+                    | AggregateState::DistinctSketch(_)
+                    | AggregateState::ColumnReadProfile(_) => {
                         state.utf8_result().map(FinalAggregateValue::Utf8)
                     }
                     AggregateState::SumDistinct(_) | AggregateState::AvgDistinct(_) => {
@@ -1805,11 +1885,15 @@ pub fn encode_aggregate_states(states: &[AggregateState]) -> Result<Vec<u8>> {
                 extrema.push(None);
                 distinct_payloads.push(Some(encode_distinct_values(values)?));
             }
-            AggregateState::ApproxDistinct(_) | AggregateState::ApproxPercentile { .. } => {
-                kinds.push(if matches!(state, AggregateState::ApproxDistinct(_)) {
-                    STATE_APPROX_DISTINCT
-                } else {
-                    STATE_APPROX_PERCENTILE
+            AggregateState::ApproxDistinct(_)
+            | AggregateState::ApproxPercentile { .. }
+            | AggregateState::DistinctSketch(_)
+            | AggregateState::ColumnReadProfile(_) => {
+                kinds.push(match state {
+                    AggregateState::ApproxDistinct(_) => STATE_APPROX_DISTINCT,
+                    AggregateState::ApproxPercentile { .. } => STATE_APPROX_PERCENTILE,
+                    AggregateState::DistinctSketch(_) => STATE_DISTINCT_SKETCH,
+                    _ => STATE_COLUMN_PROFILE,
                 });
                 sums.push(None);
                 counts.push(None);
@@ -2012,7 +2096,10 @@ pub fn decode_aggregate_states(bytes: &[u8]) -> Result<Vec<AggregateState>> {
                     }
                     AggregateState::AvgDistinct(decode_distinct_values(distinct.value(row))?)
                 }
-                kind @ (STATE_APPROX_DISTINCT | STATE_APPROX_PERCENTILE) => {
+                kind @ (STATE_APPROX_DISTINCT
+                | STATE_APPROX_PERCENTILE
+                | STATE_DISTINCT_SKETCH
+                | STATE_COLUMN_PROFILE) => {
                     if distinct.is_null(row) {
                         return Err(exec_err("sketch state payload cannot be null"));
                     }
@@ -2284,7 +2371,7 @@ impl HashAggregate {
             if agg.distinct && agg.column == "*" {
                 return Err(exec_err("COUNT(DISTINCT *) is not supported"));
             }
-            if agg.func.is_approximate() {
+            if agg.func.is_sketched() {
                 validate_approximate(agg, &source_schema)?;
                 continue;
             }
@@ -2727,7 +2814,7 @@ impl HashAggregate {
                     (!(matches!(aggregate.func, AggFunc::Count) && aggregate.column == "*"))
                         .then(|| {
                             let array = batch.column(schema.index_of(&aggregate.column).unwrap());
-                            if aggregate.func.is_approximate() {
+                            if aggregate.func.is_sketched() {
                                 sketch_input(array)
                             } else {
                                 day_numbers(array)
@@ -3306,6 +3393,12 @@ impl HashAggregate {
                     if matches!(aggregate.func, AggFunc::Count) && aggregate.column == "*" {
                         accumulators[index].update_count()?;
                     } else if let Some(array) = aggregate_arrays[index]
+                        && array.is_null(row)
+                        && matches!(accumulators[index], AggregateState::ColumnReadProfile(_))
+                    {
+                        // A profile counts the nulls the other states skip.
+                        accumulators[index].fold_sketch_row(array, row, &mut sketch_text)?;
+                    } else if let Some(array) = aggregate_arrays[index]
                         && !array.is_null(row)
                     {
                         if aggregate.distinct {
@@ -3865,10 +3958,11 @@ fn validate_approximate(agg: &AggExpr, source_schema: &SchemaRef) -> Result<()> 
         .map_err(|_| exec_err(format!("aggregate column '{}' not in input", agg.column)))?;
     let data_type = source_schema.field(index).data_type();
     match agg.func {
-        AggFunc::ApproxDistinct => {
+        AggFunc::ApproxDistinct | AggFunc::ApproxDistinctState | AggFunc::ColumnStatistics => {
             if !kaveon_core::sketch::sketchable(data_type) {
                 return Err(exec_err(format!(
-                    "APPROX_COUNT_DISTINCT cannot sketch a column of type {data_type}"
+                    "{} cannot sketch a column of type {data_type}",
+                    agg.output_name()
                 )));
             }
         }
@@ -6883,6 +6977,118 @@ mod tests {
         );
         assert!(result.column(1).is_null(0));
         assert!(result.column(2).is_null(0));
+    }
+
+    /// `APPROX_COUNT_DISTINCT_STATE` answers the sketch `APPROX_COUNT_DISTINCT`
+    /// estimates from, byte for byte; `COLUMN_STATISTICS` answers the
+    /// profile the storage read computes — both as text, on the global
+    /// path (arrays) and the grouped path (a row at a time), and the
+    /// profile of a group with only nulls counts them.
+    #[test]
+    fn state_returning_aggregates_answer_the_sketches_as_text() {
+        use kaveon_storage::ColumnReadProfile;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("g", DataType::Int64, false),
+            Field::new("v", DataType::Int64, true),
+            Field::new("t", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 1, 2, 2, 2])),
+                Arc::new(Int64Array::from(vec![Some(10), Some(-4), None, None, None])),
+                Arc::new(StringArray::from(vec![
+                    Some("b"),
+                    Some("a"),
+                    Some("c"),
+                    None,
+                    Some("c"),
+                ])),
+            ],
+        )
+        .unwrap();
+        let expressions = vec![
+            AggExpr::new(AggFunc::ApproxDistinctState, "t"),
+            AggExpr::new(AggFunc::ColumnStatistics, "v"),
+            AggExpr::new(AggFunc::ColumnStatistics, "t"),
+            AggExpr::new(AggFunc::ApproxDistinct, "t"),
+        ];
+        assert_eq!(
+            aggregate_output_types(&expressions, &schema).unwrap(),
+            vec![
+                DataType::Utf8,
+                DataType::Utf8,
+                DataType::Utf8,
+                DataType::UInt64
+            ]
+        );
+        let expected = |rows: &[usize]| {
+            let mut sketch = HllSketch::default_precision();
+            let mut v = ColumnReadProfile::new(&DataType::Int64).unwrap();
+            let mut t = ColumnReadProfile::new(&DataType::Utf8).unwrap();
+            for row in rows {
+                let slice = batch.slice(*row, 1);
+                if !slice.column(2).is_null(0) {
+                    sketch.insert_text(slice.column(2).as_string::<i32>().value(0));
+                }
+                v.fold_array(slice.column(1)).unwrap();
+                t.fold_array(slice.column(2)).unwrap();
+            }
+            (
+                kaveon_core::sketch::base64_encode(&sketch.to_bytes()),
+                String::from_utf8(v.to_json_bytes().unwrap()).unwrap(),
+                String::from_utf8(t.to_json_bytes().unwrap()).unwrap(),
+                sketch.estimate(),
+            )
+        };
+        let check = |result: &RecordBatch, row: usize, rows: &[usize]| {
+            let (sketch, v, t, estimate) = expected(rows);
+            assert_eq!(result.column(0).as_string::<i32>().value(row), sketch);
+            assert_eq!(result.column(1).as_string::<i32>().value(row), v);
+            assert_eq!(result.column(2).as_string::<i32>().value(row), t);
+            assert_eq!(
+                result
+                    .column(3)
+                    .as_primitive::<arrow::datatypes::UInt64Type>()
+                    .value(row),
+                estimate
+            );
+            let profile = ColumnReadProfile::from_json_bytes(v.as_bytes()).unwrap();
+            assert_eq!(
+                profile.nulls,
+                rows.iter().filter(|r| **r >= 2).count() as u64
+            );
+            assert!(profile.quantiles.is_some());
+            assert_eq!(
+                profile.quantiles.as_ref().unwrap().count(),
+                rows.len() as u64 - profile.nulls
+            );
+        };
+        let mut global = HashAggregate::new(
+            Box::new(Input::new(batch.clone())),
+            vec![],
+            expressions.clone(),
+        )
+        .unwrap();
+        let result = global.next_batch().unwrap().unwrap();
+        check(&result, 0, &[0, 1, 2, 3, 4]);
+        let mut grouped = HashAggregate::new(
+            Box::new(Input::new(batch.clone())),
+            vec!["g".into()],
+            expressions,
+        )
+        .unwrap();
+        let result = grouped.next_batch().unwrap().unwrap();
+        assert_eq!(result.num_rows(), 2);
+        let keys = result.column(0).as_primitive::<Int64Type>();
+        for row in 0..2 {
+            let group = keys.value(row);
+            check(
+                &result.slice(0, 2).project(&[1, 2, 3, 4]).unwrap(),
+                row,
+                if group == 1 { &[0, 1] } else { &[2, 3, 4] },
+            );
+        }
     }
 
     #[test]

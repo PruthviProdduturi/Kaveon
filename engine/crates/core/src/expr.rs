@@ -154,6 +154,8 @@ pub const AGGREGATE_FUNCTION_NAMES: &[&str] = &[
     "MAX",
     "APPROX_COUNT_DISTINCT",
     "APPROX_PERCENTILE",
+    "APPROX_COUNT_DISTINCT_STATE",
+    "COLUMN_STATISTICS",
 ];
 
 /// Whether `name` (upper-case) is an aggregate function.

@@ -4752,15 +4752,22 @@ const ANALYZE_SKETCH_THREADS: usize = 8;
 
 /// `ANALYZE`: the table's statistics from its metadata (footers, the Delta
 /// log, Iceberg manifests — no data read), or with `WITH (sketches =
-/// true)` every sketchable column read once on the coordinator for the
-/// distinct-count and quantile sketches and exact bounds; then — for `WITH
+/// true)` every sketchable column read once for the distinct-count and
+/// quantile sketches and exact bounds — on the workers, as one `SELECT
+/// COUNT(*), COLUMN_STATISTICS(…) …` statement whose scan partitions
+/// across them by row group, when the cluster can run one (two compatible
+/// workers and an exchange token), else on the coordinator; `WITH (cube =
+/// true)` likewise builds the cube from one `GROUP BY` statement per
+/// grouping on the workers, else in one coordinator scan; then — for `WITH
 /// (distinct = true)` or `WITH (columns = ARRAY[…])` — one `SELECT
-/// COUNT(DISTINCT "column")` statement per selected column through
-/// [`run_statement`], a few at a time, cancelled with this statement; then
-/// the source version is read again and the document is stored in the
-/// durable catalog beside the table definition. A column not counted by
-/// this statement keeps the exact count of the previous document when the
-/// source version is unchanged.
+/// COUNT(DISTINCT "column")` statement per selected column. Every
+/// sub-statement goes through [`run_statement`], a few at a time,
+/// cancelled with this statement; then the source version is read again
+/// and the document is stored in the durable catalog beside the table
+/// definition. A column not counted by this statement keeps the exact
+/// count of the previous document when the source version is unchanged.
+/// The result's `full_read` column and the record's `execution` say where
+/// the columns were read.
 async fn execute_analyze(
     state: &Arc<AppState>,
     identity: &Identity,
@@ -4826,11 +4833,29 @@ async fn execute_analyze(
     } else {
         None
     };
+    // Where a full read runs: on the workers as statements, when the
+    // cluster can run one; the coordinator otherwise. Surfaced on the
+    // record so a coordinator read is never silent.
+    let full_read = statement.sketches || cube_shape.is_some();
+    let placement = if full_read {
+        Some(analyze_read_placement(state, context).await)
+    } else {
+        None
+    };
+    let on_workers = matches!(placement, Some(Ok(_)));
+    if let Some(record) = QUERY_STORE.write().await.queries.get_mut(query_id) {
+        record.execution = match &placement {
+            Some(Ok(_)) => ExecutionPlacement::distributed("analyze"),
+            Some(Err(reason)) => ExecutionPlacement::coordinator(Some(reason.clone())),
+            None => ExecutionPlacement::coordinator(Some("no full read".to_owned())),
+        };
+    }
     let built = tokio::task::spawn_blocking({
         let location = table.location.clone();
         let format = table.format;
         let id = table.id.clone();
-        let sketches = statement.sketches;
+        let sketches = statement.sketches && !on_workers;
+        let cube_shape = cube_shape.clone().filter(|_| !on_workers);
         let max_cells = state.config.cube_max_cells;
         move || -> kaveon_core::Result<(kaveon_core::TableStatistics, Option<kaveon_storage::CubeBuild>)> {
             let cube = cube_shape
@@ -4859,14 +4884,15 @@ async fn execute_analyze(
                 Ok((statistics?, cube))
             } else {
                 // The metadata read reserves nothing; the permits go back
-                // before the counts, which are admitted in their own right.
+                // before the statements, which are admitted in their own
+                // right.
                 drop(memory);
                 Ok((kaveon_storage::metadata_statistics(&location, format, id)?, cube))
             }
         }
     })
     .await;
-    let (mut statistics, cube) = match built {
+    let (mut statistics, mut cube) = match built {
         Ok(Ok(built)) => built,
         Ok(Err(error)) => {
             return analyze_failure(
@@ -4919,77 +4945,120 @@ async fn execute_analyze(
             .await;
         }
     };
-    // The counts run a few at a time: each is one distributed scan of the
-    // table, and the cluster has room for more than one. The width stays
-    // under the resource group's concurrency so no count is refused
-    // admission, and the parent's own slot is already released.
+    // The sub-statements run a few at a time: each is one distributed
+    // scan of the table, and the cluster has room for more than one. The
+    // width stays under the resource group's concurrency so none is
+    // refused admission, and the parent's own slot is already released.
     let width = context
         .resource_group
         .max_concurrent
         .clamp(1, ANALYZE_COUNT_CONCURRENCY);
-    let children: Vec<(String, String)> = selected
-        .iter()
-        .map(|column| (column.clone(), Uuid::new_v4().to_string()))
-        .collect();
-    let mut pending = children.iter();
-    let mut counts = futures::stream::FuturesUnordered::new();
-    for child in pending.by_ref().take(width) {
-        counts.push(count_distinct_values(
-            state,
-            identity,
-            query_id,
-            context,
-            &qualified,
-            child,
-            &cancellation,
-        ));
-    }
-    let mut measured = BTreeMap::new();
-    let mut failure = None;
-    while let Some(result) = counts.next().await {
-        match result {
-            Ok((column, count)) => {
-                measured.insert(column, count);
-                if let Some(child) = pending.next() {
-                    counts.push(count_distinct_values(
-                        state,
-                        identity,
-                        query_id,
-                        context,
-                        &qualified,
-                        child,
-                        &cancellation,
-                    ));
-                }
-            }
-            Err(error) => {
-                failure = Some(error);
-                break;
-            }
-        }
-    }
-    drop(counts);
-    if let Some(error) = failure {
-        // The other counts still running are cancelled with the parent:
-        // their tokens first, then their records and worker tasks.
-        for (_, child_id) in &children {
-            let _ = state.lifecycle.cancellations.cancel(child_id);
-            let _ = cancel_query(
-                State(Arc::clone(state)),
-                Extension(identity.clone()),
-                Path(child_id.clone()),
-            )
-            .await;
-        }
-        return match error {
+    let sub_statement_failure = |error: SubStatementError| async move {
+        match error {
             SubStatementError::Canceled => canceled_task_response(),
             SubStatementError::Failed {
                 status,
                 code,
                 message,
             } => analyze_failure(query_id, started, status, &code, message).await,
+        }
+    };
+    if on_workers && statement.sketches {
+        let sketched = match kaveon_storage::sketched_columns(&statistics, None) {
+            Ok(sketched) => sketched,
+            Err(error) => {
+                return analyze_failure(
+                    query_id,
+                    started,
+                    StatusCode::BAD_REQUEST,
+                    "ANALYZE_FAILED",
+                    error.to_string(),
+                )
+                .await;
+            }
         };
+        if !sketched.is_empty() {
+            let child_id = Uuid::new_v4().to_string();
+            let read = run_sub_statement(
+                state,
+                identity,
+                query_id,
+                context,
+                statistics_read_sql(&statistics, &sketched, &qualified),
+                &child_id,
+                &cancellation,
+                "statistics read",
+                true,
+            )
+            .await;
+            let rows = match read {
+                Ok(rows) => rows,
+                Err(error) => return sub_statement_failure(error).await,
+            };
+            let applied = match rows.as_slice() {
+                [row] => apply_statistics_read_row(&mut statistics, &sketched, row),
+                other => Err(kaveon_core::KaveonError::Execution(format!(
+                    "statistics read answered {} rows",
+                    other.len()
+                ))),
+            };
+            if let Err(error) = applied {
+                return analyze_failure(
+                    query_id,
+                    started,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "ANALYZE_FAILED",
+                    error.to_string(),
+                )
+                .await;
+            }
+        } else {
+            statistics.depth = kaveon_core::StatisticsDepth::Full;
+        }
     }
+    if on_workers && let Some(shape) = &cube_shape {
+        match build_cube_on_workers(
+            state,
+            identity,
+            query_id,
+            context,
+            &qualified,
+            &statistics,
+            shape,
+            &cancellation,
+            width,
+            state.config.cube_max_cells,
+        )
+        .await
+        {
+            Ok(built) => cube = Some(built),
+            Err(error) => return sub_statement_failure(error).await,
+        }
+    }
+    let children: Vec<(String, String)> = selected
+        .iter()
+        .map(|column| (column.clone(), Uuid::new_v4().to_string()))
+        .collect();
+    let child_ids: Vec<String> = children.iter().map(|(_, id)| id.clone()).collect();
+    let counts = children
+        .iter()
+        .map(|child| {
+            count_distinct_values(
+                state,
+                identity,
+                query_id,
+                context,
+                &qualified,
+                child,
+                &cancellation,
+            )
+        })
+        .collect();
+    let measured: BTreeMap<String, u64> =
+        match run_sub_statements(state, identity, &child_ids, width, counts).await {
+            Ok(counts) => counts.into_iter().collect(),
+            Err(error) => return sub_statement_failure(error).await,
+        };
     // The counts must have seen the version the document describes.
     let after = tokio::task::spawn_blocking({
         let location = table.location.clone();
@@ -5124,12 +5193,18 @@ async fn execute_analyze(
         bigint("row_count"),
         bigint("distinct_columns"),
         bigint("cube_cells"),
+        varchar("full_read"),
     ];
     let rows = vec![vec![
         serde_json::json!(qualified),
         serde_json::json!(statistics.rows),
         serde_json::json!(selected.len()),
         cube_cells,
+        match placement {
+            Some(Ok(_)) => serde_json::json!("workers"),
+            Some(Err(_)) => serde_json::json!("coordinator"),
+            None => serde_json::Value::Null,
+        },
     ]];
     finish_inline_statement(query_id, started, columns, rows).await
 }
@@ -5248,14 +5323,14 @@ fn quote_identifier(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
-/// `SELECT COUNT(DISTINCT "column") FROM catalog.schema.table` as a
-/// statement of its own through [`run_statement`] — admitted, recorded,
-/// planned and executed as a client statement would be, tagged
-/// `analyze:<parent id>`, the result cache off — cancelled when `parent`
-/// is. The exact count of the column's non-null distinct values.
-/// How many distinct counts an `ANALYZE … WITH (distinct …)` runs at once.
+/// How many sub-statements an `ANALYZE` runs at once.
 const ANALYZE_COUNT_CONCURRENCY: usize = 4;
 
+/// `SELECT COUNT(DISTINCT "column") FROM catalog.schema.table` as a
+/// statement of its own through [`run_sub_statement`] — admitted,
+/// recorded, planned and executed as a client statement would be, tagged
+/// `analyze:<parent id>`, the result cache off — cancelled when `parent`
+/// is. The exact count of the column's non-null distinct values.
 async fn count_distinct_values(
     state: &Arc<AppState>,
     identity: &Identity,
@@ -5266,17 +5341,448 @@ async fn count_distinct_values(
     parent: &CancellationToken,
 ) -> Result<(String, u64), SubStatementError> {
     let (column, child_id) = (child.0.as_str(), child.1.as_str());
-    let failed = |status: StatusCode, code: &str, message: String| SubStatementError::Failed {
-        status,
-        code: code.to_owned(),
-        message: format!("distinct count of column '{column}' failed: {message}"),
-    };
     // The table name is bounded to identifier characters (see
     // `bounded_table_name`); the column is whatever the source calls it.
     let query = format!(
         "SELECT COUNT(DISTINCT {}) FROM {qualified}",
         quote_identifier(column)
     );
+    let label = format!("distinct count of column '{column}'");
+    let rows = run_sub_statement(
+        state, identity, parent_id, context, query, child_id, parent, &label, false,
+    )
+    .await?;
+    let value = rows
+        .first()
+        .and_then(|row| row.first())
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    json_u64(&value)
+        .map(|count| (column.to_owned(), count))
+        .ok_or_else(|| SubStatementError::Failed {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            code: "ANALYZE_FAILED".into(),
+            message: format!("{label} failed: the count came back as {value}"),
+        })
+}
+
+/// Whether `ANALYZE`'s full read runs on the workers — the number of
+/// compatible workers when it does, the reason the coordinator reads the
+/// columns itself when it does not: the rule a statement's distributed
+/// plan is held to.
+async fn analyze_read_placement(
+    state: &Arc<AppState>,
+    context: &QueryContext,
+) -> Result<usize, String> {
+    if state
+        .config
+        .exchange_token
+        .as_deref()
+        .is_none_or(str::is_empty)
+    {
+        return Err("no exchange token is configured".to_owned());
+    }
+    let workers = {
+        let mut cluster = state.cluster.write().await;
+        workers_for_catalog_snapshot(&mut cluster, &context.catalog_snapshot_id)?
+    };
+    if workers.len() < 2 {
+        return Err(format!(
+            "{} compatible worker(s); distributed execution needs two",
+            workers.len()
+        ));
+    }
+    Ok(workers.len())
+}
+
+/// The statement that reads the columns a full read sketches, as the
+/// workers run it: the row count and one [`kaveon_storage::ColumnReadProfile`]
+/// per selected column (the table's column indexes), in that order.
+pub(crate) fn statistics_read_sql(
+    statistics: &kaveon_core::TableStatistics,
+    selected: &[usize],
+    qualified: &str,
+) -> String {
+    let mut items = vec!["COUNT(*)".to_owned()];
+    items.extend(selected.iter().map(|index| {
+        format!(
+            "COLUMN_STATISTICS({})",
+            quote_identifier(&statistics.columns[*index].name)
+        )
+    }));
+    format!("SELECT {} FROM {qualified}", items.join(", "))
+}
+
+/// Fold the read statement's one row — `COUNT(*)`, then the profiles as
+/// JSON text — into the document, as the coordinator's own read would.
+pub(crate) fn apply_statistics_read_row(
+    statistics: &mut kaveon_core::TableStatistics,
+    selected: &[usize],
+    row: &[serde_json::Value],
+) -> kaveon_core::Result<()> {
+    let invalid =
+        |what: &str| kaveon_core::KaveonError::Execution(format!("statistics read: {what}"));
+    if row.len() != selected.len() + 1 {
+        return Err(invalid(&format!(
+            "{} values for {} columns",
+            row.len(),
+            selected.len()
+        )));
+    }
+    let rows = json_u64(&row[0]).ok_or_else(|| invalid("the row count is not a number"))?;
+    let mut profiles = Vec::with_capacity(selected.len());
+    for (index, value) in selected.iter().zip(&row[1..]) {
+        let column = &statistics.columns[*index];
+        let text = value
+            .as_str()
+            .ok_or_else(|| invalid(&format!("column '{}' has no profile", column.name)))?;
+        // Typed first, so an empty column's document is the local build's.
+        let mut profile = kaveon_storage::ColumnReadProfile::new(&column.data_type)?;
+        profile.merge(&kaveon_storage::ColumnReadProfile::from_json_bytes(
+            text.as_bytes(),
+        )?)?;
+        profiles.push(profile);
+    }
+    kaveon_storage::apply_profiles(statistics, selected, rows, profiles)
+}
+
+fn json_u64(value: &serde_json::Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+}
+
+use arrow::datatypes::DataType;
+
+/// The SQL of one cube grouping as the workers run it: the axes (a
+/// timestamp time axis at its grain through `DATE_TRUNC`; a date column
+/// at day grain is itself), `COUNT(*)`, then the measures in slot order —
+/// a distinct count as its sketch state — grouped by the axes. A
+/// single-axis grouping is read to `cap + 1` rows: one row over the cap
+/// excludes the axis, and the read stops there.
+pub(crate) struct CubeGroupingRead {
+    pub axes: Vec<usize>,
+    pub sql: String,
+    pub limit: Option<u64>,
+}
+
+pub(crate) fn cube_grouping_read(
+    shape: &kaveon_core::TableShape,
+    columns: &[kaveon_core::ColumnStatistics],
+    axes: &[usize],
+    qualified: &str,
+) -> CubeGroupingRead {
+    let shape_axes = shape.axes();
+    let keys: Vec<String> = axes
+        .iter()
+        .map(|index| {
+            let axis = &shape_axes[*index];
+            let column = quote_identifier(&axis.column);
+            let timestamp = columns
+                .iter()
+                .find(|c| c.name == axis.column)
+                .is_some_and(|c| matches!(logical_type(&c.data_type), DataType::Timestamp(_, _)));
+            match axis.grain {
+                Some(grain) if timestamp => format!("DATE_TRUNC('{}', {column})", grain.name()),
+                _ => column,
+            }
+        })
+        .collect();
+    let mut items = keys.clone();
+    items.push("COUNT(*)".to_owned());
+    for (column, aggregate) in shape.measure_slots() {
+        let column = quote_identifier(&column);
+        items.push(match aggregate {
+            kaveon_core::MeasureAggregate::Sum => format!("SUM({column})"),
+            kaveon_core::MeasureAggregate::Count => format!("COUNT({column})"),
+            kaveon_core::MeasureAggregate::Min => format!("MIN({column})"),
+            kaveon_core::MeasureAggregate::Max => format!("MAX({column})"),
+            kaveon_core::MeasureAggregate::CountDistinct => {
+                format!("APPROX_COUNT_DISTINCT_STATE({column})")
+            }
+        });
+    }
+    let limit = match axes {
+        [axis] => Some(shape_axes[*axis].cap.saturating_add(1)),
+        _ => None,
+    };
+    let mut sql = format!("SELECT {} FROM {qualified}", items.join(", "));
+    if !keys.is_empty() {
+        sql.push_str(" GROUP BY ");
+        sql.push_str(&keys.join(", "));
+    }
+    if let Some(limit) = limit {
+        sql.push_str(&format!(" LIMIT {limit}"));
+    }
+    CubeGroupingRead {
+        axes: axes.to_vec(),
+        sql,
+        limit,
+    }
+}
+
+/// A grouping's cells from the rows its statement answered, typed by the
+/// table's columns: the keys as the cube holds them (a date at day grain
+/// is itself, a timestamp truncated as `DATE_TRUNC` truncates it), the
+/// row count, the measures in slot order. Sorted by key.
+pub(crate) fn cube_grouping_from_rows(
+    shape: &kaveon_core::TableShape,
+    columns: &[kaveon_core::ColumnStatistics],
+    axes: &[usize],
+    rows: &[Vec<serde_json::Value>],
+) -> kaveon_core::Result<kaveon_core::CubeGrouping> {
+    use kaveon_core::{CellMeasure, CubeCell, MeasureAggregate};
+    let invalid = |what: String| kaveon_core::KaveonError::Execution(format!("cube read: {what}"));
+    let column_type = |name: &str| -> kaveon_core::Result<&DataType> {
+        columns
+            .iter()
+            .find(|column| column.name == name)
+            .map(|column| &column.data_type)
+            .ok_or_else(|| invalid(format!("column '{name}' is not in the table")))
+    };
+    let shape_axes = shape.axes();
+    let key_types = axes
+        .iter()
+        .map(|index| column_type(&shape_axes[*index].column))
+        .collect::<kaveon_core::Result<Vec<_>>>()?;
+    let slots = shape.measure_slots();
+    let slot_types = slots
+        .iter()
+        .map(|(column, _)| column_type(column))
+        .collect::<kaveon_core::Result<Vec<_>>>()?;
+    let mut cells = Vec::with_capacity(rows.len());
+    for row in rows {
+        if row.len() != axes.len() + 1 + slots.len() {
+            return Err(invalid(format!(
+                "{} values for {} axes and {} measures",
+                row.len(),
+                axes.len(),
+                slots.len()
+            )));
+        }
+        let key = axes
+            .iter()
+            .zip(&key_types)
+            .zip(&row[..axes.len()])
+            .map(|((index, data_type), value)| {
+                let axis = &shape_axes[*index];
+                let value = stat_value_from_json(value, data_type)?;
+                match (axis.grain, value) {
+                    (_, None) => Ok(None),
+                    (None, Some(value)) => Ok(Some(value)),
+                    (Some(grain), Some(value)) => {
+                        grain.truncate(&value).map(Some).ok_or_else(|| {
+                            invalid(format!(
+                                "time '{}' holds {value:?}, which {} grain does not bucket",
+                                axis.column,
+                                grain.name()
+                            ))
+                        })
+                    }
+                }
+            })
+            .collect::<kaveon_core::Result<Vec<_>>>()?;
+        let count = json_u64(&row[axes.len()])
+            .ok_or_else(|| invalid("the row count is not a number".to_owned()))?;
+        // The grand total of an empty table: no row, so no cell, as the
+        // coordinator's build has none.
+        if count == 0 {
+            continue;
+        }
+        let measures = slots
+            .iter()
+            .zip(&slot_types)
+            .zip(&row[axes.len() + 1..])
+            .map(|(((column, aggregate), data_type), value)| {
+                Ok(match aggregate {
+                    MeasureAggregate::Sum => {
+                        CellMeasure::Sum(stat_value_from_json(value, &sum_type(data_type))?)
+                    }
+                    MeasureAggregate::Count => CellMeasure::Count(
+                        json_u64(value)
+                            .ok_or_else(|| invalid(format!("COUNT({column}) is not a number")))?,
+                    ),
+                    MeasureAggregate::Min => {
+                        CellMeasure::Min(stat_value_from_json(value, data_type)?)
+                    }
+                    MeasureAggregate::Max => {
+                        CellMeasure::Max(stat_value_from_json(value, data_type)?)
+                    }
+                    MeasureAggregate::CountDistinct => {
+                        let text = value.as_str().ok_or_else(|| {
+                            invalid(format!("the distinct sketch of '{column}' is not text"))
+                        })?;
+                        let bytes = kaveon_core::sketch::base64_decode(text).ok_or_else(|| {
+                            invalid(format!("the distinct sketch of '{column}' is not base64"))
+                        })?;
+                        CellMeasure::Distinct(kaveon_core::HllSketch::from_bytes(&bytes)?)
+                    }
+                })
+            })
+            .collect::<kaveon_core::Result<Vec<_>>>()?;
+        cells.push(CubeCell {
+            key,
+            rows: count,
+            measures,
+        });
+    }
+    cells.sort_by(|a, b| kaveon_core::cube::compare_keys(&a.key, &b.key));
+    Ok(kaveon_core::CubeGrouping {
+        axes: axes.to_vec(),
+        cells,
+    })
+}
+
+/// The type a `SUM` over a column answers in: integers widen to one
+/// integer kind, floats to one float kind, decimals keep their scale.
+fn sum_type(data_type: &DataType) -> DataType {
+    match logical_type(data_type) {
+        DataType::Float32 | DataType::Float64 => DataType::Float64,
+        DataType::Decimal128(_, scale) => DataType::Decimal128(38, *scale),
+        DataType::UInt64 => DataType::UInt64,
+        _ => DataType::Int64,
+    }
+}
+
+fn logical_type(data_type: &DataType) -> &DataType {
+    match data_type {
+        DataType::Dictionary(_, values) => values.as_ref(),
+        other => other,
+    }
+}
+
+/// A result cell back as the statistics value of a column of `data_type`:
+/// the inverse of the rendering `batches_to_json` gives a value — numbers
+/// as numbers, temporal and decimal values as their text.
+pub(crate) fn stat_value_from_json(
+    value: &serde_json::Value,
+    data_type: &DataType,
+) -> kaveon_core::Result<Option<kaveon_core::StatValue>> {
+    use arrow::datatypes::TimeUnit;
+    use kaveon_core::StatValue;
+    let invalid = || {
+        kaveon_core::KaveonError::Execution(format!("value {value} does not read as a {data_type}"))
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let integer = || -> kaveon_core::Result<i128> {
+        if let Some(n) = value.as_i64() {
+            return Ok(i128::from(n));
+        }
+        if let Some(n) = value.as_u64() {
+            return Ok(i128::from(n));
+        }
+        if let Some(n) = value.as_f64()
+            && n.fract() == 0.0
+            && n.abs() < 9_007_199_254_740_992.0
+        {
+            return Ok(n as i128);
+        }
+        value
+            .as_str()
+            .and_then(|text| text.parse::<i128>().ok())
+            .ok_or_else(invalid)
+    };
+    let text = || value.as_str().ok_or_else(invalid);
+    Ok(Some(match logical_type(data_type) {
+        DataType::Boolean => StatValue::Bool(value.as_bool().ok_or_else(invalid)?),
+        DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64 => StatValue::Int(integer()?),
+        DataType::Float32 | DataType::Float64 => StatValue::Float(
+            value
+                .as_f64()
+                .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+                .ok_or_else(invalid)?,
+        ),
+        DataType::Utf8 | DataType::LargeUtf8 => StatValue::Text(text()?.to_owned()),
+        DataType::Date32 => StatValue::Date(parse_date32(text()?).ok_or_else(invalid)?),
+        DataType::Timestamp(unit, zone) => {
+            let nanos = arrow::compute::kernels::cast_utils::string_to_timestamp_nanos(text()?)
+                .map_err(|_| invalid())?;
+            let value = match unit {
+                TimeUnit::Second => nanos.div_euclid(1_000_000_000),
+                TimeUnit::Millisecond => nanos.div_euclid(1_000_000),
+                TimeUnit::Microsecond => nanos.div_euclid(1_000),
+                TimeUnit::Nanosecond => nanos,
+            };
+            StatValue::Timestamp {
+                value,
+                unit: *unit,
+                utc: zone.is_some(),
+            }
+        }
+        DataType::Decimal128(_, scale) => StatValue::Decimal {
+            unscaled: parse_decimal_text(text()?, *scale).ok_or_else(invalid)?,
+            scale: *scale,
+        },
+        _ => return Err(invalid()),
+    }))
+}
+
+/// `YYYY-MM-DD` as days since the epoch.
+fn parse_date32(text: &str) -> Option<i32> {
+    use arrow::compute::kernels::cast_utils::Parser;
+    arrow::datatypes::Date32Type::parse(text)
+}
+
+/// Decimal digits with an optional point, exact at `scale`: the text
+/// `StatValue::Decimal` renders.
+fn parse_decimal_text(text: &str, scale: i8) -> Option<i128> {
+    let (negative, digits) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text),
+    };
+    let (whole, fraction) = digits.split_once('.').unwrap_or((digits, ""));
+    if whole.is_empty() && fraction.is_empty() {
+        return None;
+    }
+    if !whole.chars().all(|c| c.is_ascii_digit()) || !fraction.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let scale = usize::try_from(scale).unwrap_or(0);
+    if fraction.len() > scale && fraction[scale..].bytes().any(|b| b != b'0') {
+        return None;
+    }
+    let mut padded = String::with_capacity(whole.len() + scale);
+    padded.push_str(whole);
+    padded.push_str(&fraction[..fraction.len().min(scale)]);
+    for _ in fraction.len().min(scale)..scale {
+        padded.push('0');
+    }
+    let unscaled: i128 = padded.parse().ok()?;
+    Some(if negative { -unscaled } else { unscaled })
+}
+
+/// One sub-statement of `ANALYZE`, run through [`run_statement`] —
+/// admitted, recorded, planned and executed as a client statement would
+/// be, tagged `analyze:<parent id>`, the result cache off — cancelled
+/// with the parent. Its rows: inline from the response, or with `paged`
+/// read back from the result store page by page (a result the inline
+/// bound would refuse) and the store entry released.
+#[allow(clippy::too_many_arguments)]
+async fn run_sub_statement(
+    state: &Arc<AppState>,
+    identity: &Identity,
+    parent_id: &str,
+    context: &QueryContext,
+    query: String,
+    child_id: &str,
+    parent: &CancellationToken,
+    label: &str,
+    paged: bool,
+) -> Result<Vec<Vec<serde_json::Value>>, SubStatementError> {
+    let failed = |status: StatusCode, code: &str, message: String| SubStatementError::Failed {
+        status,
+        code: code.to_owned(),
+        message: format!("{label} failed: {message}"),
+    };
     let mut settings = match serde_json::to_value(&context.settings) {
         Ok(serde_json::Value::Object(map)) => map,
         _ => serde_json::Map::new(),
@@ -5293,7 +5799,7 @@ async fn count_distinct_values(
         user: None,
         time_zone: context.time_zone.clone(),
         client_tags,
-        result_delivery: None,
+        result_delivery: paged.then(|| "paged".to_owned()),
         settings: Some(settings),
     };
     let child_id = child_id.to_owned();
@@ -5344,6 +5850,7 @@ async fn count_distinct_values(
         }
     };
     if parent.is_cancelled() {
+        state.results.remove(&child_id);
         return Err(SubStatementError::Canceled);
     }
     let status = response.status();
@@ -5364,6 +5871,7 @@ async fn count_distinct_values(
         )
     })?;
     if status != StatusCode::OK {
+        state.results.remove(&child_id);
         let code = body["code"].as_str().unwrap_or("ANALYZE_FAILED");
         let message = body["error"]
             .as_str()
@@ -5371,18 +5879,246 @@ async fn count_distinct_values(
             .unwrap_or_else(|| format!("HTTP {status}"));
         return Err(failed(status, code, message));
     }
-    let value = &body["data"][0][0];
-    value
-        .as_u64()
-        .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
-        .map(|count| (column.to_owned(), count))
-        .ok_or_else(|| {
-            failed(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "ANALYZE_FAILED",
-                format!("the count came back as {value}"),
+    let json_rows = |data: serde_json::Value| -> Vec<Vec<serde_json::Value>> {
+        match data {
+            serde_json::Value::Array(rows) => rows
+                .into_iter()
+                .filter_map(|row| match row {
+                    serde_json::Value::Array(cells) => Some(cells),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    };
+    let mut body = body;
+    if !paged {
+        return Ok(json_rows(body["data"].take()));
+    }
+    let mut rows = Vec::new();
+    let mut page = 0usize;
+    let outcome = loop {
+        match state.results.page(&child_id, page, identity) {
+            Ok(crate::results::ResultPage::Ready(mut ready)) => {
+                rows.extend(json_rows(ready["data"].take()));
+                if ready["next_uri"].is_null() {
+                    break Ok(());
+                }
+                page += 1;
+            }
+            // The statement finished before it answered: every page is
+            // flushed and complete.
+            Ok(crate::results::ResultPage::Pending(_)) => {
+                break Err(failed(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "ANALYZE_FAILED",
+                    "the result was not complete when the statement finished".into(),
+                ));
+            }
+            Err(status) => {
+                break Err(failed(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "ANALYZE_FAILED",
+                    format!("result page {page} answered {status}"),
+                ));
+            }
+        }
+    };
+    state.results.remove(&child_id);
+    outcome.map(|()| rows)
+}
+
+/// Run `jobs` — each a sub-statement of the parent — `width` at a time,
+/// in job order as far as the width allows; the results in job order.
+/// The first failure cancels every other child with the parent's own
+/// cancellation rule and comes back.
+async fn run_sub_statements<T, F>(
+    state: &Arc<AppState>,
+    identity: &Identity,
+    child_ids: &[String],
+    width: usize,
+    jobs: Vec<F>,
+) -> Result<Vec<T>, SubStatementError>
+where
+    F: std::future::Future<Output = Result<T, SubStatementError>>,
+{
+    let mut pending = jobs.into_iter().enumerate();
+    let mut running = futures::stream::FuturesUnordered::new();
+    let mut results: Vec<Option<T>> = Vec::new();
+    let indexed = |index: usize, job: F| async move { (index, job.await) };
+    for (index, job) in pending.by_ref().take(width.max(1)) {
+        running.push(indexed(index, job));
+    }
+    let mut failure = None;
+    while let Some((index, result)) = running.next().await {
+        match result {
+            Ok(value) => {
+                if results.len() <= index {
+                    results.resize_with(index + 1, || None);
+                }
+                results[index] = Some(value);
+                if let Some((index, job)) = pending.next() {
+                    running.push(indexed(index, job));
+                }
+            }
+            Err(error) => {
+                failure = Some(error);
+                break;
+            }
+        }
+    }
+    drop(running);
+    if let Some(error) = failure {
+        // The other children still running are cancelled with the parent:
+        // their tokens first, then their records and worker tasks.
+        for child_id in child_ids {
+            let _ = state.lifecycle.cancellations.cancel(child_id);
+            let _ = cancel_query(
+                State(Arc::clone(state)),
+                Extension(identity.clone()),
+                Path(child_id.clone()),
             )
+            .await;
+            state.results.remove(child_id);
+        }
+        return Err(error);
+    }
+    results
+        .into_iter()
+        .map(|value| {
+            value.ok_or_else(|| SubStatementError::Failed {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                code: "ANALYZE_FAILED".into(),
+                message: "a sub-statement answered nothing".into(),
+            })
         })
+        .collect()
+}
+
+/// The cube built on the workers: the grand total and every single axis
+/// first (a few statements at a time), then every pair of axes within
+/// their caps. An axis whose statement reaches `cap + 1` rows is excluded
+/// with the count observed, as the coordinator's build excludes it, and
+/// no pair over it is read. The cube keeps no per-file partials — a scan
+/// has no file column — so a refresh under a changed source rebuilds it.
+#[allow(clippy::too_many_arguments)]
+async fn build_cube_on_workers(
+    state: &Arc<AppState>,
+    identity: &Identity,
+    parent_id: &str,
+    context: &QueryContext,
+    qualified: &str,
+    statistics: &kaveon_core::TableStatistics,
+    shape: &kaveon_core::TableShape,
+    cancellation: &CancellationToken,
+    width: usize,
+    max_cells: u64,
+) -> Result<kaveon_storage::CubeBuild, SubStatementError> {
+    use kaveon_core::{CubeGrouping, ExcludedAxis, TableCube, cube::TABLE_CUBE_VERSION};
+    let axes = shape.axes();
+    let mut cube = TableCube {
+        version: TABLE_CUBE_VERSION,
+        table_id: statistics.table_id.clone(),
+        source_version: statistics.source_version.clone(),
+        computed_at_ms: unix_time_ms(),
+        slots: shape.measure_slots(),
+        shape: shape.clone(),
+        groupings: Vec::new(),
+        excluded: Vec::new(),
+        files: statistics
+            .per_file
+            .iter()
+            .map(|file| file.path.clone())
+            .collect(),
+        per_file_complete: false,
+    };
+    let groupings = shape.groupings();
+    let (singles, pairs): (Vec<&Vec<usize>>, Vec<&Vec<usize>>) =
+        groupings.iter().partition(|grouping| grouping.len() < 2);
+    let read_wave =
+        |wave: Vec<&Vec<usize>>, excluded: Vec<usize>| -> (Vec<String>, Vec<CubeGroupingRead>) {
+            let reads: Vec<CubeGroupingRead> = wave
+                .into_iter()
+                .filter(|grouping| !grouping.iter().any(|axis| excluded.contains(axis)))
+                .map(|grouping| cube_grouping_read(shape, &statistics.columns, grouping, qualified))
+                .collect();
+            let ids = reads.iter().map(|_| Uuid::new_v4().to_string()).collect();
+            (ids, reads)
+        };
+    let mut excluded_axes: Vec<usize> = Vec::new();
+    for wave in [singles, pairs] {
+        let (child_ids, reads) = read_wave(wave, excluded_axes.clone());
+        let jobs = reads
+            .iter()
+            .zip(&child_ids)
+            .map(|(read, child_id)| {
+                let label = format!(
+                    "cube grouping over {}",
+                    if read.axes.is_empty() {
+                        "the grand total".to_owned()
+                    } else {
+                        read.axes
+                            .iter()
+                            .map(|axis| axes[*axis].column.clone())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    }
+                );
+                async move {
+                    let rows = run_sub_statement(
+                        state,
+                        identity,
+                        parent_id,
+                        context,
+                        read.sql.clone(),
+                        child_id,
+                        cancellation,
+                        &label,
+                        true,
+                    )
+                    .await?;
+                    Ok::<_, SubStatementError>(rows)
+                }
+            })
+            .collect();
+        let answers = run_sub_statements(state, identity, &child_ids, width, jobs).await?;
+        for (read, rows) in reads.iter().zip(answers) {
+            if let (Some(limit), [axis]) = (read.limit, read.axes.as_slice())
+                && rows.len() as u64 >= limit
+            {
+                excluded_axes.push(*axis);
+                cube.excluded.push(ExcludedAxis {
+                    column: axes[*axis].column.clone(),
+                    distinct: rows.len() as u64,
+                    cap: axes[*axis].cap,
+                });
+                continue;
+            }
+            let grouping: CubeGrouping =
+                cube_grouping_from_rows(shape, &statistics.columns, &read.axes, &rows).map_err(
+                    |error| SubStatementError::Failed {
+                        status: StatusCode::INTERNAL_SERVER_ERROR,
+                        code: "ANALYZE_FAILED".into(),
+                        message: error.to_string(),
+                    },
+                )?;
+            cube.groupings.push(grouping);
+        }
+    }
+    let document = cube
+        .check_limit(max_cells)
+        .map_err(|error| SubStatementError::Failed {
+            status: StatusCode::BAD_REQUEST,
+            code: "ANALYZE_FAILED".into(),
+            message: error.to_string(),
+        })?;
+    Ok(kaveon_storage::CubeBuild {
+        cube,
+        document,
+        partials: Vec::new(),
+        replace_partials: true,
+        removed_paths: Vec::new(),
+    })
 }
 
 async fn analyze_failure(
@@ -9254,7 +9990,9 @@ fn aggregate_merge_contract(plan: &LogicalPlan) -> Option<(usize, Vec<MergeOpera
             | AggregateExpr::Count { distinct: true, .. }
             | AggregateExpr::Sum { distinct: true, .. }
             | AggregateExpr::ApproxDistinct { .. }
-            | AggregateExpr::ApproxPercentile { .. } => None,
+            | AggregateExpr::ApproxPercentile { .. }
+            | AggregateExpr::ApproxDistinctState(_)
+            | AggregateExpr::ColumnStatistics(_) => None,
         })
         .collect::<Option<Vec<_>>>()?;
     Some((group_by.len(), operations))
@@ -9454,7 +10192,9 @@ fn presented_type(data_type: &arrow::datatypes::DataType) -> String {
     }
 }
 
-fn batches_to_json(batches: &[arrow::record_batch::RecordBatch]) -> Vec<Vec<serde_json::Value>> {
+pub(crate) fn batches_to_json(
+    batches: &[arrow::record_batch::RecordBatch],
+) -> Vec<Vec<serde_json::Value>> {
     use arrow::array::{Array, AsArray};
     use arrow::datatypes::*;
 
@@ -10434,6 +11174,178 @@ mod tests {
         assert!(analyze("ANALYZE ").is_err());
     }
 
+    /// The statements `ANALYZE` runs on the workers, and the values that
+    /// come back through the JSON result read as the statistics values
+    /// the documents hold: numbers, text, dates, timestamps in every
+    /// unit, decimals at their scale.
+    #[test]
+    fn analyze_read_statements_and_their_values_round_trip() {
+        use arrow::datatypes::{DataType, TimeUnit};
+        use kaveon_core::{ColumnStatistics, StatValue};
+        let column = |name: &str, data_type: DataType| ColumnStatistics {
+            name: name.into(),
+            data_type,
+            null_count: None,
+            min: None,
+            max: None,
+            bounds_exact: false,
+            distinct: None,
+            distinct_exact: None,
+            quantiles: None,
+            bytes: None,
+        };
+        let columns = vec![
+            column("region", DataType::Utf8),
+            column(
+                "at",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            ),
+            column("day", DataType::Date32),
+            column("amount", DataType::Decimal128(12, 2)),
+            column("n", DataType::Int64),
+        ];
+        let shape = kaveon_core::TableShape::parse(
+            &["region:20".into()],
+            &["amount:sum,max".into(), "n:count_distinct".into()],
+            Some("at:month"),
+        )
+        .unwrap();
+        let read = super::cube_grouping_read(&shape, &columns, &[0, 1], "lake.sales.t");
+        assert_eq!(
+            read.sql,
+            "SELECT \"region\", DATE_TRUNC('month', \"at\"), COUNT(*), SUM(\"amount\"), MAX(\"amount\"), APPROX_COUNT_DISTINCT_STATE(\"n\") FROM lake.sales.t GROUP BY \"region\", DATE_TRUNC('month', \"at\")"
+        );
+        assert_eq!(read.limit, None);
+        let single = super::cube_grouping_read(&shape, &columns, &[0], "t");
+        assert!(single.sql.ends_with("GROUP BY \"region\" LIMIT 21"));
+        assert_eq!(single.limit, Some(21));
+        let total = super::cube_grouping_read(&shape, &columns, &[], "t");
+        assert!(!total.sql.contains("GROUP BY") && total.limit.is_none());
+        // A date column at day grain is itself.
+        let daily =
+            kaveon_core::TableShape::parse(&[], &["n:sum".into()], Some("day:day")).unwrap();
+        assert_eq!(
+            super::cube_grouping_read(&daily, &columns, &[0], "t").sql,
+            "SELECT \"day\", COUNT(*), SUM(\"n\") FROM t GROUP BY \"day\" LIMIT 3661"
+        );
+
+        let statistics = kaveon_core::TableStatistics {
+            columns: columns.clone(),
+            ..kaveon_core::TableStatistics::from_json_bytes(
+                &kaveon_core::TableStatistics {
+                    version: kaveon_core::statistics::TABLE_STATISTICS_VERSION,
+                    table_id: kaveon_core::TableId::new("table:t").unwrap(),
+                    source_version: kaveon_core::SourceVersion {
+                        identity_sha256: "abc".into(),
+                        kind: kaveon_core::SourceVersionKind::File,
+                    },
+                    computed_at_ms: 0,
+                    depth: kaveon_core::StatisticsDepth::Metadata,
+                    format: kaveon_core::DataFormat::Parquet,
+                    location: "t".into(),
+                    rows: 0,
+                    bytes: 0,
+                    files: 1,
+                    row_groups: None,
+                    uncompressed_bytes: None,
+                    last_modified_ms: None,
+                    partition_columns: Vec::new(),
+                    columns: Vec::new(),
+                    per_file: Vec::new(),
+                    per_file_complete: false,
+                }
+                .to_json_bytes()
+                .unwrap(),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            super::statistics_read_sql(&statistics, &[0, 4], "lake.sales.t"),
+            "SELECT COUNT(*), COLUMN_STATISTICS(\"region\"), COLUMN_STATISTICS(\"n\") FROM lake.sales.t"
+        );
+
+        let back = |value: serde_json::Value, data_type: &DataType| {
+            super::stat_value_from_json(&value, data_type).unwrap()
+        };
+        let rendered = |value: &StatValue| value.to_json();
+        for (value, data_type) in [
+            (StatValue::Int(-42), DataType::Int64),
+            (StatValue::Int(7), DataType::Int8),
+            (StatValue::Int(u64::MAX as i128), DataType::UInt64),
+            (StatValue::Float(2.5), DataType::Float64),
+            (StatValue::Bool(true), DataType::Boolean),
+            (StatValue::Text("x\"y".into()), DataType::Utf8),
+            (StatValue::Date(20_635), DataType::Date32),
+            (
+                StatValue::Timestamp {
+                    value: 1_782_950_400_123_456,
+                    unit: TimeUnit::Microsecond,
+                    utc: true,
+                },
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            ),
+            (
+                StatValue::Timestamp {
+                    value: -1_782_950_400_123,
+                    unit: TimeUnit::Millisecond,
+                    utc: false,
+                },
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+            ),
+            (
+                StatValue::Timestamp {
+                    value: 1_782_950_400,
+                    unit: TimeUnit::Second,
+                    utc: false,
+                },
+                DataType::Timestamp(TimeUnit::Second, None),
+            ),
+            (
+                StatValue::Decimal {
+                    unscaled: -1_234_505,
+                    scale: 2,
+                },
+                DataType::Decimal128(12, 2),
+            ),
+            (
+                StatValue::Decimal {
+                    unscaled: 1_234_505,
+                    scale: 2,
+                },
+                DataType::Decimal128(38, 2),
+            ),
+        ] {
+            assert_eq!(
+                back(rendered(&value), &data_type),
+                Some(value.clone()),
+                "{value:?} as {data_type}"
+            );
+        }
+        assert_eq!(back(serde_json::Value::Null, &DataType::Int64), None);
+        // A narrow integer's aggregate answers as a double: still an integer.
+        assert_eq!(
+            back(serde_json::json!(3.0), &DataType::Int16),
+            Some(StatValue::Int(3))
+        );
+        // A dictionary column reads as its values.
+        assert_eq!(
+            back(
+                serde_json::json!("EU"),
+                &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+            ),
+            Some(StatValue::Text("EU".into()))
+        );
+        assert!(super::stat_value_from_json(&serde_json::json!("x"), &DataType::Int64).is_err());
+        assert!(
+            super::stat_value_from_json(&serde_json::json!("1.234"), &DataType::Decimal128(10, 2))
+                .is_err()
+        );
+        assert_eq!(super::parse_decimal_text("0.5", 2), Some(50));
+        assert_eq!(super::parse_decimal_text("-.5", 1), Some(-5));
+        assert_eq!(super::parse_decimal_text("12", 0), Some(12));
+        assert_eq!(super::parse_decimal_text("1.20", 1), Some(12));
+    }
+
     #[test]
     fn analyze_parser_reads_the_with_properties() {
         let named = |names: &[&str]| {
@@ -10662,7 +11574,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(
             body["data"],
-            serde_json::json!([["lake.sales.orders", 3, 0, null]])
+            serde_json::json!([["lake.sales.orders", 3, 0, null, null]])
         );
         assert_eq!(body["columns"][2]["name"], "distinct_columns");
         let stored = stored_statistics(&state).expect("statistics on record");
@@ -12662,12 +13574,18 @@ mod tests {
                 .iter()
                 .map(|column| column["name"].as_str().unwrap())
                 .collect::<Vec<_>>(),
-            ["table", "row_count", "distinct_columns", "cube_cells"]
+            [
+                "table",
+                "row_count",
+                "distinct_columns",
+                "cube_cells",
+                "full_read"
+            ]
         );
         assert_eq!(body["columns"][2]["type"], "BIGINT");
         assert_eq!(
             body["data"],
-            serde_json::json!([["lake.sales.orders", 5, 3, null]])
+            serde_json::json!([["lake.sales.orders", 5, 3, null, null]])
         );
         assert_eq!(
             stored_distinct(&state),
@@ -12748,7 +13666,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(
             body["data"],
-            serde_json::json!([["lake.sales.orders", 5, 1, null]])
+            serde_json::json!([["lake.sales.orders", 5, 1, null, null]])
         );
         assert_eq!(
             sub_statement_records(body["id"].as_str().unwrap())
@@ -12771,7 +13689,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(
             body["data"],
-            serde_json::json!([["lake.sales.orders", 5, 0, null]])
+            serde_json::json!([["lake.sales.orders", 5, 0, null, null]])
         );
         assert!(
             sub_statement_records(body["id"].as_str().unwrap())
@@ -12846,7 +13764,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(
             body["data"],
-            serde_json::json!([["lake.sales.orders", 2, 0, null]])
+            serde_json::json!([["lake.sales.orders", 2, 0, null, null]])
         );
         assert_eq!(
             stored_distinct(&state),
@@ -12866,7 +13784,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(
             body["data"],
-            serde_json::json!([["lake.sales.orders", 2, 1, null]])
+            serde_json::json!([["lake.sales.orders", 2, 1, null, null]])
         );
         assert_eq!(
             stored_distinct(&state),
@@ -13876,7 +14794,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(
             body["data"],
-            serde_json::json!([["lake.sales.events", 300, 0, null]])
+            serde_json::json!([["lake.sales.events", 300, 0, null, "coordinator"]])
         );
         let full = stored_events_statistics(&state).unwrap();
         assert_eq!(full.depth, kaveon_core::StatisticsDepth::Full);
@@ -13928,6 +14846,281 @@ mod tests {
         assert_eq!(moved.rows, 350);
         assert!(moved.column("id").unwrap().distinct.is_none());
         assert!(moved.column("name").unwrap().distinct_exact.is_none());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// A worker over the events directory, served on a loopback port and
+    /// compatible with the coordinator's catalog snapshot.
+    async fn spawn_events_worker(
+        directory: &std::path::Path,
+        snapshot_id: &str,
+        node_id: &str,
+    ) -> (crate::cluster::NodeInfo, tokio::task::JoinHandle<()>) {
+        use kaveon_core::{
+            AccessPattern, CatalogManager, CatalogProvider, DataFormat, MemoryCatalog, StorageType,
+            TableMeta,
+        };
+        let mut catalog = MemoryCatalog::new(
+            "lake",
+            StorageType::Local {
+                base_path: directory.to_path_buf(),
+            },
+        )
+        .with_schema("sales");
+        catalog
+            .register_table(
+                "sales",
+                TableMeta {
+                    name: "events".into(),
+                    arrow_schema: events_schema(),
+                    location: "events".into(),
+                    access: AccessPattern::Shortcut,
+                    format: DataFormat::Parquet,
+                },
+            )
+            .unwrap();
+        let mut manager = CatalogManager::new("lake", "sales");
+        manager.register_catalog(Box::new(catalog));
+        let mut state = catalog_test_state();
+        state.config.coordinator = false;
+        state.config.node_id = node_id.to_owned();
+        *state.catalog.get_mut() = Arc::new(crate::PublishedCatalog {
+            manager,
+            snapshot_id: snapshot_id.to_owned(),
+        });
+        let state = Arc::new(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = super::build_router(Arc::clone(&state));
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut info = state.cluster.read().await.this_node.clone();
+        info.node_id = node_id.to_owned();
+        info.address = format!("http://{address}");
+        info.role = crate::cluster::NodeRole::Worker;
+        info.catalog_snapshot_id = Some(snapshot_id.to_owned());
+        info.last_heartbeat = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        (info, server)
+    }
+
+    /// With two compatible workers, `ANALYZE … WITH (sketches = true,
+    /// cube = true)` reads the columns on them: one `COLUMN_STATISTICS`
+    /// statement and one `GROUP BY` statement per grouping, tagged with
+    /// the parent, and stores the document and the cube the coordinator's
+    /// own build computes — the distinct sketches bit for bit; the record
+    /// says where the read ran. A second ANALYZE cancelled while its
+    /// groupings run cancels the sub-statements under way, starts none
+    /// after, and stores nothing.
+    #[tokio::test]
+    async fn analyze_reads_the_columns_on_the_workers_and_cancels_with_them() {
+        let (state, directory) = analyze_test_state().await;
+        register_events_directory(&state, &directory, 2_000).await;
+        let (status, body) = submit(
+            &state,
+            &admin(),
+            "ALTER TABLE events SET SHAPE (dimensions = ARRAY['name:100'], \
+             measures = ARRAY['id:sum,count,min,max,count_distinct', 'score:sum,max'], time = 'day:day:500')",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let snapshot_id = state.catalog.read().await.snapshot_id.clone();
+        let (first, first_server) =
+            spawn_events_worker(&directory, &snapshot_id, "analyze-worker-a").await;
+        let (second, second_server) =
+            spawn_events_worker(&directory, &snapshot_id, "analyze-worker-b").await;
+        {
+            let mut cluster = state.cluster.write().await;
+            cluster.register_worker(first);
+            cluster.register_worker(second);
+        }
+        let table = state
+            .catalog_store
+            .table_by_name("lake", "sales", "events")
+            .unwrap()
+            .unwrap();
+        let location = directory.join("events");
+        let expected = kaveon_storage::full_statistics(
+            location.to_str().unwrap(),
+            kaveon_core::DataFormat::Parquet,
+            table.id().clone(),
+            &kaveon_storage::FullScanOptions::default(),
+        )
+        .unwrap();
+        let expected_cube = kaveon_storage::build_cube(
+            location.to_str().unwrap(),
+            kaveon_core::DataFormat::Parquet,
+            table.id().clone(),
+            table.shape(),
+            &kaveon_storage::CubeBuildOptions {
+                memory: None,
+                threads: 1,
+                max_cells: state.config.cube_max_cells,
+            },
+        )
+        .unwrap()
+        .cube;
+
+        let (status, body) = submit(
+            &state,
+            &admin(),
+            "ANALYZE events WITH (sketches = true, cube = true)",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["data"][0][1], 6_000);
+        assert_eq!(body["data"][0][3], expected_cube.cell_count());
+        assert_eq!(body["data"][0][4], "workers");
+        let parent = body["id"].as_str().unwrap().to_owned();
+        let record = record(&parent, &admin()).await;
+        assert_eq!(record["execution"]["mode"], "distributed");
+        assert_eq!(record["execution"]["detail"], "analyze");
+        // One read of the columns, then (), name, day, name×day.
+        let children = sub_statement_records(&parent).await;
+        assert_eq!(
+            children.len(),
+            5,
+            "{:?}",
+            children.iter().map(|child| &child.sql).collect::<Vec<_>>()
+        );
+        assert!(
+            children[0].sql.starts_with(
+                "SELECT COUNT(*), COLUMN_STATISTICS(\"id\"), COLUMN_STATISTICS(\"score\")"
+            ),
+            "{}",
+            children[0].sql
+        );
+        for child in &children {
+            assert!(
+                matches!(child.state, super::QueryState::Finished),
+                "{} {:?}",
+                child.sql,
+                child.error
+            );
+            assert_eq!(child.execution.mode, "distributed", "{}", child.sql);
+            assert_eq!(child.settings.result_cache, Some(false));
+            assert!(!state.results.contains(&child.id));
+        }
+        let stored = stored_events_statistics(&state).unwrap();
+        assert_eq!(stored.depth, kaveon_core::StatisticsDepth::Full);
+        assert_eq!(stored.rows, expected.rows);
+        assert_eq!(stored.source_version, expected.source_version);
+        for (column, expected) in stored.columns.iter().zip(&expected.columns) {
+            assert_eq!(column.name, expected.name);
+            assert_eq!(column.null_count, expected.null_count, "{}", column.name);
+            assert_eq!(column.min, expected.min, "{}", column.name);
+            assert_eq!(column.max, expected.max, "{}", column.name);
+            assert_eq!(column.distinct, expected.distinct, "{}", column.name);
+            assert_eq!(
+                column.quantiles.is_some(),
+                expected.quantiles.is_some(),
+                "{}",
+                column.name
+            );
+        }
+        let cube = stored_events_cube(&state).expect("the cube");
+        assert_eq!(cube.source_version, expected_cube.source_version);
+        assert_eq!(cube.shape, expected_cube.shape);
+        assert_eq!(cube.slots, expected_cube.slots);
+        assert_eq!(cube.excluded, expected_cube.excluded);
+        assert_eq!(cube.files, expected_cube.files);
+        assert!(!cube.per_file_complete);
+        assert_eq!(cube.groupings, expected_cube.groupings);
+        // The cube answers what it answered from the coordinator's build.
+        let (body, record) = submit_and_record(
+            &state,
+            "SELECT name, SUM(id), APPROX_COUNT_DISTINCT(id) FROM events GROUP BY name",
+        )
+        .await;
+        assert_eq!(record["execution"]["mode"], "context", "{record}");
+        assert_eq!(body["data"].as_array().unwrap().len(), 98);
+
+        // A cancellation while the groupings run: the sub-statements under
+        // way end cancelled, no later one starts, nothing is stored.
+        let previous_version = cube.source_version.clone();
+        write_events_file(&directory.join("events").join("d.parquet"), 6_000, 2_000);
+        let parent = format!("analyze-parent-{}", uuid::Uuid::new_v4());
+        let running = {
+            let state = state.clone();
+            let parent = parent.clone();
+            tokio::spawn(async move {
+                let response = super::run_statement(
+                    state,
+                    admin(),
+                    super::StatementRequest {
+                        query: "ANALYZE events WITH (cube = true)".into(),
+                        catalog: Some("lake".into()),
+                        schema: Some("sales".into()),
+                        source: None,
+                        client: None,
+                        user: None,
+                        time_zone: None,
+                        client_tags: vec![],
+                        result_delivery: None,
+                        settings: None,
+                    },
+                    parent,
+                )
+                .await;
+                let status = response.status();
+                (status, json_body(response).await)
+            })
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no sub-statement started"
+            );
+            assert!(
+                !running.is_finished(),
+                "ANALYZE finished before it was cancelled"
+            );
+            if !sub_statement_records(&parent).await.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+        let cancelled = super::cancel_query(
+            axum::extract::State(state.clone()),
+            axum::Extension(admin()),
+            axum::extract::Path(parent.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(cancelled.status(), StatusCode::NO_CONTENT);
+        let (status, body) = running.await.unwrap();
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["code"], "QUERY_CANCELED");
+        let children = sub_statement_records(&parent).await;
+        assert!(!children.is_empty());
+        assert!(children.len() < 4, "every grouping ran: {}", children.len());
+        for child in &children {
+            assert!(
+                !matches!(
+                    child.state,
+                    super::QueryState::Queued | super::QueryState::Running
+                ),
+                "{} {:?}",
+                child.sql,
+                child.error
+            );
+            assert!(!state.results.contains(&child.id));
+        }
+        assert!(
+            children
+                .iter()
+                .any(|child| matches!(child.state, super::QueryState::Canceled))
+        );
+        assert_eq!(
+            stored_events_cube(&state).unwrap().source_version,
+            previous_version
+        );
+        first_server.abort();
+        second_server.abort();
         std::fs::remove_dir_all(directory).unwrap();
     }
 

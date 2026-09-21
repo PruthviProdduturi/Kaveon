@@ -187,6 +187,13 @@ pub enum AggregateFunction {
     /// `APPROX_PERCENTILE`: a KLL sketch of the argument, the values at
     /// the spec's `percentiles` as the result.
     ApproxPercentile,
+    /// `APPROX_COUNT_DISTINCT_STATE`: the HyperLogLog sketch of the
+    /// argument as the result — its compact bytes, base64.
+    ApproxDistinctState,
+    /// `COLUMN_STATISTICS`: the argument's read profile (null count, exact
+    /// bounds, both sketches) as the result — JSON, the statistics
+    /// document's own rendering.
+    ColumnStatistics,
 }
 
 impl AggregateFunction {

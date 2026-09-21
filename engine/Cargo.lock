@@ -2063,6 +2063,7 @@ dependencies = [
  "kaveon-core",
  "object_store",
  "parquet",
+ "serde",
  "serde_json",
  "sha2",
  "thiserror",

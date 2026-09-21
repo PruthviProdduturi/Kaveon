@@ -59,8 +59,9 @@ pub use table_rewrite::{
     Recovery, RewriteGroup, RewriteKind, RewriteReport, RewriteTarget, Staging, TableFile,
 };
 pub use table_statistics::{
-    DataFile, FullScanOptions, SourceFiles, enumerate_source, full_statistics, metadata_statistics,
-    partition_column_names, refresh_statistics, sketchable, skip_listing_files, statistics_schema,
+    ColumnReadProfile, DataFile, FullScanOptions, SourceFiles, apply_profiles, enumerate_source,
+    full_statistics, metadata_statistics, partition_column_names, refresh_statistics, sketchable,
+    sketched_columns, skip_listing_files, statistics_schema,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
