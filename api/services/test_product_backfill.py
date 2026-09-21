@@ -120,13 +120,16 @@ class ProductBackfillTests(unittest.TestCase):
              patch.object(product_backfill.product_store, "transact", side_effect=HTTPException(409, "conflict")):
             self.assertEqual(product_backfill.apply_and_reconcile(snapshot())["reconciled"], 1)
 
-    def test_existing_divergent_record_fails_before_write(self):
-        target = {"document": {"id": "2", "name": "Different"}, "revision": 1, "generation": 7}
-        with patch.object(product_backfill.product_store, "read", return_value=target), \
+    def test_existing_divergent_record_is_repaired_with_revision_guard(self):
+        record = snapshot_record()
+        target = {"document": {"id": "2", "name": "Different"}, "revision": 4, "generation": 7}
+        resolved = {"document": record.document, "revision": 5, "generation": 8}
+        with patch.object(product_backfill.product_store, "read", side_effect=[target, resolved]), \
              patch.object(product_backfill.product_store, "transact") as transact:
-            with self.assertRaisesRegex(RuntimeError, "differs"):
-                product_backfill.apply_and_reconcile(snapshot())
-        transact.assert_not_called()
+            report = product_backfill.apply_and_reconcile(snapshot())
+        self.assertEqual(report["repaired"], 1)
+        mutation = transact.call_args.args[0][0]
+        self.assertEqual((mutation.operation, mutation.expected_revision), ("update", 4))
 
     def test_post_create_reconciliation_failure_never_returns_success_report(self):
         divergent = {
