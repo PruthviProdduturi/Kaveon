@@ -43,7 +43,7 @@ three, and `distinct` and `columns` together is refused — there is no
 | Form | Reads | Produces | Cost |
 |---|---|---|---|
 | `ANALYZE t` (metadata only) | Parquet footers; the Delta log's add actions (their `stats` when every add carries them, else the active files' footers); the Iceberg metadata pointer and manifests, plus the live files' footers by field id. Never a data page. (`kaveon_storage::metadata_statistics`, `footer_profile.rs`) | Table facts (rows, bytes, files, row groups, uncompressed bytes, last modified, partition columns); per column the null count, `min`/`max` with `bounds_exact`, compressed bytes; per file rows, bytes and bounds; `depth: "metadata"` | Metadata reads only: a 504 M-row lake table profiles in tens of milliseconds (HANDSHAKE 2026-09-18) |
-| `ANALYZE t WITH (sketches = true)` | Every sketchable column once, on the coordinator, files in parallel (eight at a time, `ANALYZE_SKETCH_THREADS`), batches reserved through the statement's memory admission; a source that changes under the read is refused (`kaveon_storage::full_statistics`) | Everything above, plus per column a HyperLogLog distinct-count sketch (p = 12) and, for numeric and temporal columns, a KLL quantile sketch (k = 200); exact bounds and exact null counts; `depth: "full"` | One full read of the table's columns |
+| `ANALYZE t WITH (sketches = true)` | Every sketchable column once. **The full read runs on the workers** when the cluster can run a distributed statement (two compatible workers and an exchange token): one `SELECT COUNT(*), COLUMN_STATISTICS("a"), COLUMN_STATISTICS("b"), … FROM t` through the coordinator's own statement path, its scan partitioned across the workers by row group — a single-file table splits the same way — each partition folding one `ColumnReadProfile` per column (null count, exact bounds, both sketches) as its partial state, the partials merged on the final, and the coordinator folding the one result row into the metadata document (`apply_profiles`). With no cluster (`execution.mode = local`, one worker) the coordinator reads the files itself, in parallel (eight at a time, `ANALYZE_SKETCH_THREADS`), batches reserved through the statement's memory admission (`kaveon_storage::full_statistics`) — the same profile fold, so the two documents are equal: the HyperLogLog registers identical, the KLL sketches within their rank error. A source that changes under either read is refused | Everything above, plus per column a HyperLogLog distinct-count sketch (p = 12) and, for numeric and temporal columns, a KLL quantile sketch (k = 200); exact bounds and exact null counts; `depth: "full"`. The result's `full_read` says `workers` or `coordinator`; the record's `execution` is `distributed`/`analyze` or `coordinator` with the reason | One full read of the table's columns, on the workers' scan lanes when there are any |
 | `ANALYZE t WITH (distinct = true)` or `WITH (columns = ARRAY['a', 'b'])` | One `SELECT COUNT(DISTINCT "col") FROM t` per selected column, run through the coordinator's own statement path (workers, admission, cancellation; result cache off; the child records tagged `analyze:<parent id>`), up to four at a time and never more than the resource group's `max_concurrent` (`ANALYZE_COUNT_CONCURRENCY`) | The exact distinct count per selected column as `distinct_exact`, kept beside whatever the record holds at this source version; the source version is re-read after the counts and a change is 409 `SOURCE_CHANGED` | One distinct-count scan per column (a 504 M-row table, 21 columns: 56 s on the local Compose stack, single run, not a claim) |
 
 The forms combine: `sketches = true` with `distinct` or `columns` reads
@@ -53,9 +53,28 @@ unchanged; a metadata-only `ANALYZE` at the same version keeps the previous
 full read's sketches and exact bounds; a record at a new source version
 carries only what was measured under it. The result is one row: `table`,
 `row_count`, `distinct_columns` (how many columns this statement counted;
-`0` for the first two forms). A parse error in any form is 400
-`SYNTAX_ERROR`; a column the table does not have is 400 `ANALYSIS_ERROR`
-before any count runs.
+`0` for the first two forms), `cube_cells`, `full_read` (`workers`,
+`coordinator`, or null when nothing was read). A parse error in any form
+is 400 `SYNTAX_ERROR`; a column the table does not have is 400
+`ANALYSIS_ERROR` before any count runs.
+
+`ANALYZE t WITH (cube = true)` follows the same placement rule. On the
+workers it is one distributed `GROUP BY` statement per grouping of the
+declared shape — `SELECT axes…, COUNT(*), SUM/COUNT/MIN/MAX(measure)…,
+APPROX_COUNT_DISTINCT_STATE(measure)… FROM t GROUP BY axes…`, a timestamp
+time axis through `DATE_TRUNC` at its grain, a date column at day grain as
+itself — the grand total and the single axes first, then the pairs, four
+statements at a time under the `ANALYZE` statement's cancellation (the
+same runner as the distinct counts), each result typed back into cells;
+a single-axis statement carries `LIMIT cap + 1`, and an axis whose
+statement reaches it is excluded with the count observed, as the
+coordinator's build excludes it, and no pair over it is read. The cube
+equals the coordinator's build cell for cell (the distinct sketches bit
+for bit). A scan has no file column, so the workers' cube keeps no
+per-file partials (`per_file_complete = false`): a refresh under a
+changed source rebuilds it rather than taking removed files out. Without
+a cluster the coordinator's one-scan build runs as before, with its
+per-file partials.
 
 Two statements read the record and never the source:
 

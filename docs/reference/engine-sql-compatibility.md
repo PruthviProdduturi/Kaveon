@@ -47,11 +47,16 @@ unchanged; nothing is approximated unless the statement writes an
 | `APPROX_COUNT_DISTINCT(col)` — `APPROX_DISTINCT(col)` is Trino's name for the same function | `BIGINT` (`UInt64`): the estimated number of distinct non-null values | HyperLogLog, p = 12 (4 096 six-bit registers; the DLM's register layout and PostgreSQL's `hash_bytes_extended` over the value's canonical text, so a sketch built here merges with a stored one) | `error_kind: relative_standard_error`, 1.04 / √4096 = 1.6 % of the true count (one standard error) |
 | `APPROX_PERCENTILE(col, p)` | `DOUBLE`: the value at fraction `p` of the column's distribution | KLL, k = 200 | `error_kind: rank_error`, 2.446 / k^0.9433 = 1.65 %: the value returned has a true rank within this of `p`, with about 99 % confidence |
 | `APPROX_PERCENTILE(col, ARRAY[p, …])` | `List(Float64)`: one value per fraction, in the order written (a JSON array inline; an Arrow list on a page) | KLL, k = 200 | As above, per value |
+| `APPROX_COUNT_DISTINCT_STATE(col)` | `VARCHAR`: the HyperLogLog sketch itself — its compact bytes, base64, the encoding the statistics document stores — so a client merges it with others (register-wise maximum; merges are exact, whatever the partitioning) | HyperLogLog, p = 12 | None: the state is exact; its estimate carries the error above |
+| `COLUMN_STATISTICS(col)` | `VARCHAR`: the column's read profile over the rows aggregated as JSON — `nulls`, `min`, `max` (exact), `distinct` (HyperLogLog, base64), `quantiles` (KLL, base64; null for booleans and text) — what `ANALYZE … WITH (sketches = true)` records per column, over any group | HyperLogLog p = 12, KLL k = 200 | None: the profile is the state |
 
-- `col` is a column reference (`*` is refused). `APPROX_COUNT_DISTINCT`
-  takes any sketchable type — booleans, integers, floats, decimals, text,
-  dates, timestamps, and dictionaries over them; `APPROX_PERCENTILE` takes
-  integers, floats and decimals (dates and timestamps are refused). The
+- `col` is a column reference (`*` is refused). `APPROX_COUNT_DISTINCT`,
+  `APPROX_COUNT_DISTINCT_STATE` and `COLUMN_STATISTICS` take any sketchable
+  type — booleans, integers, floats, decimals, text, dates, timestamps,
+  and dictionaries over them; `APPROX_PERCENTILE` takes integers, floats
+  and decimals (dates and timestamps are refused). The two state-returning
+  functions are what `ANALYZE` runs on the workers; their results are not
+  estimates, so the record's `execution.approximate` does not list them. The
   fractions are numeric constants in `[0, 1]`; `DISTINCT` inside an
   `APPROX_*` call is refused. Over no non-null values the count is `0` and
   a percentile is null.
