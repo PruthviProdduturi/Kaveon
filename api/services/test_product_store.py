@@ -71,6 +71,38 @@ class ProductStoreTests(unittest.TestCase):
             "alice@example.com", role="reader",
         ))
 
+    def test_migration_calls_use_only_an_allowlisted_owner_override(self):
+        environment = {
+            "KAVEON_MIGRATION_OWNER_PRINCIPAL": "prproddu-test",
+            "KAVEON_MIGRATION_OWNER_ALLOWLIST": "migration-bot,prproddu-test",
+        }
+        with patch.dict("os.environ", environment, clear=False), \
+             patch.object(product_store, "read", return_value={"revision": 1}) as read:
+            result = product_store.migration_read("source", "source-1", "system", "Admin")
+        self.assertEqual(result, {"revision": 1})
+        read.assert_called_once_with("source", "source-1", "prproddu-test", "Admin")
+
+    def test_migration_owner_override_fails_closed_without_allowlist(self):
+        environment = {
+            "KAVEON_MIGRATION_OWNER_PRINCIPAL": "prproddu-test",
+            "KAVEON_MIGRATION_OWNER_ALLOWLIST": "migration-bot",
+        }
+        with patch.dict("os.environ", environment, clear=False), \
+             patch.object(product_store, "read") as read, \
+             self.assertRaisesRegex(RuntimeError, "not allowlisted"):
+            product_store.migration_read("source", "source-1", "system", "Admin")
+        read.assert_not_called()
+
+    def test_normal_product_calls_ignore_migration_override(self):
+        environment = {
+            "KAVEON_MIGRATION_OWNER_PRINCIPAL": "prproddu-test",
+            "KAVEON_MIGRATION_OWNER_ALLOWLIST": "prproddu-test",
+        }
+        with patch.dict("os.environ", environment, clear=False), \
+             patch.object(product_store.engine_bridge, "_request", return_value={}) as request:
+            product_store.read("source", "source-1", "system", "Admin")
+        self.assertEqual(request.call_args.args[3], "system")
+
     def test_rejects_unknown_role_and_unsafe_identifier(self):
         with self.assertRaises(HTTPException) as role_error:
             product_store.read("dataset", "safe", "alice@example.com", "Owner")

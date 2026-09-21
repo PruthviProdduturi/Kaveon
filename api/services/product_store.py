@@ -6,6 +6,8 @@ does not enable dual writes by itself.
 """
 
 import json
+import os
+import re
 from dataclasses import dataclass
 from typing import Iterable, Literal, Mapping, Optional
 from urllib.parse import quote
@@ -17,6 +19,22 @@ from services import engine_bridge
 
 ProductKind = Literal["dataset", "chart", "dashboard", "saved_query", "user_theme", "dlm_definition", "dlm_run", "favorite", "source", "user_recent", "query_history", "activity", "chat_session", "chat_message"]
 _KINDS = {"dataset", "chart", "dashboard", "saved_query", "user_theme", "dlm_definition", "dlm_run", "favorite", "source", "user_recent", "query_history", "activity", "chat_session", "chat_message"}
+_MIGRATION_PRINCIPAL = re.compile(r"^[A-Za-z0-9@._+\-]{1,255}$")
+
+
+def _migration_actor(default_actor: str) -> str:
+    """Return an explicitly allowlisted actor for offline backfill calls only."""
+    override = os.getenv("KAVEON_MIGRATION_OWNER_PRINCIPAL", "").strip()
+    if not override:
+        return default_actor
+    allowed = {
+        value.strip()
+        for value in os.getenv("KAVEON_MIGRATION_OWNER_ALLOWLIST", "").split(",")
+        if value.strip()
+    }
+    if not _MIGRATION_PRINCIPAL.fullmatch(override) or override not in allowed:
+        raise RuntimeError("migration owner principal is invalid or not allowlisted")
+    return override
 
 
 @dataclass(frozen=True)
@@ -124,6 +142,11 @@ def transact(mutations: Iterable[ProductMutation], actor: str, role: str) -> dic
         raise
 
 
+def migration_transact(mutations: Iterable[ProductMutation], actor: str, role: str) -> dict:
+    """Backfill-only transaction using an optional, explicit owner override."""
+    return transact(mutations, _migration_actor(actor), role)
+
+
 def read(kind: ProductKind, record_id: str, actor: str, role: str) -> Optional[dict]:
     """Read one committed record from a pinned durable product snapshot."""
     if kind not in _KINDS:
@@ -136,6 +159,11 @@ def read(kind: ProductKind, record_id: str, actor: str, role: str) -> Optional[d
         actor,
         role=_role(role),
     )
+
+
+def migration_read(kind: ProductKind, record_id: str, actor: str, role: str) -> Optional[dict]:
+    """Backfill-only read using the same bounded owner override as writes."""
+    return read(kind, record_id, _migration_actor(actor), role)
 
 
 def list_records(kind: ProductKind, actor: str, role: str, *, max_records: int = 1000) -> list[dict]:

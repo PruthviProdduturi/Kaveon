@@ -34,7 +34,7 @@ def capture_snapshot():
   owner=str(row.get("user_email") or "");oid=str(row.get("object_id") or "")
   if kind=="data_source": kind,oid="source",f"data-{oid}"
   if kind not in favorites.MIGRATABLE_TYPES: raise RuntimeError("favorite object type is unsupported")
-  target=product_store.read(kind,oid,owner,"Admin")
+  target=product_store.migration_read(kind,oid,owner,"Admin")
   if target is None: raise RuntimeError(f"favorite target {kind}/{oid} is missing")
   current=str(target.get("snapshot_id") or "")
   if not current or (sid is not None and sid!=current): raise RuntimeError("favorite target snapshot is invalid")
@@ -45,15 +45,15 @@ def capture_snapshot():
 def apply_and_reconcile(s):
  validate_snapshot(s);created=present=0
  for r in s.records:
-  target=product_store.read("favorite",r.record_id,r.owner_principal,"Admin")
+  target=product_store.migration_read("favorite",r.record_id,r.owner_principal,"Admin")
   if target is not None and target.get("document")==r.document:present+=1;continue
   if target is not None:raise RuntimeError(f"KaveonDB favorite {r.record_id} diverges")
-  try:product_store.transact([product_store.ProductMutation("create","favorite",r.record_id,r.document)],r.owner_principal,"Admin")
+  try:product_store.migration_transact([product_store.ProductMutation("create","favorite",r.record_id,r.document)],r.owner_principal,"Admin")
   except HTTPException as e:
-   resolved=product_store.read("favorite",r.record_id,r.owner_principal,"Admin")
+   resolved=product_store.migration_read("favorite",r.record_id,r.owner_principal,"Admin")
    if e.status_code!=409 or resolved is None or resolved.get("document")!=r.document:raise
   created+=1
  for r in s.records:
-  target=product_store.read("favorite",r.record_id,r.owner_principal,"Admin")
+  target=product_store.migration_read("favorite",r.record_id,r.owner_principal,"Admin")
   if target is None or target.get("document")!=r.document:raise RuntimeError(f"KaveonDB favorite {r.record_id} failed reconciliation")
  return {"family":"favorites","source_watermark":s.source_watermark,"target_snapshot_id":s.target_snapshot_id,"source_count":len(s.records),"created":created,"already_present":present,"reconciled":len(s.records),"snapshot_sha256":s.snapshot_sha256}

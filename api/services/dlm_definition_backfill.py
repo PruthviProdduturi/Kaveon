@@ -80,7 +80,7 @@ def capture_snapshot() -> DefinitionSnapshot:
     records, snapshot_id = [], None
     for row in rows:
         record_id, owner = str(row["id"]), str(row["created_by"])
-        dataset = product_store.read("dataset", record_id, owner, "Admin")
+        dataset = product_store.migration_read("dataset", record_id, owner, "Admin")
         if dataset is None:
             raise RuntimeError(f"KaveonDB dataset {record_id} is missing for DLM definition")
         current_snapshot = str(dataset.get("snapshot_id") or "")
@@ -105,25 +105,25 @@ def apply_and_reconcile(snapshot: DefinitionSnapshot) -> dict:
     validate_snapshot(snapshot)
     created = already_present = 0
     for record in snapshot.records:
-        target = product_store.read("dlm_definition", record.record_id, record.owner_principal, "Admin")
+        target = product_store.migration_read("dlm_definition", record.record_id, record.owner_principal, "Admin")
         if target is not None and target.get("document") == record.document:
             already_present += 1
             continue
         if target is not None:
             raise RuntimeError(f"KaveonDB DLM definition {record.record_id} diverges")
         try:
-            product_store.transact([
+            product_store.migration_transact([
                 product_store.ProductMutation("create", "dlm_definition", record.record_id, record.document)
             ], record.owner_principal, "Admin")
         except HTTPException as error:
-            resolved = product_store.read(
+            resolved = product_store.migration_read(
                 "dlm_definition", record.record_id, record.owner_principal, "Admin"
             )
             if error.status_code != 409 or resolved is None or resolved.get("document") != record.document:
                 raise
         created += 1
     for record in snapshot.records:
-        target = product_store.read("dlm_definition", record.record_id, record.owner_principal, "Admin")
+        target = product_store.migration_read("dlm_definition", record.record_id, record.owner_principal, "Admin")
         if target is None or target.get("document") != record.document:
             raise RuntimeError(f"KaveonDB DLM definition {record.record_id} failed reconciliation")
     return {
