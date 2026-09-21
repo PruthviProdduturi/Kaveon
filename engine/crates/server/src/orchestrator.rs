@@ -1,14 +1,57 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use kaveon_core::{
     ExchangeId, ExecutableFragment, KaveonError, Partitioning, Result, StageGraph, StageId,
-    TaskAssignment, TaskId,
+    TaskAssignment, TaskId, TaskState,
 };
+use serde::Serialize;
 
 use crate::cluster::NodeInfo;
-use crate::runtime::{ExchangeCleanupIntent, StageRuntime};
+use crate::runtime::{ExchangeCleanupIntent, StageRuntime, SupersededState};
 
 const DEFAULT_MAX_TASK_ATTEMPTS: u32 = 3;
+/// How many times one stage's finished output may be produced again for
+/// one query because the worker holding its consumers' spools was lost
+/// (`KAVEON_STAGE_RETRY_LIMIT`).
+pub const DEFAULT_STAGE_RETRY_LIMIT: u32 = 2;
+
+/// One attempt a worker loss created: the slot, the worker it was on, the
+/// worker it runs on now, and the attempt number it runs as.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct StageRetry {
+    pub stage: u32,
+    pub partition: usize,
+    pub from: String,
+    pub to: String,
+    pub attempt: u32,
+}
+
+/// A consumer's exchange spool moved off a lost worker: the producers'
+/// output for this consumer partition is written to `to` from now on.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SpoolMove {
+    pub stage: u32,
+    pub partition: usize,
+    pub from: String,
+    pub to: String,
+}
+
+/// What the loss of one worker cost the query: every attempt it created
+/// and every spool it moved. Empty when the worker was already gone.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct WorkerLossRecovery {
+    pub worker: String,
+    pub moved_spools: Vec<SpoolMove>,
+    pub stage_retries: Vec<StageRetry>,
+    /// The stages whose finished output was produced again.
+    pub reexecuted_stages: Vec<u32>,
+}
+
+impl WorkerLossRecovery {
+    pub fn is_empty(&self) -> bool {
+        self.moved_spools.is_empty() && self.stage_retries.is_empty()
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExchangeLocation {
@@ -55,6 +98,10 @@ pub struct CoordinatorOrchestrator {
     exchange_workers: BTreeMap<(StageId, usize), String>,
     runtime: StageRuntime,
     exchange_store_uri: Option<String>,
+    stage_retry_limit: u32,
+    /// How many times each stage's finished output was produced again
+    /// after a worker loss.
+    stage_reexecutions: BTreeMap<StageId, u32>,
 }
 
 impl CoordinatorOrchestrator {
@@ -95,11 +142,216 @@ impl CoordinatorOrchestrator {
             workers,
             assignments,
             runtime,
+            stage_retry_limit: DEFAULT_STAGE_RETRY_LIMIT,
+            stage_reexecutions: BTreeMap::new(),
         })
     }
 
     pub fn set_exchange_store_uri(&mut self, uri: String) {
         self.exchange_store_uri = Some(uri);
+    }
+
+    /// How many times one stage may be re-executed for this query after
+    /// worker losses; zero forbids stage re-execution (a task retry on a
+    /// surviving worker still happens).
+    pub fn set_stage_retry_limit(&mut self, limit: u32) {
+        self.stage_retry_limit = limit;
+    }
+
+    /// The workers the query may still dispatch to.
+    pub fn live_workers(&self) -> &[NodeInfo] {
+        &self.workers
+    }
+
+    /// Whether `task_id` is the attempt its slot stands on now; the
+    /// outcome of an older attempt is stale and must be dropped.
+    pub fn is_current_attempt(&self, task_id: &TaskId) -> bool {
+        self.runtime.is_current_attempt(task_id)
+    }
+
+    /// Recover from the loss of `worker_id`: it is dispatched to no more;
+    /// the tasks it was running or about to run move to surviving workers
+    /// (a running one as the next attempt); every consumer spool placed on
+    /// it moves to a surviving worker, and the producers of each such
+    /// consumer partition that has not finished run again as the next
+    /// attempt on the surviving workers, so the moved spool is filled
+    /// again — a producer stage whose own inputs were released when it
+    /// finished re-executes its producers too, down to the scans. A
+    /// consumer that already holds its complete input keeps it and is
+    /// left running. Each stage's finished output may be produced again
+    /// at most `stage_retry_limit` times per query; beyond that the loss
+    /// fails the query, naming the worker and the stage. When the
+    /// coordinator relays exchanges (`set_exchange_store_uri`) no spool
+    /// is on a worker and only the tasks move.
+    pub fn lose_worker(&mut self, worker_id: &str) -> Result<WorkerLossRecovery> {
+        let mut recovery = WorkerLossRecovery {
+            worker: worker_id.to_owned(),
+            ..WorkerLossRecovery::default()
+        };
+        let Some(index) = self
+            .workers
+            .iter()
+            .position(|worker| worker.node_id == worker_id)
+        else {
+            return Ok(recovery);
+        };
+        self.workers.remove(index);
+        if self.workers.is_empty() {
+            self.runtime.cancel();
+            return Err(execution_error(&format!(
+                "worker '{worker_id}' is lost and no worker survives"
+            )));
+        }
+        let reason = format!("worker '{worker_id}' was lost");
+
+        // The spools placed on the lost worker, and where they live now.
+        // A stage without inputs has no spool, whatever its placement.
+        let mut moved = BTreeSet::new();
+        if self.exchange_store_uri.is_none() {
+            let survivors = self.workers.clone();
+            let consuming = self
+                .graph
+                .exchanges
+                .iter()
+                .map(|exchange| exchange.target_stage)
+                .collect::<BTreeSet<_>>();
+            for ((stage_id, partition), placement) in &mut self.exchange_workers {
+                if placement != worker_id || !consuming.contains(stage_id) {
+                    continue;
+                }
+                let to = survivors[*partition % survivors.len()].node_id.clone();
+                recovery.moved_spools.push(SpoolMove {
+                    stage: stage_id.0,
+                    partition: *partition,
+                    from: worker_id.to_owned(),
+                    to: to.clone(),
+                });
+                *placement = to;
+                moved.insert((*stage_id, *partition));
+            }
+        }
+
+        // The tasks the lost worker was running or about to run.
+        let on_lost_worker = self
+            .runtime
+            .slots()
+            .filter(|(assignment, state)| {
+                assignment.worker_id == worker_id
+                    && matches!(state, TaskState::Pending | TaskState::Running)
+            })
+            .map(|(assignment, _)| (assignment.task_id.stage_id, assignment.task_id.partition))
+            .collect::<Vec<_>>();
+        for (stage_id, partition) in on_lost_worker {
+            self.supersede(stage_id, partition, &reason, &mut recovery)?;
+        }
+
+        // The producers of every moved spool whose consumer still needs it.
+        let mut queue = VecDeque::new();
+        for (stage_id, partition) in &moved {
+            let needed = self.runtime.slots().any(|(assignment, state)| {
+                assignment.task_id.stage_id == *stage_id
+                    && assignment.task_id.partition == *partition
+                    && state != TaskState::Finished
+            });
+            if needed {
+                queue.extend(self.producer_stages(*stage_id));
+            }
+        }
+        let mut reopened = BTreeSet::new();
+        while let Some(stage_id) = queue.pop_front() {
+            if !reopened.insert(stage_id) {
+                continue;
+            }
+            let limit = self.stage_retry_limit;
+            let count = self.stage_reexecutions.entry(stage_id).or_default();
+            if *count >= limit {
+                let attempt = ordinal(*count + 1);
+                self.runtime.cancel();
+                return Err(execution_error(&format!(
+                    "worker '{worker_id}' was lost and stage {} would be re-executed a {attempt} time for this query, beyond KAVEON_STAGE_RETRY_LIMIT={limit}",
+                    stage_id.0
+                )));
+            }
+            *count += 1;
+            recovery.reexecuted_stages.push(stage_id.0);
+            let was_finished =
+                self.runtime.stage_state(stage_id) == Some(crate::runtime::StageState::Finished);
+            let slots = self
+                .runtime
+                .slots()
+                .filter(|(assignment, state)| {
+                    assignment.task_id.stage_id == stage_id
+                        && matches!(state, TaskState::Running | TaskState::Finished)
+                })
+                .map(|(assignment, _)| assignment.task_id.partition)
+                .collect::<Vec<_>>();
+            for partition in slots {
+                self.supersede(stage_id, partition, &reason, &mut recovery)?;
+            }
+            // Its inputs are gone when it had finished (released with its
+            // finish) or when one of its own spools was on the lost worker.
+            let inputs_gone = was_finished
+                || moved
+                    .iter()
+                    .any(|(moved_stage, _)| *moved_stage == stage_id);
+            if inputs_gone {
+                queue.extend(self.producer_stages(stage_id));
+            }
+        }
+        Ok(recovery)
+    }
+
+    fn producer_stages(&self, stage_id: StageId) -> Vec<StageId> {
+        self.graph
+            .exchanges
+            .iter()
+            .filter(|exchange| exchange.target_stage == stage_id)
+            .map(|exchange| exchange.source_stage)
+            .collect()
+    }
+
+    fn supersede(
+        &mut self,
+        stage_id: StageId,
+        partition: usize,
+        reason: &str,
+        recovery: &mut WorkerLossRecovery,
+    ) -> Result<()> {
+        let current = self
+            .assignments
+            .get(&(stage_id, partition))
+            .ok_or_else(|| execution_error("worker loss references an unknown task slot"))?
+            .clone();
+        let to = self.next_worker(partition, &current.worker_id);
+        let (was, next) = self
+            .runtime
+            .supersede_task(stage_id, partition, to.clone(), reason)?;
+        self.assignments.insert((stage_id, partition), next.clone());
+        if was != SupersededState::Pending {
+            recovery.stage_retries.push(StageRetry {
+                stage: stage_id.0,
+                partition,
+                from: current.worker_id,
+                to,
+                attempt: next.task_id.attempt,
+            });
+        }
+        Ok(())
+    }
+
+    /// The surviving worker after `current` in rotation; `partition`'s own
+    /// rotation slot when `current` is gone.
+    fn next_worker(&self, partition: usize, current: &str) -> String {
+        match self
+            .workers
+            .iter()
+            .position(|worker| worker.node_id == current)
+        {
+            Some(index) => self.workers[(index + 1) % self.workers.len()]
+                .node_id
+                .clone(),
+            None => self.workers[partition % self.workers.len()].node_id.clone(),
+        }
     }
 
     pub fn ready_dispatches(&self) -> Result<Vec<TaskDispatch>> {
@@ -294,13 +546,19 @@ impl CoordinatorOrchestrator {
         let current = self
             .assignments
             .get(&(task_id.stage_id, task_id.partition))?;
-        let current_index = self
-            .workers
-            .iter()
-            .position(|worker| worker.node_id == current.worker_id)?;
-        let next_index = (current_index + 1) % self.workers.len();
-        Some(self.workers[next_index].node_id.clone())
+        Some(self.next_worker(task_id.partition, &current.worker_id))
     }
+}
+
+fn ordinal(count: u32) -> String {
+    let suffix = match (count % 10, count % 100) {
+        (1, 11) | (2, 12) | (3, 13) => "th",
+        (1, _) => "st",
+        (2, _) => "nd",
+        (3, _) => "rd",
+        _ => "th",
+    };
+    format!("{count}{suffix}")
 }
 
 fn build_assignments(
@@ -595,6 +853,326 @@ mod tests {
                     .any(|cleanup| cleanup.locations.contains(&location))
             );
         }
+    }
+
+    fn run_stage(orchestrator: &mut CoordinatorOrchestrator, stage: u32) -> Vec<TaskDispatch> {
+        let dispatches = orchestrator
+            .ready_dispatches()
+            .unwrap()
+            .into_iter()
+            .filter(|dispatch| dispatch.assignment.task_id.stage_id == StageId(stage))
+            .collect::<Vec<_>>();
+        for dispatch in &dispatches {
+            orchestrator
+                .start_task(&dispatch.assignment.task_id)
+                .unwrap();
+            orchestrator
+                .finish_task(&dispatch.assignment.task_id)
+                .unwrap();
+        }
+        dispatches
+    }
+
+    fn retry(stage: u32, partition: usize, from: &str, to: &str, attempt: u32) -> StageRetry {
+        StageRetry {
+            stage,
+            partition,
+            from: from.into(),
+            to: to.into(),
+            attempt,
+        }
+    }
+
+    #[test]
+    fn losing_the_worker_holding_a_consumers_spool_reexecutes_its_producers() {
+        let mut orchestrator = CoordinatorOrchestrator::new(
+            graph(),
+            fragments(),
+            vec![worker("worker-a"), worker("worker-b")],
+        )
+        .unwrap();
+        run_stage(&mut orchestrator, 0);
+        let consumers = orchestrator.ready_dispatches().unwrap();
+        for consumer in &consumers {
+            orchestrator
+                .start_task(&consumer.assignment.task_id)
+                .unwrap();
+        }
+        assert_eq!(consumers[1].assignment.worker_id, "worker-b");
+        assert!(
+            consumers[1]
+                .exchange_inputs
+                .iter()
+                .all(|location| location.worker_uri == "http://worker-b:8080")
+        );
+
+        // worker-b goes: the spool of consumer partition 1 goes with it.
+        let recovery = orchestrator.lose_worker("worker-b").unwrap();
+        assert_eq!(recovery.worker, "worker-b");
+        assert_eq!(
+            recovery.moved_spools,
+            vec![SpoolMove {
+                stage: 1,
+                partition: 1,
+                from: "worker-b".into(),
+                to: "worker-a".into(),
+            }]
+        );
+        assert_eq!(
+            recovery.stage_retries,
+            vec![
+                retry(1, 1, "worker-b", "worker-a", 1),
+                retry(0, 0, "worker-a", "worker-a", 1),
+                retry(0, 1, "worker-b", "worker-a", 1),
+            ]
+        );
+        assert_eq!(recovery.reexecuted_stages, vec![0]);
+        assert_eq!(orchestrator.live_workers().len(), 1);
+        assert!(!orchestrator.is_current_attempt(&consumers[1].assignment.task_id));
+        // The consumer on worker-a holds its input: it keeps running.
+        assert!(orchestrator.is_current_attempt(&consumers[0].assignment.task_id));
+        // A second report of the same loss is nothing new.
+        assert!(orchestrator.lose_worker("worker-b").unwrap().is_empty());
+
+        // The producers run again first, on the survivor, as attempt 1,
+        // writing partition 1 to its new home.
+        let producers = orchestrator.ready_dispatches().unwrap();
+        assert_eq!(producers.len(), 2);
+        for producer in &producers {
+            assert_eq!(producer.assignment.task_id.stage_id, StageId(0));
+            assert_eq!(producer.assignment.task_id.attempt, 1);
+            assert_eq!(producer.assignment.worker_id, "worker-a");
+            assert!(
+                producer
+                    .exchange_outputs
+                    .iter()
+                    .all(|location| location.worker_uri == "http://worker-a:8080")
+            );
+        }
+        run_stage(&mut orchestrator, 0);
+        // Then the moved consumer, reading the new attempts where they are.
+        let retried = orchestrator.ready_dispatches().unwrap();
+        assert_eq!(retried.len(), 1);
+        let retried = &retried[0];
+        assert_eq!(retried.assignment.task_id.partition, 1);
+        assert_eq!(retried.assignment.task_id.attempt, 1);
+        assert_eq!(retried.assignment.worker_id, "worker-a");
+        assert_eq!(retried.exchange_inputs.len(), 2);
+        for location in &retried.exchange_inputs {
+            assert_eq!(location.producer.attempt, 1);
+            assert_eq!(location.output_partition, 1);
+            assert_eq!(location.worker_uri, "http://worker-a:8080");
+        }
+        orchestrator
+            .start_task(&retried.assignment.task_id)
+            .unwrap();
+        orchestrator
+            .finish_task(&retried.assignment.task_id)
+            .unwrap();
+        orchestrator
+            .finish_task(&consumers[0].assignment.task_id)
+            .unwrap();
+        assert!(orchestrator.is_finished());
+        let cleanup = orchestrator.drain_exchange_cleanup().unwrap();
+        assert_eq!(cleanup.len(), 1);
+        assert!(
+            cleanup[0]
+                .locations
+                .iter()
+                .all(|location| location.producer.attempt == 1
+                    && location.worker_uri == "http://worker-a:8080")
+        );
+    }
+
+    #[test]
+    fn losing_a_worker_while_producers_run_supersedes_every_producer_attempt() {
+        let mut orchestrator = CoordinatorOrchestrator::new(
+            graph(),
+            fragments(),
+            vec![worker("worker-a"), worker("worker-b")],
+        )
+        .unwrap();
+        let producers = orchestrator.ready_dispatches().unwrap();
+        for producer in &producers {
+            orchestrator
+                .start_task(&producer.assignment.task_id)
+                .unwrap();
+        }
+        let recovery = orchestrator.lose_worker("worker-b").unwrap();
+        // Partition 1 ran on the lost worker; partition 0 was writing to
+        // it. Both run again, and the one that was on worker-a is stale
+        // whatever it reports.
+        assert_eq!(
+            recovery.stage_retries,
+            vec![
+                retry(0, 1, "worker-b", "worker-a", 1),
+                retry(0, 0, "worker-a", "worker-a", 1),
+            ]
+        );
+        assert!(!orchestrator.is_current_attempt(&producers[0].assignment.task_id));
+        assert!(
+            orchestrator
+                .finish_task(&producers[0].assignment.task_id)
+                .is_err()
+        );
+        run_stage(&mut orchestrator, 0);
+        let consumers = orchestrator.ready_dispatches().unwrap();
+        assert_eq!(consumers.len(), 2);
+        assert!(
+            consumers
+                .iter()
+                .all(|consumer| consumer.assignment.worker_id == "worker-a")
+        );
+        for consumer in &consumers {
+            assert!(
+                consumer
+                    .exchange_inputs
+                    .iter()
+                    .all(|location| location.producer.attempt == 1
+                        && location.worker_uri == "http://worker-a:8080")
+            );
+        }
+        run_stage(&mut orchestrator, 1);
+        assert!(orchestrator.is_finished());
+    }
+
+    #[test]
+    fn a_stage_reexecuted_beyond_the_limit_fails_the_query_naming_worker_and_stage() {
+        let mut orchestrator = CoordinatorOrchestrator::new(
+            graph(),
+            fragments(),
+            vec![worker("worker-a"), worker("worker-b"), worker("worker-c")],
+        )
+        .unwrap();
+        orchestrator.set_stage_retry_limit(1);
+        run_stage(&mut orchestrator, 0);
+        let recovery = orchestrator.lose_worker("worker-b").unwrap();
+        assert_eq!(recovery.reexecuted_stages, vec![0]);
+        run_stage(&mut orchestrator, 0);
+        let error = orchestrator
+            .lose_worker("worker-a")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("worker 'worker-a'"), "{error}");
+        assert!(error.contains("stage 0"), "{error}");
+        assert!(error.contains("KAVEON_STAGE_RETRY_LIMIT=1"), "{error}");
+        assert!(orchestrator.is_terminal());
+        assert!(!orchestrator.is_finished());
+
+        // Losing the last worker fails as well.
+        let mut lone =
+            CoordinatorOrchestrator::new(graph(), fragments(), vec![worker("worker-a")]).unwrap();
+        assert!(lone.lose_worker("worker-a").is_err());
+        assert!(lone.is_terminal());
+    }
+
+    #[test]
+    fn a_reexecuted_stage_whose_inputs_were_released_reexecutes_its_producers_too() {
+        let mut deep = graph();
+        deep.root_stage = StageId(2);
+        deep.stages.push(stage(2, 1));
+        deep.exchanges.push(ExchangeDescriptor {
+            id: ExchangeId("exchange-1-2".into()),
+            source_stage: StageId(1),
+            target_stage: StageId(2),
+            partitioning: Partitioning::Single,
+        });
+        let mut fragments = fragments();
+        fragments.insert(
+            StageId(2),
+            ExecutableFragment {
+                version: EXECUTABLE_FRAGMENT_VERSION,
+                stage_id: StageId(2),
+                root: FragmentNodeId(0),
+                nodes: vec![FragmentNode {
+                    id: FragmentNodeId(0),
+                    inputs: Vec::new(),
+                    operator: FragmentOperator::ExchangeInput(kaveon_core::ExchangeInput {
+                        exchange_id: ExchangeId("exchange-1-2".into()),
+                    }),
+                }],
+            },
+        );
+        let mut orchestrator = CoordinatorOrchestrator::new(
+            deep,
+            fragments,
+            vec![worker("worker-a"), worker("worker-b")],
+        )
+        .unwrap();
+        run_stage(&mut orchestrator, 0);
+        run_stage(&mut orchestrator, 1);
+        // Stage 1 finished: its inputs from stage 0 were released.
+        assert_eq!(orchestrator.drain_exchange_cleanup().unwrap().len(), 1);
+        let root = orchestrator.ready_dispatches().unwrap().remove(0);
+        assert_eq!(root.assignment.worker_id, "worker-a");
+        orchestrator.start_task(&root.assignment.task_id).unwrap();
+
+        let recovery = orchestrator.lose_worker("worker-a").unwrap();
+        assert_eq!(recovery.reexecuted_stages, vec![1, 0]);
+        assert_eq!(
+            recovery
+                .moved_spools
+                .iter()
+                .map(|moved| (moved.stage, moved.partition))
+                .collect::<Vec<_>>(),
+            vec![(1, 0), (2, 0)]
+        );
+        assert_eq!(recovery.stage_retries.len(), 5);
+        assert!(
+            recovery
+                .stage_retries
+                .iter()
+                .all(|retry| retry.to == "worker-b" && retry.attempt == 1)
+        );
+        run_stage(&mut orchestrator, 0);
+        // Stage 1's inputs are cleaned again once it finishes again.
+        run_stage(&mut orchestrator, 1);
+        let cleanup = orchestrator.drain_exchange_cleanup().unwrap();
+        assert_eq!(cleanup.len(), 1);
+        assert_eq!(cleanup[0].exchange_id, ExchangeId("exchange-0-1".into()));
+        assert!(
+            cleanup[0]
+                .locations
+                .iter()
+                .all(|location| location.producer.attempt == 1
+                    && location.worker_uri == "http://worker-b:8080")
+        );
+        let root = orchestrator.ready_dispatches().unwrap().remove(0);
+        assert_eq!(root.assignment.task_id.attempt, 1);
+        assert_eq!(root.assignment.worker_id, "worker-b");
+        assert!(
+            root.exchange_inputs
+                .iter()
+                .all(|location| location.producer.attempt == 1)
+        );
+        orchestrator.start_task(&root.assignment.task_id).unwrap();
+        orchestrator.finish_task(&root.assignment.task_id).unwrap();
+        assert!(orchestrator.is_finished());
+    }
+
+    #[test]
+    fn a_coordinator_relayed_exchange_loses_no_spool_with_a_worker() {
+        let mut orchestrator = CoordinatorOrchestrator::new(
+            graph(),
+            fragments(),
+            vec![worker("worker-a"), worker("worker-b")],
+        )
+        .unwrap();
+        orchestrator.set_exchange_store_uri("http://coordinator:8080".into());
+        run_stage(&mut orchestrator, 0);
+        let consumers = orchestrator.ready_dispatches().unwrap();
+        for consumer in &consumers {
+            orchestrator
+                .start_task(&consumer.assignment.task_id)
+                .unwrap();
+        }
+        let recovery = orchestrator.lose_worker("worker-b").unwrap();
+        assert!(recovery.moved_spools.is_empty());
+        assert!(recovery.reexecuted_stages.is_empty());
+        assert_eq!(
+            recovery.stage_retries,
+            vec![retry(1, 1, "worker-b", "worker-a", 1)]
+        );
     }
 
     #[test]

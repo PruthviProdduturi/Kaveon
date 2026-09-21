@@ -31,6 +31,20 @@ pub struct ExchangeCleanupIntent {
 struct TaskSlot {
     assignment: TaskAssignment,
     status: TaskStatus,
+    /// Attempts of this slot that failed on their own; a re-execution after
+    /// a worker loss takes an attempt number but not a failure.
+    failures: u32,
+}
+
+/// What a superseded slot was doing when a worker loss replaced its attempt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SupersededState {
+    /// Not yet started: only its worker changed, the attempt stays.
+    Pending,
+    /// In flight: the attempt in flight is stale and its outcome is ignored.
+    Running,
+    /// Done, but its output must be produced again.
+    Finished,
 }
 
 #[derive(Debug)]
@@ -81,7 +95,14 @@ impl StageRuntime {
                 worker_id: None,
                 failure: None,
             };
-            tasks.insert(key, TaskSlot { assignment, status });
+            tasks.insert(
+                key,
+                TaskSlot {
+                    assignment,
+                    status,
+                    failures: 0,
+                },
+            );
         }
         for (stage_id, task_count) in &task_counts {
             let assigned = tasks
@@ -164,8 +185,9 @@ impl StageRuntime {
             require_task_state(&slot.status, TaskState::Running, "fail")?;
             slot.status.state = TaskState::Failed;
             slot.status.failure = Some(failure);
+            slot.failures = slot.failures.saturating_add(1);
             let failed_status = slot.status.clone();
-            let retry = if next_attempt < max_task_attempts {
+            let retry = if slot.failures < max_task_attempts {
                 let mut retry = slot.assignment.clone();
                 retry.task_id.attempt = next_attempt;
                 if let Some(worker) = retry_worker {
@@ -202,6 +224,85 @@ impl StageRuntime {
             }
         }
         self.queue_all_exchange_cleanup();
+    }
+
+    /// Replace a slot's attempt after a worker loss: a finished or running
+    /// attempt is superseded by a pending one on `worker` with the next
+    /// attempt number (a running one is left to its fate; its outcome is
+    /// stale), a pending one only moves to `worker`. The slot's stage is
+    /// open again, and if it had finished, the cleanup of its input
+    /// exchanges may be emitted again once it finishes anew. Returns the
+    /// state the slot was in and the assignment now current.
+    pub fn supersede_task(
+        &mut self,
+        stage_id: StageId,
+        partition: usize,
+        worker: String,
+        reason: &str,
+    ) -> Result<(SupersededState, TaskAssignment)> {
+        let stage_was_finished = self.stage_state(stage_id) == Some(StageState::Finished);
+        let slot = self.tasks.get_mut(&(stage_id, partition)).ok_or_else(|| {
+            KaveonError::Execution(format!(
+                "unknown task slot: stage {} partition {partition}",
+                stage_id.0
+            ))
+        })?;
+        let was = match slot.status.state {
+            TaskState::Pending => SupersededState::Pending,
+            TaskState::Running => SupersededState::Running,
+            TaskState::Finished => SupersededState::Finished,
+            TaskState::Failed | TaskState::Canceled => {
+                return Err(KaveonError::Execution(format!(
+                    "cannot supersede task {} in state {:?}",
+                    slot.status.task_id, slot.status.state
+                )));
+            }
+        };
+        let mut next = slot.assignment.clone();
+        next.worker_id = worker;
+        if was != SupersededState::Pending {
+            next.task_id.attempt = next.task_id.attempt.saturating_add(1);
+            let mut superseded = slot.status.clone();
+            superseded.state = TaskState::Failed;
+            superseded.failure = Some(reason.to_owned());
+            self.task_history.push(superseded);
+        }
+        slot.assignment = next.clone();
+        slot.status = TaskStatus {
+            task_id: next.task_id.clone(),
+            state: TaskState::Pending,
+            worker_id: None,
+            failure: None,
+        };
+        self.stages.insert(stage_id, StageState::Running);
+        if stage_was_finished {
+            let inputs = self
+                .graph
+                .exchanges
+                .iter()
+                .filter(|exchange| exchange.target_stage == stage_id)
+                .map(|exchange| exchange.id.clone())
+                .collect::<Vec<_>>();
+            for exchange_id in inputs {
+                self.cleanup_emitted.remove(&exchange_id);
+            }
+        }
+        Ok((was, next))
+    }
+
+    /// Whether `task_id` is the attempt the slot currently stands on; an
+    /// older attempt's outcome is stale and must be ignored.
+    pub fn is_current_attempt(&self, task_id: &TaskId) -> bool {
+        self.tasks
+            .get(&task_key(task_id))
+            .is_some_and(|slot| slot.status.task_id == *task_id)
+    }
+
+    /// The assignment each slot currently stands on, with its state.
+    pub fn slots(&self) -> impl Iterator<Item = (&TaskAssignment, TaskState)> {
+        self.tasks
+            .values()
+            .map(|slot| (&slot.assignment, slot.status.state))
     }
 
     pub fn stage_state(&self, stage_id: StageId) -> Option<StageState> {
@@ -500,6 +601,87 @@ mod tests {
         );
         runtime.cancel();
         assert!(runtime.drain_cleanup_intents().is_empty());
+    }
+
+    #[test]
+    fn a_superseded_attempt_takes_a_number_but_not_a_failure() {
+        let mut runtime = StageRuntime::with_max_task_attempts(graph(), assignments(), 2).unwrap();
+        for task in runtime.ready_tasks() {
+            runtime.start_task(&task.task_id).unwrap();
+            runtime.finish_task(&task.task_id).unwrap();
+        }
+        assert_eq!(runtime.stage_state(StageId(0)), Some(StageState::Finished));
+        let root = runtime.ready_tasks().remove(0);
+        runtime.start_task(&root.task_id).unwrap();
+
+        // The finished producer runs again as attempt 1; the running root
+        // is superseded by attempt 1 and its own outcome is stale.
+        let (was, next) = runtime
+            .supersede_task(StageId(0), 1, "worker-x".into(), "worker lost")
+            .unwrap();
+        assert_eq!(was, SupersededState::Finished);
+        assert_eq!(next.task_id.attempt, 1);
+        assert_eq!(next.worker_id, "worker-x");
+        assert_eq!(runtime.stage_state(StageId(0)), Some(StageState::Running));
+        assert!(
+            runtime
+                .ready_tasks()
+                .iter()
+                .any(|task| task.task_id == next.task_id)
+        );
+        let (was, root_next) = runtime
+            .supersede_task(StageId(1), 0, "worker-x".into(), "worker lost")
+            .unwrap();
+        assert_eq!(was, SupersededState::Running);
+        assert!(!runtime.is_current_attempt(&root.task_id));
+        assert!(runtime.is_current_attempt(&root_next.task_id));
+        assert!(runtime.finish_task(&root.task_id).is_err());
+        assert_eq!(runtime.task_history().len(), 2);
+        // A pending slot only moves.
+        let (was, moved) = runtime
+            .supersede_task(StageId(1), 0, "worker-y".into(), "worker lost")
+            .unwrap();
+        assert_eq!(was, SupersededState::Pending);
+        assert_eq!(moved.task_id.attempt, 1);
+        assert_eq!(moved.worker_id, "worker-y");
+
+        // Attempt 1 of the producer still has its full failure budget: it
+        // may fail once (attempt 2) before the stage fails.
+        runtime.start_task(&next.task_id).unwrap();
+        let retry = runtime
+            .fail_task(&next.task_id, "pressure", None)
+            .unwrap()
+            .expect("one failure is within the budget of two");
+        assert_eq!(retry.task_id.attempt, 2);
+        runtime.start_task(&retry.task_id).unwrap();
+        assert!(
+            runtime
+                .fail_task(&retry.task_id, "pressure", None)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(runtime.stage_state(StageId(0)), Some(StageState::Failed));
+    }
+
+    #[test]
+    fn a_reopened_stage_emits_its_input_cleanup_again_when_it_finishes_again() {
+        let mut runtime = StageRuntime::new(graph(), assignments()).unwrap();
+        for task in runtime.ready_tasks() {
+            runtime.start_task(&task.task_id).unwrap();
+            runtime.finish_task(&task.task_id).unwrap();
+        }
+        let root = runtime.ready_tasks().remove(0);
+        runtime.start_task(&root.task_id).unwrap();
+        runtime.finish_task(&root.task_id).unwrap();
+        assert_eq!(runtime.drain_cleanup_intents().len(), 1);
+        let (_, next) = runtime
+            .supersede_task(StageId(1), 0, "worker-x".into(), "worker lost")
+            .unwrap();
+        assert!(!runtime.is_finished());
+        runtime.start_task(&next.task_id).unwrap();
+        runtime.finish_task(&next.task_id).unwrap();
+        assert!(runtime.is_finished());
+        assert_eq!(runtime.drain_cleanup_intents().len(), 1);
     }
 
     #[test]

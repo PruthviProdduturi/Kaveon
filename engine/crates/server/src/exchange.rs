@@ -1081,6 +1081,50 @@ mod tests {
         }
     }
 
+    fn chunk_for(identity: ExchangeIdentity) -> ExchangeChunk {
+        ExchangeChunk {
+            identity,
+            chunk_index: 0,
+            chunk_count: 1,
+            payload: Bytes::from_static(b"stale"),
+        }
+    }
+
+    #[test]
+    fn a_chunk_of_a_superseded_attempt_never_answers_the_current_attempt() {
+        // A producer re-executed after a worker loss runs as the next
+        // attempt; the attempt is part of the identity, so what the old
+        // attempt uploads late lands under its own key and is never what
+        // the consumer, fetching the new attempt, receives.
+        let stale = identity();
+        let mut current = identity();
+        current.task_id.attempt = stale.task_id.attempt + 1;
+        let store = ExchangeStore::default();
+        store.insert(chunk_for(stale.clone())).unwrap();
+        assert!(matches!(
+            store.get(&current),
+            Err(ExchangeError::ExchangeNotFound)
+        ));
+        assert_ne!(
+            exchange_url("http://w", &stale),
+            exchange_url("http://w", &current)
+        );
+        let root =
+            std::env::temp_dir().join(format!("kaveon-stale-attempt-{}", uuid::Uuid::new_v4()));
+        let disk = crate::disk_exchange::DiskExchangeStore::new(&root, 1 << 20).unwrap();
+        disk.insert(chunk_for(stale.clone())).unwrap();
+        assert!(disk.body(&stale).unwrap().is_some());
+        assert!(disk.body(&current).unwrap().is_none());
+        // A process that starts over the same spool root serves nothing of
+        // what the process before it held: a returning worker's old spools
+        // are not served.
+        let returned = crate::disk_exchange::DiskExchangeStore::new(&root, 1 << 20).unwrap();
+        assert!(returned.body(&stale).unwrap().is_none());
+        drop(disk);
+        drop(returned);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[tokio::test]
     async fn streamed_output_cuts_open_chunks_and_reassembles_to_the_same_batches() {
         // Batches written one at a time leave as 128-byte chunks with an

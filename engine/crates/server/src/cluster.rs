@@ -8,6 +8,12 @@ use crate::config::ServerConfig;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 const NODE_EXPIRY: Duration = Duration::from_secs(30);
+/// A worker whose last heartbeat is older than this many intervals has
+/// lapsed: with a probe of its `/v1/node` that does not answer, the
+/// coordinator treats it as lost (`ClusterState::heartbeat_lapsed`).
+const WORKER_LOSS_MISSED_HEARTBEATS: u32 = 2;
+/// How long the coordinator gives a lost-worker probe.
+pub const WORKER_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const KIBIBYTE_BYTES: u64 = 1024;
 const MAX_CATALOG_REPLICA_BYTES: usize = 16 * 1024 * 1024;
 
@@ -132,6 +138,19 @@ impl ClusterState {
     pub fn remove_stale_workers(&mut self) {
         let cutoff = now_epoch().saturating_sub(NODE_EXPIRY.as_secs());
         self.workers.retain(|_, w| w.last_heartbeat >= cutoff);
+    }
+
+    /// Whether `node_id` has missed `WORKER_LOSS_MISSED_HEARTBEATS`
+    /// heartbeats — or is no longer registered at all. The loss rule a
+    /// running query applies is: a connection to the worker refused or
+    /// reset, or a lapsed heartbeat together with a probe that does not
+    /// answer; a worker's own task error is never a loss.
+    pub fn heartbeat_lapsed(&self, node_id: &str) -> bool {
+        let Some(worker) = self.workers.get(node_id) else {
+            return true;
+        };
+        let lapse = HEARTBEAT_INTERVAL.as_secs() * u64::from(WORKER_LOSS_MISSED_HEARTBEATS);
+        worker.last_heartbeat.saturating_add(lapse) < now_epoch()
     }
 
     pub fn active_worker_count(&self) -> usize {
