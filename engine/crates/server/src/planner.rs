@@ -2,8 +2,9 @@ use kaveon_core::{
     AggregateFunction, AggregateMode, AggregateSpec, BatchOperator, BatchSource, CatalogManager,
     DataFormat, EXECUTABLE_FRAGMENT_VERSION, ExchangeDescriptor, ExchangeId, ExchangeInput,
     ExchangeOutput, ExecutableFragment, Expr, FragmentNode, FragmentNodeId, FragmentOperator,
-    JoinSpec, JoinType as FragmentJoinType, KaveonError, NamedExpr, Partitioning, QueryMemoryPool,
-    Result, ScanSpec, ScanTable, SortSpec, StageFragment, StageGraph, StageId, TableReference,
+    JoinSpec, JoinType as FragmentJoinType, KaveonError, ListingDigest, NamedExpr, Partitioning,
+    QueryMemoryPool, Result, ScanAssignment, ScanFile, ScanListing, ScanSpec, ScanTable, SortSpec,
+    StageFragment, StageGraph, StageId, TableReference,
 };
 use kaveon_exec::aggregate::{AggExpr, AggFunc};
 use kaveon_exec::filter::FilterOperator;
@@ -30,18 +31,55 @@ use std::sync::Arc;
 /// Delta version each scan reads, and the listing each directory Parquet
 /// table was analyzed at. A scan of a pinned source reads exactly what the
 /// statistics that shaped the plan were taken from, whatever lands in the
-/// table meanwhile. The Delta version travels to the workers in the
-/// fragment; the directory listing is pinned on the coordinator only (the
-/// fragment carries the location, and every task lists it under the same
-/// deterministic rule).
+/// table meanwhile. The Delta version and the directory listing both
+/// travel to the workers in the fragment: the pinned listing, pruned and
+/// skipped, is what the fragment builder assigns to the scan partitions
+/// and serialises (`ScanSpec::listing`), so every task reads the files
+/// the coordinator read.
 #[derive(Clone, Debug, Default)]
 pub struct SourcePins {
     pub delta_versions: BTreeMap<String, u64>,
     pub parquet_directories: BTreeMap<String, Arc<DirectoryListing>>,
+    /// The whole directory each pinned listing was taken from — its
+    /// digest and file count before pruning and skipping — for a task
+    /// that must list the location itself to check it against. Absent
+    /// when the pinned listing is the whole directory.
+    pub parquet_directory_sources: BTreeMap<String, ListingDigest>,
     /// Files of a pinned directory listing the table's statistics proved
     /// empty of matches, already left out of the listing: reported on the
     /// coordinator-local scan as skipped (considered, never opened).
     pub files_skipped: BTreeMap<String, u64>,
+}
+
+/// Default of `KAVEON_FRAGMENT_LISTING_MAX_FILES`.
+pub const DEFAULT_FRAGMENT_LISTING_MAX_FILES: usize = 10_000;
+
+/// What shapes the executable fragments beyond the plan.
+#[derive(Clone, Debug)]
+pub struct FragmentBuildOptions {
+    /// A directory listing of more files than this travels to the tasks
+    /// as its digest alone: each task lists the location itself and holds
+    /// its listing to the digest (`KAVEON_FRAGMENT_LISTING_MAX_FILES`,
+    /// default 10,000).
+    pub listing_max_files: usize,
+}
+
+impl FragmentBuildOptions {
+    pub fn from_environment() -> Self {
+        Self {
+            listing_max_files: std::env::var("KAVEON_FRAGMENT_LISTING_MAX_FILES")
+                .ok()
+                .and_then(|value| value.trim().parse::<usize>().ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(DEFAULT_FRAGMENT_LISTING_MAX_FILES),
+        }
+    }
+}
+
+impl Default for FragmentBuildOptions {
+    fn default() -> Self {
+        Self::from_environment()
+    }
 }
 
 const GROUPED_AGGREGATE_STATE_KEY_COLUMN: &str = "group_keys";
@@ -216,8 +254,7 @@ pub fn build_executable_fragments_with_delta_versions(
         worker_count,
         &SourcePins {
             delta_versions: analyzed_delta_versions.clone(),
-            parquet_directories: BTreeMap::new(),
-            files_skipped: BTreeMap::new(),
+            ..SourcePins::default()
         },
     )
 }
@@ -229,6 +266,24 @@ pub fn build_executable_fragments_with_pins(
     worker_count: usize,
     pins: &SourcePins,
 ) -> Result<BTreeMap<StageId, ExecutableFragment>> {
+    build_executable_fragments_with_options(
+        query_id,
+        plan,
+        catalog,
+        worker_count,
+        pins,
+        &FragmentBuildOptions::default(),
+    )
+}
+
+pub fn build_executable_fragments_with_options(
+    query_id: impl Into<String>,
+    plan: &LogicalPlan,
+    catalog: &CatalogManager,
+    worker_count: usize,
+    pins: &SourcePins,
+    options: &FragmentBuildOptions,
+) -> Result<BTreeMap<StageId, ExecutableFragment>> {
     let graph = build_stage_graph(query_id, plan, worker_count)?;
     let mut builder = ExecutableFragmentBuilder {
         graph: &graph,
@@ -239,6 +294,10 @@ pub fn build_executable_fragments_with_pins(
         // this builder. A catalog replacement therefore cannot redirect a pin.
         delta_versions: pins.delta_versions.clone(),
         iceberg_snapshots: BTreeMap::new(),
+        parquet_directories: pins.parquet_directories.clone(),
+        parquet_directory_sources: pins.parquet_directory_sources.clone(),
+        files_skipped: pins.files_skipped.clone(),
+        listing_max_files: options.listing_max_files,
     };
     let root = builder.build(plan)?;
     if root != graph.root_stage || builder.fragments.len() != graph.stages.len() {
@@ -287,15 +346,125 @@ struct ExecutableFragmentBuilder<'a> {
     next_stage: u32,
     delta_versions: BTreeMap<String, u64>,
     iceberg_snapshots: BTreeMap<String, i64>,
+    /// The listing each directory Parquet table is read at: planning's
+    /// pin, or the directory listed here once, the way a Delta version
+    /// not pinned is resolved here once.
+    parquet_directories: BTreeMap<String, Arc<DirectoryListing>>,
+    parquet_directory_sources: BTreeMap<String, ListingDigest>,
+    files_skipped: BTreeMap<String, u64>,
+    listing_max_files: usize,
 }
 
 impl ExecutableFragmentBuilder<'_> {
+    /// The listing a directory Parquet table's tasks read, assigned to the
+    /// scan partitions of the stage about to be added: `None` when the
+    /// location is one file or one object.
+    fn scan_listing(
+        &mut self,
+        source_uri: &str,
+        catalog_schema: &arrow::datatypes::SchemaRef,
+    ) -> Result<Option<ScanListing>> {
+        let listing = match self.parquet_directories.get(source_uri) {
+            Some(listing) => Arc::clone(listing),
+            None => match kaveon_storage::parquet_listing_at(source_uri)? {
+                Some(listing) => {
+                    self.parquet_directories
+                        .insert(source_uri.to_owned(), Arc::clone(&listing));
+                    listing
+                }
+                None => return Ok(None),
+            },
+        };
+        let source = self
+            .parquet_directory_sources
+            .get(source_uri)
+            .cloned()
+            .unwrap_or_else(|| listing.digest());
+        let partition_columns =
+            kaveon_storage::PartitionLayout::of(&listing, Some(catalog_schema))?.columns;
+        let files_skipped = self.files_skipped.get(source_uri).copied().unwrap_or(0);
+        let files_pruned_by_partition = source
+            .files
+            .saturating_sub(files_skipped)
+            .saturating_sub(listing.files.len() as u64);
+        let task_count = self
+            .graph
+            .stages
+            .iter()
+            .find(|stage| stage.id == StageId(self.next_stage))
+            .map_or(1, |stage| stage.task_count.max(1));
+        let assignment = if listing.files.is_empty() || listing.files.len() > self.listing_max_files
+        {
+            None
+        } else {
+            let sizes = listing.sizes();
+            let assignments = kaveon_storage::assign_files_to_partitions(&sizes, task_count);
+            // The split files are the same for every partition; their
+            // footers are read once for the row-group count each task's
+            // share is cut from.
+            let split = assignments
+                .first()
+                .map(|assignment| assignment.split.clone())
+                .unwrap_or_default();
+            let counts = kaveon_storage::directory_row_group_counts(source_uri, &listing, &split)?;
+            let row_group_counts = split
+                .iter()
+                .copied()
+                .zip(counts)
+                .collect::<BTreeMap<_, _>>();
+            let scan_file = |index: usize, row_groups: Option<Vec<usize>>| {
+                let file = &listing.files[index];
+                ScanFile {
+                    path: file.path.to_string(),
+                    size: file.size,
+                    partition_values: file.partition_values.clone(),
+                    row_groups,
+                }
+            };
+            let partitions = assignments
+                .iter()
+                .enumerate()
+                .map(|(partition, assignment)| {
+                    assignment
+                        .files()
+                        .into_iter()
+                        .filter_map(|(index, split)| {
+                            if !split {
+                                return Some(scan_file(index, None));
+                            }
+                            let groups = (0..row_group_counts.get(&index).copied().unwrap_or(0))
+                                .filter(|group| group % task_count == partition)
+                                .collect::<Vec<_>>();
+                            (!groups.is_empty()).then(|| scan_file(index, Some(groups)))
+                        })
+                        .collect()
+                })
+                .collect();
+            Some(ScanAssignment {
+                first: scan_file(0, None),
+                partitions,
+            })
+        };
+        Ok(Some(ScanListing {
+            source,
+            partition_columns,
+            files_pruned_by_partition,
+            files_skipped,
+            assignment,
+        }))
+    }
+
     fn build(&mut self, plan: &LogicalPlan) -> Result<StageId> {
         match plan {
             LogicalPlan::Scan { table, columns, .. } => {
                 let reference = TableReference::parse(table);
                 let resolved = self.catalog.resolve_table(&reference)?;
                 let source_uri = resolved.full_path();
+                let listing = if resolved.table.format == DataFormat::Parquet {
+                    self.scan_listing(&source_uri, &resolved.table.arrow_schema)?
+                } else {
+                    None
+                };
                 let delta_version = if resolved.table.format == DataFormat::Delta {
                     if let Some(version) = self.delta_versions.get(&source_uri) {
                         Some(*version)
@@ -343,6 +512,7 @@ impl ExecutableFragmentBuilder<'_> {
                     },
                     projection: columns.clone().unwrap_or_default(),
                     predicate: None,
+                    listing,
                 };
                 Ok(self.add_fragment(FragmentDraft::leaf(FragmentOperator::Scan(scan))))
             }
@@ -3300,9 +3470,8 @@ mod tests {
         assert_eq!(listing.files.len(), 3);
         write("part-3.parquet", vec![21]);
         let pinned = SourcePins {
-            delta_versions: BTreeMap::new(),
             parquet_directories: BTreeMap::from([(source.clone(), listing)]),
-            files_skipped: BTreeMap::new(),
+            ..SourcePins::default()
         };
         let pool = QueryMemoryPool::new("directory", 64 * 1024 * 1024).unwrap();
         let mut at_pin = plan_query_with_pins(&plan, &fixture.catalog, &pool, &pinned).unwrap();
@@ -3479,9 +3648,8 @@ mod tests {
         );
         let plan = optimized("SELECT id FROM sales WHERE dt = '2026-09-02'");
         let pins = SourcePins {
-            delta_versions: BTreeMap::new(),
             parquet_directories: BTreeMap::from([(source.clone(), Arc::new(pinned))]),
-            files_skipped: BTreeMap::new(),
+            ..SourcePins::default()
         };
         let pool = QueryMemoryPool::new("partitioned", 64 * 1024 * 1024).unwrap();
         let mut at_pin = plan_query_with_pins(&plan, &fixture.catalog, &pool, &pins).unwrap();

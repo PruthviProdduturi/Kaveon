@@ -228,9 +228,8 @@ partition would then carry more than a quarter over its fair share, the
 largest whole file is split by row group across every partition instead
 (the row-group modulo a single-file table has always used) and the rest are
 placed again. The assignment is a pure function of the listing and the
-partition count, so every task of a query derives the same one from the same
-listing. Each file is read through the per-object reader with its own
-identity-pinned footer cache, row-group pruning, projection and decoder
+partition count. Each file is read through the per-object reader with its
+own identity-pinned footer cache, row-group pruning, projection and decoder
 lanes; `files_considered` counts the files a partition was assigned and
 `files_opened` the files it opened, and the listing time is reported as the
 scan's snapshot time.
@@ -241,14 +240,48 @@ the listing (path, size, ETag or version per file; modification time for
 local files). The listing that planning analyzed is pinned for that query on
 the coordinator (`SourcePins`), the way Delta versions are, so the
 coordinator-local scan reads the files the statistics came from even if a
-file lands meanwhile. Workers of a distributed query list the location
-themselves under the same deterministic rule: the executable fragment names
-the location and carries no listing (its wire format is unchanged), so a
-file that lands between two tasks' listings is a window the fragment does
-not yet close; carrying the listing in the fragment belongs to the split
-assignment workstream. A local data directory (`KAVEON_DATA_DIR`) registers
+file lands meanwhile. A local data directory (`KAVEON_DATA_DIR`) registers
 each child directory of Parquet files without a `_delta_log` as a Parquet
 table, alongside `*.parquet` files and Delta directories.
+
+**The listing travels with the plan.** A distributed query's tasks do not
+list the directory: the executable fragment's scan carries the
+coordinator's listing (`ScanSpec.listing`, wire format version 6), and a
+task reads exactly what it is handed. The fragment builder takes the
+listing planning pinned — pruned by partition values and skipped by the
+table's statistics — or lists the directory itself once when planning
+took no statistics for it (the way an unpinned Delta version is resolved
+there), types the partition columns as the coordinator's catalog does,
+runs the size assignment once for every scan partition of the stage and
+serialises, per partition, the files it reads whole and, for a file split
+across the partitions, the row groups it reads (the split files' footers
+are read once on the coordinator for their row-group counts); a partition
+that would receive no row group of a split file is not given the file.
+The first kept file travels beside them as the schema every task checks
+its files against. A worker with the listing lists nothing: it builds the
+layout from the carried columns, folds the predicate over each file only
+for the residual its reader runs, opens its files and reads the carried
+row groups (`AssignedFiles`, `FileSlice::RowGroups`). So a file that lands
+between the coordinator's listing and a task's start is read by no task,
+every task of a retry reads the same files, and the files the coordinator's
+statistics skipped are skipped on every node — the task's scan telemetry
+carries its share of `files_pruned_by_partition` and `files_skipped`
+(dealt round-robin, so the tasks sum to the coordinator's counts). A
+version-5 fragment from an older coordinator carries no listing and its
+tasks list the location as before; the worker accepts both versions.
+
+*Size guard.* A listing of more files than `KAVEON_FRAGMENT_LISTING_MAX_FILES`
+(default 10,000; the pruned, skipped listing counts) travels as its digest
+alone — the whole directory's, before pruning — and the tasks list the
+location themselves, prune by partition values as before (the statistics'
+file skipping does not reach them) and hold their listing to the digest.
+A task whose listing digests differently fails with
+`directory '…' lists N files on this node where the coordinator listed M
+when the query was planned (K more)`; the orchestrator retries the task
+under its existing retry policy, every attempt lists the changed directory
+and fails the same way, and the statement fails with that message. The
+rule: a query is answered over the listing it was planned over or not at
+all; re-run the statement to plan over the directory as it is now.
 
 ## Table statistics
 

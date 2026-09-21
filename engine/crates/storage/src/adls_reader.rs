@@ -795,6 +795,9 @@ pub struct AdlsParquetReader {
     columns: Option<Vec<String>>,
     predicate: Option<StoragePredicate>,
     partition: Option<ScanPartition>,
+    /// The row groups to read, decided by the caller (a directory scan's
+    /// assignment); the partition, if set, applies among them.
+    row_groups: Option<Vec<usize>>,
     /// The schema the catalog serves for the table, for the partition
     /// columns of a directory table at this location.
     catalog_schema: Option<SchemaRef>,
@@ -869,6 +872,7 @@ impl AdlsParquetReader {
             columns: None,
             predicate: None,
             partition: None,
+            row_groups: None,
             catalog_schema: None,
             metrics: None,
             late_materialisation: LateMaterialisation::from_environment(),
@@ -941,6 +945,13 @@ impl AdlsParquetReader {
 
     pub fn with_partition(mut self, partition: ScanPartition) -> Self {
         self.partition = Some(partition);
+        self
+    }
+
+    /// Read only these row groups (the footer's statistics, Bloom filters
+    /// and the partition still prune among them).
+    pub fn with_row_groups(mut self, row_groups: Vec<usize>) -> Self {
+        self.row_groups = Some(row_groups);
         self
     }
 
@@ -1095,6 +1106,9 @@ impl AdlsParquetReader {
         } else {
             (0..metadata.metadata().num_row_groups()).collect()
         };
+        if let Some(assigned) = &self.row_groups {
+            row_groups.retain(|ordinal| assigned.contains(ordinal));
+        }
         if let Some(partition) = self.partition {
             row_groups.retain(|ordinal| partition.contains(*ordinal));
         }

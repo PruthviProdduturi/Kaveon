@@ -3,10 +3,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    DataFormat, ExchangeId, Expr, KaveonError, Partitioning, Result, StageId, StoragePredicate,
+    DataFormat, ExchangeId, Expr, KaveonError, PartitionColumn, Partitioning, Result, StageId,
+    StoragePredicate,
 };
 
-pub const EXECUTABLE_FRAGMENT_VERSION: u16 = 5;
+/// The wire format a coordinator sends. Version 6 added the directory
+/// listing to a scan (`ScanSpec::listing`); version 5 carried the location
+/// alone. A worker accepts both: a version-5 fragment from an older
+/// coordinator reads as version 6 with no listing, and its tasks list the
+/// location themselves as they always did.
+pub const EXECUTABLE_FRAGMENT_VERSION: u16 = 6;
+/// The oldest wire format a worker still executes.
+pub const OLDEST_EXECUTABLE_FRAGMENT_VERSION: u16 = 5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct FragmentNodeId(pub u32);
@@ -76,6 +84,71 @@ pub struct ScanSpec {
     pub table: ScanTable,
     pub projection: Vec<String>,
     pub predicate: Option<StoragePredicate>,
+    /// The coordinator's listing of a directory Parquet table, so every
+    /// task reads the files planning read — pruned by partition values and
+    /// skipped by the table's statistics — and lists nothing. `None` for a
+    /// single object, a Delta or Iceberg table, and every fragment of an
+    /// older coordinator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listing: Option<ScanListing>,
+}
+
+/// The listing of a directory table as the coordinator took it for the
+/// query, with the files each scan partition reads already decided.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScanListing {
+    /// The whole directory as the coordinator listed it — before pruning
+    /// and skipping — for a task that must list the location itself to
+    /// check it lists the same files.
+    pub source: ListingDigest,
+    /// The partition columns the files' paths carry, typed as the
+    /// coordinator typed them (inferred, or declared by the table).
+    pub partition_columns: Vec<PartitionColumn>,
+    /// Files the coordinator's pruning left out by their partition values.
+    pub files_pruned_by_partition: u64,
+    /// Files the coordinator's statistics proved empty of matches.
+    pub files_skipped: u64,
+    /// What each scan partition reads; `None` when the listing exceeded
+    /// the fragment listing limit (or kept no file) and the tasks list the
+    /// location themselves under the digest in `source`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignment: Option<ScanAssignment>,
+}
+
+/// The coordinator's assignment of a listing's files to the scan
+/// partitions of a stage.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScanAssignment {
+    /// The first kept file of the listing: its footer is the schema every
+    /// task checks its files against, and what a task with nothing to read
+    /// presents.
+    pub first: ScanFile,
+    /// `partitions[p]` is what scan partition `p` reads, in listing order.
+    pub partitions: Vec<Vec<ScanFile>>,
+}
+
+/// A listing's identity: a digest over every file's path, size and store
+/// identity, and how many files it holds.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListingDigest {
+    pub sha256: String,
+    pub files: u64,
+}
+
+/// One file a scan partition reads of a directory table.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScanFile {
+    /// The path as the listing carries it: relative to the directory for
+    /// a local table, store-relative for an object store.
+    pub path: String,
+    pub size: u64,
+    /// The `key=value` values of the path, one per partition column;
+    /// `None` is the NULL partition.
+    pub partition_values: Vec<Option<String>>,
+    /// The row groups this partition reads of a file the coordinator split
+    /// across the partitions; `None` reads the file whole.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub row_groups: Option<Vec<usize>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -205,7 +278,9 @@ pub struct JoinSpec {
 
 impl ExecutableFragment {
     pub fn validate(&self) -> Result<()> {
-        if self.version != EXECUTABLE_FRAGMENT_VERSION {
+        if !(OLDEST_EXECUTABLE_FRAGMENT_VERSION..=EXECUTABLE_FRAGMENT_VERSION)
+            .contains(&self.version)
+        {
             return invalid(format!(
                 "unsupported executable fragment version {}",
                 self.version
@@ -367,6 +442,12 @@ impl ScanSpec {
                 return invalid(format!("duplicate projected column {column}"));
             }
         }
+        if let Some(listing) = &self.listing {
+            if self.format != DataFormat::Parquet {
+                return invalid("only a Parquet scan carries a directory listing");
+            }
+            listing.validate()?;
+        }
         Ok(())
     }
 }
@@ -429,6 +510,45 @@ fn validate_name(value: &str, context: &str) -> Result<()> {
     Ok(())
 }
 
+impl ScanListing {
+    fn validate(&self) -> Result<()> {
+        validate_name(&self.source.sha256, "listing digest")?;
+        let Some(assignment) = &self.assignment else {
+            return Ok(());
+        };
+        if assignment.partitions.is_empty() {
+            return invalid("a scan assignment must cover at least one partition");
+        }
+        self.validate_file(&assignment.first, None)?;
+        for (partition, files) in assignment.partitions.iter().enumerate() {
+            for file in files {
+                self.validate_file(file, Some(partition))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_file(&self, file: &ScanFile, partition: Option<usize>) -> Result<()> {
+        validate_name(&file.path, "listed file path")?;
+        if file.partition_values.len() != self.partition_columns.len() {
+            return invalid(format!(
+                "listed file '{}' carries {} partition values for {} partition columns",
+                file.path,
+                file.partition_values.len(),
+                self.partition_columns.len()
+            ));
+        }
+        if file.row_groups.as_ref().is_some_and(Vec::is_empty) {
+            return invalid(format!(
+                "listed file '{}' is split for partition {} with no row groups",
+                file.path,
+                partition.unwrap_or_default()
+            ));
+        }
+        Ok(())
+    }
+}
+
 fn invalid<T>(message: impl Into<String>) -> Result<T> {
     Err(KaveonError::Execution(message.into()))
 }
@@ -453,6 +573,7 @@ mod tests {
                 },
                 projection: vec!["id".into()],
                 predicate: None,
+                listing: None,
             }),
         }
     }
@@ -488,6 +609,111 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("version")
+        );
+    }
+
+    /// A fragment from a coordinator of the previous version carries no
+    /// listing and still executes: the field reads as absent.
+    #[test]
+    fn reads_the_previous_version_without_a_listing() {
+        let mut fragment = valid_fragment();
+        fragment.version = OLDEST_EXECUTABLE_FRAGMENT_VERSION;
+        let mut json = serde_json::to_value(&fragment).unwrap();
+        let scan = &mut json["nodes"][0]["operator"];
+        assert!(scan.get("listing").is_none());
+        scan.as_object_mut().unwrap().remove("listing");
+        let decoded: ExecutableFragment = serde_json::from_value(json).unwrap();
+        decoded.validate().unwrap();
+        assert_eq!(decoded, fragment);
+        match &decoded.nodes[0].operator {
+            FragmentOperator::Scan(scan) => assert!(scan.listing.is_none()),
+            other => panic!("{other:?}"),
+        }
+        let mut older = fragment;
+        older.version = OLDEST_EXECUTABLE_FRAGMENT_VERSION - 1;
+        assert!(
+            older
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("version")
+        );
+    }
+
+    /// A listing travels as it was serialised, and one whose files do not
+    /// fit its partition columns is refused.
+    #[test]
+    fn validates_the_listing() {
+        let listing = ScanListing {
+            source: ListingDigest {
+                sha256: "ab".repeat(32),
+                files: 3,
+            },
+            partition_columns: vec![
+                PartitionColumn::new("dt", arrow::datatypes::DataType::Date32).unwrap(),
+            ],
+            files_pruned_by_partition: 1,
+            files_skipped: 0,
+            assignment: Some(ScanAssignment {
+                first: ScanFile {
+                    path: "dt=2026-01-01/a.parquet".into(),
+                    size: 10,
+                    partition_values: vec![Some("2026-01-01".into())],
+                    row_groups: None,
+                },
+                partitions: vec![
+                    vec![ScanFile {
+                        path: "dt=2026-01-01/a.parquet".into(),
+                        size: 10,
+                        partition_values: vec![Some("2026-01-01".into())],
+                        row_groups: None,
+                    }],
+                    vec![ScanFile {
+                        path: "dt=2026-01-02/b.parquet".into(),
+                        size: 10,
+                        partition_values: vec![Some("2026-01-02".into())],
+                        row_groups: Some(vec![1, 3]),
+                    }],
+                ],
+            }),
+        };
+        let mut fragment = valid_fragment();
+        let FragmentOperator::Scan(scan) = &mut fragment.nodes[0].operator else {
+            unreachable!()
+        };
+        scan.listing = Some(listing.clone());
+        fragment.validate().unwrap();
+        let json = serde_json::to_string(&fragment).unwrap();
+        let decoded: ExecutableFragment = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, fragment);
+
+        let FragmentOperator::Scan(scan) = &mut fragment.nodes[0].operator else {
+            unreachable!()
+        };
+        let mut wrong = listing.clone();
+        wrong.assignment.as_mut().unwrap().partitions[0][0]
+            .partition_values
+            .clear();
+        scan.listing = Some(wrong);
+        assert!(
+            fragment
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("partition values")
+        );
+        let FragmentOperator::Scan(scan) = &mut fragment.nodes[0].operator else {
+            unreachable!()
+        };
+        let mut empty = listing;
+        empty.assignment.as_mut().unwrap().partitions[1][0].row_groups = Some(Vec::new());
+        scan.listing = Some(empty);
+        assert!(
+            fragment
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("no row groups")
         );
     }
 

@@ -43,11 +43,19 @@
 //! an exactly-folded operand, since the negation of a weaker predicate is
 //! not implied. Files are spread over the scan partitions after pruning.
 //!
-//! The listing is not carried to the workers of a distributed query: the
-//! executable fragment names the location and every task lists it under the
-//! same deterministic rule (the fragment wire format is unchanged). The
-//! coordinator pins its own listing per query through the planning source
-//! pins, the way it pins Delta versions.
+//! **The listing travels with the plan.** The coordinator lists a
+//! directory once per query, prunes and skips, runs the assignment once
+//! for every scan partition and carries the outcome in the executable
+//! fragment (`ScanListing`): each task reads exactly its assigned files —
+//! whole, or the row groups of a split file — through [`AssignedFiles`],
+//! and lists nothing, so a file landing between the coordinator's listing
+//! and the tasks' is read by no task, and a file the coordinator's
+//! statistics skipped is skipped everywhere. A listing over the fragment
+//! listing limit travels as its digest alone: the task lists the location
+//! itself and [`verify_listing`] refuses a listing whose digest differs
+//! from the coordinator's, naming the file counts. The coordinator pins
+//! its own listing per query through the planning source pins, the way
+//! it pins Delta versions.
 
 use std::sync::{Arc, mpsc};
 
@@ -59,10 +67,11 @@ use arrow::{
 };
 use futures::{StreamExt, TryStreamExt, stream};
 use kaveon_core::{
-    BatchSource, CompareOp, PartitionColumn, Result, ScalarValue, StoragePredicate,
+    BatchSource, CompareOp, ListingDigest, PartitionColumn, Result, ScalarValue, StoragePredicate,
     predicate::date_literal_days,
 };
 use object_store::{ObjectStore, path::Path};
+use sha2::{Digest, Sha256};
 
 use crate::{
     FooterProfile, ParquetFileMetadata, ScanMetrics, ScanPartition,
@@ -139,6 +148,30 @@ impl DirectoryListing {
             lines.push('\n');
         }
         lines
+    }
+
+    /// The listing's identity for the executable fragment: SHA-256 over
+    /// every file's path, size and store identity (its ETag or version; a
+    /// local file's modification time), and the file count. Two listings
+    /// of the same files in the same state digest alike wherever they are
+    /// taken.
+    pub fn digest(&self) -> ListingDigest {
+        let mut lines = String::new();
+        for file in &self.files {
+            lines.push_str(file.path.as_ref());
+            lines.push('\t');
+            lines.push_str(&file.size.to_string());
+            lines.push('\t');
+            match file.identity() {
+                Some(identity) => lines.push_str(identity),
+                None => lines.push_str(&file.modified_nanos.to_string()),
+            }
+            lines.push('\n');
+        }
+        ListingDigest {
+            sha256: format!("{:x}", Sha256::digest(lines.as_bytes())),
+            files: self.files.len() as u64,
+        }
     }
 
     /// The listing reduced to the files at `indices` (ascending, as listed);
@@ -925,15 +958,36 @@ pub fn assign_files(sizes: &[u64], partition: ScanPartition) -> FileAssignment {
     FileAssignment { whole, split }
 }
 
+/// The assignment of every scan partition of a `count`-task stage, in
+/// partition order: what the coordinator decides once and carries in the
+/// fragment.
+pub fn assign_files_to_partitions(sizes: &[u64], count: usize) -> Vec<FileAssignment> {
+    (0..count)
+        .map(|index| assign_files(sizes, ScanPartition { index, count }))
+        .collect()
+}
+
+/// How a scan partition reads one file of a directory table.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FileSlice {
+    /// Every row group.
+    Whole,
+    /// The row groups the scan partition owns, `ordinal % count == index`,
+    /// exactly as for a single-file table.
+    Partitioned,
+    /// The row groups the coordinator assigned to this task.
+    RowGroups(Vec<usize>),
+}
+
 /// The files a scan partition opens after pruning, in listing order, each
-/// with its residual predicate and whether the partition applies inside it.
+/// with its residual predicate and how the partition reads it.
 /// `assign_files` runs over the kept files' sizes alone, so the pruned bytes
 /// never weigh on the balance.
 pub fn assign_kept_files(
     pruned: &PrunedFiles,
     sizes: &[u64],
     partition: Option<ScanPartition>,
-) -> Vec<(KeptFile, bool)> {
+) -> Vec<(KeptFile, FileSlice)> {
     let assignment = match partition {
         Some(partition) => assign_files(
             &pruned
@@ -951,8 +1005,162 @@ pub fn assign_kept_files(
     assignment
         .files()
         .into_iter()
-        .map(|(position, split)| (pruned.kept[position].clone(), split))
+        .map(|(position, split)| {
+            let slice = if split {
+                FileSlice::Partitioned
+            } else {
+                FileSlice::Whole
+            };
+            (pruned.kept[position].clone(), slice)
+        })
         .collect()
+}
+
+/// One file of a task's assignment, as the fragment carries it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AssignedFile {
+    /// The path as the listing carried it: directory-relative for a local
+    /// table, store-relative for an object store.
+    pub path: String,
+    pub size: u64,
+    pub partition_values: Vec<Option<String>>,
+    /// The row groups this task reads of a file split across the tasks;
+    /// `None` reads it whole.
+    pub row_groups: Option<Vec<usize>>,
+}
+
+/// One task's files of a directory table, decided by the coordinator and
+/// carried in the executable fragment: the task reads exactly these and
+/// lists nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AssignedFiles {
+    /// The listing's partition columns, typed as the coordinator typed
+    /// them; they stand, whatever this node's catalog says.
+    pub partition_columns: Vec<PartitionColumn>,
+    /// The first kept file of the coordinator's listing: its footer is the
+    /// schema every file is checked against, and what a task with nothing
+    /// to read presents.
+    pub first: AssignedFile,
+    /// This task's files, in listing order.
+    pub files: Vec<AssignedFile>,
+    /// This task's share of the files the coordinator pruned by partition
+    /// values and skipped from the table's statistics, for its telemetry.
+    pub files_pruned_by_partition: u64,
+    pub files_skipped: u64,
+}
+
+impl AssignedFiles {
+    /// The assignment as a listing under `root` — `first` at index 0
+    /// (whether or not this task reads it), then the task's files — for
+    /// the partition layout and the pruning fold.
+    pub(crate) fn listing_under(&self, root: &Path) -> Result<DirectoryListing> {
+        let file = |assigned: &AssignedFile| -> Result<DirectoryFile> {
+            Ok(DirectoryFile {
+                path: Path::parse(&assigned.path).map_err(storage_error)?,
+                size: assigned.size,
+                e_tag: None,
+                version: None,
+                modified_nanos: 0,
+                partition_values: assigned.partition_values.clone(),
+            })
+        };
+        let mut files = vec![file(&self.first)?];
+        for assigned in &self.files {
+            if assigned.path != self.first.path || assigned.row_groups.is_some() {
+                files.push(file(assigned)?);
+            }
+        }
+        Ok(DirectoryListing {
+            root: root.clone(),
+            files,
+            partitions: self.partition_columns.clone(),
+        })
+    }
+
+    /// Whether this task reads `first` itself.
+    fn reads_first(&self) -> bool {
+        self.files
+            .iter()
+            .any(|file| file.path == self.first.path && file.row_groups.is_none())
+    }
+}
+
+/// What a directory scan reads, decided the same way for the local and the
+/// object-store reader: the listing it reads at, the typed layout, the
+/// partition's files with their residuals and slices, and the file whose
+/// footer supplies the schema.
+pub(crate) struct DirectoryScan {
+    pub listing: Arc<DirectoryListing>,
+    pub layout: PartitionLayout,
+    /// This partition's files in listing order.
+    pub files: Vec<(KeptFile, FileSlice)>,
+    /// Listing index of the file whose footer is the schema.
+    pub first: usize,
+}
+
+/// Decide a directory scan. With `assigned` the coordinator's assignment
+/// stands: the listing is the assignment's, the layout is typed by the
+/// carried columns, the predicate is folded over each file only for the
+/// residual its reader runs, and the slices are the carried row groups.
+/// Without it the listing is pruned and spread over the partitions here.
+/// The counts go to `metrics` either way.
+pub(crate) fn plan_directory_scan(
+    listing: Arc<DirectoryListing>,
+    catalog_schema: Option<&SchemaRef>,
+    predicate: Option<&StoragePredicate>,
+    partition: Option<ScanPartition>,
+    assigned: Option<&AssignedFiles>,
+    metrics: &ScanMetrics,
+) -> Result<DirectoryScan> {
+    let Some(assigned) = assigned else {
+        let layout = PartitionLayout::of(&listing, catalog_schema)?;
+        let pruned = prune_files(&layout, predicate);
+        metrics.files_pruned_by_partition(pruned.pruned_share(partition));
+        let files = assign_kept_files(&pruned, &layout.sizes, partition);
+        metrics.files_considered(files.len() as u64);
+        let first = pruned.kept.first().map_or(0, |file| file.index);
+        return Ok(DirectoryScan {
+            listing,
+            layout,
+            files,
+            first,
+        });
+    };
+    let layout = PartitionLayout::of(&listing, None)?;
+    let pruned = prune_files(&layout, predicate);
+    // Index 0 is `first`, read for its footer; it is among this task's
+    // files only when the assignment says so.
+    let files = pruned
+        .kept
+        .iter()
+        .filter(|kept| kept.index > 0 || assigned.reads_first())
+        .map(|kept| {
+            let path = listing.files[kept.index].path.as_ref();
+            let slice = assigned
+                .files
+                .iter()
+                .find(|file| file.path == path)
+                .and_then(|file| file.row_groups.clone())
+                .map_or(FileSlice::Whole, FileSlice::RowGroups);
+            (kept.clone(), slice)
+        })
+        .collect::<Vec<_>>();
+    let pruned_here = pruned
+        .pruned
+        .iter()
+        .filter(|index| **index > 0 || assigned.reads_first())
+        .count() as u64;
+    metrics.files_pruned_by_partition(assigned.files_pruned_by_partition + pruned_here);
+    if assigned.files_skipped > 0 {
+        metrics.files_skipped(assigned.files_skipped);
+    }
+    metrics.files_considered(files.len() as u64);
+    Ok(DirectoryScan {
+        listing,
+        layout,
+        files,
+        first: 0,
+    })
 }
 
 /// The schema every file of a directory table must present: the first file's
@@ -1195,6 +1403,95 @@ pub fn directory_row_count(
     reader.metadata().map(|metadata| metadata.row_count)
 }
 
+/// The row-group count of each file at `indices` of `listing`, from its
+/// footer — a local directory or an `s3://`/`abfss://` prefix, the object
+/// footers through the per-object cache — for the coordinator to slice the
+/// files it splits across the tasks of a stage.
+pub fn directory_row_group_counts(
+    location: &str,
+    listing: &DirectoryListing,
+    indices: &[usize],
+) -> Result<Vec<usize>> {
+    if location.starts_with("s3://") || location.starts_with("abfss://") {
+        let reader = ObjectDirectoryReader::from_uri(location)?;
+        let files = indices
+            .iter()
+            .map(|index| listing.files[*index].clone())
+            .collect::<Vec<_>>();
+        return crate::delta_snapshot::blocking(async move {
+            let metrics = ScanMetrics::default();
+            let mut counts = Vec::with_capacity(files.len());
+            for file in &files {
+                let opened = reader
+                    .file_reader(file, None, None)
+                    .open(reader.store(), &metrics)
+                    .await
+                    .map_err(kaveon_core::KaveonError::from)?;
+                counts.push(opened.row_group_count());
+            }
+            Ok(counts)
+        });
+    }
+    let root = std::path::Path::new(location.strip_prefix("file://").unwrap_or(location));
+    indices
+        .iter()
+        .map(|index| {
+            crate::ParquetReader::new(root.join(listing.files[*index].path.as_ref()))
+                .metadata()
+                .map(|metadata| metadata.row_group_count)
+        })
+        .collect()
+}
+
+/// The listing of a Parquet location that is a directory of data files —
+/// a local directory or an `s3://`/`abfss://` prefix that holds no object
+/// — and `None` for a location that is one file or one object.
+pub fn parquet_listing_at(location: &str) -> Result<Option<Arc<DirectoryListing>>> {
+    if location.starts_with("s3://") || location.starts_with("abfss://") {
+        let reader = ObjectDirectoryReader::from_uri(location)?;
+        return crate::delta_snapshot::blocking(async move { reader.probe().await }).map(
+            |probed| match probed {
+                ParquetLocation::Object(_) => None,
+                ParquetLocation::Directory(listing) => Some(Arc::new(listing)),
+            },
+        );
+    }
+    let path = std::path::Path::new(location.strip_prefix("file://").unwrap_or(location));
+    if !path.is_dir() {
+        return Ok(None);
+    }
+    crate::parquet_reader::local_directory_listing(path).map(|listing| Some(Arc::new(listing)))
+}
+
+/// List `location` on this node and hold it to the coordinator's digest:
+/// the listing when it is the same set of files in the same state, else
+/// an error naming the two file counts. A task of a listing too large to
+/// travel reads at what it lists only when that is what planning listed.
+pub fn verify_listing(location: &str, expected: &ListingDigest) -> Result<Arc<DirectoryListing>> {
+    let listing = parquet_listing_at(location)?.ok_or_else(|| {
+        error(format!(
+            "location '{location}' was a directory of {} Parquet files when the query was \
+             planned and is not a directory now",
+            expected.files
+        ))
+    })?;
+    let actual = listing.digest();
+    if actual == *expected {
+        return Ok(listing);
+    }
+    Err(error(format!(
+        "directory '{location}' lists {} files on this node where the coordinator listed {} \
+         when the query was planned ({}); the directory changed after planning",
+        actual.files,
+        expected.files,
+        match actual.files.cmp(&expected.files) {
+            std::cmp::Ordering::Greater => format!("{} more", actual.files - expected.files),
+            std::cmp::Ordering::Less => format!("{} fewer", expected.files - actual.files),
+            std::cmp::Ordering::Equal => "the same count, other files or other versions".into(),
+        }
+    )))
+}
+
 /// What a Parquet location holds.
 #[derive(Debug)]
 pub enum ParquetLocation {
@@ -1215,13 +1512,14 @@ pub struct ObjectDirectoryReader {
     predicate: Option<StoragePredicate>,
     partition: Option<ScanPartition>,
     catalog_schema: Option<SchemaRef>,
+    assigned: Option<Arc<AssignedFiles>>,
     metrics: ScanMetrics,
 }
 
 /// One file of a directory scan, ready to open.
 struct ScanFile {
     file: DirectoryFile,
-    split: bool,
+    slice: FileSlice,
     residual: Option<StoragePredicate>,
     values: Vec<PartitionValue>,
 }
@@ -1247,6 +1545,7 @@ impl ObjectDirectoryReader {
             predicate: None,
             partition: None,
             catalog_schema: None,
+            assigned: None,
             metrics: ScanMetrics::default(),
         }
     }
@@ -1283,6 +1582,13 @@ impl ObjectDirectoryReader {
     /// Read a listing already taken for this query instead of listing again.
     pub fn with_listing(mut self, listing: Arc<DirectoryListing>) -> Self {
         self.listing = Some(listing);
+        self
+    }
+    /// Read exactly the files the coordinator assigned to this task, at
+    /// the row groups it assigned, and list nothing; the partition, if
+    /// set, applies to nothing.
+    pub fn with_assigned_files(mut self, value: Arc<AssignedFiles>) -> Self {
+        self.assigned = Some(value);
         self
     }
     pub fn with_batch_size(mut self, value: usize) -> Self {
@@ -1323,10 +1629,14 @@ impl ObjectDirectoryReader {
         Arc::clone(&self.store)
     }
 
-    /// The pinned listing, or the directory listed now.
+    /// The pinned listing, the assignment's files, or the directory listed
+    /// now.
     pub async fn listing(&self) -> Result<Arc<DirectoryListing>> {
         if let Some(listing) = &self.listing {
             return Ok(Arc::clone(listing));
+        }
+        if let Some(assigned) = &self.assigned {
+            return assigned.listing_under(&self.root).map(Arc::new);
         }
         let started = std::time::Instant::now();
         let listing = list_parquet_directory(self.store.as_ref(), &self.root).await?;
@@ -1354,7 +1664,7 @@ impl ObjectDirectoryReader {
         }
     }
 
-    fn file_reader(
+    pub(crate) fn file_reader(
         &self,
         file: &DirectoryFile,
         columns: Option<&[String]>,
@@ -1506,10 +1816,16 @@ impl ObjectDirectoryReader {
         for scan in files {
             let mut reader =
                 self.file_reader(&scan.file, columns.file_columns(), scan.residual.as_ref());
-            if scan.split
-                && let Some(partition) = self.partition
-            {
-                reader = reader.with_partition(partition);
+            match scan.slice {
+                FileSlice::Whole => {}
+                FileSlice::Partitioned => {
+                    if let Some(partition) = self.partition {
+                        reader = reader.with_partition(partition);
+                    }
+                }
+                FileSlice::RowGroups(row_groups) => {
+                    reader = reader.with_row_groups(row_groups);
+                }
             }
             let opened = match reader.open(Arc::clone(&self.store), &self.metrics).await {
                 Ok(opened) => opened,
@@ -1566,13 +1882,20 @@ impl ObjectDirectoryReader {
                 self.root
             )));
         }
-        let layout = PartitionLayout::of(&listing, self.catalog_schema.as_ref())?;
-        let pruned = prune_files(&layout, self.predicate.as_ref());
-        self.metrics
-            .files_pruned_by_partition(pruned.pruned_share(self.partition));
-        let files = assign_kept_files(&pruned, &layout.sizes, self.partition);
-        self.metrics.files_considered(files.len() as u64);
-        let first = &listing.files[pruned.kept.first().map_or(0, |file| file.index)];
+        let DirectoryScan {
+            listing,
+            layout,
+            files,
+            first,
+        } = plan_directory_scan(
+            listing,
+            self.catalog_schema.as_ref(),
+            self.predicate.as_ref(),
+            self.partition,
+            self.assigned.as_deref(),
+            &self.metrics,
+        )?;
+        let first = &listing.files[first];
         let head = self
             .file_reader(first, None, None)
             .open(Arc::clone(&self.store), &self.metrics)
@@ -1595,7 +1918,7 @@ impl ObjectDirectoryReader {
         let first_path = first.path.clone();
         let store = Arc::clone(&self.store);
         let metrics = self.metrics.clone();
-        let files = stream::iter(files.into_iter().map(|(kept, split)| {
+        let files = stream::iter(files.into_iter().map(|(kept, slice)| {
             let file = listing.files[kept.index].clone();
             let values = layout.values[kept.index].clone();
             let reader = self.file_reader(&file, None, None);
@@ -1619,7 +1942,7 @@ impl ObjectDirectoryReader {
                 }
                 Ok::<_, kaveon_core::KaveonError>(ScanFile {
                     file,
-                    split,
+                    slice,
                     residual: kept.residual,
                     values,
                 })
@@ -2374,7 +2697,7 @@ mod tests {
         assert!(
             assigned
                 .iter()
-                .all(|files| files.iter().all(|(_, split)| !split))
+                .all(|files| files.iter().all(|(_, slice)| *slice == FileSlice::Whole))
         );
         let mut owned = assigned
             .iter()

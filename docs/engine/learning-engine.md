@@ -259,7 +259,7 @@ scan telemetry of the task and the query record (`storage/src/metrics.rs`,
 | Layer | Applies to | What is skipped | Metric |
 |---|---|---|---|
 | Hive partition pruning | Directory Parquet tables with `key=value` paths | The scan predicate folded over each file's path values under three-valued logic before any file is opened ([partition columns](storage-and-catalogs.md#partition-columns)) | `files_pruned_by_partition` |
-| File skipping by bounds | Directory Parquet tables on the coordinator-local path, from the current record's per-file bounds while `per_file_complete` holds and every listed file is on record (the pinned listing minus the proven-empty files, `kaveon_storage::skip_listing_files`, `planner::SourcePins`); Delta on every node, from the add actions' `stats` (`delta_reader.rs`); Iceberg on every node, from the manifests' `lower_bounds`/`upper_bounds`/`null_value_counts` by field id (`iceberg_reader.rs`, `with_predicate`) | Files whose recorded bounds cannot match, before any footer is read | `files_skipped` (against `files_considered`, `files_opened`) |
+| File skipping by bounds | Directory Parquet tables on both paths, from the current record's per-file bounds while `per_file_complete` holds and every listed file is on record (the pinned listing minus the proven-empty files, `kaveon_storage::skip_listing_files`, `planner::SourcePins`; the pruned listing travels to the workers in the fragment, [the listing travels with the plan](storage-and-catalogs.md#directory-parquet-tables)); Delta on every node, from the add actions' `stats` (`delta_reader.rs`); Iceberg on every node, from the manifests' `lower_bounds`/`upper_bounds`/`null_value_counts` by field id (`iceberg_reader.rs`, `with_predicate`) | Files whose recorded bounds cannot match, before any footer is read | `files_skipped` (against `files_considered`, `files_opened`) |
 | Row-group statistics | Every Parquet file, all three readers | Row groups whose column-chunk min/max exclude the predicate, including byte-array bounds a writer marked inexact | `row_groups_considered`, `row_groups_selected`, `row_groups_pruned` on the record |
 | Bloom filters | Row groups the statistics admitted, for `=`/`IN` under `AND`/`OR` on a column that carries a filter (`parquet_reader.rs`, `bloom_probes`, `bloom_can_match`; values hashed as the physical type stores them; INT96, fixed-length and decimal columns not probed) | Row groups whose filter does not know the value; the local reader reads the filter from the file, the object readers by one range request each | `row_groups_pruned_by_bloom`, `bloom_filters_read`, `bloom_filter_bytes_read` |
 | Page index and row filter (late materialisation) | The local reader always (page index loaded when every column chunk carries an offset index; parquet-rs cannot load a column index without one); the ADLS and object readers by `KAVEON_LATE_MATERIALISATION` | The predicate's columns are decoded first as a decoder row filter (`scan_predicate.rs`, `CompiledPredicate`, `RowFilterPlan`: one stage per top-level conjunct over only its columns), the rest of the projection only for the rows that survive, and the pages the selection never touches are not fetched | `row_filter_rows_examined`, `row_filter_rows_admitted`; `compressed_bytes_read` below `compressed_bytes_selected` by what was left unread |
@@ -278,11 +278,12 @@ literal pattern, `AND` (a conjunct with no storage form dropped), `OR`
 whole, `NOT` exact; the executor's filter above the scan is unchanged and
 remains the truth. Dictionary-encoded columns are carried as dictionaries
 end to end, so predicates, functions and group keys run once per
-dictionary value. Not yet: a distributed directory scan lists on each
-worker and does not carry the coordinator's pruned listing (the
-executable fragment names the location and no listing), so `files_skipped`
-by the record applies to the coordinator-local path; Iceberg row-group
-pruning inside the files read.
+dictionary value. A distributed directory scan reads the coordinator's
+pruned, skipped listing on every worker (the fragment carries it, assigned
+per task; a listing over `KAVEON_FRAGMENT_LISTING_MAX_FILES` travels as
+its digest and the tasks list and prune for themselves), so `files_skipped`
+holds on both paths. Not yet: Iceberg row-group pruning inside the files
+read.
 
 ## The layout
 

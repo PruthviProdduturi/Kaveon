@@ -91,9 +91,29 @@ pub(crate) fn execute_distributed(
 ) -> Result<Vec<RecordBatch>> {
     let graph = crate::planner::build_stage_graph(query, plan, workers)?;
     let fragments = crate::planner::build_executable_fragments(query, plan, manager, workers)?;
+    execute_fragments(&graph, &fragments, manager, pool).map(|run| run.batches)
+}
+
+/// What an in-process distributed run hands back: the root stage's rows
+/// and every task's scan metrics, in execution order.
+pub(crate) struct DistributedRun {
+    pub batches: Vec<RecordBatch>,
+    pub scan_metrics: Vec<kaveon_storage::ScanMetrics>,
+}
+
+/// [`execute_distributed`] over fragments already built — for a test that
+/// changes the table between planning and execution, or builds them under
+/// other options.
+pub(crate) fn execute_fragments(
+    graph: &kaveon_core::StageGraph,
+    fragments: &BTreeMap<StageId, kaveon_core::ExecutableFragment>,
+    manager: &CatalogManager,
+    pool: &QueryMemoryPool,
+) -> Result<DistributedRun> {
     let mut produced: HashMap<ExchangeId, Vec<ExchangeOutputBatches>> = HashMap::new();
     let mut done: Vec<StageId> = Vec::new();
     let mut results = Vec::new();
+    let mut scan_metrics = Vec::new();
     while done.len() < graph.stages.len() {
         let stage = graph
             .stages
@@ -163,10 +183,14 @@ pub(crate) fn execute_distributed(
             if stage.id == graph.root_stage {
                 results.extend(execution.result_batches);
             }
+            scan_metrics.extend(execution.scan_metrics);
         }
         done.push(stage.id);
     }
-    Ok(results)
+    Ok(DistributedRun {
+        batches: results,
+        scan_metrics,
+    })
 }
 
 /// (name, statement with {T} for the events table and {U} for users,
@@ -1109,6 +1133,289 @@ fn the_differential_sweep_matches_across_parquet_encodings_and_execution_paths()
     }
     let _ = std::fs::remove_dir_all(&directory);
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// A directory table of `id` files — one file per entry of `files`, each
+/// holding that many consecutive ids from where the previous ended, in
+/// row groups of 4 096 — registered as `lake.events.ids`.
+fn ids_directory_catalog(
+    directory: &std::path::Path,
+    files: &[usize],
+) -> (CatalogManager, Vec<i64>) {
+    let table = directory.join("ids");
+    std::fs::create_dir_all(&table).unwrap();
+    let mut next = 0_i64;
+    let mut all = Vec::new();
+    for (index, rows) in files.iter().enumerate() {
+        let ids = (next..next + *rows as i64).collect::<Vec<_>>();
+        next += *rows as i64;
+        all.extend(ids.iter().copied());
+        write(
+            &table,
+            &format!("part-{index:05}.parquet"),
+            &ids_batch(&ids),
+        );
+    }
+    let schema = kaveon_storage::ParquetReader::new(&table)
+        .metadata()
+        .unwrap()
+        .schema;
+    let mut catalog = MemoryCatalog::new(
+        "lake",
+        StorageType::Local {
+            base_path: PathBuf::from(directory),
+        },
+    )
+    .with_schema("events");
+    catalog
+        .register_table(
+            "events",
+            TableMeta {
+                name: "ids".to_owned(),
+                arrow_schema: schema,
+                location: "ids".to_owned(),
+                access: AccessPattern::Shortcut,
+                format: DataFormat::Parquet,
+            },
+        )
+        .unwrap();
+    let mut manager = CatalogManager::new("lake", "events");
+    manager.register_catalog(Box::new(catalog));
+    (manager, all)
+}
+
+fn ids_batch(ids: &[i64]) -> RecordBatch {
+    RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)])),
+        vec![Arc::new(Int64Array::from(ids.to_vec())) as ArrayRef],
+    )
+    .unwrap()
+}
+
+/// The scan listing the one scan fragment of `fragments` carries.
+fn scan_listing(
+    fragments: &BTreeMap<StageId, kaveon_core::ExecutableFragment>,
+) -> kaveon_core::ScanListing {
+    fragments
+        .values()
+        .flat_map(|fragment| &fragment.nodes)
+        .find_map(|node| match &node.operator {
+            kaveon_core::FragmentOperator::Scan(scan) => scan.listing.clone(),
+            _ => None,
+        })
+        .expect("the scan carries its listing")
+}
+
+fn ids_of(batches: &[RecordBatch]) -> Vec<i64> {
+    let mut ids = batches
+        .iter()
+        .flat_map(|batch| {
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+                .to_vec()
+        })
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    ids
+}
+
+/// The listing travels with the plan: the fragment carries the
+/// coordinator's listing assigned to the two scan partitions, every task
+/// reads exactly its files — a file added after planning is read by no
+/// task, and the three files are opened three times in all — and the
+/// rows are the planned table's. Without the listing (a fragment of the
+/// previous wire version) the tasks list for themselves and read the
+/// added file too.
+#[test]
+fn the_listing_travels_with_the_plan() {
+    let directory = std::env::temp_dir().join(format!("kaveon-listing-{}", uuid::Uuid::new_v4()));
+    let (manager, planned) = ids_directory_catalog(&directory, &[300, 300, 300]);
+    let pool = QueryMemoryPool::new("listing", 64 * 1024 * 1024).unwrap();
+    let statement = "SELECT id FROM ids WHERE id >= 0";
+    let plan = bound_plan(statement, &manager);
+    let graph = crate::planner::build_stage_graph("listing", &plan, 2).unwrap();
+    let fragments =
+        crate::planner::build_executable_fragments("listing", &plan, &manager, 2).unwrap();
+    let listing = scan_listing(&fragments);
+    assert_eq!(listing.source.files, 3);
+    assert_eq!(listing.files_pruned_by_partition, 0);
+    assert_eq!(listing.files_skipped, 0);
+    assert!(listing.partition_columns.is_empty());
+    let assignment = listing.assignment.as_ref().expect("the files are assigned");
+    assert_eq!(assignment.partitions.len(), 2);
+    assert_eq!(assignment.first.path, "part-00000.parquet");
+    let mut assigned = assignment
+        .partitions
+        .iter()
+        .flatten()
+        .map(|file| file.path.clone())
+        .collect::<Vec<_>>();
+    assigned.sort();
+    assert_eq!(
+        assigned,
+        [
+            "part-00000.parquet",
+            "part-00001.parquet",
+            "part-00002.parquet"
+        ],
+        "every file is read by exactly one task: {assignment:?}"
+    );
+    // Three equal files over two partitions: one is split by row group,
+    // and with one row group only one partition receives it.
+    assert!(
+        assignment
+            .partitions
+            .iter()
+            .flatten()
+            .all(|file| file.row_groups.as_ref().is_none_or(|groups| groups == &[0])),
+        "{assignment:?}"
+    );
+
+    // A file lands after planning.
+    write(
+        &directory.join("ids"),
+        "part-00003.parquet",
+        &ids_batch(&(900..1200).collect::<Vec<_>>()),
+    );
+    let run = execute_fragments(&graph, &fragments, &manager, &pool).unwrap();
+    assert_eq!(ids_of(&run.batches), planned);
+    let opened = run
+        .scan_metrics
+        .iter()
+        .map(|metrics| metrics.snapshot().files_opened)
+        .sum::<u64>();
+    assert_eq!(opened, 3, "each file once");
+    let considered = run
+        .scan_metrics
+        .iter()
+        .map(|metrics| metrics.snapshot().files_considered)
+        .sum::<u64>();
+    assert_eq!(considered, 3);
+
+    // The previous wire version: no listing, the tasks list now.
+    let older = fragments
+        .iter()
+        .map(|(stage, fragment)| {
+            let mut json = serde_json::to_value(fragment).unwrap();
+            json["version"] = serde_json::json!(kaveon_core::OLDEST_EXECUTABLE_FRAGMENT_VERSION);
+            for node in json["nodes"].as_array_mut().unwrap() {
+                if let Some(operator) = node["operator"].as_object_mut() {
+                    operator.remove("listing");
+                }
+            }
+            (*stage, serde_json::from_value(json).unwrap())
+        })
+        .collect::<BTreeMap<StageId, kaveon_core::ExecutableFragment>>();
+    assert!(scan_listing_absent(&older));
+    let run = execute_fragments(&graph, &older, &manager, &pool).unwrap();
+    assert_eq!(ids_of(&run.batches), (0..1200).collect::<Vec<_>>());
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+fn scan_listing_absent(fragments: &BTreeMap<StageId, kaveon_core::ExecutableFragment>) -> bool {
+    fragments
+        .values()
+        .flat_map(|fragment| &fragment.nodes)
+        .all(|node| match &node.operator {
+            kaveon_core::FragmentOperator::Scan(scan) => scan.listing.is_none(),
+            _ => true,
+        })
+}
+
+/// One large file beside two small ones is split by row group across the
+/// two partitions: the fragment carries each task's row groups, they are
+/// disjoint and together the whole file, and the rows come back once.
+#[test]
+fn a_split_file_travels_as_row_groups() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-listing-split-{}", uuid::Uuid::new_v4()));
+    let (manager, planned) = ids_directory_catalog(&directory, &[20_000, 100, 100]);
+    let pool = QueryMemoryPool::new("listing-split", 64 * 1024 * 1024).unwrap();
+    let plan = bound_plan("SELECT id FROM ids", &manager);
+    let graph = crate::planner::build_stage_graph("split", &plan, 2).unwrap();
+    let fragments =
+        crate::planner::build_executable_fragments("split", &plan, &manager, 2).unwrap();
+    let listing = scan_listing(&fragments);
+    let assignment = listing.assignment.as_ref().unwrap();
+    let large = |partition: usize| {
+        assignment.partitions[partition]
+            .iter()
+            .find(|file| file.path == "part-00000.parquet")
+            .and_then(|file| file.row_groups.clone())
+            .expect("the large file is split")
+    };
+    let (first, second) = (large(0), large(1));
+    assert_eq!(first, [0, 2, 4]);
+    assert_eq!(second, [1, 3]);
+    for partition in &assignment.partitions {
+        assert_eq!(partition.len(), 2, "{partition:?}");
+    }
+    let run = execute_fragments(&graph, &fragments, &manager, &pool).unwrap();
+    assert_eq!(ids_of(&run.batches), planned);
+    let opened = run
+        .scan_metrics
+        .iter()
+        .map(|metrics| metrics.snapshot().files_opened)
+        .sum::<u64>();
+    assert_eq!(opened, 4, "the split file is opened by both tasks");
+    let selected = run
+        .scan_metrics
+        .iter()
+        .map(|metrics| metrics.snapshot().row_groups_selected)
+        .sum::<u64>();
+    assert_eq!(selected, 7);
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// A listing over the fragment listing limit travels as its digest: each
+/// task lists the location itself and reads at that listing when it is
+/// the coordinator's; a file added after planning fails the task with the
+/// two counts.
+#[test]
+fn a_listing_over_the_limit_travels_as_its_digest() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-listing-digest-{}", uuid::Uuid::new_v4()));
+    let (manager, planned) = ids_directory_catalog(&directory, &[300, 300, 300]);
+    let pool = QueryMemoryPool::new("listing-digest", 64 * 1024 * 1024).unwrap();
+    let plan = bound_plan("SELECT id FROM ids WHERE id < 5000", &manager);
+    let graph = crate::planner::build_stage_graph("digest", &plan, 2).unwrap();
+    let fragments = crate::planner::build_executable_fragments_with_options(
+        "digest",
+        &plan,
+        &manager,
+        2,
+        &crate::planner::SourcePins::default(),
+        &crate::planner::FragmentBuildOptions {
+            listing_max_files: 2,
+        },
+    )
+    .unwrap();
+    let listing = scan_listing(&fragments);
+    assert!(listing.assignment.is_none());
+    assert_eq!(listing.source.files, 3);
+    assert_eq!(listing.source.sha256.len(), 64);
+    let run = execute_fragments(&graph, &fragments, &manager, &pool).unwrap();
+    assert_eq!(ids_of(&run.batches), planned);
+
+    write(
+        &directory.join("ids"),
+        "part-00003.parquet",
+        &ids_batch(&(900..1200).collect::<Vec<_>>()),
+    );
+    let error = execute_fragments(&graph, &fragments, &manager, &pool)
+        .err()
+        .expect("a changed listing fails the task")
+        .to_string();
+    assert!(
+        error.contains("lists 4 files on this node where the coordinator listed 3")
+            && error.contains("1 more"),
+        "{error}"
+    );
+    let _ = std::fs::remove_dir_all(&directory);
 }
 
 /// The events file as a one-table catalog for a targeted differential.
