@@ -114,7 +114,7 @@ def apply_and_reconcile(snapshot: DefinitionSnapshot) -> dict:
             raise RuntimeError(f"KaveonDB DLM definition {record.record_id} has an invalid revision")
         try:
             product_store.migration_transact([
-                product_store.ProductMutation("update" if target is not None else "create", "dlm_definition", record.record_id, record.document)
+                product_store.ProductMutation("update" if target is not None else "create", "dlm_definition", record.record_id, record.document, revision)
             ], record.owner_principal, "Admin")
         except HTTPException as error:
             resolved = product_store.migration_read(
