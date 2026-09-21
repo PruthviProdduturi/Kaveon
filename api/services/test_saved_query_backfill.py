@@ -101,7 +101,7 @@ class SavedQueryBackfillTests(unittest.TestCase):
             self.assertEqual(backfill.apply_and_reconcile(value)["reconciled"], 1)
         with patch.object(backfill.product_store, "read", return_value={"document": {}}), \
              patch.object(backfill.product_store, "transact") as transact:
-            with self.assertRaisesRegex(RuntimeError, "diverges"):
+            with self.assertRaisesRegex(RuntimeError, "invalid revision"):
                 backfill.apply_and_reconcile(value)
         transact.assert_not_called()
 

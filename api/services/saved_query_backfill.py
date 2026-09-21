@@ -126,18 +126,19 @@ def capture_snapshot() -> SavedQuerySnapshot:
 
 def apply_and_reconcile(snapshot: SavedQuerySnapshot) -> dict:
     validate_snapshot(snapshot)
-    created = already_present = 0
+    created = already_present = repaired = 0
     for record in snapshot.records:
         target = product_store.migration_read("saved_query", record.record_id,
                                     record.owner_principal, "Admin")
         if target is not None and target.get("document") == record.document:
             already_present += 1
             continue
-        if target is not None:
-            raise RuntimeError(f"KaveonDB saved query {record.record_id} diverges")
+        revision = target.get("revision") if target is not None else None
+        if target is not None and (type(revision) is not int or revision < 1):
+            raise RuntimeError(f"KaveonDB saved query {record.record_id} has an invalid revision")
         try:
             product_store.migration_transact([product_store.ProductMutation(
-                "create", "saved_query", record.record_id, record.document,
+                "update" if target is not None else "create", "saved_query", record.record_id, record.document, revision,
             )], record.owner_principal, "Admin")
         except HTTPException as error:
             resolved = product_store.migration_read("saved_query", record.record_id,
@@ -145,7 +146,8 @@ def apply_and_reconcile(snapshot: SavedQuerySnapshot) -> dict:
             if (error.status_code != 409 or resolved is None
                     or resolved.get("document") != record.document):
                 raise
-        created += 1
+        if target is None: created += 1
+        else: repaired += 1
     for record in snapshot.records:
         target = product_store.migration_read("saved_query", record.record_id,
                                     record.owner_principal, "Admin")
@@ -157,6 +159,7 @@ def apply_and_reconcile(snapshot: SavedQuerySnapshot) -> dict:
         "source_count": len(snapshot.records),
         "created": created,
         "already_present": already_present,
+        "repaired": repaired,
         "reconciled": len(snapshot.records),
         "snapshot_sha256": snapshot.snapshot_sha256,
     }

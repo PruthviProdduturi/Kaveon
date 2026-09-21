@@ -123,7 +123,7 @@ class DlmRunBackfillTests(unittest.TestCase):
         value = snapshot()
         with patch.object(backfill.product_store, "read", return_value={"document": {}}), \
              patch.object(backfill.product_store, "transact") as transact:
-            with self.assertRaisesRegex(RuntimeError, "diverges"):
+            with self.assertRaisesRegex(RuntimeError, "invalid revision"):
                 backfill.apply_and_reconcile(value)
         transact.assert_not_called()
         corrupt = backfill.RunSnapshot(17, "snap-2", value.records, "0" * 64)

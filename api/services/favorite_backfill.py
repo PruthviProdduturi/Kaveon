@@ -43,17 +43,19 @@ def capture_snapshot():
  records=tuple(sorted(records,key=lambda r:r.record_id));sid=sid or "empty"
  result=FavoriteSnapshot(int(watermark.get("watermark") or 0),sid,records,snapshot_digest(records,sid));validate_snapshot(result);return result
 def apply_and_reconcile(s):
- validate_snapshot(s);created=present=0
+ validate_snapshot(s);created=present=repaired=0
  for r in s.records:
   target=product_store.migration_read("favorite",r.record_id,r.owner_principal,"Admin")
   if target is not None and target.get("document")==r.document:present+=1;continue
-  if target is not None:raise RuntimeError(f"KaveonDB favorite {r.record_id} diverges")
-  try:product_store.migration_transact([product_store.ProductMutation("create","favorite",r.record_id,r.document)],r.owner_principal,"Admin")
+  revision=target.get("revision") if target is not None else None
+  if target is not None and (type(revision) is not int or revision<1):raise RuntimeError(f"KaveonDB favorite {r.record_id} has an invalid revision")
+  try:product_store.migration_transact([product_store.ProductMutation("update" if target is not None else "create","favorite",r.record_id,r.document,revision)],r.owner_principal,"Admin")
   except HTTPException as e:
    resolved=product_store.migration_read("favorite",r.record_id,r.owner_principal,"Admin")
    if e.status_code!=409 or resolved is None or resolved.get("document")!=r.document:raise
-  created+=1
+  if target is None:created+=1
+  else:repaired+=1
  for r in s.records:
   target=product_store.migration_read("favorite",r.record_id,r.owner_principal,"Admin")
   if target is None or target.get("document")!=r.document:raise RuntimeError(f"KaveonDB favorite {r.record_id} failed reconciliation")
- return {"family":"favorites","source_watermark":s.source_watermark,"target_snapshot_id":s.target_snapshot_id,"source_count":len(s.records),"created":created,"already_present":present,"reconciled":len(s.records),"snapshot_sha256":s.snapshot_sha256}
+ return {"family":"favorites","source_watermark":s.source_watermark,"target_snapshot_id":s.target_snapshot_id,"source_count":len(s.records),"created":created,"already_present":present,"repaired":repaired,"reconciled":len(s.records),"snapshot_sha256":s.snapshot_sha256}

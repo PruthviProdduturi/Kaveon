@@ -40,16 +40,18 @@ def capture_snapshot():
  if len(rows)>MAX_RECORDS:raise RuntimeError("query history snapshot exceeds its bound")
  records=tuple(sorted((Record(str(r["id"]),str(r.get("user_email") or ""),document(r,dataset_ids),canonical(document(r,dataset_ids))) for r in rows),key=lambda r:r.record_id));snapshot=Snapshot(int(wm.get("watermark") or 0),records,digest(records));validate(snapshot);return snapshot
 def apply_and_reconcile(snapshot):
- validate(snapshot);created=present=0
+ validate(snapshot);created=present=repaired=0
  for r in snapshot.records:
   target=product_store.migration_read("query_history",r.record_id,r.owner_principal,"Admin")
   if target is not None and target.get("document")==r.document:present+=1;continue
-  if target is not None:raise RuntimeError("KaveonDB query history diverges")
-  try:product_store.migration_transact([product_store.ProductMutation("create","query_history",r.record_id,r.document)],r.owner_principal,"Admin")
+  revision=target.get("revision") if target is not None else None
+  if target is not None and (type(revision) is not int or revision<1):raise RuntimeError("KaveonDB query history has an invalid revision")
+  try:product_store.migration_transact([product_store.ProductMutation("update" if target is not None else "create","query_history",r.record_id,r.document,revision)],r.owner_principal,"Admin")
   except HTTPException as error:
    target=product_store.migration_read("query_history",r.record_id,r.owner_principal,"Admin")
    if error.status_code!=409 or target is None or target.get("document")!=r.document:raise
-  created+=1
+  if target is None:created+=1
+  else:repaired+=1
  for r in snapshot.records:
   if (product_store.migration_read("query_history",r.record_id,r.owner_principal,"Admin") or {}).get("document")!=r.document:raise RuntimeError("query history reconciliation failed")
- return {"family":"query_history","source_watermark":snapshot.source_watermark,"source_count":len(snapshot.records),"created":created,"already_present":present,"reconciled":len(snapshot.records),"snapshot_sha256":snapshot.snapshot_sha256}
+ return {"family":"query_history","source_watermark":snapshot.source_watermark,"source_count":len(snapshot.records),"created":created,"already_present":present,"repaired":repaired,"reconciled":len(snapshot.records),"snapshot_sha256":snapshot.snapshot_sha256}

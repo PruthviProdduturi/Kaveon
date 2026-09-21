@@ -59,7 +59,7 @@ class DashboardBackfillTests(unittest.TestCase):
              patch.object(backfill.product_store,"transact",side_effect=HTTPException(409,"conflict")):
             self.assertEqual(backfill.apply_and_reconcile(value)["reconciled"],1)
         with patch.object(backfill.product_store,"read",return_value={"document":{}}),patch.object(backfill.product_store,"transact") as tx:
-            with self.assertRaisesRegex(RuntimeError,"diverges"): backfill.apply_and_reconcile(value)
+            with self.assertRaisesRegex(RuntimeError,"invalid revision"): backfill.apply_and_reconcile(value)
         tx.assert_not_called()
 
     def test_checkpoint_guard_tamper_and_post_commit_resume(self):
