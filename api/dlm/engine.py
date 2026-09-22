@@ -47,6 +47,7 @@ import dlm.engine_dialect as dialects
 import services.datasets as datasets_svc
 import dlm.hll as hll
 import dlm.curation as auto_curation
+import dlm.classes as classes
 
 logger = logging.getLogger(__name__)
 
@@ -2152,11 +2153,25 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
     note = " ".join(notes) or None
 
     # 5) trend detection — "trend over time" / "by year" → time-series line
-    is_trend = bool(re.search(r"\b(trend|over time|by year|by month|yearly|monthly|over the years)\b", question, re.I))
+    is_trend = bool(classes._TREND.search(question))
     time_group = None
     if is_trend and date_column and not group_col:
         time_group = date_column
         year = None  # don't filter by year when showing trend
+    month_period = f"{year}-{month:02d}" if (year and month) else None
+
+    # 6) which question class this is. A derived class — a period comparison, a
+    #    share, a ratio, a ranking inside each group, an existence count, or a
+    #    vague question answered against the spec's defaults — is composed below
+    #    from two or three base results rather than a SQL shape of its own.
+    derived_intent = classes.detect_derived(
+        question,
+        has_time=bool(date_column),
+        dimensions=[d.get("column_name") or d.get("name") for d in dims],
+        measures=[m.get("name") or m.get("metric_name") for m in metrics],
+        has_group=bool(group_col),
+        explicit_metric=bool(top_score > 0),
+        explicit_period=bool(year or relative_time or time_group))
 
     group_cols = _group_cols(group_col)
     metric_expr = (metric or {}).get("expression") or "COUNT(*)"
@@ -2179,17 +2194,35 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
         binding = _engine_binding(ds, native=_native())
     else:
         binding = None
-    month_window = _time_window(year, None, month) if (year and month) else None
-    relative_window = _time_window(None, relative_time) if relative_time else None
 
-    def _statement(dialect: dialects.Dialect, ranked: bool = True) -> str:
-        """The statement for the resolved slots in one dialect — what runs on
-        the live path and, for a context answer, what would have."""
+    # The slot set one statement answers. A derived class (a comparison, a
+    # share, a ratio) runs the same resolver twice with two of these rather
+    # than writing a second SQL shape, so every number in a composed answer
+    # comes from a statement with its own evidence.
+    base_slots: Dict[str, Any] = {
+        "metric": metric, "metric_name": metric_name, "metric_expr": metric_expr,
+        "group_cols": group_cols, "group_col": group_col, "time_group": time_group,
+        "filters": filters, "year": year, "month": month, "relative_time": relative_time,
+        "window": None, "top_n": top_n, "limit_n": limit_n, "sort_asc": sort_asc,
+    }
+
+    def _statement(dialect: dialects.Dialect, ranked: bool = True,
+                   slots: Optional[Dict[str, Any]] = None) -> str:
+        """The statement for one slot set in one dialect — what runs on the
+        live path and, for a context answer, what would have."""
+        s = slots or base_slots
+        window = s.get("window")
+        month_window = window or (_time_window(s["year"], None, s["month"])
+                                  if (s["year"] and s["month"]) else None)
+        relative_window = _time_window(None, s["relative_time"]) if s["relative_time"] else None
         return dialects.assemble(
-            dialect, schema=schema, fact=fact, metric_expr=metric_expr, metric_name=metric_name,
-            group_cols=group_cols, time_group=time_group, filters=filters, columns=columns,
-            date_column=date_column, year=year, month_window=month_window, relative_time=relative_time,
-            relative_window=relative_window, limit_n=limit_n, sort_asc=sort_asc, ranked=ranked)
+            dialect, schema=schema, fact=fact, metric_expr=s["metric_expr"],
+            metric_name=s["metric_name"], group_cols=s["group_cols"], time_group=s["time_group"],
+            filters=s["filters"], columns=columns, date_column=date_column,
+            year=s["year"] or (int(str(window[0])[:4]) if window else None),
+            month_window=month_window, relative_time=s["relative_time"],
+            relative_window=relative_window, limit_n=s["limit_n"], sort_asc=s["sort_asc"],
+            ranked=ranked)
 
     def _finish(served: Dict[str, Any]) -> Dict[str, Any]:
         """Every answer leaves through here: the ranking title, the notes the
@@ -2212,84 +2245,373 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
             evidence["elapsed_ms"] = served["duration_ms"]
         return served
 
-    # ── Engine-backed: the Engine's knowing path is the answer-from-context ──
-    # One statement; the planner answers a covered question from the cube or
-    # the statistics (`execution.mode = "context"`), the result cache from a
-    # previous run (`cache`), or reads the rows (`distributed`/`coordinator`).
-    # The DLM labels the answer from the Engine's word, never from its own
-    # scoring, and no warehouse cell is consulted.
-    if binding:
-        return _finish(_answer_on_engine(
-            dataset_id, ds, binding, spec, metric, metric_name, metric_expr, group_cols, time_group,
-            filters, year, month, relative_time, date_column, columns, top_n, limit_n, sort_asc,
-            routed_entry, principal, role, question, year_shifted, _statement))
+    def _serve(slots: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Answer one slot set: the Engine's knowing path when the dataset is
+        Engine-backed, the precomputed cells when it is not, and a live
+        statement when neither covers it."""
+        s = slots or base_slots
+        s_metric, s_name, s_expr = s["metric"], s["metric_name"], s["metric_expr"]
+        s_groups, s_group = s["group_cols"], s["group_col"]
+        s_time, s_filters = s["time_group"], s["filters"]
+        s_year, s_month, s_relative = s["year"], s["month"], s["relative_time"]
+        s_top, s_limit, s_asc = s["top_n"], s["limit_n"], s["sort_asc"]
+        window = s.get("window")
 
-    # ── answer from context (precomputed) — NO database trip ─────────────────
-    # Totals, single-dimension breakdowns, and single-dimension equality filters
-    # are all already in dlm_answers. Only trends/year-slices/combos/relative-time
-    # fall through to a live query below (which we then cache).
-    if not time_group and not year and not relative_time:
-        served = _serve_from_context(dataset_id, ds, metric_name, group_col, top_n,
-                                     filters, routed_entry, sort_asc=sort_asc)
-        if served is not None:
-            return _finish(served)
+        # ── Engine-backed: the Engine's knowing path is answer-from-context ──
+        # One statement; the planner answers a covered question from the cube or
+        # the statistics (`execution.mode = "context"`), the result cache from a
+        # previous run (`cache`), or reads the rows (`distributed`/`coordinator`).
+        # The DLM labels the answer from the Engine's word, never from its own
+        # scoring, and no warehouse cell is consulted.
+        if binding:
+            return _answer_on_engine(
+                dataset_id, ds, binding, spec, s_metric, s_name, s_expr, s_groups, s_time,
+                s_filters, s_year, s_month, s_relative, date_column, columns, s_top, s_limit,
+                s_asc, routed_entry, principal, role, question, year_shifted,
+                lambda dialect, ranked=True: _statement(dialect, ranked, slots=s),
+                window=window)
 
-        # exact combo not materialized → for a non-additive COUNT(DISTINCT) metric,
-        # answer approximately from the HLL sketch cuboid (register union, no scan)
-        # before falling to a live query.
-        if metric and _distinct_col((metric or {}).get("expression") or ""):
-            sketched = _serve_sketch(dataset_id, ds, metric_name, group_col, top_n,
-                                     filters, routed_entry)
-            if sketched is not None:
-                return _finish(sketched)
+        # ── answer from context (precomputed) — NO database trip ─────────────
+        # Totals, single-dimension breakdowns, and single-dimension equality
+        # filters are all already in dlm_answers. Only trends/year-slices/
+        # combos/relative-time fall through to a live query below.
+        if not s_time and not s_year and not s_relative and not window:
+            served = _serve_from_context(dataset_id, ds, s_name, s_group, s_top,
+                                         s_filters, routed_entry, sort_asc=s_asc)
+            if served is not None:
+                return served
 
-    # ── time windows and trends from the day cells — still no database trip ──
-    if (time_group or year or relative_time) and metric and date_column \
-            and _metric_agg_type((metric or {}).get("expression") or "") == "additive":
-        served = _serve_time_window(dataset_id, ds, metric_name, group_col, filters, date_column,
-                                    year, relative_time, time_group, question, top_n, sort_asc,
-                                    round(routed_entry.get("score", 0.0), 3), month=month)
-        if served is not None:
-            return _finish(served)
+            # exact combo not materialized → for a non-additive COUNT(DISTINCT)
+            # metric, answer approximately from the HLL sketch cuboid (register
+            # union, no scan) before falling to a live query.
+            if s_metric and _distinct_col((s_metric or {}).get("expression") or ""):
+                sketched = _serve_sketch(dataset_id, ds, s_name, s_group, s_top,
+                                         s_filters, routed_entry)
+                if sketched is not None:
+                    return sketched
 
-    # ── assemble (live query path) ───────────────────────────────────────────
-    sql = _statement(dialects.POSTGRESQL)
-    chart_type = "line" if time_group else ("bar" if group_cols else "kpi")
-    x_axis = time_group or (group_cols[0] if group_cols else None)
-    title = _live_title(metric_name, time_group, group_cols, filters, year, month, relative_time,
-                        question, year_shifted)
+        # ── time windows and trends from the day cells — still no DB trip ────
+        if (s_time or s_year or s_relative) and not window and s_metric and date_column \
+                and _metric_agg_type((s_metric or {}).get("expression") or "") == "additive":
+            served = _serve_time_window(dataset_id, ds, s_name, s_group, s_filters, date_column,
+                                        s_year, s_relative, s_time, question, s_top, s_asc,
+                                        round(routed_entry.get("score", 0.0), 3), month=s_month)
+            if served is not None:
+                return served
 
-    # A native catalog whose table id could not be resolved is still executed
-    # through /sql/engine by the client with the dataset's schema selected; its
-    # parser keeps ANSI quotes as part of a relation name, so the statement
-    # is handed over already unquoted.
-    engine = _native()
-    if engine:
-        sql = re.sub(r'"([A-Za-z_][A-Za-z0-9_]*)"', r'\1', sql)
+        # ── assemble (live query path) ───────────────────────────────────────
+        sql = _statement(dialects.POSTGRESQL, slots=s)
+        chart_type = "line" if s_time else ("bar" if s_groups else "kpi")
+        x_axis = s_time or (s_groups[0] if s_groups else None)
+        title = _live_title(s_name, s_time, s_groups, s_filters, s_year, s_month, s_relative,
+                            question, year_shifted)
 
-    return _finish({
+        # A native catalog whose table id could not be resolved is still executed
+        # through /sql/engine by the client with the dataset's schema selected;
+        # its parser keeps ANSI quotes as part of a relation name, so the
+        # statement is handed over already unquoted.
+        engine = _native()
+        if engine:
+            sql = re.sub(r'"([A-Za-z_][A-Za-z0-9_]*)"', r'\1', sql)
+
+        return {
+            "ok": True,
+            "dataset_id": dataset_id,
+            "dataset_name": ds.get("dataset_name") or ds.get("name"),
+            "database": database,
+            "schema_name": schema,
+            "sql": sql,
+            "engine": engine,
+            "from_context": False,
+            "route": "live",
+            "chartType": chart_type,
+            "xAxis": x_axis,
+            "yAxis": s_name,
+            "title": title,
+            "columns": s_groups + [s_name],
+            "filters": s_filters,
+            "year": s_year,
+            "note": None,
+            # what we already know from context — shown instantly while the live
+            # query fetches the exact (multi-filter / combo) figure.
+            "context_hints": _context_hints(dataset_id, s_name, s_filters),
+            "confidence": round(routed_entry.get("score", 0.0), 3),
+        }
+
+    # ── derived classes: composed in Python from base results ───────────────
+    if derived_intent is not None:
+        composed = _compose_derived(
+            derived_intent, base_slots, _serve, spec=spec, question=question,
+            dims=dims, metrics=metrics, m_alias=m_alias, d_alias=d_alias,
+            date_column=date_column, dataset_id=dataset_id, ds=ds, notes=notes)
+        if composed is not None:
+            if not composed.get("ok", True):
+                composed.setdefault("duration_ms",
+                                    round((_time_mod.monotonic() - t0) * 1000, 1))
+                return composed
+            return _finish(composed)
+
+    served = _serve()
+    if served.get("ok"):
+        served.setdefault("question_class", classes.base_class(
+            group_cols=group_cols, filters=filters, time_group=time_group,
+            period=(month_period if month else (str(year) if year else None)),
+            top_n=top_n, distinct=bool(metric and _distinct_col((metric or {}).get("expression") or ""))))
+        served.setdefault("answer", classes.base_sentence(
+            served["question_class"], metric=metric_name,
+            value=(served.get("rows") or [[None]])[0][-1] if served.get("rows") else None,
+            dimension=group_col, filters=filters, rows=served.get("rows"), n=top_n,
+            period=(month_period if month else (str(year) if year else None)),
+            grain=(spec.get("time") or {}).get("grain") or "period"))
+    return _finish(served)
+
+
+
+# --------------------------------------------------------------------------- #
+# Derived question classes — composed from base results, never a second SQL    #
+# shape. Each one runs `serve` with a slot set of its own; the composed answer #
+# keeps every base result's evidence, so a percentage can be traced to the two #
+# numbers and the two statements behind it.                                    #
+# --------------------------------------------------------------------------- #
+
+_COMPARE_UNIT = re.compile(r"\b(?:last|previous|prior)\s+(year|month|quarter|week|day)\b", re.I)
+
+
+def _with(slots: Dict[str, Any], **overrides) -> Dict[str, Any]:
+    out = dict(slots)
+    out.update(overrides)
+    if "group_cols" in overrides and "group_col" not in overrides:
+        out["group_col"] = "|".join(overrides["group_cols"]) or None
+    return out
+
+
+def _compose_evidence(parts: List[Dict[str, Any]], question_class: str) -> Optional[Dict[str, Any]]:
+    """One evidence object for a composed answer: the lane every part agrees
+    on (the weakest wins — a composition is only as unread as its most-read
+    part), and each part's own evidence kept under `composed_of`."""
+    evidence = [p.get("evidence") for p in parts if isinstance(p.get("evidence"), dict)]
+    if not evidence:
+        return None
+    order = {"context": 0, "cache": 1, "live": 2}
+    lane = max((e.get("lane") or "live" for e in evidence), key=lambda x: order.get(x, 2))
+    head = dict(evidence[0])
+    head["lane"] = lane
+    head["question_class"] = question_class
+    head["composed_of"] = evidence
+    head["sql"] = "; ".join(e.get("sql") or "" for e in evidence)
+    head["reproduce"] = {**(evidence[0].get("reproduce") or {}),
+                         "statements": [e.get("reproduce") for e in evidence]}
+    head["rows"] = sum(int(e.get("rows") or 0) for e in evidence)
+    head["elapsed_ms"] = None
+    return head
+
+
+def _period_for(spec: dict, slots: Dict[str, Any], unit: str) -> Optional[tuple]:
+    """`(period, grain)` the comparison is about: the period the question
+    named, else the latest period the dataset actually holds at the unit the
+    question asked for. Never today's date."""
+    time_spec = spec.get("time") if isinstance(spec.get("time"), dict) else {}
+    latest = time_spec.get("latest")
+    if slots.get("year") and slots.get("month"):
+        return f"{slots['year']}-{int(slots['month']):02d}", "month"
+    if slots.get("year"):
+        return str(slots["year"]), "year"
+    if not latest:
+        return None
+    grain = "year" if unit == "year" else "month" if unit in ("month", "quarter") else "day"
+    text = str(latest)
+    if grain == "year":
+        return text[:4], "year"
+    if grain == "month":
+        return text[:7] if len(text) >= 7 else text, "month"
+    return text[:10], "day"
+
+
+def _compose_derived(intent, base_slots: Dict[str, Any], serve, *, spec: dict, question: str,
+                     dims: List[dict], metrics: List[dict], m_alias, d_alias,
+                     date_column: Optional[str], dataset_id: str, ds: dict,
+                     notes: List[str]) -> Optional[Dict[str, Any]]:
+    """The derived class's answer, or None to fall back to the base class when
+    the dataset cannot support the reading (no time dimension for a comparison,
+    no second measure for a ratio, an unresolvable dimension)."""
+    name = intent.name
+    time_spec = spec.get("time") if isinstance(spec.get("time"), dict) else {}
+
+    if name in ("comparison_period", "year_over_year"):
+        if not date_column:
+            return None
+        unit_match = _COMPARE_UNIT.search(question)
+        unit = "year" if name == "year_over_year" else (unit_match.group(1).lower() if unit_match else "month")
+        resolved = _period_for(spec, base_slots, unit)
+        if not resolved:
+            return None
+        period, grain = resolved
+        previous = classes.previous_period(period, grain,
+                                           years_back=1 if name == "year_over_year" else 0)
+        earliest = str(time_spec.get("min") or "")[:10]
+        flat = _with(base_slots, group_cols=[], group_col=None, time_group=None, top_n=None)
+        current_result = serve(_with(flat, window=classes.period_bounds(period, grain),
+                                     year=None, month=None, relative_time=None))
+        if not current_result.get("ok"):
+            return current_result
+        previous_result: Dict[str, Any] = {"rows": []}
+        if not earliest or classes.period_bounds(previous, grain)[1] > earliest:
+            previous_result = serve(_with(flat, window=classes.period_bounds(previous, grain),
+                                          year=None, month=None, relative_time=None))
+            if not previous_result.get("ok"):
+                return previous_result
+        composed = classes.compose_comparison(
+            current_result, previous_result, metric=base_slots["metric_name"],
+            period=classes.period_label(period, grain),
+            previous_label=classes.period_label(previous, grain),
+            year_over_year=(name == "year_over_year"))
+        return _derived_answer(composed, current_result, [current_result, previous_result], ds, dataset_id)
+
+    if name == "share_of_total":
+        part = serve(base_slots)
+        if not part.get("ok"):
+            return part
+        whole = serve(_with(base_slots, filters=[], group_cols=[], group_col=None,
+                            time_group=None, top_n=None))
+        if not whole.get("ok"):
+            return whole
+        subject = ", ".join(str(f.get("value")) for f in base_slots["filters"]) or \
+            base_slots["metric_name"]
+        composed = classes.compose_share(part, whole, metric=base_slots["metric_name"],
+                                         subject=subject, group_col=base_slots["group_col"])
+        return _derived_answer(composed, part, [part, whole], ds, dataset_id)
+
+    if name == "ratio":
+        numerator = _metric_for_phrase(intent.params["numerator_phrase"], metrics, m_alias)
+        denominator = _metric_for_phrase(intent.params["denominator_phrase"], metrics, m_alias)
+        if not numerator or not denominator or numerator is denominator:
+            return None
+        top = serve(_with(base_slots, metric=numerator,
+                          metric_name=numerator.get("name") or numerator.get("metric_name"),
+                          metric_expr=numerator.get("expression") or "COUNT(*)", top_n=None))
+        if not top.get("ok"):
+            return top
+        bottom = serve(_with(base_slots, metric=denominator,
+                             metric_name=denominator.get("name") or denominator.get("metric_name"),
+                             metric_expr=denominator.get("expression") or "COUNT(*)", top_n=None))
+        if not bottom.get("ok"):
+            return bottom
+        composed = classes.compose_ratio(
+            top, bottom, numerator_name=numerator.get("name") or numerator.get("metric_name"),
+            denominator_name=denominator.get("name") or denominator.get("metric_name"),
+            group_col=base_slots["group_col"])
+        return _derived_answer(composed, top, [top, bottom], ds, dataset_id)
+
+    if name == "top_n_within":
+        outer = _match_any_dim(intent.params["outer_phrase"], dims, d_alias)
+        inner = base_slots["group_col"]
+        if outer and (not inner or inner == outer):
+            # "top 3 country by users in each region" — the dimension named
+            # before the "in each" is the one being ranked, not the outer one.
+            head = re.sub(r"\b(?:in|for|within)\s+each\s+[\w ]+$", "", question, flags=re.I)
+            inner = _match_any_dim(head, [d for d in dims
+                                          if (d.get("column_name") or d.get("name")) != outer],
+                                   d_alias)
+        if not inner or not outer or outer == inner:
+            return None
+        n = base_slots["top_n"] or 3
+        result = serve(_with(base_slots, group_cols=[outer, inner], group_col=f"{outer}|{inner}",
+                             top_n=None, limit_n=5000, time_group=None))
+        if not result.get("ok"):
+            return result
+        composed = classes.compose_top_n_within(result, metric=base_slots["metric_name"],
+                                                outer=outer, inner=inner, n=n)
+        return _derived_answer(composed, result, [result], ds, dataset_id)
+
+    if name == "existence":
+        dimension = base_slots["group_col"] or _match_any_dim(intent.params["dimension_phrase"],
+                                                              dims, d_alias)
+        if not dimension:
+            return None
+        result = serve(_with(base_slots, group_cols=[dimension], group_col=dimension,
+                             top_n=None, limit_n=5000, time_group=None))
+        if not result.get("ok"):
+            return result
+        composed = classes.compose_existence(
+            result, metric=base_slots["metric_name"], dimension=dimension,
+            comparison=intent.params["comparison"], threshold=intent.params["threshold"])
+        return _derived_answer(composed, result, [result], ds, dataset_id)
+
+    if name == "vague_default":
+        headline = spec.get("default_metric") or base_slots["metric_name"]
+        metric = next((m for m in metrics if (m.get("name") or m.get("metric_name")) == headline), None)
+        slots = _with(base_slots, group_cols=[], group_col=None, time_group=None, top_n=None,
+                      filters=[], year=None, month=None, relative_time=None)
+        if metric:
+            slots = _with(slots, metric=metric, metric_name=headline,
+                          metric_expr=metric.get("expression") or "COUNT(*)")
+        period = None
+        if date_column and time_spec.get("latest"):
+            period, grain = str(time_spec["latest"]), time_spec.get("grain") or "day"
+            slots = _with(slots, window=classes.period_bounds(period, grain))
+            period = classes.period_label(period, grain)
+        result = serve(slots)
+        if not result.get("ok"):
+            return result
+        value = (result.get("rows") or [[None]])[0][-1] if result.get("rows") else None
+        composed = {
+            "question_class": "vague_default",
+            "columns": result.get("columns") or [slots["metric_name"]],
+            "rows": result.get("rows") or [],
+            "answer": classes.vague_sentence(slots["metric_name"], period, value),
+            "chartType": "kpi", "xAxis": None, "yAxis": slots["metric_name"],
+            "title": f"{slots['metric_name']}" + (f" — {period}" if period else ""),
+            # A vague question is answered against the spec's defaults, and the
+            # answer says which defaults those were rather than assuming them
+            # silently.
+            "note": (f'"{slots["metric_name"]}" is this dataset\'s headline measure'
+                     + (f" and {period} is the latest period it holds" if period else "")
+                     + "; the question named neither, so the answer uses them."),
+        }
+        return _derived_answer(composed, result, [result], ds, dataset_id)
+
+    return None
+
+
+def _derived_answer(composed: Dict[str, Any], head: Dict[str, Any], parts: List[Dict[str, Any]],
+                    ds: dict, dataset_id: str) -> Dict[str, Any]:
+    """A composed answer wearing the same envelope as a base one: the lane of
+    its weakest part, the composed evidence, and the dataset it is about."""
+    evidence = _compose_evidence(parts, composed["question_class"])
+    lane = (evidence or {}).get("lane") or head.get("route") or "live"
+    out = {
         "ok": True,
         "dataset_id": dataset_id,
         "dataset_name": ds.get("dataset_name") or ds.get("name"),
-        "database": database,
-        "schema_name": schema,
-        "sql": sql,
-        "engine": engine,
-        "from_context": False,
-        "route": "live",
-        "chartType": chart_type,
-        "xAxis": x_axis,
-        "yAxis": metric_name,
-        "title": title,
-        "columns": group_cols + [metric_name],
-        "filters": filters,
-        "year": year,
+        "database": head.get("database"),
+        "schema_name": head.get("schema_name"),
+        "sql": (evidence or {}).get("sql") or head.get("sql"),
+        "engine": head.get("engine"),
+        "executed": True,
+        "from_context": lane == "context",
+        "route": lane,
+        "filters": head.get("filters") or [],
+        "year": head.get("year"),
         "note": None,
-        # what we already know from context — shown instantly while the live
-        # query fetches the exact (multi-filter / combo) figure.
-        "context_hints": _context_hints(dataset_id, metric_name, filters),
-        "confidence": round(routed_entry.get("score", 0.0), 3),
-    })
+        "approx": bool(head.get("approx")),
+        "confidence": head.get("confidence"),
+        **composed,
+    }
+    if evidence:
+        out["evidence"] = evidence
+    return out
+
+
+def _metric_for_phrase(phrase: str, metrics: List[dict], m_alias) -> Optional[dict]:
+    """The metric a phrase names, or None when nothing scores. Used by the
+    ratio class, where two measures have to be told apart in one sentence."""
+    tokens = set(_tokenize(phrase))
+    if not tokens:
+        return None
+    ranked = _rank_metrics(tokens, metrics, m_alias)
+    if not ranked or ranked[0][1] <= 0:
+        return None
+    return ranked[0][0]
 
 
 def _live_title(metric_name: str, time_group: Optional[str], group_cols: List[str],
@@ -2434,7 +2756,7 @@ def _answer_on_engine(dataset_id: str, ds: dict, binding: dict, spec: dict, metr
                       relative_time: Optional[str], date_column: Optional[str], columns: List[dict],
                       top_n: Optional[int], limit_n: int, sort_asc: bool, routed_entry: dict,
                       principal: Optional[str], role: str, question: str, year_shifted: bool,
-                      statement) -> Dict[str, Any]:
+                      statement, window: Optional[tuple] = None) -> Dict[str, Any]:
     """Run the question as one Engine statement and label the answer from the
     record. A breakdown over dimensions the table's declared shape holds is
     written without `ORDER BY`/`LIMIT` — the exact shape the cube answers,
@@ -2446,7 +2768,11 @@ def _answer_on_engine(dataset_id: str, ds: dict, binding: dict, spec: dict, metr
     shape = engine_meta.get("shape") or binding.get("shape") or {}
     declared = {str(d.get("name")) for d in (shape.get("dimensions") or [])
                 if isinstance(d, dict) and d.get("name")}
-    ranked = not (group_cols and not time_group and all(c in declared for c in group_cols))
+    # An explicit window is a predicate the cube's cells do not carry, so the
+    # statement keeps its own ordering and limit rather than being written in
+    # the cube's shape.
+    ranked = not (group_cols and not time_group and not window
+                  and all(c in declared for c in group_cols))
     sql = statement(dialects.ENGINE, ranked=ranked)
     settings = _engine_settings(spec, metric, metric_name)
     run_as, run_role = _engine_principal(principal, role)
