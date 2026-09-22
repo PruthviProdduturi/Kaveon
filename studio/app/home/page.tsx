@@ -12,6 +12,8 @@ import { InlineChart } from "../../components/chat/InlineChart";
 import { EvidencePanel, Evidence, Row, headlineOf } from "../../components/chat/EvidencePanel";
 import { API_BASE } from "../../config";
 import { useRecents } from "../../hooks/useRecents";
+import { useDemoQuota } from "../../hooks/useDemoQuota";
+import { rateLimitNotice } from "../../utils/demoQuota";
 import { useSearchParams } from "next/navigation";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -54,6 +56,8 @@ interface Clarification {
 interface Message {
   role: "user" | "assistant";
   content: string;
+  /** The demo's quota notice: shown quietly, never saved to the session. */
+  notice?: boolean;
   loading?: boolean;
   liveSince?: number;   // epoch ms — set once a loading message is running a live query
   contextHints?: ContextHint[];   // relevant precomputed slices shown while live runs
@@ -61,6 +65,12 @@ interface Message {
   routeMeta?: RouteMeta;
   clarification?: Clarification;
   chosen?: string;      // option id the user picked, once the clarification is answered
+}
+
+/** The Engine's quota refusal as the ask box says it: the time it names,
+ *  and what does not count against the quota. */
+function quotaNotice(message: string): string {
+  return `${message}. Answers from precomputed context and the result cache do not count against the quota.`;
 }
 
 /** Assistant text is rendered with **bold** markup only. Everything else is
@@ -300,6 +310,9 @@ export default function Home() {
 
   // Chat history state
   const [sessions, setSessions] = useState<ChatSession[]>([]);
+  // The demo's live-query quota, shown under the ask box; a self-hosted
+  // install has none and shows nothing.
+  const demoQuota = useDemoQuota();
   const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
   const [loadingSession, setLoadingSession] = useState(false);
 
@@ -867,7 +880,15 @@ export default function Home() {
                   evidence.rows = rows.length;
                   if (execData.query_id) evidence.query_id = String(execData.query_id);
                 }
+              } else {
+                const notice = rateLimitNotice(execRes.status, await execRes.json().catch(() => null));
+                if (notice) {
+                  demoQuota.refresh();
+                  setMessages(prev => [...prev.slice(0, -1), { role: "assistant", content: quotaNotice(notice), notice: true }]);
+                  return;
+                }
               }
+              demoQuota.refresh();
             }
             if (got && (resultHasData(rows) || dlm.note)) {
               const lane: RouteMeta["lane"] = evidence?.lane ?? (dlm.from_context ? "context" : "live");
@@ -1058,6 +1079,12 @@ export default function Home() {
               return;
             } else {
               const errText = await execRes.text().catch(() => "");
+              const notice = rateLimitNotice(execRes.status, (() => { try { return JSON.parse(errText); } catch { return null; } })());
+              if (notice) {
+                demoQuota.refresh();
+                setMessages(prev => [...prev.slice(0, -1), { role: "assistant", content: quotaNotice(notice), notice: true }]);
+                return;
+              }
               const errMsg = `The query could not be completed (status ${execRes.status}).\n\nSQL: \`${parsed.sql}\`\n\n${errText.substring(0, 200)}`;
               if (sid) {
                 void saveMessage(sid, "user", text.trim());
@@ -1187,7 +1214,11 @@ export default function Home() {
                   rows={2}
                   style={{ width: "100%", border: "none", outline: "none", background: "transparent", color: "#f0f0f2", fontSize: 15, lineHeight: 1.5, resize: "none", fontFamily: "inherit" }}
                 />
-                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                  <span style={{ fontSize: 11.5, color: demoQuota.quota?.remaining === 0 ? "#d97706" : "#64748b", minHeight: 16 }}
+                    title={demoQuota.label ? "This demo allows a fixed number of live reads per rolling window; answers from precomputed context and the result cache do not count." : undefined}>
+                    {demoQuota.label ?? ""}
+                  </span>
                   <button onClick={submit} disabled={!query.trim() || !canSend} style={{ width: 34, height: 34, borderRadius: 10, border: "none", background: query.trim() && canSend ? "var(--accent)" : "rgba(255,255,255,0.08)", color: query.trim() && canSend ? "#fff" : "#64748b", cursor: query.trim() && canSend ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, transition: "all 0.15s" }}>
                     ↑
                   </button>
@@ -1272,8 +1303,13 @@ export default function Home() {
                       )
                     ) : (
                       <>
+                        {m.notice && (
+                          <div style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "2px 9px", borderRadius: 999, background: "rgba(217,119,6,0.12)", color: "#d97706", fontSize: 11, fontWeight: 600, marginBottom: 6 }}>
+                            <i className="fas fa-hourglass-half" style={{ fontSize: 8 }} /> Live-query quota
+                          </div>
+                        )}
                         {m.content && (
-                          <div style={{ padding: m.chart ? "0 0 8px" : 0, whiteSpace: "pre-wrap", lineHeight: 1.6 }}
+                          <div style={{ padding: m.chart ? "0 0 8px" : 0, whiteSpace: "pre-wrap", lineHeight: 1.6, color: m.notice ? "var(--text-secondary)" : undefined }}
                             dangerouslySetInnerHTML={{ __html: renderAssistantHtml(m.content) }}
                           />
                         )}
@@ -1360,7 +1396,11 @@ export default function Home() {
                   rows={2}
                   style={{ width: "100%", border: "none", outline: "none", background: "transparent", color: "#f0f0f2", fontSize: 15, lineHeight: 1.5, resize: "none", fontFamily: "inherit" }}
                 />
-                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                  <span style={{ fontSize: 11.5, color: demoQuota.quota?.remaining === 0 ? "#d97706" : "#64748b", minHeight: 16 }}
+                    title={demoQuota.label ? "This demo allows a fixed number of live reads per rolling window; answers from precomputed context and the result cache do not count." : undefined}>
+                    {demoQuota.label ?? ""}
+                  </span>
                   <button onClick={submit} disabled={!query.trim() || !canSend} style={{ width: 34, height: 34, borderRadius: 10, border: "none", background: query.trim() && canSend ? "var(--accent)" : "rgba(255,255,255,0.08)", color: query.trim() && canSend ? "#fff" : "#64748b", cursor: query.trim() && canSend ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, transition: "all 0.15s" }}>
                     ↑
                   </button>
