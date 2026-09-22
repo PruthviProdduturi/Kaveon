@@ -1885,12 +1885,95 @@ def _clarify(kind: str, prompt: str, options: List[Dict[str, str]], question: st
     return {
         "ok": False,
         "reason": "clarify",
+        "question_class": {"value": "clarify_value", "metric": "clarify_metric",
+                           "dimension": "clarify_dimension"}.get(kind, "clarify_value"),
         "dataset_id": dataset_id,
         "dataset_name": ds.get("dataset_name") or ds.get("name"),
         "clarification": {"kind": kind, "prompt": prompt, "options": options},
         "resume": {"question": question, "choices": dict(choices)},
         "duration_ms": round((_time_mod.monotonic() - t0) * 1000, 1),
     }
+
+
+def _dataset_label(ds: dict) -> str:
+    return ds.get("dataset_name") or ds.get("name") or "this dataset"
+
+
+def _unanswerable(dataset_id: str, ds: dict, question: str, t0: float, *, why: str,
+                  closest: List[str], examples: Optional[List[str]] = None) -> Dict[str, Any]:
+    """A question this dataset's spec genuinely cannot answer. It says why, and
+    it offers the closest questions it *can* answer rather than answering a
+    different question and hoping the number passes."""
+    answer = why
+    if closest:
+        answer += " The closest it can answer: " + "; ".join(f'"{c}"' for c in closest) + "."
+    if examples:
+        answer += " Values it knows include " + ", ".join(examples) + "."
+    return {
+        "ok": False,
+        "reason": "unanswerable",
+        "question_class": "unanswerable",
+        "dataset_id": dataset_id,
+        "dataset_name": ds.get("dataset_name") or ds.get("name"),
+        "question": question,
+        "why": why,
+        "closest": closest,
+        "examples": examples or [],
+        "answer": answer,
+        "duration_ms": round((_time_mod.monotonic() - t0) * 1000, 1),
+    }
+
+
+def _closest_questions(spec: dict, dim_names: List[str], metrics: List[dict]) -> List[str]:
+    """Three questions this spec can answer, written the way a person would ask
+    them: the headline measure alone, broken down, and ranked."""
+    metric = spec.get("default_metric") or next(
+        ((m.get("name") or m.get("metric_name")) for m in metrics), None)
+    if not metric:
+        return []
+    out = [f"total {metric.lower()}"]
+    if dim_names:
+        out.append(f"{metric.lower()} by {dim_names[0].replace('_', ' ')}")
+        out.append(f"top 5 {dim_names[0].replace('_', ' ')} by {metric.lower()}")
+    if (spec.get("time") or {}).get("latest"):
+        out.append(f"{metric.lower()} over time")
+    return out[:3]
+
+
+def _near_names(term: str, names: List[str], alias_index) -> List[str]:
+    """The named elements a term nearly names, closest first — the same bounded
+    edit distance the value index uses, so "revenu" finds "Net revenue" and
+    "sprockets" finds nothing."""
+    norm = _normalize(term)
+    if len(norm) < 4:
+        return []
+    scored: List[tuple] = []
+    for name in names:
+        if not name:
+            continue
+        candidates = {_normalize(name)} | {_normalize(t) for t in _tokenize(name)}
+        candidates |= {_normalize(a) for a in (alias_index or {}).get(_normalize(name), [])}
+        best = max((_near_score(norm, c) for c in candidates if c), default=0.0)
+        if best > 0:
+            scored.append((-best, name))
+    scored.sort()
+    return [name for _score, name in scored[:5]]
+
+
+def _index_examples(dataset_id: str, limit: int = 4) -> List[str]:
+    """A few of the most frequent values the dataset's index holds — what a
+    refusal shows so the person can see what this dataset is about."""
+    rows = sorted(_indexed_values(dataset_id), key=lambda r: -_num(r.get("freq")))
+    out: List[str] = []
+    seen: set = set()
+    for row in rows:
+        value = str(row.get("value_text") or "")
+        if value and value not in seen:
+            seen.add(value)
+            out.append(value)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None,
@@ -2007,7 +2090,8 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
         vocabulary |= set(_tokenize(c.get("column_name") or c.get("name") or ""))
     pinned_phrase = str(choices.get("value_phrase") or "").lower()
     pinned_value = str(choices.get("value") or "")
-    for term in _unresolved_terms(_strip_time_phrases(question), consumed, vocabulary, metric_name_tokens):
+    for term in _unresolved_terms(_strip_time_phrases(question), consumed, vocabulary,
+                                  metric_name_tokens, grammar=classes.GRAMMAR_WORDS):
         if term.lower() == pinned_phrase and pinned_value:
             if pinned_value == "skip":
                 notes.append(f'"{term}" was left out of the answer.')
@@ -2016,6 +2100,11 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
                 if col and val and not any(f.get("column") == col for f in filters):
                     filters.append({"column": col, "value": val, "element_key": None})
             continue
+        # A word the dataset cannot place is never dropped into a note and
+        # answered around: the answer would be a different question's answer.
+        # The nearest indexed values are offered; failing those, the measures
+        # and dimensions it might have meant; failing those, the question is
+        # refused with the closest question this dataset can answer.
         near = _near_values(dataset_id, term)
         if near:
             options = [{"id": f"{_hit_column(h)}={h.get('key_value') or h.get('value')}",
@@ -2027,8 +2116,27 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
             return _clarify("value", f'"{term}" is not a value{scope} — did you mean {closest}?',
                             options, original_question, dict(choices, value_phrase=term.lower()),
                             dataset_id, ds, t0)
-        notes.append(f'"{term}" matched no value' + (f" of {', '.join(dim_names)}" if dim_names else "")
-                     + " and was left out of the answer.")
+        measure_options = _near_names(term, [m.get("name") or m.get("metric_name") for m in metrics],
+                                      m_alias)
+        if measure_options:
+            return _clarify("metric",
+                            f'"{term}" is not a measure of {_dataset_label(ds)} — '
+                            f'did you mean {", ".join(measure_options)}?',
+                            [{"id": name, "label": name, "description": ""} for name in measure_options],
+                            original_question, choices, dataset_id, ds, t0)
+        dimension_options = _near_names(term, dim_names, d_alias)
+        if dimension_options:
+            return _clarify("dimension",
+                            f'"{term}" is not a dimension of {_dataset_label(ds)} — '
+                            f'did you mean {", ".join(dimension_options)}?',
+                            [{"id": name, "label": name, "description": ""} for name in dimension_options],
+                            original_question, choices, dataset_id, ds, t0)
+        sample = _index_examples(dataset_id, limit=4)
+        return _unanswerable(dataset_id, ds, original_question, t0,
+                             why=f'"{term}" is not a value, a measure or a dimension of '
+                                 f'{_dataset_label(ds)}.',
+                             closest=_closest_questions(spec, dim_names, metrics),
+                             examples=sample)
 
     # 2) metric — curated aliases + default metric; generic quantifier words ignored.
     #    A tie between named metrics is a question for the user, not a coin flip.
@@ -2104,15 +2212,34 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
     # The user asked for a breakdown and got none: say what the phrase hit — a
     # column of the dataset that is not one of its dimensions ("by locale"),
     # or nothing at all — and what the dimensions are.
-    if wanted_groupby and not group_col:
+    # Which question class this is. A derived class — a period comparison, a
+    # share, a ratio, a ranking inside each group, an existence count, or a
+    # vague question answered against the spec's defaults — is composed below
+    # from two or three base results rather than a SQL shape of its own, and
+    # it accounts for the grammar ("per", "in each", "vs last month") that
+    # would otherwise read as an unmatched breakdown.
+    derived_intent = classes.detect_derived(
+        question,
+        has_time=bool(date_column),
+        dimensions=dim_names,
+        measures=[m.get("name") or m.get("metric_name") for m in metrics],
+        has_group=bool(group_col),
+        explicit_metric=bool(top_score > 0),
+        explicit_period=bool(_extract_year(question) or _extract_relative_time(question)))
+
+    if wanted_groupby and not group_col and derived_intent is None:
         by_column = _column_named_by(_by_phrase(question), columns)
-        dataset_label = ds.get("dataset_name") or ds.get("name") or "this dataset"
-        available = f" Dimensions: {', '.join(dim_names)}." if dim_names else ""
-        if by_column and by_column not in dim_names:
-            notes.append(f"{by_column} is a column of {dataset_label} but not one of its dimensions, "
-                         f"so the answer is not broken down by it.{available}")
-        elif dim_names:
-            notes.append(f"No dimension matches the requested breakdown.{available}")
+        label = _dataset_label(ds)
+        if dim_names:
+            why = (f"{by_column} is a column of {label} but not one of its dimensions"
+                   if by_column and by_column not in dim_names
+                   else f"No dimension of {label} matches the requested breakdown")
+            return _clarify("dimension", f"{why} — break it down by which one?",
+                            [{"id": name, "label": name, "description": ""} for name in dim_names],
+                            original_question, choices, dataset_id, ds, t0)
+        return _unanswerable(dataset_id, ds, original_question, t0,
+                             why=f"{label} has no dimensions to break a measure down by.",
+                             closest=_closest_questions(spec, dim_names, metrics))
 
     # 4) year filter, optionally narrowed to a named month ("July 2026")
     year = _extract_year(question)
@@ -2159,19 +2286,6 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
         time_group = date_column
         year = None  # don't filter by year when showing trend
     month_period = f"{year}-{month:02d}" if (year and month) else None
-
-    # 6) which question class this is. A derived class — a period comparison, a
-    #    share, a ratio, a ranking inside each group, an existence count, or a
-    #    vague question answered against the spec's defaults — is composed below
-    #    from two or three base results rather than a SQL shape of its own.
-    derived_intent = classes.detect_derived(
-        question,
-        has_time=bool(date_column),
-        dimensions=[d.get("column_name") or d.get("name") for d in dims],
-        measures=[m.get("name") or m.get("metric_name") for m in metrics],
-        has_group=bool(group_col),
-        explicit_metric=bool(top_score > 0),
-        explicit_period=bool(year or relative_time or time_group))
 
     group_cols = _group_cols(group_col)
     metric_expr = (metric or {}).get("expression") or "COUNT(*)"
@@ -4679,15 +4793,18 @@ _RANKING_WORDS = frozenset({
 
 
 def _unresolved_terms(question: str, consumed: set, vocabulary: set,
-                      metric_tokens: set) -> List[str]:
+                      metric_tokens: set, grammar: Optional[set] = None) -> List[str]:
     """The words of a question that look like a filter but resolved to nothing:
     the object of a filter preposition ("desktop users *in finance*") and a
     qualifier right before the measure's name ("*finance* users"). A phrase is
     trimmed at the first word the dataset already accounts for — a value the
     index matched, a metric, dimension or column name, a stopword — so "in the
     finance sector" yields "finance" and "users by platform in Europe" nothing."""
-    known = set(consumed) | vocabulary | _STOPWORDS | _GENERIC_METRIC_TOKENS | _RANKING_WORDS
+    known = (set(consumed) | vocabulary | _STOPWORDS | _GENERIC_METRIC_TOKENS | _RANKING_WORDS
+             | set(grammar or ()))
     known_stems = {_stem(t) for t in known}
+    # Prefix matching ("seconds" against a metric's "sec") is the dataset's own
+    # vocabulary only: a grammar word is a whole word, never a prefix.
     heads = [t for t in vocabulary if len(t) >= 3]
 
     def accounted(word: str) -> bool:

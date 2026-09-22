@@ -417,14 +417,17 @@ class ProductUsersUnresolvedTests(unittest.TestCase):
         self.assertEqual(result["frame"]["filters"], [{"column": "platform", "value": "Desktop"}])
         self.assertEqual(result["note"], '"finance" was left out of the answer.')
 
-    def test_a_word_with_nothing_close_is_left_out_with_a_note(self):
+    def test_a_word_with_nothing_close_is_refused_not_answered_around(self):
+        # The old behaviour answered the question the word was not part of and
+        # noted the word. That is a different question's answer.
         with ProductUsersHarness():
             result = engine.ask("desktop users in zzyzx")
-        self.assertTrue(result["ok"], result)
-        self.assertEqual(result["frame"]["filters"], [{"column": "platform", "value": "Desktop"}])
-        self.assertEqual(result["rows"], [[1124707]])
-        self.assertEqual(result["note"], '"zzyzx" matched no value of platform, license, segment, industry, region, '
-                                         'country, deployment, acquisition_channel, team_size and was left out of the answer.')
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["reason"], "unanswerable")
+        self.assertIn('"zzyzx" is not a value, a measure or a dimension of Product users',
+                      result["why"])
+        self.assertIn("total users", result["closest"])
+        self.assertIn("The closest it can answer", result["answer"])
 
     def test_a_second_value_of_a_filtered_column_is_recognised_and_noted(self):
         with ProductUsersHarness():
@@ -445,21 +448,23 @@ class ProductUsersUnresolvedTests(unittest.TestCase):
         self.assertEqual(result["reason"], "clarify")
         self.assertEqual(result["clarification"]["options"][0]["id"], "region=North America")
 
-    def test_a_by_phrase_naming_a_column_that_is_not_a_dimension_is_explained(self):
+    def test_a_by_phrase_naming_a_column_that_is_not_a_dimension_asks_which(self):
         with ProductUsersHarness():
             result = engine.ask("users by locale")
-        self.assertTrue(result["ok"], result)
-        self.assertEqual(result["title"], "Users")
-        self.assertIsNone(result["frame"]["group_col"])
-        self.assertEqual(result["note"], "locale is a column of Product users but not one of its dimensions, "
-                                         "so the answer is not broken down by it. Dimensions: platform, license, "
-                                         "segment, industry, region, country, deployment, acquisition_channel, team_size.")
+        self.assertEqual(result["reason"], "clarify")
+        self.assertEqual(result["clarification"]["kind"], "dimension")
+        self.assertIn("locale is a column of Product users but not one of its dimensions",
+                      result["clarification"]["prompt"])
+        self.assertEqual([o["id"] for o in result["clarification"]["options"]][:2],
+                         ["platform", "license"])
 
-    def test_a_by_phrase_naming_nothing_is_noted(self):
+    def test_a_by_phrase_naming_nothing_asks_which_dimension(self):
         with ProductUsersHarness():
             result = engine.ask("users by colour")
-        self.assertTrue(result["ok"], result)
-        self.assertTrue(result["note"].startswith("No dimension matches the requested breakdown. Dimensions: platform"))
+        self.assertEqual(result["reason"], "clarify")
+        self.assertEqual(result["clarification"]["kind"], "dimension")
+        self.assertIn("No dimension of Product users matches the requested breakdown",
+                      result["clarification"]["prompt"])
 
     def test_near_values_rank_stem_then_edit_then_prefix(self):
         with ProductUsersHarness():
