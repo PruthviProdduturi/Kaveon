@@ -1,11 +1,155 @@
-# Engine governance: resource groups and the audit ledger
+# Engine governance: catalog access, resource groups and the audit ledger
 
-What a principal may use of the coordinator, decided at admission by a
-named policy, and a durable record of who did what. Both live on the
-coordinator's own store — the configuration file, the state directory —
-never in PostgreSQL. Sources: `engine/crates/server/src/resource_groups.rs`,
+Which catalogs a principal may reach and how far, what a principal may use
+of the coordinator, decided at admission by a named policy, and a durable
+record of who did what. Grants live in the KaveonDB transaction authority;
+the rest lives on the coordinator's own store — the configuration file,
+the state directory — never in PostgreSQL. Sources:
+`engine/crates/server/src/catalog_access.rs` (the evaluator and the
+store), `engine/crates/server/src/catalog_access_api.rs`,
+`engine/crates/server/src/resource_groups.rs`,
 `engine/crates/core/src/memory.rs` (the admission order),
 `engine/crates/server/src/audit.rs`, `engine/crates/server/src/api.rs`.
+
+## Catalog access
+
+Which principal may see, query and change which catalog. The policy is
+**default deny**: a principal with no grant sees no catalog — not on
+`GET /v1/catalog`, not in `SHOW CATALOGS`, not in the definitions API,
+not in a statement. An administrator reaches every catalog by role; that
+access is not a grant and no grant or revoke can reduce it, so the last
+administrator cannot be locked out.
+
+### The grant
+
+A grant is one row of the `catalog_grants` typed family in the KaveonDB
+product transaction authority — the same store, commit protocol and
+revision discipline as every product record: one conditional publication
+per change, a revision on every row that an update or revoke must send
+back (a mismatch is a conflict), an audit line naming the actor. Nothing
+about a grant is written to PostgreSQL or to the coordinator's SQLite
+catalog. The generic transaction API refuses to stage a change naming the
+family, so a session cannot record a grant for its owner; only the catalog
+access routes, administrators only, write it.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `principal` | string | The principal as the security layer resolves it: the platform's verified email through the bridge, a static principal's name, an Entra object id. Never a client claim. |
+| `catalog` | string | The catalog by name. `KaveonDB` is refused. |
+| `access` | `browse` \| `query` \| `manage` | The level, below. |
+| `granted_by`, `granted_at_ms` | string, integer | The administrator and the time. |
+| revision | integer | Starts at 1; advances by one per change; the primary key is `<catalog>/<principal>`. |
+
+The coordinator loads the family at start, republishes it after every
+change it makes, and re-reads it on the 30-second maintenance loop for a
+change another coordinator committed; a failed re-read keeps the last
+family rather than widening anything. Without a configured authority
+(`KAVEON_PRODUCT_TRANSACTIONS_ENABLED` off) no grant can exist: catalogs
+are visible to administrators only, and the routes answer 503
+`ACCESS_STORE_DISABLED`.
+
+### Levels and roles
+
+| Level | Allows |
+|---|---|
+| `browse` | list the catalog; discover its schemas, tables and columns; `SHOW SCHEMAS`, `SHOW TABLES`, `DESCRIBE`, `SHOW CREATE TABLE`, `DESCRIBE DETAIL`, `SHOW STATS FOR` |
+| `query` | `browse`, and SQL statements that read the catalog |
+| `manage` | `query`, and catalog DDL inside it: `CREATE|DROP SCHEMA`, `CREATE|DROP TABLE`, `ALTER TABLE … SET LOCATION|CLUSTERED BY|SHAPE`; the platform's schema and table registration routes |
+
+A grant never widens a role. The effective level on a catalog is the
+lesser of the grant and the role's ceiling:
+
+| Platform role | Engine role | Ceiling | So a grant of `manage` gives |
+|---|---|---|---|
+| Viewer | `reader` | `browse` | `browse` |
+| Analyst | `analyst` | `manage` | `manage` on the Engine; the platform's SQL Lab still runs only `SELECT`/`WITH`, and its registration routes still require Editor |
+| Editor | `analyst` | `manage` | `manage`; the platform's registration routes additionally require `manage` on the catalog |
+| Admin | `admin` | every catalog, every level, by role | not through grants |
+
+The Engine cannot tell the platform's Analyst from its Editor (both arrive
+as `analyst`); that split is the platform's, enforced on its own routes as
+it was before grants existed. `CREATE CATALOG` and `DROP CATALOG` stay
+administrators only, and a catalog an administrator creates is granted to
+nobody until they grant it. A `reader` browses through the REST metadata
+routes — SQL Lab's browser and autocomplete, the CLI's Tab completion,
+`GET /v1/catalog…` — because `POST /v1/statement` was never open to
+`reader` and still is not; the statement-form `SHOW …` and `DESCRIBE`
+are the analyst's and the administrator's, as before.
+
+### Where it is enforced
+
+One evaluator (`CatalogAccess::evaluate`, a `Scope` per identity)
+answers every path, and enforcement is by projection: the published
+catalog is restricted to the identity's visible set
+(`Scope::restrict`), so the binder, the planner, the statistics
+statements and the metadata statements all resolve against a manager in
+which a hidden catalog does not exist. A reference to an ungranted
+catalog therefore fails at bind with the same text an absent catalog gets
+— `catalog 'x' not found` — and never confirms that the catalog exists.
+
+| Path | What the identity sees |
+|---|---|
+| `GET /v1/catalog`, `/v1/catalog/{c}/schema`, `/v1/catalog/{c}/schema/{s}/table` | granted catalogs; an ungranted one is 404 `CATALOG_NOT_FOUND` |
+| `GET /v1/catalog/definitions…`, `/v1/catalog/schemas/{id}…`, `/v1/catalog/tables/{id}…` | definitions in granted catalogs, each catalog carrying the identity's `access`; anything else 404. The catalog service credential (no identity) keeps the whole view. |
+| `POST /v1/statement` | the session catalog must be visible (400 `CATALOG_NOT_FOUND` otherwise); every scanned table must bind (400 `ANALYSIS_ERROR`, `catalog 'x' not found`); reading needs `query` (403 `ACCESS_DENIED`); DDL inside a catalog needs `manage` (403); `SHOW CATALOGS|SCHEMAS|TABLES`, `DESCRIBE`, `SHOW CREATE TABLE`, `SHOW STATS FOR`, `DESCRIBE DETAIL`, `ANALYZE` resolve against the restricted view |
+| The result cache | consulted only after the statement binds against the identity's view, so a cached result is never served for a catalog the identity cannot resolve |
+| The platform | `GET /api/v1/lab/engine/sources` keeps only registry sources whose catalog is in the Engine's list for the verified principal, so SQL Lab's picker, its autocomplete, the catalog browser and the chart builder show granted catalogs; schema and table registration require `manage` on the catalog |
+| The CLI | `kaveon catalog list`, `schema list`, `table list`, `describe`, Tab completion: the coordinator's answers for the session's identity |
+
+### `KaveonDB`
+
+The transactional application and catalog authority is reserved: it is
+never grantable (400 `RESERVED_CATALOG`), and it is hidden from every
+role — administrators included — until its read-only `product` and
+`catalog` views exist. They do not yet
+(`docs/engineering/unified-kaveondb-metadata.md`, "Current state"), so
+the evaluator fails closed on the name whatever its case rather than
+expose internals. When the projection ships, administrators get the
+read-only views and `system`; nobody else sees it.
+
+### Managing grants
+
+`GET /v1/admin/catalog-access` (admin) is the document: the store's
+standing (`enabled`, `generation`, `snapshot_id`), the grantable
+`catalogs`, the `reserved` authority, the role ceilings and every grant.
+`PUT /v1/admin/catalog-access/grants` with
+`{"principal", "catalog", "access"[, "revision"]}` creates a grant (no
+revision) or changes one at its current revision; `DELETE` on the same
+path with `{"principal", "catalog", "revision"}` revokes it. A stale or
+missing revision is 409 `REVISION_CONFLICT` naming the current one; an
+unregistered catalog 404; the reserved one 400 `RESERVED_CATALOG`; a bad
+name 400 `INVALID_GRANT`. `GET /v1/admin/catalog-access/effective/{principal}`
+is the effective view: each grant with the level every Engine role would
+reach on it, and the catalogs the principal is not granted. A request
+body never names the actor; the security layer's identity is the actor
+and the ledger records it. Studio's **Settings → Catalog access** page
+manages the same document and hands a conflict back as a reload;
+`kaveon catalog access …` does the same from the command line.
+
+### Reconciling an open deployment
+
+Before grants existed every signed-in principal saw every catalog.
+`POST /v1/admin/catalog-access/import` with `{"source": "open"}` (admin)
+proposes that policy as explicit grants: one per principal the audit
+ledger has seen submit a statement, per grantable catalog, at the ceiling
+of the highest non-admin role it held (`reader` → `browse`, `analyst` →
+`manage`), skipping pairs already granted and administrators, whose
+access is the role's. The answer is the proposal — `principals_seen`,
+`catalogs`, `proposed` — and nothing is recorded; with `"apply": true`
+the proposal is recorded in one publication, each grant audited under
+the administrator, and `recorded` lists them. Leaving it unrecorded keeps
+the default: deny. A ledger that is off (`ledger_enabled: false`)
+proposes nothing. Studio's page previews and records it; the CLI is
+`kaveon catalog access import --from-open [--apply]`.
+
+### Audit
+
+`catalog_access.grant` and `catalog_access.revoke` lines carry the
+administrator (`principal`, `role`), `object_type` `catalog_grant`,
+`object_id` `<catalog>/<principal>`, `catalog`, `revision_before` and
+`revision_after` (absent for a create and a revoke respectively) and
+`details` (`principal`, `access`, `access_before` when changed,
+`imported` for the reconciliation, the authority's `generation`).
 
 ## Resource groups
 
@@ -289,6 +433,7 @@ other fields are present when the kind has them.
 | `catalog.create`, `catalog.update`, `catalog.delete` | a durable catalog, schema or table definition changed, through `/v1/catalog/*` or a catalog statement | `principal` (the actor), `object_type`, `object_id`, `revision_before` (absent for a create), `revision_after` (absent for a delete), `details` (a cascade's counts) |
 | `settings.resource_groups` | `PUT /v1/admin/resource-groups` applied | `principal`, `role`, `details` (`groups_before`, `groups_after`, `selectors_before`, `selectors_after`) |
 | `settings.cache_cleared` | `DELETE /v1/cache` | `principal`, `role`, `details` (`cleared_entries`, `cleared_bytes`) |
+| `catalog_access.grant`, `catalog_access.revoke` | a catalog grant was created, changed or revoked ([catalog access](#catalog-access)) | `principal`, `role` (the administrator), `catalog`, `object_type` (`catalog_grant`), `object_id` (`<catalog>/<principal>`), `revision_before`, `revision_after`, `details` (`principal`, `access`, `access_before`, `imported`, `generation`) |
 | `auth.unauthorized`, `auth.forbidden` | a request was refused with 401 or 403 by the security layer | `route` (`METHOD /path`), `principal` (the one the request named or resolved to, when any), `error_code` |
 
 Catalog lines come from the catalog store's own `audit_events` table:
@@ -308,7 +453,7 @@ store's newest event: it starts at its own start.
 oldest first. Parameters: `since` and `until` (Unix milliseconds,
 `YYYY-MM-DD`, or `YYYY-MM-DDTHH:MM:SS[.fff]Z`), `principal` (exact),
 `kind` (comma-separated exact kinds or families: `statement`, `catalog`,
-`settings`, `auth`), `query_id`, `limit` (1 to 1000, default 200) and
+`catalog_access`, `settings`, `auth`), `query_id`, `limit` (1 to 1000, default 200) and
 `cursor` (a `next_cursor` from the previous page). `format=jsonl` streams
 every matching record as `application/x-ndjson`, one object per line, a
 page at a time, for export; the same filters apply. A read flushes the

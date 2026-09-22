@@ -685,6 +685,52 @@ with `resource_group`, `limit` (`{"max_memory_bytes"}`, `{"max_queued"}`
 or `{"max_queue_wait_seconds"}`) and `admission_wait_ms`; a refusal by the
 node's pool or queue keeps the code below and names the group too.
 
+### Catalog access
+
+Every metadata route and every statement answers for the identity the
+security layer resolved — the bridge's verified principal and role, a
+static principal, an Entra identity — against the catalogs that identity
+was granted; a request body or query string never names a catalog claim
+or a role. The policy, the levels and the role mapping are in
+[Governance](../engine/governance.md#catalog-access). What it means on
+the wire:
+
+| Route | For an ungranted or reserved catalog |
+|---|---|
+| `GET /v1/catalog` | the name is absent from `catalogs` |
+| `GET /v1/catalog/{catalog}/schema`, `GET /v1/catalog/{catalog}/schema/{schema}/table` | 404 `CATALOG_NOT_FOUND`, `catalog 'x' not found` — the same answer as for a catalog that does not exist |
+| `GET /v1/catalog/definitions` | the definition is absent; each listed catalog carries `access` (`browse`, `query`, `manage`), the identity's level on it |
+| `GET /v1/catalog/definitions/{id}`, `…/{id}/schemas`, `GET /v1/catalog/schemas/{id}`, `…/{id}/tables`, `GET /v1/catalog/tables/{id}`, `…/statistics`, `…/version` | 404 |
+| `POST /v1/statement` | session catalog: 400 `CATALOG_NOT_FOUND`; a scanned table: 400 `ANALYSIS_ERROR`, `SQL analysis error: execution: catalog 'x' not found`; a `browse`-only grant on a read: 403 `ACCESS_DENIED`; DDL below `manage`: 403 `FORBIDDEN`; `SHOW …`, `DESCRIBE …`, `SHOW STATS FOR`, `DESCRIBE DETAIL`, `ANALYZE`: as the metadata routes |
+| `GET /v1/catalog-access/me` | the caller's own standing: `principal`, `role`, `store_enabled`, `catalogs` (`[{"catalog", "access"}]`) |
+
+The catalog service credential (`KAVEON_ENGINE_CATALOG_TOKEN`, confined
+to `/v1/catalog/*`) carries no identity and keeps the whole view; it is
+the platform's own credential, never a user's.
+
+Administration, all admin and on the coordinator (403 otherwise, 400
+`NOT_COORDINATOR` on a worker); the grants family needs the KaveonDB
+authority (503 `ACCESS_STORE_DISABLED` without it):
+
+| Route | Body | Answer |
+|---|---|---|
+| `GET /v1/admin/catalog-access` | — | `store` (`enabled`, `generation`, `snapshot_id`), `catalogs` (grantable), `reserved` (`KaveonDB`: `grantable`, `visible_to`, `reason`), `roles` (the ceilings), `grants` (`principal`, `catalog`, `access`, `revision`, `granted_by`, `granted_at_ms`) |
+| `PUT /v1/admin/catalog-access/grants` | `{"principal", "catalog", "access"[, "revision"]}` | 200 `grant`, `revision_before`, `generation`, `effective` (per role); 409 `REVISION_CONFLICT` when the revision is stale, missing for an existing grant, or given for a grant that no longer exists; 404 `CATALOG_NOT_FOUND` for an unregistered catalog; 400 `RESERVED_CATALOG`, `INVALID_GRANT` |
+| `DELETE /v1/admin/catalog-access/grants` | `{"principal", "catalog", "revision"}` | 200 `revoked`, `generation`; 409 `REVISION_CONFLICT` |
+| `GET /v1/admin/catalog-access/effective/{principal}` | — | `principal`, `store_enabled`, `grants` (each with `registered` and `effective` per role), `ungranted`, `reserved`, `roles` |
+| `POST /v1/admin/catalog-access/import` | `{"source": "open"[, "apply": bool]}` | the proposal from the audit ledger (`ledger_enabled`, `principals_seen`, `catalogs`, `proposed` with `role_seen`); `applied` and `recorded` once applied; 400 `INVALID_IMPORT` for any other source |
+
+An outcome the authority could not confirm either way is 503
+`ACCESS_OUTCOME_INDETERMINATE`: reload and compare before retrying. The
+platform proxies the same routes under
+`/api/v1/engine/admin/catalog-access[/grants|/effective/{principal}|/import]`
+and `/api/v1/engine/catalog-access/me`, forwarding the verified principal
+and role, with the Engine's 409 passed through as 409 for the Studio to
+reload on; `/api/v1/lab/engine/sources` lists only registry sources whose
+catalog the Engine lists for the caller, and the schema and table
+registration routes under `/api/v1/engine/catalog` require `manage` on
+the catalog as the Engine reports it.
+
 ### Audit ledger
 
 `GET /v1/audit` (admin) reads the coordinator's append-only ledger,
@@ -692,7 +738,7 @@ oldest first: `{"records": [...], "next_cursor": <seq>}`, `next_cursor`
 present when more follow and passed back as `cursor`. Filters: `since`,
 `until` (Unix milliseconds, `YYYY-MM-DD`, or an RFC 3339 UTC timestamp),
 `principal`, `kind` (comma-separated kinds or families `statement`,
-`catalog`, `settings`, `auth`), `query_id`; `limit` 1 to 1000, default
+`catalog`, `catalog_access`, `settings`, `auth`), `query_id`; `limit` 1 to 1000, default
 200. `format=jsonl` streams every matching record as
 `application/x-ndjson` for export. An invalid parameter is 400
 `INVALID_AUDIT_QUERY`; a node without a ledger (a worker, or
