@@ -46,6 +46,7 @@ import dlm.profiler as profiler
 import dlm.engine_dialect as dialects
 import services.datasets as datasets_svc
 import dlm.hll as hll
+import dlm.curation as auto_curation
 
 logger = logging.getLogger(__name__)
 
@@ -392,6 +393,12 @@ def _generate_dlm_bound(dataset_id: str, force: bool, actor: Optional[str], ds: 
     import time as _time
     shape = (engine_table or {}).get("shape") if binding else None
 
+    # What the Engine knows about this table — the substrate auto-curation
+    # derives the context spec from. Metadata reads only; None when the table
+    # has no statistics record, which degrades the spec to the old heuristic.
+    facts = _engine_facts(binding, columns, shape)
+    derived_spec = _suggest_spec(columns, metrics, shape=shape, engine=bool(binding), facts=facts)
+
     # 1) fingerprint the structural definition — cheap change-detection
     source_hash = _fingerprint(ds, columns, dimensions, metrics, shape)
     if not force:
@@ -446,8 +453,10 @@ def _generate_dlm_bound(dataset_id: str, force: bool, actor: Optional[str], ds: 
     #    back to a bounded generate-time scan for views / unanalyzed tables that
     #    have no catalog stats. Only low-cardinality dimensions get indexed.
     cube_dims = {str(d.get("name")) for d in ((shape or {}).get("dimensions") or []) if d.get("name")}
+    indexable = set(auto_curation.indexable_dimensions(derived_spec)) if facts and facts.known() else None
     value_rows = _value_inventory(str(dataset_id), database, schema, columns, dimensions,
-                                  snapshots, stats_supported, cube_dims=cube_dims)
+                                  snapshots, stats_supported, cube_dims=cube_dims,
+                                  indexable=indexable)
 
     # 4) usage rollup — how often each table has actually been asked about
     usage_rollup = _usage_rollup(schema, columns, dimensions, snapshots)
@@ -480,7 +489,8 @@ def _generate_dlm_bound(dataset_id: str, force: bool, actor: Optional[str], ds: 
             database, schema, ds.get("table_name") or ds.get("fact_table"))
 
     # 6) manifest — the deterministic assembler's map of the dataset
-    manifest = _manifest(ds, columns, dimensions, metrics, shape=shape, engine=bool(binding))
+    manifest = _manifest(ds, columns, dimensions, metrics, shape=shape, engine=bool(binding),
+                         facts=facts, spec=derived_spec)
 
     # 7) persist artifact + value index + router summary atomically-ish
     _persist_value_index(str(dataset_id), value_rows)
@@ -1354,23 +1364,30 @@ def _value_dataset_hits(q_tokens: set) -> Dict[str, int]:
 
 def _value_inventory(dataset_id: str, database: str, schema: str, columns: List[dict],
                      dimensions: List[dict], snapshots: Dict[str, dict],
-                     stats_supported: bool, cube_dims: Optional[set] = None) -> List[Dict[str, Any]]:
+                     stats_supported: bool, cube_dims: Optional[set] = None,
+                     indexable: Optional[set] = None) -> List[Dict[str, Any]]:
     """Which dimension values the DLM can recognise. With catalog statistics the
     index is built from them plus bounded scans; a native KaveonDB catalog has
     no pg_stats but runs the same bounded distinct scan on the Engine, so its
     datasets resolve entities ("in India") exactly like PostgreSQL ones. Other
-    external sources without statistics get no index rather than a full scan."""
+    external sources without statistics get no index rather than a full scan.
+
+    `indexable` is the set of dimensions the Engine's statistics say are
+    low-cardinality enough to enumerate; when it is given, no other column is
+    even considered, so a free-text or identifier column is never scanned."""
     if stats_supported:
-        return _build_value_index(dataset_id, database, schema, columns, dimensions, snapshots)
+        return _build_value_index(dataset_id, database, schema, columns, dimensions, snapshots,
+                                  indexable=indexable)
     if _native_catalog(database):
         return _build_value_index(dataset_id, database, schema, columns, dimensions, {},
-                                  cube_dims=cube_dims)
+                                  cube_dims=cube_dims, indexable=indexable)
     return []
 
 
 def _build_value_index(dataset_id: str, database: str, schema: str, columns: List[dict],
                        dimensions: List[dict], snapshots: Dict[str, dict],
-                       cube_dims: Optional[set] = None) -> List[Dict[str, Any]]:
+                       cube_dims: Optional[set] = None,
+                       indexable: Optional[set] = None) -> List[Dict[str, Any]]:
     """Enumerate the values of each low-cardinality dimension. A bounded GROUP BY
     scan is the primary source — it returns the COMPLETE set exactly, which
     matters for uniformly-distributed dims (e.g. covid 'country' in a daily
@@ -1385,6 +1402,8 @@ def _build_value_index(dataset_id: str, database: str, schema: str, columns: Lis
         table = (col.get("table_name") or "").strip()
         cname = (col.get("column_name") or col.get("name") or "").strip()
         if not (cname and table):
+            continue
+        if indexable is not None and cname not in indexable:
             continue
         ek = profiler.column_key(schema, table, cname)
         snap = snapshots.get(ek)
@@ -1433,7 +1452,9 @@ def _build_value_index(dataset_id: str, database: str, schema: str, columns: Lis
 
 
 def _manifest(ds: dict, columns: List[dict], dimensions: List[dict],
-              metrics: List[dict], shape: Optional[dict] = None, engine: bool = False) -> Dict[str, Any]:
+              metrics: List[dict], shape: Optional[dict] = None, engine: bool = False,
+              facts: Optional["auto_curation.TableFacts"] = None,
+              spec: Optional[dict] = None) -> Dict[str, Any]:
     cols = [{
         "table": c.get("table_name"),
         "name": c.get("column_name") or c.get("name"),
@@ -1467,7 +1488,8 @@ def _manifest(ds: dict, columns: List[dict], dimensions: List[dict],
         "columns": cols,
         "joins": joins,
         "metrics": mets,
-        "context_spec": _suggest_spec(columns, metrics, shape=shape, engine=engine),
+        "context_spec": spec if spec is not None else _suggest_spec(
+            columns, metrics, shape=shape, engine=engine, facts=facts),
         **({"engine": {"source": datasets_svc.source_binding(ds.get("source")), "shape": shape}} if engine else {}),
     }
 
@@ -1925,6 +1947,21 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
                if not _mspec.get(m.get("name") or m.get("metric_name"), {}).get("hidden")]
     dims = [d for d in dims
             if not _dspec.get(d.get("column_name") or d.get("name"), {}).get("hidden")]
+    if (spec.get("derived_from") or {}).get("source") == "engine_statistics":
+        # The statistics, not the column's spelling, say what can be grouped by:
+        # a near-unique or free-text column is dropped even if the dataset calls
+        # it a dimension, and a column the record shows is low-cardinality is
+        # added even if the dataset does not.
+        dims = [d for d in dims if (d.get("column_name") or d.get("name")) in _dspec]
+        known = {d.get("column_name") or d.get("name") for d in dims}
+        dims += [c for c in columns
+                 if (c.get("column_name") or c.get("name")) in _dspec
+                 and (c.get("column_name") or c.get("name")) not in known
+                 and not _dspec.get(c.get("column_name") or c.get("name"), {}).get("hidden")]
+    # The time dimension the statistics found, when the dataset never named one.
+    time_spec = spec.get("time") if isinstance(spec.get("time"), dict) else None
+    if not date_column and time_spec and time_spec.get("column"):
+        date_column = time_spec["column"]
 
     question = _fuzzy_question(question, _dataset_vocabulary(metrics, dims, m_alias, d_alias))
     qset = set(_tokenize(_strip_time_phrases(question)))
@@ -4664,6 +4701,43 @@ def _engine_version(table_id: str) -> Optional[Dict[str, Any]]:
     return version
 
 
+def _engine_facts(binding: Optional[dict], columns: List[dict],
+                  shape: Optional[dict]) -> Optional["auto_curation.TableFacts"]:
+    """What the Engine knows about the bound table, for auto-curation: its
+    statistics record and, when every column it would name already carries its
+    sketch, one `APPROX_*` statement answered from those statistics. Both are
+    metadata reads — a table that was never analyzed simply yields facts the
+    derivation degrades against, and a probe that the Engine would have had to
+    scan for is discarded rather than run."""
+    if not binding:
+        return None
+    from services import engine_bridge
+    try:
+        statistics = engine_bridge.table_statistics(binding["table_id"], _SERVICE_ACTOR, "Admin")
+    except Exception as error:
+        logger.info("Engine statistics unavailable for %s: %s", binding["table_id"], type(error).__name__)
+        return None
+    if not isinstance(statistics, dict):
+        return None
+    arrow_types = {str(c.get("column_name") or c.get("name") or ""): c.get("data_type")
+                   for c in columns or []}
+    qualified = f"{binding['catalog']}.{binding['schema']}.{binding['table']}"
+
+    def run_probe(sql: str):
+        result = engine_bridge.execute(sql, binding["catalog"], _SERVICE_ACTOR, "Analyst",
+                                       binding["schema"] or None, timeout=60,
+                                       settings={"use_statistics": True, "result_cache": False})
+        rows = result.get("data") or result.get("rows") or []
+        record = result.get("query_details") if isinstance(result.get("query_details"), dict) else {}
+        row = rows[0] if rows else None
+        if isinstance(row, dict):
+            row = list(row.values())
+        return row, (record or {}).get("execution")
+
+    return auto_curation.facts_from_engine(statistics, shape, arrow_types,
+                                           run_probe=run_probe, table=qualified)
+
+
 def _change_counter(database: str, schema: str, table: Optional[str]) -> Dict[str, Any]:
     """The warehouse's change counter for the fact table as read now — the
     version a warehouse answer reflects. PostgreSQL's `pg_stat_user_tables`
@@ -5051,16 +5125,30 @@ _SPEC_CACHE: Dict[str, dict] = {}
 
 
 def _suggest_spec(columns: List[dict], metrics: List[dict], shape: Optional[dict] = None,
-                  engine: bool = False) -> dict:
-    """Auto-derive a starter context spec at generate time: aliases from the seed
-    lexicon, additivity inferred from the aggregate, every dimension precomputed
-    by default. The user edits this on the context page; edits persist separately.
+                  engine: bool = False, facts: Optional["auto_curation.TableFacts"] = None) -> dict:
+    """Auto-derive a starter context spec at generate time. The user edits this
+    on the context page; edits persist separately.
 
-    Over an Engine table the declared shape is the authority on additivity: a
-    measure declared `count_distinct` is non-additive and marked `approximate`
-    (the cube holds it as a sketch and the Engine states the error); the spec
-    also carries the dataset's freshness policy — `cached` lets the Engine's
-    result cache answer a repeated statement, `live` bypasses it."""
+    When the Engine has a statistics record for the table (`facts`), the spec
+    is *derived* rather than guessed: distinct counts decide dimension vs
+    measure vs identifier, KLL quantiles decide a measure's outlier-safe range,
+    null counts decide optionality, and the temporal column's bounds decide the
+    time dimension, its grain, and what "current" means — the maximum date in
+    the data, not today. A declared shape wins over all of it. Every element
+    carries the evidence it came from (`dlm/curation.py`).
+
+    Without a record — a warehouse dataset, or a table never analyzed — this
+    falls back to the original name-and-type heuristic: aliases from the seed
+    lexicon, additivity inferred from the aggregate, every dimension
+    precomputed by default. Over an Engine table the declared shape is still
+    the authority on additivity: a measure declared `count_distinct` is
+    non-additive and marked `approximate` (the cube holds it as a sketch and
+    the Engine states the error); the spec also carries the dataset's freshness
+    policy — `cached` lets the Engine's result cache answer a repeated
+    statement, `live` bypasses it."""
+    if facts is not None and facts.known():
+        return auto_curation.derive(columns, metrics, facts, engine=engine,
+                               synonyms=_synonyms_for, distinct_expr=_distinct_col)
     ms: Dict[str, dict] = {}
     for i, m in enumerate(metrics):
         name = m.get("name") or m.get("metric_name")
@@ -5097,32 +5185,56 @@ def _suggest_spec(columns: List[dict], metrics: List[dict], shape: Optional[dict
     return spec
 
 
-def _merge_spec(suggested: dict, curation: dict) -> dict:
-    """Overlay human curation on the auto-suggested spec. Aliases union (users add,
-    never silently lose a suggestion); scalar flags override; value_aliases merge."""
+def _merge_spec(suggested: dict, curated: dict) -> dict:
+    """Overlay human curation on the auto-derived spec.
+
+    The merge is what makes a regenerate idempotent *and* non-destructive:
+    every **derived** field (cardinality, null counts, ranges, evidence, the
+    time dimension's bounds and grain) is replaced by what the record now
+    says, and every **curated** field (display name, aliases, additivity, the
+    default metric, whether an element is hidden or precomputed, how deep the
+    value index goes) survives untouched. An element the curator edited is
+    marked `curated: [fields]` so the editor can show what is theirs.
+
+    Curation on an element the table no longer has is dropped rather than
+    resurrecting a column that is gone; curation on a *field* the record owns
+    (`cardinality`, `evidence`, …) is ignored rather than letting a stale
+    hand-typed number stand in for the statistic."""
     out: Dict[str, Any] = {"metrics": {}, "dimensions": {}, "value_aliases": {}}
     for kind in ("metrics", "dimensions"):
         base = suggested.get(kind) or {}
-        over = curation.get(kind) or {}
+        over = curated.get(kind) or {}
         for key, val in base.items():
             entry = dict(val)
             o = over.get(key) or {}
+            applied: List[str] = []
             if "aliases" in o:
                 # curated list is authoritative (WYSIWYG editor pre-fills from
                 # effective, so this supports removing a suggested alias too)
                 entry["aliases"] = sorted(set(o.get("aliases") or []))
-            for f in ("display_name", "additive", "default", "precompute", "top_n", "hidden", "approximate"):
+                applied.append("aliases")
+            for f in auto_curation.CURATABLE_FIELDS:
                 if f in o:
                     entry[f] = o[f]
+                    applied.append(f)
+            if applied:
+                entry["curated"] = sorted(set(applied))
             out[kind][key] = entry
     va = dict(suggested.get("value_aliases") or {})
-    va.update(curation.get("value_aliases") or {})
+    va.update(curated.get("value_aliases") or {})
     out["value_aliases"] = va
-    policy = curation.get("freshness_policy") or suggested.get("freshness_policy")
+    policy = curated.get("freshness_policy") or suggested.get("freshness_policy")
     if policy:
         out["freshness_policy"] = policy
+    # Derived-only sections: always the record's word, refreshed on every
+    # regenerate, never overwritten by curation.
+    for section in ("identifiers", "time", "rows", "derived_from"):
+        if suggested.get(section) is not None:
+            out[section] = suggested[section]
     # default metric: explicit curation wins, else the one flagged default, else first
-    dflt = curation.get("default_metric")
+    dflt = curated.get("default_metric")
+    if dflt and dflt not in out["metrics"]:
+        dflt = None
     if not dflt:
         for k, v in out["metrics"].items():
             if v.get("default"):
