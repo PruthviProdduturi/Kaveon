@@ -100,6 +100,75 @@ export function labHref(catalog: string, schema: string, table: string) {
   const sql = `SELECT *\nFROM ${quoteIdent(catalog)}.${quoteIdent(schema)}.${quoteIdent(table)}\nLIMIT 100`;
   return `/lab?catalog=${enc(catalog)}&schema=${enc(schema)}&name=${enc(table)}&query=${encodeURIComponent(sql)}`;
 }
+// ── Reading the measurements ─────────────────────────────────────────────────
+// Numbers a reader has to trust are never rounded away: a row count is written
+// in full, and a byte total in the binary units storage is actually billed and
+// listed in. Nothing here invents a value for a fact that was not measured.
+
+/** An exact count with thousands separators; an em dash when nothing was counted. */
+export const count = (value: number | null | undefined) =>
+  typeof value === "number" ? value.toLocaleString() : "—";
+
+/** Bytes as stored, in binary units: 2.23 KiB, 68.4 MiB, 1.21 GiB. */
+export function bytes(value: number | null | undefined): string {
+  if (typeof value !== "number") return "—";
+  if (value < 1024) return `${value} B`;
+  const units = ["KiB", "MiB", "GiB", "TiB", "PiB"];
+  let size = value / 1024, unit = 0;
+  while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit += 1; }
+  return `${size >= 100 ? Math.round(size) : size.toFixed(size >= 10 ? 1 : 2)} ${units[unit]}`;
+}
+
+/** How long ago, in the coarsest unit that still says something: 4 min, 6 h, 12 d. */
+export function since(ms: number | null | undefined): string {
+  if (typeof ms !== "number" || !Number.isFinite(ms)) return "—";
+  const seconds = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (seconds < 90) return "just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 90) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 36) return `${hours} h ago`;
+  const days = Math.round(hours / 24);
+  if (days < 45) return `${days} d ago`;
+  const months = Math.round(days / 30);
+  return months < 24 ? `${months} mo ago` : `${Math.round(months / 12)} y ago`;
+}
+
+export const exactTime = (ms: number | null | undefined) =>
+  typeof ms === "number" && Number.isFinite(ms) ? new Date(ms).toLocaleString() : "";
+
+/** The Engine's own name for a version: `delta v12`, `iceberg snapshot 8842`, `12 files`, `single file`. */
+export function versionLabel(version: SourceVersion | null | undefined): string {
+  if (!version) return "—";
+  switch (version.kind) {
+    case "delta_version": return `delta v${version.version}`;
+    case "iceberg_snapshot": return version.snapshot_id != null ? `iceberg snapshot ${version.snapshot_id}` : "iceberg";
+    case "listing": return `${version.files.toLocaleString()} file${version.files === 1 ? "" : "s"}`;
+    case "file": return "single file";
+    default: return "—";
+  }
+}
+
+/** The first twelve characters of the version digest — what the Engine prints. */
+export const versionDigest = (version: SourceVersion | null | undefined) =>
+  version?.identity_sha256 ? version.identity_sha256.slice(0, 12) : "";
+
+/** The declared format, as the catalog holds it. */
+export const formatLabel = (format: TableFormat | string | null) => format || "—";
+
+/**
+ * Whether a Parquet table is one file or a directory of them — a distinction
+ * the source version makes and the definition does not, and the difference
+ * between a table that grows by appending files and one that is rewritten.
+ * Empty for Delta and Iceberg, whose logs already say it.
+ */
+export function formatKind(format: TableFormat | string | null, version?: SourceVersion | null): string {
+  if (format !== "Parquet" || !version) return "";
+  if (version.kind === "file") return "single file";
+  if (version.kind === "listing") return "directory";
+  return "";
+}
+
 export function shortLocation(location: string): { host: string; path: string } {
   const m = location.match(/^([a-z0-9+.-]+:\/\/[^/]+)(\/.*)?$/i);
   return m ? { host: m[1], path: m[2] || "/" } : { host: "", path: location };
@@ -132,6 +201,12 @@ export interface EngineColumn { name: string; data_type: unknown; nullable: bool
 export interface EngineTable {
   id: string; schema_id: string; name: string; revision: number; lifecycle: string;
   location: string; access: string; format: TableFormat; columns: EngineColumn[];
+  /** Columns read from `key=value` path segments; absent unless the table is a partitioned directory. */
+  partitions?: { name: string; data_type?: unknown }[];
+  /** Clustering and Bloom columns; absent unless declared. */
+  layout?: { clustered_by?: string[]; bloom?: string[] };
+  /** The shape a cube is built over; absent unless declared. */
+  shape?: { dimensions?: { name: string; cap?: number }[]; measures?: { column: string; aggregates: string[] }[]; time?: unknown };
 }
 export interface ColumnInput { name: string; type: string; nullable: boolean }
 export interface Probe { rowCount: number; elapsedMs: number | null; queryId: string | null }
@@ -160,6 +235,55 @@ export const fetchDefinitions = async () =>
   (await get<{ definitions: CatalogDefinition[] }>("/engine/catalog/definitions")).definitions;
 export const fetchSchemaDefinitions = async (catalogId: string) =>
   (await get<{ schemas: SchemaDefinition[] }>(`/engine/catalog/definitions/${enc(catalogId)}/schemas`)).schemas;
+
+export const fetchTableDefinitions = async (schemaId: string) =>
+  (await get<{ tables: EngineTable[] }>(`/engine/catalog/schemas/${enc(schemaId)}/tables`)).tables;
+
+// ── Inventory ────────────────────────────────────────────────────────────────
+// What the Engine has measured about each table in a schema, read in one call
+// per schema rather than two per table. Definitions arrive first and draw the
+// rows; measurements fill the cells those rows already reserved.
+
+/** How the source is versioned, and therefore how a change to it is noticed. */
+export type SourceVersion =
+  | { kind: "delta_version"; version: number; identity_sha256: string }
+  | { kind: "iceberg_snapshot"; snapshot_id: number | null; identity_sha256: string }
+  | { kind: "listing"; files: number; identity_sha256: string }
+  | { kind: "file"; identity_sha256: string };
+
+export interface Measurement {
+  tableId: string;
+  /** measured: statistics on record · unmeasured: never analyzed · unreadable: the location did not answer. */
+  state: "measured" | "unmeasured" | "unreadable";
+  error?: string | null;
+  sourceVersion?: SourceVersion | null;
+  currentSourceVersion?: SourceVersion | null;
+  observedAtMs?: number | null;
+  stale?: boolean;
+  computedAtMs?: number | null;
+  depth?: "metadata" | "full" | null;
+  rows?: number | null;
+  bytes?: number | null;
+  files?: number | null;
+  rowGroups?: number | null;
+  uncompressedBytes?: number | null;
+  lastModifiedMs?: number | null;
+  partitionColumns?: string[];
+  measuredColumns?: number | null;
+}
+
+export const fetchInventory = async (schemaId: string, refresh = false) =>
+  (await get<{ measurements: Measurement[] }>(
+    `/engine/catalog/schemas/${enc(schemaId)}/inventory${refresh ? "?refresh=true" : ""}`)).measurements;
+
+/** How deeply to measure a table; nothing set reads metadata only. */
+export interface AnalyzeDepth { sketches?: boolean; distinct?: boolean; cube?: boolean }
+export interface AnalyzeResult {
+  statement: string;
+  result: { table?: string; row_count?: number; distinct_columns?: number; cube_cells?: number | null };
+}
+export const analyzeTable = (tableId: string, depth: AnalyzeDepth) =>
+  send<AnalyzeResult>(`/engine/catalog/tables/${enc(tableId)}/analyze`, json("POST", depth));
 
 export const createSchema = async (catalogId: string, name: string) =>
   (await send<{ schema: SchemaDefinition }>(`/engine/catalog/definitions/${enc(catalogId)}/schemas`, json("POST", { name }))).schema;
