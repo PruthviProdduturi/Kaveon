@@ -5,7 +5,7 @@ from fastapi import HTTPException, Response
 from pydantic import ValidationError
 
 from middleware.auth import UserContext
-from models.engine_catalog import ColumnSpec, TableCreate, TableReplace, arrow_type
+from models.engine_catalog import ColumnSpec, TableAnalyze, TableCreate, TableReplace, arrow_type
 from routers import engine_catalog
 from services import engine_bridge
 
@@ -278,6 +278,189 @@ class BridgeTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as error:
             engine_bridge.probe_table("Benchmarks", "tpch_sf1", "region", "viewer@example.com", "Viewer")
         self.assertEqual(error.exception.status_code, 403)
+
+
+class InventoryTests(unittest.TestCase):
+    """The per-schema batch: one call, one row per table, and never a whole
+    page lost to the one table the Engine cannot read."""
+
+    VIEWER = UserContext("viewer@example.com", "Viewer")
+
+    def setUp(self):
+        engine_catalog._INVENTORY_CACHE.clear()
+
+    @staticmethod
+    def _table(name):
+        return {"id": f"table:Benchmarks:tpch_sf1:{name}", "schema_id": SCHEMA["id"], "name": name,
+                "location": f"tpch/sf1/{name}", "access": "Shortcut", "format": "Delta",
+                "revision": 2, "lifecycle": "Active", "columns": []}
+
+    STATISTICS = {
+        "state": "measured", "table_id": "table:Benchmarks:tpch_sf1:region",
+        "source_version": {"kind": "delta_version", "version": 4, "identity_sha256": "a" * 64},
+        "current_source_version": {"kind": "delta_version", "version": 5, "identity_sha256": "b" * 64},
+        "observed_at_ms": 1790000000000, "stale": True,
+        "statistics": {"rows": 5, "bytes": 2284, "files": 1, "row_groups": 1, "uncompressed_bytes": 1424,
+                       "computed_at_ms": 1789000000000, "depth": "metadata", "partition_columns": ["r_year"],
+                       "source_version": {"kind": "delta_version", "version": 4, "identity_sha256": "a" * 64},
+                       "columns": [{"name": "r_regionkey"}, {"name": "r_name"}]},
+    }
+
+    def _inventory(self, measurements):
+        tables = [self._table(name) for name in ("region", "nation", "orders")]
+        with patch.object(engine_bridge, "schema_definition", return_value=SCHEMA), \
+             patch.object(engine_bridge, "table_definitions", return_value=tables), \
+             patch.object(engine_bridge, "table_measurement", side_effect=measurements):
+            return engine_catalog.schema_inventory(SCHEMA["id"], Response(), False, self.VIEWER)["measurements"]
+
+    def test_every_table_is_one_row_in_the_platform_shape(self):
+        rows = self._inventory([
+            self.STATISTICS,
+            {"state": "unmeasured", "source_version": {"kind": "listing", "files": 12, "identity_sha256": "c" * 64},
+             "observed_at_ms": 1790000000001},
+            {"state": "unreadable", "error": "source version of Benchmarks.tpch_sf1.orders is unreadable: no such path"},
+        ])
+        self.assertEqual([row["state"] for row in rows], ["measured", "unmeasured", "unreadable"])
+        measured = rows[0]
+        self.assertEqual((measured["rows"], measured["bytes"], measured["files"]), (5, 2284, 1))
+        self.assertEqual((measured["depth"], measured["stale"]), ("metadata", True))
+        self.assertEqual(measured["partitionColumns"], ["r_year"])
+        # Column-level facts stay on the table's own page; only the count travels.
+        self.assertEqual(measured["measuredColumns"], 2)
+        self.assertNotIn("columns", measured)
+        self.assertEqual(rows[1]["sourceVersion"]["files"], 12)
+        self.assertIsNone(rows[1].get("rows"))
+        # The storage error is the Engine's own words, kept whole.
+        self.assertIn("no such path", rows[2]["error"])
+
+    def test_one_refused_table_does_not_lose_the_others(self):
+        rows = self._inventory([HTTPException(502, "Engine is unavailable"), self.STATISTICS, self.STATISTICS])
+        self.assertEqual(rows[0], {"tableId": "table:Benchmarks:tpch_sf1:region", "state": "unreadable",
+                                   "error": "Engine is unavailable"})
+        self.assertEqual([row["state"] for row in rows[1:]], ["measured", "measured"])
+
+    def test_a_repeat_read_is_answered_from_the_last_one_until_refresh(self):
+        tables = [self._table("region")]
+        with patch.object(engine_bridge, "schema_definition", return_value=SCHEMA), \
+             patch.object(engine_bridge, "table_definitions", return_value=tables), \
+             patch.object(engine_bridge, "table_measurement", return_value=self.STATISTICS) as measure:
+            engine_catalog.schema_inventory(SCHEMA["id"], Response(), False, self.VIEWER)
+            engine_catalog.schema_inventory(SCHEMA["id"], Response(), False, self.VIEWER)
+            self.assertEqual(measure.call_count, 1)
+            engine_catalog.schema_inventory(SCHEMA["id"], Response(), True, self.VIEWER)
+            self.assertEqual(measure.call_count, 2)
+
+    def test_an_unknown_schema_is_not_found(self):
+        with patch.object(engine_bridge, "schema_definition", return_value=None):
+            with self.assertRaises(HTTPException) as error:
+                engine_catalog.schema_inventory("nope", Response(), False, self.VIEWER)
+        self.assertEqual(error.exception.status_code, 404)
+
+
+class AnalyzeTests(unittest.TestCase):
+    """ANALYZE is assembled from the table's own names, needs `manage`, and is
+    never offered a cube over a table that declares no shape."""
+
+    TABLE = {"id": "aks-benchmarks-tpch_sf1-region", "schema_id": SCHEMA["id"], "name": "region",
+             "location": "tpch/sf1/region", "access": "Shortcut", "format": "Delta", "revision": 2,
+             "lifecycle": "Active", "columns": []}
+
+    def _run(self, body, table=None):
+        with patch.object(engine_bridge, "table_definition_by_id", return_value=table or self.TABLE), \
+             patch.object(engine_bridge, "schema_definition", return_value=SCHEMA), \
+             patch.object(engine_bridge, "catalog_definition", return_value=CATALOG), \
+             patch.object(engine_bridge, "analyze_table",
+                          return_value=("ANALYZE tpch_sf1.region",
+                                        {"id": "q9",
+                                         "columns": [{"name": "table"}, {"name": "row_count"}, {"name": "cube_cells"}],
+                                         "data": [["Benchmarks.tpch_sf1.region", 5, 240]]})) as analyze:
+            result = engine_catalog.analyze_table_definition("aks-benchmarks-tpch_sf1-region", body, EDITOR)
+        return result, analyze
+
+    def test_the_depth_flags_reach_the_bridge_and_the_summary_comes_back(self):
+        result, analyze = self._run(TableAnalyze(sketches=True))
+        self.assertEqual(analyze.call_args.args[:3], ("Benchmarks", "tpch_sf1", "region"))
+        self.assertEqual(analyze.call_args.kwargs, {"sketches": True, "distinct": False, "cube": False})
+        self.assertEqual(result["result"]["row_count"], 5)
+        self.assertEqual(result["result"]["cube_cells"], 240)
+        self.assertEqual(result["queryId"], "q9")
+
+    def test_a_cube_needs_a_declared_shape(self):
+        with patch.object(engine_bridge, "table_definition_by_id", return_value=self.TABLE), \
+             patch.object(engine_bridge, "schema_definition", return_value=SCHEMA), \
+             patch.object(engine_bridge, "catalog_definition", return_value=CATALOG):
+            with self.assertRaises(HTTPException) as error:
+                engine_catalog.analyze_table_definition(
+                    "aks-benchmarks-tpch_sf1-region", TableAnalyze(cube=True), EDITOR)
+        self.assertEqual(error.exception.status_code, 409)
+        self.assertEqual(error.exception.detail["code"], "no_shape")
+        shaped = {**self.TABLE, "shape": {"dimensions": [{"name": "r_name"}]}}
+        result, _ = self._run(TableAnalyze(cube=True), table=shaped)
+        self.assertTrue(result["success"])
+
+    def test_changing_statistics_needs_manage_on_the_catalog(self):
+        with patch.object(engine_bridge, "table_definition_by_id", return_value=self.TABLE), \
+             patch.object(engine_bridge, "schema_definition", return_value=SCHEMA), \
+             patch.object(engine_bridge, "catalog_definition", return_value={**CATALOG, "access": "read"}):
+            with self.assertRaises(HTTPException) as error:
+                engine_catalog.analyze_table_definition("aks-benchmarks-tpch_sf1-region", TableAnalyze(), EDITOR)
+        self.assertEqual(error.exception.status_code, 403)
+
+
+class MeasurementBridgeTests(unittest.TestCase):
+    """`table_measurement` separates the three outcomes without raising, and
+    `analyze_table` builds its own statement and keeps the Engine's refusal."""
+
+    class _Response:
+        def __init__(self, status, body=None):
+            self.status_code, self._body = status, body
+            self.is_success = 200 <= status < 300
+
+        def json(self):
+            if self._body is None:
+                raise ValueError("no body")
+            return self._body
+
+    def test_statistics_on_record_come_back_as_measured(self):
+        body = {"table_id": "t", "stale": False, "statistics": {"rows": 7}}
+        with patch.object(engine_bridge, "_send", return_value=self._Response(200, body)):
+            result = engine_bridge.table_measurement("t", "a@b.c", "Viewer")
+        self.assertEqual(result["state"], "measured")
+        self.assertEqual(result["statistics"], {"rows": 7})
+
+    def test_a_table_never_analyzed_still_reports_its_version(self):
+        version = {"table_id": "t", "source_version": {"kind": "file", "identity_sha256": "d" * 64},
+                   "observed_at_ms": 1}
+        responses = [self._Response(404, {"code": "STATISTICS_UNAVAILABLE"}), self._Response(200, version)]
+        with patch.object(engine_bridge, "_send", side_effect=responses):
+            result = engine_bridge.table_measurement("t", "a@b.c", "Viewer")
+        self.assertEqual(result["state"], "unmeasured")
+        self.assertEqual(result["source_version"]["kind"], "file")
+
+    def test_an_unreadable_location_keeps_the_engines_words(self):
+        message = "source version of C.s.t is unreadable: failed to list /data/t"
+        with patch.object(engine_bridge, "_send",
+                          return_value=self._Response(502, {"error": message, "code": "SOURCE_UNAVAILABLE"})):
+            result = engine_bridge.table_measurement("t", "a@b.c", "Viewer")
+        self.assertEqual(result, {"state": "unreadable", "error": message})
+
+    def test_analyze_assembles_the_statement_and_raises_the_engines_refusal(self):
+        with patch.object(engine_bridge, "_send",
+                          return_value=self._Response(200, {"id": "q", "data": [], "columns": []})) as send:
+            statement, _ = engine_bridge.analyze_table("C", "s", "t", "a@b.c", "Editor",
+                                                       sketches=True, distinct=True)
+        self.assertEqual(statement, "ANALYZE s.t WITH (distinct = true, sketches = true)")
+        self.assertEqual(send.call_args.kwargs["payload"]["query"], statement)
+        self.assertEqual(engine_bridge._quote_ident("region"), "region")
+        self.assertEqual(engine_bridge._quote_ident('a"b'), '"a""b"')
+        with patch.object(engine_bridge, "_send",
+                          return_value=self._Response(400, {"error": "C.s.t is not in the durable catalog",
+                                                            "code": "TABLE_NOT_FOUND"})):
+            with self.assertRaises(HTTPException) as error:
+                engine_bridge.analyze_table("C", "s", "t", "a@b.c", "Editor")
+        self.assertEqual(error.exception.status_code, 422)
+        self.assertEqual(error.exception.detail["message"], "C.s.t is not in the durable catalog")
+        self.assertEqual(error.exception.detail["engineCode"], "TABLE_NOT_FOUND")
 
 
 if __name__ == "__main__":

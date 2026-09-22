@@ -700,6 +700,118 @@ def table_statistics(table_id, actor, role):
                     "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role))
 
 
+def table_measurement(table_id, actor, role):
+    """What the Engine has measured about one table, in the one shape the
+    Catalog reads it in.
+
+    Three outcomes, never an exception for any of them:
+
+    * `measured` — statistics are on record. `statistics` is the document and
+      `stale` says whether it still describes the source as observed now.
+    * `unmeasured` — the table has never been analyzed (the Engine answers 404
+      on the statistics route). The source version observed now is still
+      reported, because a reader wants to know the table is readable and at
+      what version even before anyone runs ANALYZE.
+    * `unreadable` — the location could not be read. The Engine's message is
+      kept verbatim: the person looking at the row needs the path or
+      permission problem it names, exactly as the registration flow shows it.
+
+    Only a transport failure or a refused bridge credential raises; a caller
+    measuring many tables must not lose the whole batch to one bad location.
+    """
+    path = "/v1/catalog/tables/" + quote(table_id, safe="")
+    engine_role = _read_role(role)
+    response = _send("GET", path + "/statistics", "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=engine_role)
+    if response.status_code == 429:
+        raise _too_many_requests(_response_json(response))
+    if response.status_code in {401, 403}:
+        raise HTTPException(502, "Engine rejected the bridge credential")
+    if response.is_success:
+        body = _response_json(response)
+        if isinstance(body, dict) and isinstance(body.get("statistics"), dict):
+            return {"state": "measured", **body}
+        return {"state": "unreadable", "error": "Engine returned an invalid statistics record"}
+    statistics_error = _engine_error_text(_response_json(response))
+    if response.status_code != 404:
+        return {"state": "unreadable", "error": statistics_error}
+
+    # 404 is either "no statistics yet" or "no such table"; the version route
+    # separates them and gives the version a row can show either way.
+    response = _send("GET", path + "/version", "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=engine_role)
+    if response.status_code == 429:
+        raise _too_many_requests(_response_json(response))
+    if response.status_code in {401, 403}:
+        raise HTTPException(502, "Engine rejected the bridge credential")
+    if response.is_success:
+        body = _response_json(response)
+        return {"state": "unmeasured", **(body if isinstance(body, dict) else {})}
+    if response.status_code == 404:
+        return {"state": "unreadable", "error": "The Engine no longer holds this table definition."}
+    return {"state": "unreadable", "error": _engine_error_text(_response_json(response))}
+
+
+def _engine_error_text(body):
+    """The Engine's own words for a refusal, or a plain fallback."""
+    if isinstance(body, dict):
+        for key in ("error", "message"):
+            if isinstance(body.get(key), str) and body[key].strip():
+                return body[key].strip()
+    return "The Engine could not read this location."
+
+
+def analyze_table(catalog, schema, table, actor, role, *, sketches=False, distinct=False,
+                  cube=False, timeout=600):
+    """Run ANALYZE over one table.
+
+    The statement is assembled here from the table's own catalog names and
+    boolean properties — never from caller text — so no free SQL reaches the
+    Engine through this path. A full read (sketches or a cube) legitimately
+    runs for minutes, so the bound is generous, and a caller that gives up
+    cancels the statement rather than leaving a scan running for everyone.
+
+    ANALYZE answers inline, and its refusals are the ones the person who
+    asked for it has to act on — an unreadable location, a table the durable
+    catalog does not hold, a cell limit. The Engine's own message is raised
+    verbatim instead of a generic rejection.
+    """
+    properties = [f"{name} = true" for name, on in
+                  (("distinct", distinct), ("sketches", sketches), ("cube", cube)) if on]
+    statement = f"ANALYZE {_quote_ident(schema)}.{_quote_ident(table)}"
+    if properties:
+        statement += " WITH (" + ", ".join(properties) + ")"
+    engine_role = _sql_role(role)
+    tag = "kaveon-api:" + uuid.uuid4().hex
+    payload = _statement_payload(statement, catalog, schema, tag, None)
+    try:
+        response = _send("POST", "/v1/statement", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
+                         payload=payload, role=engine_role, timeout=timeout)
+    except HTTPException as error:
+        if error.status_code == 504:
+            cancel_tagged(tag, actor, engine_role)
+        raise
+    if response.status_code == 429:
+        raise _too_many_requests(_response_json(response))
+    if response.status_code in {401, 403}:
+        raise HTTPException(502, "Engine rejected the bridge credential")
+    body = _response_json(response)
+    if not response.is_success:
+        raise HTTPException(422, {"code": "analyze_failed",
+                                  "engineCode": (body or {}).get("code") if isinstance(body, dict) else None,
+                                  "message": _engine_error_text(body),
+                                  "statement": statement})
+    if not isinstance(body, dict):
+        raise HTTPException(502, "Engine returned an invalid ANALYZE result")
+    return statement, body
+
+
+def _quote_ident(value):
+    """A catalog identifier as SQL. Plain names are written bare, as the
+    Engine's parser keeps ANSI quotes as part of a quoted identifier."""
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value or ""):
+        return value
+    return '"' + str(value).replace('"', '""') + '"'
+
+
 def _activate(path, definition, actor):
     """Draft revision 1 → Active revision 2. The Engine publishes only Active
     definitions into its query snapshot, so nothing is queryable before this."""

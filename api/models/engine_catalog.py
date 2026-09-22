@@ -144,6 +144,19 @@ class TableCreate(BaseModel):
         return self
 
 
+class TableAnalyze(BaseModel):
+    """How deeply to measure one table. Nothing set is the metadata read: the
+    Parquet footers, the Delta log or the Iceberg manifests, and no data page.
+    `sketches` reads the columns once to build the distinct-count and quantile
+    sketches; `distinct` counts distinct values exactly instead of estimating
+    them; `cube` builds the cells of the table's declared shape in the same
+    scan. Each is a property of the Engine's ANALYZE statement, assembled from
+    these flags alone."""
+    sketches: bool = False
+    distinct: bool = False
+    cube: bool = False
+
+
 class TableReplace(BaseModel):
     """A full replacement, as the Engine requires; the id, schema and revision come from the path and If-Match."""
     name: str = Field(..., pattern=IDENTIFIER, max_length=128)
