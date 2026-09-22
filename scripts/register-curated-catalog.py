@@ -60,6 +60,8 @@ register('/v1/catalog/definitions', '/v1/catalog/definitions/'+CATALOG_ID,
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--definitions-only', action='store_true',
                     help='Register definitions without running reads or updating API metadata')
+parser.add_argument('--retire-legacy-kaveon', action='store_true',
+                    help='After a successful Kaveon registration, remove legacy OpenSource Kaveon table definitions; never deletes lake objects')
 parser.add_argument('manifests', nargs='+')
 args = parser.parse_args()
 documents = [json.loads(Path(filename).read_text()) for filename in args.manifests]
@@ -69,6 +71,8 @@ if len(catalog_names) != 1:
 CATALOG = catalog_names.pop()
 if CATALOG not in {'OpenSource', 'Kaveon'}:
     parser.error(f'unsupported curated catalog: {CATALOG}')
+if args.retire_legacy_kaveon and CATALOG != 'Kaveon':
+    parser.error('--retire-legacy-kaveon is valid only with a Kaveon manifest')
 CATALOG_ID = ('local-' if LOCAL_LAKE else 'aks-') + CATALOG.lower()
 tables = [table for document in documents for table in document['tables']]
 # Publish subject schemas; physical medallion paths remain unchanged in ADLS.
@@ -90,6 +94,73 @@ for table in tables:
     schema, name = publication.get(key, key)
     curated.append({**table, 'schema': schema, 'name': name})
 tables = curated
+
+
+def retire_legacy_kaveon_definitions() -> list[str]:
+    """Remove only old Kaveon table definitions after the new catalog is verified.
+
+    The old registration used OpenSource.kaveon_product plus
+    OpenSource.public.kaveon_events_dashboard. This is a metadata move: the
+    Parquet/Delta objects are never deleted. Empty schemas are removed only
+    after their selected tables have been removed.
+    """
+    retired: list[str] = []
+    definitions = client.get('/v1/catalog/definitions')
+    definitions.raise_for_status()
+    catalogs = definitions.json()
+    if isinstance(catalogs, dict):
+        catalogs = catalogs.get('catalogs') or catalogs.get('definitions') or []
+    old = next((item for item in catalogs if item.get('name') == 'OpenSource'), None)
+    if not isinstance(old, dict):
+        return retired
+    catalog_id = old.get('id')
+    if not catalog_id:
+        return retired
+    schemas_response = client.get(f'/v1/catalog/definitions/{quote(str(catalog_id), safe="")}/schemas')
+    if schemas_response.status_code == 404:
+        return retired
+    schemas_response.raise_for_status()
+    schemas = schemas_response.json()
+    if isinstance(schemas, dict):
+        schemas = schemas.get('schemas') or schemas.get('definitions') or []
+    for schema in schemas:
+        if not isinstance(schema, dict):
+            continue
+        schema_name = schema.get('name')
+        schema_id = schema.get('id')
+        if schema_name not in {'kaveon_product', 'public'} or not schema_id:
+            continue
+        response = client.get(f'/v1/catalog/schemas/{quote(str(schema_id), safe="")}/tables')
+        response.raise_for_status()
+        entries = response.json()
+        if isinstance(entries, dict):
+            entries = entries.get('tables') or entries.get('definitions') or []
+        for table in entries:
+            if not isinstance(table, dict):
+                continue
+            if not (schema_name == 'kaveon_product' or
+                    (schema_name == 'public' and table.get('name') == 'kaveon_events_dashboard')):
+                continue
+            table_id = table.get('id')
+            revision = table.get('revision')
+            if not table_id or not isinstance(revision, int):
+                raise RuntimeError(f'Legacy table lacks a revision: {schema_name}.{table.get("name")}')
+            delete = client.delete(f'/v1/catalog/tables/{quote(str(table_id), safe="")}', headers={'If-Match': str(revision)})
+            delete.raise_for_status()
+            retired.append(f'{schema_name}.{table.get("name")}')
+        if schema_name == 'kaveon_product':
+            latest = client.get(f'/v1/catalog/schemas/{quote(str(schema_id), safe="")}/tables')
+            latest.raise_for_status()
+            remaining = latest.json()
+            if isinstance(remaining, dict):
+                remaining = remaining.get('tables') or remaining.get('definitions') or []
+            if not remaining:
+                revision = schema.get('revision')
+                if not isinstance(revision, int):
+                    raise RuntimeError('Legacy kaveon_product schema lacks a revision')
+                delete = client.delete(f'/v1/catalog/schemas/{quote(str(schema_id), safe="")}', headers={'If-Match': str(revision)})
+                delete.raise_for_status()
+    return retired
 
 for schema in sorted({t['schema'] for t in tables}):
     schema_id = CATALOG_ID+'-'+schema
@@ -146,3 +217,7 @@ metadata.execute('''INSERT INTO catalog_sources
       else 'Kaveon synthetic usage and product showcase datasets')])
 print(json.dumps({'catalog': CATALOG, 'registered_tables': len(tables)}))
 print('VALIDATION=' + json.dumps(checks))
+if args.retire_legacy_kaveon:
+    retired = retire_legacy_kaveon_definitions()
+    print(json.dumps({'retired_legacy_open_source_tables': retired,
+                      'lake_objects_deleted': False}))

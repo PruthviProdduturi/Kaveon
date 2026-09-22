@@ -147,6 +147,13 @@ rebuild was recovered this way, in this order:
    The second manifest registers Kaveon-owned usage tables under
    `Kaveon.usage`; it reuses the same immutable ADLS objects and does not
    migrate or rewrite the backing files.
+   After both registrations pass their exact row-count checks, run the Kaveon
+   manifest once more with `--retire-legacy-kaveon`. That flag removes only the
+   old `OpenSource.kaveon_product` definitions and the old
+   `OpenSource.public.kaveon_events_dashboard` definition. It never deletes or
+   copies a lake object and refuses to remove a table without its current
+   revision. Then run the dashboard importer preflight/apply so the existing
+   Kaveon Events dataset keeps its identity while pointing at `Kaveon.usage`.
    The script registers the catalog, every schema and table, runs `COUNT(*)`
    on each and refuses to update the platform source registry unless every
    count matches the manifest.
