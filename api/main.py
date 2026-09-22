@@ -24,6 +24,7 @@ from routers import (
     catalog,
     catalog_sources,
     engine_catalog,
+    engine_catalog_access,
     engine_console,
     engine_governance,
     health,
@@ -186,6 +187,7 @@ app.include_router(catalog_sources.router,  prefix="/api/v1")
 app.include_router(engine_console.router,   prefix="/api/v1")
 app.include_router(engine_catalog.router,   prefix="/api/v1")
 app.include_router(engine_governance.router, prefix="/api/v1")
+app.include_router(engine_catalog_access.router, prefix="/api/v1")
 app.include_router(catalog.router,          prefix="/api/v1")
 app.include_router(setup.router,            prefix="/api/v1")
 app.include_router(users.router,            prefix="/api/v1")

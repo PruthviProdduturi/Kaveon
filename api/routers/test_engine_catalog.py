@@ -5,13 +5,16 @@ from fastapi import HTTPException, Response
 from pydantic import ValidationError
 
 from middleware.auth import UserContext
-from models.engine_catalog import ColumnSpec, TableCreate, arrow_type
+from models.engine_catalog import ColumnSpec, TableCreate, TableReplace, arrow_type
 from routers import engine_catalog
 from services import engine_bridge
 
+# The Engine annotates a definition it returns for a principal with that
+# principal's level on the catalog; the Editor here holds `manage`.
 CATALOG = {"id": "aks-benchmarks", "name": "Benchmarks", "revision": 2, "adapter": "Native",
            "storage": {"AdlsGen2": {"account": "acct", "container": "opensource", "root_path": "benchmarks"}},
-           "credential": {"kind": "WorkloadIdentity", "reference": "kaveon-test-reader"}, "lifecycle": "Active"}
+           "credential": {"kind": "WorkloadIdentity", "reference": "kaveon-test-reader"}, "lifecycle": "Active",
+           "access": "manage"}
 SCHEMA = {"id": "aks-benchmarks-tpch_sf1", "catalog_id": "aks-benchmarks", "name": "tpch_sf1", "revision": 2, "lifecycle": "Active"}
 TABLE_BODY = {"schema_id": "aks-benchmarks-tpch_sf1", "name": "region", "location": "tpch/sf1/region",
               "format": "delta", "columns": [{"name": "r_regionkey", "type": "bigint", "nullable": False},
@@ -145,7 +148,9 @@ class TableRegistrationTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as error:
             engine_catalog.delete_table_definition("t1", None, EDITOR)
         self.assertEqual(error.exception.status_code, 428)
-        with patch.object(engine_bridge, "table_definition_by_id", return_value={"id": "t1", "revision": 3}), \
+        with patch.object(engine_bridge, "table_definition_by_id", return_value={"id": "t1", "revision": 3, "schema_id": SCHEMA["id"]}), \
+             patch.object(engine_bridge, "schema_definition", return_value=SCHEMA), \
+             patch.object(engine_bridge, "catalog_definition", return_value=CATALOG), \
              patch.object(engine_bridge, "delete_table") as delete:
             response = engine_catalog.delete_table_definition("t1", '"3"', EDITOR)
         self.assertEqual(response.status_code, 204)
@@ -154,6 +159,45 @@ class TableRegistrationTests(unittest.TestCase):
             with self.assertRaises(HTTPException) as error:
                 engine_catalog.delete_table_definition("gone", "3", EDITOR)
         self.assertEqual(error.exception.status_code, 404)
+
+    def test_changes_inside_a_catalog_need_the_manage_level_the_engine_reports(self):
+        """An Editor granted `query` (or nothing the Engine reported) on the
+        catalog can read its definitions but not change them: every
+        registration route checks the level before anything is created."""
+        from models.engine_catalog import SchemaCreate
+        table = {"id": "t1", "revision": 3, "schema_id": SCHEMA["id"], "name": "region", "location": "x",
+                 "access": "Shortcut", "format": "Delta", "lifecycle": "Active", "columns": []}
+        for catalog in ({**CATALOG, "access": "query"}, {**CATALOG, "access": "browse"}, {key: value for key, value in CATALOG.items() if key != "access"}):
+            with patch.object(engine_bridge, "catalog_definition", return_value=catalog), \
+                 patch.object(engine_bridge, "schema_definition", return_value=SCHEMA), \
+                 patch.object(engine_bridge, "table_definition_by_id", return_value=table), \
+                 patch.object(engine_bridge, "create_schema") as create_schema, \
+                 patch.object(engine_bridge, "create_table") as create_table, \
+                 patch.object(engine_bridge, "create_table_inferred") as create_inferred, \
+                 patch.object(engine_bridge, "replace_table") as replace, \
+                 patch.object(engine_bridge, "delete_schema") as delete_schema, \
+                 patch.object(engine_bridge, "delete_table") as delete_table:
+                for call in (
+                    lambda: engine_catalog.create_schema_definition("aks-benchmarks", SchemaCreate(name="silver"), EDITOR),
+                    lambda: engine_catalog.delete_schema_definition(SCHEMA["id"], "2", EDITOR),
+                    lambda: engine_catalog.create_table_definition(TableCreate(**TABLE_BODY), EDITOR),
+                    lambda: engine_catalog.create_table_definition(TableCreate(**{**TABLE_BODY, "columns": []}), EDITOR),
+                    lambda: engine_catalog.replace_table_definition("t1", TableReplace(**{key: TABLE_BODY[key] for key in ("name", "location", "format", "columns")}), "3", EDITOR),
+                    lambda: engine_catalog.delete_table_definition("t1", "3", EDITOR),
+                ):
+                    with self.assertRaises(HTTPException) as error:
+                        call()
+                    self.assertEqual(error.exception.status_code, 403, catalog.get("access"))
+                    self.assertEqual(error.exception.detail["code"], "catalog_access")
+                for mutation in (create_schema, create_table, create_inferred, replace, delete_schema, delete_table):
+                    mutation.assert_not_called()
+        # A catalog the Engine hid from the principal is not found at all.
+        with patch.object(engine_bridge, "catalog_definition", return_value=None), \
+             patch.object(engine_bridge, "create_schema") as create_schema:
+            with self.assertRaises(HTTPException) as error:
+                engine_catalog.create_schema_definition("aks-benchmarks", SchemaCreate(name="silver"), EDITOR)
+        self.assertEqual(error.exception.status_code, 404)
+        create_schema.assert_not_called()
 
 
 class SchemaRegistrationTests(unittest.TestCase):

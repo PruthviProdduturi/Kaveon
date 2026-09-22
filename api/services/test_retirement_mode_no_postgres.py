@@ -7,7 +7,7 @@ from fastapi import Response
 
 import database.metadata as metadata
 from routers import catalog, catalog_sources, chat, data_sources, lab, sql
-from services import product_read_authority
+from services import engine_bridge, product_read_authority
 
 
 @pytest.fixture(autouse=True)
@@ -42,6 +42,8 @@ def point(family,record_id,*_args):
 def test_studio_lab_source_tree_and_database_picker_do_not_touch_postgres(monkeypatch,retired):
     monkeypatch.setattr(product_read_authority,"list_documents",documents)
     monkeypatch.setattr(product_read_authority,"read_document",point)
+    # The picker keeps the sources the Engine's catalog list grants the principal.
+    monkeypatch.setattr(engine_bridge,"catalogs",lambda actor,role:{"catalogs":["lake"]})
     response=Response();ctx=SimpleNamespace(email="alice",role="Admin")
     assert lab.list_databases(response,"alice")["databases"][0]["database"]=="warehouse"
     assert lab.list_engine_sources(response,ctx)["sources"][0]["catalog"]=="lake"

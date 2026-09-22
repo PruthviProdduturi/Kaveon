@@ -8,7 +8,10 @@ bridge with the Engine's catalog-admin credential; the browser never holds it.
 Roles. The Engine itself knows one catalog-admin credential, so the platform's
 role model is the boundary: Admin registers catalogs (a storage location and a
 credential reference are infrastructure), Editor registers schemas and tables
-inside them, everyone with a role can read definitions.
+inside them, everyone with a role can read definitions. Catalog access grants
+narrow that further: the Engine answers definition reads for the verified
+principal only with the catalogs they were granted, and reports the level on
+each (`access`); a schema or table change inside a catalog needs `manage`.
 
 A table is registered as Draft, activated, and read once (`SELECT COUNT(*)`
 with the result cache bypassed) before the call returns. The Engine publishes
@@ -39,6 +42,15 @@ def _revision(if_match: str | None) -> int:
     if not value.isdigit() or int(value) < 1:
         raise HTTPException(400, {"code": "invalid_revision", "message": "If-Match must be a positive revision number."})
     return int(value)
+
+
+def _require_manage(catalog: dict) -> None:
+    """A change inside `catalog` needs the caller's `manage` level, as the
+    Engine reported it on the definition. A definition the Engine did not
+    annotate is refused: access is never assumed."""
+    if catalog.get("access") != "manage":
+        raise HTTPException(403, {"code": "catalog_access",
+                                  "message": f"Changing {catalog.get('name')} requires manage access on the catalog."})
 
 
 def _schema_parents(schema_id: str, ctx: UserContext) -> tuple[dict, dict]:
@@ -98,6 +110,7 @@ def create_schema_definition(catalog_id: str, body: SchemaCreate,
     catalog = engine_bridge.catalog_definition(catalog_id, ctx.email, ctx.role)
     if not isinstance(catalog, dict):
         raise HTTPException(404, {"code": "catalog_not_found", "message": "Catalog definition not found."})
+    _require_manage(catalog)
     if catalog.get("lifecycle") != _ACTIVE:
         raise HTTPException(409, {"code": "catalog_inactive",
                                   "message": f"Catalog {catalog.get('name')} is {str(catalog.get('lifecycle')).lower()}; activate it before adding schemas."})
@@ -111,8 +124,8 @@ def delete_schema_definition(schema_id: str, if_match: str | None = Header(defau
                              ctx: UserContext = Depends(require_min_role("Editor"))):
     """Remove an empty schema. A schema that still holds tables is refused by the Engine."""
     revision = _revision(if_match)
-    if engine_bridge.schema_definition(schema_id, ctx.email, ctx.role) is None:
-        raise HTTPException(404, {"code": "schema_not_found", "message": "Schema definition not found."})
+    catalog, _ = _schema_parents(schema_id, ctx)
+    _require_manage(catalog)
     engine_bridge.delete_schema(schema_id, revision, ctx.email)
     return Response(status_code=204)
 
@@ -141,6 +154,7 @@ def get_table_definition(table_id: str, response: Response,
 @router.post("/engine/catalog/tables", status_code=201)
 def create_table_definition(body: TableCreate, ctx: UserContext = Depends(require_min_role("Editor"))):
     catalog, schema = _schema_parents(body.schema_id, ctx)
+    _require_manage(catalog)
     if body.verify and (catalog.get("lifecycle") != _ACTIVE or schema.get("lifecycle") != _ACTIVE):
         raise HTTPException(409, {"code": "parent_inactive",
                                   "message": "The catalog and schema must be active for the table to be verified."})
@@ -196,6 +210,8 @@ def replace_table_definition(table_id: str, body: TableReplace, if_match: str | 
     current = engine_bridge.table_definition_by_id(table_id, ctx.email, ctx.role)
     if not isinstance(current, dict):
         raise HTTPException(404, {"code": "table_not_found", "message": "Table definition not found."})
+    catalog, _ = _schema_parents(current["schema_id"], ctx)
+    _require_manage(catalog)
     definition = {
         "id": table_id, "schema_id": current["schema_id"], "name": body.name,
         "location": body.location, "access": body.access, "format": body.format,
@@ -210,7 +226,10 @@ def delete_table_definition(table_id: str, if_match: str | None = Header(default
                             ctx: UserContext = Depends(require_min_role("Editor"))):
     """Remove a table definition. The data at its location is not touched."""
     revision = _revision(if_match)
-    if engine_bridge.table_definition_by_id(table_id, ctx.email, ctx.role) is None:
+    current = engine_bridge.table_definition_by_id(table_id, ctx.email, ctx.role)
+    if not isinstance(current, dict):
         raise HTTPException(404, {"code": "table_not_found", "message": "Table definition not found."})
+    catalog, _ = _schema_parents(current["schema_id"], ctx)
+    _require_manage(catalog)
     engine_bridge.delete_table(table_id, revision, ctx.email)
     return Response(status_code=204)
