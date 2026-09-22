@@ -179,9 +179,13 @@ fn print_header(client: &Session, options: &Options) {
 }
 
 /// `kaveon catalog|schema|table …`: one catalog statement through
-/// `POST /v1/statement`, or the durable definition for `catalog show`.
+/// `POST /v1/statement`, the durable definition for `catalog show`, or
+/// the catalog access API for `catalog access …`.
 pub fn run_admin(options: &Options, command: &crate::admin::AdminCommand) -> Result<(), String> {
     let client = Session::connect(options)?;
+    if let crate::admin::AdminCommand::CatalogAccess(action) = command {
+        return run_catalog_access(&client, options, action);
+    }
     let Some(sql) = command.statement()? else {
         let crate::admin::AdminCommand::CatalogShow { name } = command else {
             return Err("internal error: command has neither a statement nor a lookup".into());
@@ -209,6 +213,224 @@ pub fn run_admin(options: &Options, command: &crate::admin::AdminCommand) -> Res
         output.push('\n');
     }
     write_output(options, &output)
+}
+
+/// `kaveon catalog access …` against `/v1/admin/catalog-access`. Machine
+/// formats get the coordinator's document; the human formats a table or
+/// one line saying what changed.
+fn run_catalog_access(
+    client: &Session,
+    options: &Options,
+    command: &crate::admin::CatalogAccessCommand,
+) -> Result<(), String> {
+    use crate::admin::CatalogAccessCommand;
+    let human = is_human_format(options.output_format);
+    let (document, rendered) = match command {
+        CatalogAccessCommand::List => {
+            let document: Value = get_json(client, options, "/v1/admin/catalog-access")?;
+            let rendered = render_access_list(&document, options.output_format);
+            (document, rendered)
+        }
+        CatalogAccessCommand::Grant {
+            principal,
+            catalog,
+            access,
+            revision,
+        } => {
+            let mut body = serde_json::json!({
+                "principal": principal,
+                "catalog": catalog,
+                "access": access,
+            });
+            if let Some(revision) = revision {
+                body["revision"] = Value::from(*revision);
+            }
+            let document = send_json(
+                client,
+                options,
+                reqwest::Method::PUT,
+                "/v1/admin/catalog-access/grants",
+                &body,
+            )?;
+            let grant = &document["grant"];
+            let rendered = format!(
+                "granted {} {} on {} (revision {}{})\n",
+                grant["principal"].as_str().unwrap_or(principal),
+                grant["access"].as_str().unwrap_or(access),
+                grant["catalog"].as_str().unwrap_or(catalog),
+                grant["revision"],
+                document["revision_before"]
+                    .as_u64()
+                    .map(|before| format!(", was {before}"))
+                    .unwrap_or_default()
+            );
+            (document, rendered)
+        }
+        CatalogAccessCommand::Revoke {
+            principal,
+            catalog,
+            revision,
+        } => {
+            let document = send_json(
+                client,
+                options,
+                reqwest::Method::DELETE,
+                "/v1/admin/catalog-access/grants",
+                &serde_json::json!({
+                    "principal": principal,
+                    "catalog": catalog,
+                    "revision": revision,
+                }),
+            )?;
+            let revoked = &document["revoked"];
+            let rendered = format!(
+                "revoked {} {} on {} (was revision {})\n",
+                revoked["principal"].as_str().unwrap_or(principal),
+                revoked["access"].as_str().unwrap_or("access"),
+                revoked["catalog"].as_str().unwrap_or(catalog),
+                revoked["revision"]
+            );
+            (document, rendered)
+        }
+        CatalogAccessCommand::Import { apply } => {
+            let document = send_json(
+                client,
+                options,
+                reqwest::Method::POST,
+                "/v1/admin/catalog-access/import",
+                &serde_json::json!({ "source": "open", "apply": apply }),
+            )?;
+            let rendered = render_access_import(&document, options.output_format);
+            (document, rendered)
+        }
+    };
+    if human {
+        write_output(options, &rendered)
+    } else {
+        let text = serde_json::to_string_pretty(&document)
+            .map_err(|error| format!("cannot render the document: {error}"))?;
+        write_output(options, &format!("{text}\n"))
+    }
+}
+
+fn render_access_list(document: &Value, format: OutputFormat) -> String {
+    let names = ["principal", "catalog", "access", "revision", "granted_by"]
+        .map(str::to_owned)
+        .to_vec();
+    let rows: Vec<Vec<Value>> = document["grants"]
+        .as_array()
+        .map(|grants| {
+            grants
+                .iter()
+                .map(|grant| {
+                    vec![
+                        grant["principal"].clone(),
+                        grant["catalog"].clone(),
+                        grant["access"].clone(),
+                        grant["revision"].clone(),
+                        grant["granted_by"].clone(),
+                    ]
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut out = String::new();
+    if rows.is_empty() {
+        out.push_str("No grants: administrators see every catalog, nobody else sees one.\n");
+    } else {
+        out.push_str(&crate::output::format_rows(&names, &rows, format));
+    }
+    let catalogs = document["catalogs"]
+        .as_array()
+        .map(|names| {
+            names
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+    out.push_str(&format!(
+        "Grantable catalogs: {}\n",
+        if catalogs.is_empty() {
+            "none registered".to_owned()
+        } else {
+            catalogs
+        }
+    ));
+    for reserved in document["reserved"].as_array().into_iter().flatten() {
+        out.push_str(&format!(
+            "Reserved: {} — {}\n",
+            reserved["name"].as_str().unwrap_or("KaveonDB"),
+            reserved["reason"].as_str().unwrap_or("administrators only")
+        ));
+    }
+    if document["store"]["enabled"] == Value::Bool(false) {
+        out.push_str(
+            "The KaveonDB transaction store is not configured on this coordinator: no grant can be recorded.\n",
+        );
+    }
+    out
+}
+
+fn render_access_import(document: &Value, format: OutputFormat) -> String {
+    let proposed = document["proposed"].as_array().cloned().unwrap_or_default();
+    let mut out = String::new();
+    if proposed.is_empty() && document["recorded"].as_array().is_none_or(Vec::is_empty) {
+        out.push_str(
+            "Nothing to record: every principal the audit ledger has seen already holds a grant on every catalog, or the ledger is empty.\n",
+        );
+        if document["ledger_enabled"] == Value::Bool(false) {
+            out.push_str("The audit ledger is not enabled on this coordinator.\n");
+        }
+        return out;
+    }
+    let names = ["principal", "role_seen", "catalog", "access"]
+        .map(str::to_owned)
+        .to_vec();
+    let rows: Vec<Vec<Value>> = proposed
+        .iter()
+        .map(|row| {
+            vec![
+                row["principal"].clone(),
+                row["role_seen"].clone(),
+                row["catalog"].clone(),
+                row["access"].clone(),
+            ]
+        })
+        .collect();
+    if document["applied"] == Value::Bool(true) {
+        let recorded = document["recorded"].as_array().map_or(0, Vec::len);
+        out.push_str(&crate::output::format_rows(&names, &rows, format));
+        out.push_str(&format!(
+            "Recorded {recorded} grant{} from the open policy.\n",
+            if recorded == 1 { "" } else { "s" }
+        ));
+    } else {
+        out.push_str(&crate::output::format_rows(&names, &rows, format));
+        out.push_str(&format!(
+            "Proposal only: nothing recorded. Add --apply to record {} grant{}.\n",
+            rows.len(),
+            if rows.len() == 1 { "" } else { "s" }
+        ));
+    }
+    out
+}
+
+fn send_json(
+    client: &Session,
+    options: &Options,
+    method: reqwest::Method,
+    path: &str,
+    body: &Value,
+) -> Result<Value, String> {
+    let response = client
+        .request(method, &endpoint(options, path))?
+        .timeout(crate::client::session::METADATA_TIMEOUT)
+        .json(body)
+        .send()
+        .map_err(connection_error)?;
+    decode_response(response)
 }
 
 fn submit_statement(
@@ -2126,6 +2348,199 @@ mod tests {
         .unwrap();
         run_admin(&options, &command).unwrap();
         server.join().unwrap();
+    }
+
+    /// The metadata commands show what the coordinator grants: `catalog
+    /// list` is `SHOW CATALOGS` answered from the caller's view, and a
+    /// catalog the caller was not granted is reported exactly as one that
+    /// does not exist — the client adds nothing and hides nothing.
+    #[test]
+    fn metadata_commands_show_only_what_the_coordinator_grants() {
+        use crate::client::session::test_server::{fixture, session};
+        let (url, thread) = fixture(vec![
+            (
+                "POST /v1/statement ",
+                200,
+                r#"{"id":"q-1","state":"FINISHED","columns":[{"name":"Catalog","type":"Utf8"}],"data":[["OpenSource"]],"elapsed_ms":1}"#.into(),
+            ),
+            (
+                "POST /v1/statement ",
+                400,
+                r#"{"id":"q-2","error":"catalog 'Kaveon' not found","code":"CATALOG_NOT_FOUND"}"#.into(),
+            ),
+            (
+                "POST /v1/statement ",
+                400,
+                r#"{"id":"q-3","error":"catalog 'Nowhere' not found","code":"CATALOG_NOT_FOUND"}"#.into(),
+            ),
+        ]);
+        let (_, mut options) = session(&url);
+        options.output_format = OutputFormat::Csv;
+        let (list, _) = crate::admin::split(&["catalog".to_owned(), "list".into()]).unwrap();
+        run_admin(&options, &list).unwrap();
+        let (hidden, _) =
+            crate::admin::split(&["schema".to_owned(), "list".into(), "Kaveon".into()]).unwrap();
+        let hidden = run_admin(&options, &hidden).unwrap_err();
+        let (absent, _) =
+            crate::admin::split(&["schema".to_owned(), "list".into(), "Nowhere".into()]).unwrap();
+        let absent = run_admin(&options, &absent).unwrap_err();
+        assert!(hidden.contains("catalog 'Kaveon' not found"), "{hidden}");
+        assert_eq!(
+            hidden.replace("Kaveon", "X"),
+            absent.replace("Nowhere", "X")
+        );
+        let bodies = thread.join().unwrap();
+        let first: Value = serde_json::from_str(&bodies[0]).unwrap();
+        assert_eq!(first["query"], "SHOW CATALOGS");
+        let second: Value = serde_json::from_str(&bodies[1]).unwrap();
+        assert_eq!(second["query"], "SHOW SCHEMAS FROM \"Kaveon\"");
+    }
+
+    #[test]
+    fn catalog_access_commands_call_the_access_api_and_render_its_answers() {
+        use crate::client::session::test_server::{fixture, session};
+        let (url, thread) = fixture(vec![
+            (
+                "GET /v1/admin/catalog-access ",
+                200,
+                r#"{"store":{"enabled":true,"generation":4},"catalogs":["Kaveon","OpenSource"],"reserved":[{"name":"KaveonDB","grantable":false,"visible_to":"none","reason":"its read-only views are not available yet; hidden from every role until they are"}],"roles":{"reader":"browse","analyst":"manage","admin":"all"},"grants":[{"principal":"ana","catalog":"OpenSource","access":"query","revision":1,"granted_by":"root","granted_at_ms":1}]}"#.into(),
+            ),
+            (
+                "PUT /v1/admin/catalog-access/grants ",
+                200,
+                r#"{"grant":{"principal":"ana","catalog":"Kaveon","access":"manage","revision":1,"granted_by":"root","granted_at_ms":1},"revision_before":null,"generation":5}"#.into(),
+            ),
+            (
+                "PUT /v1/admin/catalog-access/grants ",
+                409,
+                r#"{"error":"the grant for ana on Kaveon is at revision 1, not 7; reload","code":"REVISION_CONFLICT"}"#.into(),
+            ),
+            (
+                "DELETE /v1/admin/catalog-access/grants ",
+                200,
+                r#"{"revoked":{"principal":"ana","catalog":"Kaveon","access":"manage","revision":1,"granted_by":"root","granted_at_ms":1},"generation":6}"#.into(),
+            ),
+            (
+                "POST /v1/admin/catalog-access/import ",
+                200,
+                r#"{"source":"open","ledger_enabled":true,"principals_seen":1,"catalogs":["Kaveon","OpenSource"],"proposed":[{"principal":"ana","role_seen":"analyst","catalog":"Kaveon","access":"manage"}],"applied":false,"recorded":[]}"#.into(),
+            ),
+        ]);
+        let (_, mut options) = session(&url);
+        options.output_format = OutputFormat::Csv;
+        let run = |args: &[&str]| {
+            let (command, _) =
+                crate::admin::split(&args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>())
+                    .unwrap();
+            run_admin(&options, &command)
+        };
+        run(&["catalog", "access", "list"]).unwrap();
+        run(&[
+            "catalog", "access", "grant", "ana", "--on", "Kaveon", "--access", "manage",
+        ])
+        .unwrap();
+        let conflict = run(&[
+            "catalog",
+            "access",
+            "grant",
+            "ana",
+            "--on",
+            "Kaveon",
+            "--access",
+            "query",
+            "--revision",
+            "7",
+        ])
+        .unwrap_err();
+        assert!(conflict.contains("REVISION_CONFLICT"), "{conflict}");
+        assert!(conflict.contains("not 7"), "{conflict}");
+        run(&[
+            "catalog",
+            "access",
+            "revoke",
+            "ana",
+            "--on",
+            "Kaveon",
+            "--revision",
+            "1",
+        ])
+        .unwrap();
+        run(&["catalog", "access", "import", "--from-open"]).unwrap();
+        let bodies = thread.join().unwrap();
+        assert_eq!(bodies[0], "");
+        let grant: Value = serde_json::from_str(&bodies[1]).unwrap();
+        assert_eq!(
+            grant,
+            serde_json::json!({"principal": "ana", "catalog": "Kaveon", "access": "manage"})
+        );
+        let change: Value = serde_json::from_str(&bodies[2]).unwrap();
+        assert_eq!(change["revision"], 7);
+        let revoke: Value = serde_json::from_str(&bodies[3]).unwrap();
+        assert_eq!(
+            revoke,
+            serde_json::json!({"principal": "ana", "catalog": "Kaveon", "revision": 1})
+        );
+        let import: Value = serde_json::from_str(&bodies[4]).unwrap();
+        assert_eq!(
+            import,
+            serde_json::json!({"source": "open", "apply": false})
+        );
+    }
+
+    #[test]
+    fn catalog_access_answers_render_for_people() {
+        let list: Value = serde_json::json!({
+            "store": {"enabled": true},
+            "catalogs": ["Kaveon", "OpenSource"],
+            "reserved": [{"name": "KaveonDB", "reason": "hidden until its views exist"}],
+            "grants": [
+                {"principal": "ana", "catalog": "OpenSource", "access": "query", "revision": 2, "granted_by": "root"}
+            ]
+        });
+        let rendered = render_access_list(&list, OutputFormat::Csv);
+        assert_eq!(
+            rendered,
+            "principal,catalog,access,revision,granted_by\nana,OpenSource,query,2,root\nGrantable catalogs: Kaveon, OpenSource\nReserved: KaveonDB — hidden until its views exist\n"
+        );
+        let empty = render_access_list(
+            &serde_json::json!({"store": {"enabled": false}, "catalogs": [], "reserved": [], "grants": []}),
+            OutputFormat::Csv,
+        );
+        assert!(
+            empty.starts_with("No grants: administrators see every catalog"),
+            "{empty}"
+        );
+        assert!(empty.contains("not configured"), "{empty}");
+        let proposal = render_access_import(
+            &serde_json::json!({
+                "proposed": [{"principal": "ana", "role_seen": "analyst", "catalog": "Kaveon", "access": "manage"}],
+                "applied": false,
+                "recorded": []
+            }),
+            OutputFormat::Csv,
+        );
+        assert!(
+            proposal.ends_with("Proposal only: nothing recorded. Add --apply to record 1 grant.\n"),
+            "{proposal}"
+        );
+        let applied = render_access_import(
+            &serde_json::json!({
+                "proposed": [{"principal": "ana", "role_seen": "analyst", "catalog": "Kaveon", "access": "manage"}],
+                "applied": true,
+                "recorded": [{"principal": "ana"}]
+            }),
+            OutputFormat::Csv,
+        );
+        assert!(
+            applied.ends_with("Recorded 1 grant from the open policy.\n"),
+            "{applied}"
+        );
+        let nothing = render_access_import(
+            &serde_json::json!({"proposed": [], "applied": false, "recorded": [], "ledger_enabled": false}),
+            OutputFormat::Csv,
+        );
+        assert!(nothing.contains("Nothing to record"), "{nothing}");
+        assert!(nothing.contains("audit ledger is not enabled"), "{nothing}");
     }
 
     #[test]
