@@ -45,10 +45,14 @@ export async function msalFetchRetry(
 	for (let attempt = 0; attempt <= retries; attempt++) {
 		try {
 			const res = await msalFetch(input, init);
-			// Admission/rate limits are retryable for these idempotent reads.
-			// Authentication and other client errors still return immediately.
+			// Admission exhaustion is retryable for these idempotent reads.
+			// Authentication and other client errors still return immediately,
+			// and so does a 429 whose Retry-After is beyond a short wait: the
+			// demo's live-query quota names a time hours away, and the caller
+			// shows it rather than waiting on it.
+			const retryAfter = Number(res.headers.get("Retry-After"));
+			if (res.status === 429 && Number.isFinite(retryAfter) && retryAfter > 20) return res;
 			if ((res.status === 429 || (res.status >= 500 && res.status <= 504)) && attempt < retries) {
-				const retryAfter = Number(res.headers.get("Retry-After"));
 				const delay = res.status === 429
 					? Math.min(20_000, Math.max(backoffMs * 2 ** attempt, Number.isFinite(retryAfter) ? retryAfter * 1000 : 0))
 					: backoffMs * (attempt + 1);

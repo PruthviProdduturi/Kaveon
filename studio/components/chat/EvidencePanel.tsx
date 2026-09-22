@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { msalFetch } from "../../utils/msalFetch";
+import { rateLimitNotice, refusalMessage } from "../../utils/demoQuota";
 
 /** What a DLM answer carries about itself: the statement that ran (or would
  *  have), the dataset and its source, the source version the answer reflects,
@@ -26,7 +27,8 @@ export interface Evidence {
 }
 
 interface LiveRun {
-  state: "idle" | "running" | "done" | "failed";
+  /** `quota`: the Engine refused the run on the demo's live-query quota. */
+  state: "idle" | "running" | "done" | "failed" | "quota";
   headline?: number | string | null;
   elapsedMs?: number | null;
   rows?: number | null;
@@ -129,8 +131,12 @@ export function EvidencePanel({ evidence, headline, canRunLive }: {
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const detail = body?.detail ?? body?.error?.message;
-        setLive({ state: "failed", message: typeof detail === "string" ? detail : "The live run was refused." });
+        const notice = rateLimitNotice(res.status, body);
+        if (notice) {
+          setLive({ state: "quota", message: notice });
+          return;
+        }
+        setLive({ state: "failed", message: refusalMessage(body, "The live run was refused.") });
         return;
       }
       setLive({
@@ -196,6 +202,7 @@ export function EvidencePanel({ evidence, headline, canRunLive }: {
                     <span> · {fmtMs(live.elapsedMs)}{live.rows != null ? ` · ${live.rows} rows` : ""}{live.detail ? ` · ${live.detail}` : ""}</span>
                   </span>
                 )}
+                {live.state === "quota" && <span style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>{live.message}</span>}
                 {live.state === "failed" && <span style={{ fontSize: 11.5, color: "#ef4444" }}>{live.message}</span>}
               </div>
             </div>

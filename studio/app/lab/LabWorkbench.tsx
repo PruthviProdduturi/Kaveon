@@ -10,6 +10,8 @@ import dynamic from "next/dynamic";
 import { format as formatSql } from "sql-formatter";
 import { msalFetch } from "../../utils/msalFetch";
 import { useAuth } from "../../auth/useAuth";
+import { useDemoQuota } from "../../hooks/useDemoQuota";
+import { RateLimitedError, rateLimitNotice, refusalMessage } from "../../utils/demoQuota";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useRouter, useSearchParams } from "next/navigation";
 // using same-origin relative API calls
@@ -90,6 +92,7 @@ interface StreamRecord {
   scans?: Array<{ rows_selected: number; rows_emitted?: number | null }>;
   workers?: number;
   error?: string | null;
+  error_code?: string | null;
   execution?: { mode: string; detail?: string } | null;
   next_uri?: string | null;
 }
@@ -318,6 +321,10 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
   const [multiResults, setMultiResults] = useState<Array<{ sql: string; result?: QueryResult; error?: string }> | null>(null);
   const [results, setResults] = useState<QueryResult | null>(null);
   const [resultError, setResultError] = useState<string | null>(null);
+  // The Engine refused the statement on the demo's live-query quota: shown
+  // as a notice with the time the next is allowed, not as a failure.
+  const [resultNotice, setResultNotice] = useState<string | null>(null);
+  const demoQuota = useDemoQuota();
   const [liveElapsedMs, setLiveElapsedMs] = useState<number | null>(null);
   // A KaveonDB statement's live counters while its rows stream into the grid.
   const [streamProgress, setStreamProgress] = useState<StreamProgress | null>(null);
@@ -1138,6 +1145,7 @@ return;
     try {
       setIsExecuting(true);
       setResultError(null);
+      setResultNotice(null);
       setResults(null);
       setMultiResults(null);
       setEstimatedRows(null);
@@ -1186,6 +1194,8 @@ return;
       });
 
       if (!res.ok || !data.success) {
+        const notice = rateLimitNotice(res.status, data);
+        if (notice) throw new RateLimitedError(notice);
         throw new Error(data.error || "Query execution failed");
       }
 
@@ -1205,6 +1215,9 @@ return;
       if (e instanceof Error && e.name === "AbortError") {
         // User cancelled — clear state silently
         setResults(null);
+      } else if (e instanceof RateLimitedError) {
+        setResultNotice(e.message);
+        setResults(null);
       } else {
         setResultError(e instanceof Error ? e.message : "Unknown error");
         setResults(null);
@@ -1219,6 +1232,9 @@ return;
         executionTimerRef.current = null;
       }
       setLiveElapsedMs(null);
+      // A live run may have used a slot of the demo quota; a cache or
+      // statistics answer did not. The counter reads the Engine's count.
+      demoQuota.refresh();
     }
   };
 
@@ -1241,11 +1257,9 @@ return;
     });
     const submission = await submitted.json().catch(() => ({}));
     if (!submitted.ok || !submission.success || typeof submission.queryId !== "string") {
-      const detail = submission.detail;
-      const message = typeof detail === "string" ? detail
-        : detail && typeof detail.message === "string" ? detail.message
-        : submission.error || "Query execution failed";
-      throw new Error(message);
+      const notice = rateLimitNotice(submitted.status, submission);
+      if (notice) throw new RateLimitedError(notice);
+      throw new Error(refusalMessage(submission, "Query execution failed"));
     }
     const run: StreamRun = { queryId: submission.queryId, active: true, cancelled: false };
     streamRunRef.current = run;
@@ -1406,6 +1420,9 @@ return;
 
     if (state === "FAILED" || (gone && state !== "CANCELED")) {
       setResults(null);
+      if (finalRecord?.error_code === "RATE_LIMITED") {
+        throw new RateLimitedError(finalRecord.error || "The demo's live-query quota is used up for now.");
+      }
       setResultError(finalRecord?.error || "KaveonDB could not complete the statement");
       return;
     }
@@ -1450,6 +1467,7 @@ return;
     try {
       setIsExecuting(true);
       setResultError(null);
+      setResultNotice(null);
       setResults(null);
       setMultiResults(null);
       setEstimatedRows(null);
@@ -1483,7 +1501,7 @@ return;
           });
           const data = await res.json();
           if (!res.ok || !data.success) {
-            batch.push({ sql: stmt, error: data.error || "Query failed" });
+            batch.push({ sql: stmt, error: rateLimitNotice(res.status, data) ?? refusalMessage(data, data.error || "Query failed") });
           } else {
             const rows: unknown[][] = data.rows || [];
             batch.push({
@@ -1510,6 +1528,7 @@ return;
         executionTimerRef.current = null;
       }
       setLiveElapsedMs(null);
+      demoQuota.refresh();
     }
   };
 
@@ -2680,6 +2699,14 @@ return;
                 >
                   <i className="fas fa-play" /> Run
                 </button>
+                {demoQuota.label && (
+                  <span
+                    style={{ fontSize: "0.72rem", color: demoQuota.quota?.remaining === 0 ? "var(--warning, #d97706)" : "var(--text-muted)", whiteSpace: "nowrap" }}
+                    title="This demo allows a fixed number of live reads per rolling window; answers from the result cache and from statistics do not count."
+                  >
+                    {demoQuota.label}
+                  </span>
+                )}
                 {isExecuting && (
                   <button
                     type="button"
@@ -2939,6 +2966,15 @@ return;
                     <p>
                       Select a table from the left sidebar or write a custom SQL query to get started.
                     </p>
+                  </div>
+                )}
+
+                {!multiResults && resultNotice && (
+                  <div className="empty-state" style={{ color: "var(--text-secondary)" }}>
+                    <i className="fas fa-hourglass-half" />
+                    <h3>Live-query quota</h3>
+                    <p>{resultNotice}</p>
+                    <p style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>Answers from the result cache and from statistics do not count against it.</p>
                   </div>
                 )}
 
