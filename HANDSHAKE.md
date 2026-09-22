@@ -23,6 +23,12 @@ dashboard/DLM qualification. The read-only `KaveonDB.product`, `.catalog`, and
 not describe this manifest split as completion of the PostgreSQL metadata
 migration. Catalog RBAC remains Claude's separate requested work.
 
+The registrar now has an explicit `--retire-legacy-kaveon` gate. It deletes
+only the old Engine metadata definitions after the new `Kaveon.usage` tables
+pass their exact counts; it never deletes the backing ADLS objects. Run this
+after registration and before dashboard qualification, not as an unverified
+startup side effect.
+
 > **Read this file at the start of every session.** This is how Claude and Codex stay in sync without a middleman.
 
 ## How this works
