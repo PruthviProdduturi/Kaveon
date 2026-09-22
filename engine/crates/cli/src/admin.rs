@@ -2,7 +2,8 @@
 //! line. Each command is one catalog statement submitted to the coordinator
 //! through `POST /v1/statement` — the same DDL, role checks, revisions and
 //! audit trail as an interactive `CREATE TABLE` — except `catalog show`,
-//! which reads the durable definition from the catalog API.
+//! which reads the durable definition from the catalog API, and `catalog
+//! access …`, which manages the grants through the catalog access API.
 
 use kaveon_sql::ddl::{parse_catalog_statement, quote_identifier};
 
@@ -72,6 +73,32 @@ pub enum AdminCommand {
     TableDetail {
         name: String,
     },
+    /// `kaveon catalog access …`: the grants, through the catalog access
+    /// API (administrators).
+    CatalogAccess(CatalogAccessCommand),
+}
+
+/// What `kaveon catalog access <action>` does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CatalogAccessCommand {
+    /// Every grant, the grantable catalogs and the reserved authority.
+    List,
+    /// Create a grant, or change one at `revision`.
+    Grant {
+        principal: String,
+        catalog: String,
+        access: String,
+        revision: Option<u64>,
+    },
+    /// Remove a grant at `revision`.
+    Revoke {
+        principal: String,
+        catalog: String,
+        revision: u64,
+    },
+    /// The reconciliation of an open deployment: the proposal from the
+    /// audit ledger, recorded only with `apply`.
+    Import { apply: bool },
 }
 
 /// Whether `word` opens an administration command.
@@ -79,8 +106,14 @@ pub fn is_noun(word: &str) -> bool {
     matches!(word, "catalog" | "schema" | "table")
 }
 
-const BOOLEAN_FLAGS: [&str; 3] = ["--cascade", "--if-exists", "--if-not-exists"];
-const VALUE_FLAGS: [&str; 13] = [
+const BOOLEAN_FLAGS: [&str; 5] = [
+    "--cascade",
+    "--if-exists",
+    "--if-not-exists",
+    "--from-open",
+    "--apply",
+];
+const VALUE_FLAGS: [&str; 15] = [
     "--location",
     "--format",
     "--access",
@@ -94,6 +127,8 @@ const VALUE_FLAGS: [&str; 13] = [
     "--bucket",
     "--region",
     "--prefix",
+    "--on",
+    "--revision",
 ];
 const CREDENTIAL_FLAG: &str = "--credential";
 
@@ -181,10 +216,16 @@ fn build(
             verbs_for(noun).join(", ")
         ));
     }
-    if positionals.len() > 2 {
+    // `catalog access <action> [principal]` takes one more positional.
+    let positional_limit = if (noun, verb) == ("catalog", "access") {
+        3
+    } else {
+        2
+    };
+    if positionals.len() > positional_limit {
         return Err(format!(
             "unexpected argument '{}' after 'kaveon {noun} {verb}'",
-            positionals[2]
+            positionals[positional_limit]
         ));
     }
     let name = positionals.get(1).cloned();
@@ -198,6 +239,7 @@ fn build(
     let allowed: &[&str] = match (noun, verb) {
         ("catalog", "list") | ("schema", "list") | ("table", "list") => &["--like"],
         ("catalog", "show") => &[],
+        ("catalog", "access") => &["--on", "--access", "--revision", "--from-open", "--apply"],
         ("catalog", "add") => &[
             "--if-not-exists",
             "--storage",
@@ -253,6 +295,97 @@ fn build(
         ("catalog", "show") => AdminCommand::CatalogShow {
             name: require_name("a catalog name")?,
         },
+        ("catalog", "access") => {
+            let action = name.clone().ok_or_else(|| {
+                "kaveon catalog access requires an action: list, grant, revoke, import".to_owned()
+            })?;
+            let principal = positionals.get(2).cloned();
+            let require_principal = || {
+                principal
+                    .clone()
+                    .ok_or_else(|| format!("kaveon catalog access {action} requires a principal"))
+            };
+            let require_catalog = || {
+                value("--on").ok_or_else(|| {
+                    format!("kaveon catalog access {action} requires --on <catalog>")
+                })
+            };
+            let revision = value("--revision")
+                .map(|text| {
+                    text.parse::<u64>()
+                        .ok()
+                        .filter(|revision| *revision > 0)
+                        .ok_or_else(|| "--revision must be a positive number".to_owned())
+                })
+                .transpose()?;
+            let refuse_extra = |what: &str| {
+                if principal.is_some() {
+                    return Err(format!(
+                        "unexpected argument '{}' after 'kaveon catalog access {action}'",
+                        principal.clone().unwrap_or_default()
+                    ));
+                }
+                if value("--on").is_some() || value("--access").is_some() || revision.is_some() {
+                    return Err(format!("kaveon catalog access {action} takes {what}"));
+                }
+                Ok(())
+            };
+            AdminCommand::CatalogAccess(match action.as_str() {
+                "list" => {
+                    refuse_extra("no options")?;
+                    if has("--from-open") || has("--apply") {
+                        return Err(
+                            "--from-open and --apply belong to 'kaveon catalog access import'"
+                                .into(),
+                        );
+                    }
+                    CatalogAccessCommand::List
+                }
+                "grant" => {
+                    let principal = require_principal()?;
+                    let access = value("--access").ok_or_else(|| {
+                        "kaveon catalog access grant requires --access browse|query|manage"
+                            .to_owned()
+                    })?;
+                    if !matches!(access.as_str(), "browse" | "query" | "manage") {
+                        return Err(format!(
+                            "--access must be browse, query or manage, not '{access}'"
+                        ));
+                    }
+                    CatalogAccessCommand::Grant {
+                        principal,
+                        catalog: require_catalog()?,
+                        access,
+                        revision,
+                    }
+                }
+                "revoke" => CatalogAccessCommand::Revoke {
+                    principal: require_principal()?,
+                    catalog: require_catalog()?,
+                    revision: revision.ok_or_else(|| {
+                        "kaveon catalog access revoke requires --revision <current revision>"
+                            .to_owned()
+                    })?,
+                },
+                "import" => {
+                    refuse_extra("only --from-open and --apply")?;
+                    if !has("--from-open") {
+                        return Err(
+                            "kaveon catalog access import requires --from-open: the only policy it records is the open one every principal had before grants"
+                                .into(),
+                        );
+                    }
+                    CatalogAccessCommand::Import {
+                        apply: has("--apply"),
+                    }
+                }
+                other => {
+                    return Err(format!(
+                        "unknown action 'kaveon catalog access {other}'; expected list, grant, revoke or import"
+                    ));
+                }
+            })
+        }
         ("catalog", "add") => {
             let name = require_name("a catalog name")?;
             let storage = value("--storage")
@@ -339,7 +472,7 @@ fn build(
 
 fn verbs_for(noun: &str) -> &'static [&'static str] {
     match noun {
-        "catalog" => &["list", "show", "add", "drop"],
+        "catalog" => &["list", "show", "add", "drop", "access"],
         "schema" => &["list", "add", "drop"],
         "table" => &[
             "list",
@@ -372,7 +505,7 @@ impl AdminCommand {
         }
         let sql = match self {
             Self::CatalogList { like } => format!("SHOW CATALOGS{}", like_clause(like)),
-            Self::CatalogShow { .. } => return Ok(None),
+            Self::CatalogShow { .. } | Self::CatalogAccess(_) => return Ok(None),
             Self::CatalogAdd {
                 name,
                 if_not_exists,
@@ -558,6 +691,21 @@ pub fn print_usage() {
     println!("  kaveon catalog add <name> --storage local --base-path <absolute path>");
     println!("  kaveon catalog add <name> --storage s3 --bucket <b> --region <r> [--prefix <p>]");
     println!("  kaveon catalog drop <name> [--cascade] [--if-exists]");
+    println!();
+    println!("Catalog access (admin role; grants are default deny):");
+    println!(
+        "  kaveon catalog access list                       Every grant, and what is grantable"
+    );
+    println!(
+        "  kaveon catalog access grant <principal> --on <catalog> --access browse|query|manage"
+    );
+    println!(
+        "                            [--revision <current>]  Required to change an existing grant"
+    );
+    println!("  kaveon catalog access revoke <principal> --on <catalog> --revision <current>");
+    println!("  kaveon catalog access import --from-open [--apply]");
+    println!("      Proposes the open policy every principal in the audit ledger had before");
+    println!("      grants existed; records nothing without --apply.");
     println!();
     println!("Schemas (analyst or admin role):");
     println!("  kaveon schema list [catalog] [--like 'pattern']");
@@ -762,6 +910,127 @@ mod tests {
         assert_eq!(command.statement().unwrap().unwrap(), "SHOW SCHEMAS");
         let (command, _) = split(&strings(&["catalog", "show", "lake"])).unwrap();
         assert_eq!(command.statement().unwrap(), None);
+    }
+
+    #[test]
+    fn catalog_access_commands_parse_their_actions_and_options() {
+        let (command, connection) = split(&strings(&[
+            "catalog",
+            "access",
+            "grant",
+            "ana@example.com",
+            "--on",
+            "OpenSource",
+            "--access",
+            "query",
+            "--revision",
+            "2",
+            "--server",
+            "https://engine.example",
+        ]))
+        .unwrap();
+        assert_eq!(
+            command,
+            AdminCommand::CatalogAccess(CatalogAccessCommand::Grant {
+                principal: "ana@example.com".into(),
+                catalog: "OpenSource".into(),
+                access: "query".into(),
+                revision: Some(2),
+            })
+        );
+        assert_eq!(connection, strings(&["--server", "https://engine.example"]));
+        assert_eq!(command.statement().unwrap(), None);
+        let (command, _) = split(&strings(&[
+            "catalog",
+            "access",
+            "revoke",
+            "ana",
+            "--on",
+            "Kaveon",
+            "--revision",
+            "3",
+        ]))
+        .unwrap();
+        assert_eq!(
+            command,
+            AdminCommand::CatalogAccess(CatalogAccessCommand::Revoke {
+                principal: "ana".into(),
+                catalog: "Kaveon".into(),
+                revision: 3,
+            })
+        );
+        let (command, _) = split(&strings(&["catalog", "access", "list"])).unwrap();
+        assert_eq!(
+            command,
+            AdminCommand::CatalogAccess(CatalogAccessCommand::List)
+        );
+        let (command, _) =
+            split(&strings(&["catalog", "access", "import", "--from-open"])).unwrap();
+        assert_eq!(
+            command,
+            AdminCommand::CatalogAccess(CatalogAccessCommand::Import { apply: false })
+        );
+        let (command, _) = split(&strings(&[
+            "catalog",
+            "access",
+            "import",
+            "--from-open",
+            "--apply",
+        ]))
+        .unwrap();
+        assert_eq!(
+            command,
+            AdminCommand::CatalogAccess(CatalogAccessCommand::Import { apply: true })
+        );
+        for (args, expected) in [
+            (&["catalog", "access"][..], "requires an action"),
+            (&["catalog", "access", "share"][..], "unknown action"),
+            (&["catalog", "access", "grant"][..], "requires a principal"),
+            (&["catalog", "access", "grant", "ana"][..], "--access"),
+            (
+                &["catalog", "access", "grant", "ana", "--access", "query"][..],
+                "--on",
+            ),
+            (
+                &[
+                    "catalog", "access", "grant", "ana", "--on", "x", "--access", "owner",
+                ][..],
+                "browse, query or manage",
+            ),
+            (
+                &["catalog", "access", "revoke", "ana", "--on", "x"][..],
+                "--revision",
+            ),
+            (
+                &[
+                    "catalog",
+                    "access",
+                    "revoke",
+                    "ana",
+                    "--on",
+                    "x",
+                    "--revision",
+                    "0",
+                ][..],
+                "positive",
+            ),
+            (&["catalog", "access", "import"][..], "--from-open"),
+            (
+                &["catalog", "access", "list", "ana"][..],
+                "unexpected argument",
+            ),
+            (
+                &["catalog", "access", "import", "--from-open", "--on", "x"][..],
+                "only --from-open and --apply",
+            ),
+            (
+                &["catalog", "access", "list", "--apply"][..],
+                "belong to 'kaveon catalog access import'",
+            ),
+        ] {
+            let error = split(&strings(args)).unwrap_err();
+            assert!(error.contains(expected), "{args:?}: {error}");
+        }
     }
 
     #[test]
