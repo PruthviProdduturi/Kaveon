@@ -556,9 +556,14 @@ mod tests {
 
     async fn ddl(state: &Arc<AppState>, sql: &str) {
         let statement = parse_catalog_statement(sql).unwrap().unwrap();
-        crate::catalog_ddl::execute_catalog_statement(state, &admin(), "lake", "sales", statement)
-            .await
-            .unwrap_or_else(|error| panic!("{sql}: {} {}", error.code, error.message));
+        let admin = admin();
+        let published = state.catalog.read().await.clone();
+        let scope = state.catalog_access.evaluate(&admin);
+        crate::catalog_ddl::execute_catalog_statement(
+            state, &admin, "lake", "sales", &published, &scope, statement,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{sql}: {} {}", error.code, error.message));
     }
 
     /// Run `sql` under a pool of `budget` bytes with a spill attached the
