@@ -1680,6 +1680,24 @@ _FOLLOW_UP_RE = re.compile(
 _FUZZY_CUTOFF = 0.85
 
 
+def _compiled_datasets() -> List[Dict[str, Any]]:
+    """The datasets that have a ready DLM artifact, newest first — what a vague
+    question can be about."""
+    if _RETIREMENT_SERVING.get() is not None:
+        return [{"dataset_id": str(a.get("dataset_id")),
+                 "name": (a.get("manifest") or {}).get("name") or str(a.get("dataset_id"))}
+                for a in _serving_artifacts() if a.get("status") == "ready"]
+    ensure_tables()
+    rows = meta.query("SELECT dataset_id, manifest FROM dlm_artifact WHERE status = 'ready' "
+                      "ORDER BY built_at DESC", [])
+    out: List[Dict[str, Any]] = []
+    for row in rows.get("rows_objects", rows.get("rows", [])):
+        manifest = _loads(row.get("manifest")) or {}
+        out.append({"dataset_id": str(row.get("dataset_id")),
+                    "name": manifest.get("name") or str(row.get("dataset_id"))})
+    return out
+
+
 def _dataset_names() -> List[str]:
     """Names of the datasets the DLM can answer for — the compiled artifacts, which
     is exactly the set routing considers."""
@@ -2002,10 +2020,26 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
     follow_up = bool(frame and frame.get("dataset_id")) and (
         not routed or str(routed[0]["dataset_id"]) == str(frame["dataset_id"]) or bool(_FOLLOW_UP_RE.search(question)))
     if not routed and not follow_up:
-        if not _vocabulary_hit(question):
-            return {"ok": False, "reason": "out_of_scope", "datasets": _dataset_names(),
-                    "duration_ms": round((_time_mod.monotonic() - t0) * 1000, 1)}
-        return {"ok": False, "reason": "no_dataset"}
+        # A vague-but-answerable question ("what is current usage", "how are we
+        # doing") names nothing the router can score. It is still answerable
+        # against a dataset's own defaults — but only when there is exactly one
+        # dataset to mean. Two or more is a question, not a guess.
+        if choices.get("dataset"):
+            routed = [{"dataset_id": str(choices["dataset"]), "score": 0.0}]
+        elif classes._VAGUE.search(question):
+            compiled = _compiled_datasets()
+            if len(compiled) == 1:
+                routed = [{"dataset_id": compiled[0]["dataset_id"], "score": 0.0}]
+            elif len(compiled) > 1:
+                return _clarify("dataset", "Which dataset did you mean?",
+                                [{"id": str(d["dataset_id"]), "label": str(d["name"]),
+                                  "description": ""} for d in compiled[:8]],
+                                original_question, choices, "", {}, t0)
+        if not routed:
+            if not _vocabulary_hit(question):
+                return {"ok": False, "reason": "out_of_scope", "datasets": _dataset_names(),
+                        "duration_ms": round((_time_mod.monotonic() - t0) * 1000, 1)}
+            return {"ok": False, "reason": "no_dataset"}
     dataset_id = str(frame["dataset_id"]) if (follow_up and (not routed or bool(_FOLLOW_UP_RE.search(question)))) else str(routed[0]["dataset_id"])
     routed_entry = routed[0] if routed and str(routed[0]["dataset_id"]) == dataset_id else {"dataset_id": dataset_id, "score": 1.0}
     ds = _dataset_by_id(dataset_id)
@@ -2227,7 +2261,10 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
         explicit_metric=bool(top_score > 0),
         explicit_period=bool(_extract_year(question) or _extract_relative_time(question)))
 
-    if wanted_groupby and not group_col and derived_intent is None:
+    # "by month" / "by year" is a trend over the time dimension, not a missing
+    # breakdown; it is resolved below rather than asked about here.
+    wants_trend = bool(classes._TREND.search(question)) and bool(date_column)
+    if wanted_groupby and not group_col and derived_intent is None and not wants_trend:
         by_column = _column_named_by(_by_phrase(question), columns)
         label = _dataset_label(ds)
         if dim_names:
@@ -2279,12 +2316,22 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
             year, year_shifted = lo, True
     note = " ".join(notes) or None
 
-    # 5) trend detection — "trend over time" / "by year" → time-series line
+    # 5) trend detection — "trend over time" / "by year" → time-series line.
+    #    The series is at the grain the dataset's time dimension actually has;
+    #    a question that asked for a coarser one is answered at that grain and
+    #    told so, rather than being given a differently-grained number.
     is_trend = bool(classes._TREND.search(question))
     time_group = None
     if is_trend and date_column and not group_col:
         time_group = date_column
         year = None  # don't filter by year when showing trend
+        grain = (time_spec or {}).get("grain") or "day"
+        asked = ("year" if re.search(r"\b(?:by\s+year|yearly|over\s+the\s+years)\b", question, re.I)
+                 else "month" if re.search(r"\b(?:by\s+month|monthly)\b", question, re.I)
+                 else "week" if re.search(r"\b(?:by\s+week|weekly)\b", question, re.I) else None)
+        if asked and asked != grain:
+            notes.append(f"{date_column} is recorded by {grain}, so the series is by {grain}.")
+            note = " ".join(notes) or None
     month_period = f"{year}-{month:02d}" if (year and month) else None
 
     group_cols = _group_cols(group_col)

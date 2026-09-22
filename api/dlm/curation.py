@@ -70,8 +70,27 @@ _YEAR_ONLY = re.compile(r"^\d{4}$")
 # The facts the Engine hands over                                              #
 # --------------------------------------------------------------------------- #
 
+# A column's type reaches this module in either spelling: the platform's SQL
+# names (`bigint`, `varchar`) on a dataset created through the binding, and
+# Arrow's own (`Int64`, `Utf8`) on the statistics record and on datasets bound
+# before the binding normalized them. Both are read here.
+_ARROW_TO_SQL = {
+    "boolean": "boolean",
+    "int8": "tinyint", "int16": "smallint", "int32": "integer", "int64": "bigint",
+    "uint8": "tinyint", "uint16": "smallint", "uint32": "integer", "uint64": "bigint",
+    "float16": "real", "float32": "real", "float64": "double",
+    "utf8": "varchar", "largeutf8": "varchar",
+    "binary": "varbinary", "largebinary": "varbinary",
+    "date32": "date", "date64": "date",
+}
+
+
 def _base_type(data_type: Any) -> str:
-    return str(data_type or "").split("(", 1)[0].strip().lower()
+    if isinstance(data_type, dict) and len(data_type) == 1:
+        name = next(iter(data_type))
+        return "timestamp" if name == "Timestamp" else str(name).split("(", 1)[0].strip().lower()
+    text = str(data_type or "").split("(", 1)[0].strip().lower()
+    return _ARROW_TO_SQL.get(text, text)
 
 
 def _scalar(value: Any) -> Any:
