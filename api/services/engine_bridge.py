@@ -543,6 +543,75 @@ def table_definition(catalog, schema, table, actor, role):
 # table needs to read why a definition or a location was refused. Locations
 # are storage paths and credentials are references; nothing here is secret.
 
+# ── Catalog access: the grants family and the caller's standing ───────────────
+
+def _access_response(response, fallback):
+    """The Engine's answer for a catalog access call, its message and code
+    kept: validation refusals are 422, revision conflicts 409 (reload and
+    retry), an unknown catalog 404, the admin gate 403, a store that is not
+    configured or reachable 503."""
+    status = response.status_code
+    body = _response_json(response)
+    code = body.get("code") if isinstance(body, dict) else None
+    message = _engine_message(response, fallback)
+    if status == 400:
+        raise HTTPException(422, {"code": code or "invalid_request", "message": message})
+    if status == 403:
+        raise HTTPException(403, {"code": "forbidden", "message": _engine_message(response, "Engine refused the administrator credential")})
+    if status == 404:
+        raise HTTPException(404, {"code": code or "not_found", "message": message})
+    if status == 409:
+        raise HTTPException(409, {"code": code or "revision_conflict", "message": message})
+    if status in {401, 503}:
+        raise HTTPException(503, {"code": code or "engine_unavailable", "message": _engine_message(response, "Engine catalog access is unavailable")})
+    if not response.is_success:
+        raise HTTPException(502, "Engine rejected the request")
+    if not isinstance(body, dict):
+        raise HTTPException(502, "Engine returned an invalid catalog access document")
+    return body
+
+
+def catalog_access(actor, role):
+    """Every grant, the grantable catalogs, the reserved authority and the role ceilings."""
+    response = _send("GET", "/v1/admin/catalog-access", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
+                     role=_admin_role(role, "catalog access"))
+    return _access_response(response, "Engine could not read the catalog grants")
+
+
+def grant_catalog_access(document, actor, role):
+    """Create a grant, or change one at the revision the document names."""
+    response = _send("PUT", "/v1/admin/catalog-access/grants", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
+                     payload=document, role=_admin_role(role, "catalog access"))
+    return _access_response(response, "Engine refused the grant")
+
+
+def revoke_catalog_access(document, actor, role):
+    """Remove a grant at the revision the document names."""
+    response = _send("DELETE", "/v1/admin/catalog-access/grants", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
+                     payload=document, role=_admin_role(role, "catalog access"))
+    return _access_response(response, "Engine refused the revoke")
+
+
+def effective_catalog_access(principal, actor, role):
+    """What each Engine role reaches on one principal's grants."""
+    response = _send("GET", "/v1/admin/catalog-access/effective/" + quote(principal, safe=""),
+                     "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_admin_role(role, "catalog access"))
+    return _access_response(response, "Engine could not read the principal's access")
+
+
+def import_catalog_access(document, actor, role):
+    """The open-policy reconciliation: a proposal from the audit ledger, recorded only with `apply`."""
+    response = _send("POST", "/v1/admin/catalog-access/import", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
+                     payload=document, role=_admin_role(role, "catalog access"), timeout=120)
+    return _access_response(response, "Engine refused the import")
+
+
+def my_catalog_access(actor, role):
+    """The caller's own catalogs and levels, as the Engine evaluates them."""
+    response = _send("GET", "/v1/catalog-access/me", "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role))
+    return _access_response(response, "Engine could not read the caller's access")
+
+
 CATALOG_TOKEN = "KAVEON_ENGINE_CATALOG_TOKEN"
 
 

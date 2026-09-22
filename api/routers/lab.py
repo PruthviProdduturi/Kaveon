@@ -226,7 +226,13 @@ def _engine_query(sql: str, catalog: str) -> str:
 
 @router.get("/lab/engine/sources")
 def list_engine_sources(response: Response, ctx=Depends(require_min_role("Viewer"))):
+    """The active native catalogs the caller may see. The registry names the
+    sources; the Engine's catalog list — evaluated for the verified principal
+    and role, never for a client claim — decides which of them appear."""
+    from services import engine_bridge
     response.headers.update(NO_CACHE)
+    listed = engine_bridge.catalogs(ctx.email, ctx.role) or {}
+    granted = {name for name in (listed.get("catalogs") or []) if isinstance(name, str)}
     if product_read_authority.enabled("sources"):
         rows=[{"id":str(item["source_id"])[8:],"name":item.get("name"),"engine_catalog":item.get("catalog_identity")}
               for item in product_read_authority.list_documents("sources",ctx.email,ctx.role)
@@ -237,7 +243,8 @@ def list_engine_sources(response: Response, ctx=Depends(require_min_role("Viewer
         "WHERE lifecycle = 'active' AND adapter_type = 'native' ORDER BY name"
         ).get("rows") or []
     return {"success": True, "sources": [
-        {"id": row["id"], "name": row["name"], "catalog": row["engine_catalog"]} for row in rows
+        {"id": row["id"], "name": row["name"], "catalog": row["engine_catalog"]}
+        for row in rows if row.get("engine_catalog") in granted
     ]}
 
 
