@@ -6,7 +6,7 @@
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--text-primary);
   --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  display: grid; grid-template-columns: 288px minmax(0, 1fr); gap: 14px;
+  display: grid; grid-template-columns: 236px minmax(0, 1fr); gap: 16px;
   min-height: calc(100vh - 56px);
   align-items: start;
 }
@@ -54,51 +54,155 @@
 .crumbs { display: flex; align-items: center; gap: 6px; font: 12px var(--mono); color: var(--text-muted); margin-bottom: 10px; flex-wrap: wrap }
 .crumbs b { color: var(--text-secondary); font-weight: 500 }
 .crumbs i { font-style: normal; color: var(--text-faint) }
-.head {
-  display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap;
-  padding: 18px 22px; margin-bottom: 14px;
-  background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-sm);
+/* ── Inventory ─────────────────────────────────────────────────────────────
+   The table list is the page. It is one continuous surface, not a deck of
+   cards: a hairline between rows, names in Inter, everything measured in mono
+   and right-aligned so a column of numbers can be compared down its edge. A
+   schema is a section label, written once, in the qualified form a reader
+   types into SQL Lab. Colour appears in exactly one place — the verdict in
+   the last column — and nowhere else. ──────────────────────────────────── */
+
+.invHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px 28px; flex-wrap: wrap; margin: 0 2px 14px }
+.invHeadMain { min-width: 0; flex: 1 1 320px }
+.invTitle { margin: 0; font-size: 19px; font-weight: 600; letter-spacing: -.012em; color: var(--text-primary) }
+.invLede { margin: 6px 0 0; max-width: 62ch; font-size: 12.5px; line-height: 1.6; color: var(--text-muted) }
+.invActions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }
+.quietLink { font-size: 12px; color: var(--text-muted); text-decoration: none; padding: 0 2px; border-bottom: 1px solid transparent }
+.quietLink:hover { color: var(--text-primary); border-bottom-color: var(--border-hover) }
+.rotate { animation: spin .9s linear infinite }
+
+.search { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px; color: var(--text-faint) }
+.search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .18) }
+.search i { font-size: 11px }
+.search input { width: 196px; max-width: 46vw; border: 0; outline: 0; background: transparent; font: 12.5px Inter, sans-serif; color: var(--text-primary) }
+.search input::placeholder { color: var(--text-faint) }
+
+.invSummary { margin: 0 2px 18px; font-size: 12.5px; line-height: 1.55; color: var(--text-secondary); font-variant-numeric: tabular-nums }
+
+/* One table for the whole catalog: the columns line up across every schema,
+   and a schema is a band across it rather than a separate grid. */
+.tableWrap { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden }
+.inv { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12.5px }
+.inv thead th { padding: 7px 10px; text-align: left; font: 600 11px Inter, sans-serif; color: var(--text-muted); background: var(--bg-elevated); border-bottom: 1px solid var(--border); white-space: nowrap }
+.inv td { padding: 0 10px; height: 36px; border-top: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle }
+.invRow:hover td { background: var(--bg-hover) }
+.invRowOpen td { background: var(--bg-hover) }
+
+.groupRow th {
+  padding: 0; text-align: left; border-top: 1px solid var(--border); background: var(--bg-primary);
 }
-.title { margin: 0; font: 600 20px/1.2 var(--mono); letter-spacing: -.01em; overflow-wrap: anywhere }
-.subtitle { margin: 6px 0 0; font-size: 12.5px; color: var(--text-muted) }
-.chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px }
-.chip { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; font: 600 11px Inter, sans-serif; color: var(--text-secondary); background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px }
-.chip span { font-weight: 500; color: var(--text-muted) }
-.chipShortcut { color: var(--accent); border-color: rgba(var(--accent-rgb), .35) }
-.actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center }
-.copied { font: 11px var(--mono); color: var(--text-muted); min-width: 70px }
+.schemaBody:first-of-type .groupRow th { border-top: 0 }
+.groupBand { display: flex; align-items: baseline; gap: 12px; padding: 9px 12px 7px }
+.groupName { min-width: 0; font: 600 12.5px var(--mono); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.groupCatalog { font-weight: 400; color: var(--text-muted) }
+.groupCount { margin-left: auto; font: 500 11px Inter, sans-serif; color: var(--text-muted); flex-shrink: 0 }
+.groupEmpty { font-size: 12.5px; color: var(--text-muted); white-space: normal }
 
-.panel { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; margin-bottom: 14px }
-.panelHead { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px }
-.panelTitle { margin: 0; font-size: 13px; font-weight: 600 }
-.panelMeta { font: 11.5px var(--mono); color: var(--text-muted) }
+.cDisclose { width: 28px; padding: 0 !important; text-align: center }
+.cName { min-width: 0 }
+.cFormat { width: 74px }
+.cRows { width: 98px; text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--text-secondary) }
+.cSize { width: 84px; text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--text-secondary) }
+.cWhen { width: 72px; text-align: right; color: var(--text-muted) }
+.cState { width: 120px; border-left: 1px solid var(--border) }
+th.cRows, th.cSize, th.cWhen { text-align: right }
+th.cRows .sortBtn, th.cSize .sortBtn, th.cWhen .sortBtn { justify-content: flex-end; width: 100% }
+.sizeCell { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 1px; line-height: 1.25 }
+.sizeFiles { font-size: 10.5px; color: var(--text-faint) }
 
-.grid { overflow: auto; border: 1px solid var(--border); border-radius: 8px; max-height: 420px }
-.grid table { width: 100%; border-collapse: collapse; font-size: 12.5px }
-.grid th { position: sticky; top: 0; text-align: left; padding: 8px 12px; font-size: 11px; font-weight: 600; color: var(--text-muted); background: var(--bg-elevated); border-bottom: 1px solid var(--border); white-space: nowrap }
-.grid td { padding: 7px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; font-family: var(--mono) }
-.grid tr:last-child td { border-bottom: 0 }
-.type { color: var(--text-secondary) }
-.nullable { color: var(--text-muted); font-family: Inter, sans-serif; font-size: 11.5px }
+.sortBtn { display: inline-flex; align-items: center; gap: 5px; padding: 0; border: 0; background: none; font: inherit; color: inherit; cursor: pointer }
+.sortBtn i { font-size: 9px; color: var(--text-faint); visibility: hidden }
+.sortBtn:hover { color: var(--text-primary) }
+.sortBtn:hover i { visibility: visible }
+.sortOn { color: var(--text-primary) }
+.sortOn i { visibility: visible; color: var(--accent) }
 
-.loc { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font: 12.5px var(--mono); align-items: baseline }
-.loc dt { color: var(--text-muted); font-family: Inter, sans-serif; font-size: 12px }
-.loc dd { margin: 0; overflow-wrap: anywhere }
+.disclose { width: 26px; height: 26px; display: inline-grid; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--text-faint); font-size: 10px; cursor: pointer }
+.disclose:hover { color: var(--text-primary); background: var(--bg-elevated) }
+
+/* Every control on the row is reachable by keyboard and says so. */
+.disclose:focus-visible, .sortBtn:focus-visible, .formBtn:focus-visible,
+.tableName:focus-visible, .quietLink:focus-visible, .ghost:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px;
+}
+
+.nameLine { display: flex; align-items: baseline; gap: 7px; min-width: 0 }
+.tableName { font-weight: 500; color: var(--text-primary); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.tableName:hover { color: var(--accent) }
+.mark { flex-shrink: 0; font: 500 10px Inter, sans-serif; color: var(--text-muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px }
+.narrowFacts { display: none }
+
+.formatCell { display: inline-flex; flex-direction: column; gap: 1px; line-height: 1.25; color: var(--text-secondary) }
+.formatKind { font-size: 10.5px; color: var(--text-faint) }
+
+.dash { color: var(--text-faint) }
+.skel { display: inline-block; height: 9px; border-radius: 3px; background: var(--bg-hover); border: 1px solid var(--border); vertical-align: middle }
+
+.stateCell { display: inline-flex; flex-direction: column; gap: 1px; line-height: 1.25; cursor: help }
+.stateWord { font-weight: 600; font-size: 12px }
+.stateDepth { font-size: 10.5px; color: var(--text-muted) }
+.toneOk .stateWord { color: var(--success) }
+.toneWarn .stateWord { color: var(--warning) }
+.toneBad .stateWord { color: var(--error) }
+.toneOff .stateWord { color: var(--text-faint) }
+
+/* The detail opens inside the row it belongs to, so the address a reader
+   just read stays directly above what it describes. */
+.detailRow td { height: auto; padding: 0; white-space: normal; background: var(--bg-primary); border-top: 1px solid var(--border) }
+.detail { padding: 16px 18px 18px 38px; display: flex; flex-direction: column; gap: 16px }
+.facts { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 7px 18px; margin: 0; font-size: 12.5px; line-height: 1.6 }
+.facts dt { color: var(--text-muted) }
+.facts dd { margin: 0; color: var(--text-secondary); overflow-wrap: anywhere }
+.factBad { color: var(--error) !important }
+.digest { margin-left: 8px; font: 11px var(--mono); color: var(--text-faint) }
+.aside { display: block; font-size: 11.5px; color: var(--text-muted) }
+.detailActions { display: flex; gap: 8px; flex-wrap: wrap }
+
+.analyze { padding-top: 14px; border-top: 1px solid var(--border) }
+.analyzeTitle { margin: 0 0 10px; font-size: 12.5px; font-weight: 600; color: var(--text-primary) }
+.forms { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px 20px }
+.forms li { display: grid; grid-template-columns: 1fr; gap: 5px; align-content: start }
+.formBtn { justify-self: start; height: 26px; padding: 0 12px; font: 600 12px Inter, sans-serif; color: var(--text-secondary); background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 7px; cursor: pointer }
+.formBtn:hover:enabled { color: var(--text-primary); border-color: var(--border-hover) }
+.formBtn:disabled { color: var(--text-faint); cursor: not-allowed }
+.formBlurb { margin: 0; font-size: 11.5px; line-height: 1.55; color: var(--text-muted) }
+.outcomeOk { margin: 12px 0 0; font: 12px/1.55 var(--mono); color: var(--success); overflow-wrap: anywhere }
+.outcomeBad { margin: 12px 0 0; font: 12px/1.55 var(--mono); color: var(--error); overflow-wrap: anywhere }
+
+.pageFoot { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 2px 8px }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap }
+
+/* Narrowing drops columns rather than folding the grid into cards: the facts
+   that leave the row reappear beneath the name, and the verdict never goes. */
+/* A dropped column still takes its share of a fixed layout's slack, so once
+   columns start leaving, the table sizes itself and the name cell claims what
+   the verdict leaves (`max-width: 0` lets a long name ellipsize rather than
+   widen the table). */
+@media (max-width: 880px) {
+  .inv { table-layout: auto }
+  .inv .cWhen { display: none }
+  .inv .cName { width: 100%; max-width: 0 }
+}
+@media (max-width: 660px) {
+  .inv .cFormat, .inv .cRows, .inv .cSize { display: none }
+  .inv td { height: auto; padding-top: 8px; padding-bottom: 8px }
+  .inv .cState { width: 92px }
+  .inv .cDisclose { width: 26px }
+  .narrowFacts { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 3px; font: 11px var(--mono); color: var(--text-muted) }
+  .detail { padding-left: 18px }
+  .facts { grid-template-columns: minmax(0, 1fr); gap: 2px }
+  .facts dt { margin-top: 8px }
+  .forms { grid-template-columns: minmax(0, 1fr) }
+}
 
 .note { padding: 10px 12px; font-size: 12.5px; color: var(--text-secondary); background: var(--bg-primary); border: 1px solid var(--border); border-radius: 8px }
 .note b { color: var(--text-primary) }
 .noteErr { border-color: rgba(239, 68, 68, .35); color: var(--error) }
 
 .empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; padding: 56px 24px; color: var(--text-muted); background: var(--bg-surface); border: 1px dashed var(--border); border-radius: 12px }
-.emptyTitle { font-size: 15px; font-weight: 600; color: var(--text-primary) }
-.emptyBody { font-size: 13px; max-width: 520px; line-height: 1.55 }
+.emptyTitle { margin: 0; font-size: 15px; font-weight: 600; color: var(--text-primary) }
+.emptyBody { margin: 0; font-size: 13px; max-width: 520px; line-height: 1.55 }
 .emptyActions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; justify-content: center }
-
-.overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 14px }
-.stat { padding: 14px 16px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-sm) }
-.statLabel { font-size: 12px; color: var(--text-muted); margin-bottom: 4px }
-.statValue { font: 600 20px/1.1 var(--mono) }
-.statValue small { font: 500 12px Inter, sans-serif; color: var(--text-muted); margin-left: 6px }
 
 @media (max-width: 900px) {
   .root, .rootCollapsed { grid-template-columns: 1fr }
