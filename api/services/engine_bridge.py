@@ -61,6 +61,38 @@ def _send(method, path, token_name, actor, *, payload=None, revision=None, role=
         raise HTTPException(502, "Engine is unavailable") from None
 
 
+# ── Engine refusals ───────────────────────────────────────────────────────────
+# The coordinator answers 429 for two different things. Admission exhaustion
+# (`MEMORY_ADMISSION_REJECTED`, `RESOURCE_GROUP_REJECTED`) is momentary and
+# the Studio retries it, so it stays the short message it always was. The
+# per-principal live-read quota of a demo coordinator (`RATE_LIMITED`) is not
+# retryable until the time the Engine names, so its body — code, message,
+# `retry_after_seconds`, `next_allowed_at` — is passed through unchanged for
+# the Studio to show as a notice.
+QUOTA_CODE = "RATE_LIMITED"
+
+
+def _too_many_requests(body):
+    """The HTTPException for an Engine 429 whose JSON body is `body`."""
+    if isinstance(body, dict) and body.get("code") == QUOTA_CODE:
+        retry_after = body.get("retry_after_seconds")
+        retry_after = int(retry_after) if isinstance(retry_after, (int, float)) and retry_after >= 0 else 1
+        detail = {"code": QUOTA_CODE, "message": str(body.get("message") or body.get("error") or "Query quota exhausted"),
+                  "retry_after_seconds": retry_after}
+        for key in ("next_allowed_at", "limit", "resource_group"):
+            if key in body:
+                detail[key] = body[key]
+        return HTTPException(429, detail, headers={"Retry-After": str(retry_after)})
+    return HTTPException(429, "Engine query capacity is temporarily exhausted", headers={"Retry-After": "1"})
+
+
+def _response_json(response):
+    try:
+        return response.json()
+    except ValueError:
+        return None
+
+
 def _request(method, path, token_name, actor, *, payload=None, revision=None, role=None, timeout=60):
     response = _send(method, path, token_name, actor, payload=payload, revision=revision, role=role, timeout=timeout)
     if response.status_code == 404:
@@ -68,7 +100,7 @@ def _request(method, path, token_name, actor, *, payload=None, revision=None, ro
     # Admission exhaustion is temporary. Preserve it for the Studio's bounded
     # retry path instead of turning a healthy Engine into an opaque 502.
     if response.status_code == 429:
-        raise HTTPException(429, "Engine query capacity is temporarily exhausted", headers={"Retry-After": "1"})
+        raise _too_many_requests(_response_json(response))
     if response.status_code in {409, 412, 428}:
         raise HTTPException(409, "Engine revision conflict; reload before retrying")
     if not response.is_success:
@@ -264,7 +296,7 @@ def _submit_error(statement):
     status, body = statement.status, statement.body if isinstance(statement.body, dict) else {}
     message = body.get("error") if isinstance(body.get("error"), str) and body.get("error").strip() else None
     if status == 429:
-        return HTTPException(429, "Engine query capacity is temporarily exhausted", headers={"Retry-After": "1"})
+        return _too_many_requests(body)
     if status == 400:
         return HTTPException(400, message or "Engine refused the statement")
     return HTTPException(502, message or "Engine rejected the request")
@@ -384,7 +416,7 @@ def result_page(query_id, page, actor, role):
     response = _send("GET", "/v1/query/" + quote(str(query_id), safe="") + "/results/" + str(int(page)),
                      "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role))
     if response.status_code == 429:
-        raise HTTPException(429, "Engine query capacity is temporarily exhausted", headers={"Retry-After": "1"})
+        raise _too_many_requests(_response_json(response))
     if response.status_code in {200, 202, 404, 410}:
         try:
             body = response.json()
@@ -697,7 +729,7 @@ def probe_table(catalog, schema, table, actor, role, timeout=120):
     except ValueError:
         body = {}
     if response.status_code == 429:
-        raise HTTPException(429, "Engine query capacity is temporarily exhausted", headers={"Retry-After": "1"})
+        raise _too_many_requests(body)
     if not response.is_success or (isinstance(body, dict) and body.get("error")):
         message = _engine_message(response, "Engine could not read the table")
         code = body.get("code") if isinstance(body, dict) and isinstance(body.get("code"), str) else None
@@ -754,6 +786,24 @@ def replace_resource_groups(document, actor, role):
     response = _send("PUT", "/v1/admin/resource-groups", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
                      payload=document, role=_admin_role(role, "resource groups"))
     return _governance_response(response, "Engine refused the resource groups")
+
+
+def quota(actor, role):
+    """The caller's live-read quota on the coordinator (`GET /v1/quota`):
+    `{"demo": {"enabled"}, "quota": null | {...}}`. A coordinator that does
+    not know the route (before the demo posture) answers 404, which is
+    reported as the posture being off."""
+    response = _send("GET", "/v1/quota", "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role), timeout=10)
+    if response.status_code == 404:
+        return {"demo": {"enabled": False}, "quota": None}
+    if response.status_code in {401, 403}:
+        raise HTTPException(502, "Engine rejected the bridge credential")
+    if not response.is_success:
+        raise HTTPException(502, "Engine rejected the request")
+    body = _response_json(response)
+    if not isinstance(body, dict) or not isinstance(body.get("demo"), dict):
+        raise HTTPException(502, "Engine returned an invalid quota document")
+    return body
 
 
 def _audit_path(params):

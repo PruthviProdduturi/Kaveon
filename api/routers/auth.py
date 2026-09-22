@@ -2,11 +2,13 @@
 
 from datetime import datetime, timezone
 from fastapi import APIRouter
+from middleware.demo import allowed_in_demo
 
 router = APIRouter()
 
 
 @router.post("/connect")
+@allowed_in_demo
 def connect():
     """
     Called by the frontend immediately after Azure AD authentication.
@@ -20,6 +22,7 @@ def connect():
 
 
 @router.post("/disconnect")
+@allowed_in_demo
 def disconnect():
     return {
         "success": True,

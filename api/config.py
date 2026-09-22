@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     KAVEON_DEV_USER_NAME: str = "Dev User"
     KAVEON_DEV_USER_ROLE: str = "Admin"
 
+    # ── Demo posture ──────────────────────────────────────────────────────────
+    # True makes every mutating platform route read-only for any role below
+    # Admin (403 `demo_read_only`) and confines submitted SQL to read
+    # statements; see middleware/demo.py. The Engine's per-principal live-read
+    # quota is configured on the coordinator (resource groups, `demo.enabled`).
+    # Off by default: a self-hosted install is unaffected.
+    KAVEON_DEMO_MODE: bool = False
+
     # ── Metadata database ─────────────────────────────────────────────────────
     # Supported types: fabric_sql | azure_sql | postgresql | mysql
     METADATA_DB_TYPE: str = ""

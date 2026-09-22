@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from middleware.auth import require_user_context, UserContext
 from middleware.permissions import require_min_role
 from middleware.rate_limit import sql_execute_limiter
+from middleware.demo import allowed_in_demo, statement_route
 from services.sql_guard import assert_no_platform_tables, assert_read_only
 import dlm.engine as dlm
 
@@ -162,6 +163,7 @@ def route(question: str = Query(..., min_length=1),
 
 
 @router.post("/dlm/ask")
+@allowed_in_demo
 def ask(body: AskBody, ctx: UserContext = Depends(require_user_context)):
     """Deterministic NL -> SQL via the DLM (no LLM). Returns the routed dataset,
     assembled SQL, and chart hints — or ok=false if nothing matched.
@@ -177,6 +179,7 @@ def ask(body: AskBody, ctx: UserContext = Depends(require_user_context)):
 
 
 @router.post("/dlm/reproduce")
+@statement_route("sql")
 def reproduce(body: ReproduceBody, ctx: UserContext = Depends(require_min_role("Analyst"))):
     """Run an answer's statement as a live read — on the Engine with
     `use_statistics = false` and `result_cache = false`, on the warehouse
@@ -198,6 +201,7 @@ def reproduce(body: ReproduceBody, ctx: UserContext = Depends(require_min_role("
 
 
 @router.post("/dlm/serve-chart")
+@allowed_in_demo
 def serve_chart(body: ServeChartBody, ctx: UserContext = Depends(require_user_context)):
     """Serve a dashboard chart from precomputed DLM context — no live SQL.
     Returns served=true with columns/rows on a hit, served=false when the

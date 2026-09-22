@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from middleware.auth import require_user_context, UserContext
+from middleware.demo import statement_route
 import dlm.profiler as profiler
 import dlm.router as router_svc
 import dlm.validity as validity
@@ -62,6 +63,7 @@ def get_validity(database: str, schema_name: str = "public",
 
 
 @router.post("/context/ask")
+@statement_route("sql")
 def ask(body: AskBody, ctx: UserContext = Depends(require_user_context)):
     """Route a natural-language question by the validity of the specific context
     elements it depends on. Returns the route taken (context/hybrid/query), the

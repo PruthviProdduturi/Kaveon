@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Response, HTTPException, Depends
 from middleware.auth import require_auth
+from middleware.demo import allowed_in_demo
 from models.theme import ThemeUpdate
 import services.theme as svc
 
@@ -16,12 +17,14 @@ def get_theme(response: Response, user: str = Depends(require_auth)):
 
 
 @router.put("/theme")
+@allowed_in_demo
 def save_theme(data: ThemeUpdate, user: str = Depends(require_auth)):
     svc.save_user_theme(user, data.theme_color)
     return {"success": True, "message": "Theme saved successfully", "theme_color": data.theme_color}
 
 
 @router.delete("/theme")
+@allowed_in_demo
 def delete_theme(user: str = Depends(require_auth)):
     svc.delete_user_theme(user)
     return {"success": True, "message": "Theme reset to default"}

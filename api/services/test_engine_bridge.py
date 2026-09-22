@@ -117,7 +117,8 @@ class EngineBridgeTests(unittest.TestCase):
             self.assertEqual(error.exception.status_code, 503)
 
     def test_engine_admission_rejection_is_retryable(self):
-        response = SimpleNamespace(status_code=429, is_success=False)
+        response = SimpleNamespace(status_code=429, is_success=False,
+                                   json=lambda: {"error": "memory admission wait expired", "code": "MEMORY_ADMISSION_REJECTED"})
         with patch.dict("os.environ", {"KAVEON_ENGINE_URL": "https://engine.example", "KAVEON_ENGINE_BRIDGE_TOKEN": "test"}), \
              patch.object(bridge, "_verify_context", return_value=True), \
              patch.object(bridge.httpx, "request", return_value=response):

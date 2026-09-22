@@ -9,6 +9,7 @@ from fastapi import APIRouter, BackgroundTasks, Request, Response, HTTPException
 from middleware.auth import require_auth, require_user_context, UserContext
 from middleware.permissions import require_min_role
 from middleware.rate_limit import sql_execute_limiter
+from middleware.demo import allowed_in_demo, statement_route
 from models.sql import SqlGenerateBody, SqlExecuteBody
 import services.datasets as datasets_svc
 import services.query_history as history_svc
@@ -185,6 +186,7 @@ def _assert_engine_execute_permission(data: SqlExecuteBody, ctx: UserContext) ->
 
 
 @router.post("/sql/generate")
+@allowed_in_demo
 def generate_sql(data: SqlGenerateBody, ctx=Depends(require_min_role("Analyst"))):
     user = ctx.email
     dataset_id = data.dataset_id
@@ -394,6 +396,7 @@ def distinct_filter_values(
 
 
 @router.post("/sql/execute")
+@statement_route("sql_text")
 def execute_sql(data: SqlExecuteBody, response: Response, ctx: UserContext = Depends(require_user_context)):
     if postgresql_retirement_runtime.requested():
         raise HTTPException(status_code=503, detail="Legacy SQL execution is unavailable after PostgreSQL retirement; use /sql/engine.")
@@ -507,6 +510,7 @@ def execute_sql(data: SqlExecuteBody, response: Response, ctx: UserContext = Dep
 
 
 @router.post("/sql/execute-async")
+@statement_route("sql_text")
 def execute_sql_async(
     data: SqlExecuteBody,
     background_tasks: BackgroundTasks,
@@ -542,6 +546,7 @@ def get_async_job(job_id: str, ctx: UserContext = Depends(require_user_context))
 
 
 @router.delete("/sql/async/{job_id}")
+@allowed_in_demo
 def cancel_async_job(job_id: str, ctx: UserContext = Depends(require_user_context)):
     """Discard the owner's job/result; an in-flight database call may still finish."""
     with _ASYNC_JOBS_LOCK:
@@ -561,6 +566,7 @@ def invalidate_cache(ctx=Depends(require_min_role("Admin"))):
 
 
 @router.post("/sql/engine")
+@statement_route("sql_text")
 def execute_engine_sql(data: SqlExecuteBody, response: Response, ctx: UserContext = Depends(require_user_context)):
     """Execute against an active, server-resolved Engine catalog."""
     _assert_engine_execute_permission(data, ctx)

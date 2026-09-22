@@ -5,6 +5,7 @@ import logging
 from fastapi import APIRouter, Request, Response, HTTPException, Depends
 from middleware.auth import require_auth
 from middleware.permissions import require_min_role
+from middleware.demo import allowed_in_demo
 import database.metadata as db
 import database.pool as pool
 from services.credentials import encrypt, CredentialError
@@ -336,6 +337,7 @@ def test_data_source(ds_id: str, user: str = Depends(require_auth)):
 
 
 @router.post("/data-sources/{ds_id}/favorite")
+@allowed_in_demo
 def set_ds_favorite(ds_id: str, user: str = Depends(require_auth)):
     if product_read_authority.enabled("sources"):
         from services import favorites
@@ -356,6 +358,7 @@ def set_ds_favorite(ds_id: str, user: str = Depends(require_auth)):
 
 
 @router.delete("/data-sources/{ds_id}/favorite")
+@allowed_in_demo
 def remove_ds_favorite(ds_id: str, user: str = Depends(require_auth)):
     if product_read_authority.enabled("sources"):
         from services import favorites

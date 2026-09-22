@@ -7,11 +7,31 @@ query history. Nothing here mutates Engine state.
 """
 from fastapi import APIRouter, Depends, HTTPException
 
+from middleware import demo
 from middleware.auth import UserContext
 from middleware.permissions import require_min_role
 from services import engine_bridge
 
 router = APIRouter(tags=["engine-console"])
+
+
+@router.get("/engine/quota")
+def engine_quota(ctx: UserContext = Depends(require_min_role("Viewer"))):
+    """The caller's demo posture: whether the platform is read-only for them
+    (`read_only`), and their live-read quota on the coordinator (`quota`,
+    null when no quota applies to them — an Admin, a self-hosted install, or
+    a coordinator without the Engine integration). Never an error for a
+    missing Engine: the Studio shows the counter only when there is one."""
+    read_only = demo.enabled() and ctx.role != "Admin"
+    try:
+        engine = engine_bridge.quota(ctx.email, ctx.role)
+    except HTTPException as error:
+        if error.status_code in {502, 503, 504}:
+            return {"demo": {"read_only": read_only, "engine": False}, "quota": None}
+        raise
+    quota = engine.get("quota")
+    return {"demo": {"read_only": read_only, "engine": bool(engine["demo"].get("enabled"))},
+            "quota": quota if isinstance(quota, dict) else None}
 
 
 @router.get("/engine/console/cluster")
