@@ -37,6 +37,9 @@ interface RouteMeta {
   /** The lane the DLM's answer took — the Engine's word for an Engine-backed
    *  dataset (`execution.mode`), the DLM's own for a warehouse one. */
   lane?: "context" | "cache" | "live";
+  /** The named question class the DLM answered as — `breakdown`,
+   *  `comparison_period`, `share_of_total`, … See `api/dlm/classes.py`. */
+  questionClass?: string;
   evidence?: Evidence;
   headline?: Row | null;
 }
@@ -47,7 +50,9 @@ interface ContextHint { label: string; value: number | string | null }
 // guessing. Picking an option re-posts the original question with the slot
 // pinned; the DLM does not pick silently.
 interface Clarification {
-  kind: "metric" | "dimension" | "value";
+  /** `question` is the refusal path: the options are whole questions the
+   *  dataset can answer, asked afresh rather than pinning a slot. */
+  kind: "metric" | "dimension" | "value" | "question";
   prompt: string;
   options: { id: string; label: string; description?: string }[];
   resume: { question: string; choices: Record<string, string> };
@@ -823,6 +828,30 @@ export default function Home() {
             }]);
             return;
           }
+          // The dataset genuinely cannot answer this. Say so, and offer the
+          // closest questions it can answer as one-click follow-ups — the same
+          // selectable shape a clarification uses.
+          if (!dlm?.ok && dlm?.reason === "unanswerable") {
+            const closest: string[] = dlm.closest || [];
+            const why = String(dlm.answer || dlm.why || "That question cannot be answered from this dataset.");
+            if (sid) {
+              void saveMessage(sid, "user", text.trim());
+              void saveMessage(sid, "assistant", why, { route: "unanswerable" });
+            }
+            setMessages(prev => [...prev.slice(0, -1), {
+              role: "assistant",
+              content: why,
+              ...(closest.length ? {
+                clarification: {
+                  kind: "question" as const,
+                  prompt: why,
+                  options: closest.map(q => ({ id: q, label: q })),
+                  resume: { question: "", choices: {} },
+                },
+              } : {}),
+            }]);
+            return;
+          }
           if (!dlm?.ok && dlm?.reason === "out_of_scope") {
             const names: string[] = dlm.datasets || [];
             const scopeMsg = dlm.hint
@@ -906,7 +935,7 @@ export default function Home() {
                 role: "assistant",
                 content: summary,
                 ...(wantsChart ? { chart: { rows, columns, chartType: dlm.chartType, xAxis: dlm.xAxis, yAxis: dlm.yAxis, title: dlm.title, sql: dlm.sql } } : {}),
-                routeMeta: { route, lane, evidence, headline: headlineOf(rows), durationMs: Math.round(performance.now() - dlmT0), approx: !!dlm.approx, datasetName: dlm.dataset_name },
+                routeMeta: { route, lane, evidence, headline: headlineOf(rows), durationMs: Math.round(performance.now() - dlmT0), approx: !!dlm.approx, datasetName: dlm.dataset_name, questionClass: dlm.question_class },
               }]);
               return;
             }
@@ -1327,7 +1356,11 @@ export default function Home() {
                                   onClick={() => {
                                     const c = m.clarification!;
                                     setMessages(prev => prev.map((x, j) => (j === i ? { ...x, chosen: opt.id } : x)));
-                                    void sendMessage(opt.label, { question: c.resume.question, choices: { ...c.resume.choices, [c.kind]: opt.id } });
+                                    if (c.kind === "question") {
+                                      void sendMessage(opt.label);   // a whole question, asked afresh
+                                    } else {
+                                      void sendMessage(opt.label, { question: c.resume.question, choices: { ...c.resume.choices, [c.kind]: opt.id } });
+                                    }
                                   }}
                                   style={{
                                     padding: "6px 12px", borderRadius: 8, fontSize: 12.5, fontWeight: 500,
@@ -1371,6 +1404,11 @@ export default function Home() {
                             {m.routeMeta.route === "context" && m.routeMeta.approx && <span style={{ color: "#10b981" }} title="Sketch estimate with its error stated in the evidence; no scan">&middot; ≈ estimate &middot; no scan</span>}
                             {m.routeMeta.elementsChecked != null && <span>&middot; {m.routeMeta.elementsChecked} elements</span>}
                             {m.routeMeta.datasetName && <span>&middot; {m.routeMeta.datasetName}</span>}
+                            {m.routeMeta.questionClass && (
+                              <span title="The question class the DLM answered as">
+                                &middot; {m.routeMeta.questionClass.replace(/_/g, " ")}
+                              </span>
+                            )}
                           </div>
                         )}
                         {m.routeMeta?.evidence && (

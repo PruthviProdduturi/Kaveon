@@ -224,6 +224,23 @@ _TREND = re.compile(r"\b(trend|over\s+time|by\s+year|by\s+month|by\s+day|yearly|
                     r"over\s+the\s+years|by\s+week|weekly)\b", re.I)
 
 
+# The words the derived grammar above accounts for. They are grammar, not data,
+# so an unresolved-term check must not treat "than" in "more than 150" or "per"
+# in "errors per query" as a filter value the dataset failed to recognise.
+GRAMMAR_WORDS = frozenset({
+    "vs", "versus", "compared", "comparing", "against", "change", "changed",
+    "last", "previous", "prior", "year", "month", "quarter", "week", "day",
+    "yoy", "mom", "wow", "over", "on",
+    "share", "percentage", "percent", "proportion", "ratio", "per", "each",
+    "within", "how", "many", "much", "have", "has", "had", "with",
+    "more", "than", "greater", "least", "above", "fewer", "less", "under",
+    "below", "most", "exactly", "at",
+    "current", "currently", "latest", "right", "now", "today", "yesterday",
+    "going", "state", "status", "stand", "overview", "summary", "snapshot",
+    "trend", "time", "usage", "us", "we", "it", "things",
+})
+
+
 @dataclass
 class Intent:
     """A derived class the question asks for, with what the composer needs."""
