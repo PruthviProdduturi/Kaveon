@@ -689,6 +689,17 @@ def table_version(table_id, actor, role):
                     "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role))
 
 
+def table_statistics(table_id, actor, role):
+    """The table's statistics record and the version observed now — `{table_id,
+    table, source_version, current_source_version, observed_at_ms, stale,
+    statistics}`. What DLM auto-curation derives a dataset's context spec from:
+    per-column distinct counts, bounds, null counts and the sketches. None for
+    a table that has never been analyzed (the Engine answers 404) or one the
+    Engine will not publish."""
+    return _request("GET", "/v1/catalog/tables/" + quote(table_id, safe="") + "/statistics",
+                    "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role))
+
+
 def _activate(path, definition, actor):
     """Draft revision 1 → Active revision 2. The Engine publishes only Active
     definitions into its query snapshot, so nothing is queryable before this."""
