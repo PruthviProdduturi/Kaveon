@@ -110,9 +110,16 @@ pub struct AuditRecord {
     /// Compressed bytes the statement's scans read, across every task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bytes_scanned: Option<u64>,
-    /// Where the statement ran: `distributed`, `coordinator`, `cache`.
+    /// Where the statement ran: `distributed`, `coordinator`, `cache`,
+    /// `context`. Absent when it never ran.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// When the statement was charged against its resource group's
+    /// statement quota — the moment it reached the row path. Absent when
+    /// no quota applied to it, or it was answered without running. The
+    /// quota is rebuilt from this field at start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quota_charged_at_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_code: Option<String>,
     /// The first 200 characters of the error.
@@ -227,7 +234,7 @@ pub fn sha256_hex(text: &str) -> String {
     hex
 }
 
-fn unix_ms() -> u64 {
+pub fn unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -712,6 +719,41 @@ pub fn parse_time(text: &str) -> Option<u64> {
     Some(ms)
 }
 
+/// A time as the API reports it: `YYYY-MM-DDTHH:MM:SSZ` (UTC, whole
+/// seconds) from Unix milliseconds. The inverse of [`parse_time`] at
+/// second precision.
+pub fn format_time(ms: u64) -> String {
+    let seconds = ms / 1_000;
+    let days = i64::try_from(seconds / 86_400).unwrap_or(i64::MAX);
+    let (year, month, day) = civil_from_days(days);
+    let clock = seconds % 86_400;
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        clock / 3_600,
+        clock % 3_600 / 60,
+        clock % 60
+    )
+}
+
+/// The proleptic Gregorian date of a day count since 1970-01-01.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let days = days + 719_468;
+    let era = days.div_euclid(146_097);
+    let day_of_era = days.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_index = (5 * day_of_year + 2) / 153;
+    let day = (day_of_year - (153 * month_index + 2) / 5 + 1) as u32;
+    let month = if month_index < 10 {
+        month_index + 3
+    } else {
+        month_index - 9
+    } as u32;
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    (year, month, day)
+}
+
 /// Days since 1970-01-01 for a proleptic Gregorian date.
 fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
     let year = if month <= 2 { year - 1 } else { year };
@@ -903,6 +945,25 @@ mod tests {
         );
         assert_eq!(parse_time("2026-13-01"), None);
         assert_eq!(parse_time("yesterday"), None);
+    }
+
+    #[test]
+    fn times_format_as_utc_timestamps_and_round_trip_through_parse() {
+        assert_eq!(format_time(0), "1970-01-01T00:00:00Z");
+        assert_eq!(format_time(86_400_000 - 1), "1970-01-01T23:59:59Z");
+        assert_eq!(
+            format_time(1_789_776_000_000 + 10 * 3_600_000 + 20 * 60_000 + 30_250),
+            "2026-09-19T10:20:30Z"
+        );
+        assert_eq!(format_time(951_782_400_000), "2000-02-29T00:00:00Z");
+        for text in [
+            "2026-09-19T10:20:30Z",
+            "2000-02-29T23:59:59Z",
+            "1999-12-31T00:00:00Z",
+            "2100-03-01T12:00:00Z",
+        ] {
+            assert_eq!(format_time(parse_time(text).unwrap()), text);
+        }
     }
 
     #[test]
