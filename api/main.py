@@ -6,12 +6,13 @@ Replaces the Node.js/Express API + Python Flask proxy with a single service.
 import threading
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 import time
 
 from config import settings
+from middleware.demo import demo_read_only
 from middleware.errors import AppError, app_error_handler, generic_error_handler
 from database.pool import LargeIntResponse, TokenAuthError
 from database.warmup import start_warmup_and_heartbeat
@@ -112,6 +113,9 @@ app = FastAPI(
     version="2.0.0",
     default_response_class=LargeIntResponse,
     lifespan=lifespan,
+    # The demo posture is one application-level dependency: every router below
+    # inherits it, so a route added later cannot forget it (middleware/demo.py).
+    dependencies=[Depends(demo_read_only)],
 )
 
 _CORS_HEADERS = {

@@ -17,6 +17,7 @@ import re
 import os
 
 from middleware.auth import require_user_context, UserContext
+from middleware.demo import allowed_in_demo
 import database.metadata as db
 import database.pool as pool
 from services import product_outbox
@@ -389,6 +390,7 @@ def _save_message(session_id: int, owner_email: str, role: str, content: str,
 # ── Endpoint ───────────────────────────────────────────────────────────────────
 
 @router.post("/chat")
+@allowed_in_demo
 def chat(req: ChatRequest, ctx: UserContext = Depends(require_user_context)):
     if postgresql_retirement_runtime.requested():
         raise HTTPException(status_code=503, detail="Legacy direct chat is unavailable after PostgreSQL retirement; use the DLM context API.")

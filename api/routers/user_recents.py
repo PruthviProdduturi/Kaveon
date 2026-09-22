@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from middleware.auth import require_user_context, UserContext
+from middleware.demo import allowed_in_demo
 import services.user_recents as svc
 
 router = APIRouter()
@@ -21,12 +22,14 @@ def get_recents(ctx: UserContext = Depends(require_user_context)):
 
 
 @router.post("/user/recents")
+@allowed_in_demo
 def add_recent(item: RecentItem, ctx: UserContext = Depends(require_user_context)):
     svc.add_recent(ctx.email, item.item_id, item.label, item.href, item.type)
     return {"status": "ok"}
 
 
 @router.delete("/user/recents")
+@allowed_in_demo
 def clear_recents(type: str | None = None, ctx: UserContext = Depends(require_user_context)):
     """Clear all recents for the user, or just one category (?type=chart)."""
     deleted = svc.clear_recents(ctx.email, type)
@@ -34,6 +37,7 @@ def clear_recents(type: str | None = None, ctx: UserContext = Depends(require_us
 
 
 @router.delete("/user/recents/{item_id}")
+@allowed_in_demo
 def remove_recent(item_id: str, ctx: UserContext = Depends(require_user_context)):
     svc.remove_recent(ctx.email, item_id)
     return {"status": "ok"}

@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from middleware.auth import require_user_context, UserContext
+from middleware.demo import allowed_in_demo
 import database.metadata as db
 from services import product_outbox
 from services import chat_history_store, product_read_authority
@@ -150,6 +151,7 @@ def get_session(session_id: int, ctx: UserContext = Depends(require_user_context
 
 
 @router.post("/chat/history", status_code=201)
+@allowed_in_demo
 def create_session(body: SessionCreate, ctx: UserContext = Depends(require_user_context)):
     """Create a new chat session."""
     title = (body.title or "New conversation").strip()[:500]
@@ -173,6 +175,7 @@ def create_session(body: SessionCreate, ctx: UserContext = Depends(require_user_
 
 
 @router.post("/chat/history/{session_id}/messages", status_code=201)
+@allowed_in_demo
 def add_message(
     session_id: int,
     body: MessageCreate,
@@ -222,6 +225,7 @@ def add_message(
 
 
 @router.delete("/chat/history/{session_id}", status_code=204)
+@allowed_in_demo
 def delete_session(session_id: int, ctx: UserContext = Depends(require_user_context)):
     """Delete a session and its messages (CASCADE)."""
     _assert_session_owner(session_id, ctx.email)

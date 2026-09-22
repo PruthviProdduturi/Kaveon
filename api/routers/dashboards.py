@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Response, HTTPException, Depends
 from middleware.auth import require_auth, require_user_context, UserContext
 from middleware.permissions import require_min_role, can_write, can_publish
+from middleware.demo import allowed_in_demo
 from models.dashboards import DashboardCreate, DashboardUpdate, DashboardFavoriteBody
 import services.dashboards as svc
 import services.favorites as fav_svc
@@ -89,6 +90,7 @@ def delete_dashboard(dashboard_id: str, ctx: UserContext = Depends(require_user_
 
 
 @router.put("/dashboards/{dashboard_id}/favorite")
+@allowed_in_demo
 def set_dashboard_favorite(dashboard_id: str, data: DashboardFavoriteBody, user: str = Depends(require_auth)):
     dashboard = svc.get_dashboard_by_id(dashboard_id)
     if not dashboard:

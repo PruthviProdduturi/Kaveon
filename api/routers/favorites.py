@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Response, HTTPException, Depends
 from middleware.auth import require_auth
+from middleware.demo import allowed_in_demo
 from models.favorites import FavoriteCreate
 import services.favorites as svc
 
@@ -16,16 +17,19 @@ def list_favorites(response: Response, user: str = Depends(require_auth)):
 
 
 @router.post("/favorites", status_code=201)
+@allowed_in_demo
 def create_favorite(data: FavoriteCreate, user: str = Depends(require_auth)):
     return svc.create_favorite(data.model_dump(), user)
 
 
 @router.post("/favorites/toggle")
+@allowed_in_demo
 def toggle_favorite(data: FavoriteCreate, user: str = Depends(require_auth)):
     return svc.toggle_favorite(data.model_dump(), user)
 
 
 @router.delete("/favorites/{fav_id}", status_code=204)
+@allowed_in_demo
 def delete_favorite(fav_id: str, user: str = Depends(require_auth)):
     deleted = svc.delete_favorite_by_id(fav_id, user)
     if not deleted:

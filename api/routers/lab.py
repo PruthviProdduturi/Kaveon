@@ -7,6 +7,7 @@ from fastapi import APIRouter, Request, Response, HTTPException, Query, Depends
 from middleware.auth import require_auth
 from middleware.permissions import require_min_role
 from middleware.rate_limit import sql_execute_limiter
+from middleware.demo import allowed_in_demo, statement_route
 from models.lab import SavedQueryCreate, SavedQueryUpdate, LabExecuteBody, LabQueryBody, SwitchDatabaseBody, CtasBody
 import database.pool as pool
 import database.metadata as meta_db
@@ -302,6 +303,7 @@ def get_schema(schema: str, table_name: str, database: str = Query(default=None)
 
 
 @router.post("/lab/execute")
+@statement_route("sql")
 def execute_sql(data: LabExecuteBody, response: Response, ctx=Depends(require_min_role("Analyst"))):
     _require_legacy_data_plane()
     user = ctx.email
@@ -329,7 +331,7 @@ def execute_sql(data: LabExecuteBody, response: Response, ctx=Depends(require_mi
 # polling path.
 RECORD_FIELDS = (
     "id", "state", "elapsed_ms", "admission_wait_ms", "columns", "stages", "scans",
-    "scan_metrics_complete", "error", "execution", "next_uri", "timings", "cached_from",
+    "scan_metrics_complete", "error", "error_code", "execution", "next_uri", "timings", "cached_from",
     "cached_elapsed_ms", "submitted_at_ms", "completed_at_ms",
 )
 
@@ -427,6 +429,7 @@ async def get_lab_query_page(query_id: str, page: int, response: Response,
 
 
 @router.delete("/lab/query/{query_id}", status_code=204)
+@allowed_in_demo
 async def cancel_lab_query(query_id: str, ctx=Depends(require_min_role("Analyst"))):
     """Cancel one statement the caller submitted. Cancelling releases its pages."""
     from services import engine_bridge
@@ -436,6 +439,7 @@ async def cancel_lab_query(query_id: str, ctx=Depends(require_min_role("Analyst"
 
 
 @router.post("/lab/query")
+@statement_route("query")
 async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_min_role("Analyst"))):
     user = ctx.email
     sql_execute_limiter.check(user)
@@ -588,6 +592,7 @@ def create_table_as_select(data: CtasBody, ctx=Depends(require_min_role("Analyst
 
 
 @router.post("/lab/switch-database")
+@allowed_in_demo
 def switch_database(data: SwitchDatabaseBody, user: str = Depends(require_auth)):
     return {"success": True, "database": data.database_name}
 
@@ -600,12 +605,14 @@ def get_query_history(response: Response, limit: int = Query(default=50), user: 
 
 
 @router.delete("/lab/query-history")
+@allowed_in_demo
 def clear_query_history(user: str = Depends(require_auth)):
     count = history_svc.delete_all_history(user)
     return {"deleted": count}
 
 
 @router.post("/lab/record-query")
+@allowed_in_demo
 def record_query(user: str = Depends(require_auth)):
     """No-op — kept for backwards compatibility. History is written by /sql/execute."""
     return {"success": True}

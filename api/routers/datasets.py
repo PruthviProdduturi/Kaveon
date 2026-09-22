@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Response, HTTPException, Depends
 from middleware.auth import require_auth, require_user_context, UserContext
 from middleware.permissions import require_min_role, can_read, can_write, can_publish
+from middleware.demo import allowed_in_demo
 from models.datasets import DatasetCreate, DatasetUpdate
 import services.datasets as svc
 import services.favorites as fav_svc
@@ -119,6 +120,7 @@ def delete_dataset(dataset_id: str, ctx: UserContext = Depends(require_user_cont
 
 
 @router.put("/datasets/{dataset_id}/favorite")
+@allowed_in_demo
 def toggle_dataset_favorite(dataset_id: str, user: str = Depends(require_auth)):
     dataset = svc.get_dataset_by_id(dataset_id)
     if not dataset:

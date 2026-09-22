@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Response, HTTPException, Depends
 from middleware.auth import require_auth, require_user_context, UserContext
 from middleware.permissions import require_min_role, can_write, can_publish
+from middleware.demo import allowed_in_demo
 from models.charts import ChartCreate, ChartUpdate
 import services.charts as svc
 import services.favorites as fav_svc
@@ -109,6 +110,7 @@ def delete_chart(chart_id: str, ctx: UserContext = Depends(require_user_context)
 
 
 @router.put("/charts/{chart_id}/favorite")
+@allowed_in_demo
 def toggle_chart_favorite(chart_id: str, user: str = Depends(require_auth)):
     chart = svc.get_chart_by_id(chart_id)
     if not chart:
