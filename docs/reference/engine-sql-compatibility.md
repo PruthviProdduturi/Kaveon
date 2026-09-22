@@ -10,7 +10,7 @@ by the selected database and Kaveon's API guardrails.
 |---|---|---|
 | `SELECT` | Alpha | Local and object-store Parquet, Delta, and Iceberg tables resolved through the Engine catalog |
 | `ANALYZE catalog.schema.table` | Alpha | Admin-only on the coordinator; publishes exact metadata row counts bound to the catalog and immutable storage-source identity through the ADLS catalog head |
-| Catalog DDL: `CREATE CATALOG`, `CREATE SCHEMA`, `CREATE TABLE … WITH (location, format [, partitioned_by])`, `CALL system.register_table`, `ALTER TABLE … SET LOCATION`, `DROP CATALOG|SCHEMA|TABLE`, `SHOW CREATE TABLE`, `DESCRIBE`, `SHOW CATALOGS|SCHEMAS|TABLES` | Alpha | Registers existing Parquet, Delta and Iceberg tables in the durable catalog under the principal's role (admin for catalogs, analyst or admin for schemas and tables); columns are read from the source when omitted; a table is activated only after a metadata-only probe of its location. See the [API reference](api.md#catalog-statements) |
+| Catalog DDL: `CREATE CATALOG`, `CREATE SCHEMA`, `CREATE TABLE … WITH (location, format [, partitioned_by])`, `CALL system.register_table`, `ALTER TABLE … SET LOCATION`, `DROP CATALOG|SCHEMA|TABLE`, `SHOW CREATE TABLE`, `DESCRIBE`, `SHOW CATALOGS|SCHEMAS|TABLES` | Alpha | Registers existing Parquet, Delta and Iceberg tables in the durable catalog under the principal's role (admin for catalogs, analyst or admin for schemas and tables) and its [catalog access](../engine/governance.md#catalog-access) (`manage` on the catalog for schema and table changes; the metadata statements answer for granted catalogs only); columns are read from the source when omitted; a table is activated only after a metadata-only probe of its location. See the [API reference](api.md#catalog-statements) |
 | Column projection and aliases | Alpha | Projection is strict; unknown or duplicate requested columns fail |
 | `WHERE` comparisons and boolean expressions | Alpha | Row-level filter operator is implemented |
 | `GROUP BY` | Alpha | Local and distributed columnar hash aggregation: partials on several threads that flush on memory pressure, a hybrid final merge that spills sub-partitions; `GROUP BY` without an aggregate is DISTINCT over the keys |
@@ -148,6 +148,17 @@ The coordinator answers the same `SHOW` and `DESCRIBE` statements on
 DDL from the command line ([CLI guide](../guides/engine-cli.md#catalog-administration)).
 The CLI currently has no PostgreSQL wire-protocol, JDBC, or ODBC compatibility
 claim.
+
+Every metadata statement is answered for the session's identity against
+the catalogs it was granted ([catalog access](../engine/governance.md#catalog-access)):
+`SHOW CATALOGS` lists granted catalogs; `SHOW SCHEMAS`, `SHOW TABLES`,
+`DESCRIBE`, `SHOW CREATE TABLE`, `SHOW STATS FOR` and `DESCRIBE DETAIL`
+on an ungranted catalog answer `catalog 'x' not found`, the same text
+and code as for a catalog that does not exist; a table reference in a
+query fails at bind the same way. There is no `information_schema` in the
+Engine today; when one is added it is subject to the same projection —
+it lists what the caller may see, never an administrator's view of hidden
+objects.
 
 Unsupported syntax should be treated as unsupported even if the upstream SQL
 parser accepts it. The executable contract is the intersection of parsing,

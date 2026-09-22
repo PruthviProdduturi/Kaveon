@@ -554,7 +554,7 @@ trail are the coordinator's. Unqualified names resolve against the session
 `--catalog` and `--schema`.
 
 ```bash
-# Catalogs (admin role)
+# Catalogs (admin role for changes; list and show answer for any granted catalog)
 kaveon catalog list [--like 'pattern']
 kaveon catalog show Benchmarks                      # the durable definition as JSON
 kaveon catalog add Benchmarks --storage adls --account kvtest --container opensource \
@@ -581,6 +581,38 @@ kaveon table stats Benchmarks.tpch_sf100.lineitem       # SHOW STATS FOR: the la
 kaveon table detail Benchmarks.tpch_sf100.lineitem      # DESCRIBE DETAIL: format, location, files, size, versions
 kaveon table drop Benchmarks.tpch_sf100.lineitem --if-exists
 ```
+
+Every listing and description is the coordinator's answer for your
+identity: `catalog list`, `schema list`, `table list`, `table describe`
+and Tab completion show the catalogs you were granted, and a catalog you
+were not granted is reported exactly as one that does not exist
+(`catalog 'x' not found`). Grants are default deny — a principal with
+none sees no catalog — and are managed by administrators
+([catalog access](../engine/governance.md#catalog-access)):
+
+```bash
+# Catalog access (admin role)
+kaveon catalog access list                                   # every grant, the grantable catalogs, the reserved authority
+kaveon catalog access grant ana@example.com --on OpenSource --access query
+kaveon catalog access grant ana@example.com --on OpenSource --access manage --revision 1   # change: the current revision is required
+kaveon catalog access revoke ana@example.com --on OpenSource --revision 2
+kaveon catalog access import --from-open            # the proposal from the audit ledger; records nothing
+kaveon catalog access import --from-open --apply    # record it
+```
+
+`grant` creates a grant, or changes one when `--revision` names its
+current revision; `revoke` needs the revision too. A stale revision is
+`REVISION_CONFLICT` naming the current one: run `list` and retry with it.
+`--access` is `browse` (list and describe), `query` (read) or `manage`
+(schema and table changes); a Viewer browses whatever the grant says, an
+Analyst or Editor reaches the level granted, and administrators are not
+granted — their access is the role's. `KaveonDB` cannot be granted and
+stays hidden until its read-only views exist. `import --from-open`
+proposes the open policy every principal in the coordinator's audit
+ledger had before grants existed — every catalog at the ceiling of the
+role they held — and records it only with `--apply`; without it, nothing
+changes and the default stays deny. Machine output formats (`--output-format json`,
+`csv`) print the coordinator's document instead of the table.
 
 `table stats` and `table detail` submit `SHOW STATS FOR` and `DESCRIBE
 DETAIL` and print the rows as the coordinator returns them in the chosen
