@@ -220,14 +220,15 @@ def build(output: Path, store_schema: bool = False) -> None:
     writer.close()
 
     manifest = {
+        "catalog": "Kaveon",
         "synthetic": True,
         "disclaimer": DISCLAIMER,
         "seed": SEED,
         "tables": [
-            {"schema": "kaveon_product", "name": "kaveon_events_users",
+            {"schema": "usage", "name": "kaveon_events_users",
              "location": "kaveon_product/kaveon_events_users/combined-v1.parquet",
              "row_count": N_USERS, "columns": manifest_columns(users.schema)},
-            {"schema": "kaveon_product", "name": "kaveon_events_enriched",
+            {"schema": "usage", "name": "kaveon_events_enriched",
              "location": "kaveon_product/kaveon_events_enriched/combined-v1.parquet",
              "row_count": total, "columns": manifest_columns(schema)},
         ],

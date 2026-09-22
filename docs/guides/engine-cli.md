@@ -212,7 +212,7 @@ normal scrollback above:
  kaveon › SELECT region, COUNT(*) FROM kaveon_events_enriched
           GROUP BY region;
  ──────────────────────────────────────────────────────────────────────
- OpenSource.kaveon_product · localhost:8081 · 2 workers · last query 1.10 s, 18.0M rows scanned
+ Kaveon.usage · localhost:8081 · 2 workers · last query 1.10 s, 18.0M rows scanned
 ```
 
 Two rules decide what happens on Enter: a SQL statement ends with `;`, and a
@@ -318,14 +318,14 @@ the catalog API) keep a fixed 30 s bound.
 ## Analyzing a run
 
 ```text
-kaveon OpenSource.kaveon_product › EXPLAIN ANALYZE SELECT region, count(*) AS users
+kaveon Kaveon.usage › EXPLAIN ANALYZE SELECT region, count(*) AS users
                                    FROM kaveon_events_enriched WHERE country = 'India'
                                    GROUP BY region ORDER BY users DESC;
   Sort order_by=[(Column("users"), false)]
   └─ Project expressions=[Column("region"), Alias { … name: "users" }]
      └─ Aggregate aggregates=[Count { expr: Star, distinct: false }] group_by=[Column("region")]
         └─ Filter predicate=BinaryOp { left: Column("country"), op: Eq, right: Literal(Utf8("India")) }
-           └─ Scan columns=country, region table=OpenSource.kaveon_product.kaveon_events_enriched
+           └─ Scan columns=country, region table=Kaveon.usage.kaveon_events_enriched
 
   Execution  distributed · fragments   analysis 86 µs · planning 52 µs · execution 15.93 s
 
@@ -496,7 +496,7 @@ stateless, so a setting lives only as long as the statements that carry it.
 ## Asking in plain language
 
 ```text
-kaveon OpenSource.kaveon_product › .ask users by platform in Europe
+kaveon Kaveon.usage › .ask users by platform in Europe
 → Product users · Users by platform, Europe
 SELECT platform, COUNT(*) AS users
 FROM kaveon_events_users

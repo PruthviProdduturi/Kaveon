@@ -1,8 +1,8 @@
-"""Import the canonical eight Vercel dashboards into the OpenSource Engine catalog.
+"""Import the canonical eight Vercel dashboards into their owning Engine catalogs.
 
 The contract is an API export, so chart names, query/viz configuration, dashboard
 layout and filters are copied without reinterpretation.  Only legacy dataset IDs
-and datasource strings are replaced with registered OpenSource physical datasets.
+and datasource strings are replaced with registered OpenSource or Kaveon datasets.
 
 Objects are idempotent by their private ``_kaveon_live_ref`` marker.  Cleanup is
 limited to previously managed dashboards and happens only after all eight saved
@@ -38,7 +38,7 @@ PHYSICAL_DATASETS: dict[str, dict[str, str]] = {
     "138": {"name": "AI Model Pricing", "schema_name": "ai_benchmarks", "table_name": "pricing"},
     "139": {"name": "COVID-19 Global", "schema_name": "public", "table_name": "covid_global"},
     "140": {"name": "NYC Taxi by Borough", "schema_name": "public", "table_name": "nyc_taxi_borough"},
-    "144": {"name": "Kaveon Events", "schema_name": "public", "table_name": "kaveon_events_dashboard"},
+    "144": {"name": "Kaveon Events", "catalog": "Kaveon", "schema_name": "usage", "table_name": "kaveon_events_dashboard"},
 }
 
 EVENT_DATASET_ID = "144"
@@ -52,6 +52,21 @@ EVENT_METRICS = {
     ("SUM", "cache_hits"), ("AVG", "latency_p75_ms"),
     ("COUNT_DISTINCT", "user_id"),
 }
+
+
+def physical_dataset_matches(rows: list[dict[str, Any]], legacy_id: str, target: dict[str, str]) -> list[dict[str, Any]]:
+    """Find the current binding, including the one safe Kaveon catalog move."""
+    catalog = target.get("catalog", "OpenSource")
+    current = [row for row in rows if row.get("database_name") == catalog
+               and row.get("schema_name") == target["schema_name"]
+               and row.get("table_name") == target["table_name"]]
+    if current or legacy_id != EVENT_DATASET_ID:
+        return current
+    # Preserve the existing dataset identity so all saved charts and dashboards
+    # keep their references while the one Kaveon-owned table changes catalog.
+    return [row for row in rows if row.get("database_name") == "OpenSource"
+            and row.get("schema_name") == "public"
+            and row.get("table_name") == "kaveon_events_dashboard"]
 
 
 def validate_event_projection_contract(contract: dict[str, Any]) -> None:
@@ -248,16 +263,18 @@ def audit_contract(contract: dict[str, Any], api: Callable[..., Any]) -> dict[st
     """Read-only preflight for the complete import and managed cleanup set."""
     validate_contract(contract)
     sources = api("GET", "lab/engine/sources").get("sources", [])
-    source = next((item for item in sources if item.get("catalog") == "OpenSource"), None)
-    if source is None:
-        raise RuntimeError("OpenSource Engine source is unavailable")
+    source_by_catalog = {item.get("catalog"): item for item in sources}
     datasets = api("GET", "datasets")
     physical = []
     for legacy_id, target in PHYSICAL_DATASETS.items():
-        matches = [row for row in datasets if row.get("database_name") == "OpenSource" and row.get("schema_name") == target["schema_name"] and row.get("table_name") == target["table_name"]]
+        catalog = target.get("catalog", "OpenSource")
+        source = source_by_catalog.get(catalog)
+        matches = physical_dataset_matches(datasets, legacy_id, target)
         if len(matches) > 1:
             raise RuntimeError(f"Duplicate physical dataset: {target['schema_name']}.{target['table_name']}")
         try:
+            if source is None:
+                raise RuntimeError(f"{catalog} Engine source is unavailable")
             metadata = api("GET", f"lab/engine/{source['id']}/schemas/{target['schema_name']}/tables/{target['table_name']}/columns")
             columns = metadata.get("schema", {}).get("columns", [])
             error = None if columns else "no columns"
@@ -265,7 +282,7 @@ def audit_contract(contract: dict[str, Any], api: Callable[..., Any]) -> dict[st
             columns, error = [], str(exc)
         physical.append({
             "legacy_dataset_id": legacy_id,
-            "physical": f"OpenSource.{target['schema_name']}.{target['table_name']}",
+            "physical": f"{catalog}.{target['schema_name']}.{target['table_name']}",
             "engine_column_count": len(columns),
             "registered_dataset_id": str(matches[0]["id"]) if matches else None,
             "error": error,
@@ -295,14 +312,16 @@ def import_contract(contract: dict[str, Any], api: Callable[..., Any], apply: bo
     """Register data and upsert the exact contract through a small API callback."""
     validate_contract(contract)
     sources = api("GET", "lab/engine/sources").get("sources", [])
-    source = next((item for item in sources if item.get("catalog") == "OpenSource"), None)
-    if source is None:
-        raise RuntimeError("OpenSource Engine source is unavailable")
+    source_by_catalog = {item.get("catalog"): item for item in sources}
     existing_datasets = api("GET", "datasets")
     dataset_ids: dict[str, int] = {}
     for legacy_id, physical in PHYSICAL_DATASETS.items():
-        target = {"database_name": "OpenSource", "schema_name": physical["schema_name"], "table_name": physical["table_name"]}
-        matches = [row for row in existing_datasets if all(row.get(key) == value for key, value in target.items())]
+        catalog = physical.get("catalog", "OpenSource")
+        source = source_by_catalog.get(catalog)
+        if source is None:
+            raise RuntimeError(f"{catalog} Engine source is unavailable")
+        target = {"database_name": catalog, "schema_name": physical["schema_name"], "table_name": physical["table_name"]}
+        matches = physical_dataset_matches(existing_datasets, legacy_id, physical)
         if len(matches) > 1:
             raise RuntimeError(f"Duplicate physical dataset: {physical['schema_name']}.{physical['table_name']}")
         columns_response = api("GET", f"lab/engine/{source['id']}/schemas/{physical['schema_name']}/tables/{physical['table_name']}/columns")

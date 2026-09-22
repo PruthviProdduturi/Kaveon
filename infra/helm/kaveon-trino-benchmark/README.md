@@ -205,7 +205,7 @@ written by `scripts/qualify-dlm-questions.py` (route and seconds per question
 as served through the portal, live SQL seconds on Kaveon) and executes the same
 SQL on Trino through the read-only `opensource` Hive catalog
 (`--set trino.opensource.enabled=true`), declared from
-`infra/aks/opensource-catalog-manifest.json` as external Parquet tables on the
+`infra/aks/kaveon-catalog-manifest.json` as external Parquet tables on the
 same objects the Engine reads. Three timed executions after one warm-up per
 statement; no row data leaves the cluster.
 

@@ -140,7 +140,7 @@ Verify the cluster sees both workers:
 curl.exe -s http://localhost:8081/v1/cluster
 ```
 
-## 4. Register the lake as the `OpenSource` catalog
+## 4. Register the Kaveon usage lake as the `Kaveon` catalog
 
 One-time, from the host, using the API's virtual environment (`cd api; python
 -m venv venv; venv\Scripts\pip install -r requirements.txt` if it does not exist
@@ -173,9 +173,9 @@ rewrites `/data` into `C:/Program Files/Git/data` and every scan fails with
 Expected output ends with:
 
 ```text
-Verified kaveon_product.kaveon_events_users: 3000000
-Verified kaveon_product.kaveon_events_enriched: 504000000
-{"catalog": "OpenSource", "registered_tables": 2}
+Verified usage.kaveon_events_users: 3000000
+Verified usage.kaveon_events_enriched: 504000000
+{"catalog": "Kaveon", "registered_tables": 2}
 ```
 
 The registration lives in the `catalog-data` volume and survives restarts and
@@ -188,7 +188,7 @@ The coordinator runs the insecure-development profile, so the CLI connects
 without a token:
 
 ```powershell
-kaveon http://localhost:8081/OpenSource/kaveon_product --auth none
+kaveon http://localhost:8081/Kaveon/usage --auth none
 ```
 
 ```sql
@@ -207,7 +207,7 @@ statement's state while it runs; Ctrl-C cancels it on the coordinator. Every
 statement also appears at http://localhost:3000/engine and
 http://localhost:8081/ui.
 
-Studio: open http://localhost:3000, and SQL Lab lists `OpenSource` as a
+Studio: open http://localhost:3000, and SQL Lab lists `Kaveon` as a
 source. Statements run there stream too: the grid fills page by page while
 the statement runs under a running line with the same state, tasks, rows
 scanned and workers the shell shows, and Cancel stops it on the coordinator.
@@ -237,7 +237,7 @@ def call(method, path, body=None):
         return json.loads(response.read())
 
 source = call("POST", "/catalog-sources", {
-    "name": "OpenSource", "engine_catalog": "OpenSource", "adapter_type": "native",
+    "name": "Kaveon", "engine_catalog": "Kaveon", "adapter_type": "native",
     "storage_type": "local", "data_format": "parquet",
     "storage_config": {"base_path": "/data"}})["catalogSource"]
 call("POST", f"/catalog-sources/{source['id']}/transition", {"lifecycle": "active"})
@@ -246,8 +246,8 @@ table = "kaveon_events_users"
 dimensions = ("platform", "license", "segment", "industry", "region", "country",
               "deployment", "acquisition_channel", "team_size")
 dataset = call("POST", "/datasets", {
-    "name": "Product users", "database_name": "OpenSource",
-    "schema_name": "kaveon_product", "table_name": table, "visibility": "published",
+    "name": "Product users", "database_name": "Kaveon",
+    "schema_name": "usage", "table_name": table, "visibility": "published",
     "columns": [{"table_name": table, "column_name": "user_id", "data_type": "bigint",
                  "is_dimension": False, "is_metric": False},
                 {"table_name": table, "column_name": "locale", "data_type": "varchar",

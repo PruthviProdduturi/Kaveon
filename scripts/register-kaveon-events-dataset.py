@@ -23,8 +23,8 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 DATASET_NAME = "Kaveon Telemetry"
-CATALOG = "OpenSource"
-SCHEMA = "kaveon_product"
+CATALOG = "Kaveon"
+SCHEMA = "usage"
 TABLE = "kaveon_events_enriched"
 DESCRIPTION = (
     "504M-row product telemetry served by KaveonDB: daily per-user engagement "

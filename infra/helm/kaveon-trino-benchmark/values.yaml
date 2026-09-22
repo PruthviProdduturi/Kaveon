@@ -20,9 +20,9 @@ trino:
     account: ""
     container: silver
   # A read-only Hive catalog over the same Parquet objects the OpenSource
-  # Engine catalog reads, so the product corpus's live SQL can be timed on
+  # Kaveon catalog reads, so the product corpus's live SQL can be timed on
   # Trino during a leased window. External tables are declared from
-  # infra/aks/opensource-catalog-manifest.json; nothing is written to the lake.
+  # infra/aks/kaveon-catalog-manifest.json; nothing is written to the lake.
   opensource:
     enabled: false
   # TPC-H generation: Trino's tpch connector (data computed on the fly at

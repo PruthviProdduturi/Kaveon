@@ -64,11 +64,12 @@ def main() -> None:
         datasets = api("GET", "datasets")
         dataset_ids = {}
         for legacy_id, physical in live.PHYSICAL_DATASETS.items():
-            matches = [item for item in datasets if item.get("database_name") == "OpenSource"
+            catalog = physical.get("catalog", "OpenSource")
+            matches = [item for item in datasets if item.get("database_name") == catalog
                        and item.get("schema_name") == physical["schema_name"]
                        and item.get("table_name") == physical["table_name"]]
             if len(matches) != 1:
-                raise RuntimeError(f"Expected one registered dataset for OpenSource.{physical['schema_name']}.{physical['table_name']}; found {len(matches)}")
+                raise RuntimeError(f"Expected one registered dataset for {catalog}.{physical['schema_name']}.{physical['table_name']}; found {len(matches)}")
             dataset_ids[legacy_id] = int(matches[0]["id"])
 
         all_charts = api("GET", "charts")

@@ -13,9 +13,9 @@ import time
 sys.path.insert(0, "/app")
 import services.engine_bridge as eb  # noqa: E402
 
-A = os.environ.get("TABLE_A", "kaveon_product.kaveon_events_enriched")
-B = os.environ.get("TABLE_B", "kaveon_product.kaveon_events_plain")
-U = "kaveon_product.kaveon_events_users"
+A = os.environ.get("TABLE_A", "usage.kaveon_events_enriched")
+B = os.environ.get("TABLE_B", "usage.kaveon_events_plain")
+U = "usage.kaveon_events_users"
 
 CASES = [
     ("distinct_values", "SELECT DISTINCT region FROM {T} ORDER BY region", True),
@@ -56,7 +56,7 @@ def run(sql):
     t0 = time.time()
     # Bypass the coordinator's result cache and every answer from statistics:
     # both timings are the Engine's read path.
-    result = eb.execute(sql, "OpenSource", "differential", "Admin", "kaveon_product", timeout=900,
+    result = eb.execute(sql, "Kaveon", "differential", "Admin", "usage", timeout=900,
                         settings={"result_cache": False, "use_statistics": False})
     rows = result.get("data") or result.get("rows") or []
     return round(time.time() - t0, 2), rows

@@ -33,7 +33,7 @@ def write(name: str, columns: dict[str, list], rows: int, parts: list[dict]) -> 
     table = pa.table(columns)
     pq.write_table(table, path, compression='zstd')
     types = {field.name: str(field.type).replace('int64', 'Int64').replace('double', 'Float64').replace('string', 'Utf8') for field in table.schema}
-    parts.append({'schema': 'kaveon_product', 'name': name, 'location': str(path.relative_to(ROOT.parent)).replace('\\', '/'), 'row_count': rows, 'columns': [{'name': k, 'data_type': v, 'nullable': True} for k, v in types.items()]})
+    parts.append({'schema': 'usage', 'name': name, 'location': str(path.relative_to(ROOT.parent)).replace('\\', '/'), 'row_count': rows, 'columns': [{'name': k, 'data_type': v, 'nullable': True} for k, v in types.items()]})
 
 def main() -> None:
     parts = []
@@ -103,9 +103,9 @@ def main() -> None:
             if day % 25 == 0 or day == DAYS - 1:
                 print(f'Generated {day + 1}/{DAYS} days: {total} synthetic rows per fact table', flush=True)
     schema = pa.table(values).schema
-    parts.append({'schema': 'kaveon_product', 'name': 'kaveon_usage_daily', 'location': 'kaveon_product/kaveon_usage_daily/combined-v1.parquet', 'row_count': total, 'columns': [{'name': f.name, 'data_type': 'Float64' if pa.types.is_floating(f.type) else 'Int64' if pa.types.is_integer(f.type) else 'Utf8', 'nullable': True} for f in schema]})
+    parts.append({'schema': 'usage', 'name': 'kaveon_usage_daily', 'location': 'kaveon_product/kaveon_usage_daily/combined-v1.parquet', 'row_count': total, 'columns': [{'name': f.name, 'data_type': 'Float64' if pa.types.is_floating(f.type) else 'Int64' if pa.types.is_integer(f.type) else 'Utf8', 'nullable': True} for f in schema]})
     analytics_schema = pa.table(analytics).schema
-    parts.append({'schema': 'kaveon_product', 'name': 'kaveon_product_analytics', 'location': 'kaveon_product/kaveon_product_analytics/combined-v1.parquet', 'row_count': total, 'columns': [{'name': f.name, 'data_type': 'Float64' if pa.types.is_floating(f.type) else 'Int64' if pa.types.is_integer(f.type) else 'Utf8', 'nullable': True} for f in analytics_schema]})
-    (ROOT.parent / 'kaveon-product-singlefile-manifest.json').write_text(json.dumps({'synthetic': True, 'disclaimer': 'Deterministic demo data; not production telemetry.', 'seed': 20260909, 'tables': parts}, indent=2), encoding='utf-8')
+    parts.append({'schema': 'usage', 'name': 'kaveon_product_analytics', 'location': 'kaveon_product/kaveon_product_analytics/combined-v1.parquet', 'row_count': total, 'columns': [{'name': f.name, 'data_type': 'Float64' if pa.types.is_floating(f.type) else 'Int64' if pa.types.is_integer(f.type) else 'Utf8', 'nullable': True} for f in analytics_schema]})
+    (ROOT.parent / 'kaveon-product-singlefile-manifest.json').write_text(json.dumps({'catalog': 'Kaveon', 'synthetic': True, 'disclaimer': 'Deterministic demo data; not production telemetry.', 'seed': 20260909, 'tables': parts}, indent=2), encoding='utf-8')
 if __name__ == '__main__':
     main()

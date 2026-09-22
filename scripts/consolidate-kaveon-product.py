@@ -20,6 +20,6 @@ def combine(name):
             writer.write_table(table); rows+=table.num_rows
     finally:
         if writer: writer.close()
-    return {'schema':'kaveon_product','name':name,'location':f'kaveon_product/{name}/combined-v1.parquet','row_count':rows,'columns':[{'name':f.name,'data_type':'Float64' if str(f.type) in ('double','float') else 'Int64' if 'int' in str(f.type) else 'Utf8','nullable':True} for f in columns]}
+    return {'schema':'usage','name':name,'location':f'kaveon_product/{name}/combined-v1.parquet','row_count':rows,'columns':[{'name':f.name,'data_type':'Float64' if str(f.type) in ('double','float') else 'Int64' if 'int' in str(f.type) else 'Utf8','nullable':True} for f in columns]}
 tables=[combine('kaveon_usage_daily'),combine('kaveon_product_analytics')]
-Path('/work/kaveon-product-readable-manifest.json').write_text(json.dumps({'tables':tables},indent=2),encoding='utf-8')
+Path('/work/kaveon-product-readable-manifest.json').write_text(json.dumps({'catalog':'Kaveon','tables':tables},indent=2),encoding='utf-8')
