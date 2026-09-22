@@ -399,6 +399,12 @@ def distinct_filter_values(
 @statement_route("sql_text")
 def execute_sql(data: SqlExecuteBody, response: Response, ctx: UserContext = Depends(require_user_context)):
     if postgresql_retirement_runtime.requested():
+        # A statement over an Engine catalog is not legacy execution: the
+        # warehouse is gone, the catalog is not. Route it to the Engine
+        # rather than refusing a caller that named a live catalog (the
+        # chat's own fallback statement did exactly that).
+        if _engine_source_for_catalog(data.database):
+            return execute_engine_sql(data, response, ctx)
         raise HTTPException(status_code=503, detail="Legacy SQL execution is unavailable after PostgreSQL retirement; use /sql/engine.")
     # Viewers may only execute from dashboard/filter context — not from builder or lab
     _dashboard_sources = {"dashboard-chart", "dashboard-filter", "dataset-filter", "dataset-preview"}
