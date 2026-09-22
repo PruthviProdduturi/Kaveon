@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { useRole } from "../../hooks/useRole";
 import { RegisterSheet } from "./CatalogEditor";
-import { useCatalogTree } from "./CatalogShell";
+import { catalogLabel, useCatalogTree } from "./CatalogShell";
 import s from "./catalog.module.css";
 import { enc } from "./lib";
 
@@ -35,8 +35,8 @@ export default function CatalogOverviewPage() {
     <>
       <header className={s.head}>
         <div>
-          <h1 className={s.title} style={{ fontFamily: "inherit" }}>Catalog</h1>
-          <p className={s.subtitle}>Every table here is read where it lives in your lake. Open one for its columns, location, format and a sample of rows — then query it in SQL Lab.</p>
+            <h1 className={s.title} style={{ fontFamily: "inherit" }}>KaveonDB</h1>
+            <p className={s.subtitle}>Your governed data surface. Open a catalog to inspect its schemas and tables, then query the same definitions in SQL Lab.</p>
         </div>
         <div className={s.actions}>
           {isAdmin && <Link href="/settings/storage" className={s.ghost}><i className="fas fa-sliders" aria-hidden="true" /> Catalog sources</Link>}
@@ -61,7 +61,7 @@ export default function CatalogOverviewPage() {
         return (
           <section key={cat.catalog} className={s.panel}>
             <div className={s.panelHead}>
-              <h2 className={s.panelTitle}><i className="fas fa-database" aria-hidden="true" style={{ color: "var(--text-faint)", marginRight: 8 }} />{cat.catalog}</h2>
+              <h2 className={s.panelTitle}><i className="fas fa-database" aria-hidden="true" style={{ color: "var(--text-faint)", marginRight: 8 }} />{catalogLabel(cat.catalog)}</h2>
               <span className={s.panelMeta}>
                 {list ? `${list.length} schema${list.length === 1 ? "" : "s"}` : "loading…"}
                 {isEditor && list && <button type="button" className={s.ghost} style={{ height: 24, padding: "0 8px", marginLeft: 12, fontSize: 11.5 }} onClick={() => setAdding({ catalog: cat.catalog })}><i className="fas fa-plus" aria-hidden="true" /> Add schema</button>}

@@ -19,6 +19,7 @@
   display: flex; flex-direction: column; max-height: calc(100vh - 56px); overflow: hidden;
 }
 .treeHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 12px 10px 14px; border-bottom: 1px solid var(--border) }
+.productEyebrow { color: var(--text-faint); font-size: 10px; font-weight: 700; letter-spacing: .12em; line-height: 1.2; margin-bottom: 4px; text-transform: uppercase }
 .treeTitle { margin: 0; font-size: 13px; font-weight: 600 }
 .treeTitle span { font-weight: 500; color: var(--text-muted); margin-left: 6px; font-family: var(--mono); font-size: 11px }
 .collapse { width: 26px; height: 26px; display: grid; place-items: center; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer }

@@ -30,6 +30,16 @@ export const useCatalogTree = () => {
 
 export const tableKey = (catalog: string, schema: string) => `${catalog} ${schema}`;
 
+// The Engine keeps `Kaveon` as its SQL-compatible internal name. Studio uses
+// the product-facing KaveonDB name while retaining the real name in URLs/API calls.
+export function catalogLabel(catalog: string): string {
+  return catalog === "Kaveon" ? "KaveonDB" : catalog;
+}
+
+function catalogOrder(source: EngineSource): number {
+  return source.catalog === "OpenSource" ? 0 : source.catalog === "Kaveon" ? 1 : 2;
+}
+
 export function CatalogShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const params = useParams<{ catalog?: string; schema?: string; table?: string }>();
@@ -76,7 +86,14 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     fetchSources()
-      .then(list => { if (!cancelled) { setCatalogs(list); setError(null); setOpen(new Set(list.map(c => c.catalog))); } })
+      .then(list => {
+        if (!cancelled) {
+          const ordered = [...list].sort((a, b) => catalogOrder(a) - catalogOrder(b) || a.name.localeCompare(b.name));
+          setCatalogs(ordered);
+          setError(null);
+          setOpen(new Set(ordered.map(c => c.catalog)));
+        }
+      })
       .catch(e => { if (!cancelled) fail(e); });
     return () => { cancelled = true; };
   }, []);
@@ -114,7 +131,10 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
           ) : (
             <>
               <div className={s.treeHead}>
-                <h2 className={s.treeTitle}>Catalogs{catalogs && <span>{catalogs.length}</span>}</h2>
+                <div>
+                  <div className={s.productEyebrow}>KaveonDB</div>
+                  <h2 className={s.treeTitle}>Catalogs{catalogs && <span>{catalogs.length}</span>}</h2>
+                </div>
                 <button type="button" className={s.collapse} onClick={() => setCollapsed(true)} aria-label="Collapse catalog tree"><i className="fas fa-angles-left" /></button>
               </div>
               <div className={s.treeBody}>
@@ -128,7 +148,7 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
                       <button type="button" className={s.node} aria-expanded={isOpen} onClick={() => toggle(name, () => loadSchemas(name))}>
                         <span className={`${s.chev} ${isOpen ? s.chevOpen : ""}`}>▶</span>
                         <span className={s.kind}><i className="fas fa-database" /></span>
-                        <span className={s.nodeLabel}>{name}</span>
+                        <span className={s.nodeLabel}>{catalogLabel(name)}</span>
                         {list && <span className={s.nodeCount}>{list.length}</span>}
                       </button>
                       {isOpen && (list ?? []).map(schema => {
