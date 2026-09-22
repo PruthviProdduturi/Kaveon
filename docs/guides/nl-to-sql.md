@@ -117,6 +117,68 @@ A 4-digit year (1900–2099) in the question becomes a date filter. Smart handli
 
 ---
 
+## What it can answer
+
+Every question the DLM answers is one of a **named class**. A class has a
+name, one SQL shape and one answer sentence; the list lives in
+`api/dlm/classes.py` and is what `python -m dlm.coverage` reports per class,
+so the list here and the list the harness measures cannot drift apart. The
+measured numbers are in
+[docs/qualification/dlm/](../qualification/dlm/coverage-2026-09-22.md).
+
+**Base classes** — one statement over the slots the router resolved.
+
+| Class | Example | SQL shape |
+|---|---|---|
+| `total` | "total queries run" | `SELECT <agg> FROM t` |
+| `breakdown` | "queries run by region" | `… GROUP BY d` |
+| `filter` | "queries run in Europe" | `… WHERE d = v` |
+| `filter_breakdown` | "queries run by country in Europe" | `… WHERE d1 = v GROUP BY d2` |
+| `two_filters` | "queries run in Europe Enterprise" | `… WHERE d1 = v1 AND d2 = v2` |
+| `top_n` | "top 5 countries by queries run" | `… GROUP BY d ORDER BY 2 DESC LIMIT n` |
+| `distinct_total` | "distinct users" | `SELECT APPROX_COUNT_DISTINCT(c) FROM t` — labelled approximate with the sketch's stated error |
+| `distinct_breakdown` | "distinct users by region" | the same, grouped |
+| `time_slice` | "queries run in 2026", "queries run in July 2026" | `… WHERE date >= lo AND date < hi` |
+| `trend` | "queries run over time", "errors by month" | `… GROUP BY date ORDER BY date`, at the grain the time dimension actually has |
+
+**Derived classes** — composed in Python from two or three base results, so a
+comparison is two windows of one statement rather than a second SQL dialect
+to maintain. Each part keeps its own evidence, and the composed answer
+carries them under `evidence.composed_of`.
+
+| Class | Example | Built from |
+|---|---|---|
+| `comparison_period` | "queries run vs last month" | two `time_slice` statements; reports the level, the change and the percent change |
+| `year_over_year` | "queries run year over year" | two `time_slice` statements a year apart |
+| `share_of_total` | "what share of queries run is Europe", "percentage of queries run by region" | one slice (or one breakdown) and the grand total |
+| `ratio` | "errors per query" | one statement per measure, divided |
+| `top_n_within` | "top 3 countries by queries run in each region" | one two-dimension grouping, ranked inside each outer group |
+| `existence` | "how many countries have more than 1000 users" | one breakdown, counted against the threshold, with the matches named |
+| `vague_default` | "what is current usage", "how are we doing" | the spec's headline measure at the dataset's latest period — and the answer **says** which defaults it used |
+
+**"Current" is the data's word, not the clock's.** A period a question does
+not name comes from the spec's time dimension — the maximum date the
+statistics record for the column — so a dataset that stops in August is
+current as of August. A previous period the data does not reach is stated
+("The data holds no 2025 to compare it with"), never answered as zero.
+
+**Refusal classes** — when the DLM will not answer. Nothing here produces a
+number.
+
+| Class | When | What the user gets |
+|---|---|---|
+| `clarify_value` | a word resolves to no indexed value, or to a value in two columns | the nearest indexed values as options, plus an explicit "leave it out" |
+| `clarify_metric` | two measures read the question equally well, or a word is close to a measure name | the measures as options |
+| `clarify_dimension` | two dimensions read the breakdown equally well, or the "by" phrase names a column that is not a dimension | the dimensions as options |
+| `unanswerable` | a word is close to nothing the dataset holds | why, plus the three closest questions the spec *can* answer, plus a few values it knows |
+| `out_of_scope` | the question is about nothing the platform holds | the datasets that exist |
+
+A clarification is resumed by re-posting the original question with the slot
+pinned (`choices`); the DLM never picks for the user, and never answers a
+question the user did not ask by dropping the word it could not place.
+
+---
+
 ## Answer-from-Context
 
 When the DLM resolves a question to a shape that was precomputed at generation time, it serves the answer from an **in-memory dict** — zero database trip, microsecond latency. This is the `_serve_from_context()` path.
@@ -360,7 +422,9 @@ Each loaded schema is scored against the query: +3 for dataset name words, +2 fo
 |------|------|
 | `api/dlm/engine.py` | DLM runtime: compilation, deterministic resolution, and answer serving; the Engine-backed path (`_answer_on_engine`), evidence and `reproduce` |
 | `api/dlm/engine_dialect.py` | One statement assembler, two dialects (PostgreSQL, Engine) |
-| `api/dlm/coverage.py` | `python -m dlm.coverage`: question-class coverage of one dataset |
+| `api/dlm/classes.py` | The named question classes: the registry, the derived-class detection, and the composition from base results |
+| `api/dlm/curation.py` | Auto-curation: a dataset's context spec derived from the Engine's statistics and its declared shape, with per-element evidence |
+| `api/dlm/coverage.py` | `python -m dlm.coverage`: question-class coverage of one or more datasets, with `--check` for wrong answers against an independent statement |
 | `api/services/engine_datasets.py` | Binding a dataset to an Engine table: names, columns and semantics from the definition and its shape |
 | `api/routers/dlm.py` | API endpoints: /dlm/ask, /dlm/serve-chart, /dlm/filter-values, /dlm/route, /datasets/{id}/dlm/generate, /datasets/{id}/freshness |
 | `api/dlm/hll.py` | HyperLogLog implementation |
