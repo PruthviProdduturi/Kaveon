@@ -6,7 +6,7 @@
 #   kubectl -n kaveon create configmap kaveon-time-to-answer-input \
 #     --from-file=benchmark-time-to-answer.py=scripts/benchmark-time-to-answer.py \
 #     --from-file=report.json=tmp/dlm-question-report-westus2.json \
-#     --from-file=manifest.json=infra/aks/opensource-catalog-manifest.json
+#     --from-file=manifest.json=infra/aks/kaveon-catalog-manifest.json
 #
 # Replace the runner image digest and the storage account with the run's
 # values. Output lands on the benchmark results claim as /results/time-to-answer.json.

@@ -27,15 +27,17 @@ appear in the dashboard descriptions and chart information tooltips.
 ## Recreate the canonical eight dashboards
 
 The primary showcase is the exact API contract exported from the live Vercel
-deployment: **8 dashboards and 70 charts**. The source-controlled contract is
+deployment: **8 dashboards and 70 charts**. Public data stays in `OpenSource`;
+Kaveon-owned event data lives in `Kaveon.usage`. The source-controlled contract is
 [`vercel-live-dashboard-contract.json`](../../data/dashboard-templates/vercel-live-dashboard-contract.json).
 The importer preserves dashboard names, chart membership, layout, filters,
 chart types, query configuration, and visualization configuration. It changes
-only legacy dataset and chart IDs so the definitions target physical
-`OpenSource` Engine relations.
+only legacy dataset and chart IDs so definitions target their owning Engine
+catalogs. The Kaveon Events dataset is rebound in place to preserve its ID and
+all dashboard/chart references.
 
 Eight supporting relations are exact table exports or deterministic rebuilds of
-their saved dashboard contracts. `OpenSource.public.kaveon_events_dashboard` is
+their saved dashboard contracts. `Kaveon.usage.kaveon_events_dashboard` is
 the one exception: it is a compact synthetic projection that reproduces the
 dimensions and measures needed by the three Kaveon product dashboards. It is
 showcase data and must not be described as customer telemetry or an exact copy

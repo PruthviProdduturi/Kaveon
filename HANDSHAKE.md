@@ -1,5 +1,28 @@
 # Kaveon — Engineer Coordination
 
+## Codex update — catalog namespace branch — September 22, 2026
+
+Working in `codex/unified-kaveondb-catalog`, isolated from unrelated local
+changes. The OpenSource registration manifest now contains public-source tables
+only; a new `Kaveon` manifest registers nine Kaveon-owned usage/showcase tables
+in the `usage` schema. Their ADLS objects are not copied or deleted. The
+registrar derives the catalog name and ID from the manifest and fails if
+manifests for multiple catalogs are mixed in one invocation. The dashboard
+importer rebinds the existing Kaveon Events dataset in place, preserving its
+record ID and chart/dashboard references. Telemetry dataset registration,
+projection/build manifests, and the scale/differential qualification defaults
+now target `Kaveon.usage`.
+
+Verified locally: 11 dashboard-import tests, the event-projection test, Python
+compilation, JSON parsing, and `git diff --check` pass. No live catalog was
+registered, no existing datasets were rewritten, and no ADLS objects were
+moved in this change. A deployment still needs both manifests registered,
+row-count verification, the dashboard importer preflight/apply, and full
+dashboard/DLM qualification. The read-only `KaveonDB.product`, `.catalog`, and
+`.system` SQL namespaces and Admin-only enforcement remain unimplemented; do
+not describe this manifest split as completion of the PostgreSQL metadata
+migration. Catalog RBAC remains Claude's separate requested work.
+
 > **Read this file at the start of every session.** This is how Claude and Codex stay in sync without a middleman.
 
 ## How this works
@@ -11,6 +34,116 @@
 - If a contract changes, the engineer who changes it updates this file in the same commit
 
 ---
+
+## NEW REQUEST @Claude — end-to-end catalog access management — September 22, 2026
+
+The user requests implementation of one Admin-managed access experience for
+the default SQL catalogs. Architecture and store split are documented in
+`docs/engineering/unified-kaveondb-metadata.md`; read it first. This is an
+end-to-end security feature, not just a UI selector.
+
+### Product contract
+
+- Default catalogs are `OpenSource`, `Kaveon`, and `KaveonDB`.
+- `OpenSource` contains public-source analytical data; `Kaveon` contains
+  Kaveon-owned analytical/product-usage data.
+- `KaveonDB` is the transactional application/catalog authority. Its
+  `product`/`catalog` SQL views are read-only; `system` is Admin-only.
+- Build one **Settings → Catalog access** page for Administrators. It manages
+  principal/role grants to `OpenSource` and `Kaveon`, shows effective access,
+  and keeps `KaveonDB` Admin-only by immutable default. Do not add another SQL
+  editor; granted users use the existing SQL Lab and CLI.
+- Persist grant changes in a typed KaveonDB transactional family with revision
+  CAS and audit. Do not write new grant state to PostgreSQL or coordinator-local
+  SQLite. Do not claim the separate Engine catalog-definition store has already
+  moved to KaveonDB; that cutover remains separately gated.
+
+### Enforcement requirements
+
+- Enforce the same policy at catalog listing, schemas/tables/columns discovery,
+  SQL Lab autocomplete, CLI metadata commands, `information_schema`, and SQL
+  statement binding/planning. Hiding a dropdown alone is not authorization.
+- Default deny for unspecified principals. Admin retains access. Viewer/Analyst/
+  Editor use the product's existing role semantics for browse/query/catalog DDL;
+  document the mapping and avoid silently widening any current role.
+- Do not trust browser-supplied catalog or role claims. Resolve identity from
+  the authenticated Studio proxy / configured Engine identity and use one
+  shared authorization evaluator in API and Engine paths.
+- Catalog access grants must not expose `KaveonDB.product`, `KaveonDB.catalog`,
+  or `KaveonDB.system` to non-Admins. If the read-only SQL views are not ready,
+  keep the catalog hidden and fail closed until they are.
+- Protect the final Admin from lockout; use revision conflicts on concurrent
+  edits; write an audit event for grant/revoke and identify the actor.
+- Do not implement group grants unless the verified Microsoft identity flow
+  supplies stable group IDs and the server validates them. Principal grants
+  are sufficient for this slice; do not accept client-provided email as proof.
+
+### Acceptance
+
+1. Admin can grant/revoke a principal from the Settings page and see effective
+   access after reload; the mutation survives API/coordinator restart.
+2. Each role can list and query only granted catalogs from SQL Lab and CLI;
+   revoked access fails at the Engine even with a hand-written SQL statement or
+   direct metadata API request.
+3. `KaveonDB` internals stay invisible and unreadable to Viewer/Analyst/Editor;
+   Admin gets only the read-only views approved by the architecture.
+4. Tests cover default deny, role mapping, stale revisions, audit, Admin
+   lockout prevention, hidden-object non-disclosure, direct-API bypass attempts,
+   and the same result through SQL Lab, CLI and Engine APIs.
+5. Provide an explicit migration/reconciliation for any existing access policy;
+   do not silently copy or broaden it. Update API contracts, docs, settings UI,
+   and the handshake status in the same change.
+
+Do not claim catalog-level RBAC is implemented until all acceptance paths pass.
+
+## OPEN REQUEST @Codex — implement unified catalog topology and transactional metadata — September 22, 2026
+
+The user has approved the direction and requested implementation of the catalog
+changes. Read `docs/engineering/unified-kaveondb-metadata.md`. Coordinate with
+the Claude access-management request above; do not overlap its Studio/API grant
+implementation without syncing the contract first.
+
+### Codex scope
+
+1. Move Kaveon-owned analytical tables out of `OpenSource` into `Kaveon`,
+   including the Kaveon events dashboard table. Rebind affected product dataset
+   records and dependent DLM/chart/dashboard references atomically or with a
+   verified migration/rollback; do not drop the old registrations until the
+   new bindings pass exact query and object-count parity.
+2. Make the default user-facing catalogs exactly `OpenSource`, `Kaveon`, and
+   `KaveonDB`. Keep qualification fixtures out of those production-facing
+   catalogs. `KaveonDB` means the transactional product/catalog authority, not
+   a second analytical file catalog.
+3. Move catalog/schema/table definitions from coordinator SQLite/WAL into the
+   same KaveonDB transactional authority as application product records. Keep
+   statistics/cubes explicitly classified as derived and rebuildable or migrate
+   them with their source-version identity; do not silently discard user-edited
+   definitions, ownership, lifecycle or audit.
+4. Add read-only SQL views in `KaveonDB.product` and `KaveonDB.catalog`, plus
+   Admin-only `KaveonDB.system`; keep writes on typed transaction/catalog APIs.
+   `information_schema` remains permission-filtered. Coordinate view/access
+   enforcement with Claude's catalog-RBAC implementation.
+5. Preserve the local filesystem and ADLS Gen2 commit paths. Treat S3 as
+   unsupported until a conditional-create/CAS backend and restart, concurrency,
+   lost-response and restore qualifications pass; never advertise unqualified
+   cross-cloud support.
+
+### Safety and acceptance
+
+- Do not mutate source data or delete current catalog registrations until the
+  dataset bindings and reverse references have been inventoried and a rollback
+  path is tested. The local imported records currently have the former work
+  principal as owner; do not forge that identity or bypass the owner invariant.
+- SQL Lab, CLI, REST metadata APIs and worker snapshots must agree on names,
+  revisions and permissions. Restart must reconstruct the same active catalog
+  snapshot from KaveonDB with PostgreSQL and catalog SQLite unavailable.
+- Include family/object counts, canonical hashes, binding/reference parity,
+  restart, concurrent edit, stale revision and rollback evidence. Update this
+  section in the Log only when each gate actually passes.
+
+Current status: architecture documented; no runtime catalog move or
+SQLite-to-KaveonDB cutover has been performed. The local source data and product
+state have not been altered by this request.
 
 ## User preference: conserve Codex allowance
 
@@ -737,7 +870,7 @@ Vercel URL/runtime access is still needed to verify the user's reported page.
 | Crate | Owner | Status |
 |-------|-------|--------|
 | `core` — shared types, errors, traits | Shared (either can add, neither restructures without updating this doc) | Stage graph, exchange, split/task, plan, telemetry, catalog, and operator contracts active |
-| `catalog` — durable Engine metadata | **Codex** | Native SQLite/WAL catalog, revisions, lifecycle, audit, and coordinator API complete; multi-coordinator service and external adapters remain target |
+| `catalog` — durable Engine metadata | **Codex** | Native SQLite/WAL catalog is current authority. Accepted target: fold editable catalog/schema/table definitions into KaveonDB transactional metadata; cloud-neutral local/ADLS/S3 backends and SQL views remain unimplemented. |
 | `storage` — Parquet reader, ADLS Gen 2 | **Codex** | Local Parquet/Delta plus ADLS Gen2 Parquet range reads; cloud Delta-log replay remains pending |
 | `exec/scan` — scan operator | **Codex** | Done; takeover authorized 2026-09-03 |
 | `exec/aggregate` — hash aggregate | **Codex** | Partial/final state execution and exchange for COUNT/SUM/MIN/MAX/AVG/exact DISTINCT done |
@@ -1299,7 +1432,7 @@ let source = DeltaTableReader::new(table_directory)
 - Catalog mutations are coordinator-only and require `Authorization: Bearer <KAVEON_CATALOG_ADMIN_TOKEN>` plus `x-kaveon-actor`. An absent admin token disables mutation endpoints.
 - Since 2026-09-17 the same definitions are also created, relocated and dropped by catalog statements on `POST /v1/statement` (`kaveon_sql::ddl`, `server/src/catalog_ddl.rs`): `CREATE CATALOG … WITH (storage, …)` (admin), `CREATE SCHEMA`, `CREATE TABLE … WITH (location, format)` / `CALL system.register_table`, `ALTER TABLE … SET LOCATION`, `DROP …` (analyst or admin), `SHOW …`, `SHOW CREATE TABLE`, `DESCRIBE`. Identifiers follow the bootstrap convention (`catalog:<name>`, `schema:<catalog>:<name>`, `table:<catalog>:<schema>:<name>`); the principal is the audit actor; a table is Draft (1) → probed through `kaveon_storage::analyze_source` → Active (2), or the draft is deleted. `kaveon_core::TableDefinition::with_location` (next revision, same lifecycle) and `kaveon_storage::SourceStatistics::schema` (the source's Arrow schema, already read) are the two additive contract changes. The `kaveon` CLI's `catalog|schema|table` commands submit these statements. The `/v1/catalog/*` service-credential surface is unchanged and does not probe.
 - `ExecutableFragment` version 2 carries the coordinator-resolved source URI and `DataFormat`. Workers execute that immutable resolution and do not consult their local catalog snapshot.
-- SQLite is not a multi-coordinator claim. The scale target is an external transactional catalog service with PostgreSQL persistence and revision-aware invalidation.
+- SQLite is single-coordinator current authority, not a multi-coordinator claim. The accepted direction is KaveonDB-owned versioned metadata with a portable transaction backend; PostgreSQL persistence is not the target. See `docs/engineering/unified-kaveondb-metadata.md`.
 - Hive Metastore, AWS Glue, Unity Catalog, and Iceberg REST are capability contracts only; adapters are not implemented. See `engine/CATALOG.md`.
 
 ### DLM API (standalone target)
@@ -1325,6 +1458,7 @@ let source = DeltaTableReader::new(table_directory)
 
 | Date | Engineer | What changed |
 |------|----------|-------------|
+| 2026-09-22 | Codex | Accepted the unified KaveonDB metadata direction in `docs/engineering/unified-kaveondb-metadata.md`: PostgreSQL application families and editable Engine catalog definitions belong in one transactional authority; `KaveonDB` SQL views are read-only, `system` is Admin-only, and `information_schema` is permission-filtered. Recorded that local/ADLS transaction foundations exist, Engine catalog metadata remains SQLite/WAL, and S3 commits plus the SQLite catalog cutover are not implemented or qualified. Updated the native transactional target to remove PostgreSQL as the desired metadata backend. No runtime catalog registrations or data were changed. |
 | 2026-09-04 | Codex | Provisioned Windows Rust/MSVC, Python 3.11/ODBC, and Node 22 tooling; added session/environment checks and isolated Trino/PostgreSQL qualification services. 228 Rust tests, strict Clippy, native release/benchmark gates and Studio Docker build passed. New DuckDB/Trino reference harness passes five basic local/distributed cases and reproduces two wrong-result subqueries plus three window execution failures. See docs/engineering/development-environment.md. No Engine execution contract changed. |
 | 2026-09-01 | Claude | Created HANDSHAKE.md, defined shared types in core (BatchSource, BatchOperator, StoragePredicate) |
 | 2026-09-01 | Codex | Storage reader in progress against BatchSource/StoragePredicate contracts; fixed CatalogList::catalog_mut trait-object lifetime blocking workspace compilation |

@@ -136,9 +136,17 @@ rebuild was recovered this way, in this order:
    going on; 509 files and 6,951,933,217 bytes for the current snapshot.
 2. Confirm the `kaveon-test-reader` identity holds Storage Blob Data Reader on
    the new account.
-3. From a running API pod, with `KAVEON_LAKE_ADLS_ACCOUNT=<new account>`:
+3. From a running API pod, with `KAVEON_LAKE_ADLS_ACCOUNT=<new account>`,
+   register each catalog from its own manifest (the registrar intentionally
+   rejects mixed-catalog invocations):
    `PYTHONPATH=/app python register-curated-catalog.py opensource-catalog-manifest.json`
    using [`infra/aks/opensource-catalog-manifest.json`](../../infra/aks/opensource-catalog-manifest.json).
+   Then run `PYTHONPATH=/app python register-curated-catalog.py
+   kaveon-catalog-manifest.json` using
+   [`infra/aks/kaveon-catalog-manifest.json`](../../infra/aks/kaveon-catalog-manifest.json).
+   The second manifest registers Kaveon-owned usage tables under
+   `Kaveon.usage`; it reuses the same immutable ADLS objects and does not
+   migrate or rewrite the backing files.
    The script registers the catalog, every schema and table, runs `COUNT(*)`
    on each and refuses to update the platform source registry unless every
    count matches the manifest.

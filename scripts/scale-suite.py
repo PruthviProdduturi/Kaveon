@@ -47,9 +47,8 @@ def result_hash(rows, ordered):
 
 def main():
     suite = json.load(open(os.environ.get("SUITE", "/input/scale-suite.json"), encoding="utf-8"))
-    # A suite names its catalog and schema; the telemetry suite predates that.
-    catalog = suite.get("catalog", "OpenSource")
-    schema = suite.get("schema", "kaveon_product")
+    catalog = suite.get("catalog", "Kaveon")
+    schema = suite.get("schema", "usage")
     records = []
     for statement in suite["statements"]:
         sql = statement.get("kaveon_sql", statement["sql"])

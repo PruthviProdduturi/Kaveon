@@ -1,8 +1,10 @@
 # OpenSource sample data
 
-`OpenSource` is the retained public analytical catalog. It is separate from the
-planned internal `Kaveon` product catalog, which is not available yet.
-PostgreSQL still owns the portal's mutable metadata.
+`OpenSource` is the retained public analytical catalog. Kaveon-owned synthetic
+usage and showcase relations are defined separately under `Kaveon.usage` in the
+curated catalog manifests. Registering that manifest and rebinding live product
+datasets still require the rollout and qualification steps in
+[the catalog restore guide](register-engine-catalog.md#restore-after-a-cluster-rebuild).
 
 The first AKS run completed in 5 minutes 10 seconds. All 11 tables passed exact
 Engine row-count checks. It loaded 3,523,552 original taxi rows, retained

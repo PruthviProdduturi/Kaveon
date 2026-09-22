@@ -53,6 +53,28 @@ class LiveDashboardImportTests(unittest.TestCase):
         self.assertEqual(len(event_charts), 33)
         module.validate_event_projection_contract(self.contract)
         self.assertEqual(module.PHYSICAL_DATASETS["144"]["table_name"], "kaveon_events_dashboard")
+        self.assertEqual(module.PHYSICAL_DATASETS["144"]["catalog"], "Kaveon")
+        self.assertEqual(module.PHYSICAL_DATASETS["144"]["schema_name"], "usage")
+
+    def test_kaveon_dataset_move_preserves_existing_record_identity(self):
+        old = {"id": 144, "database_name": "OpenSource", "schema_name": "public",
+               "table_name": "kaveon_events_dashboard"}
+        rows = [old]
+        moved = module.physical_dataset_matches(rows, "144", module.PHYSICAL_DATASETS["144"])
+        self.assertEqual(moved, [old])
+        self.assertEqual(moved[0]["id"], 144)
+
+    def test_curated_manifests_separate_public_and_kaveon_owned_tables(self):
+        root = Path(__file__).parents[1] / "infra/aks"
+        public = json.loads((root / "opensource-catalog-manifest.json").read_text())
+        kaveon = json.loads((root / "kaveon-catalog-manifest.json").read_text())
+        self.assertEqual(public["catalog"], "OpenSource")
+        self.assertEqual(kaveon["catalog"], "Kaveon")
+        self.assertFalse(any(row["schema"] == "kaveon_product" or row["name"] == "kaveon_events_dashboard"
+                             for row in public["tables"]))
+        self.assertEqual(len(kaveon["tables"]), 9)
+        self.assertEqual({row["schema"] for row in kaveon["tables"]}, {"usage"})
+        self.assertEqual(sum(row["row_count"] for row in kaveon["tables"] if row["name"] == "kaveon_events_enriched"), 504000000)
 
     def test_rejects_event_query_outside_lossless_projection(self):
         broken = copy.deepcopy(self.contract)
@@ -93,7 +115,7 @@ class LiveDashboardImportTests(unittest.TestCase):
         ]
         def api(method, path, body=None):
             calls.append((method, path))
-            if path == "lab/engine/sources": return {"sources": [{"id": "open", "catalog": "OpenSource"}]}
+            if path == "lab/engine/sources": return {"sources": [{"id": "open", "catalog": "OpenSource"}, {"id": "kaveon", "catalog": "Kaveon"}]}
             if path == "datasets": return datasets
             if path == "charts": return charts
             if path == "dashboards": return dashboards

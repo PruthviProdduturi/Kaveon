@@ -60,9 +60,11 @@ class BuildTests(unittest.TestCase):
 
         manifest = json.loads((out / "kaveon-events-singlefile-manifest.json").read_text())
         self.assertTrue(manifest["synthetic"])
+        self.assertEqual(manifest["catalog"], "Kaveon")
         tables = {t["name"]: t for t in manifest["tables"]}
         self.assertEqual(tables["kaveon_events_enriched"]["row_count"], N * 12)
         self.assertEqual(tables["kaveon_events_users"]["row_count"], N)
+        self.assertEqual(tables["kaveon_events_enriched"]["schema"], "usage")
         self.assertEqual(tables["kaveon_events_enriched"]["location"],
                          "kaveon_product/kaveon_events_enriched/combined-v1.parquet")
         types = {c["name"]: c["data_type"] for c in tables["kaveon_events_enriched"]["columns"]}

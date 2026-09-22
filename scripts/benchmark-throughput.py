@@ -127,8 +127,8 @@ class KaveonExecutor:
         sys.path.insert(0, "/app")
         import services.engine_bridge as bridge
         self.bridge = bridge
-        self.catalog = suite.get("catalog", "OpenSource")
-        self.schema = suite.get("schema", "kaveon_product")
+        self.catalog = suite.get("catalog", "Kaveon")
+        self.schema = suite.get("schema", "usage")
         self.timeout = int(os.environ.get("STATEMENT_TIMEOUT_SECONDS", "900"))
 
     def prepare(self):

@@ -22,10 +22,13 @@ reference in tests; it is not the native transaction execution architecture.
    multi-statement updates, competing writers, retries and process restarts.
    Indexes must support bounded point operations without loading every system
    table into coordinator memory for each transaction.
-4. ADLS retains table data, schema/index metadata, commit state, idempotency
-   records, audit/recovery evidence and Engine definitions. Memory caches and
-   temporary execution buffers are expendable. No local database file becomes
-   authoritative. Credentials keep their existing managed-secret boundary.
+4. The selected durable backend retains table data, schema/index metadata,
+   commit state, idempotency records, audit/recovery evidence and Engine
+   definitions. Local Docker uses the local commit backend; AKS uses ADLS Gen2;
+   AWS requires an S3 conditional-commit backend. Memory caches and temporary
+   execution buffers are expendable. No coordinator-local database file becomes
+   authoritative in the target architecture. Credentials keep their existing
+   managed-secret boundary.
 5. Lost commit responses, stale writers, cancellation, coordinator/worker
    termination, missing/corrupt history and storage throttling have explicit,
    tested outcomes. Unknown commit outcome is not reported as rollback.
@@ -54,11 +57,13 @@ keys, range predicates, commit retries and dashboard API workflows. Start with
 small correctness runs on the existing three-worker AKS deployment before
 spending compute on scale tests.
 
-ADLS-only durable commits introduce storage round trips. Low-latency OLTP is a
-separate performance requirement that must be measured; matching transaction
+Object-store durable commits introduce storage round trips. Low-latency OLTP is
+a separate performance requirement that must be measured; matching transaction
 correctness does not imply matching PostgreSQL latency. The user selected both
-workloads: general-purpose OLTP alongside distributed analytics, including lakehouse transactions and product metadata. Neither suite
-can be omitted from the eventual acceptance claim.
+workloads: general-purpose OLTP alongside distributed analytics, including
+lakehouse transactions and product metadata. Neither suite can be omitted from
+the eventual acceptance claim. See the [unified metadata architecture](unified-kaveondb-metadata.md)
+for catalog placement, SQL visibility and current backend support.
 
 ## Current implementation boundary
 
@@ -66,5 +71,9 @@ can be omitted from the eventual acceptance claim.
 are transaction-publication foundations. They do not implement native row
 mutations, constraints, SQL transactions or the completed migration. The
 [ADLS protocol](adls-transaction-protocol.md) records remaining limitations.
-PostgreSQL and the existing SQLite Engine definition catalog remain live until
-their respective ADLS replacement gates pass.
+PostgreSQL is not started in the local profile. The existing SQLite Engine
+definition catalog remains the current authority until its migration into
+KaveonDB passes reconciliation, restart, concurrency and rollback gates. Local
+and ADLS product transaction paths are implemented foundations; AWS S3
+product-metadata commits and the unified SQLite-to-KaveonDB catalog cutover are
+not implemented or qualified.

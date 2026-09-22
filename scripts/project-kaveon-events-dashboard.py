@@ -114,7 +114,7 @@ def materialize(source: Path, output: Path, batch_rows: int = 25_000) -> dict[st
             writer.write_table(pa.Table.from_pylist(projected, schema=OUTPUT_SCHEMA))
             count += len(projected)
     table = {
-        "schema": "public",
+        "schema": "usage",
         "name": "kaveon_events_dashboard",
         "location": "public/kaveon_events_dashboard/part-00000.parquet",
         "row_count": count,
@@ -126,14 +126,14 @@ def materialize(source: Path, output: Path, batch_rows: int = 25_000) -> dict[st
         ],
         "lineage": {
             "kind": "synthetic_showcase_projection",
-            "source": "kaveon_product.kaveon_product_analytics",
+            "source": "usage.kaveon_product_analytics",
             "grain": "one deterministic surface per user-day",
             "surface_assignment": "(user_id * 31 + ordinal(usage_date) * 17) modulo 6",
             "derived_columns": ["surface", "actions", "rows_scanned", "cache_hits", "latency_p75_ms"],
             "legacy_equivalent": False,
         },
     }
-    manifest = {"format": "kaveon.events-dashboard-projection/v1", "tables": [table]}
+    manifest = {"format": "kaveon.events-dashboard-projection/v1", "catalog": "Kaveon", "tables": [table]}
     (output / "kaveon-events-dashboard-manifest.json").write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
     )
