@@ -7,7 +7,7 @@ use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Extension, Json, Router};
 use futures::StreamExt;
 use kaveon_catalog::CascadePolicy;
@@ -624,6 +624,27 @@ pub fn build_router(state: Arc<AppState>) -> Router {
                 .put(crate::resource_groups::put_resource_groups),
         )
         .route("/v1/quota", get(crate::resource_groups::get_quota))
+        .route(
+            "/v1/admin/catalog-access",
+            get(crate::catalog_access_api::get_catalog_access),
+        )
+        .route(
+            "/v1/admin/catalog-access/grants",
+            put(crate::catalog_access_api::put_grant)
+                .delete(crate::catalog_access_api::delete_grant),
+        )
+        .route(
+            "/v1/admin/catalog-access/effective/{principal}",
+            get(crate::catalog_access_api::get_effective),
+        )
+        .route(
+            "/v1/admin/catalog-access/import",
+            post(crate::catalog_access_api::import_open_policy),
+        )
+        .route(
+            "/v1/catalog-access/me",
+            get(crate::catalog_access_api::get_my_access),
+        )
         .route("/v1/node/heartbeat", post(receive_heartbeat))
         .route(
             "/v1/internal/catalog/snapshot",
@@ -2660,8 +2681,13 @@ async fn run_statement(
     };
     // Pin one immutable catalog manager for validation, optimization and
     // physical planning. Publishing a newer manager swaps the outer Arc and
-    // cannot change the definitions observed by this query.
-    let catalog_snapshot = state.catalog.read().await.clone();
+    // cannot change the definitions observed by this query. The manager is
+    // the published catalog as this identity may see it: the evaluator's
+    // visible set projected onto the same providers, so binding, planning
+    // and the metadata statements resolve granted catalogs only and an
+    // ungranted one fails as an absent one.
+    let access_scope = state.catalog_access.evaluate(&identity);
+    let catalog_snapshot = access_scope.restrict(&state.catalog.read().await.clone());
     let requested_catalog = req
         .catalog
         .as_deref()
@@ -2974,7 +3000,17 @@ async fn run_statement(
         return finish_catalog_result(&query_id, result, start).await;
     }
     if let Some(statement) = catalog_statement {
-        return execute_catalog(&state, &identity, &query_id, &context, statement, start).await;
+        return execute_catalog(
+            &state,
+            &identity,
+            &query_id,
+            &context,
+            &catalog_snapshot,
+            &access_scope,
+            statement,
+            start,
+        )
+        .await;
     }
     if let Some(statement) = parse_analyze_statement(&sql) {
         // ANALYZE runs no operator of its own, and the statements it runs
@@ -2987,6 +3023,7 @@ async fn run_statement(
             &identity,
             &query_id,
             &context,
+            &catalog_snapshot,
             statement,
             start,
             query_memory,
@@ -2994,7 +3031,15 @@ async fn run_statement(
         .await;
     }
     if let Some(statement) = statistics_statement {
-        return execute_statistics_statement(&state, &query_id, &context, statement, start).await;
+        return execute_statistics_statement(
+            &state,
+            &query_id,
+            &context,
+            &catalog_snapshot,
+            statement,
+            start,
+        )
+        .await;
     }
 
     let analysis_start = Instant::now();
@@ -3036,6 +3081,26 @@ async fn run_statement(
                 .into_response();
         }
     };
+    // Bound, so every scan names a catalog the identity may see; reading
+    // one takes the `query` level, which a browse-only grant does not give.
+    if let Some(refused) = crate::planner::scan_tables(&plan)
+        .iter()
+        .map(|table| table.split('.').next().unwrap_or(table).to_owned())
+        .find(|catalog| !access_scope.can_query(catalog))
+    {
+        let message = format!(
+            "reading catalog '{refused}' requires query access; this principal may browse it"
+        );
+        finish_failed_query(&query_id, message.clone(), start, None, None, None).await;
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": message,
+                "code": "ACCESS_DENIED"
+            })),
+        )
+            .into_response();
+    }
     let approximate = approximate_notes(&plan);
     let analysis_us = elapsed_us(analysis_start);
     let logical_plan = crate::planner::logical_plan_tree(&plan);
@@ -4431,12 +4496,10 @@ type StatementFailure = (StatusCode, &'static str, String);
 
 async fn resolve_statistics_table(
     state: &AppState,
+    catalog: &kaveon_core::CatalogManager,
     qualified: &str,
 ) -> Result<StatisticsTable, StatementFailure> {
-    let resolved = state
-        .catalog
-        .read()
-        .await
+    let resolved = catalog
         .resolve_table(&kaveon_core::TableReference::parse(qualified))
         .map_err(|error| {
             (
@@ -4684,6 +4747,7 @@ async fn execute_statistics_statement(
     state: &Arc<AppState>,
     query_id: &str,
     context: &QueryContext,
+    catalog: &kaveon_core::CatalogManager,
     statement: StatisticsStatement,
     started: Instant,
 ) -> Response {
@@ -4691,12 +4755,13 @@ async fn execute_statistics_statement(
         StatisticsStatement::ShowStats(table) => (table, true),
         StatisticsStatement::DescribeDetail(table) => (table, false),
     };
-    let table = match resolve_statistics_table(state, &qualify_table(context, &table)).await {
-        Ok(table) => table,
-        Err((status, code, message)) => {
-            return analyze_failure(query_id, started, status, code, message).await;
-        }
-    };
+    let table =
+        match resolve_statistics_table(state, catalog, &qualify_table(context, &table)).await {
+            Ok(table) => table,
+            Err((status, code, message)) => {
+                return analyze_failure(query_id, started, status, code, message).await;
+            }
+        };
     let stored = match stored_table_statistics(state, &table.id) {
         Ok(stored) => stored,
         Err((status, code, message)) => {
@@ -4815,11 +4880,13 @@ const ANALYZE_SKETCH_THREADS: usize = 8;
 /// count of the previous document when the source version is unchanged.
 /// The result's `full_read` column and the record's `execution` say where
 /// the columns were read.
+#[allow(clippy::too_many_arguments)]
 async fn execute_analyze(
     state: &Arc<AppState>,
     identity: &Identity,
     query_id: &str,
     context: &QueryContext,
+    catalog: &kaveon_core::CatalogManager,
     statement: Result<AnalyzeStatement, String>,
     started: Instant,
     memory: AdmittedQueryMemory,
@@ -4854,7 +4921,9 @@ async fn execute_analyze(
         }
     };
     let table =
-        match resolve_statistics_table(state, &qualify_table(context, &statement.table)).await {
+        match resolve_statistics_table(state, catalog, &qualify_table(context, &statement.table))
+            .await
+        {
             Ok(table) => table,
             Err((status, code, message)) => {
                 return analyze_failure(query_id, started, status, code, message).await;
@@ -5307,11 +5376,14 @@ fn cached_table_cube(state: &AppState, id: &TableId) -> Option<Arc<kaveon_core::
 /// A catalog statement (`CREATE`/`DROP`/`ALTER` on the durable catalog,
 /// `SHOW`/`DESCRIBE` over the published snapshot) runs on the coordinator
 /// and leaves a query record like any statement.
+#[allow(clippy::too_many_arguments)]
 async fn execute_catalog(
     state: &Arc<AppState>,
     identity: &Identity,
     query_id: &str,
     context: &QueryContext,
+    catalog: &Arc<crate::PublishedCatalog>,
+    scope: &crate::catalog_access::Scope,
     statement: kaveon_sql::ddl::CatalogStatement,
     started: Instant,
 ) -> Response {
@@ -5320,6 +5392,8 @@ async fn execute_catalog(
         identity,
         &context.catalog,
         &context.schema,
+        catalog,
+        scope,
         statement,
     )
     .await
@@ -6375,12 +6449,18 @@ async fn statistics_diagnostics(
 /// now: `GET /v1/catalog/tables/{id}/statistics`.
 async fn get_table_statistics(
     State(state): State<Arc<AppState>>,
+    identity: Option<Extension<Identity>>,
     Path(id): Path<String>,
 ) -> Response {
     let id = match TableId::new(id) {
         Ok(id) => id,
         Err(error) => return catalog_error_response(error),
     };
+    match table_catalog_name(&state, &id) {
+        Ok(Some(name)) if definition_visible(&state, identity.as_deref(), &name) => {}
+        Ok(_) => return StatusCode::NOT_FOUND.into_response(),
+        Err(error) => return catalog_error_response(error),
+    }
     let statistics = match state.catalog_store.table_statistics(&id) {
         Ok(Some(value)) => value,
         Ok(None) => {
@@ -6418,11 +6498,20 @@ async fn get_table_statistics(
 /// The table's current source version, from the least metadata that
 /// establishes it: `GET /v1/catalog/tables/{id}/version`. Cheap enough to
 /// call before every answer.
-async fn get_table_version(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+async fn get_table_version(
+    State(state): State<Arc<AppState>>,
+    identity: Option<Extension<Identity>>,
+    Path(id): Path<String>,
+) -> Response {
     let id = match TableId::new(id) {
         Ok(id) => id,
         Err(error) => return catalog_error_response(error),
     };
+    match table_catalog_name(&state, &id) {
+        Ok(Some(name)) if definition_visible(&state, identity.as_deref(), &name) => {}
+        Ok(_) => return StatusCode::NOT_FOUND.into_response(),
+        Err(error) => return catalog_error_response(error),
+    }
     match observe_table_version(&state, &id).await {
         Ok(observed) => Json(serde_json::json!({
             "table_id": id.as_str(),
@@ -7628,8 +7717,57 @@ async fn catalog_replica_snapshot(
 
 // --- Catalog ---
 
-async fn list_catalogs(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let catalog = state.catalog.read().await;
+/// The published catalog as the request's identity sees it. The catalog
+/// service credential carries no identity and sees every catalog; every
+/// other caller sees what the evaluator grants.
+async fn visible_catalog(
+    state: &AppState,
+    identity: Option<&Identity>,
+) -> Arc<crate::PublishedCatalog> {
+    let published = state.catalog.read().await.clone();
+    match identity {
+        Some(identity) => state.catalog_access.evaluate(identity).restrict(&published),
+        None => published,
+    }
+}
+
+/// Whether the request's identity may see the catalog `name`; the catalog
+/// service credential (no identity) sees every definition.
+fn definition_visible(state: &AppState, identity: Option<&Identity>, name: &str) -> bool {
+    identity.is_none_or(|identity| state.catalog_access.can_see(identity, name))
+}
+
+/// The catalog name a schema definition belongs to, or `None` when either
+/// is absent.
+fn schema_catalog_name(
+    state: &AppState,
+    schema: &SchemaId,
+) -> Result<Option<String>, kaveon_core::KaveonError> {
+    let Some(schema) = state.catalog_store.schema(schema)? else {
+        return Ok(None);
+    };
+    Ok(state
+        .catalog_store
+        .catalog(schema.catalog_id())?
+        .map(|catalog| catalog.name().to_owned()))
+}
+
+/// The catalog name a table definition belongs to, or `None` when absent.
+fn table_catalog_name(
+    state: &AppState,
+    table: &TableId,
+) -> Result<Option<String>, kaveon_core::KaveonError> {
+    Ok(state
+        .catalog_store
+        .table_name(table)?
+        .map(|name| name.catalog))
+}
+
+async fn list_catalogs(
+    State(state): State<Arc<AppState>>,
+    identity: Option<Extension<Identity>>,
+) -> impl IntoResponse {
+    let catalog = visible_catalog(&state, identity.as_deref()).await;
     let names = catalog.catalog_names();
     Json(serde_json::json!({ "catalogs": names }))
 }
@@ -7905,15 +8043,45 @@ pub(crate) async fn refresh_catalog_snapshot(state: &AppState) -> Result<(), Box
     })
 }
 
-async fn list_catalog_definitions(State(state): State<Arc<AppState>>) -> Response {
+/// A catalog definition as the identity sees it: the definition, and the
+/// identity's `access` level on it (absent for the service credential).
+fn catalog_definition_document(
+    state: &AppState,
+    identity: Option<&Identity>,
+    definition: &CatalogDefinition,
+) -> Option<serde_json::Value> {
+    let mut document = serde_json::to_value(definition).ok()?;
+    if let Some(identity) = identity {
+        let level = state
+            .catalog_access
+            .evaluate(identity)
+            .level(definition.name())?;
+        if let Some(object) = document.as_object_mut() {
+            object.insert("access".into(), serde_json::json!(level));
+        }
+    }
+    Some(document)
+}
+
+async fn list_catalog_definitions(
+    State(state): State<Arc<AppState>>,
+    identity: Option<Extension<Identity>>,
+) -> Response {
     match state.catalog_store.list_catalogs() {
-        Ok(values) => Json(values).into_response(),
+        Ok(values) => Json(
+            values
+                .iter()
+                .filter_map(|value| catalog_definition_document(&state, identity.as_deref(), value))
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
         Err(error) => catalog_error_response(error),
     }
 }
 
 async fn get_catalog_definition(
     State(state): State<Arc<AppState>>,
+    identity: Option<Extension<Identity>>,
     Path(id): Path<String>,
 ) -> Response {
     let id = match CatalogId::new(id) {
@@ -7921,7 +8089,10 @@ async fn get_catalog_definition(
         Err(error) => return catalog_error_response(error),
     };
     match state.catalog_store.catalog(&id) {
-        Ok(Some(value)) => Json(value).into_response(),
+        Ok(Some(value)) => match catalog_definition_document(&state, identity.as_deref(), &value) {
+            Some(document) => Json(document).into_response(),
+            None => StatusCode::NOT_FOUND.into_response(),
+        },
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(error) => catalog_error_response(error),
     }
@@ -8035,12 +8206,22 @@ async fn delete_catalog_definition(
 
 async fn list_schema_definitions(
     State(state): State<Arc<AppState>>,
+    identity: Option<Extension<Identity>>,
     Path(catalog_id): Path<String>,
 ) -> Response {
     let id = match CatalogId::new(catalog_id) {
         Ok(id) => id,
         Err(error) => return catalog_error_response(error),
     };
+    match state.catalog_store.catalog(&id) {
+        Ok(Some(catalog)) => {
+            if !definition_visible(&state, identity.as_deref(), catalog.name()) {
+                return StatusCode::NOT_FOUND.into_response();
+            }
+        }
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(error) => return catalog_error_response(error),
+    }
     match state.catalog_store.list_schemas(&id) {
         Ok(values) => Json(values).into_response(),
         Err(error) => catalog_error_response(error),
@@ -8049,12 +8230,18 @@ async fn list_schema_definitions(
 
 async fn get_schema_definition(
     State(state): State<Arc<AppState>>,
+    identity: Option<Extension<Identity>>,
     Path(id): Path<String>,
 ) -> Response {
     let id = match SchemaId::new(id) {
         Ok(id) => id,
         Err(error) => return catalog_error_response(error),
     };
+    match schema_catalog_name(&state, &id) {
+        Ok(Some(name)) if definition_visible(&state, identity.as_deref(), &name) => {}
+        Ok(_) => return StatusCode::NOT_FOUND.into_response(),
+        Err(error) => return catalog_error_response(error),
+    }
     match state.catalog_store.schema(&id) {
         Ok(Some(value)) => Json(value).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
@@ -8175,12 +8362,18 @@ async fn delete_schema_definition(
 
 async fn list_table_definitions(
     State(state): State<Arc<AppState>>,
+    identity: Option<Extension<Identity>>,
     Path(schema_id): Path<String>,
 ) -> Response {
     let id = match SchemaId::new(schema_id) {
         Ok(id) => id,
         Err(error) => return catalog_error_response(error),
     };
+    match schema_catalog_name(&state, &id) {
+        Ok(Some(name)) if definition_visible(&state, identity.as_deref(), &name) => {}
+        Ok(_) => return StatusCode::NOT_FOUND.into_response(),
+        Err(error) => return catalog_error_response(error),
+    }
     match state.catalog_store.list_tables(&id) {
         Ok(values) => Json(values).into_response(),
         Err(error) => catalog_error_response(error),
@@ -8189,12 +8382,18 @@ async fn list_table_definitions(
 
 async fn get_table_definition(
     State(state): State<Arc<AppState>>,
+    identity: Option<Extension<Identity>>,
     Path(id): Path<String>,
 ) -> Response {
     let id = match TableId::new(id) {
         Ok(id) => id,
         Err(error) => return catalog_error_response(error),
     };
+    match table_catalog_name(&state, &id) {
+        Ok(Some(name)) if definition_visible(&state, identity.as_deref(), &name) => {}
+        Ok(_) => return StatusCode::NOT_FOUND.into_response(),
+        Err(error) => return catalog_error_response(error),
+    }
     match state.catalog_store.table(&id) {
         Ok(Some(value)) => Json(value).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
@@ -8306,9 +8505,10 @@ async fn delete_table_definition(
 
 async fn list_schemas(
     State(state): State<Arc<AppState>>,
+    identity: Option<Extension<Identity>>,
     Path(catalog_name): Path<String>,
 ) -> impl IntoResponse {
-    let catalog = state.catalog.read().await;
+    let catalog = visible_catalog(&state, identity.as_deref()).await;
     match catalog.catalog(&catalog_name) {
         Some(cat) => {
             let names = cat.schema_names();
@@ -8327,9 +8527,10 @@ async fn list_schemas(
 
 async fn list_tables(
     State(state): State<Arc<AppState>>,
+    identity: Option<Extension<Identity>>,
     Path((catalog_name, schema_name)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let catalog = state.catalog.read().await;
+    let catalog = visible_catalog(&state, identity.as_deref()).await;
     match catalog.catalog(&catalog_name) {
         Some(cat) => match cat.table_names(&schema_name) {
             Ok(names) => Json(serde_json::json!({ "tables": names })).into_response(),
@@ -10776,7 +10977,14 @@ pub(crate) fn catalog_test_state() -> crate::AppState {
         // granted, so any other catalog is invisible to them.
         catalog_access: crate::catalog_access::CatalogAccess::preset(
             [
-                "analyst", "alice", "bob", "reader", "svc-small", "svc-loader", "other", "ana",
+                "analyst",
+                "alice",
+                "bob",
+                "reader",
+                "svc-small",
+                "svc-loader",
+                "other",
+                "ana",
             ]
             .into_iter()
             .map(|principal| (principal, "lake", crate::catalog_access::Access::Manage)),
@@ -11765,6 +11973,7 @@ mod tests {
         let table_id = stored.table_id.as_str().to_owned();
         let response = super::get_table_statistics(
             axum::extract::State(state.clone()),
+            None,
             axum::extract::Path(table_id.clone()),
         )
         .await;
@@ -11780,6 +11989,7 @@ mod tests {
         assert_eq!(body["statistics"]["columns"][0]["name"], "id");
         let response = super::get_table_version(
             axum::extract::State(state.clone()),
+            None,
             axum::extract::Path(table_id.clone()),
         )
         .await;
@@ -11794,6 +12004,7 @@ mod tests {
         write_orders(&directory, &[10, 11, 12, 13]);
         let response = super::get_table_version(
             axum::extract::State(state.clone()),
+            None,
             axum::extract::Path(table_id.clone()),
         )
         .await;
@@ -11801,6 +12012,7 @@ mod tests {
         assert_ne!(changed["source_version"], version["source_version"]);
         let response = super::get_table_statistics(
             axum::extract::State(state.clone()),
+            None,
             axum::extract::Path(table_id.clone()),
         )
         .await;
@@ -11810,6 +12022,7 @@ mod tests {
         assert_eq!(body["source_version"], version["source_version"]);
         let response = super::get_table_statistics(
             axum::extract::State(state.clone()),
+            None,
             axum::extract::Path("table:nope".to_owned()),
         )
         .await;
@@ -13569,13 +13782,15 @@ mod tests {
         let stats = state.result_cache.stats();
         assert_eq!((stats.hits, stats.misses, stats.entries), (0, 1, 1));
 
-        // Same statement, different spelling outside literals: a hit with
-        // the same rows, no worker or coordinator execution, the original
-        // named on the record.
+        // Same statement, different spelling outside identifiers and
+        // literals: a hit with the same rows, no worker or coordinator
+        // execution, the original named on the record. The cache is read
+        // only after the statement binds against the identity's catalog
+        // view, so a name it cannot resolve is never served from it.
         let (status, second) = submit(
             &state,
             &analyst,
-            "select   ID from ORDERS\n where id > 1 order by id;",
+            "select   id from orders\n where id > 1 order by id;",
             serde_json::Value::Null,
         )
         .await;
@@ -14208,11 +14423,13 @@ mod tests {
                 .admit(uuid::Uuid::new_v4().to_string(), 1 << 20)
                 .unwrap()
         };
+        let published = state.catalog.read().await.clone();
         let denied = execute_analyze(
             &state,
             &reader,
             "denied",
             &analyze_context(),
+            &published,
             analyze("ANALYZE orders"),
             std::time::Instant::now(),
             memory(),
@@ -14226,6 +14443,7 @@ mod tests {
             &admin,
             "allowed",
             &analyze_context(),
+            &published,
             analyze("ANALYZE orders"),
             std::time::Instant::now(),
             memory(),
@@ -14583,6 +14801,7 @@ mod tests {
         // The table document carries the shape.
         let response = super::get_table_definition(
             axum::extract::State(state.clone()),
+            None,
             axum::extract::Path(table.id().as_str().to_owned()),
         )
         .await;
@@ -15455,6 +15674,7 @@ mod tests {
         // The statistics endpoint says so.
         let response = super::get_table_statistics(
             axum::extract::State(state.clone()),
+            None,
             axum::extract::Path(stored.table_id.as_str().to_owned()),
         )
         .await;

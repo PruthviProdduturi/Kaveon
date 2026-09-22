@@ -1,6 +1,7 @@
 mod api;
 pub mod audit;
 pub mod catalog_access;
+pub mod catalog_access_api;
 mod catalog_ddl;
 pub mod cluster;
 mod config;

@@ -183,6 +183,39 @@ pub fn qualify_tables(plan: &mut LogicalPlan, catalog: &str, schema: &str) {
     }
 }
 
+/// The qualified names of every table the plan scans, in plan order.
+pub fn scan_tables(plan: &LogicalPlan) -> Vec<String> {
+    fn collect(plan: &LogicalPlan, out: &mut Vec<String>) {
+        match plan {
+            LogicalPlan::Scan { table, .. } => out.push(table.clone()),
+            LogicalPlan::Join { left, right, .. }
+            | LogicalPlan::Intersect { left, right }
+            | LogicalPlan::Except { left, right }
+            | LogicalPlan::SemiJoin { left, right, .. }
+            | LogicalPlan::AntiJoin { left, right, .. } => {
+                collect(left, out);
+                collect(right, out);
+            }
+            LogicalPlan::Filter { input, .. }
+            | LogicalPlan::Project { input, .. }
+            | LogicalPlan::Aggregate { input, .. }
+            | LogicalPlan::Sort { input, .. }
+            | LogicalPlan::Limit { input, .. }
+            | LogicalPlan::Offset { input, .. }
+            | LogicalPlan::Distinct { input, .. }
+            | LogicalPlan::Window { input, .. } => collect(input, out),
+            LogicalPlan::Union { inputs, .. } => {
+                for input in inputs {
+                    collect(input, out);
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    collect(plan, &mut out);
+    out
+}
+
 pub fn logical_plan_tree(plan: &LogicalPlan) -> kaveon_core::PlanNode {
     let mut next_id = 0;
     build_plan_tree(plan, &mut next_id, kaveon_core::PlanPhase::Logical)

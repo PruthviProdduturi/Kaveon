@@ -118,11 +118,18 @@ type DdlResult<T> = Result<T, CatalogStatementError>;
 
 /// Run one catalog statement for `identity` with the request's session
 /// catalog and schema as the defaults for unqualified names.
+///
+/// `published` is the catalog as `identity` may see it and `scope` the
+/// evaluator's answer for them: the metadata statements read the former,
+/// so a hidden catalog is reported as absent; a change inside a catalog
+/// needs `manage` on it, checked before the durable store is touched.
 pub(crate) async fn execute_catalog_statement(
     state: &Arc<AppState>,
     identity: &Identity,
     context_catalog: &str,
     context_schema: &str,
+    published: &Arc<crate::PublishedCatalog>,
+    scope: &crate::catalog_access::Scope,
     statement: CatalogStatement,
 ) -> DdlResult<CatalogStatementResult> {
     if statement.is_catalog_mutation() && identity.role != Role::Admin {
@@ -135,6 +142,31 @@ pub(crate) async fn execute_catalog_statement(
             "catalog changes require the analyst or admin role",
         ));
     }
+    // A hidden catalog is absent; a visible one is changed only at `manage`.
+    let require_manage = |catalog: &str| -> DdlResult<()> {
+        if !scope.can_see(catalog) {
+            return Err(CatalogStatementError::not_found(
+                "CATALOG_NOT_FOUND",
+                format!("catalog '{catalog}' not found"),
+            ));
+        }
+        if !scope.can_manage(catalog) {
+            return Err(CatalogStatementError::forbidden(format!(
+                "catalog changes in '{catalog}' require manage access"
+            )));
+        }
+        Ok(())
+    };
+    let require_visible = |catalog: &str| -> DdlResult<()> {
+        if scope.can_see(catalog) {
+            Ok(())
+        } else {
+            Err(CatalogStatementError::not_found(
+                "CATALOG_NOT_FOUND",
+                format!("catalog '{catalog}' not found"),
+            ))
+        }
+    };
     let actor = identity.principal.as_str();
     let store = &state.catalog_store;
     let result = match statement {
@@ -154,6 +186,7 @@ pub(crate) async fn execute_catalog_statement(
             if_not_exists,
         } => {
             let (catalog, schema) = schema_target(&name, context_catalog);
+            require_manage(&catalog)?;
             create_schema(store, actor, catalog, schema, if_not_exists)?
         }
         CatalogStatement::DropSchema {
@@ -162,6 +195,7 @@ pub(crate) async fn execute_catalog_statement(
             cascade,
         } => {
             let (catalog, schema) = schema_target(&name, context_catalog);
+            require_manage(&catalog)?;
             drop_schema(store, actor, catalog, schema, if_exists, cascade)?
         }
         CatalogStatement::CreateTable {
@@ -177,6 +211,7 @@ pub(crate) async fn execute_catalog_statement(
             shape,
         } => {
             let target = table_target(&name, context_catalog, context_schema);
+            require_manage(&target.catalog)?;
             let layout = TableLayout::new(clustered_by, bloom)
                 .map_err(CatalogStatementError::invalid_error)?;
             shape
@@ -199,6 +234,7 @@ pub(crate) async fn execute_catalog_statement(
         }
         CatalogStatement::DropTable { name, if_exists } => {
             let target = table_target(&name, context_catalog, context_schema);
+            require_manage(&target.catalog)?;
             drop_table(store, actor, target, if_exists)?
         }
         CatalogStatement::AlterTableSetLocation {
@@ -207,6 +243,7 @@ pub(crate) async fn execute_catalog_statement(
             location,
         } => {
             let target = table_target(&name, context_catalog, context_schema);
+            require_manage(&target.catalog)?;
             set_table_location(store, actor, target, if_exists, location).await?
         }
         CatalogStatement::AlterTableSetClusteredBy {
@@ -215,6 +252,7 @@ pub(crate) async fn execute_catalog_statement(
             columns,
         } => {
             let target = table_target(&name, context_catalog, context_schema);
+            require_manage(&target.catalog)?;
             set_table_clustering(store, actor, target, if_exists, columns)?
         }
         CatalogStatement::AlterTableSetShape {
@@ -223,6 +261,7 @@ pub(crate) async fn execute_catalog_statement(
             shape,
         } => {
             let target = table_target(&name, context_catalog, context_schema);
+            require_manage(&target.catalog)?;
             shape
                 .check_cell_limit(state.config.cube_max_cells)
                 .map_err(CatalogStatementError::invalid_error)?;
@@ -238,23 +277,24 @@ pub(crate) async fn execute_catalog_statement(
         }
         CatalogStatement::ShowCreateTable { name } => {
             let target = table_target(&name, context_catalog, context_schema);
+            require_visible(&target.catalog)?;
             return show_create_table(store, target);
         }
         CatalogStatement::Describe { name } => {
             let target = table_target(&name, context_catalog, context_schema);
-            return describe(state, target).await;
+            return describe(published, target);
         }
-        CatalogStatement::ShowCatalogs { like } => return show_catalogs(state, like).await,
+        CatalogStatement::ShowCatalogs { like } => return show_catalogs(published, like),
         CatalogStatement::ShowSchemas { catalog, like } => {
             let catalog = catalog.unwrap_or_else(|| context_catalog.to_owned());
-            return show_schemas(state, catalog, like).await;
+            return show_schemas(published, catalog, like);
         }
         CatalogStatement::ShowTables { schema, like } => {
             let (catalog, schema) = match schema {
                 Some(name) => schema_target(&name, context_catalog),
                 None => (context_catalog.to_owned(), context_schema.to_owned()),
             };
-            return show_tables(state, catalog, schema, like).await;
+            return show_tables(published, catalog, schema, like);
         }
     };
     crate::api::publish_catalog_snapshot(state)
@@ -1201,9 +1241,11 @@ fn show_create_table(
     })
 }
 
-async fn describe(state: &AppState, target: TableTarget) -> DdlResult<CatalogStatementResult> {
+fn describe(
+    published: &crate::PublishedCatalog,
+    target: TableTarget,
+) -> DdlResult<CatalogStatementResult> {
     let qualified = target.qualified();
-    let published = state.catalog.read().await.clone();
     let reference = kaveon_core::TableReference::Full {
         catalog: target.catalog,
         schema: target.schema,
@@ -1236,20 +1278,18 @@ async fn describe(state: &AppState, target: TableTarget) -> DdlResult<CatalogSta
     })
 }
 
-async fn show_catalogs(
-    state: &AppState,
+fn show_catalogs(
+    published: &crate::PublishedCatalog,
     like: Option<String>,
 ) -> DdlResult<CatalogStatementResult> {
-    let published = state.catalog.read().await.clone();
     Ok(names("Catalog", published.catalog_names(), like.as_deref()))
 }
 
-async fn show_schemas(
-    state: &AppState,
+fn show_schemas(
+    published: &crate::PublishedCatalog,
     catalog: String,
     like: Option<String>,
 ) -> DdlResult<CatalogStatementResult> {
-    let published = state.catalog.read().await.clone();
     let provider = published.catalog(&catalog).ok_or_else(|| {
         CatalogStatementError::not_found(
             "CATALOG_NOT_FOUND",
@@ -1259,13 +1299,12 @@ async fn show_schemas(
     Ok(names("Schema", provider.schema_names(), like.as_deref()))
 }
 
-async fn show_tables(
-    state: &AppState,
+fn show_tables(
+    published: &crate::PublishedCatalog,
     catalog: String,
     schema: String,
     like: Option<String>,
 ) -> DdlResult<CatalogStatementResult> {
-    let published = state.catalog.read().await.clone();
     let provider = published.catalog(&catalog).ok_or_else(|| {
         CatalogStatementError::not_found(
             "CATALOG_NOT_FOUND",
@@ -1357,7 +1396,10 @@ mod tests {
         let statement = parse_catalog_statement(sql)
             .unwrap()
             .unwrap_or_else(|| panic!("{sql} is not a catalog statement"));
-        execute_catalog_statement(state, who, "lake", "sales", statement).await
+        let published = state.catalog.read().await.clone();
+        let scope = state.catalog_access.evaluate(who);
+        let published = scope.restrict(&published);
+        execute_catalog_statement(state, who, "lake", "sales", &published, &scope, statement).await
     }
 
     async fn ok(state: &Arc<AppState>, who: &Identity, sql: &str) -> Vec<Vec<Value>> {
@@ -1375,7 +1417,32 @@ mod tests {
     }
 
     fn state_with_local_catalog(base: &std::path::Path) -> Arc<AppState> {
-        let state = crate::api::catalog_test_state();
+        let mut state = crate::api::catalog_test_state();
+        // The analyst manages `lake` and the `staging` catalog a test
+        // creates; the reader browses both. Nothing else is granted, so
+        // every other catalog is invisible to them.
+        state.catalog_access = crate::catalog_access::CatalogAccess::preset([
+            (
+                "analyst@example.com",
+                "lake",
+                crate::catalog_access::Access::Manage,
+            ),
+            (
+                "analyst@example.com",
+                "staging",
+                crate::catalog_access::Access::Manage,
+            ),
+            (
+                "reader@example.com",
+                "lake",
+                crate::catalog_access::Access::Browse,
+            ),
+            (
+                "reader@example.com",
+                "staging",
+                crate::catalog_access::Access::Browse,
+            ),
+        ]);
         let catalog = CatalogDefinition::new(
             CatalogId::new("catalog:lake").unwrap(),
             "lake",

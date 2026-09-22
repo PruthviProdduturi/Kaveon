@@ -44,6 +44,12 @@ use kaveon_core::{BinaryOp, CatalogManager, Expr, KaveonError, Result, TableRefe
 use kaveon_sql::logical_plan::{AggregateExpr, JoinType, LogicalPlan};
 
 /// Bind `plan` against `catalog`. Table names must already be qualified.
+///
+/// Every scanned table must resolve in `catalog`: this is where a
+/// statement's references are checked against what the session may see,
+/// so a catalog the session was not granted — presented as absent by a
+/// restricted `CatalogManager` — fails here as `catalog 'x' not found`,
+/// before planning, exactly as a catalog that does not exist.
 pub fn bind(plan: LogicalPlan, catalog: &CatalogManager) -> Result<LogicalPlan> {
     Binder {
         catalog,
@@ -202,7 +208,10 @@ struct Binder<'a> {
 impl Binder<'_> {
     fn bind(&self, plan: LogicalPlan, outer: &[Scope]) -> Result<Bound> {
         match plan {
-            LogicalPlan::Scan { .. } => Ok(Bound::plain(plan)),
+            LogicalPlan::Scan { ref table, .. } => {
+                self.catalog.resolve_table(&TableReference::parse(table))?;
+                Ok(Bound::plain(plan))
+            }
             LogicalPlan::Filter { input, predicate } => {
                 let input = self.bind(*input, outer)?;
                 let scope = self.scope_of(&input.plan);
@@ -1906,7 +1915,7 @@ mod tests {
     }
 
     #[test]
-    fn a_single_relation_and_an_unknown_relation_are_left_as_written() {
+    fn a_single_relation_is_left_as_written_and_an_unknown_relation_is_refused() {
         let single = "SELECT c_name FROM customer WHERE c_custkey = 1 ORDER BY c_name";
         let expected = format!("{:?}", {
             let mut plan = sql_to_logical_plan(single).unwrap();
@@ -1914,25 +1923,23 @@ mod tests {
             plan
         });
         assert_eq!(format!("{:?}", bound(single)), expected);
+        // A relation the catalog does not hold fails at bind, naming it.
         let unknown = "SELECT a, b FROM unknown, customer WHERE a = c_custkey AND b = 2";
         let mut plan = sql_to_logical_plan(unknown).unwrap();
         qualify(&mut plan);
-        let plan = bind(plan, &catalog()).unwrap();
-        let LogicalPlan::Project { input, .. } = plan else {
-            panic!("projection");
-        };
-        // Nothing resolves on the unknown side, so the filter stays whole.
-        let LogicalPlan::Filter { input, .. } = *input else {
-            panic!("filter above the join");
-        };
-        assert!(matches!(
-            *input,
-            LogicalPlan::Join {
-                join_type: JoinType::Cross,
-                condition: None,
-                ..
-            }
-        ));
+        let error = bind(plan, &catalog()).unwrap_err().to_string();
+        assert_eq!(error, "execution: table 'lake.tpch.unknown' not found");
+        // A catalog the session cannot see fails the same way as one that
+        // does not exist, and the text does not tell the two apart.
+        let mut plan = sql_to_logical_plan("SELECT c_name FROM customer").unwrap();
+        qualify(&mut plan);
+        let hidden = bind(plan, &catalog().restricted(Vec::<String>::new()))
+            .unwrap_err()
+            .to_string();
+        let plan = sql_to_logical_plan("SELECT c_name FROM nowhere.tpch.customer").unwrap();
+        let absent = bind(plan, &catalog()).unwrap_err().to_string();
+        assert_eq!(hidden, "execution: catalog 'lake' not found");
+        assert_eq!(absent, "execution: catalog 'nowhere' not found");
     }
 
     #[test]
