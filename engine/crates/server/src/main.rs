@@ -1,5 +1,6 @@
 mod api;
 pub mod audit;
+pub mod catalog_access;
 mod catalog_ddl;
 pub mod cluster;
 mod config;
@@ -74,6 +75,9 @@ pub struct AppState {
     pub lifecycle: lifecycle::WorkerLifecycle<transport::CachedTaskResult>,
     pub memory_admission: kaveon_core::MemoryAdmissionController,
     pub product_transactions: transaction_api::TransactionRegistry,
+    /// Who may see, query and change which catalog: the `catalog_grants`
+    /// family of the same authority.
+    pub catalog_access: catalog_access::CatalogAccess,
 }
 
 #[tokio::main]
@@ -271,6 +275,33 @@ async fn main() {
     } else {
         audit::AuditLedger::disabled()
     };
+    // Grants live in the same authority as the product records. Without it
+    // no grant can exist: Admins keep every catalog, nobody else sees one.
+    let catalog_access = match &product_catalog {
+        Some(product_catalog) => {
+            match catalog_access::CatalogAccess::open(product_catalog.clone()).await {
+                Ok(access) => {
+                    println!(
+                        "Access:      {} catalog grant(s) from the KaveonDB authority",
+                        access.current().len()
+                    );
+                    access
+                }
+                Err(error) => {
+                    eprintln!("failed to load catalog grants: {error}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        None => {
+            if config.coordinator {
+                println!(
+                    "Access:      no KaveonDB authority; catalogs are visible to administrators only"
+                );
+            }
+            catalog_access::CatalogAccess::disabled()
+        }
+    };
     let state = Arc::new(AppState {
         disk_exchange_store,
         results: results::ResultStore::with_limits(
@@ -296,6 +327,7 @@ async fn main() {
         product_transactions: product_catalog
             .map(transaction_api::TransactionRegistry::enabled)
             .unwrap_or_else(transaction_api::TransactionRegistry::disabled),
+        catalog_access,
     });
 
     if !state.config.coordinator {
@@ -316,6 +348,11 @@ async fn main() {
             if cleanup_state.audit.is_enabled() {
                 let ledger = cleanup_state.audit.clone();
                 let _ = tokio::task::spawn_blocking(move || ledger.enforce_retention()).await;
+            }
+            // Grants another coordinator committed; a failed read keeps
+            // the last family rather than widening anything.
+            if cleanup_state.catalog_access.is_enabled() {
+                let _ = cleanup_state.catalog_access.reload().await;
             }
         }
     });

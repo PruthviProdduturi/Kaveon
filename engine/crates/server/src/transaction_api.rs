@@ -171,6 +171,7 @@ impl TransactionRegistry {
         id: &str,
         request: StageRequest,
     ) -> Result<CatalogSnapshot, RegistryError> {
+        reject_grant_changes(&request.change)?;
         let mut sessions = self.sessions.lock().await;
         expire(&mut sessions);
         let session = owned_session(&mut sessions, owner, id)?;
@@ -226,6 +227,7 @@ impl TransactionRegistry {
         expire(&mut sessions);
         let session = owned_session(&mut sessions, owner, id)?;
         let (change, document) = product_change(session.transaction.snapshot(), owner, command)?;
+        reject_grant_changes(&change)?;
         let document_total =
             document
                 .as_ref()
@@ -345,6 +347,19 @@ impl TransactionRegistry {
             next_cursor: page.next_cursor,
         })
     }
+}
+
+/// The grants family is written only by the catalog access store, which
+/// checks the actor's role and audits; a session — staged as a change or
+/// as typed-row DML — cannot record a grant for its owner.
+fn reject_grant_changes(change: &CatalogChange) -> Result<(), RegistryError> {
+    if crate::catalog_access::touches_grants(change) {
+        return Err(RegistryError::Invalid(format!(
+            "the '{}' family is managed through the catalog access API",
+            crate::catalog_access::GRANTS_TABLE
+        )));
+    }
+    Ok(())
 }
 
 fn product_change(
@@ -1774,6 +1789,88 @@ mod tests {
             TransactionRegistry::disabled().metrics(),
             Err(RegistryError::Disabled)
         ));
+    }
+
+    #[tokio::test]
+    async fn a_session_cannot_stage_a_catalog_grant_for_its_owner() {
+        use kaveon_catalog::product_manifest::{TypedRow, TypedValue};
+        let (registry, _) = registry().await;
+        let begun = registry.begin("ana").await.unwrap();
+        let row = TypedRow {
+            primary_key: "lake/ana".into(),
+            revision: 1,
+            columns: BTreeMap::from([
+                ("principal".to_owned(), TypedValue::String("ana".into())),
+                ("catalog".to_owned(), TypedValue::String("lake".into())),
+                ("access".to_owned(), TypedValue::String("manage".into())),
+                ("granted_by".to_owned(), TypedValue::String("ana".into())),
+                ("granted_at_ms".to_owned(), TypedValue::Integer(1)),
+            ]),
+            unique_keys: BTreeMap::new(),
+        };
+        // As a staged change.
+        let staged = registry
+            .stage(
+                "ana",
+                &begun.transaction_id,
+                StageRequest {
+                    change: CatalogChange::InsertTypedRow {
+                        table: crate::catalog_access::GRANTS_TABLE.into(),
+                        row: row.clone(),
+                    },
+                    document: None,
+                },
+            )
+            .await;
+        assert!(
+            matches!(&staged, Err(RegistryError::Invalid(message)) if message.contains("catalog access API")),
+            "{staged:?}"
+        );
+        // As typed-row DML.
+        let dml = registry
+            .stage_product_command(
+                "ana",
+                &begun.transaction_id,
+                ProductDmlCommand::Create {
+                    kind: "typed_row".into(),
+                    id: "lake/ana".into(),
+                    document_json: serde_json::json!({
+                        "table": crate::catalog_access::GRANTS_TABLE,
+                        "primary_key": "lake/ana",
+                        "revision": 1,
+                        "columns": row.columns,
+                        "unique_keys": {},
+                        "owner_principal": "ana"
+                    })
+                    .to_string(),
+                },
+            )
+            .await;
+        assert!(
+            matches!(&dml, Err(RegistryError::Invalid(message)) if message.contains("catalog access API")),
+            "{dml:?}"
+        );
+        // The session is intact and stages ordinary work.
+        let snapshot = registry
+            .stage(
+                "ana",
+                &begun.transaction_id,
+                StageRequest {
+                    change: CatalogChange::InsertTypedRow {
+                        table: "notes".into(),
+                        row,
+                    },
+                    document: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(snapshot.typed_rows.contains_key("notes"));
+        assert!(
+            !snapshot
+                .typed_rows
+                .contains_key(crate::catalog_access::GRANTS_TABLE)
+        );
     }
 
     #[tokio::test]
