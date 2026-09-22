@@ -117,6 +117,8 @@ python main.py
 
 Studio runs on `http://localhost:3000`; the API defaults to `http://localhost:8080`. See [DEPLOYMENT.md](DEPLOYMENT.md) for production topology and configuration.
 
+The public demo runs with the demo posture on: the platform is read-only below the Admin role and the Engine allows each person five live reads per rolling six hours (answers from context and the result cache do not count). Both switches — `KAVEON_DEMO_MODE` on the API, `demo.enabled` in the Engine's resource groups — are off by default, so a self-hosted install has neither; see [Engine settings](docs/engine/settings.md#the-demo-posture).
+
 ## Architecture at a glance
 
 <div align="center">

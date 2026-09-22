@@ -78,3 +78,31 @@ workers:
 # KAVEON_HASH_SPILL_BYTES on every node: hash aggregate and join spill under
 # /tmp/spill (KAVEON_HASH_SPILL_ROOT), inside the 6 GiB /tmp emptyDir.
 spillDiskLimitBytes: "4294967296"
+# The coordinator's resource groups as a Helm-managed document. Off (the
+# default) nothing is rendered: the coordinator keeps its durable runtime copy,
+# else the built-in `default` group, and Settings -> Governance edits it. On,
+# the document below is rendered to a ConfigMap, mounted read-only at
+# /etc/kaveon/resource-groups/resource-groups.json and named by
+# KAVEON_RESOURCE_GROUPS, which takes precedence over the durable copy; a
+# runtime PUT /v1/admin/resource-groups then fails, because the file is
+# Helm's. The example is the public demo's posture: `demo.enabled` with a
+# `rate` of five live statements per principal per rolling six hours
+# (answers from the result cache and from statistics are not counted, admins
+# are exempt), everyone but admins in the `demo` group. Pair it with the portal
+# chart's `api.demoMode`. Keys and bounds: docs/engine/governance.md.
+resourceGroups:
+  enabled: false
+  document:
+    demo:
+      enabled: true
+    groups:
+      - name: demo
+        max_concurrent: 2
+        max_queued: 8
+        max_queue_wait_seconds: 30
+        rate: {max_statements: 5, per_seconds: 21600, count: live}
+      - name: default
+        max_concurrent: 4
+    selectors:
+      - {role: admin, group: default}
+      - {group: demo}

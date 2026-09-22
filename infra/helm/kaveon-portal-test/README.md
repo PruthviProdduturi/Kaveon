@@ -29,6 +29,12 @@ vault credential or connection string in Helm values.
 `NODE_ENV=production` is fixed, and no local-mode or developer-user variables
 are supplied.
 
+`api.demoMode` (default `false`) sets `KAVEON_DEMO_MODE` on the API: the
+public demo's read-only posture below the Admin role, with submitted SQL
+confined to read statements. The Engine's half of the posture — the
+per-principal live-read quota — is the Engine chart's `resourceGroups` block;
+set both for a demo cluster and neither for anything else.
+
 The PostgreSQL image must be a digest-pinned mirror of Debian-based PostgreSQL
 17. Its user and database are deliberately fixed to `kaveon` and `kaveonmeta`;
 only the password comes from the existing Secret, and `PGDATA` uses a child of

@@ -29,6 +29,11 @@ postgres:
     requests: {cpu: 250m, memory: 512Mi}
     limits: {cpu: "1", memory: 1Gi}
 api:
+  # The demo posture (KAVEON_DEMO_MODE): every mutating platform route is
+  # read-only below the Admin role and submitted SQL is confined to read
+  # statements. Off for a self-hosted install; pair it with the Engine chart's
+  # resourceGroups block, which carries the per-principal live-read quota.
+  demoMode: false
   evidenceStorage:
     # Create a restricted, durable PVC shared by report/smoke Jobs and the
     # PostgreSQL-free API. Azure Files CSI supplies the required RWX topology.

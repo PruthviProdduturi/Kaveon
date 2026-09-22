@@ -41,6 +41,10 @@ With `workers.exchange.spool: true`, each worker keeps the exchange partitions a
 
 The admission limit must fit inside the container memory limit less the Engine's headroom (the larger of 256 MiB and 15 %); the Engine refuses to start otherwise. The Engine reads the cgroup limit itself, so the chart never sets `KAVEON_PROCESS_MEMORY_LIMIT_BYTES`. When raising `workers.resources.limits.memory`, raise the worker budgets together with it.
 
+## Resource groups and the demo posture
+
+`resourceGroups.enabled` (default `false`) renders `resourceGroups.document` to a ConfigMap mounted read-only on the coordinator and named by `KAVEON_RESOURCE_GROUPS`, so the groups are Helm's rather than the coordinator's durable runtime copy (a `PUT /v1/admin/resource-groups` then fails on the read-only file; edit the values instead). The example document in `values.yaml` is the public demo's posture: `demo.enabled` and a `demo` group with `rate: {max_statements: 5, per_seconds: 21600, count: live}` — five live statements per principal per rolling six hours, counted from the audit ledger so a restart keeps the count, admins exempt, cache and statistics answers not counted. A self-hosted install leaves the block off. The portal chart's `api.demoMode` is the other half; see `docs/engine/governance.md`.
+
 ```powershell
 helm upgrade --install kaveon infra/helm/kaveon-test --namespace kaveon --create-namespace --set image.repository=<registry>/kaveon-engine --set image.digest=sha256:<digest> --set workloadIdentity.clientId=<client-id> --set productTransactions.enabled=true --set productTransactions.account=<storage-account> --set productTransactions.container=<product-container> --set productTransactions.prefix=<product-prefix> --wait --timeout 10m
 ```
