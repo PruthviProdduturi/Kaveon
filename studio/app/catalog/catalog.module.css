@@ -169,7 +169,6 @@ th.cRows .sortBtn, th.cSize .sortBtn, th.cWhen .sortBtn { justify-content: flex-
 .outcomeOk { margin: 12px 0 0; font: 12px/1.55 var(--mono); color: var(--success); overflow-wrap: anywhere }
 .outcomeBad { margin: 12px 0 0; font: 12px/1.55 var(--mono); color: var(--error); overflow-wrap: anywhere }
 
-.pageFoot { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 2px 8px }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap }
 
 /* Narrowing drops columns rather than folding the grid into cards: the facts
