@@ -20,11 +20,14 @@ activation; a table the Engine cannot read is deleted again and the storage
 error is returned verbatim, because the person registering it needs the path
 or schema mismatch the Engine names.
 """
+import concurrent.futures
+import time
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 
 from middleware.auth import UserContext
 from middleware.permissions import require_min_role
-from models.engine_catalog import CatalogCreate, SchemaCreate, TableCreate, TableReplace
+from models.engine_catalog import CatalogCreate, SchemaCreate, TableAnalyze, TableCreate, TableReplace
 from routers import lab
 from services import engine_bridge
 
@@ -139,6 +142,136 @@ def list_table_definitions(schema_id: str, response: Response,
     if engine_bridge.schema_definition(schema_id, ctx.email, ctx.role) is None:
         raise HTTPException(404, {"code": "schema_not_found", "message": "Schema definition not found."})
     return {"success": True, "tables": engine_bridge.table_definitions(schema_id, ctx.email, ctx.role)}
+
+
+@router.get("/engine/catalog/schemas/{schema_id}/inventory")
+def schema_inventory(schema_id: str, response: Response, refresh: bool = False,
+                     ctx: UserContext = Depends(require_min_role("Viewer"))):
+    """What the Engine has measured about every table in one schema.
+
+    The Catalog shows a schema as a list of tables and each table as what can
+    be answered over it, so the page needs a statistics record and a source
+    version per table. Read one table at a time that is two Engine round trips
+    per row; a schema of thirty tables would be sixty requests from the
+    browser, each waiting on the one before. This endpoint is that fan-out,
+    done once on the server, concurrently, and returned as one document.
+
+    Each entry is measured, unmeasured or unreadable (see
+    `engine_bridge.table_measurement`); an unreadable location carries the
+    Engine's message verbatim rather than removing the row, because a table
+    whose storage has moved is exactly what the reader came to find out.
+
+    Every observation reads storage metadata, so identical requests inside
+    `_INVENTORY_TTL_SECONDS` are answered from the last one; `refresh=true`
+    takes the reading again.
+    """
+    response.headers.update(lab.NO_CACHE)
+    schema = engine_bridge.schema_definition(schema_id, ctx.email, ctx.role)
+    if not isinstance(schema, dict):
+        raise HTTPException(404, {"code": "schema_not_found", "message": "Schema definition not found."})
+    tables = engine_bridge.table_definitions(schema_id, ctx.email, ctx.role)
+    ids = [table["id"] for table in tables
+           if isinstance(table, dict) and isinstance(table.get("id"), str)]
+    return {"success": True, "measurements": _measurements(schema_id, ids, ctx, refresh)}
+
+
+# Storage metadata reads are cheap but not free, and a page reload must not
+# re-list every location. Keyed by schema and caller, because the Engine
+# answers definition reads for the verified principal only.
+_INVENTORY_TTL_SECONDS = 15
+_INVENTORY_MAX_WORKERS = 8
+_INVENTORY_CACHE: dict = {}
+
+
+def _measurements(schema_id: str, ids: list, ctx: UserContext, refresh: bool) -> list:
+    key = (schema_id, ctx.email, ctx.role, tuple(ids))
+    now = time.monotonic()
+    cached = _INVENTORY_CACHE.get(key)
+    if cached and not refresh and now - cached[0] < _INVENTORY_TTL_SECONDS:
+        return cached[1]
+    if not ids:
+        return []
+    workers = min(_INVENTORY_MAX_WORKERS, len(ids))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        measured = list(pool.map(
+            lambda table_id: _measurement(table_id, ctx), ids))
+    # One expiring entry per schema and caller; the map never grows past the
+    # schemas a live process has actually served.
+    _INVENTORY_CACHE[key] = (now, measured)
+    for stale_key in [k for k, (at, _) in _INVENTORY_CACHE.items()
+                      if now - at > _INVENTORY_TTL_SECONDS * 20]:
+        _INVENTORY_CACHE.pop(stale_key, None)
+    return measured
+
+
+def _measurement(table_id: str, ctx: UserContext) -> dict:
+    """One table's row, in the platform's shape. Never raises: a table the
+    Engine refuses individually is one row that says so, not a failed page."""
+    try:
+        result = engine_bridge.table_measurement(table_id, ctx.email, ctx.role)
+    except HTTPException as error:
+        detail = error.detail
+        message = detail if isinstance(detail, str) else str(
+            detail.get("message") if isinstance(detail, dict) else detail)
+        return {"tableId": table_id, "state": "unreadable", "error": message}
+    state = result.get("state")
+    if state == "unreadable":
+        return {"tableId": table_id, "state": "unreadable", "error": result.get("error")}
+    if state == "unmeasured":
+        return {"tableId": table_id, "state": "unmeasured",
+                "sourceVersion": result.get("source_version"),
+                "observedAtMs": result.get("observed_at_ms")}
+    statistics = result.get("statistics") or {}
+    return {
+        "tableId": table_id,
+        "state": "measured",
+        "stale": bool(result.get("stale")),
+        "sourceVersion": statistics.get("source_version"),
+        "currentSourceVersion": result.get("current_source_version"),
+        "observedAtMs": result.get("observed_at_ms"),
+        "computedAtMs": statistics.get("computed_at_ms"),
+        "depth": statistics.get("depth"),
+        "rows": statistics.get("rows"),
+        "bytes": statistics.get("bytes"),
+        "files": statistics.get("files"),
+        "rowGroups": statistics.get("row_groups"),
+        "uncompressedBytes": statistics.get("uncompressed_bytes"),
+        "lastModifiedMs": statistics.get("last_modified_ms"),
+        "partitionColumns": statistics.get("partition_columns") or [],
+        # Column-level facts stay on the table's own page: a schema of thirty
+        # wide tables would otherwise carry thousands of entries nothing in
+        # the list reads.
+        "measuredColumns": len(statistics.get("columns") or []),
+    }
+
+
+@router.post("/engine/catalog/tables/{table_id}/analyze")
+def analyze_table_definition(table_id: str, body: TableAnalyze,
+                             ctx: UserContext = Depends(require_min_role("Editor"))):
+    """Measure one table. The statement is assembled from the table's own
+    catalog names, so nothing a caller typed reaches the Engine as SQL, and
+    the same `manage` level that governs a change inside the catalog governs
+    the read that rewrites its statistics."""
+    table = engine_bridge.table_definition_by_id(table_id, ctx.email, ctx.role)
+    if not isinstance(table, dict):
+        raise HTTPException(404, {"code": "table_not_found", "message": "Table definition not found."})
+    catalog, schema = _schema_parents(table["schema_id"], ctx)
+    _require_manage(catalog)
+    if body.cube and not table.get("shape"):
+        raise HTTPException(409, {
+            "code": "no_shape",
+            "message": f"{table['name']} declares no shape, so there is nothing for a cube to be built over."})
+    statement, result = engine_bridge.analyze_table(
+        catalog["name"], schema["name"], table["name"], ctx.email, ctx.role,
+        sketches=body.sketches, distinct=body.distinct, cube=body.cube)
+    _INVENTORY_CACHE.clear()
+    rows = result.get("data") or []
+    summary = rows[0] if rows and isinstance(rows[0], list) else []
+    columns = [column.get("name") if isinstance(column, dict) else str(column)
+               for column in (result.get("columns") or [])]
+    return {"success": True, "statement": statement,
+            "result": dict(zip(columns, summary)) if summary else {},
+            "queryId": result.get("id")}
 
 
 @router.get("/engine/catalog/tables/{table_id}")
