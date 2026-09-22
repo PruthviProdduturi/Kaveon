@@ -54,9 +54,6 @@ def register(collection, path, body):
                               json={**body, 'revision': revision+1, 'lifecycle': 'Active'})
         response.raise_for_status()
 
-register('/v1/catalog/definitions', '/v1/catalog/definitions/'+CATALOG_ID,
-         {'id': CATALOG_ID, 'name': CATALOG, 'adapter': 'Native', 'storage': STORAGE,
-          **({'credential': CREDENTIAL} if CREDENTIAL else {})})
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--definitions-only', action='store_true',
                     help='Register definitions without running reads or updating API metadata')
@@ -75,6 +72,10 @@ if args.retire_legacy_kaveon and CATALOG != 'Kaveon':
     parser.error('--retire-legacy-kaveon is valid only with a Kaveon manifest')
 CATALOG_ID = ('local-' if LOCAL_LAKE else 'aks-') + CATALOG.lower()
 tables = [table for document in documents for table in document['tables']]
+
+register('/v1/catalog/definitions', '/v1/catalog/definitions/'+CATALOG_ID,
+         {'id': CATALOG_ID, 'name': CATALOG, 'adapter': 'Native', 'storage': STORAGE,
+          **({'credential': CREDENTIAL} if CREDENTIAL else {})})
 # Publish subject schemas; physical medallion paths remain unchanged in ADLS.
 publication = {
     ('silver', 'yellow_trips'): ('nyc_taxi', 'yellow_trips'),
