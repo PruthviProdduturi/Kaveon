@@ -7,6 +7,20 @@
 {{- $_ := required "productTransactions.container is required when enabled" .Values.productTransactions.container -}}
 {{- $_ := required "productTransactions.prefix is required when enabled" .Values.productTransactions.prefix -}}
 {{- end -}}
+{{- if .Values.resourceGroups.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-resource-groups
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: kaveon-engine
+    app.kubernetes.io/component: coordinator
+data:
+  resource-groups.json: |
+{{ toPrettyJson .Values.resourceGroups.document | indent 4 }}
+---
+{{- end }}
 {{- if .Values.serviceAccount.create }}
 apiVersion: v1
 kind: ServiceAccount
@@ -153,6 +167,10 @@ spec:
             - name: KAVEON_STUDIO_URL
               value: {{ $.Values.studioUrl | quote }}
             {{- end }}
+            {{- if and $isCoordinator $.Values.resourceGroups.enabled }}
+            - name: KAVEON_RESOURCE_GROUPS
+              value: /etc/kaveon/resource-groups/resource-groups.json
+            {{- end }}
             - name: KAVEON_EXCHANGE_TOKEN
               valueFrom: {secretKeyRef: {name: {{ $credentials }}, key: exchange-token}}
             - name: KAVEON_CATALOG_ADMIN_TOKEN
@@ -225,11 +243,19 @@ spec:
             - {name: tls, mountPath: /etc/kaveon/tls, readOnly: true}
             - {name: state, mountPath: /state}
             - {name: tmp, mountPath: /tmp}
+            {{- if and $isCoordinator $.Values.resourceGroups.enabled }}
+            - {name: resource-groups, mountPath: /etc/kaveon/resource-groups, readOnly: true}
+            {{- end }}
       volumes:
         - name: tls
           secret:
             secretName: {{ $.Values.tlsSecret }}
             defaultMode: 0440
+        {{- if and $isCoordinator $.Values.resourceGroups.enabled }}
+        - name: resource-groups
+          configMap:
+            name: {{ $.Release.Name }}-resource-groups
+        {{- end }}
         - name: tmp
           emptyDir: {sizeLimit: 6Gi}
         {{- if not $isCoordinator }}

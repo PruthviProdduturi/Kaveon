@@ -122,7 +122,17 @@ replay reads at most 64 MiB of commit JSON; Iceberg metadata is capped at
 | `KAVEON_AUDIT_DIR` | `audit.dir` | `<state dir>/audit` | directory path | Where the audit ledger keeps its JSONL segments and the catalog cursor ([Governance](governance.md#the-audit-ledger)). | coordinator | not set: `/state/catalog/audit` |
 | `KAVEON_AUDIT_RETENTION_DAYS` | `audit.retention_days` | 90 | days | A ledger segment is removed once every record in it is older than this; `0` turns the ledger off. | coordinator | not set |
 | `KAVEON_AUDIT_SEGMENT_BYTES` | `audit.segment_bytes` | 67108864 (64 MiB) | bytes | The size at which a ledger segment is closed and the next started; at least 1 MiB. | coordinator | not set |
-| `KAVEON_RESOURCE_GROUPS` | `[resource_groups]` section (`[[resource_groups.groups]]`, `[[resource_groups.selectors]]`) | none: the durable runtime copy, the section, the legacy list, else one built-in `default` group | file path (JSON, or TOML by extension) | The resource groups and selectors (`groups`, `selectors` at the top level; the keys and bounds are in [Governance](governance.md)). Validated on start; a group over the admission limit, without a `default`, or a selector naming an unknown group refuses to start. `PUT /v1/admin/resource-groups` writes back to this file. | coordinator | not set |
+| `KAVEON_RESOURCE_GROUPS` | `[resource_groups]` section (`[[resource_groups.groups]]`, `[[resource_groups.selectors]]`, `[resource_groups.demo]`) | none: the durable runtime copy, the section, the legacy list, else one built-in `default` group | file path (JSON, or TOML by extension) | The resource groups and selectors (`groups`, `selectors`, `demo` at the top level; the keys and bounds are in [Governance](governance.md)). Validated on start; a group over the admission limit, without a `default`, a selector naming an unknown group, or a `rate` without `demo.enabled` refuses to start. `PUT /v1/admin/resource-groups` writes back to this file. | coordinator | not set; the chart renders it from `resourceGroups` when that block is enabled |
+
+### The demo posture
+
+One switch on each side, both off by default so a self-hosted install is
+unaffected. Neither is read by the Engine as an environment variable.
+
+| Where | Key | Default | What it does |
+|---|---|---|---|
+| API | `KAVEON_DEMO_MODE` (chart value `api.demoMode`) | `false` | Every mutating platform route — datasets, charts, dashboards, saved queries, catalog registration, DLM curation, settings — answers 403 `demo_read_only` for any role below Admin; viewing stays; per-user preferences (favorites, pins, theme, recents, the user's own history) stay; SQL Lab and the DLM stay, with submitted SQL confined to one read statement (SELECT, WITH, SHOW, DESCRIBE, EXPLAIN — DDL, DML, CALL, ANALYZE, OPTIMIZE and `SET SESSION` are refused with the same code). One application-level dependency in `api/main.py`. |
+| Engine | `demo.enabled` in the resource-group document (chart value `resourceGroups.document.demo.enabled`) | `false` | Enables a group's `rate` — the per-principal quota of live statements over a rolling window, admins exempt, counted from the audit ledger so it survives a restart — and `GET /v1/quota`. Off, a `rate` is refused at validation. See [Governance](governance.md#the-demo-quota). |
 
 ## Result cache
 

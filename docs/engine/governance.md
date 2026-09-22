@@ -23,7 +23,16 @@ the group's limits are on the statement's record
 | `max_queue_wait_seconds` | 60 | 1 to 86400 | How long a statement of the group waits before HTTP 429. `KAVEON_MEMORY_ADMISSION_WAIT_SECONDS` and the request's `admission_wait_seconds` can only shorten the wait. |
 | `max_local_parallelism` | the node's | ≥ 1 | Caps the statement's `local_parallelism` (aggregator threads per task); the request's own value is lowered to it, and the effective value is on the record's `settings`. |
 | `priority` | 1 | 1 to 1000 | The group's weight in the cross-group admission order below. |
+| `rate` | none | `{"max_statements": 1 to 100000, "per_seconds": 1 to 2678400, "count": "live"}`; needs `demo.enabled`; `per_seconds` at most the audit ledger's retention | The demo posture's quota: each principal of the group may run `max_statements` live statements in any rolling window of `per_seconds` ([below](#the-demo-quota)). Admins are exempt. |
 | `default_settings` | none | the [per-request settings](settings.md#per-request-settings), validated as a request's own | Applied for every key the request left unset, whether the request used the `settings` object or `SET SESSION`. |
+
+The document's top level also carries `demo` (`{"enabled": false}` unless
+said otherwise): the coordinator's half of the demo posture. Off, a `rate`
+on any group is refused at validation, so a self-hosted install cannot
+carry the quota unknowingly; on, every `rate` is enforced and
+`GET /v1/quota` reports it. The platform's half — read-only for every
+role below Admin — is `KAVEON_DEMO_MODE` on the API
+([settings](settings.md#the-demo-posture)).
 
 Selectors are evaluated in order; the first that matches names the group;
 a statement no selector matches goes to `default`. A selector may carry
@@ -83,7 +92,7 @@ cluster, `/var/lib/kaveon` on the local Compose stack).
 `GET /v1/admin/resource-groups` (admin) reports the configuration in
 force, its `source` (`environment`, `runtime`, `config_file`,
 `legacy_security`, `builtin`), the `store_path` a replacement is written
-to, and every group's counters. `PUT /v1/admin/resource-groups` (admin)
+to, `demo`, and every group's counters. `PUT /v1/admin/resource-groups` (admin)
 replaces every group and selector at once after validation — the
 controller's policies first, then the durable copy, then the selectors —
 so it takes effect for the next admission decision, waiting statements
@@ -151,6 +160,81 @@ and, when the binding limit is the group's, `limit` with the bound:
 }
 ```
 
+### The demo quota
+
+A public demo cluster bounds what one person can make the workers do:
+`rate` on a group is a per-principal quota of *live* statements over a
+rolling window, enforced on the coordinator so it holds for every client
+— Studio through the platform bridge, the CLI, a direct HTTP caller.
+
+- **What counts.** A statement is charged when it reaches the row path:
+  after its plan is bound, after the result cache and the statistics have
+  declined to answer it, before the first task is scheduled or the first
+  batch read. `execution.mode` of a charged statement is `distributed` or
+  `coordinator`. A `cache` hit, a `context` answer, a catalog statement,
+  a statement refused before it ran (parse error, admission, the quota
+  itself) and an admin's statement are not charged. A charged statement
+  that then fails or is cancelled stays charged: its rows were read.
+- **The decision.** The window holds the charges of the last
+  `per_seconds`; a statement arriving when it holds `max_statements` is
+  refused with HTTP 429 and nothing is charged. The record of the refused
+  statement is `FAILED` with `error_code: RATE_LIMITED` and the message,
+  so a paged submission whose record already exists reports the refusal
+  through the record. The charge is on the admitted statement's record as
+  `context.quota_charge` (`charged_at_ms`, `used`, `remaining`,
+  `max_statements`, `per_seconds`).
+- **Durability.** The charge travels to the ledger on the statement's
+  terminal line as `quota_charged_at_ms`. The in-memory window index —
+  per principal, oldest first — is read from those lines at the first
+  decision after a start or a `PUT /v1/admin/resource-groups`, over the
+  widest window any group carries, and a statement already indexed is not
+  counted again. The ledger's retention must therefore cover
+  `per_seconds` (validated), and a coordinator without a ledger cannot
+  carry a `rate`.
+
+```json
+{
+  "error": "5 live queries per 6 hours in this demo; the next is allowed at 2026-09-22T14:20:00Z",
+  "code": "RATE_LIMITED",
+  "message": "5 live queries per 6 hours in this demo; the next is allowed at 2026-09-22T14:20:00Z",
+  "retry_after_seconds": 12034,
+  "next_allowed_at": "2026-09-22T14:20:00Z",
+  "next_allowed_at_ms": 1789827600000,
+  "resource_group": "demo",
+  "limit": {"max_statements": 5, "per_seconds": 21600, "count": "live"}
+}
+```
+
+The response carries `Retry-After` with the same seconds. The platform
+passes the body through unchanged (`/api/v1/sql/engine`, `/api/v1/lab/query`,
+`/api/v1/dlm/reproduce`), and Studio shows it as a notice with the time,
+not as a failure.
+
+`GET /v1/quota` (any authenticated role, coordinator only) answers the
+caller's own standing: `demo`, `principal`, the `resource_group` the
+selectors pick for them with no client tags, `exempt` (an admin in a group
+with a `rate`) and `quota` — `max_statements`, `per_seconds`, `count`,
+`resource_group`, `used`, `remaining`, `resets_at` (when the oldest charge
+leaves the window), `next_allowed_at` (now while `remaining` is above
+zero) — or `null` when no quota applies. The platform proxies it as
+`GET /api/v1/engine/quota` for Studio's counters (`3 of 5 live queries
+left · resets 14:20` on the SQL Lab run button and under the ask box).
+
+```json
+{
+  "demo": {"enabled": true},
+  "groups": [
+    {"name": "demo", "max_concurrent": 2, "max_queued": 8, "max_queue_wait_seconds": 30,
+     "rate": {"max_statements": 5, "per_seconds": 21600, "count": "live"}},
+    {"name": "default", "max_concurrent": 4}
+  ],
+  "selectors": [
+    {"role": "admin", "group": "default"},
+    {"group": "demo"}
+  ]
+}
+```
+
 ### Counters
 
 `/v1/node` on the coordinator and its entry on `/v1/cluster` carry
@@ -198,8 +282,8 @@ other fields are present when the kind has them.
 | `kind` | When | Fields |
 |---|---|---|
 | `statement.submitted` | a statement reaches admission (after its settings and context are accepted) | `query_id`, `principal`, `role`, `client`, `source`, `client_tags`, `catalog`, `schema`, `statement_sha256` (SHA-256 of the statement text as submitted, after any `SET SESSION` prefix), `statement` (its first 200 characters), `resource_group` |
-| `statement.finished` | the statement's response is sent | the submitted fields, `admission_wait_ms`, `elapsed_ms`, `rows` (the whole result, paged or inline), `bytes_scanned` (compressed bytes the scans read across every task), `mode` (`distributed`, `coordinator`, `cache`) |
-| `statement.failed` | the statement failed after admission — an execution error, or a wait that expired | the finished fields, `error_code` (`MEMORY_ADMISSION_REJECTED`, `RESOURCE_GROUP_REJECTED`, a catalog statement's code, `ANALYZE_FAILED`, else `EXECUTION_FAILED`), `error` (first 200 characters) |
+| `statement.finished` | the statement's response is sent | the submitted fields, `admission_wait_ms`, `elapsed_ms`, `rows` (the whole result, paged or inline), `bytes_scanned` (compressed bytes the scans read across every task), `mode` (`distributed`, `coordinator`, `cache`, `context`), `quota_charged_at_ms` when the statement was charged against its group's [quota](#the-demo-quota) |
+| `statement.failed` | the statement failed after admission — an execution error, a wait that expired, or the demo quota | the finished fields, `error_code` (`MEMORY_ADMISSION_REJECTED`, `RESOURCE_GROUP_REJECTED`, `RATE_LIMITED`, a catalog statement's code, `ANALYZE_FAILED`, else `EXECUTION_FAILED`), `error` (first 200 characters) |
 | `statement.canceled` | `DELETE /v1/query/{id}`, or the client disconnected | the finished fields, `error_code` (`QUERY_CANCELED`, `CLIENT_DISCONNECTED`) |
 | `statement.rejected` | refused on arrival, before any record exists: over the group's share, the group's or the node's queue full, no wait allowed | the submitted fields, `error_code`, `error` |
 | `catalog.create`, `catalog.update`, `catalog.delete` | a durable catalog, schema or table definition changed, through `/v1/catalog/*` or a catalog statement | `principal` (the actor), `object_type`, `object_id`, `revision_before` (absent for a create), `revision_after` (absent for a delete), `details` (a cascade's counts) |

@@ -107,6 +107,7 @@ spec:
               containerPort: 8080
           env:
             - {name: NODE_ENV, value: production}
+            - {name: KAVEON_DEMO_MODE, value: {{ .Values.api.demoMode | quote }}}
             - {name: METADATA_DB_TYPE, value: postgresql}
             - {name: METADATA_HOST, value: kaveon-postgres}
             - {name: METADATA_PORT, value: "5432"}
