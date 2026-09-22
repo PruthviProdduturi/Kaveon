@@ -496,6 +496,11 @@ struct QueryContext {
     /// The resource group the selectors picked at admission, with the
     /// limits that applied.
     resource_group: crate::resource_groups::EffectiveGroup,
+    /// The statement's charge against the group's quota, made when it
+    /// reached the row path; absent when no quota applied or it was
+    /// answered from the cache or the statistics.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    quota_charge: Option<crate::resource_groups::QuotaCharge>,
     #[serde(skip_serializing)]
     settings: QuerySettings,
 }
@@ -618,6 +623,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             get(crate::resource_groups::get_resource_groups)
                 .put(crate::resource_groups::put_resource_groups),
         )
+        .route("/v1/quota", get(crate::resource_groups::get_quota))
         .route("/v1/node/heartbeat", post(receive_heartbeat))
         .route(
             "/v1/internal/catalog/snapshot",
@@ -2368,6 +2374,11 @@ fn statement_audit_line(record: &QueryRecord) -> crate::audit::AuditRecord {
         ),
         // A statement that never ran has no placement to report.
         mode: (record.execution.mode != "pending").then(|| record.execution.mode.to_owned()),
+        quota_charged_at_ms: record
+            .context
+            .quota_charge
+            .as_ref()
+            .map(|charge| charge.charged_at_ms),
         error_code,
         error: record.error.as_deref().map(text_prefix),
         ..AuditRecord::new(kind)
@@ -2721,6 +2732,7 @@ async fn run_statement(
             result_delivery: req.result_delivery,
             catalog_snapshot_id,
             resource_group,
+            quota_charge: None,
             settings: settings.clone(),
         }
     };
@@ -3218,6 +3230,41 @@ async fn run_statement(
             elapsed_ms: elapsed,
         })
         .into_response();
+    }
+
+    // The row path begins here: the cache and the statistics have declined
+    // the statement, so it is charged against its principal's quota when
+    // the group carries one, and refused — the record failed with
+    // `RATE_LIMITED`, nothing charged — when the window is full. Nothing
+    // above this point counts.
+    let mut context = context;
+    match state.governance.charge(
+        &state.audit,
+        &context.resource_group,
+        &identity,
+        &query_id,
+        unix_time_ms(),
+    ) {
+        Ok(Some(charge)) => {
+            if let Some(record) = QUERY_STORE.write().await.queries.get_mut(&query_id) {
+                record.context.quota_charge = Some(charge.clone());
+            }
+            context.quota_charge = Some(charge);
+        }
+        Ok(None) => {}
+        Err(refusal) => {
+            finish_failed_query(
+                &query_id,
+                refusal.message(),
+                start,
+                Some(analysis_us),
+                None,
+                Some(logical_plan),
+            )
+            .await;
+            note_error_code(&query_id, crate::resource_groups::RATE_LIMITED).await;
+            return refusal.response(unix_time_ms());
+        }
     }
 
     // Why the coordinator ran it, when it did: surfaced on the record so a
@@ -12139,6 +12186,7 @@ mod tests {
             max_queue_wait_seconds: 60,
             max_local_parallelism: None,
             priority: 1,
+            rate: None,
             default_settings: serde_json::Map::new(),
         }
     }
@@ -12172,6 +12220,7 @@ mod tests {
                     group: "small".into(),
                     ..Default::default()
                 }],
+                demo: Default::default(),
             },
         )
         .await;
@@ -12277,6 +12326,7 @@ mod tests {
                     group: "interactive".into(),
                     ..Default::default()
                 }],
+                demo: Default::default(),
             },
         )
         .await;
@@ -12325,6 +12375,7 @@ mod tests {
             crate::resource_groups::ResourceGroups {
                 groups: vec![resource_group("default", 4)],
                 selectors: vec![],
+                demo: Default::default(),
             },
         )
         .await;
@@ -12487,6 +12538,227 @@ mod tests {
         panic!("the ledger never held {expected} records for {query}");
     }
 
+    /// The demo quota: a group's `rate` charges each statement of its
+    /// principals that reaches the row path; the one past `max_statements`
+    /// is 429 `RATE_LIMITED` naming the time the next is allowed, and its
+    /// record fails with the code. A result-cache hit, a statistics answer
+    /// and an admin's statement are not charged. `GET /v1/quota` reports
+    /// the standing, and a governor built anew reads the charges back from
+    /// the ledger's terminal lines.
+    #[tokio::test]
+    async fn the_demo_quota_charges_live_statements_only_and_survives_a_ledger_reload() {
+        use crate::resource_groups::{Demo, EffectiveGroup, RateLimit, ResourceGroup, Selector};
+        let groups = crate::resource_groups::ResourceGroups {
+            groups: vec![
+                resource_group("default", 4),
+                ResourceGroup {
+                    rate: Some(RateLimit {
+                        max_statements: 2,
+                        per_seconds: 3_600,
+                        count: Default::default(),
+                    }),
+                    ..resource_group("demo", 4)
+                },
+            ],
+            // Everyone lands in the demo group; the admin is exempt by role.
+            selectors: vec![Selector {
+                group: "demo".into(),
+                ..Default::default()
+            }],
+            demo: Demo { enabled: true },
+        };
+        let (state, directory) = governed_test_state_built(8, groups, |state, directory| {
+            state.audit = crate::audit::AuditLedger::open(
+                &directory.join("audit"),
+                1 << 20,
+                std::time::Duration::from_secs(86_400),
+            )
+            .unwrap();
+            state.audit.skip_catalog_history(&state.catalog_store);
+        })
+        .await;
+        register_events_directory(&state, &directory, 100).await;
+        let admin = admin();
+        let analyst = principal("analyst", Role::Analyst);
+        let live = serde_json::json!({"result_cache": false});
+        let quota = |identity: &crate::security::Identity| {
+            let state = state.clone();
+            let identity = identity.clone();
+            async move {
+                let response = crate::resource_groups::get_quota(
+                    axum::extract::State(state),
+                    axum::Extension(identity),
+                )
+                .await;
+                assert_eq!(response.status(), axum::http::StatusCode::OK);
+                json_body(response).await
+            }
+        };
+
+        // A live statement is charged: one of two used.
+        let cached_sql = "SELECT id FROM orders WHERE id > 1 ORDER BY id";
+        let (status, first) = submit(&state, &analyst, cached_sql, serde_json::Value::Null).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{first}");
+        let first_id = first["id"].as_str().unwrap().to_owned();
+        let first_record = record(&first_id, &analyst).await;
+        assert_eq!(first_record["execution"]["mode"], "coordinator");
+        assert_eq!(first_record["context"]["quota_charge"]["used"], 1);
+        assert_eq!(first_record["context"]["quota_charge"]["remaining"], 1);
+        assert_eq!(first_record["context"]["quota_charge"]["max_statements"], 2);
+        assert!(first_record["context"]["quota_charge"]["charged_at_ms"].is_u64());
+
+        // The same statement again is a cache hit: nothing charged.
+        let (status, hit) = submit(&state, &analyst, cached_sql, serde_json::Value::Null).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{hit}");
+        let hit_record = record(hit["id"].as_str().unwrap(), &analyst).await;
+        assert_eq!(hit_record["execution"]["mode"], "cache");
+        assert!(hit_record["context"].get("quota_charge").is_none());
+
+        // An answer from the statistics: nothing charged.
+        let (status, analyzed) =
+            submit(&state, &admin, "ANALYZE events", serde_json::Value::Null).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{analyzed}");
+        let (status, counted) = submit(
+            &state,
+            &analyst,
+            "SELECT COUNT(*) FROM events",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{counted}");
+        let counted_record = record(counted["id"].as_str().unwrap(), &analyst).await;
+        assert_eq!(counted_record["execution"]["mode"], "context");
+        assert!(counted_record["context"].get("quota_charge").is_none());
+
+        let standing = quota(&analyst).await;
+        assert_eq!(standing["demo"]["enabled"], true);
+        assert_eq!(standing["resource_group"], "demo");
+        assert_eq!(standing["exempt"], false);
+        assert_eq!(standing["quota"]["used"], 1, "{standing}");
+        assert_eq!(standing["quota"]["remaining"], 1);
+        assert_eq!(standing["quota"]["max_statements"], 2);
+        assert_eq!(standing["quota"]["per_seconds"], 3_600);
+        assert_eq!(standing["quota"]["count"], "live");
+        assert!(
+            standing["quota"]["resets_at"]
+                .as_str()
+                .unwrap()
+                .ends_with('Z')
+        );
+
+        // The second live statement uses the window up.
+        let (status, second) = submit(
+            &state,
+            &analyst,
+            "SELECT id FROM orders WHERE id > 2 ORDER BY id",
+            live.clone(),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{second}");
+        let second_record = record(second["id"].as_str().unwrap(), &analyst).await;
+        assert_eq!(second_record["context"]["quota_charge"]["used"], 2);
+        assert_eq!(second_record["context"]["quota_charge"]["remaining"], 0);
+
+        // The third is refused, with the time the next is allowed.
+        let refused_sql = "SELECT id FROM orders ORDER BY id";
+        let (status, refused) = submit(&state, &analyst, refused_sql, live.clone()).await;
+        assert_eq!(
+            status,
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            "{refused}"
+        );
+        assert_eq!(refused["code"], "RATE_LIMITED");
+        let message = refused["message"].as_str().unwrap();
+        let next_allowed = refused["next_allowed_at"].as_str().unwrap();
+        assert_eq!(
+            message,
+            format!(
+                "2 live queries per 1 hour in this demo; the next is allowed at {next_allowed}"
+            )
+        );
+        assert_eq!(refused["error"], message);
+        let retry_after = refused["retry_after_seconds"].as_u64().unwrap();
+        assert!((1..=3_600).contains(&retry_after), "{refused}");
+        assert_eq!(refused["resource_group"], "demo");
+        assert_eq!(refused["limit"]["max_statements"], 2);
+        assert_eq!(refused["limit"]["count"], "live");
+        let refused_record = {
+            let store = super::QUERY_STORE.read().await;
+            let record = store
+                .queries
+                .values()
+                .find(|record| record.sql == refused_sql)
+                .expect("the refused statement has a record");
+            serde_json::to_value(record).unwrap()
+        };
+        assert_eq!(refused_record["state"], "FAILED");
+        assert_eq!(refused_record["error_code"], "RATE_LIMITED");
+        assert_eq!(refused_record["error"], message);
+        assert!(refused_record["context"].get("quota_charge").is_none());
+        let standing = quota(&analyst).await;
+        assert_eq!(standing["quota"]["remaining"], 0);
+        assert_eq!(standing["quota"]["next_allowed_at"], next_allowed);
+        assert_eq!(standing["quota"]["resets_at"], next_allowed);
+
+        // An admin in the same group is exempt.
+        let (status, by_admin) = submit(&state, &admin, refused_sql, live.clone()).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{by_admin}");
+        let admin_record = record(by_admin["id"].as_str().unwrap(), &admin).await;
+        assert!(admin_record["context"].get("quota_charge").is_none());
+        let standing = quota(&admin).await;
+        assert_eq!(standing["exempt"], true);
+        assert!(standing["quota"].is_null());
+
+        // The ledger carries the two charges on the terminal lines, and a
+        // governor built anew — a restart — counts them back in.
+        let lines = ledger_lines(
+            &state,
+            &admin,
+            "kind=statement.finished&principal=analyst",
+            4,
+        )
+        .await;
+        let charged: Vec<_> = lines
+            .iter()
+            .filter(|line| line["quota_charged_at_ms"].is_u64())
+            .collect();
+        assert_eq!(charged.len(), 2, "{lines:?}");
+        assert!(charged.iter().all(|line| line["mode"] == "coordinator"));
+        let reloaded = crate::resource_groups::Governor::new(
+            state.governance.current().as_ref().clone(),
+            crate::resource_groups::Source::ConfigFile,
+            directory.join("reloaded-resource-groups.json"),
+        );
+        let current = state.governance.current();
+        let group = EffectiveGroup::from(current.select(&analyst, &[]));
+        let now = crate::audit::unix_ms();
+        let standing = reloaded
+            .quota(&state.audit, &group, &analyst, now)
+            .expect("the analyst has a quota");
+        assert_eq!((standing.used, standing.remaining), (2, 0));
+        assert_eq!(standing.next_allowed_at, next_allowed);
+        let refusal = reloaded
+            .charge(&state.audit, &group, &analyst, "after-restart", now)
+            .unwrap_err();
+        assert_eq!(refusal.resource_group, "demo");
+        assert_eq!(refusal.message(), message);
+        assert!(refusal.retry_after_seconds(now) <= retry_after);
+        assert!(reloaded.quota(&state.audit, &group, &admin, now).is_none());
+        // Once the window has passed, the reloaded index admits again.
+        let later = now + 3_600_001;
+        let standing = reloaded
+            .quota(&state.audit, &group, &analyst, later)
+            .unwrap();
+        assert_eq!((standing.used, standing.remaining), (0, 2));
+        assert!(
+            reloaded
+                .charge(&state.audit, &group, &analyst, "next-window", later)
+                .is_ok()
+        );
+        state.audit.shutdown();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     /// Every kind the statement path, the settings and the catalog write,
     /// with the fields each carries; paging by cursor; the JSONL export;
     /// the admin gate and the query validation.
@@ -12507,6 +12779,7 @@ mod tests {
                     group: "small".into(),
                     ..Default::default()
                 }],
+                demo: Default::default(),
             },
             |state, directory| {
                 state.audit = crate::audit::AuditLedger::open(
@@ -13128,6 +13401,7 @@ mod tests {
             result_delivery: delivery.map(str::to_owned),
             catalog_snapshot_id: String::new(),
             resource_group: crate::resource_groups::EffectiveGroup::for_tests(),
+            quota_charge: None,
             settings: super::QuerySettings::default(),
         };
         let pending = |delivery: Option<&str>, state: super::QueryState| {
@@ -13477,6 +13751,7 @@ mod tests {
             result_delivery: None,
             catalog_snapshot_id: "sha256:catalog-one".into(),
             resource_group: crate::resource_groups::EffectiveGroup::for_tests(),
+            quota_charge: None,
             settings: crate::settings::QuerySettings::default(),
         }
     }
@@ -15651,6 +15926,7 @@ mod tests {
             result_delivery: None,
             catalog_snapshot_id: String::new(),
             resource_group: crate::resource_groups::EffectiveGroup::for_tests(),
+            quota_charge: None,
             settings: crate::settings::QuerySettings::default(),
         };
         let snapshot = kaveon_core::CatalogManager::new("kaveon", "default");
@@ -15894,6 +16170,7 @@ mod tests {
             result_delivery: None,
             catalog_snapshot_id: "sha256:test".into(),
             resource_group: crate::resource_groups::EffectiveGroup::for_tests(),
+            quota_charge: None,
             settings: crate::settings::QuerySettings::default(),
         };
 
@@ -16147,6 +16424,7 @@ mod tests {
                 result_delivery: None,
                 catalog_snapshot_id: String::new(),
                 resource_group: crate::resource_groups::EffectiveGroup::for_tests(),
+                quota_charge: None,
                 settings: super::QuerySettings::default(),
             },
             super::QueryState::Running,
@@ -16453,6 +16731,7 @@ mod streamed_root_tests {
             result_delivery: Some("paged".into()),
             catalog_snapshot_id: SNAPSHOT.into(),
             resource_group: crate::resource_groups::EffectiveGroup::for_tests(),
+            quota_charge: None,
             settings: QuerySettings::default(),
         }
     }
