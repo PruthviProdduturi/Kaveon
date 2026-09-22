@@ -3,7 +3,7 @@ use crate::shape::TableShape;
 use arrow::datatypes::SchemaRef;
 use arrow_schema::DataType;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -793,39 +793,82 @@ pub trait CatalogProvider: Send + Sync {
     fn register_table(&mut self, schema: &str, table: TableMeta) -> Result<()>;
 }
 
+/// The catalogs a session resolves names against.
+///
+/// The registered providers are shared: `restricted` returns a view over the
+/// same providers that exposes only the catalogs it names, so a principal's
+/// binder, planner and metadata calls all resolve against one object and an
+/// invisible catalog is indistinguishable from an absent one (`catalog 'x'
+/// not found`). A view never widens: restricting a view intersects.
+#[derive(Clone)]
 pub struct CatalogManager {
-    catalogs: HashMap<String, Box<dyn CatalogProvider>>,
+    catalogs: Arc<HashMap<String, Arc<dyn CatalogProvider>>>,
     default_catalog: String,
     default_schema: String,
+    /// `None` exposes every registered catalog.
+    visible: Option<Arc<HashSet<String>>>,
 }
 
 impl CatalogManager {
     pub fn new(default_catalog: impl Into<String>, default_schema: impl Into<String>) -> Self {
         Self {
-            catalogs: HashMap::new(),
+            catalogs: Arc::new(HashMap::new()),
             default_catalog: default_catalog.into(),
             default_schema: default_schema.into(),
+            visible: None,
         }
     }
 
     pub fn register_catalog(&mut self, catalog: Box<dyn CatalogProvider>) {
         let name = catalog.name().to_owned();
-        self.catalogs.insert(name, catalog);
+        Arc::make_mut(&mut self.catalogs).insert(name, Arc::from(catalog));
+    }
+
+    fn is_visible(&self, name: &str) -> bool {
+        self.visible
+            .as_ref()
+            .is_none_or(|visible| visible.contains(name))
     }
 
     pub fn catalog(&self, name: &str) -> Option<&dyn CatalogProvider> {
+        if !self.is_visible(name) {
+            return None;
+        }
         self.catalogs.get(name).map(|c| c.as_ref())
     }
 
-    pub fn catalog_mut(&mut self, name: &str) -> Option<&mut (dyn CatalogProvider + '_)> {
-        match self.catalogs.get_mut(name) {
-            Some(catalog) => Some(catalog.as_mut()),
-            None => None,
-        }
+    /// Every registered catalog, hidden ones included: the shape of the
+    /// deployment, for the evaluator that decides what a view exposes.
+    pub fn registered_catalog_names(&self) -> Vec<String> {
+        self.catalogs.keys().cloned().collect()
     }
 
     pub fn catalog_names(&self) -> Vec<String> {
-        self.catalogs.keys().cloned().collect()
+        self.catalogs
+            .keys()
+            .filter(|name| self.is_visible(name))
+            .cloned()
+            .collect()
+    }
+
+    /// This manager's providers, exposing only the catalogs in `visible`
+    /// that this view already exposes.
+    pub fn restricted(&self, visible: impl IntoIterator<Item = String>) -> Self {
+        let visible: HashSet<String> = visible
+            .into_iter()
+            .filter(|name| self.is_visible(name))
+            .collect();
+        Self {
+            catalogs: Arc::clone(&self.catalogs),
+            default_catalog: self.default_catalog.clone(),
+            default_schema: self.default_schema.clone(),
+            visible: Some(Arc::new(visible)),
+        }
+    }
+
+    /// Whether this manager is a restricted view.
+    pub fn is_restricted(&self) -> bool {
+        self.visible.is_some()
     }
 
     pub fn default_catalog(&self) -> &str {
@@ -837,7 +880,7 @@ impl CatalogManager {
     }
 
     pub fn set_default(&mut self, catalog_name: &str, schema_name: &str) -> Result<()> {
-        let catalog = self.catalogs.get(catalog_name).ok_or_else(|| {
+        let catalog = self.catalog(catalog_name).ok_or_else(|| {
             crate::KaveonError::Execution(format!("catalog '{catalog_name}' not found"))
         })?;
         if !catalog
@@ -873,7 +916,7 @@ impl CatalogManager {
             ),
         };
 
-        let catalog = self.catalogs.get(catalog_name).ok_or_else(|| {
+        let catalog = self.catalog(catalog_name).ok_or_else(|| {
             crate::KaveonError::Execution(format!("catalog '{catalog_name}' not found"))
         })?;
 
@@ -1365,5 +1408,77 @@ mod tests {
         let json = serde_json::to_string(&column).unwrap();
         let decoded: ColumnDefinition = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, column);
+    }
+
+    #[test]
+    fn a_restricted_view_hides_catalogs_without_disclosing_them() {
+        let storage = StorageType::Local {
+            base_path: PathBuf::from("/data"),
+        };
+        let mut open = MemoryCatalog::new("OpenSource", storage.clone()).with_schema("public");
+        open.register_table(
+            "public",
+            TableMeta {
+                name: "events".into(),
+                arrow_schema: test_schema(),
+                location: "events.parquet".into(),
+                access: AccessPattern::Shortcut,
+                format: DataFormat::Parquet,
+            },
+        )
+        .unwrap();
+        let mut kaveon = MemoryCatalog::new("Kaveon", storage).with_schema("usage");
+        kaveon
+            .register_table(
+                "usage",
+                TableMeta {
+                    name: "sessions".into(),
+                    arrow_schema: test_schema(),
+                    location: "sessions.parquet".into(),
+                    access: AccessPattern::Shortcut,
+                    format: DataFormat::Parquet,
+                },
+            )
+            .unwrap();
+        let mut full = CatalogManager::new("OpenSource", "public");
+        full.register_catalog(Box::new(open));
+        full.register_catalog(Box::new(kaveon));
+        assert!(!full.is_restricted());
+
+        let mut view = full.restricted(["OpenSource".to_owned(), "Missing".to_owned()]);
+        assert!(view.is_restricted());
+        assert_eq!(view.catalog_names(), vec!["OpenSource".to_owned()]);
+        let mut registered = view.registered_catalog_names();
+        registered.sort();
+        assert_eq!(registered, vec!["Kaveon".to_owned(), "OpenSource".into()]);
+        assert!(view.catalog("Kaveon").is_none());
+        assert!(view.catalog("OpenSource").is_some());
+        // The hidden catalog and a catalog that does not exist fail alike.
+        let hidden = view
+            .resolve_table(&TableReference::parse("Kaveon.usage.sessions"))
+            .unwrap_err()
+            .to_string();
+        let absent = view
+            .resolve_table(&TableReference::parse("Nowhere.usage.sessions"))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            hidden.replace("Kaveon", "X"),
+            absent.replace("Nowhere", "X")
+        );
+        assert!(view.set_default("Kaveon", "usage").is_err());
+        assert!(
+            view.resolve_table(&TableReference::parse("OpenSource.public.events"))
+                .is_ok()
+        );
+        // Restricting a view intersects; it never widens.
+        let widened = view.restricted(["Kaveon".to_owned(), "OpenSource".into()]);
+        assert_eq!(widened.catalog_names(), vec!["OpenSource".to_owned()]);
+        let none = view.restricted(Vec::<String>::new());
+        assert!(none.catalog_names().is_empty());
+        assert!(none.catalog("OpenSource").is_none());
+        // The full manager is untouched by its views.
+        assert_eq!(full.catalog_names().len(), 2);
+        assert!(full.catalog("Kaveon").is_some());
     }
 }

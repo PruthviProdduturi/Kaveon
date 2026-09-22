@@ -10771,6 +10771,16 @@ pub(crate) fn catalog_test_state() -> crate::AppState {
         lifecycle: crate::lifecycle::WorkerLifecycle::default(),
         memory_admission,
         product_transactions: crate::transaction_api::TransactionRegistry::disabled(),
+        // Every non-admin principal the tests use manages `lake` (a reader's
+        // ceiling is browse whatever the grant says); nothing else is
+        // granted, so any other catalog is invisible to them.
+        catalog_access: crate::catalog_access::CatalogAccess::preset(
+            [
+                "analyst", "alice", "bob", "reader", "svc-small", "svc-loader", "other", "ana",
+            ]
+            .into_iter()
+            .map(|principal| (principal, "lake", crate::catalog_access::Access::Manage)),
+        ),
         config,
     }
 }

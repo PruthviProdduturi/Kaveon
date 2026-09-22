@@ -383,6 +383,7 @@ mod tests {
             .unwrap()
             .with_queue_limit(config.memory_admission_queue),
             product_transactions: crate::transaction_api::TransactionRegistry::disabled(),
+            catalog_access: crate::catalog_access::CatalogAccess::disabled(),
             config,
         });
         let app = axum::Router::new()

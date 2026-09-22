@@ -28,6 +28,8 @@ pub const KIND_CATALOG_CREATE: &str = "catalog.create";
 pub const KIND_CATALOG_UPDATE: &str = "catalog.update";
 pub const KIND_CATALOG_DELETE: &str = "catalog.delete";
 pub const KIND_SETTINGS_RESOURCE_GROUPS: &str = "settings.resource_groups";
+pub const KIND_CATALOG_ACCESS_GRANT: &str = "catalog_access.grant";
+pub const KIND_CATALOG_ACCESS_REVOKE: &str = "catalog_access.revoke";
 pub const KIND_SETTINGS_CACHE_CLEARED: &str = "settings.cache_cleared";
 pub const KIND_AUTH_UNAUTHORIZED: &str = "auth.unauthorized";
 pub const KIND_AUTH_FORBIDDEN: &str = "auth.forbidden";
@@ -44,6 +46,8 @@ pub const KINDS: &[&str] = &[
     KIND_CATALOG_DELETE,
     KIND_SETTINGS_RESOURCE_GROUPS,
     KIND_SETTINGS_CACHE_CLEARED,
+    KIND_CATALOG_ACCESS_GRANT,
+    KIND_CATALOG_ACCESS_REVOKE,
     KIND_AUTH_UNAUTHORIZED,
     KIND_AUTH_FORBIDDEN,
 ];
@@ -247,8 +251,8 @@ pub struct AuditFilter {
     pub since_ms: Option<u64>,
     pub until_ms: Option<u64>,
     pub principal: Option<String>,
-    /// Exact kinds, or families (`statement`, `catalog`, `settings`,
-    /// `auth`); empty matches every kind.
+    /// Exact kinds, or families (`statement`, `catalog`, `catalog_access`,
+    /// `settings`, `auth`); empty matches every kind.
     pub kinds: Vec<String>,
     pub query_id: Option<String>,
     /// Records with `seq` above this.
