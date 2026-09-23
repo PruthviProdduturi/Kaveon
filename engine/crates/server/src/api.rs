@@ -8060,6 +8060,15 @@ fn catalog_definition_document(
             object.insert("access".into(), serde_json::json!(level));
         }
     }
+    // `Kaveon` is the persisted compatibility identity.  The product-facing
+    // catalog name is KaveonDB everywhere clients discover catalogs; IDs and
+    // mutation routes remain stable so existing dashboard references do not
+    // break during the rename.
+    if definition.name() == "Kaveon"
+        && let Some(object) = document.as_object_mut()
+    {
+        object.insert("name".into(), serde_json::json!("KaveonDB"));
+    }
     Some(document)
 }
 

@@ -33,11 +33,11 @@ export const tableKey = (catalog: string, schema: string) => `${catalog} ${schem
 // The Engine keeps `Kaveon` as its SQL-compatible internal name. Studio uses
 // the product-facing KaveonDB name while retaining the real name in URLs/API calls.
 export function catalogLabel(catalog: string): string {
-  return catalog === "Kaveon" ? "KaveonDB" : catalog;
+  return catalog === "Kaveon" || catalog === "KaveonDB" ? "KaveonDB" : catalog;
 }
 
 function catalogOrder(source: EngineSource): number {
-  return source.catalog === "OpenSource" ? 0 : source.catalog === "Kaveon" ? 1 : 2;
+  return source.catalog === "OpenSource" ? 0 : source.catalog === "Kaveon" || source.catalog === "KaveonDB" ? 1 : 2;
 }
 
 export function CatalogShell({ children }: { children: React.ReactNode }) {
@@ -132,7 +132,7 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
             <>
               <div className={s.treeHead}>
                 <div>
-                  <div className={s.productEyebrow}>KaveonDB</div>
+                  <div className={s.productEyebrow}>Data catalog</div>
                   <h2 className={s.treeTitle}>Catalogs{catalogs && <span>{catalogs.length}</span>}</h2>
                 </div>
                 <button type="button" className={s.collapse} onClick={() => setCollapsed(true)} aria-label="Collapse catalog tree"><i className="fas fa-angles-left" /></button>

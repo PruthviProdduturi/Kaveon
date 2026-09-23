@@ -53,7 +53,7 @@ class LiveDashboardImportTests(unittest.TestCase):
         self.assertEqual(len(event_charts), 33)
         module.validate_event_projection_contract(self.contract)
         self.assertEqual(module.PHYSICAL_DATASETS["144"]["table_name"], "kaveon_events_dashboard")
-        self.assertEqual(module.PHYSICAL_DATASETS["144"]["catalog"], "Kaveon")
+        self.assertEqual(module.PHYSICAL_DATASETS["144"]["catalog"], "KaveonDB")
         self.assertEqual(module.PHYSICAL_DATASETS["144"]["schema_name"], "usage")
 
     def test_kaveon_dataset_move_preserves_existing_record_identity(self):
@@ -69,7 +69,7 @@ class LiveDashboardImportTests(unittest.TestCase):
         public = json.loads((root / "opensource-catalog-manifest.json").read_text())
         kaveon = json.loads((root / "kaveon-catalog-manifest.json").read_text())
         self.assertEqual(public["catalog"], "OpenSource")
-        self.assertEqual(kaveon["catalog"], "Kaveon")
+        self.assertEqual(kaveon["catalog"], "KaveonDB")
         self.assertFalse(any(row["schema"] == "kaveon_product" or row["name"] == "kaveon_events_dashboard"
                              for row in public["tables"]))
         self.assertEqual(len(kaveon["tables"]), 9)
@@ -115,7 +115,7 @@ class LiveDashboardImportTests(unittest.TestCase):
         ]
         def api(method, path, body=None):
             calls.append((method, path))
-            if path == "lab/engine/sources": return {"sources": [{"id": "open", "catalog": "OpenSource"}, {"id": "kaveon", "catalog": "Kaveon"}]}
+            if path == "lab/engine/sources": return {"sources": [{"id": "open", "catalog": "OpenSource"}, {"id": "kaveon", "catalog": "KaveonDB"}]}
             if path == "datasets": return datasets
             if path == "charts": return charts
             if path == "dashboards": return dashboards

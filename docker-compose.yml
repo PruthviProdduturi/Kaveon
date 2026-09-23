@@ -152,7 +152,10 @@ services:
       API_PORT: "8080"
       WEB_URL: http://localhost:3000
       KAVEON_LOCAL_PRODUCT_MODE: "true"
-      KAVEON_POSTGRESQL_RETIREMENT_MODE: "false"
+      # Local Docker is PostgreSQL-free: all product authority routes use
+      # KaveonDB. The optional postgres profile remains only for historical
+      # migration rehearsal and is never part of the default stack.
+      KAVEON_POSTGRESQL_RETIREMENT_MODE: "true"
       KAVEONDB_AUTHORITY_FAMILIES: ai_configuration,catalog_sources,data_sources,datasets,dataset_semantics,charts,dashboards,favorites,saved_queries,user_themes,user_recents,query_history,activity,context_cache,dlm_generation,chat_history
       KAVEONDB_READ_AUTHORITY_FAMILIES: datasets,charts,dashboards,saved_queries,user_themes,user_recents,favorites,query_history,activity,chat_history,sources,dlm_definitions
       KAVEON_DLM_LIVE_ARTIFACT_PUBLISH_ENABLED: "true"

@@ -810,6 +810,31 @@ pub struct CatalogManager {
 }
 
 impl CatalogManager {
+    /// The product-facing name for Kaveon's own analytical catalog.  The
+    /// persisted catalog identity remains `Kaveon` for compatibility with
+    /// existing table registrations and dashboard SQL, while SQL clients and
+    /// metadata statements use the product name `KaveonDB`.
+    fn storage_name<'a>(&self, name: &'a str) -> &'a str {
+        if self.catalogs.contains_key(name) {
+            return name;
+        }
+        if name.eq_ignore_ascii_case("KaveonDB") && self.catalogs.contains_key("Kaveon") {
+            "Kaveon"
+        } else if name.eq_ignore_ascii_case("Kaveon") && self.catalogs.contains_key("KaveonDB") {
+            "KaveonDB"
+        } else {
+            name
+        }
+    }
+
+    fn display_name(name: &str) -> String {
+        if name == "Kaveon" {
+            "KaveonDB".to_owned()
+        } else {
+            name.to_owned()
+        }
+    }
+
     pub fn new(default_catalog: impl Into<String>, default_schema: impl Into<String>) -> Self {
         Self {
             catalogs: Arc::new(HashMap::new()),
@@ -831,10 +856,11 @@ impl CatalogManager {
     }
 
     pub fn catalog(&self, name: &str) -> Option<&dyn CatalogProvider> {
-        if !self.is_visible(name) {
+        let storage_name = self.storage_name(name);
+        if !self.is_visible(storage_name) {
             return None;
         }
-        self.catalogs.get(name).map(|c| c.as_ref())
+        self.catalogs.get(storage_name).map(|c| c.as_ref())
     }
 
     /// Every registered catalog, hidden ones included: the shape of the
@@ -847,7 +873,9 @@ impl CatalogManager {
         self.catalogs
             .keys()
             .filter(|name| self.is_visible(name))
-            .cloned()
+            .map(|name| Self::display_name(name))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
             .collect()
     }
 
@@ -1452,6 +1480,7 @@ mod tests {
         registered.sort();
         assert_eq!(registered, vec!["Kaveon".to_owned(), "OpenSource".into()]);
         assert!(view.catalog("Kaveon").is_none());
+        assert!(view.catalog("KaveonDB").is_none());
         assert!(view.catalog("OpenSource").is_some());
         // The hidden catalog and a catalog that does not exist fail alike.
         let hidden = view
@@ -1480,5 +1509,10 @@ mod tests {
         // The full manager is untouched by its views.
         assert_eq!(full.catalog_names().len(), 2);
         assert!(full.catalog("Kaveon").is_some());
+        assert!(full.catalog("KaveonDB").is_some());
+        assert!(
+            full.resolve_table(&TableReference::parse("KaveonDB.usage.sessions"))
+                .is_ok()
+        );
     }
 }
