@@ -78,9 +78,12 @@ pub struct RuntimeTableSourceRef {
     pub source_identity_sha256: String,
 }
 
-/// Small typed row representation used by the catalog transaction prototype.
-/// Values are intentionally bounded scalar values; larger payloads belong in
-/// immutable table objects referenced by a future mutation writer.
+/// Small typed row representation used by the catalog transaction layer.
+///
+/// JSON values are supported for control-plane documents (for example DLM
+/// configuration and visibility rules), but remain bounded and validated by
+/// the manifest. Large artifacts belong in immutable table objects referenced
+/// by a future mutation writer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum TypedValue {
@@ -88,6 +91,9 @@ pub enum TypedValue {
     Boolean(bool),
     Integer(i64),
     String(String),
+    /// A bounded JSON document. This is deliberately one variant instead of
+    /// exposing an unbounded collection of engine-specific scalar types.
+    Json(serde_json::Value),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,6 +103,7 @@ pub enum TypedColumnType {
     Boolean,
     Integer,
     String,
+    Json,
 }
 
 impl TypedValue {
@@ -106,6 +113,7 @@ impl TypedValue {
             Self::Boolean(_) => TypedColumnType::Boolean,
             Self::Integer(_) => TypedColumnType::Integer,
             Self::String(_) => TypedColumnType::String,
+            Self::Json(_) => TypedColumnType::Json,
         }
     }
 }
@@ -1289,6 +1297,9 @@ fn validate_typed_row(row: &TypedRow) -> Result<(), ManifestError> {
         {
             return Err(error("typed row string value exceeds limit"));
         }
+        if let TypedValue::Json(value) = value {
+            validate_typed_json(value, 0)?;
+        }
     }
     if row.unique_keys.len() > MAX_UNIQUE_VALUES_PER_PRODUCT_RECORD {
         return Err(error("typed row unique-index limit exceeded"));
@@ -1296,6 +1307,42 @@ fn validate_typed_row(row: &TypedRow) -> Result<(), ManifestError> {
     for (name, value) in &row.unique_keys {
         validate_identifier("typed row unique index", name)?;
         validate_identifier("typed row unique value", value)?;
+    }
+    Ok(())
+}
+
+const MAX_TYPED_JSON_BYTES: usize = 1 * 1024 * 1024;
+const MAX_TYPED_JSON_DEPTH: usize = 16;
+
+fn validate_typed_json(value: &serde_json::Value, depth: usize) -> Result<(), ManifestError> {
+    if depth > MAX_TYPED_JSON_DEPTH {
+        return Err(error("typed row JSON nesting limit exceeded"));
+    }
+    if serde_json::to_vec(value)
+        .map_err(|_| error("typed row JSON cannot be serialized"))?
+        .len()
+        > MAX_TYPED_JSON_BYTES
+    {
+        return Err(error("typed row JSON value exceeds limit"));
+    }
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                validate_typed_json(value, depth + 1)?;
+            }
+        }
+        serde_json::Value::Object(values) => {
+            for (name, value) in values {
+                if name.len() > 128 {
+                    return Err(error("typed row JSON key exceeds limit"));
+                }
+                validate_typed_json(value, depth + 1)?;
+            }
+        }
+        serde_json::Value::Null
+        | serde_json::Value::Bool(_)
+        | serde_json::Value::Number(_)
+        | serde_json::Value::String(_) => {}
     }
     Ok(())
 }
@@ -1532,6 +1579,73 @@ mod tests {
             .get_mut("u-1")
             .unwrap() = 99;
         assert!(tampered.validate().is_err());
+    }
+
+    #[test]
+    fn typed_json_rows_round_trip_and_are_bounded() {
+        let base = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        let schema = TypedTableSchema {
+            columns: BTreeMap::from([("document".into(), TypedColumnType::Json)]),
+            primary_key: "primary_key".into(),
+            unique_keys: BTreeSet::new(),
+        };
+        let row = TypedRow {
+            primary_key: "config-1".into(),
+            revision: 1,
+            columns: BTreeMap::from([(
+                "document".into(),
+                TypedValue::Json(serde_json::json!({
+                    "enabled": true,
+                    "owners": ["admin", "operator"],
+                    "options": {"retention_days": 30}
+                })),
+            )]),
+            unique_keys: BTreeMap::new(),
+        };
+        let snapshot = base
+            .prepare(change(
+                base.reference(),
+                "typed-json",
+                DIGEST,
+                vec![
+                    CatalogChange::DefineTypedSchema {
+                        table: "system.config".into(),
+                        schema,
+                    },
+                    CatalogChange::InsertTypedRow {
+                        table: "system.config".into(),
+                        row: row.clone(),
+                    },
+                ],
+            ))
+            .unwrap();
+        let bytes = serde_json::to_vec(&snapshot).unwrap();
+        let decoded: CatalogSnapshot = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(decoded.typed_rows["system.config"]["config-1"], row);
+        decoded.validate().unwrap();
+
+        let mut too_deep = serde_json::Value::Null;
+        for _ in 0..=MAX_TYPED_JSON_DEPTH {
+            too_deep = serde_json::Value::Array(vec![too_deep]);
+        }
+        let invalid = TypedRow {
+            primary_key: "config-2".into(),
+            revision: 1,
+            columns: BTreeMap::from([("document".into(), TypedValue::Json(too_deep))]),
+            unique_keys: BTreeMap::new(),
+        };
+        assert!(
+            base.prepare(change(
+                base.reference(),
+                "typed-json-invalid",
+                DIGEST,
+                vec![CatalogChange::InsertTypedRow {
+                    table: "system.config".into(),
+                    row: invalid,
+                }],
+            ))
+            .is_err()
+        );
     }
 
     #[test]
