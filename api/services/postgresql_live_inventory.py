@@ -9,6 +9,10 @@ from services.postgresql_retirement_gate import AUTHORITY_FAMILIES
 
 SCHEMA_VERSION = 1
 MAX_TABLES = 256
+# These tables are legacy authentication state rather than product authority.
+# They must still appear in the live inventory so retirement cannot silently
+# discard them, but they are handled by the identity migration/retirement path.
+LEGACY_IDENTITY_TABLES = frozenset({"auth_config", "local_users"})
 INFRASTRUCTURE_TABLES = frozenset({"product_migration_outbox"})
 
 
@@ -39,11 +43,13 @@ def collect(*, now=None) -> dict:
         discovered = tuple(str(row["table_name"]) for row in discovered_rows)
         if len(discovered) != len(set(discovered)) or discovered != tuple(sorted(discovered)):
             raise RuntimeError("PostgreSQL live schema inventory is not stable")
-        unknown = sorted(set(discovered) - set(expected) - set(INFRASTRUCTURE_TABLES))
+        unknown = sorted(set(discovered) - set(expected) - set(INFRASTRUCTURE_TABLES)
+                         - set(LEGACY_IDENTITY_TABLES))
         if unknown:
             raise RuntimeError("unclassified PostgreSQL public tables: " + ", ".join(unknown))
         counts = {}
-        for table in sorted(set(discovered) & set(expected)):
+        for table in sorted((set(discovered) & set(expected))
+                            | (set(discovered) & set(LEGACY_IDENTITY_TABLES))):
             # The identifier comes only from the fixed authority manifest.
             row = transaction.query_one(f'SELECT COUNT(*) AS count FROM "{table}"') or {}
             count = row.get("count")
@@ -63,6 +69,10 @@ def collect(*, now=None) -> dict:
             for table in sorted(expected)
         ],
         "infrastructure_tables": sorted(set(discovered) & set(INFRASTRUCTURE_TABLES)),
+        "legacy_identity_tables": [
+            {"table": table, "row_count": counts.get(table, 0)}
+            for table in sorted(set(discovered) & set(LEGACY_IDENTITY_TABLES))
+        ],
         "unclassified_tables": [],
     }
     if not report["source_snapshot"]:

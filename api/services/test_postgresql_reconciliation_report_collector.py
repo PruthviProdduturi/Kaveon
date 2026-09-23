@@ -44,7 +44,8 @@ def inventory(ai_count=0):
                            "row_count": ai_count if name == "ai_providers" else 0})
     value = {"schema_version": 1, "captured_at": "2026-09-14T17:50:00Z",
              "source_snapshot": "31:31:", "discovered_tables": [],
-             "authority_tables": tables, "infrastructure_tables": [], "unclassified_tables": []}
+             "authority_tables": tables, "infrastructure_tables": [],
+             "legacy_identity_tables": [], "unclassified_tables": []}
     value["report_sha256"] = hashlib.sha256(collector._canonical(value)).hexdigest()
     return value
 
