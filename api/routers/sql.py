@@ -120,6 +120,11 @@ def _engine_source_for_catalog(catalog: str) -> dict | None:
     """
     if not catalog:
         return None
+    if catalog == "KaveonDB":
+        from services import engine_bridge
+        listed = engine_bridge.catalogs("kaveon-system", "Admin") or {}
+        if "KaveonDB" in (listed.get("catalogs") or []):
+            return {"id": "kaveondb", "engine_catalog": "KaveonDB"}
     if product_read_authority.enabled("sources"):
         for source in product_read_authority.list_documents("sources", "kaveon-system", "Admin"):
             if (source.get("source_kind") == "catalog"

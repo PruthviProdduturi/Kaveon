@@ -21,6 +21,11 @@ import time
 
 router = APIRouter()
 
+
+def _catalog_label(catalog: str) -> str:
+    """Return the stable product name without changing Engine SQL identity."""
+    return "KaveonDB" if str(catalog) == "Kaveon" else catalog
+
 MAX_SQL_BYTES = 65_536
 NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
 
@@ -113,6 +118,15 @@ def _hide_platform_tables(tables: list, resolved_db: str) -> list:
 
 def _engine_source(source_id: str) -> dict:
     """Resolve a browser-selected ID to one active native catalog only."""
+    # KaveonDB is the built-in transactional/product catalog.  It is an
+    # Engine authority, not an optional external connection, so local Docker
+    # installations may not have a separate catalog_sources row for it.
+    if source_id == "kaveondb":
+        from services import engine_bridge
+        listed = engine_bridge.catalogs("kaveon-system", "Admin") or {}
+        if "KaveonDB" not in (listed.get("catalogs") or []):
+            raise HTTPException(404, "KaveonDB catalog is not available")
+        return {"id": source_id, "name": "KaveonDB", "engine_catalog": "KaveonDB"}
     if product_read_authority.enabled("sources"):
         document=product_read_authority.read_document("sources",f"catalog-{source_id}","kaveon-system","Admin")
         if (not document or document.get("source_kind")!="catalog" or document.get("lifecycle")!="active"
@@ -242,10 +256,15 @@ def list_engine_sources(response: Response, ctx=Depends(require_min_role("Viewer
         "SELECT id, name, engine_catalog FROM catalog_sources "
         "WHERE lifecycle = 'active' AND adapter_type = 'native' ORDER BY name"
         ).get("rows") or []
-    return {"success": True, "sources": [
-        {"id": row["id"], "name": row["name"], "catalog": row["engine_catalog"]}
+    sources = [
+        {"id": row["id"], "name": row["name"], "catalog": _catalog_label(row["engine_catalog"])}
         for row in rows if row.get("engine_catalog") in granted
-    ]}
+    ]
+    # Always expose the built-in product catalog when the Engine authorizes
+    # it, even when a local product-mode API has no legacy catalog_sources row.
+    if "KaveonDB" in granted and not any(item["catalog"] == "KaveonDB" for item in sources):
+        sources.insert(0, {"id": "kaveondb", "name": "KaveonDB", "catalog": "KaveonDB"})
+    return {"success": True, "sources": sources}
 
 
 @router.get("/lab/engine/{source_id}/schemas")

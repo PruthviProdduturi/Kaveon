@@ -60,6 +60,9 @@ async function primaryVerifiedGithubEmail(accessToken?: string): Promise<string 
 }
 
 function roleFor(email?: string | null, username?: string | null): "Admin" | "Viewer" {
+  // A local Docker installation is a single-user development environment.
+  // Keep it frictionless while preserving the hosted allowlist/RBAC model.
+  if (process.env.KAVEON_LOCAL_MODE === "true") return "Admin";
   if (email && adminEmails.includes(email.toLowerCase())) return "Admin";
   if (username && adminUsernames.includes(username.toLowerCase())) return "Admin";
   return "Viewer";

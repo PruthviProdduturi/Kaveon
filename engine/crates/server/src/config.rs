@@ -746,7 +746,19 @@ pub fn open_catalog(config: &ServerConfig) -> anyhow::Result<(CatalogStore, Cata
 
 fn bootstrap_catalog(store: &CatalogStore, config: &ServerConfig) -> anyhow::Result<()> {
     let discovered = build_catalog_manager(config);
+    // A product deployment with curated catalog definitions mounted in the
+    // durable catalog store must not recreate the legacy catch-all `/data`
+    // catalog on every restart.  That auto-discovery path is retained for a
+    // first-run standalone Engine, but once local curated definitions exist it
+    // is a duplicate (and used to reintroduce the lowercase `kaveon` catalog).
+    let has_local_curated_catalogs = store
+        .list_catalogs()?
+        .iter()
+        .any(|definition| definition.id().as_str().starts_with("local-"));
     for catalog_name in discovered.catalog_names() {
+        if has_local_curated_catalogs && catalog_name == "kaveon" {
+            continue;
+        }
         let provider = discovered.catalog(&catalog_name).ok_or_else(|| {
             anyhow::anyhow!("catalog '{catalog_name}' disappeared during bootstrap")
         })?;

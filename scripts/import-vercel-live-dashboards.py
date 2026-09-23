@@ -38,7 +38,7 @@ PHYSICAL_DATASETS: dict[str, dict[str, str]] = {
     "138": {"name": "AI Model Pricing", "schema_name": "ai_benchmarks", "table_name": "pricing"},
     "139": {"name": "COVID-19 Global", "schema_name": "public", "table_name": "covid_global"},
     "140": {"name": "NYC Taxi by Borough", "schema_name": "public", "table_name": "nyc_taxi_borough"},
-    "144": {"name": "Kaveon Events", "catalog": "Kaveon", "schema_name": "usage", "table_name": "kaveon_events_dashboard"},
+    "144": {"name": "Kaveon Events", "catalog": "KaveonDB", "schema_name": "usage", "table_name": "kaveon_events_dashboard"},
 }
 
 EVENT_DATASET_ID = "144"

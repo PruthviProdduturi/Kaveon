@@ -1071,7 +1071,7 @@ mod tests {
         let (_, body) = engine.get(ADMIN, "/v1/admin/catalog-access").await;
         assert_eq!(body["catalogs"], json!(["lake", "secret"]));
         assert_eq!(body["reserved"][0]["name"], "KaveonDB");
-        assert_eq!(body["reserved"][0]["visible_to"], "none");
+        assert_eq!(body["reserved"][0]["visible_to"], "admin");
         assert_eq!(body["roles"]["reader"], "browse");
         assert_eq!(body["roles"]["analyst"], "manage");
         assert_eq!(body["store"]["enabled"], true);

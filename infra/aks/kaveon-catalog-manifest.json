@@ -1,5 +1,5 @@
 {
- "catalog": "Kaveon",
+ "catalog": "KaveonDB",
  "root_path": "snapshots/2026-09-09-v1",
  "notes": "Kaveon-owned synthetic usage and showcase tables. This is a logical catalog split only: paths remain in the existing ADLS container and no objects are copied or deleted. Dataset/chart references must be rebound and qualified before activating this catalog in an existing deployment.",
  "tables": [

@@ -47,6 +47,19 @@ def register(collection, path, body):
         current = existing.json()
         for key, value in body.items():
             if current.get(key) != value:
+                if (path.endswith('/' + CATALOG_ID)
+                        and key == 'name'
+                        and current.get('name') == 'Kaveon'
+                        and value == 'KaveonDB'):
+                    response = client.put(
+                        path,
+                        headers={'If-Match': str(current['revision'])},
+                        json={**body, 'revision': current['revision'] + 1,
+                              'lifecycle': current.get('lifecycle', 'Active')},
+                    )
+                    response.raise_for_status()
+                    current = response.json()
+                    break
                 raise RuntimeError(f'Existing definition differs: {path}, field {key}')
     if current['lifecycle'] != 'Active':
         revision = current['revision']
@@ -66,11 +79,15 @@ catalog_names = {document.get('catalog', 'OpenSource') for document in documents
 if len(catalog_names) != 1:
     parser.error('register one catalog at a time; all manifests must name the same catalog')
 CATALOG = catalog_names.pop()
-if CATALOG not in {'OpenSource', 'Kaveon'}:
+if CATALOG == 'Kaveon':
+    # Accept the old manifest spelling during the migration, but publish the
+    # transactional product catalog under its final name.
+    CATALOG = 'KaveonDB'
+if CATALOG not in {'OpenSource', 'KaveonDB'}:
     parser.error(f'unsupported curated catalog: {CATALOG}')
-if args.retire_legacy_kaveon and CATALOG != 'Kaveon':
-    parser.error('--retire-legacy-kaveon is valid only with a Kaveon manifest')
-CATALOG_ID = ('local-' if LOCAL_LAKE else 'aks-') + CATALOG.lower()
+if args.retire_legacy_kaveon and CATALOG != 'KaveonDB':
+    parser.error('--retire-legacy-kaveon is valid only with a KaveonDB manifest')
+CATALOG_ID = ('local-' if LOCAL_LAKE else 'aks-') + ('kaveon' if CATALOG == 'KaveonDB' else CATALOG.lower())
 tables = [table for document in documents for table in document['tables']]
 
 register('/v1/catalog/definitions', '/v1/catalog/definitions/'+CATALOG_ID,
