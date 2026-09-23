@@ -8,6 +8,7 @@ from services import product_store
 
 
 ENVIRONMENT_KEY = "KAVEONDB_READ_AUTHORITY_FAMILIES"
+ALL_FAMILIES_TOKEN = "all"
 SUPPORTED_FAMILIES = frozenset({
     "datasets", "charts", "dashboards", "saved_queries", "user_themes",
     "user_recents", "favorites", "query_history", "activity", "chat_history",
@@ -35,6 +36,13 @@ def enabled(family: str) -> bool:
     if not raw:
         return False
     configured = {item.strip().lower() for item in raw.split(",") if item.strip()}
+    # ``all`` is an explicit deployment switch for the complete product
+    # repository set.  It deliberately expands only families implemented by
+    # product_store; control-plane families remain fail-closed until their
+    # Engine schemas and replay evidence exist.
+    if ALL_FAMILIES_TOKEN in configured:
+        configured.remove(ALL_FAMILIES_TOKEN)
+        configured.update(SUPPORTED_FAMILIES)
     unknown = sorted(configured - SUPPORTED_FAMILIES)
     if unknown:
         raise ProductReadAuthorityError(

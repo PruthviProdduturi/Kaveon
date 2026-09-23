@@ -19,6 +19,17 @@ class ProductReadAuthorityTests(unittest.TestCase):
             with self.assertRaisesRegex(authority.ProductReadAuthorityError, "unknown"):
                 authority.enabled("datasets")
 
+    def test_all_explicitly_cuts_over_every_supported_product_family(self):
+        with patch.dict(os.environ, {authority.ENVIRONMENT_KEY: "all"}, clear=True):
+            for family in authority.SUPPORTED_FAMILIES:
+                with self.subTest(family=family):
+                    self.assertTrue(authority.enabled(family))
+
+    def test_all_does_not_silently_enable_unimplemented_control_plane_families(self):
+        with patch.dict(os.environ, {authority.ENVIRONMENT_KEY: "all"}, clear=True):
+            with self.assertRaises(authority.ProductReadAuthorityError):
+                authority.enabled("context_cache")
+
     def test_target_error_has_no_postgresql_fallback(self):
         with patch.dict(os.environ, {authority.ENVIRONMENT_KEY: "datasets"}, clear=True), \
              patch.object(authority.product_store, "read", side_effect=RuntimeError("target unavailable")), \
