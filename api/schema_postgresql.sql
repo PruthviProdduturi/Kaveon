@@ -348,7 +348,8 @@ ALTER TABLE product_migration_outbox ADD CONSTRAINT ck_product_outbox_family CHE
     (family IN ('datasets','charts','dashboards','saved_queries','user_themes',
                 'user_recents','favorites','catalog_sources','data_sources',
                 'activity','chat_sessions','chat_messages','dlm_definitions',
-                'dlm_runs','query_history'));
+                'dlm_runs','query_history','ai_configuration','dataset_semantics',
+                'context_cache','dlm_generation'));
 CREATE INDEX IF NOT EXISTS idx_product_outbox_unapplied
     ON product_migration_outbox(source_sequence) WHERE applied_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_product_outbox_family_unapplied
