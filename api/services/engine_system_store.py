@@ -8,7 +8,7 @@ identity headers, pagination, or Engine response details.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 import json
 from urllib.parse import quote
 
@@ -19,6 +19,7 @@ from services import engine_bridge
 
 _TABLE = r"^[A-Za-z][A-Za-z0-9_]{0,62}$"
 _ID_MAX = 255
+_JSON_MAX_BYTES = 512 * 1024
 
 
 def _valid(value: str, label: str) -> str:
@@ -122,8 +123,15 @@ def create_row(
     if any(not isinstance(key, str) or not key or len(key) > 128 for key in columns):
         raise HTTPException(422, "Invalid system row column")
     for value in columns.values():
-        if not isinstance(value, dict) or value.get("type") not in {"null", "boolean", "integer", "string"}:
+        if not isinstance(value, dict) or value.get("type") not in {"null", "boolean", "integer", "string", "json"}:
             raise HTTPException(422, "System row columns must use Engine typed values")
+        if value.get("type") == "json":
+            try:
+                encoded = json.dumps(value.get("value"), separators=(",", ":"), ensure_ascii=False)
+            except (TypeError, ValueError) as error:
+                raise HTTPException(422, "System row JSON value is invalid") from error
+            if len(encoded.encode("utf-8")) > _JSON_MAX_BYTES:
+                raise HTTPException(422, "System row JSON value exceeds the 512 KiB limit")
     owner = owner_principal or actor
     _valid(owner, "owner principal")
     document = {
@@ -159,6 +167,85 @@ def create_row(
                 "POST", "/v1/transaction/sql", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
                 payload={"sql": "ROLLBACK", "transaction_id": transaction_id}, role="admin",
             )
+        except Exception:
+            pass
+        raise
+    return committed if isinstance(committed, dict) else (staged if isinstance(staged, dict) else {})
+
+
+def update_row(
+    table: str,
+    row_id: str,
+    columns: Mapping[str, Mapping[str, Any]],
+    expected_revision: int,
+    actor: str,
+    role: str,
+) -> dict:
+    """CAS-update a typed system row through the Engine transaction boundary."""
+    table, row_id = _valid(table, "table"), _valid(row_id, "row ID")
+    if not isinstance(expected_revision, int) or expected_revision < 1:
+        raise HTTPException(422, "System row revision must be positive")
+    _validate_columns(columns)
+    document = {"table": table, "primary_key": row_id, "revision": expected_revision + 1,
+                "columns": columns, "owner_principal": actor}
+    return _typed_row_mutation("UPDATE", row_id, document, actor, role, expected_revision)
+
+
+def delete_row(
+    table: str,
+    row_id: str,
+    expected_revision: int,
+    actor: str,
+    role: str,
+) -> dict:
+    """CAS-delete a typed system row through the Engine transaction boundary."""
+    table, row_id = _valid(table, "table"), _valid(row_id, "row ID")
+    if not isinstance(expected_revision, int) or expected_revision < 1:
+        raise HTTPException(422, "System row revision must be positive")
+    # The table is part of the predicate encoded in the typed-row document.
+    # The Engine validates existence, ownership, and the expected revision.
+    return _typed_row_mutation("DELETE", row_id, None, actor, role, expected_revision, table=table)
+
+
+def _validate_columns(columns: Mapping[str, Mapping[str, Any]]) -> None:
+    if not isinstance(columns, Mapping) or not columns:
+        raise HTTPException(422, "System row columns are required")
+    for key, value in columns.items():
+        if not isinstance(key, str) or not key or len(key) > 128:
+            raise HTTPException(422, "Invalid system row column")
+        if not isinstance(value, Mapping) or value.get("type") not in {"null", "boolean", "integer", "string", "json"}:
+            raise HTTPException(422, "System row columns must use Engine typed values")
+        if value.get("type") == "json":
+            try:
+                encoded = json.dumps(value.get("value"), separators=(",", ":"), ensure_ascii=False)
+            except (TypeError, ValueError) as error:
+                raise HTTPException(422, "System row JSON value is invalid") from error
+            if len(encoded.encode("utf-8")) > _JSON_MAX_BYTES:
+                raise HTTPException(422, "System row JSON value exceeds the 512 KiB limit")
+
+
+def _typed_row_mutation(operation: str, row_id: str, document: Optional[dict], actor: str,
+                        role: str, expected_revision: int, *, table: Optional[str] = None) -> dict:
+    if operation == "DELETE":
+        sql = f"DELETE FROM kaveon.product.typed_rows WHERE id = {_sql_literal(row_id)} AND revision = {expected_revision}"
+    else:
+        payload = json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        sql = ("UPDATE kaveon.product.typed_rows SET document_json = " + _sql_literal(payload) +
+               f" WHERE id = {_sql_literal(row_id)} AND revision = {expected_revision}")
+    begun = engine_bridge._request("POST", "/v1/transaction/sql", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
+                                   payload={"sql": "BEGIN"}, role=_role(role))
+    transaction_id = begun.get("transaction_id") if isinstance(begun, dict) else None
+    if not transaction_id:
+        raise HTTPException(502, "KaveonDB returned an invalid transaction session")
+    try:
+        staged = engine_bridge._request("POST", "/v1/transaction/sql", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
+                                        payload={"sql": sql, "transaction_id": transaction_id}, role="admin")
+        committed = engine_bridge._request("POST", "/v1/transaction/sql", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
+                                           payload={"sql": "COMMIT", "transaction_id": transaction_id}, role="admin")
+    except Exception:
+        try:
+            engine_bridge._request("POST", "/v1/transaction/sql", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
+                                   payload={"sql": "ROLLBACK", "transaction_id": transaction_id}, role="admin")
         except Exception:
             pass
         raise
