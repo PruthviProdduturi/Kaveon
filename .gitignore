@@ -150,6 +150,7 @@ data/**/*.parquet
 # Local ADLS mirror and generated qualification data are runtime artifacts;
 # keep the 100+ GB mirror out of source control.
 data/adls-mirror/
+library-ref-*.png
 # Curated, source-controlled dashboard template provenance (not extracted data).
 !data/dashboard-templates/
 !data/dashboard-templates/vercel-live-dashboard-contract.json
