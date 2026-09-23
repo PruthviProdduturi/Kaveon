@@ -78,6 +78,34 @@ def summarize(audit=None, operational=None):
                       and all(rehearsal[name].get("status") == "passed"
                               for name in BASELINE_GATES))
     passed = passed and baseline_bound
+    blockers = []
+    if not audit_validated:
+        blockers.append("reconciliation audit is missing or not passed")
+    if not operational_validated:
+        blockers.append("operational evidence schema is missing or unsupported")
+    if not family_inventory_complete:
+        missing = sorted(set(AUTHORITY_FAMILIES) - observed_families)
+        extra = sorted(observed_families - set(AUTHORITY_FAMILIES))
+        if missing:
+            blockers.append("authority families missing: " + ", ".join(missing))
+        if extra:
+            blockers.append("unknown authority families present: " + ", ".join(extra))
+        if audit.get("authority_family_count") != EXPECTED_AUTHORITY_FAMILY_COUNT:
+            blockers.append("authority family count does not match the maintained inventory")
+    blockers.extend(
+        f"authority family pending: {item['family']}"
+        for item in families if item["status"] != "passed"
+    )
+    blockers.extend(
+        f"global gate pending: {item['gate']}"
+        for item in gates if item["status"] != "passed"
+    )
+    blockers.extend(
+        f"operational gate pending: {name}"
+        for name, item in rehearsal.items() if item.get("status") != "passed"
+    )
+    if not baseline_bound:
+        blockers.append("fresh PostgreSQL baseline gates are not all passed and bound to one identity")
     return {
         "schema_version": 2,
         "qualification": "postgresql-retirement",
@@ -91,6 +119,7 @@ def summarize(audit=None, operational=None):
         "global_gates": gates,
         "rehearsal_gates": rehearsal,
         "fresh_postgresql_baseline_bound": baseline_bound,
+        "blocking_reasons": blockers,
         "source": {
             "audit_loaded": bool(audit),
             "audit_validated": audit_validated,
