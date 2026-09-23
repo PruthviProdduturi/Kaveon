@@ -11,14 +11,14 @@ ENVIRONMENT_KEY = "KAVEONDB_READ_AUTHORITY_FAMILIES"
 SUPPORTED_FAMILIES = frozenset({
     "datasets", "charts", "dashboards", "saved_queries", "user_themes",
     "user_recents", "favorites", "query_history", "activity", "chat_history",
-    "sources", "dlm_definitions",
+    "sources", "dlm_definitions", "dlm_runs",
 })
 _KIND = {
     "datasets": "dataset", "charts": "chart", "dashboards": "dashboard",
     "saved_queries": "saved_query", "user_themes": "user_theme",
     "user_recents": "user_recent", "favorites": "favorite",
     "query_history": "query_history", "activity": "activity",
-    "sources": "source", "dlm_definitions": "dlm_definition",
+    "sources": "source", "dlm_definitions": "dlm_definition", "dlm_runs": "dlm_run",
 }
 _OWNER_FAMILIES = {"saved_queries", "user_themes", "user_recents", "favorites", "query_history"}
 
@@ -68,7 +68,7 @@ def read_document(
         if role != "Admin" and owner != actor:
             return None
         return dict(document)
-    if family in {"sources", "dlm_definitions", "activity"}:
+    if family in {"sources", "dlm_definitions", "dlm_runs", "activity"}:
         if family == "activity" and role != "Admin" and document.get("user_email") != actor:
             return None
         return dict(document)
@@ -118,7 +118,7 @@ def list_documents(family: str, actor: str, role: str) -> list[dict]:
             continue
         if family == "activity" and role != "Admin" and document.get("user_email") != actor:
             continue
-        if family in {"sources", "dlm_definitions", "activity"}:
+        if family in {"sources", "dlm_definitions", "dlm_runs", "activity"}:
             item = dict(document)
             identity = str(item.get("source_id") if family == "sources" else item.get("id"))
             item["favorite"] = ("source", identity) in favorite_ids if family == "sources" else False
