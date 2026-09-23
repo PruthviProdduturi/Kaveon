@@ -17,6 +17,13 @@
 > September 12 author's until a campaign record under
 > `benchmark-program.md` completes its rounds.
 
+> **Local cutover update (2026-09-22).** The Docker product profile now runs
+> without a PostgreSQL service. KaveonDB is authoritative for the local product
+> transaction path, and a rebuildable `KaveonDB.system` Parquet projection is
+> queryable. This does not revise the comparative scores below: hosted
+> retirement still requires shadow parity, write fencing, backup/restore and
+> restart-without-PostgreSQL qualification.
+
 ## How to read the scores
 
 KaveonDB is compared on two axes because it is trying to be two things. Against **Trino** it is a distributed analytical engine over lake files; against **PostgreSQL** it is a transactional store for the product's own records. Each dimension carries a score out of 10 for KaveonDB **relative to the reference system doing that job in production today**, with the evidence that earned it and the gap that capped it. A 10 means "no reason to choose the reference over KaveonDB on this dimension"; a 1 means "the capability is absent." The scores are not averaged into one number, because an average would hide the two dimensions that decide whether the product can ship.
@@ -141,7 +148,12 @@ KaveonDB ships reproducible images, Helm and Bicep, health/readiness/metrics, a 
 
 It is a **typed product-record protocol on object storage**, not a relational database. Records are datasets, charts, dashboards, DLM definitions, favourites, saved queries, themes, sources — the product's own metadata. Each write is a revision-checked, digest-verified immutable document; publication is a conditional (compare-and-swap) head update on ADLS Gen2 using HNS versioning and snapshots; reads are snapshot-bound with explicit snapshot-isolation metadata; conflicts and indeterminate outcomes are surfaced as proofs, not swallowed. `BEGIN`/`COMMIT`/`ROLLBACK` are accepted for exactly one statement per request; isolation modifiers and SAVEPOINT are rejected by name. There are no user tables, no row DML, no constraints, no indexes beyond uniqueness checks on record keys.
 
-Migration from PostgreSQL is running under a fail-closed protocol: datasets (9/9), charts (70/70), dashboards (8/8) and DLM definitions (9/9) have been reconciled exactly into KaveonDB on AKS from a retained PostgreSQL snapshot, with an outbox for ongoing writes, checkpointed backfills, and a receipt verifier. Query history's first live write is blocked by an Engine validation response. **PostgreSQL remains authoritative**; no cutover, fencing, or destructive cleanup has been authorised.
+Migration from PostgreSQL was qualified under a fail-closed protocol for the
+historical AKS snapshot. The local Docker profile has since moved its product
+authority to KaveonDB and runs with PostgreSQL absent. **Hosted retirement is
+still gated**: live shadow parity, write fencing and watermark drain, restart
+with PostgreSQL unavailable, backup/restore and rollback rehearsal, and a
+complete authority-family manifest remain required.
 
 ### 2.2 Scores
 
