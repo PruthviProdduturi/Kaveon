@@ -1616,8 +1616,13 @@ async fn commit(
         return error_response(RegistryError::Invalid(error.to_string()));
     }
     let outcome = transaction.commit().await;
-    if matches!(outcome, Ok(CommitOutcome::Committed(_))) {
-        // Committed product data may be what a cached result read.
+    if matches!(
+        outcome,
+        Ok(CommitOutcome::Committed(_) | CommitOutcome::Replayed(_))
+    ) {
+        // A replay confirms that the product write is durable too. Clear the
+        // result cache for both outcomes so a retry cannot expose a stale
+        // query result after an ambiguous client response.
         state.result_cache.clear();
     }
     commit_outcome_response(outcome, &id)
