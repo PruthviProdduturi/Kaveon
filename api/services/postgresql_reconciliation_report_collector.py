@@ -173,7 +173,8 @@ def _verify_inventory(path: Path) -> dict:
             or hashlib.sha256(_canonical(unsigned)).hexdigest() != claimed):
         raise RuntimeError("PostgreSQL live inventory digest mismatch")
     required = {"schema_version", "captured_at", "source_snapshot", "discovered_tables",
-                "authority_tables", "infrastructure_tables", "unclassified_tables"}
+                "authority_tables", "infrastructure_tables", "legacy_identity_tables",
+                "unclassified_tables"}
     if set(unsigned) != required or inventory.get("schema_version") != 1:
         raise RuntimeError("PostgreSQL live inventory schema is invalid")
     rows = {entry.get("table"): entry for entry in inventory["authority_tables"]

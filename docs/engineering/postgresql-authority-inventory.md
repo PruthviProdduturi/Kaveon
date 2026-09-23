@@ -65,6 +65,12 @@ The command uses one repeatable-read, read-only transaction, rejects an unknown
 public table, and records counts, presence, family mapping, source snapshot and
 report digest without rows or credentials.
 
+The live inventory also records `auth_config` and `local_users` explicitly as
+legacy identity tables. They are outside the 16 product authority families:
+`auth_config` must be empty, and local-user metadata is archived without
+password hashes before Entra-only retirement. Their presence is therefore
+accounted for rather than silently treated as an unclassified product table.
+
 ## Operational boundary
 
 Implemented code is insufficient to retire a live database. One immutable AKS

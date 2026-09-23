@@ -50,6 +50,7 @@ class LiveInventoryTests(unittest.TestCase):
         datasets = next(row for row in report["authority_tables"] if row["table"] == "datasets")
         self.assertEqual(datasets["row_count"], 9)
         self.assertEqual(report["infrastructure_tables"], ["product_migration_outbox"])
+        self.assertEqual(report["legacy_identity_tables"], [])
         unsigned = {key: value for key, value in report.items() if key != "report_sha256"}
         self.assertEqual(report["report_sha256"], hashlib.sha256(
             json.dumps(unsigned, sort_keys=True, separators=(",", ":"),
