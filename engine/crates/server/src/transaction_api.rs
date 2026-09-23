@@ -1,6 +1,7 @@
 //! Authenticated, owner-isolated API sessions for product-catalog transactions.
 
 use std::{
+    cmp::Ordering,
     collections::HashMap,
     sync::Arc,
     time::{Duration, Instant},
@@ -58,6 +59,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         // is never owner-filtered through the product API.
         .route("/v1/system/{table}", get(list_system_rows))
         .route("/v1/system/{table}/{id}", get(read_system_row))
+        .route("/v1/system/{table}/query", post(query_system_rows))
 }
 
 #[derive(Clone)]
@@ -372,16 +374,7 @@ impl TransactionRegistry {
         limit: usize,
         cursor: Option<&str>,
     ) -> Result<SystemListResponse, RegistryError> {
-        if table.is_empty()
-            || table.len() > 128
-            || !table
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'_')
-        {
-            return Err(RegistryError::Invalid(
-                "system table name is invalid".into(),
-            ));
-        }
+        validate_system_table(table)?;
         if !(1..=1000).contains(&limit) {
             return Err(RegistryError::Invalid(
                 "system row limit must be between 1 and 1000".into(),
@@ -432,16 +425,7 @@ impl TransactionRegistry {
         table: &str,
         id: &str,
     ) -> Result<SystemRowResponse, RegistryError> {
-        if table.is_empty()
-            || table.len() > 128
-            || !table
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'_')
-        {
-            return Err(RegistryError::Invalid(
-                "system table name is invalid".into(),
-            ));
-        }
+        validate_system_table(table)?;
         let catalog = self.catalog.as_ref().ok_or(RegistryError::Disabled)?;
         let snapshot = catalog.read_current().await.map_err(|error| match error {
             kaveon_storage::CommitErrorKind::Missing | kaveon_storage::CommitErrorKind::Invalid => {
@@ -462,6 +446,136 @@ impl TransactionRegistry {
             snapshot_id: snapshot.snapshot_id,
             columns: row.columns.clone(),
         })
+    }
+
+    async fn query_system_rows(
+        &self,
+        table: &str,
+        request: &SystemQueryRequest,
+    ) -> Result<SystemListResponse, RegistryError> {
+        validate_system_table(table)?;
+        if !(1..=1000).contains(&request.limit) {
+            return Err(RegistryError::Invalid(
+                "system query limit must be between 1 and 1000".into(),
+            ));
+        }
+        if request.filters.len() > 32 {
+            return Err(RegistryError::Invalid(
+                "system query filter limit exceeded".into(),
+            ));
+        }
+        for column in request.filters.keys() {
+            validate_system_column(column)?;
+        }
+        if let Some(column) = request.order_by.as_deref() {
+            validate_system_column(column)?;
+        }
+        let catalog = self.catalog.as_ref().ok_or(RegistryError::Disabled)?;
+        let snapshot = catalog.read_current().await.map_err(|error| match error {
+            kaveon_storage::CommitErrorKind::Missing | kaveon_storage::CommitErrorKind::Invalid => {
+                RegistryError::Corrupt
+            }
+            _ => RegistryError::Unavailable,
+        })?;
+        let rows = snapshot
+            .typed_rows
+            .get(table)
+            .ok_or(RegistryError::ProductMissing)?;
+        let mut matches = rows
+            .iter()
+            .filter(|(_, row)| {
+                request
+                    .filters
+                    .iter()
+                    .all(|(column, expected)| row.columns.get(column) == Some(expected))
+            })
+            .collect::<Vec<_>>();
+        matches.sort_by(|(left_id, left), (right_id, right)| {
+            let ordering = request
+                .order_by
+                .as_deref()
+                .and_then(|column| left.columns.get(column).zip(right.columns.get(column)))
+                .map(|(left, right)| typed_value_order(left, right))
+                .unwrap_or_else(|| left_id.cmp(right_id));
+            let ordering = if request.descending {
+                ordering.reverse()
+            } else {
+                ordering
+            };
+            ordering.then_with(|| left_id.cmp(right_id))
+        });
+        let rows = matches
+            .into_iter()
+            .take(request.limit)
+            .map(|(id, row)| SystemRowResponse {
+                table: table.to_owned(),
+                id: id.clone(),
+                revision: row.revision,
+                generation: snapshot.generation,
+                snapshot_id: snapshot.snapshot_id.clone(),
+                columns: row.columns.clone(),
+            })
+            .collect();
+        Ok(SystemListResponse {
+            generation: snapshot.generation,
+            snapshot_id: snapshot.snapshot_id,
+            rows,
+            next_cursor: None,
+        })
+    }
+}
+
+fn validate_system_table(table: &str) -> Result<(), RegistryError> {
+    if table.is_empty()
+        || table.len() > 128
+        || table.starts_with('.')
+        || table.ends_with('.')
+        || table.contains("..")
+        || !table
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'.')
+    {
+        return Err(RegistryError::Invalid(
+            "system table name is invalid".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_system_column(column: &str) -> Result<(), RegistryError> {
+    if column.is_empty()
+        || column.len() > 128
+        || !column
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        return Err(RegistryError::Invalid(
+            "system column name is invalid".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn typed_value_order(left: &TypedValue, right: &TypedValue) -> Ordering {
+    let rank = |value: &TypedValue| match value {
+        TypedValue::Null => 0,
+        TypedValue::Boolean(_) => 1,
+        TypedValue::Integer(_) => 2,
+        TypedValue::String(_) => 3,
+        TypedValue::Json(_) => 4,
+    };
+    match rank(left).cmp(&rank(right)) {
+        Ordering::Equal => match (left, right) {
+            (TypedValue::Null, TypedValue::Null) => Ordering::Equal,
+            (TypedValue::Boolean(left), TypedValue::Boolean(right)) => left.cmp(right),
+            (TypedValue::Integer(left), TypedValue::Integer(right)) => left.cmp(right),
+            (TypedValue::String(left), TypedValue::String(right)) => left.cmp(right),
+            (TypedValue::Json(left), TypedValue::Json(right)) => serde_json::to_vec(left)
+                .unwrap_or_default()
+                .cmp(&serde_json::to_vec(right).unwrap_or_default()),
+            _ => Ordering::Equal,
+        },
+        ordering => ordering,
     }
 }
 
@@ -1456,6 +1570,22 @@ struct SystemListResponse {
     next_cursor: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct SystemQueryRequest {
+    #[serde(default)]
+    filters: BTreeMap<String, TypedValue>,
+    #[serde(default)]
+    order_by: Option<String>,
+    #[serde(default)]
+    descending: bool,
+    #[serde(default = "default_system_query_limit")]
+    limit: usize,
+}
+
+fn default_system_query_limit() -> usize {
+    100
+}
+
 #[derive(Deserialize)]
 struct ProductListQuery {
     #[serde(default = "default_product_list_limit")]
@@ -1540,6 +1670,25 @@ async fn read_system_row(
         .await
     {
         Ok(row) => Json(row).into_response(),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn query_system_rows(
+    State(state): State<Arc<AppState>>,
+    Extension(identity): Extension<Identity>,
+    Path(table): Path<String>,
+    Json(request): Json<SystemQueryRequest>,
+) -> Response {
+    if identity.role != crate::security::Role::Admin {
+        return error_response(RegistryError::OwnershipForbidden);
+    }
+    match state
+        .product_transactions
+        .query_system_rows(&table, &request)
+        .await
+    {
+        Ok(page) => Json(page).into_response(),
         Err(error) => error_response(error),
     }
 }
@@ -3135,5 +3284,59 @@ mod tests {
             catalog.read_current().await.unwrap().typed_rows["app.users"]["u-1"].revision,
             2
         );
+    }
+
+    #[tokio::test]
+    async fn system_query_filters_and_orders_rows_from_one_snapshot() {
+        let (registry, _) = registry().await;
+        for (id, status, rank) in [("a", "ready", 2), ("b", "ready", 9), ("c", "failed", 10)] {
+            let begun = registry.begin("admin").await.unwrap();
+            registry
+                .stage_product_command(
+                    "admin",
+                    &begun.transaction_id,
+                    ProductDmlCommand::Create {
+                        kind: "typed_row".into(),
+                        id: id.into(),
+                        document_json: format!(
+                            r#"{{"table":"system.jobs","primary_key":"{id}","revision":1,"owner_principal":"admin","columns":{{"status":{{"type":"string","value":"{status}"}},"rank":{{"type":"integer","value":{rank}}}}},"unique_keys":{{}}}}"#
+                        ),
+                    },
+                )
+                .await
+                .unwrap();
+            let mut transaction = registry.take("admin", &begun.transaction_id).await.unwrap();
+            transaction.bind_request_digest(id.as_bytes()).unwrap();
+            transaction.commit().await.unwrap();
+        }
+        let result = registry
+            .query_system_rows(
+                "system.jobs",
+                &SystemQueryRequest {
+                    filters: BTreeMap::from([(
+                        "status".into(),
+                        TypedValue::String("ready".into()),
+                    )]),
+                    order_by: Some("rank".into()),
+                    descending: true,
+                    limit: 10,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            result
+                .rows
+                .iter()
+                .map(|row| row.id.as_str())
+                .collect::<Vec<_>>(),
+            ["b", "a"]
+        );
+        assert!(
+            result.rows.iter().all(|row| {
+                row.columns.get("status") == Some(&TypedValue::String("ready".into()))
+            })
+        );
+        assert!(result.next_cursor.is_none());
     }
 }
