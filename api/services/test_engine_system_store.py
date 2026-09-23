@@ -55,3 +55,28 @@ def test_create_row_uses_transaction_boundary_and_commits():
     staged = request.call_args_list[1].kwargs["payload"]["sql"]
     assert "typed_rows" in staged and '"primary_key":"d1"' in staged
     assert request.call_args_list[2].kwargs["payload"] == {"sql": "COMMIT", "transaction_id": "tx-1"}
+
+
+def test_create_row_accepts_bounded_json_columns():
+    responses = [{"transaction_id": "tx-1"}, {"generation": 5}, {"generation": 6}]
+    with patch.object(store.engine_bridge, "_request", side_effect=responses):
+        store.create_row("datasets", "d1", {
+            "config": {"type": "json", "value": {"enabled": True, "tags": ["a"]}},
+        }, "admin@example.com", "Admin")
+
+
+def test_update_row_uses_compare_and_swap_revision():
+    responses = [{"transaction_id": "tx-2"}, {"generation": 7}, {"generation": 8}]
+    with patch.object(store.engine_bridge, "_request", side_effect=responses) as request:
+        store.update_row("datasets", "d1", {"name": {"type": "string", "value": "new"}},
+                         3, "admin@example.com", "Admin")
+    sql = request.call_args_list[1].kwargs["payload"]["sql"]
+    assert "revision = 3" in sql and '"revision":4' in sql
+
+
+def test_system_json_value_is_bounded():
+    with pytest.raises(HTTPException) as error:
+        store.create_row("datasets", "d1", {
+            "config": {"type": "json", "value": "x" * (512 * 1024 + 1)},
+        }, "admin@example.com", "Admin")
+    assert error.value.status_code == 422
