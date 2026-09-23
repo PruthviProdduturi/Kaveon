@@ -156,13 +156,23 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
                         const schemaActive = current.catalog === name && current.schema === schema && !current.table;
                         return (
                           <div key={k}>
-                            <Link href={`/catalog/${enc(name)}/${enc(schema)}`} className={`${s.node} ${s.level1}`} aria-current={schemaActive ? "page" : undefined}
-                              onClick={() => { setOpen(prev => new Set(prev).add(k)); loadTables(name, schema); }}>
-                              <span className={`${s.chev} ${sOpen ? s.chevOpen : ""}`}>▶</span>
-                              <span className={s.kind}><i className="fas fa-folder" /></span>
-                              <span className={s.nodeLabel}>{schema}</span>
-                              {tlist && <span className={s.nodeCount}>{tlist.length}</span>}
-                            </Link>
+                            {/* The twist and the name are two controls, not one: the
+                                twist opens and closes the schema where it stands, the
+                                name navigates to it. A schema that opened on arrival
+                                closes again from the same place it opened. */}
+                            <div className={`${s.row} ${schemaActive ? s.rowActive : ""}`}>
+                              <button type="button" className={s.twist} aria-expanded={sOpen}
+                                aria-label={`${sOpen ? "Collapse" : "Expand"} ${schema}`}
+                                onClick={() => toggle(k, () => loadTables(name, schema))}>
+                                <span className={`${s.chev} ${sOpen ? s.chevOpen : ""}`}>▶</span>
+                              </button>
+                              <Link href={`/catalog/${enc(name)}/${enc(schema)}`} className={s.rowLink} aria-current={schemaActive ? "page" : undefined}
+                                onClick={() => { setOpen(prev => new Set(prev).add(k)); loadTables(name, schema); }}>
+                                <span className={s.kind}><i className="fas fa-folder" /></span>
+                                <span className={s.nodeLabel}>{schema}</span>
+                                {tlist && <span className={s.nodeCount}>{tlist.length}</span>}
+                              </Link>
+                            </div>
                             {sOpen && (tlist ?? []).map(table => {
                               const active = current.catalog === name && current.schema === schema && current.table === table;
                               return (
