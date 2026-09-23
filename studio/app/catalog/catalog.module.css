@@ -32,6 +32,26 @@
 .node:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
 .nodeLabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1 }
 .nodeCount { font: 11px var(--mono); color: var(--text-muted) }
+/* A schema row carries two controls side by side — the twist that opens it and
+   the name that navigates to it — so the row, not the link, holds the hover
+   and the current-page tint. */
+.row { display: flex; align-items: center; min-height: 28px; border-radius: 6px }
+.row:hover { background: var(--bg-hover) }
+.row:hover .rowLink { color: var(--text-primary) }
+.rowActive { background: rgba(var(--accent-rgb), .10) }
+.rowActive .rowLink { color: var(--text-primary); font-weight: 600 }
+.twist {
+  width: 14px; height: 28px; margin-left: 22px; padding: 0; flex-shrink: 0;
+  display: grid; place-items: center; border: 0; border-radius: 4px;
+  background: transparent; cursor: pointer;
+}
+.twist:hover .chev { color: var(--text-secondary) }
+.twist:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
+.rowLink {
+  display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; min-height: 28px;
+  padding: 0 8px 0 6px; color: var(--text-secondary); font: 12.5px Inter, sans-serif; text-decoration: none;
+}
+.rowLink:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 6px }
 .chev { width: 14px; flex-shrink: 0; color: var(--text-faint); font-size: 10px; text-align: center; transition: transform .12s }
 .chevOpen { transform: rotate(90deg) }
 .kind { width: 14px; flex-shrink: 0; color: var(--text-faint); font-size: 11px; text-align: center }
@@ -40,14 +60,19 @@
 .treeErr { color: var(--error) }
 .rail { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 0 }
 
+/* One control size across the page, and the same one the Library header uses:
+   34px tall, a 10px radius, the surface behind it. */
 .ghost {
-  display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: 30px; padding: 0 11px;
-  font: 600 12px Inter, sans-serif; color: var(--text-secondary); text-decoration: none;
-  background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 34px; padding: 0 14px;
+  font: 500 13px Inter, sans-serif; color: var(--text-secondary); text-decoration: none; white-space: nowrap;
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s;
 }
-.ghost:hover { color: var(--text-primary); border-color: var(--border-hover) }
-.primary { background: var(--accent); border-color: var(--accent); color: #fff }
-.primary:hover { color: #fff; background: var(--accent-dark) }
+.ghost:hover { color: var(--text-primary); border-color: var(--border-hover); background: var(--bg-elevated) }
+.ghost:disabled { cursor: default; color: var(--text-muted) }
+.ghost i { font-size: 12px }
+.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 500 }
+.primary:hover { color: #fff; background: var(--accent-dark); border-color: var(--accent-dark) }
 
 /* ── Right pane ───────────────────────────────────────────────────────────── */
 .pane { min-width: 0 }
@@ -62,22 +87,25 @@
    types into SQL Lab. Colour appears in exactly one place — the verdict in
    the last column — and nowhere else. ──────────────────────────────────── */
 
-.invHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px 28px; flex-wrap: wrap; margin: 0 2px 14px }
-.invHeadMain { min-width: 0; flex: 1 1 320px }
+/* The title and the controls share one line and one centre line; the sentence
+   that explains the last column sits under both, at reading width. */
+.invHead { margin: 0 2px 14px }
+.invHeadTop { display: flex; align-items: center; justify-content: space-between; gap: 16px 24px; flex-wrap: wrap; min-height: 34px }
 .invTitle { margin: 0; font-size: 19px; font-weight: 600; letter-spacing: -.012em; color: var(--text-primary) }
-.invLede { margin: 6px 0 0; max-width: 62ch; font-size: 12.5px; line-height: 1.6; color: var(--text-muted) }
-.invActions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }
-.quietLink { font-size: 12px; color: var(--text-muted); text-decoration: none; padding: 0 2px; border-bottom: 1px solid transparent }
-.quietLink:hover { color: var(--text-primary); border-bottom-color: var(--border-hover) }
+.invLede { margin: 10px 0 0; max-width: 78ch; font-size: 12.5px; line-height: 1.6; color: var(--text-muted) }
+.invActions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap }
 .rotate { animation: spin .9s linear infinite }
 
-.search { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px; color: var(--text-faint) }
-.search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .18) }
-.search i { font-size: 11px }
-.search input { width: 196px; max-width: 46vw; border: 0; outline: 0; background: transparent; font: 12.5px Inter, sans-serif; color: var(--text-primary) }
-.search input::placeholder { color: var(--text-faint) }
+.search {
+  display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px;
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; color: var(--text-muted);
+}
+.search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .15) }
+.search i { font-size: 12px }
+.search input { width: 190px; max-width: 42vw; border: 0; outline: 0; background: transparent; font: 13px Inter, sans-serif; color: var(--text-primary) }
+.search input::placeholder { color: var(--text-muted) }
 
-.invSummary { margin: 0 2px 18px; font-size: 12.5px; line-height: 1.55; color: var(--text-secondary); font-variant-numeric: tabular-nums }
+.invSummary { margin: 12px 2px 14px; font-size: 12.5px; line-height: 1.55; color: var(--text-secondary); font-variant-numeric: tabular-nums }
 
 /* One table for the whole catalog: the columns line up across every schema,
    and a schema is a band across it rather than a separate grid. */
@@ -122,7 +150,7 @@ th.cRows .sortBtn, th.cSize .sortBtn, th.cWhen .sortBtn { justify-content: flex-
 
 /* Every control on the row is reachable by keyboard and says so. */
 .disclose:focus-visible, .sortBtn:focus-visible, .formBtn:focus-visible,
-.tableName:focus-visible, .quietLink:focus-visible, .ghost:focus-visible {
+.tableName:focus-visible, .ghost:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px;
 }
 

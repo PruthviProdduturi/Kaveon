@@ -218,29 +218,33 @@ export function Inventory({ catalogName, schemaName, action }: {
   return (
     <>
       <header className={s.invHead}>
-        <div className={s.invHeadMain}>
+        <div className={s.invHeadTop}>
           <h1 className={s.invTitle}>{schemaName ?? "Tables"}</h1>
-          <p className={s.invLede}>
-            A table whose statistics are current can answer counts, totals and bounds without reading the data.
-            One whose statistics are stale, or missing, is read in full for every question asked of it.
-          </p>
+          <div className={s.invActions}>
+            <label className={s.search}>
+              <i className="fas fa-magnifying-glass" aria-hidden="true" />
+              <input
+                type="search" value={query} placeholder="Search tables and columns"
+                aria-label="Search tables and columns"
+                onChange={event => setQuery(event.target.value)}
+              />
+            </label>
+            {isAdmin && (
+              <Link href="/settings/storage" className={s.ghost}>
+                <i className="fas fa-sliders" aria-hidden="true" /> Catalog sources
+              </Link>
+            )}
+            <button type="button" className={s.ghost} onClick={refresh} disabled={refreshing}>
+              <i className={`fas fa-rotate ${refreshing ? s.rotate : ""}`} aria-hidden="true" />
+              {refreshing ? "Measuring" : "Re-measure"}
+            </button>
+            {action}
+          </div>
         </div>
-        <div className={s.invActions}>
-          <label className={s.search}>
-            <i className="fas fa-magnifying-glass" aria-hidden="true" />
-            <input
-              type="search" value={query} placeholder="Search tables and columns"
-              aria-label="Search tables and columns"
-              onChange={event => setQuery(event.target.value)}
-            />
-          </label>
-          <button type="button" className={s.ghost} onClick={refresh} disabled={refreshing}>
-            <i className={`fas fa-rotate ${refreshing ? s.rotate : ""}`} aria-hidden="true" />
-            {refreshing ? "Measuring" : "Re-measure"}
-          </button>
-          {action}
-          {isAdmin && <Link href="/settings/storage" className={s.quietLink}>Catalog sources</Link>}
-        </div>
+        <p className={s.invLede}>
+          A table whose statistics are current can answer counts, totals and bounds without reading the data.
+          One whose statistics are stale, or missing, is read in full for every question asked of it.
+        </p>
       </header>
 
       <p className={s.invSummary} aria-live="polite">
