@@ -14,11 +14,14 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest } from "next/server";
 import { auth } from "../../../../auth";
+import { hasConfiguredSignInProvider } from "../../../../auth/providerConfig";
 
 const API_BASE = (process.env.API_URL || "http://localhost:8080").replace(/\/+$/, "");
 const PROXY_SECRET = process.env.KAVEON_PROXY_SECRET || "";
 
-const DEV_BYPASS = (process.env.NODE_ENV === "development" || process.env.KAVEON_LOCAL_MODE === "true") && process.env.KAVEON_DEV_USER_EMAIL;
+const DEV_BYPASS = !hasConfiguredSignInProvider() &&
+	(process.env.NODE_ENV === "development" || process.env.KAVEON_LOCAL_MODE === "true") &&
+	process.env.KAVEON_DEV_USER_EMAIL;
 
 async function handler(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
 	let email = "";

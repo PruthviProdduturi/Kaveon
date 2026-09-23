@@ -16,11 +16,17 @@ REPORT_DIRECTORY_KEY = "KAVEON_POSTGRESQL_RECONCILIATION_REPORTS"
 RECEIPT_DIRECTORY_KEY = "KAVEON_POSTGRESQL_OPERATIONAL_RECEIPTS"
 AUTHORITY_KEY = "KAVEONDB_AUTHORITY_FAMILIES"
 MAX_AGE_KEY = "KAVEON_POSTGRESQL_RETIREMENT_MAX_AGE_HOURS"
+LOCAL_MODE_KEY = "KAVEON_LOCAL_PRODUCT_MODE"
 
 
 def requested() -> bool:
     return (os.getenv(MODE_KEY, "").strip().lower() == "true"
-            or os.getenv(REHEARSAL_MODE_KEY, "").strip().lower() == "true")
+            or os.getenv(REHEARSAL_MODE_KEY, "").strip().lower() == "true"
+            or os.getenv(LOCAL_MODE_KEY, "").strip().lower() == "true")
+
+
+def _local_requested() -> bool:
+    return os.getenv(LOCAL_MODE_KEY, "").strip().lower() == "true"
 
 
 def _final_requested() -> bool:
@@ -79,6 +85,31 @@ def validate(*, now: datetime | None = None) -> dict:
     """Return verified activation metadata or reject incomplete configuration."""
     if not requested():
         return {"enabled": False, "authority": "postgresql"}
+    if _local_requested():
+        # Explicit workstation-only mode: use the same KaveonDB repositories and
+        # API routes as retirement, but do not pretend this is retirement
+        # evidence. Loopback Docker is the boundary; cloud deployments must
+        # never set this flag.
+        from services import product_read_authority
+        runtime_reads = {item.strip().lower() for item in
+            os.getenv(product_read_authority.ENVIRONMENT_KEY, "").split(",") if item.strip()}
+        if runtime_reads != set(product_read_authority.SUPPORTED_FAMILIES):
+            raise RuntimeError("Local KaveonDB mode requires every product read family")
+        families = {item.strip().lower() for item in os.getenv(AUTHORITY_KEY, "").split(",") if item.strip()}
+        if families != set(gate.AUTHORITY_FAMILIES):
+            raise RuntimeError("Local KaveonDB mode requires the complete product authority family set")
+        engine_bridge._endpoint()
+        engine_bridge._verify_context()
+        if not os.getenv("KAVEON_ENGINE_BRIDGE_TOKEN"):
+            raise RuntimeError("Local KaveonDB bridge credential is not configured")
+        from services import dlm_compiled_artifact
+        if os.getenv(dlm_compiled_artifact.LIVE_PUBLISH_KEY) != "true":
+            raise RuntimeError("Local compiled DLM artifact publication is not enabled")
+        if not os.getenv("KAVEON_LOCAL_DLM_ARTIFACT_PATH"):
+            raise RuntimeError("Local DLM artifact directory is not configured")
+        return {"enabled": True, "authority": "kaveondb", "authority_family_count": len(families),
+                "evidence_sha256": None, "checked_at": datetime.now(timezone.utc).isoformat(),
+                "phase": "local_development"}
     if _final_requested() and os.getenv(REHEARSAL_MODE_KEY, "").strip().lower() == "true":
         raise RuntimeError("Final retirement and restart rehearsal modes are mutually exclusive")
     configured = _authority_families()

@@ -21,6 +21,7 @@ import MicrosoftEntraID from "next-auth/providers/microsoft-entra-id";
 import Credentials from "next-auth/providers/credentials";
 import { isEntraObjectId, verifyEntraAccessToken } from "./auth/verifyEntra";
 import { sessionConfig } from "./auth/sessionConfig";
+import { hasConfiguredSignInProvider } from "./auth/providerConfig";
 
 const adminEmails = (process.env.AUTH_ADMIN_EMAILS ?? "")
   .split(",")
@@ -28,9 +29,35 @@ const adminEmails = (process.env.AUTH_ADMIN_EMAILS ?? "")
   .filter(Boolean);
 
 const adminUsernames = ["pruthviprodduturi"];
+const githubConfigured = Boolean(process.env.GITHUB_ID && process.env.GITHUB_SECRET);
+const googleConfigured = Boolean(process.env.GOOGLE_ID && process.env.GOOGLE_SECRET);
+const microsoftConfigured = Boolean(process.env.AUTH_MICROSOFT_ENTRA_ID_ID && process.env.AUTH_MICROSOFT_ENTRA_ID_SECRET);
 const publicClientEnabled = process.env.KAVEON_ENTRA_PUBLIC_CLIENT === "true";
 const entraAdmins = new Set((process.env.AUTH_ENTRA_ADMIN_OBJECT_IDS ?? "")
   .split(",").map((value) => value.trim().toLowerCase()).filter(isEntraObjectId));
+
+async function primaryVerifiedGithubEmail(accessToken?: string): Promise<string | null> {
+  if (!accessToken) return null;
+  try {
+    const response = await fetch("https://api.github.com/user/emails", {
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${accessToken}`,
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) return null;
+    const emails = await response.json() as Array<{
+      email?: string;
+      primary?: boolean;
+      verified?: boolean;
+    }>;
+    return emails.find((entry) => entry.primary && entry.verified)?.email ?? null;
+  } catch {
+    return null;
+  }
+}
 
 function roleFor(email?: string | null, username?: string | null): "Admin" | "Viewer" {
   if (email && adminEmails.includes(email.toLowerCase())) return "Admin";
@@ -57,18 +84,22 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         };
       },
     })] : []),
-    ...(process.env.GITHUB_ID
-      ? [GitHub({ clientId: process.env.GITHUB_ID, clientSecret: process.env.GITHUB_SECRET })]
+    ...(githubConfigured
+      ? [GitHub({
+          clientId: process.env.GITHUB_ID,
+          clientSecret: process.env.GITHUB_SECRET,
+          authorization: { params: { scope: "read:user user:email" } },
+        })]
       : []),
-    ...(process.env.GOOGLE_ID
+    ...(googleConfigured
       ? [Google({ clientId: process.env.GOOGLE_ID, clientSecret: process.env.GOOGLE_SECRET })]
       : []),
-    ...(!publicClientEnabled && process.env.AUTH_MICROSOFT_ENTRA_ID_ID
+    ...(!publicClientEnabled && microsoftConfigured
       ? [
           MicrosoftEntraID({
             clientId: process.env.AUTH_MICROSOFT_ENTRA_ID_ID,
             clientSecret: process.env.AUTH_MICROSOFT_ENTRA_ID_SECRET,
-            issuer: process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER,
+            issuer: process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER || "https://login.microsoftonline.com/common/v2.0",
             authorization: { params: { prompt: "select_account" } },
           }),
         ]
@@ -79,13 +110,23 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   },
   session: sessionConfig(publicClientEnabled),
   callbacks: {
+    async signIn({ user, account }) {
+      if (account?.provider !== "github" || user.email) return true;
+      const email = await primaryVerifiedGithubEmail(account.access_token);
+      if (!email) return false;
+      user.email = email;
+      return true;
+    },
     // Attach a Kaveon role to the session token so the app can gate on it.
     jwt({ token, profile, user }) {
       const upstreamExpiresAt = user && "upstreamExpiresAt" in user ? user.upstreamExpiresAt : undefined;
       if (typeof upstreamExpiresAt === "number") token.upstreamExpiresAt = upstreamExpiresAt;
       if (typeof token.upstreamExpiresAt === "number" && token.upstreamExpiresAt <= Date.now()) return null;
-      const username = (profile as { login?: string })?.login ?? (token.name as string | undefined);
-      if (profile) token.role = roleFor(token.email as string | undefined, username);
+      const identityProfile = profile as { login?: string; email?: string; preferred_username?: string } | undefined;
+      const email = (token.email as string | undefined) ?? identityProfile?.email ?? identityProfile?.preferred_username;
+      if (email) token.email = email;
+      const username = identityProfile?.login ?? identityProfile?.preferred_username ?? (token.name as string | undefined);
+      if (profile) token.role = roleFor(email, username);
       else if (user && "role" in user) token.role = user.role as string;
       return token;
     },
@@ -99,7 +140,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     authorized({ auth: session, request: { nextUrl } }) {
       // Local-dev bypass — mirrors the API proxy. Container local mode must be
       // opted into explicitly; hosted deployments leave KAVEON_LOCAL_MODE unset.
-      if ((process.env.NODE_ENV === "development" || process.env.KAVEON_LOCAL_MODE === "true") && process.env.KAVEON_DEV_USER_EMAIL) {
+      if (!hasConfiguredSignInProvider() && (process.env.NODE_ENV === "development" || process.env.KAVEON_LOCAL_MODE === "true") && process.env.KAVEON_DEV_USER_EMAIL) {
         return true;
       }
       const isLoggedIn = !!session?.user;

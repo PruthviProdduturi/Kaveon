@@ -44,8 +44,9 @@ kaveon-api                  Up (healthy)
 kaveon-studio               Up (healthy)`}</Code>
 
       <Callout type="note">
-        The stack binds only to loopback and enables <code>KAVEON_LOCAL_MODE</code>, which signs you in as a
-        local Admin so you can skip OAuth entirely. That mode is for localhost only — see{" "}
+        The stack binds only to loopback. Configure Microsoft Entra ID in the ignored <code>.env</code> to
+        use personal or work sign-in; without provider credentials, local mode uses a development Admin.
+        That mode is for localhost only — see{" "}
         <a href="/docs/auth">Auth &amp; RBAC</a> before exposing Kaveon to a network.
       </Callout>
 
@@ -54,8 +55,8 @@ kaveon-studio               Up (healthy)`}</Code>
       <Code lang="bash">{`curl -s localhost:8080/api/health     # platform API
 curl -s localhost:8081/health         # Engine coordinator`}</Code>
       <p>
-        Then open <a href="http://localhost:3000">http://localhost:3000</a>. You land in Studio, already
-        signed in as <strong>Local Developer</strong> with the Admin role.
+        Then open <a href="http://localhost:3000">http://localhost:3000</a>. If Microsoft is configured,
+        sign in with your Microsoft account; otherwise Studio uses the local development Admin.
       </p>
 
       <h2>3 · Run your first query</h2>

@@ -56,13 +56,12 @@ pub const RESERVED_CATALOG: &str = "KaveonDB";
 const MAX_PRINCIPAL_LEN: usize = 96;
 const MAX_CATALOG_LEN: usize = 64;
 
-/// Whether the read-only `KaveonDB.product` and `KaveonDB.catalog` views
-/// the architecture approves for Admins exist. They do not yet
-/// (`docs/engineering/unified-kaveondb-metadata.md`, "Current state"), so
-/// the reserved catalog is hidden from every role: the policy fails closed
-/// rather than exposing internals. Flip this when the projection ships.
+/// Whether the read-only `KaveonDB.system` projection is available to
+/// administrators. The local materializer publishes the transactional
+/// families as immutable Parquet snapshots; mutations refresh the snapshot
+/// before the next catalog publication.
 pub const fn kaveondb_views_available() -> bool {
-    false
+    true
 }
 
 /// Whether `name` is the reserved transactional catalog. Compared without
@@ -280,7 +279,7 @@ impl Scope {
     pub fn level(&self, catalog: &str) -> Option<Access> {
         if is_reserved(catalog) {
             return (self.role == Role::Admin && kaveondb_views_available())
-                .then_some(Access::Browse);
+                .then_some(Access::Query);
         }
         if self.role == Role::Admin {
             return Some(Access::Manage);
@@ -890,8 +889,9 @@ pub(crate) mod tests {
             assert!(!access.can_manage(who, "OpenSource"));
         }
         assert!(access.can_manage(&admin, "OpenSource"));
-        assert!(!access.can_see(&admin, RESERVED_CATALOG));
-        assert!(!access.can_see(&admin, "kaveondb"));
+        assert!(access.can_see(&admin, RESERVED_CATALOG));
+        assert!(access.can_query(&admin, RESERVED_CATALOG));
+        assert!(access.can_see(&admin, "kaveondb"));
 
         access
             .grant(

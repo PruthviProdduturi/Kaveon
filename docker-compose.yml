@@ -2,6 +2,7 @@ name: kaveon
 
 services:
   postgres:
+    profiles: [local-postgres]
     image: postgres:17-alpine
     container_name: kaveon-postgres
     environment:
@@ -23,6 +24,7 @@ services:
     restart: unless-stopped
 
   metadata-migrate:
+    profiles: [local-postgres]
     image: postgres:17-alpine
     environment:
       PGPASSWORD: ${KAVEON_POSTGRES_PASSWORD:-kaveon-local-only}
@@ -81,9 +83,11 @@ services:
     volumes:
       - ./engine/etc/coordinator.toml:/etc/kaveon/config.toml:ro
       - catalog-data:/var/lib/kaveon
+      - ./data/adls-mirror/product-transactions:/var/lib/kaveon/product-transactions
       - type: bind
-        source: ${KAVEON_DATA_PATH:-./data}
+        source: ${KAVEON_DATA_PATH:-./data/adls-mirror/opensource}
         target: /data
+        read_only: true
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 10s
@@ -113,8 +117,9 @@ services:
     volumes: &engine-worker-volumes
       - ./engine/etc/worker.toml:/etc/kaveon/config.toml:ro
       - type: bind
-        source: ${KAVEON_DATA_PATH:-./data}
+        source: ${KAVEON_DATA_PATH:-./data/adls-mirror/opensource}
         target: /data
+        read_only: true
     restart: unless-stopped
 
   engine-worker-2:
@@ -142,36 +147,30 @@ services:
     ports:
       - "127.0.0.1:8082:8080"
     environment:
-      NODE_ENV: development
+      # Trust only the identity stamped by Studio's authenticated server-side proxy.
+      NODE_ENV: production
       API_PORT: "8080"
       WEB_URL: http://localhost:3000
-      METADATA_DB_TYPE: postgresql
-      METADATA_HOST: postgres
-      METADATA_PORT: "5432"
-      METADATA_DATABASE: kaveonmeta
-      METADATA_USER: kaveon
-      METADATA_PASSWORD: ${KAVEON_POSTGRES_PASSWORD:-kaveon-local-only}
-      METADATA_SSLMODE: disable
+      KAVEON_LOCAL_PRODUCT_MODE: "true"
+      KAVEON_POSTGRESQL_RETIREMENT_MODE: "false"
+      KAVEONDB_AUTHORITY_FAMILIES: ai_configuration,catalog_sources,data_sources,datasets,dataset_semantics,charts,dashboards,favorites,saved_queries,user_themes,user_recents,query_history,activity,context_cache,dlm_generation,chat_history
+      KAVEONDB_READ_AUTHORITY_FAMILIES: datasets,charts,dashboards,saved_queries,user_themes,user_recents,favorites,query_history,activity,chat_history,sources,dlm_definitions
+      KAVEON_DLM_LIVE_ARTIFACT_PUBLISH_ENABLED: "true"
+      KAVEON_LOCAL_DLM_ARTIFACT_PATH: /var/lib/kaveon/product-transactions
       KAVEON_PROXY_SECRET: ${KAVEON_PROXY_SECRET:-kaveon-local-proxy}
-      KAVEON_DEV_USER_EMAIL: ${KAVEON_DEV_USER_EMAIL:-developer@localhost}
-      KAVEON_DEV_USER_NAME: ${KAVEON_DEV_USER_NAME:-Local Developer}
-      KAVEON_DEV_USER_ROLE: Admin
+      KAVEON_DEV_USER_EMAIL: ""
       KAVEON_ENGINE_URL: http://engine-coordinator:8080
       KAVEON_ENGINE_PRIVATE_HTTP: "true"
       KAVEON_ENGINE_BRIDGE_TOKEN: ${KAVEON_ENGINE_BRIDGE_TOKEN:-kaveon-local-bridge-token-not-for-production}
       KAVEON_ENGINE_CATALOG_TOKEN: ${KAVEON_CATALOG_ADMIN_TOKEN:-kaveon-local-catalog-admin}
-      # PostgreSQL stays the read authority here; every product write also
-      # lands in the coordinator's KaveonDB product catalog through the
-      # ordered outbox replay. DLM publication binds each definition to the
-      # dataset's catalog revision, so the replay worker is part of this profile.
-      KAVEON_PRODUCT_REPLAY_ENABLED: "true"
+      KAVEON_PRODUCT_REPLAY_ENABLED: "false"
       KAVEON_CREDENTIAL_KEYS: ${KAVEON_CREDENTIAL_KEYS:-}
       KAVEON_CREDENTIAL_ACTIVE_KEY: ${KAVEON_CREDENTIAL_ACTIVE_KEY:-}
     depends_on:
-      metadata-migrate:
-        condition: service_completed_successfully
       engine-coordinator:
         condition: service_healthy
+    volumes:
+      - ./data/adls-mirror/product-transactions:/var/lib/kaveon/product-transactions
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')"]
       interval: 10s
@@ -197,6 +196,10 @@ services:
       API_URL: http://api:8080
       AUTH_URL: http://localhost:3000
       AUTH_SECRET: ${AUTH_SECRET:-kaveon-local-session-secret-change-outside-localhost}
+      AUTH_ADMIN_EMAILS: ${AUTH_ADMIN_EMAILS:-}
+      AUTH_MICROSOFT_ENTRA_ID_ID: ${AUTH_MICROSOFT_ENTRA_ID_ID:-}
+      AUTH_MICROSOFT_ENTRA_ID_SECRET: ${AUTH_MICROSOFT_ENTRA_ID_SECRET:-}
+      AUTH_MICROSOFT_ENTRA_ID_ISSUER: ${AUTH_MICROSOFT_ENTRA_ID_ISSUER:-https://login.microsoftonline.com/common/v2.0}
       KAVEON_LOCAL_MODE: "true"
       KAVEON_PROXY_SECRET: ${KAVEON_PROXY_SECRET:-kaveon-local-proxy}
       KAVEON_DEV_USER_EMAIL: ${KAVEON_DEV_USER_EMAIL:-developer@localhost}
