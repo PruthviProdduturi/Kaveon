@@ -310,41 +310,54 @@ impl TransactionRegistry {
             }
             _ => RegistryError::Unavailable,
         })?;
-        let page = snapshot
-            .product_records_page(kind, limit, cursor)
-            .map_err(|error| RegistryError::Invalid(error.to_string()))?;
-        let mut records = Vec::with_capacity(page.records.len());
-        for record in page.records {
-            let owner = record.unique_values.get("owner_principal");
-            if identity.role != crate::security::Role::Admin
-                && owner.map(String::as_str) != Some(identity.principal.as_str())
-            {
-                continue;
+        let mut records = Vec::with_capacity(limit);
+        // Authorization filtering must happen before pagination is exposed to
+        // callers. Otherwise a page containing another user's records can
+        // return fewer rows and advance the cursor past records the caller is
+        // allowed to see.
+        let mut scan_cursor = cursor.map(str::to_owned);
+        let next_cursor = loop {
+            let page = snapshot
+                .product_records_page(kind, limit, scan_cursor.as_deref())
+                .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+            for record in page.records {
+                let owner = record.unique_values.get("owner_principal");
+                if identity.role != crate::security::Role::Admin
+                    && owner.map(String::as_str) != Some(identity.principal.as_str())
+                {
+                    continue;
+                }
+                let bytes = catalog
+                    .fetch_product_document_at(&snapshot, kind, &record.id)
+                    .await
+                    .map_err(|error| match error {
+                        kaveon_storage::CommitErrorKind::Missing
+                        | kaveon_storage::CommitErrorKind::Invalid => RegistryError::Corrupt,
+                        _ => RegistryError::Unavailable,
+                    })?
+                    .ok_or(RegistryError::Corrupt)?;
+                let document =
+                    serde_json::from_slice(&bytes).map_err(|_| RegistryError::Corrupt)?;
+                records.push(ProductReadResponse {
+                    kind,
+                    id: record.id,
+                    revision: record.revision,
+                    generation: snapshot.generation,
+                    snapshot_id: snapshot.snapshot_id.clone(),
+                    document,
+                });
             }
-            let bytes = catalog
-                .fetch_product_document_at(&snapshot, kind, &record.id)
-                .await
-                .map_err(|error| match error {
-                    kaveon_storage::CommitErrorKind::Missing
-                    | kaveon_storage::CommitErrorKind::Invalid => RegistryError::Corrupt,
-                    _ => RegistryError::Unavailable,
-                })?
-                .ok_or(RegistryError::Corrupt)?;
-            let document = serde_json::from_slice(&bytes).map_err(|_| RegistryError::Corrupt)?;
-            records.push(ProductReadResponse {
-                kind,
-                id: record.id,
-                revision: record.revision,
-                generation: snapshot.generation,
-                snapshot_id: snapshot.snapshot_id.clone(),
-                document,
-            });
-        }
+            let page_next_cursor = page.next_cursor;
+            if records.len() >= limit || page_next_cursor.is_none() {
+                break page_next_cursor;
+            }
+            scan_cursor = page_next_cursor;
+        };
         Ok(ProductListResponse {
             generation: snapshot.generation,
             snapshot_id: snapshot.snapshot_id,
             records,
-            next_cursor: page.next_cursor,
+            next_cursor,
         })
     }
 }
