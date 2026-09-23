@@ -53,6 +53,11 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/v1/transaction/sql", post(execute_sql))
         .route("/v1/products/{kind}", get(list_products))
         .route("/v1/product/{kind}/{id}", get(read_product))
+        // KaveonDB-owned control-plane rows.  These are deliberately separate
+        // from product records: system metadata is administrator-readable and
+        // is never owner-filtered through the product API.
+        .route("/v1/system/{table}", get(list_system_rows))
+        .route("/v1/system/{table}/{id}", get(read_system_row))
 }
 
 #[derive(Clone)]
@@ -358,6 +363,104 @@ impl TransactionRegistry {
             snapshot_id: snapshot.snapshot_id,
             records,
             next_cursor,
+        })
+    }
+
+    async fn list_system_rows(
+        &self,
+        table: &str,
+        limit: usize,
+        cursor: Option<&str>,
+    ) -> Result<SystemListResponse, RegistryError> {
+        if table.is_empty()
+            || table.len() > 128
+            || !table
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        {
+            return Err(RegistryError::Invalid(
+                "system table name is invalid".into(),
+            ));
+        }
+        if !(1..=1000).contains(&limit) {
+            return Err(RegistryError::Invalid(
+                "system row limit must be between 1 and 1000".into(),
+            ));
+        }
+        let catalog = self.catalog.as_ref().ok_or(RegistryError::Disabled)?;
+        let snapshot = catalog.read_current().await.map_err(|error| match error {
+            kaveon_storage::CommitErrorKind::Missing | kaveon_storage::CommitErrorKind::Invalid => {
+                RegistryError::Corrupt
+            }
+            _ => RegistryError::Unavailable,
+        })?;
+        let rows = snapshot
+            .typed_rows
+            .get(table)
+            .ok_or(RegistryError::ProductMissing)?;
+        let start = cursor.unwrap_or("");
+        let mut page = Vec::new();
+        let mut next_cursor = None;
+        for (id, row) in rows
+            .iter()
+            .filter(|(id, _)| id.as_str() > start)
+            .take(limit + 1)
+        {
+            if page.len() == limit {
+                next_cursor = Some(id.clone());
+                break;
+            }
+            page.push(SystemRowResponse {
+                table: table.to_owned(),
+                id: id.clone(),
+                revision: row.revision,
+                generation: snapshot.generation,
+                snapshot_id: snapshot.snapshot_id.clone(),
+                columns: row.columns.clone(),
+            });
+        }
+        Ok(SystemListResponse {
+            generation: snapshot.generation,
+            snapshot_id: snapshot.snapshot_id,
+            rows: page,
+            next_cursor,
+        })
+    }
+
+    async fn read_system_row(
+        &self,
+        table: &str,
+        id: &str,
+    ) -> Result<SystemRowResponse, RegistryError> {
+        if table.is_empty()
+            || table.len() > 128
+            || !table
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        {
+            return Err(RegistryError::Invalid(
+                "system table name is invalid".into(),
+            ));
+        }
+        let catalog = self.catalog.as_ref().ok_or(RegistryError::Disabled)?;
+        let snapshot = catalog.read_current().await.map_err(|error| match error {
+            kaveon_storage::CommitErrorKind::Missing | kaveon_storage::CommitErrorKind::Invalid => {
+                RegistryError::Corrupt
+            }
+            _ => RegistryError::Unavailable,
+        })?;
+        let row = snapshot
+            .typed_rows
+            .get(table)
+            .and_then(|rows| rows.get(id))
+            .ok_or(RegistryError::ProductMissing)?;
+        Ok(SystemRowResponse {
+            table: table.to_owned(),
+            id: id.to_owned(),
+            revision: row.revision,
+            generation: snapshot.generation,
+            snapshot_id: snapshot.snapshot_id,
+            columns: row.columns.clone(),
         })
     }
 }
@@ -1335,6 +1438,24 @@ struct ProductListResponse {
     next_cursor: Option<String>,
 }
 
+#[derive(Serialize)]
+struct SystemRowResponse {
+    table: String,
+    id: String,
+    revision: u64,
+    generation: u64,
+    snapshot_id: String,
+    columns: BTreeMap<String, TypedValue>,
+}
+
+#[derive(Serialize)]
+struct SystemListResponse {
+    generation: u64,
+    snapshot_id: String,
+    rows: Vec<SystemRowResponse>,
+    next_cursor: Option<String>,
+}
+
 #[derive(Deserialize)]
 struct ProductListQuery {
     #[serde(default = "default_product_list_limit")]
@@ -1382,6 +1503,43 @@ async fn read_product(
         .await
     {
         Ok(record) => Json(record).into_response(),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn list_system_rows(
+    State(state): State<Arc<AppState>>,
+    Extension(identity): Extension<Identity>,
+    Path(table): Path<String>,
+    Query(query): Query<ProductListQuery>,
+) -> Response {
+    if identity.role != crate::security::Role::Admin {
+        return error_response(RegistryError::OwnershipForbidden);
+    }
+    match state
+        .product_transactions
+        .list_system_rows(&table, query.limit, query.cursor.as_deref())
+        .await
+    {
+        Ok(page) => Json(page).into_response(),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn read_system_row(
+    State(state): State<Arc<AppState>>,
+    Extension(identity): Extension<Identity>,
+    Path((table, id)): Path<(String, String)>,
+) -> Response {
+    if identity.role != crate::security::Role::Admin {
+        return error_response(RegistryError::OwnershipForbidden);
+    }
+    match state
+        .product_transactions
+        .read_system_row(&table, &id)
+        .await
+    {
+        Ok(row) => Json(row).into_response(),
         Err(error) => error_response(error),
     }
 }
