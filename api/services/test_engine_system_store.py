@@ -40,3 +40,18 @@ def test_system_row_page_rejects_malformed_engine_response():
         with pytest.raises(HTTPException) as error:
             store.list_rows("datasets", "admin@example.com", "Admin")
     assert error.value.status_code == 502
+
+
+def test_create_row_uses_transaction_boundary_and_commits():
+    responses = [
+        {"transaction_id": "tx-1"},
+        {"generation": 5},
+        {"generation": 6, "snapshot_id": "s6"},
+    ]
+    with patch.object(store.engine_bridge, "_request", side_effect=responses) as request:
+        store.create_row("datasets", "d1", {"name": {"type": "string", "value": "Orders"}},
+                         "admin@example.com", "Admin")
+    assert request.call_args_list[0].kwargs["payload"] == {"sql": "BEGIN"}
+    staged = request.call_args_list[1].kwargs["payload"]["sql"]
+    assert "typed_rows" in staged and '"primary_key":"d1"' in staged
+    assert request.call_args_list[2].kwargs["payload"] == {"sql": "COMMIT", "transaction_id": "tx-1"}

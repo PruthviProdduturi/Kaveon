@@ -9,6 +9,7 @@ identity headers, pagination, or Engine response details.
 from __future__ import annotations
 
 from typing import Any, Optional
+import json
 from urllib.parse import quote
 
 from fastapi import HTTPException
@@ -98,3 +99,71 @@ def list_rows(
         "rows": rows,
         "next_cursor": next_cursor,
     }
+
+
+def create_row(
+    table: str,
+    row_id: str,
+    columns: dict[str, dict[str, Any]],
+    actor: str,
+    role: str,
+    *,
+    owner_principal: Optional[str] = None,
+) -> dict:
+    """Create one typed system row through the Engine transaction boundary.
+
+    ``columns`` contains Engine ``TypedValue`` JSON objects (for example
+    ``{"type": "string", "value": "..."}``).  The API never writes a
+    system row with a direct filesystem or database connection.
+    """
+    table, row_id = _valid(table, "table"), _valid(row_id, "row ID")
+    if not isinstance(columns, dict) or not columns:
+        raise HTTPException(422, "System row columns are required")
+    if any(not isinstance(key, str) or not key or len(key) > 128 for key in columns):
+        raise HTTPException(422, "Invalid system row column")
+    for value in columns.values():
+        if not isinstance(value, dict) or value.get("type") not in {"null", "boolean", "integer", "string"}:
+            raise HTTPException(422, "System row columns must use Engine typed values")
+    owner = owner_principal or actor
+    _valid(owner, "owner principal")
+    document = {
+        "table": table,
+        "primary_key": row_id,
+        "revision": 1,
+        "columns": columns,
+        "owner_principal": owner,
+    }
+    sql = (
+        "INSERT INTO kaveon.product.typed_rows (id, document_json) VALUES ("
+        + _sql_literal(row_id) + ", " + _sql_literal(json.dumps(document, sort_keys=True, separators=(",", ":"))) + ")"
+    )
+    begun = engine_bridge._request(
+        "POST", "/v1/transaction/sql", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
+        payload={"sql": "BEGIN"}, role=_role(role),
+    )
+    transaction_id = begun.get("transaction_id") if isinstance(begun, dict) else None
+    if not transaction_id:
+        raise HTTPException(502, "KaveonDB returned an invalid transaction session")
+    try:
+        staged = engine_bridge._request(
+            "POST", "/v1/transaction/sql", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
+            payload={"sql": sql, "transaction_id": transaction_id}, role="admin",
+        )
+        committed = engine_bridge._request(
+            "POST", "/v1/transaction/sql", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
+            payload={"sql": "COMMIT", "transaction_id": transaction_id}, role="admin",
+        )
+    except Exception:
+        try:
+            engine_bridge._request(
+                "POST", "/v1/transaction/sql", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
+                payload={"sql": "ROLLBACK", "transaction_id": transaction_id}, role="admin",
+            )
+        except Exception:
+            pass
+        raise
+    return committed if isinstance(committed, dict) else (staged if isinstance(staged, dict) else {})
+
+
+def _sql_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
