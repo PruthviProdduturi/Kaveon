@@ -117,6 +117,9 @@ recovery, restart, concurrency and restore tests pass against that backend.
   columns are `id`, `revision`, `generation`, `snapshot_id` and
   `document_json`. Automatic post-commit refresh and typed per-family SQL
   columns remain qualification work.
+  Refresh it after a product transaction with
+  `powershell -File scripts/refresh-local-kaveondb-system.ps1`; the command
+  republishes the coordinator catalog and verifies the mirror before returning.
 - Local Docker runs PostgreSQL-free with the product transaction authority,
   Engine coordinator and workers, and Studio healthy. A qualification run
   verified 910 product records, 251 journal shards, zero missing records and
