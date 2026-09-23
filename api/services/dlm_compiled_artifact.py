@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+from pathlib import Path
 
 from services import adls_artifact_client, product_outbox, product_store
 
@@ -27,7 +28,46 @@ def _canonical(value: dict) -> bytes:
 
 
 def _client():
+    if os.getenv("KAVEON_LOCAL_PRODUCT_MODE", "").strip().lower() == "true":
+        return LocalArtifactClient(os.environ["KAVEON_LOCAL_DLM_ARTIFACT_PATH"])
     return adls_artifact_client.AzureArtifactClient.from_env()
+
+
+class LocalArtifactClient:
+    """Create-only immutable DLM objects for the explicitly local Docker mode."""
+    def __init__(self, root: str):
+        self.root = Path(root).resolve()
+
+    def _path(self, key: str) -> Path:
+        if (not isinstance(key, str) or not key or key.startswith("/")
+                or any(part in {"", ".", ".."} for part in key.split("/"))):
+            raise RuntimeError("Local DLM artifact path is invalid")
+        target = (self.root / Path(*key.split("/"))).resolve()
+        if not target.is_relative_to(self.root):
+            raise RuntimeError("Local DLM artifact path escapes its root")
+        return target
+
+    def create_if_absent(self, key: str, content: bytes) -> None:
+        target = self._path(key)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with target.open("xb") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+        except FileExistsError:
+            return
+
+    def read(self, key: str, max_bytes: int) -> bytes | None:
+        target = self._path(key)
+        try:
+            with target.open("rb") as stream:
+                content = stream.read(max_bytes + 1)
+        except FileNotFoundError:
+            return None
+        if len(content) > max_bytes:
+            raise RuntimeError("Local DLM artifact exceeds its read bound")
+        return content
 
 
 def publish(payload: dict) -> dict | None:

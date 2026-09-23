@@ -1,6 +1,6 @@
 # Unified KaveonDB metadata architecture
 
-Status: **accepted product direction; implementation and cloud qualification pending**
+Status: **local PostgreSQL-free path qualified; cloud retirement and full transactional qualification pending**
 
 ## Decision
 
@@ -20,7 +20,7 @@ KaveonDB (one transactional authority; versioned snapshots and audit)
   system     read-only operational metadata and administrator diagnostics
 
 OpenSource  public analytical datasets
-Kaveon      Kaveon-owned analytical/product-usage datasets
+KaveonDB    transactional product authority plus Kaveon-owned usage datasets
 ```
 
 Product and catalog records are read-only through SQL. Mutations use typed,
@@ -62,10 +62,10 @@ covered.
   KaveonDB transaction authority (revision-CAS and audit); they are not copied
   into PostgreSQL or SQLite. Existing catalog/schema/table definitions remain
   SQLite-backed until the separately gated catalog-store migration passes.
-- `OpenSource` contains public-source datasets only. `Kaveon` contains
+- `OpenSource` contains public-source datasets only. `KaveonDB.usage` contains
   Kaveon-owned analytical data, including synthetic usage/telemetry tables.
 - Qualification fixtures live in a separate non-product qualification catalog
-  or test environment; they do not appear in the user-facing `Kaveon` catalog.
+  or test environment; they do not appear in the user-facing `KaveonDB` catalog.
 
 ## Deployment contract
 
@@ -108,19 +108,27 @@ recovery, restart, concurrency and restore tests pass against that backend.
 
 - Product records use KaveonDB's immutable product transaction catalog, stored
   locally under `data/adls-mirror/product-transactions` in this Docker setup.
-- Curated analytical namespaces are `OpenSource` and `Kaveon`; the latter
-  groups Kaveon-owned showcase tables under `usage`. `KaveonDB` currently names
-  the transactional authority in the product/API, not a queryable SQL catalog.
 - Catalog/schema/table definitions, statistics and catalog audit still use
   `kaveon_catalog-data` (SQLite/WAL) locally.
-- The SQL `KaveonDB` system/product/catalog views described above do not yet
-  exist. Product records currently use the authenticated transaction API.
-- The catalog manifests and showcase importer now define the logical move to
-  `Kaveon.usage`; they preserve the existing Kaveon Events dataset ID and keep
-  the same ADLS paths. This branch has not registered the manifests against a
-  running Engine, rebound live dataset records, or passed dashboard/DLM
-  qualification. Existing coordinator catalog state therefore remains
-  unchanged until that rollout is explicitly performed.
+- A local read-only `KaveonDB.system` projection is now registered and queryable
+  (19 tables). The materializer reads the authenticated product APIs and writes
+  Parquet snapshots under `data/adls-mirror/opensource/kaveon/system`; it is a
+  rebuildable projection, not a second write authority. Its current common
+  columns are `id`, `revision`, `generation`, `snapshot_id` and
+  `document_json`. Automatic post-commit refresh and typed per-family SQL
+  columns remain qualification work.
+- Local Docker runs PostgreSQL-free with the product transaction authority,
+  Engine coordinator and workers, and Studio healthy. A qualification run
+  verified 910 product records, 251 journal shards, zero missing records and
+  zero hash mismatches; a dashboard create/delete stress run completed without
+  failures. This is local evidence, not proof of AKS/ADLS retirement.
+- Catalog/schema/table definitions still use the coordinator's SQLite/WAL
+  catalog store locally. Moving that metadata authority into KaveonDB requires
+  the pinned-generation rollout and restart/restore gates above.
+- The local source catalogs expose public data under `OpenSource`; Kaveon-owned
+  usage data is kept under `KaveonDB.usage`. Dataset bindings must be checked
+  whenever a catalog path is changed.
 - PostgreSQL is not started in the local Compose profile. That proves the local
-  runtime can operate without a PostgreSQL service; it does not prove that the
-  full historic PostgreSQL table inventory has been reconciled.
+  runtime can operate without a PostgreSQL service; it does not prove the full
+  historic PostgreSQL inventory, live shadow parity, backup/restore, or cloud
+  retirement gates have passed.

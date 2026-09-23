@@ -119,8 +119,10 @@ kaveon https://engine.example.com/OpenSource/nyc_taxi
 kaveon --server https://engine.example.com --catalog OpenSource --schema nyc_taxi
 ```
 
-Without either, the session starts in the coordinator's default `kaveon.default`
-and the status line shows no context until `USE` selects one. Options accept
+Without either, a remote session starts in the canonical `KaveonDB.system`
+projection. Use `--catalog OpenSource --schema <name>` for public analytical
+data, or `USE`/`.use` to switch context. Local `--local` sessions retain the
+data directory's configured defaults. Options accept
 `--option value` or `--option=value`. A URL may not carry credentials, a query
 string or a fragment; the positional URL and `--server` cannot both be given.
 

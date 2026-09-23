@@ -72,8 +72,8 @@ fn print_usage() {
     println!();
     println!("Options:");
     println!("      --server <URL>          Coordinator URL (default: http://localhost:8080)");
-    println!("      --catalog <NAME>        Session catalog (default: kaveon)");
-    println!("      --schema <NAME>         Session schema (default: default)");
+    println!("      --catalog <NAME>        Session catalog (default: KaveonDB)");
+    println!("      --schema <NAME>         Session schema (default: system for KaveonDB)");
     println!("      --user <NAME>           Session user");
     println!("      --source <NAME>         Client source (default: kaveon-cli)");
     println!("      --client-tags <TAGS>    Comma-separated client tags");

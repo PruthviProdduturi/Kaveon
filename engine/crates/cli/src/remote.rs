@@ -2323,7 +2323,7 @@ mod tests {
                 body["query"],
                 "CREATE TABLE lake.sales.orders WITH (location = 'orders.parquet', format = 'parquet')"
             );
-            assert_eq!(body["catalog"], "kaveon");
+            assert_eq!(body["catalog"], "KaveonDB");
             let reply = r#"{"id":"q-1","state":"FINISHED","columns":[{"name":"table","type":"Utf8"},{"name":"result","type":"Utf8"}],"data":[["lake.sales.orders","created"]],"elapsed_ms":3}"#;
             write!(
                 stream,

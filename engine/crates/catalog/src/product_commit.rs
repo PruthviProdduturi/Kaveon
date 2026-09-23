@@ -187,6 +187,22 @@ impl ProductCatalogCommit {
             .await
         {
             Ok(_) => {}
+            Err(error) if error.kind == CommitErrorKind::Conflict => {
+                // Startup can race with another coordinator initializing the
+                // same store. Reconcile the durable head before reporting a
+                // conflict; an identical verified genesis is a successful
+                // replay, while a different head must still fail closed.
+                if let Ok(current) = self.read_current().await {
+                    if current.reference() == genesis.reference()
+                        && current.operation_id == genesis.operation_id
+                        && current.request_digest == genesis.request_digest
+                    {
+                        attempt.finish(TransactionOutcome::Replayed);
+                        return CommitOutcome::Replayed(current);
+                    }
+                }
+                return finish_storage(attempt, error.kind);
+            }
             Err(error) => return finish_storage(attempt, error.kind),
         }
         let head = match encode_head(&HeadRecord {
@@ -204,6 +220,21 @@ impl ProductCatalogCommit {
             Ok(_) => {
                 attempt.finish(TransactionOutcome::Committed);
                 CommitOutcome::Committed(genesis)
+            }
+            Err(error) if error.kind == CommitErrorKind::Conflict => {
+                // The head may have been created by a concurrent initializer
+                // after our genesis object write. Verify it instead of
+                // turning a safe replay into an indeterminate startup error.
+                if let Ok(current) = self.read_current().await {
+                    if current.reference() == genesis.reference()
+                        && current.operation_id == genesis.operation_id
+                        && current.request_digest == genesis.request_digest
+                    {
+                        attempt.finish(TransactionOutcome::Replayed);
+                        return CommitOutcome::Replayed(current);
+                    }
+                }
+                finish_storage(attempt, error.kind)
             }
             Err(error) => finish_storage(attempt, error.kind),
         }
@@ -897,6 +928,23 @@ mod tests {
     fn catalog_with(storage: AdlsConditionalCommit) -> ProductCatalogCommit {
         ProductCatalogCommit::new(storage, "product", Arc::new(TransactionMetrics::default()))
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn initialize_reconciles_an_existing_genesis_as_replay() {
+        let catalog = catalog();
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        assert!(matches!(
+            catalog.initialize(genesis.clone()).await,
+            CommitOutcome::Committed(_)
+        ));
+
+        // A restart after another coordinator completed initialization must
+        // reconcile the durable head instead of reporting a startup conflict.
+        assert!(matches!(
+            catalog.initialize(genesis).await,
+            CommitOutcome::Replayed(_)
+        ));
     }
     fn table(name: &str) -> TableManifestRef {
         TableManifestRef {

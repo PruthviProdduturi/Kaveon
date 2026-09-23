@@ -24,7 +24,10 @@ services:
       KAVEON_CATALOG_ADMIN_TOKEN: ${KAVEON_DB_CATALOG_TOKEN:-kaveon-local-catalog-admin}
       KAVEON_PRODUCT_TRANSACTIONS_ENABLED: "true"
       KAVEON_PRODUCT_STORAGE_MODE: local
-      KAVEON_PRODUCT_LOCAL_PATH: /var/lib/kaveon/product-transactions
+      # Point this at the mirrored product-transaction directory when running
+      # fully offline (KAVEON_DATA_PATH=data/adls-mirror). Keep the named
+      # volume as the default for an empty local install.
+      KAVEON_PRODUCT_LOCAL_PATH: ${KAVEON_PRODUCT_LOCAL_PATH:-/var/lib/kaveon/product-transactions}
       KAVEON_PRODUCT_ADLS_PREFIX: kaveon/product-catalog
     volumes:
       - kaveon-db-catalog:/var/lib/kaveon

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { signIn } from "next-auth/react";
 import { KaveonMark } from "./KaveonMark";
 import { preparePublicEntra } from "../auth/publicEntra";
@@ -29,19 +29,35 @@ const PROMPTS = [
 ];
 
 export function AuthScreen() {
-	const [toast, setToast] = useState<string | null>(null);
 	const [signInError, setSignInError] = useState<string | null>(null);
+	const [microsoftProviderEnabled, setMicrosoftProviderEnabled] = useState(false);
+	const [microsoftPublicToken, setMicrosoftPublicToken] = useState<(() => Promise<string>) | null>(null);
 	const [microsoftPending, setMicrosoftPending] = useState(false);
-	const [microsoftAction, setMicrosoftAction] = useState<{ token: (() => Promise<string>) | null } | null>(null);
+	useEffect(() => {
+		let active = true;
+		void fetch("/api/auth/providers", { cache: "no-store" })
+			.then(async (response): Promise<Record<string, unknown>> =>
+				response.ok ? await response.json() as Record<string, unknown> : {})
+			.then((providers) => {
+				if (active) setMicrosoftProviderEnabled(Boolean(providers?.["microsoft-entra-id"]));
+			})
+			.catch(() => {
+				if (active) setMicrosoftProviderEnabled(false);
+			});
+		return () => { active = false; };
+	}, []);
+
 	useEffect(() => {
 		let active = true;
 		void (async () => {
 			try {
 				const response = await fetch("/api/auth/entra-config", { cache: "no-store" });
-				if (!response.ok) throw new Error("configuration_unavailable");
+				if (!response.ok) return;
 				const config = await response.json();
-				const token = config.enabled ? await preparePublicEntra(config) : null;
-				if (active) setMicrosoftAction({ token });
+				if (config.enabled) {
+					const token = await preparePublicEntra(config);
+					if (active) setMicrosoftPublicToken(token);
+				}
 			} catch {
 				if (active) setSignInError("Microsoft sign-in could not be prepared. Refresh this page to retry.");
 			}
@@ -64,24 +80,16 @@ export function AuthScreen() {
 		return () => clearInterval(t);
 	}, []);
 
-	const dismissToast = useCallback(() => setToast(null), []);
-
-	useEffect(() => {
-		if (!toast) return;
-		const t = setTimeout(dismissToast, 5000);
-		return () => clearTimeout(t);
-	}, [toast, dismissToast]);
 
 	const start = (provider: string) => {
 		signIn(provider, { callbackUrl: signInDestination() });
 	};
 	const startMicrosoft = async () => {
-		if (!microsoftAction) return;
 		setSignInError(null);
 		setMicrosoftPending(true);
 		try {
-			if (!microsoftAction.token) return start("microsoft-entra-id");
-			const token = await microsoftAction.token();
+			if (!microsoftPublicToken) return start("microsoft-entra-id");
+			const token = await microsoftPublicToken();
 			await signIn("entra-public", { token, callbackUrl: signInDestination() });
 		} catch (error) {
 			const code = error && typeof error === "object" && "errorCode" in error && typeof error.errorCode === "string" && /^[a-z_]{1,80}$/.test(error.errorCode) ? error.errorCode : "sign_in_failed";
@@ -93,9 +101,6 @@ export function AuthScreen() {
 		}
 	};
 
-	const showComingSoon = (provider: string) => {
-		setToast(provider === "google" ? "Google" : "Microsoft");
-	};
 
 	const btnBase: React.CSSProperties = {
 		width: "100%",
@@ -259,23 +264,11 @@ export function AuthScreen() {
 					</p>
 
 					<div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-						<button
-							type="button"
-							onClick={() => start("github")}
-							style={btnBase}
-							onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.15)"; }}
-							onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; }}
-						>
-							<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-								<path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
-							</svg>
-							Continue with GitHub
-						</button>
 
 						<button
 							type="button"
 							onClick={startMicrosoft}
-							disabled={microsoftPending || !microsoftAction}
+							disabled={microsoftPending || (!microsoftProviderEnabled && !microsoftPublicToken)}
 							aria-busy={microsoftPending}
 							style={{ ...btnBase, cursor: microsoftPending ? "wait" : "pointer", opacity: microsoftPending ? 0.7 : 1 }}
 							onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.15)"; }}
@@ -291,21 +284,6 @@ export function AuthScreen() {
 						</button>
 						{signInError && <p role="alert" style={{ margin: "2px 0 0", fontSize: 13, color: "#fca5a5", lineHeight: 1.4 }}>{signInError}</p>}
 
-						<button
-							type="button"
-							onClick={() => showComingSoon("google")}
-							style={btnBase}
-							onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.15)"; }}
-							onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; }}
-						>
-							<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
-								<path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4" />
-								<path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
-								<path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05" />
-								<path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
-							</svg>
-							Continue with Google
-						</button>
 					</div>
 
 					<p style={{ fontSize: 11, color: "#64748b", textAlign: "center", marginTop: 32, letterSpacing: "0.3px" }}>
@@ -314,64 +292,6 @@ export function AuthScreen() {
 				</div>
 			</div>
 
-			{/* Coming-soon modal */}
-			{toast && (
-				<>
-					<div
-						onClick={dismissToast}
-						style={{
-							position: "fixed", inset: 0,
-							background: "rgba(0,0,0,0.5)",
-							backdropFilter: "blur(4px)",
-							zIndex: 99,
-						}}
-					/>
-					<div
-						style={{
-							position: "fixed", top: "50%", left: "50%",
-							transform: "translate(-50%, -50%)",
-							maxWidth: 380, width: "calc(100% - 40px)",
-							background: "#252525",
-							border: "1px solid rgba(255,255,255,0.08)",
-							borderRadius: 14, padding: "32px 28px 24px",
-							boxShadow: "0 24px 64px rgba(0,0,0,0.5)",
-							zIndex: 100, textAlign: "center",
-						}}
-					>
-						<div style={{ fontSize: 15, fontWeight: 600, color: "#f0f0f2", marginBottom: 8 }}>
-							{toast} sign-in coming soon
-						</div>
-						<div style={{ fontSize: 13, color: "#94a3b8", lineHeight: 1.6, marginBottom: 20 }}>
-							This provider isn&rsquo;t configured yet. GitHub and Microsoft sign-in are available now.
-						</div>
-						<div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
-							<button
-								type="button"
-								onClick={() => { setToast(null); start("github"); }}
-								style={{
-									padding: "10px 20px", borderRadius: 8,
-									background: "#f0f0f2", color: "#171717",
-									border: "none", fontSize: 13, fontWeight: 500, cursor: "pointer",
-								}}
-							>
-								Use GitHub
-							</button>
-							<button
-								type="button"
-								onClick={dismissToast}
-								style={{
-									padding: "10px 20px", borderRadius: 8,
-									background: "transparent", color: "#64748b",
-									border: "1px solid rgba(255,255,255,0.08)",
-									fontSize: 13, cursor: "pointer",
-								}}
-							>
-								Cancel
-							</button>
-						</div>
-					</div>
-				</>
-			)}
 		</div>
 	);
 }

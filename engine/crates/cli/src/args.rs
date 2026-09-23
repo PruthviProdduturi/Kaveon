@@ -2,7 +2,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 const DEFAULT_SERVER: &str = "http://localhost:8080";
-const DEFAULT_CATALOG: &str = "kaveon";
+// KaveonDB is the product's canonical transactional catalog.  Keep the
+// persisted lowercase name out of new sessions; the coordinator retains an
+// alias for older installations and explicit --catalog values remain intact.
+const DEFAULT_CATALOG: &str = "KaveonDB";
 const DEFAULT_SCHEMA: &str = "default";
 const DEFAULT_SOURCE: &str = "kaveon-cli";
 /// Statements run for as long as they take; the timeout guards the
@@ -338,6 +341,16 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             return Err("schema specified both in URL and --schema".to_owned());
         }
         options.schema = decode_segment(schema)?;
+    }
+    // A fresh remote session targets the administrator-facing KaveonDB
+    // projection. Other catalogs keep the normal schema default unless the
+    // caller supplies --schema (or /catalog/schema in the URL).
+    if !options.local
+        && !explicit_schema
+        && segments.get(1).is_none()
+        && options.catalog.eq_ignore_ascii_case("KaveonDB")
+    {
+        options.schema = "system".to_owned();
     }
     options.context_explicit = explicit_catalog || explicit_schema || !segments.is_empty();
     url.set_path("");
