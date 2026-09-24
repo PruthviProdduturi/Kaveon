@@ -65,6 +65,33 @@ def _typed(value: Any) -> dict[str, Any]:
     return {"type": "string", "value": str(value)}
 
 
+def _table_columns(rows: list[Mapping[str, Any]]) -> dict[str, str]:
+    """Infer one stable Engine type per source column.
+
+    PostgreSQL permits nulls and values whose runtime representation varies
+    across rows. KaveonDB typed tables deliberately do not. A column remains
+    scalar when every non-null value has the same type and is promoted to JSON
+    when nullability or mixed values would otherwise make replay order matter.
+    """
+    observed: dict[str, set[str]] = {}
+    for row in rows:
+        for key, value in row.items():
+            observed.setdefault(str(key), set()).add(_typed(value)["type"])
+    result: dict[str, str] = {}
+    for key, types in observed.items():
+        non_null = types - {"null"}
+        result[key] = next(iter(non_null)) if len(non_null) == 1 and "null" not in types else "json"
+    return result
+
+
+def _typed_for_column(value: Any, column_type: str) -> dict[str, Any]:
+    if column_type == "json":
+        return {"type": "json", "value": _json_value(value)}
+    if value is None:
+        return {"type": "json", "value": None}
+    return _typed(value)
+
+
 def _record_id(table: str, row: Mapping[str, Any]) -> str:
     """Return a stable <=255 character key for a control-plane row."""
     for key in ("id", "dataset_id", "user_email"):
@@ -103,12 +130,13 @@ def replay_table(
     before invoking this function on a resumed run.
     """
     rows = snapshot_table(table, query=query)
+    column_types = _table_columns(rows)
     written = 0
     skipped = 0
     updated = 0
     for row in rows:
         record_id = _record_id(table, row)
-        columns = {str(key): _typed(value) for key, value in row.items()}
+        columns = {str(key): _typed_for_column(value, column_types[str(key)]) for key, value in row.items()}
         target = read(table, record_id, actor, "Admin")
         if target is not None and target.get("columns") == columns:
             skipped += 1
