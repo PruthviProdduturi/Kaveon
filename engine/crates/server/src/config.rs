@@ -311,6 +311,31 @@ fn parse_raw_config(content: &str, allow_env_fallback: bool) -> anyhow::Result<R
     }
 }
 
+fn parse_security_config(
+    value: &str,
+    allow_env_fallback: bool,
+    insecure_fallback: bool,
+) -> anyhow::Result<crate::security::SecurityConfig> {
+    match serde_json::from_str(value) {
+        Ok(config) => Ok(config),
+        Err(json_error) if allow_env_fallback => match toml::from_str(value) {
+            Ok(config) => Ok(config),
+            Err(toml_error) if insecure_fallback => {
+                // In explicit development fallback mode, the later
+                // KAVEON_INSECURE_DEVELOPMENT override enables development
+                // authentication. Never discard a security document behind
+                // only a TLS proxy, where doing so would weaken auth.
+                let _ = (json_error, toml_error);
+                Ok(crate::security::SecurityConfig::default())
+            }
+            Err(toml_error) => Err(anyhow::anyhow!(
+                "KAVEON_SECURITY_JSON is invalid JSON and TOML fallback failed: {toml_error}"
+            )),
+        },
+        Err(error) => Err(error.into()),
+    }
+}
+
 pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     let mut config = ServerConfig::default();
     let mut config_sets_admission = false;
@@ -533,7 +558,11 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     }
 
     if let Ok(value) = std::env::var("KAVEON_SECURITY_JSON") {
-        config.security = serde_json::from_str(&value)?;
+        config.security = parse_security_config(
+            &value,
+            config_env_fallback_enabled(),
+            std::env::var("KAVEON_INSECURE_DEVELOPMENT").as_deref() == Ok("true"),
+        )?;
     }
     if let Ok(value) = std::env::var("KAVEON_STUDIO_URL") {
         config.security.studio_url = Some(value);
@@ -1202,7 +1231,8 @@ fn parse_kv(line: &str) -> Option<(&str, String)> {
 mod tests {
     use super::{
         ProductTransactionsConfig, ServerConfig, load_server_config, open_catalog,
-        parse_raw_config, product_catalog_commit, validate_product_transactions,
+        parse_raw_config, parse_security_config, product_catalog_commit,
+        validate_product_transactions,
     };
     use arrow::datatypes::{DataType, Field};
     use kaveon_core::{
@@ -1308,6 +1338,19 @@ mod tests {
         let fallback = parse_raw_config(malformed, true).unwrap();
         assert!(fallback.node.is_none());
         assert!(fallback.catalog.is_none());
+    }
+
+    #[test]
+    fn security_config_accepts_toml_and_only_discards_malformed_data_in_dev_fallback() {
+        let parsed = parse_security_config("insecure_development = true\n", true, false).unwrap();
+        assert!(parsed.insecure_development);
+        assert!(parse_security_config("{not-valid}", true, false).is_err());
+        assert!(
+            parse_security_config("{not-valid}", true, true)
+                .unwrap()
+                .principals
+                .is_empty()
+        );
     }
 
     #[test]
