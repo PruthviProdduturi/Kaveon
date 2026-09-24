@@ -356,6 +356,27 @@ CREATE INDEX IF NOT EXISTS idx_product_outbox_family_unapplied
     ON product_migration_outbox(family, source_sequence) WHERE applied_at IS NULL;
 
 -- ── Adaptive Context Routing (staleness-scored NL query router) ────────────────
+-- Optional control-plane families.  These tables are intentionally empty by
+-- default; they provide a stable source schema for retirement replay even on
+-- a fresh deployment that has never configured an AI provider or key.
+CREATE TABLE IF NOT EXISTS ai_providers (
+    id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    display_name TEXT,
+    configuration TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS user_ai_keys (
+    id TEXT PRIMARY KEY,
+    user_email TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    key_reference TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- ── Adaptive Context Routing (staleness-scored NL query router) ────────────────
 -- Global context representation: one row per profiled table/column element.
 -- Populated from pg_stats + pg_stat_user_tables (no LLM, no data scan). The
 -- change counters captured here are what let the validity engine detect drift

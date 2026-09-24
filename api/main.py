@@ -89,6 +89,16 @@ async def lifespan(app: FastAPI):
     if _db_configured:
         threading.Thread(target=start_warmup_and_heartbeat, daemon=True).start()
         print("[API] Connection pool warmup started.")
+        if _os.getenv("KAVEON_RETIREMENT_BASELINE_SCHEMA_ON_START", "false").lower() == "true":
+            def _ensure_retirement_baseline():
+                try:
+                    from ensure_retirement_baseline import main as ensure_baseline
+                    ensure_baseline()
+                except Exception as error:  # pragma: no cover - live operator path
+                    print(f"[API] Retirement baseline schema failed: {type(error).__name__}: {error}")
+            threading.Thread(target=_ensure_retirement_baseline, daemon=True,
+                             name="retirement-baseline-schema").start()
+            print("[API] Retirement baseline schema check started.")
         from services import product_replay_worker
         replay_worker = product_replay_worker.start()
         if replay_worker:
