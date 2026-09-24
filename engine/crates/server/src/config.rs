@@ -288,7 +288,15 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
 
     if path.exists() {
         let content = std::fs::read_to_string(path)?;
-        let raw: RawConfig = toml::from_str(&content)?;
+        // Older ACA revisions mounted the rendered configuration as JSON even
+        // though the file was named `config.toml`. Accept that representation
+        // only when the document is explicitly a JSON object; malformed JSON
+        // still fails closed and TOML keeps its normal parser/validation path.
+        let raw: RawConfig = if content.trim_start().starts_with('{') {
+            serde_json::from_str(&content)?
+        } else {
+            toml::from_str(&content)?
+        };
 
         if let Some(node) = raw.node {
             if let Some(id) = node.id {
@@ -1245,6 +1253,23 @@ mod tests {
             config.catalog_database_path,
             std::path::PathBuf::from("state/catalog.db")
         );
+        assert_eq!(config.catalog_admin_token.as_deref(), Some("test-token"));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn json_rendered_config_is_accepted_for_aca_compatibility() {
+        let directory = temporary_directory();
+        let config_path = directory.join("config.toml");
+        std::fs::write(
+            &config_path,
+            r#"{"node":{"id":"aca-coordinator","coordinator":true},"http":{"port":8090},"catalog":{"database_path":"state/catalog.db","admin_token":"test-token"}}"#,
+        )
+        .unwrap();
+        let config = load_server_config(&config_path).unwrap();
+        assert_eq!(config.node_id, "aca-coordinator");
+        assert!(config.coordinator);
+        assert_eq!(config.http_port, 8090);
         assert_eq!(config.catalog_admin_token.as_deref(), Some("test-token"));
         std::fs::remove_dir_all(directory).unwrap();
     }
