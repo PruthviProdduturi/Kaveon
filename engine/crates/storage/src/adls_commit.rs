@@ -213,6 +213,11 @@ fn append_bounded(target: &mut Vec<u8>, chunk: &[u8], max_bytes: usize) -> Commi
 }
 
 fn classify_error(error: ObjectStoreError) -> CommitError {
+    // Keep the public error deliberately coarse, but retain a safe diagnostic
+    // in the coordinator logs so cloud authentication/endpoint failures can
+    // be distinguished from a missing durable head during startup. The object
+    // store error never contains bearer tokens or secret values.
+    eprintln!("ADLS object-store request failed: {error:?}");
     let kind = match error {
         ObjectStoreError::AlreadyExists { .. }
         | ObjectStoreError::Precondition { .. }
