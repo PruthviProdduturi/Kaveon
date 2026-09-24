@@ -104,7 +104,10 @@ def _request(method, path, token_name, actor, *, payload=None, revision=None, ro
     if response.status_code in {409, 412, 428}:
         raise HTTPException(409, "Engine revision conflict; reload before retrying")
     if not response.is_success:
-        raise HTTPException(502, "Engine rejected the request")
+        # Preserve the upstream status for operators without exposing response
+        # bodies or credentials.  A generic 502 made auth/routing failures
+        # indistinguishable during live cutover qualification.
+        raise HTTPException(502, f"Engine rejected the request (upstream HTTP {response.status_code})")
     try:
         return response.json()
     except ValueError:
