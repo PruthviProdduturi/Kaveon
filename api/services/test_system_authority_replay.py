@@ -32,7 +32,8 @@ class SystemAuthorityReplayTests(unittest.TestCase):
             return {"rows": rows[table]}
 
         write = Mock(return_value={"generation": 1})
-        report = replay.replay_family("dataset_semantics", query=query, write=write)
+        report = replay.replay_family("dataset_semantics", query=query, write=write,
+                                      read=lambda *_args, **_kwargs: None)
         self.assertEqual(report["source_count"], 3)
         self.assertEqual(report["written"], 3)
         self.assertEqual([call.args[0] for call in write.call_args_list], [

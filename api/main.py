@@ -103,16 +103,14 @@ async def lifespan(app: FastAPI):
         replay_worker = product_replay_worker.start()
         if replay_worker:
             print("[API] Product migration outbox replay started.")
+        # System-authority replay is deliberately operator-run.  Running a
+        # full PostgreSQL snapshot in the web process can consume the API's
+        # CPU/memory budget and make ACA health probes fail while the revision
+        # is still starting.  Use ``python run_system_authority_replay.py`` or
+        # the chart's one-shot replay Job instead; its report is durable and
+        # observable, and this process remains responsible only for serving.
         if _os.getenv("KAVEON_SYSTEM_REPLAY_ON_START", "false").lower() == "true":
-            def _run_system_replay_once():
-                try:
-                    from run_system_authority_replay import main as replay_main
-                    replay_main()
-                except Exception as error:  # pragma: no cover - live operator path
-                    print(f"[API] System authority replay failed: {type(error).__name__}: {error}")
-            threading.Thread(target=_run_system_replay_once, daemon=True,
-                             name="system-authority-replay").start()
-            print("[API] System authority replay started.")
+            print("[API] Ignoring KAVEON_SYSTEM_REPLAY_ON_START; run the operator replay command/job explicitly.")
     else:
         print("[API] No metadata database configured — starting in setup mode.")
         print("[API] Setup wizard is available. Configure an identity provider to continue.")

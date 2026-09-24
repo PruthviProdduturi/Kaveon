@@ -93,6 +93,8 @@ def replay_table(
     *,
     query: Callable[..., Mapping[str, Any]] = db.query,
     write: Callable[..., dict] = engine_system_store.create_row,
+    read: Callable[..., Mapping[str, Any] | None] = engine_system_store.read_row,
+    update: Callable[..., dict] = engine_system_store.update_row,
 ) -> dict[str, int | str]:
     """Replay one immutable source snapshot into the typed system table.
 
@@ -102,12 +104,26 @@ def replay_table(
     """
     rows = snapshot_table(table, query=query)
     written = 0
+    skipped = 0
+    updated = 0
     for row in rows:
         record_id = _record_id(table, row)
         columns = {str(key): _typed(value) for key, value in row.items()}
+        target = read(table, record_id, actor, "Admin")
+        if target is not None and target.get("columns") == columns:
+            skipped += 1
+            continue
+        if target is not None:
+            revision = target.get("revision")
+            if type(revision) is not int or revision < 1:
+                raise RuntimeError(f"KaveonDB returned an invalid revision for {table}:{record_id}")
+            update(table, record_id, columns, revision, actor, "Admin")
+            updated += 1
+            continue
         write(table, record_id, columns, actor, "Admin", owner_principal=actor)
         written += 1
-    return {"family": _TABLE_TO_FAMILY[table], "table": table, "source_count": len(rows), "written": written}
+    return {"family": _TABLE_TO_FAMILY[table], "table": table, "source_count": len(rows),
+            "written": written, "updated": updated, "skipped": skipped}
 
 
 def replay_family(family: str, actor: str = "kaveon-migration", **kwargs: Any) -> dict[str, Any]:
@@ -116,4 +132,3 @@ def replay_family(family: str, actor: str = "kaveon-migration", **kwargs: Any) -
     reports = [replay_table(table, actor, **kwargs) for table in FAMILY_TABLES[family]]
     return {"family": family, "tables": reports, "source_count": sum(int(r["source_count"]) for r in reports),
             "written": sum(int(r["written"]) for r in reports)}
-
