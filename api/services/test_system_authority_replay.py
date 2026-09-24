@@ -46,6 +46,24 @@ class SystemAuthorityReplayTests(unittest.TestCase):
         self.assertLessEqual(len(key), 255)
         self.assertTrue(key.startswith("context_snapshots:sha256:"))
 
+    def test_replay_is_safe_to_resume_and_updates_divergent_target(self):
+        def query(sql, *_args):
+            return {"rows": [{"id": 8, "name": "current"}]}
+
+        columns = {"id": {"type": "integer", "value": 8},
+                   "name": {"type": "string", "value": "current"}}
+        read = Mock(side_effect=[{"columns": columns, "revision": 3},
+                                 {"columns": {**columns, "name": {"type": "string", "value": "old"}}, "revision": 2}])
+        update = Mock()
+        first = replay.replay_table("catalog_sources", query=query, read=read, update=update,
+                                    write=Mock(), actor="migration")
+        self.assertEqual(first["skipped"], 1)
+        self.assertEqual(first["updated"], 0)
+        second = replay.replay_table("catalog_sources", query=query, read=read, update=update,
+                                     write=Mock(), actor="migration")
+        self.assertEqual(second["updated"], 1)
+        update.assert_called_once_with("catalog_sources", "catalog_sources:8", columns, 2, "migration", "Admin")
+
 
 if __name__ == "__main__":
     unittest.main()
