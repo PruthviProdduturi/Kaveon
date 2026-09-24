@@ -41,6 +41,20 @@ def _authority_families() -> set[str]:
     }
 
 
+def _runtime_product_families() -> set[str]:
+    """Normalize the explicit product read-authority deployment switch."""
+    from services import product_read_authority
+    configured = {
+        item.strip().lower()
+        for item in os.getenv(product_read_authority.ENVIRONMENT_KEY, "").split(",")
+        if item.strip()
+    }
+    if product_read_authority.ALL_FAMILIES_TOKEN in configured:
+        configured.discard(product_read_authority.ALL_FAMILIES_TOKEN)
+        configured.update(product_read_authority.SUPPORTED_FAMILIES)
+    return configured
+
+
 def _validate_rehearsal_evidence(now: datetime, max_age: int) -> dict:
     """Validate every prerequisite that can exist before the first PG-free boot."""
     from services import postgresql_evidence_collector as collector
@@ -91,8 +105,7 @@ def validate(*, now: datetime | None = None) -> dict:
         # evidence. Loopback Docker is the boundary; cloud deployments must
         # never set this flag.
         from services import product_read_authority
-        runtime_reads = {item.strip().lower() for item in
-            os.getenv(product_read_authority.ENVIRONMENT_KEY, "").split(",") if item.strip()}
+        runtime_reads = _runtime_product_families()
         if runtime_reads != set(product_read_authority.SUPPORTED_FAMILIES):
             raise RuntimeError("Local KaveonDB mode requires every product read family")
         families = {item.strip().lower() for item in os.getenv(AUTHORITY_KEY, "").split(",") if item.strip()}
@@ -124,8 +137,7 @@ def validate(*, now: datetime | None = None) -> dict:
             detail.append("unknown: " + ", ".join(unknown))
         raise RuntimeError("KaveonDB authority-family configuration is incomplete (" + "; ".join(detail) + ")")
     from services import product_read_authority
-    runtime_reads = {item.strip().lower() for item in
-        os.getenv(product_read_authority.ENVIRONMENT_KEY, "").split(",") if item.strip()}
+    runtime_reads = _runtime_product_families()
     if runtime_reads != set(product_read_authority.SUPPORTED_FAMILIES):
         raise RuntimeError("KaveonDB runtime read-authority configuration is incomplete")
     current = now or datetime.now(timezone.utc)
