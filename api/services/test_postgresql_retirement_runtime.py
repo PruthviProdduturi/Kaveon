@@ -117,8 +117,14 @@ class RetirementRuntimeTests(unittest.TestCase):
             runtime.AUTHORITY_KEY: ",".join(gate.AUTHORITY_FAMILIES),
             product_read_authority.ENVIRONMENT_KEY: "datasets,charts"}
         with patch.dict(os.environ, environment, clear=True), \
-             self.assertRaisesRegex(RuntimeError, "read-authority"):
+            self.assertRaisesRegex(RuntimeError, "read-authority"):
             runtime.validate(now=NOW)
+
+    def test_all_product_read_switch_satisfies_runtime_family_check(self):
+        with patch.dict(os.environ,
+                        {product_read_authority.ENVIRONMENT_KEY: "all"}, clear=True):
+            self.assertEqual(runtime._runtime_product_families(),
+                             set(product_read_authority.SUPPORTED_FAMILIES))
 
 
 class RetirementStartupTests(unittest.IsolatedAsyncioTestCase):
