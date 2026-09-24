@@ -57,7 +57,15 @@ def apply_and_reconcile(snapshot):
         target=product_store.migration_read("user_theme",record.record_id,record.record_id,"Admin")
         if target is not None and target.get("document")==record.document: already_present+=1; continue
         revision=target.get("revision") if target is not None else None
-        if target is not None and (type(revision) is not int or revision<1): raise RuntimeError(f"KaveonDB user theme {record.record_id} has an invalid revision")
+        if target is not None and (type(revision) is not int or revision<1):
+            # Report content divergence first.  A malformed target revision is
+            # still invalid, but callers need the stronger reconciliation
+            # signal when the committed document is not the source snapshot.
+            if target.get("document") != record.document:
+                raise RuntimeError(
+                    f"KaveonDB user theme {record.record_id} diverges and has an invalid revision"
+                )
+            raise RuntimeError(f"KaveonDB user theme {record.record_id} has an invalid revision")
         try: product_store.migration_transact([product_store.ProductMutation("update" if target is not None else "create","user_theme",record.record_id,record.document,revision)],record.record_id,"Admin")
         except HTTPException as error:
             resolved=product_store.migration_read("user_theme",record.record_id,record.record_id,"Admin")
