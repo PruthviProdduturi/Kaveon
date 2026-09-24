@@ -184,6 +184,12 @@ newest manifest from a blob listing; those files can be failed-CAS orphans. ADLS
 backup/restore and this procedure require real-account failure qualification
 before the catalog is authoritative.
 
+The KaveonDB backup rehearsal follows the same rule: it recomputes the state
+inventory digest before copying objects, publishes the manifest with a
+create-only write, and reads that manifest back byte-for-byte before emitting a
+successful backup receipt. A stale caller-provided inventory or an
+unreadable/mismatched manifest is a failed rehearsal, never a qualified backup.
+
 GC roots are the directly read head, retained app-level head-history/checkpoint
 records, rollback pins, active migration roots and minimum idempotency/read
 windows. GC traverses manifest references, writes immutable mark evidence, waits
