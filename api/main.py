@@ -93,6 +93,16 @@ async def lifespan(app: FastAPI):
         replay_worker = product_replay_worker.start()
         if replay_worker:
             print("[API] Product migration outbox replay started.")
+        if _os.getenv("KAVEON_SYSTEM_REPLAY_ON_START", "false").lower() == "true":
+            def _run_system_replay_once():
+                try:
+                    from run_system_authority_replay import main as replay_main
+                    replay_main()
+                except Exception as error:  # pragma: no cover - live operator path
+                    print(f"[API] System authority replay failed: {type(error).__name__}: {error}")
+            threading.Thread(target=_run_system_replay_once, daemon=True,
+                             name="system-authority-replay").start()
+            print("[API] System authority replay started.")
     else:
         print("[API] No metadata database configured — starting in setup mode.")
         print("[API] Setup wizard is available. Configure an identity provider to continue.")
