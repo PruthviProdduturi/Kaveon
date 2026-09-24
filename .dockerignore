@@ -43,6 +43,9 @@ temp
 .vscode
 .idea
 .claude
+**/.claude/**
+**/.codex/**
+**/.agents/**
 CLAUDE.md
 
 # Docs & local junk
