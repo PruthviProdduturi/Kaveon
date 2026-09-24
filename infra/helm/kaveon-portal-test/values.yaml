@@ -89,6 +89,15 @@ api:
     enabled: false
     batchSize: 50
     intervalSeconds: 5
+  systemAuthorityReplay:
+    # One-shot operator job; never run this in the API web process.
+    enabled: false
+    family: ""
+    table: ""
+    reportPath: /tmp/system-authority-replay.json
+    resources:
+      requests: {cpu: 100m, memory: 256Mi}
+      limits: {cpu: "1", memory: 1Gi}
   workloadIdentity:
     clientId: ""
   keyVaultUrl: ""
