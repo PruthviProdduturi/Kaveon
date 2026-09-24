@@ -9,7 +9,7 @@ class Client:
   values=[{"path":path,"etag":"e-"+path,"size":len(value)} for path,value in self.objects.items() if path.startswith(prefix.rstrip("/")+"/")]
   if self.changed:values[0]={**values[0],"etag":"changed"}
   self.changed=True;return values
- def read(self,path,size):return self.objects.get(path)
+ def read(self,path,size):return self.created.get(path,self.objects.get(path))
  def create_if_absent_with_etag(self,path,value):
   if path in self.created:raise RuntimeError("exists")
   self.created[path]=value;return "etag-"+str(len(self.created))
@@ -32,6 +32,14 @@ def test_changed_active_prefix_fails_before_manifest_publication():
  client=Client({"active/head":b"head"})
  with pytest.raises(RuntimeError,match="changed during backup"):backup.create("active","b1",client,client,records,state)
  assert "backups/b1/manifest.json" not in client.created
+
+def test_stale_state_identity_fails_before_copy():
+ records=[{"kind":"dataset","id":"1","revision":1,"document_sha256":"a"*64}]
+ client=Client({"active/head":b"head"})
+ state={"snapshot_id":"snapshot-1","record_count":1,"state_sha256":"b"*64}
+ with pytest.raises(RuntimeError,match="does not match supplied identity"):
+  backup.create("active","b1",client,client,records,state)
+ assert not client.created
 
 def test_inventory_requires_one_snapshot_across_kinds(monkeypatch):
  count=0

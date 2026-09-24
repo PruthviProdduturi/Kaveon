@@ -21,6 +21,10 @@ def product_inventory(actor="kaveon-backup"):
 
 def create(active_prefix,backup_id,source,destination,records,state):
  if not backup_id or "/" in backup_id:raise RuntimeError("backup ID is invalid")
+ computed_state=evidence.state_identity(records)
+ if (not isinstance(state,dict) or state.get("state_sha256")!=computed_state["state_sha256"]
+         or state.get("record_count")!=computed_state["record_count"]):
+  raise RuntimeError("backup state inventory does not match supplied identity")
  source_before=sorted(source.list(active_prefix,MAX_OBJECTS),key=lambda item:item["path"])
  if len({item["path"] for item in source_before})!=len(source_before):raise RuntimeError("active transaction prefix contains duplicate objects")
  if not source_before:raise RuntimeError("active transaction prefix is empty")
@@ -43,6 +47,10 @@ def create(active_prefix,backup_id,source,destination,records,state):
   "state_sha256":state["state_sha256"],"record_count":state["record_count"],"objects":objects}
  verified=evidence.validate_backup_manifest(manifest)
  manifest_bytes=json.dumps(manifest,sort_keys=True,separators=(",",":")).encode()
- destination.create_if_absent_with_etag(f"{root}/manifest.json",manifest_bytes)
+ manifest_path=f"{root}/manifest.json"
+ destination.create_if_absent_with_etag(manifest_path,manifest_bytes)
+ persisted=destination.read(manifest_path,len(manifest_bytes))
+ if persisted!=manifest_bytes:
+  raise RuntimeError("backup manifest read-back does not match published bytes")
  return {"backup_id":backup_id,"snapshot_id":state["snapshot_id"],"manifest_sha256":verified["manifest_sha256"],
   "state_sha256":state["state_sha256"],"record_count":state["record_count"],"object_count":len(objects),"manifest":manifest}
