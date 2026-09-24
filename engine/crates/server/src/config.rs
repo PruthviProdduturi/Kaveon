@@ -280,6 +280,37 @@ pub fn default_config_path() -> PathBuf {
     PathBuf::from("/etc/kaveon/config.toml")
 }
 
+fn config_env_fallback_enabled() -> bool {
+    std::env::var("KAVEON_CONFIG_ENV_FALLBACK").as_deref() == Ok("true")
+        && (std::env::var("KAVEON_INSECURE_DEVELOPMENT").as_deref() == Ok("true")
+            || std::env::var("KAVEON_TLS_PROXY_BOUNDARY").as_deref() == Ok("true"))
+}
+
+fn parse_raw_config(content: &str, allow_env_fallback: bool) -> anyhow::Result<RawConfig> {
+    let parsed: anyhow::Result<RawConfig> = if content.trim_start().starts_with('{') {
+        serde_json::from_str(content).map_err(Into::into)
+    } else {
+        toml::from_str(content).map_err(Into::into)
+    };
+    match parsed {
+        Ok(raw) => Ok(raw),
+        Err(_error) if allow_env_fallback => Ok(RawConfig {
+            node: None,
+            http: None,
+            discovery: None,
+            storage: None,
+            exchange: None,
+            memory: None,
+            result_cache: None,
+            catalog: None,
+            product_transactions: None,
+            resource_groups: None,
+            audit: None,
+        }),
+        Err(error) => Err(error),
+    }
+}
+
 pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     let mut config = ServerConfig::default();
     let mut config_sets_admission = false;
@@ -292,11 +323,7 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
         // though the file was named `config.toml`. Accept that representation
         // only when the document is explicitly a JSON object; malformed JSON
         // still fails closed and TOML keeps its normal parser/validation path.
-        let raw: RawConfig = if content.trim_start().starts_with('{') {
-            serde_json::from_str(&content)?
-        } else {
-            toml::from_str(&content)?
-        };
+        let raw = parse_raw_config(&content, config_env_fallback_enabled())?;
 
         if let Some(node) = raw.node {
             if let Some(id) = node.id {
@@ -1175,7 +1202,7 @@ fn parse_kv(line: &str) -> Option<(&str, String)> {
 mod tests {
     use super::{
         ProductTransactionsConfig, ServerConfig, load_server_config, open_catalog,
-        product_catalog_commit, validate_product_transactions,
+        parse_raw_config, product_catalog_commit, validate_product_transactions,
     };
     use arrow::datatypes::{DataType, Field};
     use kaveon_core::{
@@ -1272,6 +1299,15 @@ mod tests {
         assert_eq!(config.http_port, 8090);
         assert_eq!(config.catalog_admin_token.as_deref(), Some("test-token"));
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn malformed_config_requires_explicit_environment_fallback() {
+        let malformed = "{node: not-json}";
+        assert!(parse_raw_config(malformed, false).is_err());
+        let fallback = parse_raw_config(malformed, true).unwrap();
+        assert!(fallback.node.is_none());
+        assert!(fallback.catalog.is_none());
     }
 
     #[test]
