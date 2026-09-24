@@ -107,7 +107,17 @@ def _request(method, path, token_name, actor, *, payload=None, revision=None, ro
         # Preserve the upstream status for operators without exposing response
         # bodies or credentials.  A generic 502 made auth/routing failures
         # indistinguishable during live cutover qualification.
-        raise HTTPException(502, f"Engine rejected the request (upstream HTTP {response.status_code})")
+        detail = f"Engine rejected the request (upstream HTTP {response.status_code})"
+        try:
+            body = response.json()
+            if isinstance(body, dict):
+                code = body.get("code")
+                message = body.get("error") or body.get("message")
+                if code or message:
+                    detail += f": {code or 'ENGINE_ERROR'}" + (f" - {message}" if message else "")
+        except ValueError:
+            pass
+        raise HTTPException(502, detail)
     try:
         return response.json()
     except ValueError:
