@@ -230,8 +230,15 @@ def replay_table(
                         if existing is not None and _columns_match(existing.get("columns", {}), row_columns):
                             skipped += 1
                         elif existing is None:
-                            write(table, row_id, row_columns, actor, "Admin", owner_principal=actor)
-                            written += 1
+                            try:
+                                write(table, row_id, row_columns, actor, "Admin", owner_principal=actor)
+                                written += 1
+                            except Exception:
+                                after = read(table, row_id, actor, "Admin")
+                                if after is not None and _columns_match(after.get("columns", {}), row_columns):
+                                    skipped += 1
+                                else:
+                                    raise
                         else:
                             raise
                 pending = []
@@ -245,8 +252,15 @@ def replay_table(
                     if existing is not None and _columns_match(existing.get("columns", {}), row_columns):
                         skipped += 1
                     elif existing is None:
-                        write(table, row_id, row_columns, actor, "Admin", owner_principal=actor)
-                        written += 1
+                        try:
+                            write(table, row_id, row_columns, actor, "Admin", owner_principal=actor)
+                            written += 1
+                        except Exception:
+                            after = read(table, row_id, actor, "Admin")
+                            if after is not None and _columns_match(after.get("columns", {}), row_columns):
+                                skipped += 1
+                            else:
+                                raise
                     else:
                         raise
         # Existing mismatches are rare; fall through to the regular loop for
