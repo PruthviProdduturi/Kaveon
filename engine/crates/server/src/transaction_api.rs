@@ -263,6 +263,44 @@ impl TransactionRegistry {
         Ok(session.transaction.snapshot().clone())
     }
 
+    async fn stage_product_commands(
+        &self,
+        owner: &str,
+        id: &str,
+        commands: Vec<kaveon_sql::parser::ProductDmlCommand>,
+    ) -> Result<CatalogSnapshot, RegistryError> {
+        let mut sessions = self.sessions.lock().await;
+        expire(&mut sessions);
+        let session = owned_session(&mut sessions, owner, id)?;
+        for command in commands {
+            let (change, document) =
+                product_change(session.transaction.snapshot(), owner, command)?;
+            reject_grant_changes(&change)?;
+            let document_total =
+                document
+                    .as_ref()
+                    .map_or(Ok(session.document_bytes), |(_, bytes)| {
+                        session
+                            .document_bytes
+                            .checked_add(bytes.len())
+                            .ok_or(RegistryError::Capacity)
+                    })?;
+            if document_total > MAX_SESSION_DOCUMENT_BYTES {
+                return Err(RegistryError::Capacity);
+            }
+            session
+                .transaction
+                .stage(change)
+                .map_err(|error| RegistryError::Invalid(error.to_string()))?;
+            if let Some((path, bytes)) = document {
+                session.transaction.stage_document(path, bytes);
+                session.document_bytes = document_total;
+            }
+        }
+        session.expires_at = Instant::now() + self.ttl;
+        Ok(session.transaction.snapshot().clone())
+    }
+
     async fn read_product(
         &self,
         identity: &Identity,
@@ -1845,7 +1883,7 @@ async fn stage_sql_batch(
             "SQL batch requires between 1 and 1000 statements".into(),
         ));
     }
-    let mut snapshot = None;
+    let mut commands = Vec::with_capacity(request.statements.len());
     for sql in request.statements {
         let parsed = match parse_native_transactional(&sql) {
             Ok(NativeTransactionalStatement::Dml(dml)) => dml,
@@ -1860,16 +1898,16 @@ async fn stage_sql_batch(
             Ok(command) => command,
             Err(error) => return error_response(RegistryError::Invalid(error.to_string())),
         };
-        match state
-            .product_transactions
-            .stage_product_command(&identity.principal, &transaction_id, command)
-            .await
-        {
-            Ok(value) => snapshot = Some(value),
-            Err(error) => return error_response(error),
-        }
+        commands.push(command);
     }
-    Json(snapshot.expect("non-empty SQL batch")).into_response()
+    match state
+        .product_transactions
+        .stage_product_commands(&identity.principal, &transaction_id, commands)
+        .await
+    {
+        Ok(snapshot) => Json(snapshot).into_response(),
+        Err(error) => error_response(error),
+    }
 }
 
 async fn execute_sql_request(
