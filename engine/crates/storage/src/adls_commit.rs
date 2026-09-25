@@ -288,6 +288,17 @@ pub fn workload_identity_adls_commit(
     if let Ok(authority) = std::env::var("AZURE_AUTHORITY_HOST") {
         builder = builder.with_authority_host(authority);
     }
+    // Azure Container Apps injects its managed-identity endpoint as
+    // IDENTITY_ENDPOINT (and the request header as IDENTITY_HEADER).  Using
+    // `MicrosoftAzureBuilder::new()` intentionally avoids importing arbitrary
+    // credential environment variables, so pass this endpoint explicitly;
+    // otherwise object_store falls back to the VM metadata address, which is
+    // unreachable from ACA and is reported only as a generic retryable error.
+    if let Ok(endpoint) = std::env::var("IDENTITY_ENDPOINT") {
+        builder = builder.with_msi_endpoint(endpoint);
+    } else if let Ok(endpoint) = std::env::var("MSI_ENDPOINT") {
+        builder = builder.with_msi_endpoint(endpoint);
+    }
     let store = builder
         .build()
         .map_err(|error| format!("cannot configure ADLS object store: {error}"))?;
