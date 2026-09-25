@@ -65,6 +65,18 @@ def test_create_row_accepts_bounded_json_columns():
         }, "admin@example.com", "Admin")
 
 
+def test_create_rows_uses_one_multi_value_insert():
+    responses = [{"transaction_id": "tx-b"}, {"generation": 9}, {"generation": 10}]
+    rows = [("d1", {"name": {"type": "string", "value": "A"}}),
+            ("d2", {"name": {"type": "string", "value": "B"}})]
+    with patch.object(store.engine_bridge, "_request", side_effect=responses) as request:
+        store.create_rows(rows, "admin@example.com", "Admin", table="datasets")
+    sql = request.call_args_list[1].kwargs["payload"]["sql"]
+    assert sql.count("'datasets'") == 0
+    assert "'d1'" in sql and "'d2'" in sql
+    assert sql.count("), (") == 1
+
+
 def test_update_row_uses_compare_and_swap_revision():
     responses = [{"transaction_id": "tx-2"}, {"generation": 7}, {"generation": 8}]
     with patch.object(store.engine_bridge, "_request", side_effect=responses) as request:
