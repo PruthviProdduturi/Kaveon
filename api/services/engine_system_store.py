@@ -192,15 +192,15 @@ def create_rows(
         raise HTTPException(422, "A system row batch requires between 1 and 100 rows")
     owner = owner_principal or actor
     _valid(owner, "owner principal")
-    values: list[str] = []
+    statements: list[str] = []
     for row_id, columns in rows:
         row_id = _valid(row_id, "row ID")
         _validate_columns(columns)
         document = {"table": table, "primary_key": row_id, "revision": 1,
                     "columns": columns, "owner_principal": owner}
-        values.append("(" + _sql_literal(row_id) + ", " +
-                      _sql_literal(json.dumps(document, sort_keys=True, separators=(",", ":"))) + ")")
-    sql = "INSERT INTO kaveon.product.typed_rows (id, document_json) VALUES " + ", ".join(values)
+        statements.append("INSERT INTO kaveon.product.typed_rows (id, document_json) VALUES (" +
+                          _sql_literal(row_id) + ", " +
+                          _sql_literal(json.dumps(document, sort_keys=True, separators=(",", ":"))) + ")")
     begun = engine_bridge._request(
         "POST", "/v1/transaction/sql", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
         payload={"sql": "BEGIN"}, role=_role(role),
@@ -209,10 +209,12 @@ def create_rows(
     if not transaction_id:
         raise HTTPException(502, "KaveonDB returned an invalid transaction session")
     try:
-        staged = engine_bridge._request(
-            "POST", "/v1/transaction/sql", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
-            payload={"sql": sql, "transaction_id": transaction_id}, role="admin",
-        )
+        staged = None
+        for sql in statements:
+            staged = engine_bridge._request(
+                "POST", "/v1/transaction/sql", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
+                payload={"sql": sql, "transaction_id": transaction_id}, role="admin",
+            )
         committed = engine_bridge._request(
             "POST", "/v1/transaction/sql", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
             payload={"sql": "COMMIT", "transaction_id": transaction_id}, role="admin",
