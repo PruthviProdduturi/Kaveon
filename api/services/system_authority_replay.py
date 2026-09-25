@@ -153,13 +153,33 @@ def replay_table(
     """
     rows = snapshot_table(table, query=query)
     column_types = _table_columns(rows)
+    # Pin one bounded target page up front. This avoids a round-trip GET for
+    # every history row while retaining direct reads for post-commit retry
+    # verification. Authority tables are capped below the page bound.
+    target_cache: dict[str, dict | None] = {}
+    # One bounded snapshot avoids reloading the ADLS manifest for every row.
+    if rows and len(rows) <= 1000 and read is engine_system_store.read_row:
+        page = engine_system_store.list_rows(table, actor, "Admin", limit=1000)
+        target_cache = {str(item["id"]): item for item in page.get("rows", [])
+                        if isinstance(item, Mapping) and isinstance(item.get("id"), str)}
+        known_target_ids = set(target_cache)
+    else:
+        known_target_ids = set()
+
+    def initial_read(_table: str, row_id: str, _actor: str, _role: str):
+        if row_id in known_target_ids:
+            return target_cache[row_id]
+        if rows and len(rows) <= 1000 and read is engine_system_store.read_row:
+            return None
+        return read(_table, row_id, _actor, _role)
+
     written = 0
     skipped = 0
     updated = 0
     for row in rows:
         record_id = _record_id(table, row)
         columns = {str(key): _typed_for_column(value, column_types[str(key)]) for key, value in row.items()}
-        target = read(table, record_id, actor, "Admin")
+        target = initial_read(table, record_id, actor, "Admin")
         if target is not None and _columns_match(target.get("columns", {}), columns):
             skipped += 1
             continue
