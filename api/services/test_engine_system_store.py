@@ -71,10 +71,10 @@ def test_create_rows_uses_one_multi_value_insert():
             ("d2", {"name": {"type": "string", "value": "B"}})]
     with patch.object(store.engine_bridge, "_request", side_effect=responses) as request:
         store.create_rows(rows, "admin@example.com", "Admin", table="datasets")
-    sqls = [request.call_args_list[i].kwargs["payload"]["sql"] for i in (1, 2)]
+    sqls = request.call_args_list[1].kwargs["payload"]["statements"]
     assert all("typed_rows" in sql for sql in sqls)
     assert "'d1'" in sqls[0] and "'d2'" in sqls[1]
-    assert request.call_args_list[3].kwargs["payload"] == {"sql": "COMMIT", "transaction_id": "tx-b"}
+    assert request.call_args_list[2].kwargs["payload"] == {"sql": "COMMIT", "transaction_id": "tx-b"}
 
 
 def test_update_row_uses_compare_and_swap_revision():

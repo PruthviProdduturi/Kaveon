@@ -47,7 +47,10 @@ pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/v1/transaction", post(begin))
         .route("/v1/transaction/{transaction_id}/stage", post(stage))
-        .route("/v1/transaction/{transaction_id}/stage-sql-batch", post(stage_sql_batch))
+        .route(
+            "/v1/transaction/{transaction_id}/stage-sql-batch",
+            post(stage_sql_batch),
+        )
         .route("/v1/transaction/{transaction_id}/commit", post(commit))
         .route("/v1/transaction/{transaction_id}/rollback", post(rollback))
         .route("/v1/transaction/{transaction_id}/recovery", get(recovery))
@@ -1834,7 +1837,9 @@ async fn stage_sql_batch(
     Path(transaction_id): Path<String>,
     Json(request): Json<SqlBatchRequest>,
 ) -> Response {
-    use kaveon_sql::parser::{NativeTransactionalStatement, adapt_product_dml, parse_native_transactional};
+    use kaveon_sql::parser::{
+        NativeTransactionalStatement, adapt_product_dml, parse_native_transactional,
+    };
     if request.statements.is_empty() || request.statements.len() > 100 {
         return error_response(RegistryError::Invalid(
             "SQL batch requires between 1 and 100 statements".into(),
@@ -1844,14 +1849,19 @@ async fn stage_sql_batch(
     for sql in request.statements {
         let parsed = match parse_native_transactional(&sql) {
             Ok(NativeTransactionalStatement::Dml(dml)) => dml,
-            Ok(_) => return error_response(RegistryError::Invalid("SQL batch accepts DML statements only".into())),
+            Ok(_) => {
+                return error_response(RegistryError::Invalid(
+                    "SQL batch accepts DML statements only".into(),
+                ));
+            }
             Err(error) => return error_response(RegistryError::Invalid(error.to_string())),
         };
         let command = match adapt_product_dml(&parsed) {
             Ok(command) => command,
             Err(error) => return error_response(RegistryError::Invalid(error.to_string())),
         };
-        match state.product_transactions
+        match state
+            .product_transactions
             .stage_product_command(&identity.principal, &transaction_id, command)
             .await
         {
