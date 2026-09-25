@@ -1840,9 +1840,9 @@ async fn stage_sql_batch(
     use kaveon_sql::parser::{
         NativeTransactionalStatement, adapt_product_dml, parse_native_transactional,
     };
-    if request.statements.is_empty() || request.statements.len() > 100 {
+    if request.statements.is_empty() || request.statements.len() > 1000 {
         return error_response(RegistryError::Invalid(
-            "SQL batch requires between 1 and 100 statements".into(),
+            "SQL batch requires between 1 and 1000 statements".into(),
         ));
     }
     let mut snapshot = None;

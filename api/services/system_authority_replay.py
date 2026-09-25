@@ -221,7 +221,7 @@ def replay_table(
                 # Mismatched rows need the revision/owner-aware update path.
                 continue
             pending.append((record_id, columns))
-            if len(pending) == 100:
+            if len(pending) == 1000:
                 try:
                     engine_system_store.create_rows(pending, actor, "Admin", table=table, owner_principal=actor)
                     written += len(pending)
