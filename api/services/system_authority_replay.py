@@ -179,29 +179,13 @@ def replay_table(
     else:
         known_target_ids = set()
 
-    # Large authority tables still need a target snapshot when a replay is
-    # resumed after a partial run.  Page it once with a pinned cursor rather
-    # than doing one point read per source row.  This keeps retries bounded by
-    # the number of pages and preserves deterministic idempotence.
+    # Large authority tables use the Engine's idempotent typed-row batch
+    # mutation.  Avoid a full manifest scan here: each page would reload the
+    # immutable snapshot, while matching creates are safely no-ops in the
+    # transaction layer.  A rejected batch still falls back to bounded reads.
     if rows and len(rows) > 1000 and read is engine_system_store.read_row:
-        cursor = None
-        snapshot_id = None
-        while True:
-            page = engine_system_store.list_rows(
-                table, actor, "Admin", limit=1000, cursor=cursor
-            )
-            page_snapshot = page.get("snapshot_id")
-            if snapshot_id is None:
-                snapshot_id = page_snapshot
-            elif page_snapshot != snapshot_id:
-                raise RuntimeError(f"Engine target snapshot changed during replay of {table}")
-            for item in page.get("rows", []):
-                if isinstance(item, Mapping) and isinstance(item.get("id"), str):
-                    target_cache[str(item["id"])] = item
-            cursor = page.get("next_cursor")
-            if not cursor:
-                break
-        known_target_ids = set(target_cache)
+        target_cache = {}
+        known_target_ids = set()
 
     # One multi-value INSERT per bounded batch is materially faster than a
     # transaction and HTTP round-trip for every history row. Existing rows
