@@ -156,10 +156,20 @@ def replay_table(
             revision = target.get("revision")
             if type(revision) is not int or revision < 1:
                 raise RuntimeError(f"KaveonDB returned an invalid revision for {table}:{record_id}")
+            # Preserve the target row's ownership identity when resuming a
+            # migration.  Typed-row updates are owner guarded by the Engine;
+            # rows created by an earlier replay/API writer must be updated as
+            # that owner, while newly created rows use the migration actor.
+            target_owner = target.get("columns", {}).get("owner_principal")
+            row_actor = actor
+            if isinstance(target_owner, Mapping) and target_owner.get("type") == "string":
+                owner_value = target_owner.get("value")
+                if isinstance(owner_value, str) and owner_value:
+                    row_actor = owner_value
             last_error = None
             for attempt in range(6):
                 try:
-                    update(table, record_id, columns, revision, actor, "Admin")
+                    update(table, record_id, columns, revision, row_actor, "Admin")
                     last_error = None
                     break
                 except Exception as error:
