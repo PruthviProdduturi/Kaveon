@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Callable, Mapping
@@ -155,21 +156,31 @@ def replay_table(
             revision = target.get("revision")
             if type(revision) is not int or revision < 1:
                 raise RuntimeError(f"KaveonDB returned an invalid revision for {table}:{record_id}")
-            try:
-                update(table, record_id, columns, revision, actor, "Admin")
-            except Exception:
-                # A distributed commit can be durable even when the response
-                # is lost or the coordinator reports an indeterminate outcome.
-                # Re-read the row before retrying so replay never duplicates a
-                # committed mutation or blindly overwrites a newer revision.
-                after = read(table, record_id, actor, "Admin")
-                if after is not None and after.get("columns") == columns:
-                    updated += 1
-                    continue
-                retry_revision = after.get("revision") if after else None
-                if type(retry_revision) is not int or retry_revision < 1:
-                    raise
-                update(table, record_id, columns, retry_revision, actor, "Admin")
+            last_error = None
+            for attempt in range(6):
+                try:
+                    update(table, record_id, columns, revision, actor, "Admin")
+                    last_error = None
+                    break
+                except Exception as error:
+                    last_error = error
+                    # A distributed commit can be durable even when the
+                    # response is lost. Re-read before every retry so replay
+                    # never duplicates a committed mutation or overwrites a
+                    # newer revision. Short backoff also lets a transient
+                    # storage/identity failure recover without hot-looping.
+                    after = read(table, record_id, actor, "Admin")
+                    if after is not None and after.get("columns") == columns:
+                        last_error = None
+                        break
+                    retry_revision = after.get("revision") if after else None
+                    if type(retry_revision) is not int or retry_revision < 1:
+                        raise
+                    revision = retry_revision
+                    if attempt < 5:
+                        time.sleep(min(2 ** attempt, 8))
+            if last_error is not None:
+                raise RuntimeError(f"replay update failed for {table}:{record_id}") from last_error
             updated += 1
             continue
         try:
