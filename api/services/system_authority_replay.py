@@ -204,6 +204,25 @@ def replay_table(
     # transaction and HTTP round-trip for every history row. Existing rows
     # remain on the normal CAS/update path below, so replay stays resumable.
     if rows and len(rows) > 1000 and write is engine_system_store.create_row:
+        def create_one(row_id: str, row_columns: dict[str, dict[str, Any]]) -> bool:
+            """Create one row, returning false when an uncertain commit is found."""
+            for attempt in range(6):
+                try:
+                    write(table, row_id, row_columns, actor, "Admin", owner_principal=actor)
+                    return True
+                except Exception:
+                    try:
+                        after = read(table, row_id, actor, "Admin")
+                    except Exception:
+                        after = None
+                    if after is not None:
+                        if _columns_match(after.get("columns", {}), row_columns):
+                            return False
+                        raise
+                    if attempt < 5:
+                        time.sleep(min(2 ** attempt, 8))
+            raise RuntimeError(f"replay create outcome unresolved for {table}:{row_id}")
+
         pending: list[tuple[str, dict[str, dict[str, Any]]]] = []
         for row in rows:
             record_id = _record_id(table, row)
@@ -231,14 +250,12 @@ def replay_table(
                             skipped += 1
                         elif existing is None:
                             try:
-                                write(table, row_id, row_columns, actor, "Admin", owner_principal=actor)
-                                written += 1
-                            except Exception:
-                                after = read(table, row_id, actor, "Admin")
-                                if after is not None and _columns_match(after.get("columns", {}), row_columns):
-                                    skipped += 1
+                                if create_one(row_id, row_columns):
+                                    written += 1
                                 else:
-                                    raise
+                                    skipped += 1
+                            except Exception:
+                                raise
                         else:
                             raise
                 pending = []
@@ -253,14 +270,12 @@ def replay_table(
                         skipped += 1
                     elif existing is None:
                         try:
-                            write(table, row_id, row_columns, actor, "Admin", owner_principal=actor)
-                            written += 1
-                        except Exception:
-                            after = read(table, row_id, actor, "Admin")
-                            if after is not None and _columns_match(after.get("columns", {}), row_columns):
-                                skipped += 1
+                            if create_one(row_id, row_columns):
+                                written += 1
                             else:
-                                raise
+                                skipped += 1
+                        except Exception:
+                            raise
                     else:
                         raise
         # Existing mismatches are rare; fall through to the regular loop for
