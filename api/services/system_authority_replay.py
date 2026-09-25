@@ -217,12 +217,38 @@ def replay_table(
                 continue
             pending.append((record_id, columns))
             if len(pending) == 100:
-                engine_system_store.create_rows(pending, actor, "Admin", table=table, owner_principal=actor)
-                written += len(pending)
+                try:
+                    engine_system_store.create_rows(pending, actor, "Admin", table=table, owner_principal=actor)
+                    written += len(pending)
+                except Exception:
+                    # A prior partial replay (or duplicate source key) can
+                    # make a whole batch reject. Reconcile that bounded batch
+                    # row-by-row before failing the migration; later batches
+                    # retain the fast transaction path.
+                    for row_id, row_columns in pending:
+                        existing = read(table, row_id, actor, "Admin")
+                        if existing is not None and _columns_match(existing.get("columns", {}), row_columns):
+                            skipped += 1
+                        elif existing is None:
+                            write(table, row_id, row_columns, actor, "Admin", owner_principal=actor)
+                            written += 1
+                        else:
+                            raise
                 pending = []
         if pending:
-            engine_system_store.create_rows(pending, actor, "Admin", table=table, owner_principal=actor)
-            written += len(pending)
+            try:
+                engine_system_store.create_rows(pending, actor, "Admin", table=table, owner_principal=actor)
+                written += len(pending)
+            except Exception:
+                for row_id, row_columns in pending:
+                    existing = read(table, row_id, actor, "Admin")
+                    if existing is not None and _columns_match(existing.get("columns", {}), row_columns):
+                        skipped += 1
+                    elif existing is None:
+                        write(table, row_id, row_columns, actor, "Admin", owner_principal=actor)
+                        written += 1
+                    else:
+                        raise
         # Existing mismatches are rare; fall through to the regular loop for
         # those rows, while already matching/new rows are skipped safely.
         rows = [row for row in rows if _record_id(table, row) in target_cache and
