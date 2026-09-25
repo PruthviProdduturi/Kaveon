@@ -103,6 +103,14 @@ def _typed_for_column(value: Any, column_type: str) -> dict[str, Any]:
     return _typed(value)
 
 
+def _columns_match(target: Mapping[str, Any], expected: Mapping[str, Any]) -> bool:
+    """Compare source columns while accounting for Engine ownership metadata."""
+    actual = dict(target)
+    if "owner_principal" not in expected:
+        actual.pop("owner_principal", None)
+    return actual == dict(expected)
+
+
 def _record_id(table: str, row: Mapping[str, Any]) -> str:
     """Return a stable <=255 character key for a control-plane row."""
     for key in ("id", "dataset_id", "user_email"):
@@ -118,7 +126,10 @@ def _record_id(table: str, row: Mapping[str, Any]) -> str:
 def snapshot_table(table: str, *, query: Callable[..., Mapping[str, Any]] = db.query) -> list[dict[str, Any]]:
     if table not in _TABLE_TO_FAMILY:
         raise ValueError("unsupported system authority table")
-    result = query(f"SELECT * FROM {table} ORDER BY 1")
+    # Replay identity is derived from each row's stable key, so SQL row order
+    # is irrelevant. Avoiding a global ORDER BY keeps large history tables
+    # streaming-friendly and prevents an unnecessary sort before migration.
+    result = query(f"SELECT * FROM {table}")
     rows = result.get("rows") if isinstance(result, Mapping) else None
     if not isinstance(rows, list):
         raise RuntimeError(f"PostgreSQL returned an invalid {table} snapshot")
@@ -149,7 +160,7 @@ def replay_table(
         record_id = _record_id(table, row)
         columns = {str(key): _typed_for_column(value, column_types[str(key)]) for key, value in row.items()}
         target = read(table, record_id, actor, "Admin")
-        if target is not None and target.get("columns") == columns:
+        if target is not None and _columns_match(target.get("columns", {}), columns):
             skipped += 1
             continue
         if target is not None:
@@ -180,7 +191,7 @@ def replay_table(
                     # newer revision. Short backoff also lets a transient
                     # storage/identity failure recover without hot-looping.
                     after = read(table, record_id, actor, "Admin")
-                    if after is not None and after.get("columns") == columns:
+                    if after is not None and _columns_match(after.get("columns", {}), columns):
                         last_error = None
                         break
                     retry_revision = after.get("revision") if after else None
@@ -193,22 +204,26 @@ def replay_table(
                 raise RuntimeError(f"replay update failed for {table}:{record_id}") from last_error
             updated += 1
             continue
-        try:
-            write(table, record_id, columns, actor, "Admin", owner_principal=actor)
-        except Exception:
-            # The same read-after-uncertain rule applies to create-only rows:
-            # a conflict or lost response is success when the exact row is
-            # now visible, and only an unchanged/missing row is retried.
-            after = read(table, record_id, actor, "Admin")
-            if after is not None and after.get("columns") == columns:
-                written += 1
-                continue
-            if after is not None:
-                if after.get("columns") == columns:
-                    written += 1
-                    continue
-                raise
-            write(table, record_id, columns, actor, "Admin", owner_principal=actor)
+        last_error = None
+        for attempt in range(6):
+            try:
+                write(table, record_id, columns, actor, "Admin", owner_principal=actor)
+                last_error = None
+                break
+            except Exception as error:
+                last_error = error
+                # A create can commit while its response is lost. Re-read
+                # after every uncertain outcome; retry only while absent.
+                after = read(table, record_id, actor, "Admin")
+                if after is not None and _columns_match(after.get("columns", {}), columns):
+                    last_error = None
+                    break
+                if after is not None:
+                    raise
+                if attempt < 5:
+                    time.sleep(min(2 ** attempt, 8))
+        if last_error is not None:
+            raise RuntimeError(f"replay create failed for {table}:{record_id}") from last_error
         written += 1
     return {"family": _TABLE_TO_FAMILY[table], "table": table, "source_count": len(rows),
             "written": written, "updated": updated, "skipped": skipped}
