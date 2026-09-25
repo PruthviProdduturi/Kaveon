@@ -273,6 +273,31 @@ impl TransactionRegistry {
         expire(&mut sessions);
         let session = owned_session(&mut sessions, owner, id)?;
         for command in commands {
+            // Migration batches are replayable.  A typed-row create that is
+            // already present with the same immutable payload is an idempotent
+            // no-op; this avoids turning a resumed batch into 1,000 point-read
+            // reconciliations while still rejecting mismatched rows below.
+            if let kaveon_sql::parser::ProductDmlCommand::Create {
+                kind,
+                id: row_id,
+                document_json,
+            } = &command
+            {
+                if kind == "typed_row" {
+                    let (table, row) = typed_row_document(row_id, document_json, owner, 1)?;
+                    if let Some(existing) = session
+                        .transaction
+                        .snapshot()
+                        .typed_rows
+                        .get(&table)
+                        .and_then(|rows| rows.get(row_id))
+                    {
+                        if existing == &row {
+                            continue;
+                        }
+                    }
+                }
+            }
             let (change, document) =
                 product_change(session.transaction.snapshot(), owner, command)?;
             reject_grant_changes(&change)?;
