@@ -209,12 +209,11 @@ def create_rows(
     if not transaction_id:
         raise HTTPException(502, "KaveonDB returned an invalid transaction session")
     try:
-        staged = None
-        for sql in statements:
-            staged = engine_bridge._request(
-                "POST", "/v1/transaction/sql", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
-                payload={"sql": sql, "transaction_id": transaction_id}, role="admin",
-            )
+        staged = engine_bridge._request(
+            "POST", f"/v1/transaction/{transaction_id}/stage-sql-batch",
+            "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
+            payload={"statements": statements}, role="admin",
+        )
         committed = engine_bridge._request(
             "POST", "/v1/transaction/sql", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
             payload={"sql": "COMMIT", "transaction_id": transaction_id}, role="admin",

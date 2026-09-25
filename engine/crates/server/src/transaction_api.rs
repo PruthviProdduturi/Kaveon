@@ -47,6 +47,7 @@ pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/v1/transaction", post(begin))
         .route("/v1/transaction/{transaction_id}/stage", post(stage))
+        .route("/v1/transaction/{transaction_id}/stage-sql-batch", post(stage_sql_batch))
         .route("/v1/transaction/{transaction_id}/commit", post(commit))
         .route("/v1/transaction/{transaction_id}/rollback", post(rollback))
         .route("/v1/transaction/{transaction_id}/recovery", get(recovery))
@@ -1534,6 +1535,11 @@ struct SqlTransactionRequest {
     transaction_id: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct SqlBatchRequest {
+    statements: Vec<String>,
+}
+
 #[derive(Serialize)]
 struct ProductReadResponse {
     kind: ProductRecordKind,
@@ -1817,6 +1823,43 @@ async fn execute_sql(
         state.result_cache.clear();
     }
     response
+}
+
+/// Stage a bounded group of product SQL mutations in one authenticated
+/// request. Each statement retains the normal parser and transaction checks;
+/// this endpoint only removes per-row HTTP overhead for migration batches.
+async fn stage_sql_batch(
+    State(state): State<Arc<AppState>>,
+    Extension(identity): Extension<Identity>,
+    Path(transaction_id): Path<String>,
+    Json(request): Json<SqlBatchRequest>,
+) -> Response {
+    use kaveon_sql::parser::{NativeTransactionalStatement, adapt_product_dml, parse_native_transactional};
+    if request.statements.is_empty() || request.statements.len() > 100 {
+        return error_response(RegistryError::Invalid(
+            "SQL batch requires between 1 and 100 statements".into(),
+        ));
+    }
+    let mut snapshot = None;
+    for sql in request.statements {
+        let parsed = match parse_native_transactional(&sql) {
+            Ok(NativeTransactionalStatement::Dml(dml)) => dml,
+            Ok(_) => return error_response(RegistryError::Invalid("SQL batch accepts DML statements only".into())),
+            Err(error) => return error_response(RegistryError::Invalid(error.to_string())),
+        };
+        let command = match adapt_product_dml(&parsed) {
+            Ok(command) => command,
+            Err(error) => return error_response(RegistryError::Invalid(error.to_string())),
+        };
+        match state.product_transactions
+            .stage_product_command(&identity.principal, &transaction_id, command)
+            .await
+        {
+            Ok(value) => snapshot = Some(value),
+            Err(error) => return error_response(error),
+        }
+    }
+    Json(snapshot.expect("non-empty SQL batch")).into_response()
 }
 
 async fn execute_sql_request(
