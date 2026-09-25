@@ -173,6 +173,62 @@ def create_row(
     return committed if isinstance(committed, dict) else (staged if isinstance(staged, dict) else {})
 
 
+def create_rows(
+    rows: list[tuple[str, dict[str, dict[str, Any]]]],
+    actor: str,
+    role: str,
+    *,
+    table: str,
+    owner_principal: Optional[str] = None,
+) -> dict:
+    """Atomically insert a bounded batch of typed rows in one SQL request.
+
+    Replay uses this path for large authority tables.  A multi-value INSERT
+    keeps the transaction boundary in KaveonDB while avoiding one HTTP round
+    trip per history row.
+    """
+    table = _valid(table, "table")
+    if not rows or len(rows) > 100:
+        raise HTTPException(422, "A system row batch requires between 1 and 100 rows")
+    owner = owner_principal or actor
+    _valid(owner, "owner principal")
+    values: list[str] = []
+    for row_id, columns in rows:
+        row_id = _valid(row_id, "row ID")
+        _validate_columns(columns)
+        document = {"table": table, "primary_key": row_id, "revision": 1,
+                    "columns": columns, "owner_principal": owner}
+        values.append("(" + _sql_literal(row_id) + ", " +
+                      _sql_literal(json.dumps(document, sort_keys=True, separators=(",", ":"))) + ")")
+    sql = "INSERT INTO kaveon.product.typed_rows (id, document_json) VALUES " + ", ".join(values)
+    begun = engine_bridge._request(
+        "POST", "/v1/transaction/sql", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
+        payload={"sql": "BEGIN"}, role=_role(role),
+    )
+    transaction_id = begun.get("transaction_id") if isinstance(begun, dict) else None
+    if not transaction_id:
+        raise HTTPException(502, "KaveonDB returned an invalid transaction session")
+    try:
+        staged = engine_bridge._request(
+            "POST", "/v1/transaction/sql", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
+            payload={"sql": sql, "transaction_id": transaction_id}, role="admin",
+        )
+        committed = engine_bridge._request(
+            "POST", "/v1/transaction/sql", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
+            payload={"sql": "COMMIT", "transaction_id": transaction_id}, role="admin",
+        )
+    except Exception:
+        try:
+            engine_bridge._request(
+                "POST", "/v1/transaction/sql", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
+                payload={"sql": "ROLLBACK", "transaction_id": transaction_id}, role="admin",
+            )
+        except Exception:
+            pass
+        raise
+    return committed if isinstance(committed, dict) else (staged if isinstance(staged, dict) else {})
+
+
 def update_row(
     table: str,
     row_id: str,

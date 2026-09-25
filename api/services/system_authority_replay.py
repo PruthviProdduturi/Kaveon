@@ -16,6 +16,8 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Callable, Mapping
 
+from fastapi import HTTPException
+
 import database.metadata as db
 from services import engine_system_store
 
@@ -153,18 +155,79 @@ def replay_table(
     """
     rows = snapshot_table(table, query=query)
     column_types = _table_columns(rows)
+    written = 0
+    skipped = 0
+    updated = 0
     # Pin one bounded target page up front. This avoids a round-trip GET for
     # every history row while retaining direct reads for post-commit retry
     # verification. Authority tables are capped below the page bound.
     target_cache: dict[str, dict | None] = {}
     # One bounded snapshot avoids reloading the ADLS manifest for every row.
     if rows and len(rows) <= 1000 and read is engine_system_store.read_row:
-        page = engine_system_store.list_rows(table, actor, "Admin", limit=1000)
+        try:
+            page = engine_system_store.list_rows(table, actor, "Admin", limit=1000)
+        except HTTPException as error:
+            # A first replay has no typed table yet; the Engine reports that
+            # as an invalid empty page. Other transport/auth failures remain
+            # fatal and must not be mistaken for an empty target.
+            if error.status_code != 502:
+                raise
+            page = {"rows": []}
         target_cache = {str(item["id"]): item for item in page.get("rows", [])
                         if isinstance(item, Mapping) and isinstance(item.get("id"), str)}
         known_target_ids = set(target_cache)
     else:
         known_target_ids = set()
+
+    # Large authority tables (notably query_history) are migrated in bounded
+    # pages.  Listing the target once lets retries remain idempotent without
+    # issuing a GET for every source row.
+    if rows and len(rows) > 1000 and read is engine_system_store.read_row:
+        target_cache = {}
+        cursor = None
+        try:
+            while True:
+                page = engine_system_store.list_rows(table, actor, "Admin", limit=1000, cursor=cursor)
+                for item in page.get("rows", []):
+                    if isinstance(item, Mapping) and isinstance(item.get("id"), str):
+                        target_cache[item["id"]] = item
+                cursor = page.get("next_cursor")
+                if not cursor:
+                    break
+        except HTTPException as error:
+            if error.status_code != 502:
+                raise
+            target_cache = {}
+        known_target_ids = set(target_cache)
+
+    # One multi-value INSERT per bounded batch is materially faster than a
+    # transaction and HTTP round-trip for every history row. Existing rows
+    # remain on the normal CAS/update path below, so replay stays resumable.
+    if rows and len(rows) > 1000 and write is engine_system_store.create_row:
+        pending: list[tuple[str, dict[str, dict[str, Any]]]] = []
+        for row in rows:
+            record_id = _record_id(table, row)
+            columns = {str(key): _typed_for_column(value, column_types[str(key)]) for key, value in row.items()}
+            target = target_cache.get(record_id)
+            if target is not None and _columns_match(target.get("columns", {}), columns):
+                skipped += 1
+                continue
+            if target is not None:
+                # Mismatched rows need the revision/owner-aware update path.
+                continue
+            pending.append((record_id, columns))
+            if len(pending) == 100:
+                engine_system_store.create_rows(pending, actor, "Admin", table=table, owner_principal=actor)
+                written += len(pending)
+                pending = []
+        if pending:
+            engine_system_store.create_rows(pending, actor, "Admin", table=table, owner_principal=actor)
+            written += len(pending)
+        # Existing mismatches are rare; fall through to the regular loop for
+        # those rows, while already matching/new rows are skipped safely.
+        rows = [row for row in rows if _record_id(table, row) in target_cache and
+                not _columns_match(target_cache[_record_id(table, row)].get("columns", {}),
+                                   {str(key): _typed_for_column(value, column_types[str(key)]) for key, value in row.items()})]
 
     def initial_read(_table: str, row_id: str, _actor: str, _role: str):
         if row_id in known_target_ids:
@@ -173,9 +236,6 @@ def replay_table(
             return None
         return read(_table, row_id, _actor, _role)
 
-    written = 0
-    skipped = 0
-    updated = 0
     for row in rows:
         record_id = _record_id(table, row)
         columns = {str(key): _typed_for_column(value, column_types[str(key)]) for key, value in row.items()}
