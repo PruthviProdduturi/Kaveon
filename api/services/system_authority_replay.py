@@ -155,10 +155,39 @@ def replay_table(
             revision = target.get("revision")
             if type(revision) is not int or revision < 1:
                 raise RuntimeError(f"KaveonDB returned an invalid revision for {table}:{record_id}")
-            update(table, record_id, columns, revision, actor, "Admin")
+            try:
+                update(table, record_id, columns, revision, actor, "Admin")
+            except Exception:
+                # A distributed commit can be durable even when the response
+                # is lost or the coordinator reports an indeterminate outcome.
+                # Re-read the row before retrying so replay never duplicates a
+                # committed mutation or blindly overwrites a newer revision.
+                after = read(table, record_id, actor, "Admin")
+                if after is not None and after.get("columns") == columns:
+                    updated += 1
+                    continue
+                retry_revision = after.get("revision") if after else None
+                if type(retry_revision) is not int or retry_revision < 1:
+                    raise
+                update(table, record_id, columns, retry_revision, actor, "Admin")
             updated += 1
             continue
-        write(table, record_id, columns, actor, "Admin", owner_principal=actor)
+        try:
+            write(table, record_id, columns, actor, "Admin", owner_principal=actor)
+        except Exception:
+            # The same read-after-uncertain rule applies to create-only rows:
+            # a conflict or lost response is success when the exact row is
+            # now visible, and only an unchanged/missing row is retried.
+            after = read(table, record_id, actor, "Admin")
+            if after is not None and after.get("columns") == columns:
+                written += 1
+                continue
+            if after is not None:
+                if after.get("columns") == columns:
+                    written += 1
+                    continue
+                raise
+            write(table, record_id, columns, actor, "Admin", owner_principal=actor)
         written += 1
     return {"family": _TABLE_TO_FAMILY[table], "table": table, "source_count": len(rows),
             "written": written, "updated": updated, "skipped": skipped}
