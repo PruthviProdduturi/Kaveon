@@ -179,26 +179,12 @@ def replay_table(
     else:
         known_target_ids = set()
 
-    # Large authority tables (notably query_history) are migrated in bounded
-    # pages.  Listing the target once lets retries remain idempotent without
-    # issuing a GET for every source row.
+    # For large authority tables, avoid scanning every target page up front:
+    # each page reloads the ADLS manifest. A rejected batch is reconciled with
+    # bounded point reads, which is both resumable and much cheaper.
     if rows and len(rows) > 1000 and read is engine_system_store.read_row:
         target_cache = {}
-        cursor = None
-        try:
-            while True:
-                page = engine_system_store.list_rows(table, actor, "Admin", limit=1000, cursor=cursor)
-                for item in page.get("rows", []):
-                    if isinstance(item, Mapping) and isinstance(item.get("id"), str):
-                        target_cache[item["id"]] = item
-                cursor = page.get("next_cursor")
-                if not cursor:
-                    break
-        except HTTPException as error:
-            if error.status_code != 502:
-                raise
-            target_cache = {}
-        known_target_ids = set(target_cache)
+        known_target_ids = set()
 
     # One multi-value INSERT per bounded batch is materially faster than a
     # transaction and HTTP round-trip for every history row. Existing rows
