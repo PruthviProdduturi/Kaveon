@@ -179,12 +179,29 @@ def replay_table(
     else:
         known_target_ids = set()
 
-    # For large authority tables, avoid scanning every target page up front:
-    # each page reloads the ADLS manifest. A rejected batch is reconciled with
-    # bounded point reads, which is both resumable and much cheaper.
+    # Large authority tables still need a target snapshot when a replay is
+    # resumed after a partial run.  Page it once with a pinned cursor rather
+    # than doing one point read per source row.  This keeps retries bounded by
+    # the number of pages and preserves deterministic idempotence.
     if rows and len(rows) > 1000 and read is engine_system_store.read_row:
-        target_cache = {}
-        known_target_ids = set()
+        cursor = None
+        snapshot_id = None
+        while True:
+            page = engine_system_store.list_rows(
+                table, actor, "Admin", limit=1000, cursor=cursor
+            )
+            page_snapshot = page.get("snapshot_id")
+            if snapshot_id is None:
+                snapshot_id = page_snapshot
+            elif page_snapshot != snapshot_id:
+                raise RuntimeError(f"Engine target snapshot changed during replay of {table}")
+            for item in page.get("rows", []):
+                if isinstance(item, Mapping) and isinstance(item.get("id"), str):
+                    target_cache[str(item["id"])] = item
+            cursor = page.get("next_cursor")
+            if not cursor:
+                break
+        known_target_ids = set(target_cache)
 
     # One multi-value INSERT per bounded batch is materially faster than a
     # transaction and HTTP round-trip for every history row. Existing rows
