@@ -23,9 +23,19 @@ FAMILY_TABLES: dict[str, tuple[str, ...]] = {
     "ai_configuration": ("ai_providers", "user_ai_keys"),
     "catalog_sources": ("catalog_sources",),
     "data_sources": ("data_sources",),
+    "datasets": ("datasets",),
     "dataset_semantics": ("dataset_dimensions", "dataset_columns", "dataset_metrics"),
+    "charts": ("charts",),
+    "dashboards": ("dashboards",),
+    "favorites": ("favorites",),
+    "saved_queries": ("saved_queries",),
+    "user_themes": ("user_themes",),
+    "user_recents": ("user_recents",),
+    "query_history": ("query_history",),
+    "activity": ("activity",),
     "context_cache": ("context_snapshots", "context_answer_cache"),
     "dlm_generation": ("dlm_artifact", "dlm_value_index", "dlm_router", "dlm_answers", "dlm_sketch"),
+    "chat_history": ("chat_sessions", "chat_messages"),
 }
 
 # The table names are static and reviewed; never accept a caller-provided SQL
