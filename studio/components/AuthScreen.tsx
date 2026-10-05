@@ -31,6 +31,7 @@ const PROMPTS = [
 export function AuthScreen() {
 	const [signInError, setSignInError] = useState<string | null>(null);
 	const [microsoftProviderEnabled, setMicrosoftProviderEnabled] = useState(false);
+	const [githubProviderEnabled, setGithubProviderEnabled] = useState(false);
 	const [microsoftPublicToken, setMicrosoftPublicToken] = useState<(() => Promise<string>) | null>(null);
 	const [microsoftPending, setMicrosoftPending] = useState(false);
 	useEffect(() => {
@@ -39,10 +40,14 @@ export function AuthScreen() {
 			.then(async (response): Promise<Record<string, unknown>> =>
 				response.ok ? await response.json() as Record<string, unknown> : {})
 			.then((providers) => {
-				if (active) setMicrosoftProviderEnabled(Boolean(providers?.["microsoft-entra-id"]));
+				if (active) {
+					setMicrosoftProviderEnabled(Boolean(providers?.["microsoft-entra-id"] || providers?.["entra-public"]));
+					setGithubProviderEnabled(Boolean(providers?.github));
+				}
 			})
 			.catch(() => {
 				if (active) setMicrosoftProviderEnabled(false);
+				if (active) setGithubProviderEnabled(false);
 			});
 		return () => { active = false; };
 	}, []);
@@ -281,6 +286,20 @@ export function AuthScreen() {
 								<rect x="11" y="11" width="9" height="9" fill="#ffb900" />
 							</svg>
 							{microsoftPending ? "Connecting to Microsoft…" : "Continue with Microsoft"}
+						</button>
+						{githubProviderEnabled && <button
+							type="button"
+							onClick={() => start("github")}
+							style={btnBase}
+							onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.15)"; }}
+							onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; }}
+						>
+							<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .6A11.4 11.4 0 0 0 8.4 22.9c.57.1.78-.25.78-.55v-2.14c-3.18.69-3.85-1.34-3.85-1.34-.52-1.32-1.27-1.67-1.27-1.67-1.04-.71.08-.7.08-.7 1.15.08 1.75 1.18 1.75 1.18 1.02 1.74 2.68 1.24 3.33.95.1-.74.4-1.24.73-1.53-2.54-.29-5.2-1.27-5.2-5.67 0-1.25.45-2.27 1.18-3.07-.12-.29-.51-1.45.11-3.03 0 0 .97-.31 3.15 1.17a10.9 10.9 0 0 1 5.74 0c2.18-1.48 3.15-1.17 3.15-1.17.62 1.58.23 2.74.11 3.03.73.8 1.18 1.82 1.18 3.07 0 4.41-2.67 5.37-5.22 5.65.41.35.78 1.04.78 2.1v3.11c0 .3.21.65.79.54A11.4 11.4 0 0 0 12 .6Z" /></svg>
+							Continue with GitHub
+						</button>}
+						<button type="button" disabled style={{ ...btnBase, opacity: 0.45, cursor: "not-allowed" }} aria-label="Google sign-in coming soon">
+							<svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M21.35 12.23c0-.71-.06-1.4-.18-2.05H12v3.88h5.24a4.48 4.48 0 0 1-1.94 2.94v2.44h3.14c1.84-1.69 2.91-4.18 2.91-7.21Z"/><path fill="#34A853" d="M12 21.5c2.63 0 4.84-.87 6.45-2.36l-3.14-2.44c-.87.58-1.98.92-3.31.92-2.54 0-4.7-1.72-5.47-4.03H3.28v2.52A9.74 9.74 0 0 0 12 21.5Z"/><path fill="#FBBC05" d="M6.53 13.59a5.86 5.86 0 0 1 0-3.18V7.89H3.28a9.75 9.75 0 0 0 0 8.22l3.25-2.52Z"/><path fill="#EA4335" d="M12 6.38c1.43 0 2.71.49 3.72 1.45l2.79-2.79C16.84 3.42 14.63 2.5 12 2.5a9.74 9.74 0 0 0-8.72 5.39l3.25 2.52C7.3 8.1 9.46 6.38 12 6.38Z"/></svg>
+							Google · Coming soon
 						</button>
 						{signInError && <p role="alert" style={{ margin: "2px 0 0", fontSize: 13, color: "#fca5a5", lineHeight: 1.4 }}>{signInError}</p>}
 
