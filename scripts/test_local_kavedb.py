@@ -31,6 +31,12 @@ class LocalKaveonDbPackageTests(unittest.TestCase):
         self.assertIn("kaveon_dlm_live_artifact_publish_enabled", script)
         self.assertIn('[string]$datadir = ""', script)
 
+    def test_local_retirement_verifier_is_fail_closed(self):
+        script = (ROOT / "scripts/verify-local-postgresql-retirement.ps1").read_text(encoding="utf-8").lower()
+        self.assertIn("postgresql-x64-17", script)
+        self.assertIn("kaveondb", script)
+        self.assertIn("throw", script)
+
 
 if __name__ == "__main__":
     unittest.main()
