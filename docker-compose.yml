@@ -157,7 +157,7 @@ services:
       # migration rehearsal and is never part of the default stack.
       KAVEON_POSTGRESQL_RETIREMENT_MODE: "true"
       KAVEONDB_AUTHORITY_FAMILIES: ai_configuration,catalog_sources,data_sources,datasets,dataset_semantics,charts,dashboards,favorites,saved_queries,user_themes,user_recents,query_history,activity,context_cache,dlm_generation,chat_history
-      KAVEONDB_READ_AUTHORITY_FAMILIES: datasets,charts,dashboards,saved_queries,user_themes,user_recents,favorites,query_history,activity,chat_history,sources,dlm_definitions
+      KAVEONDB_READ_AUTHORITY_FAMILIES: datasets,charts,dashboards,saved_queries,user_themes,user_recents,favorites,query_history,activity,chat_history,sources,dlm_definitions,dlm_runs
       KAVEON_DLM_LIVE_ARTIFACT_PUBLISH_ENABLED: "true"
       KAVEON_LOCAL_DLM_ARTIFACT_PATH: /var/lib/kaveon/product-transactions
       KAVEON_PROXY_SECRET: ${KAVEON_PROXY_SECRET:-kaveon-local-proxy}
