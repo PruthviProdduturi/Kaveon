@@ -48,6 +48,16 @@ function Start-Node([string]$name, [string]$config, [int]$port, [bool]$coordinat
   $env:KAVEON_DATA_DIR = $DataDir
   $env:KAVEON_CATALOG_DATABASE_PATH = Join-Path $StateDir "$name-catalog.db"
   $env:KAVEON_EXCHANGE_SPOOL_ROOT = Join-Path $StateDir "$name-exchange"
+  if ($coordinator) {
+    $env:KAVEON_PRODUCT_TRANSACTIONS_ENABLED = "true"
+    $env:KAVEON_PRODUCT_STORAGE_MODE = "local"
+    $env:KAVEON_PRODUCT_LOCAL_PATH = Join-Path $StateDir "product-transactions"
+    New-Item -ItemType Directory -Force -Path $env:KAVEON_PRODUCT_LOCAL_PATH | Out-Null
+  } else {
+    Remove-Item Env:KAVEON_PRODUCT_TRANSACTIONS_ENABLED -ErrorAction SilentlyContinue
+    Remove-Item Env:KAVEON_PRODUCT_STORAGE_MODE -ErrorAction SilentlyContinue
+    Remove-Item Env:KAVEON_PRODUCT_LOCAL_PATH -ErrorAction SilentlyContinue
+  }
   $env:KAVEON_INSECURE_DEVELOPMENT = "true"
   $env:KAVEON_SECURITY_JSON = $securityJson
   $env:KAVEON_EXCHANGE_TOKEN = $exchangeToken
