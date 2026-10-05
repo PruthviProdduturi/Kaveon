@@ -2,11 +2,11 @@
 
 > For development when the qualification cluster is down (it is paused at weekends, see [suspend and resume](aks-suspend-resume.md)) or when Docker is unavailable on the machine. Same environment contract as `docker-compose.yml` and the Helm charts; what runs here is what runs on AKS **minus** TLS, workload identity, ADLS and network policies. Never publish a number measured here.
 
-This default profile intentionally keeps PostgreSQL so developers can exercise
-source capture, outbox replay, reconciliation and rollback. The checked-in
-retirement runtime can start Studio/API without PostgreSQL only when supplied a
-complete activation-evidence bundle and all 16 exact read-authority families.
-That fail-closed profile is a recovery test, not a shortcut around migration.
+This native profile is PostgreSQL-free. It exercises the KaveonDB product
+authority, Engine catalog, API and DLM paths on local durable files. PostgreSQL
+source capture, outbox replay, reconciliation and rollback remain cloud
+migration operations and must use the retirement evidence runbook; they are not
+silently started by this profile.
 
 ## What runs
 
@@ -14,7 +14,6 @@ That fail-closed profile is a recovery test, not a shortcut around migration.
 |---|---|---|---|
 | KaveonDB coordinator | 8080 | `infra/local/engine/coordinator.toml` | insecure-development security profile, dev tokens from `scripts/local-cluster.ps1` |
 | KaveonDB workers ×3 | 8081–8083 | `infra/local/engine/worker-N.toml` | discover the coordinator at 127.0.0.1:8080 |
-| PostgreSQL 17 | 5433 | native Windows service | databases `kaveonmeta` (control plane, DLM) and `kaveon`; role `kaveon` |
 | API | 8090 | environment set by the script | `uvicorn main:app`, dev identity `developer@localhost` as Admin |
 | Studio | 3002 | environment in the shell | `node node_modules/next/dist/bin/next dev -p 3002` (corepack cannot fetch pnpm on the home network) |
 
@@ -24,10 +23,6 @@ catalog with the same script that registers it on AKS:
 
 ```powershell
 # once
-winget install --id PostgreSQL.PostgreSQL.17 --override "--mode unattended --superpassword kaveon-local-only --serverport 5433 --disable-components stackbuilder"
-& "C:\Program Files\PostgreSQL\17\bin\psql.exe" -h 127.0.0.1 -p 5433 -U postgres -c "CREATE ROLE kaveon LOGIN PASSWORD 'kaveon-local-only' SUPERUSER"
-& "C:\Program Files\PostgreSQL\17\bin\psql.exe" -h 127.0.0.1 -p 5433 -U postgres -c "CREATE DATABASE kaveonmeta OWNER kaveon" -c "CREATE DATABASE kaveon OWNER kaveon"
-& "C:\Program Files\PostgreSQL\17\bin\psql.exe" -h 127.0.0.1 -p 5433 -U kaveon -d kaveonmeta --set=ON_ERROR_STOP=1 -f api\schema_postgresql.sql
 cd engine; cargo build --release -p kaveon-server -p kaveon-cli; cd ..
 python scripts\build-kaveon-events-parquet.py build --output tmp\kaveon-events
 
@@ -39,15 +34,11 @@ python scripts\build-kaveon-events-parquet.py build --output tmp\kaveon-events
 Register the lake (runs the same `COUNT(*)` verification as AKS):
 
 ```powershell
-cd api
 $env:KAVEON_ENGINE_URL = "http://127.0.0.1:8080"
 $env:KAVEON_ENGINE_CATALOG_TOKEN = "kaveon-local-catalog-admin"
 $env:KAVEON_ENGINE_BRIDGE_TOKEN = "kaveon-local-bridge-token-not-for-production"
 $env:KAVEON_LOCAL_LAKE_PATH = "D:\Repos\PruthviProdduturi\Kaveon\tmp\kaveon-events"
-$env:METADATA_DB_TYPE = "postgresql"; $env:METADATA_HOST = "127.0.0.1"; $env:METADATA_PORT = "5433"
-$env:METADATA_DATABASE = "kaveonmeta"; $env:METADATA_USER = "kaveon"; $env:METADATA_PASSWORD = "kaveon-local-only"; $env:METADATA_SSLMODE = "disable"
-$env:PYTHONPATH = "."
-.\venv\Scripts\python.exe ..\scripts\register-curated-catalog.py ..\tmp\kaveon-events\kaveon-events-singlefile-manifest.json
+python scripts\register-curated-catalog.py tmp\kaveon-events\kaveon-events-singlefile-manifest.json
 ```
 
 Studio:
@@ -83,13 +74,22 @@ reports Entra disabled.
 ## What it is not
 
 - Not a performance environment: one machine's cores are shared by four Engine
-  processes, PostgreSQL, the API and Studio, and the lake is a local SSD.
+  processes, the API and Studio, and the lake is a local SSD.
 - Not a security environment: the `KAVEON_INSECURE_DEVELOPMENT` profile, dev
   tokens, plain HTTP, no workload identity, no network policies.
 - Not ADLS: conditional writes, footer caching over the network, and the
   product-transaction store on ADLS are not exercised.
 - Not retirement evidence: a local filesystem checkpoint is accepted only when
   `KAVEON_ENVIRONMENT=local`; it cannot be reused as an AKS cutover receipt.
+
+Verify the local retirement boundary after starting the profile:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\verify-local-postgresql-retirement.ps1
+```
+
+The verifier requires a healthy KaveonDB authority and fails if the Windows
+PostgreSQL service or either local PostgreSQL port is still active.
 
 ## Findings recorded from the first local run (2026-09-13)
 
