@@ -17,6 +17,51 @@ from middleware.errors import AppError, app_error_handler, generic_error_handler
 from database.pool import LargeIntResponse, TokenAuthError
 from database.warmup import start_warmup_and_heartbeat
 
+
+def _start_engine_metadata_warmup() -> None:
+    """Publish bounded footer statistics for registered Engine tables once.
+
+    This is an operator-triggered deployment hook.  It runs through the API's
+    existing Engine bridge using its server-side catalog-admin capability, so
+    a browser session is not required to seed the Catalog page.  The resulting
+    statistics are durable in KaveonDB; the hook is disabled by default and is
+    removed from the deployment after the initial pass.
+    """
+    def run() -> None:
+        try:
+            from services import engine_bridge
+            actor, role = "kaveon-system", "Admin"
+            catalogs = engine_bridge.catalog_definitions(actor, role)
+            work = []
+            for catalog in catalogs:
+                if not isinstance(catalog, dict):
+                    continue
+                catalog_name = str(catalog.get("name") or "")
+                catalog_id = catalog.get("id")
+                if not catalog_name or not isinstance(catalog_id, str):
+                    continue
+                for schema in engine_bridge.schema_definitions(catalog_id, actor, role):
+                    if not isinstance(schema, dict) or not isinstance(schema.get("id"), str):
+                        continue
+                    schema_name = str(schema.get("name") or "")
+                    for table in engine_bridge.table_definitions(schema["id"], actor, role):
+                        if isinstance(table, dict) and table.get("name"):
+                            work.append((catalog_name, schema_name, str(table["name"])))
+            import concurrent.futures
+            def measure(item):
+                try:
+                    engine_bridge.analyze_table(*item, actor, role, metadata_only=True, timeout=180)
+                    return True
+                except Exception as error:  # one unreadable source must not stop the pass
+                    print(f"[API] Engine metadata warmup skipped {item[0]}.{item[1]}.{item[2]}: {type(error).__name__}")
+                    return False
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, max(1, len(work)))) as pool:
+                passed = sum(pool.map(measure, work)) if work else 0
+            print(f"[API] Engine metadata warmup complete: {passed}/{len(work)} tables measured.")
+        except Exception as error:  # pragma: no cover - live deployment hook
+            print(f"[API] Engine metadata warmup failed: {type(error).__name__}: {error}")
+    threading.Thread(target=run, daemon=True, name="engine-metadata-warmup").start()
+
 # Routers
 from routers import (
     auth,
@@ -53,6 +98,9 @@ from routers import (
 async def lifespan(app: FastAPI):
     import os as _os
     from services import postgresql_retirement_runtime
+
+    if _os.getenv("KAVEON_ENGINE_METADATA_WARMUP_ON_START", "false").lower() == "true":
+        _start_engine_metadata_warmup()
 
     retirement = postgresql_retirement_runtime.validate()
     app.state.postgresql_retirement = retirement
