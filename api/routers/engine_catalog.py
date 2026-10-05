@@ -172,7 +172,36 @@ def schema_inventory(schema_id: str, response: Response, refresh: bool = False,
     tables = engine_bridge.table_definitions(schema_id, ctx.email, ctx.role)
     ids = [table["id"] for table in tables
            if isinstance(table, dict) and isinstance(table.get("id"), str)]
-    return {"success": True, "measurements": _measurements(schema_id, ids, ctx, refresh)}
+    measurements = _measurements(schema_id, ids, ctx, refresh)
+    # Establish the bounded footer/manifest fact at the API boundary. This
+    # keeps every client (web, CLI and direct API) consistent and avoids a
+    # stale browser being the reason a catalog shows an em dash. The bridge
+    # uses its admin capability only for this metadata-only statement; deep
+    # analysis remains an explicit, role-gated operation.
+    if any(item.get("state") == "unmeasured" for item in measurements):
+        by_id = {table.get("id"): table for table in tables if isinstance(table, dict)}
+        try:
+            catalog = engine_bridge.catalog_definition(schema.get("catalog_id"), ctx.email, ctx.role)
+        except HTTPException:
+            # Preserve the cheap inventory response if the catalog parent is
+            # unavailable; the next refresh can retry metadata publication.
+            return {"success": True, "measurements": measurements}
+        catalog_name = str((catalog or {}).get("name") or "")
+        def measure(item: dict) -> None:
+            table = by_id.get(item.get("tableId"))
+            if not isinstance(table, dict):
+                return
+            try:
+                engine_bridge.analyze_table(
+                    catalog_name,
+                    str(schema.get("name") or ""), str(table.get("name") or ""),
+                    ctx.email, ctx.role, metadata_only=True)
+            except HTTPException:
+                return
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(_INVENTORY_MAX_WORKERS, len(measurements))) as pool:
+            list(pool.map(measure, [item for item in measurements if item.get("state") == "unmeasured"]))
+        measurements = _measurements(schema_id, ids, ctx, True)
+    return {"success": True, "measurements": measurements}
 
 
 # Storage metadata reads are cheap but not free, and a page reload must not
