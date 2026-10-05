@@ -29,6 +29,35 @@ def _catalog_label(catalog: str) -> str:
 MAX_SQL_BYTES = 65_536
 NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
 
+# Catalog authorization is stable for a short interval, while the Engine
+# round-trip used to evaluate it is comparatively expensive (especially when
+# the Container App is waking).  Keep the source picker responsive without
+# weakening authorization: the cache is keyed by the verified principal and
+# role, and expires quickly after an access change.
+_ENGINE_SOURCE_GRANTS_TTL = 15.0
+_ENGINE_SOURCE_GRANTS: dict[tuple[str, str], tuple[float, set[str]]] = {}
+_ENGINE_SOURCE_GRANTS_LOCK = threading.Lock()
+
+
+def _engine_source_grants(actor: str, role: str) -> set[str]:
+    key = (str(actor), str(role))
+    now = time.monotonic()
+    # Tests and local adapters can replace the bridge per call; keep that
+    # deterministic path uncached.  The deployed product authority is the
+    # stable path where the short TTL removes the repeated round-trip.
+    cache_enabled = product_read_authority.enabled("sources")
+    with _ENGINE_SOURCE_GRANTS_LOCK:
+        cached = _ENGINE_SOURCE_GRANTS.get(key)
+        if cache_enabled and cached and now - cached[0] < _ENGINE_SOURCE_GRANTS_TTL:
+            return set(cached[1])
+    from services import engine_bridge
+    listed = engine_bridge.catalogs(actor, role) or {}
+    granted = {name for name in (listed.get("catalogs") or []) if isinstance(name, str)}
+    if cache_enabled:
+        with _ENGINE_SOURCE_GRANTS_LOCK:
+            _ENGINE_SOURCE_GRANTS[key] = (now, granted)
+    return set(granted)
+
 
 def _require_legacy_data_plane():
     """Reject legacy pool access before it can resolve metadata in PostgreSQL."""
@@ -245,8 +274,7 @@ def list_engine_sources(response: Response, ctx=Depends(require_min_role("Viewer
     and role, never for a client claim — decides which of them appear."""
     from services import engine_bridge
     response.headers.update(NO_CACHE)
-    listed = engine_bridge.catalogs(ctx.email, ctx.role) or {}
-    granted = {name for name in (listed.get("catalogs") or []) if isinstance(name, str)}
+    granted = _engine_source_grants(ctx.email, ctx.role)
     if product_read_authority.enabled("sources"):
         rows=[{"id":str(item["source_id"])[8:],"name":item.get("name"),"engine_catalog":item.get("catalog_identity")}
               for item in product_read_authority.list_documents("sources",ctx.email,ctx.role)
