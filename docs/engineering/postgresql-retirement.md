@@ -77,9 +77,13 @@ match, writes are fenced, deletion counts match the pre-deletion inventory, and
 zero rows remain. This report is one family input; it does not bypass the other
 authority-family or global retirement gates.
 
-Current status on September 14, 2026: the PostgreSQL-free runtime and migration
-tooling are implemented locally, and the live AKS retirement gate has not passed.
-**Do not delete or scale down PostgreSQL yet.**
+Current status on October 5, 2026: the PostgreSQL-free runtime is verified on
+the local native profile (`verify-local-postgresql-retirement.ps1` passed with
+16 healthy authority families, the PostgreSQL service stopped, and no 5432/5433
+listeners). The personal Azure deployment remains PostgreSQL-authoritative;
+its live replay, shadow parity, write fence, restart, backup/restore, rollback,
+and final evidence gates have not passed. **Do not delete or scale down the
+cloud PostgreSQL server yet.**
 
 The complete code-path and runtime-table audit is maintained in
 [PostgreSQL authority inventory](postgresql-authority-inventory.md).

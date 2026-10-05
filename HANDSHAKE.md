@@ -1,5 +1,32 @@
 # Kaveon — Engineer Coordination
 
+## Codex handoff - October 5, 2026
+
+Local PostgreSQL retirement is verified. `scripts/verify-local-postgresql-retirement.ps1`
+passed with KaveonDB healthy and all 16 authority families available; the
+Windows PostgreSQL service is stopped and ports 5432/5433 have zero listeners.
+The supporting local proof is on `dev` (`fc92e13f`): 313 Kaveon server tests,
+4 local-retirement tests, documentation validation, and `git diff --check` pass.
+
+This does not retire PostgreSQL in the personal Azure deployment. Subscription
+`4ed07f02-b111-4eea-98ce-1c177d573a51`, resource group `kaveon-rg`, still has
+Ready Flexible Server `kaveon-db`; the active API reports PostgreSQL metadata
+authority, retirement mode disabled, and no product-storage cutover. ADLS
+`kaveonlake` is HNS-enabled with `backups`, `opensource`, and `product`
+containers. No Trino reference deployment exists there, so performance claims
+remain unqualified.
+
+Next handoff gates, in order: preserve cloud backup/snapshot; execute and
+archive the complete 16-family replay with durable ADLS checkpoints; prove
+shadow parity, outbox zero lag, write fencing and final watermark; rehearse
+PostgreSQL-unavailable restart, backup/restore and rollback; then run the
+fail-closed retirement evidence validator. Only a passing report permits cloud
+cutover and PostgreSQL scale-down/deletion. Start with
+`docs/engineering/codex-continuation.md` and
+`docs/engineering/postgresql-retirement.md`, then run the read-only Azure and
+local commands recorded in the continuation brief.
+
+
 ## Claude update — Catalog is now a table inventory — September 22, 2026
 
 `/catalog` was a tree, a header card and a per-catalog card that between them

@@ -5,6 +5,65 @@
 **Branch:** `dev`  
 **Repository:** `PruthviProdduturi/Kaveon`
 
+## Current handoff - 2026-10-05
+
+The local PostgreSQL retirement gate is verified. The read-only verifier
+`scripts/verify-local-postgresql-retirement.ps1` passed with KaveonDB healthy,
+all 16 authority families available, the Windows PostgreSQL service stopped,
+and zero listeners on ports 5432 and 5433. This is a local retirement result;
+it is not evidence that the personal Azure deployment has been cut over.
+
+Local evidence on `dev`:
+
+- `fc92e13f` documents the PostgreSQL-free native local profile.
+- `cargo test -p kaveon-server --bin kaveon-server --no-fail-fast`: 313 passed.
+- `python -m unittest scripts.test_local_kavedb -v`: 4 passed.
+- `node scripts/validate-docs.mjs` and `git diff --check` passed.
+
+The personal Azure environment remains intentionally preserved. In subscription
+`4ed07f02-b111-4eea-98ce-1c177d573a51`, resource group `kaveon-rg` (West US 2),
+PostgreSQL Flexible Server `kaveon-db` is Ready (Standard_B1ms, 64 GiB), and
+the active Container Apps API still reports PostgreSQL metadata authority,
+retirement mode disabled, and no product-storage cutover. ADLS Gen2 account
+`kaveonlake` is HNS-enabled with `backups`, `opensource`, and `product`
+containers. No cloud cutover, write fence, or deletion has been performed.
+No Trino reference deployment exists in this subscription, so no performance
+superiority claim is currently supported.
+
+### Next safe execution order
+
+1. Preserve and verify the cloud PostgreSQL backup/snapshot and ADLS inventory.
+2. Run the live 16-family replay and reconciliation, writing immutable reports
+   and durable checkpoints to ADLS.
+3. Complete shadow-read parity for roles and visibility, drain the outbox,
+   fence writes, and record the final watermark.
+4. Rehearse restart with PostgreSQL unavailable, backup/restore, and rollback.
+5. Run the final retirement evidence validator. Only a passing report permits
+   cloud cutover; retain PostgreSQL and its rollback snapshot through the
+   agreed recovery window.
+6. Provision a resource-matched Trino reference before making a performance
+   claim. The qualification metric is successful exact-result QPS at
+   concurrency 4 on the fixed 12-query corpus, six alternating rounds, the
+   same data, hardware, version, and cache policy, with zero errors and exact
+   result hashes. The gate requires at least 1.90x Kaveon/Trino; the current
+   report is pending rather than qualified.
+
+### Resume commands
+
+```powershell
+git switch dev
+git pull origin dev
+powershell -ExecutionPolicy Bypass -File .\scripts\verify-local-postgresql-retirement.ps1
+az account set --subscription 4ed07f02-b111-4eea-98ce-1c177d573a51
+az postgres flexible-server show -g kaveon-rg -n kaveon-db -o table
+az containerapp show -g kaveon-rg -n kaveon-api --query "{revision:properties.latestRevisionName,env:properties.template.containers[0].env}" -o json
+az storage container list --account-name kaveonlake --auth-mode login -o table
+```
+
+Read `docs/engineering/postgresql-retirement.md` before any cloud write or
+scale operation. The local verifier is fail-closed and does not authorize
+cloud retirement.
+
 This is the durable Engineer 2 continuation record. Read `HANDSHAKE.md` first on every machine, then this file; the HANDSHAKE Log rows of 2026-09-15 to 2026-09-17 and `engine/DISTRIBUTED_EXECUTION_STATUS.md` describe what landed on the Engine while Codex was away. Never store credentials, tokens, connection strings, or user data here.
 
 ## Product boundary
