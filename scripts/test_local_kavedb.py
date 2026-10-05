@@ -27,6 +27,9 @@ class LocalKaveonDbPackageTests(unittest.TestCase):
         self.assertIn("kaveon_postgresql_retirement_mode", script)
         self.assertIn("kaveon_product_storage_mode", script)
         self.assertIn("kaveon_product_local_path", script)
+        self.assertIn('kaveondb_read_authority_families = "all"', script)
+        self.assertIn("kaveon_dlm_live_artifact_publish_enabled", script)
+        self.assertIn('[string]$datadir = ""', script)
 
 
 if __name__ == "__main__":
