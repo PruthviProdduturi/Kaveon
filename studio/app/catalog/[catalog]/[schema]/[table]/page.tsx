@@ -9,7 +9,7 @@ import { useCatalogTree } from "../../../CatalogShell";
 import s from "../../../catalog.module.css";
 import {
   CatalogError, Sample, TableDef, Usage,
-  deleteTable, enc, fetchSample, fetchTable, fetchUsage, labHref, shortLocation,
+  deleteTable, enc, fetchInventory, fetchSample, fetchTable, fetchUsage, labHref, shortLocation,
 } from "../../../lib";
 
 const fmt = (n: number) => n.toLocaleString();
@@ -67,7 +67,19 @@ export default function CatalogTablePage() {
       return;
     }
     fetchTable(source, schema, table)
-      .then(d => { if (!cancelled) setDef(d); })
+      .then(async d => {
+        // Definitions deliberately remain cheap and may not carry a count.
+        // Merge the durable footer measurement so the table page agrees with
+        // the Catalog inventory and never shows an avoidable em dash.
+        try {
+          const measurements = await fetchInventory(d.schemaId || `${source}-${schema}`, true);
+          const measured = measurements.find(m => m.tableId === d.id);
+          if (measured?.state === "measured" && typeof measured.rows === "number") {
+            d = { ...d, rowCount: measured.rows };
+          }
+        } catch { /* the definition remains useful if measurement is unavailable */ }
+        if (!cancelled) setDef(d);
+      })
       .catch(e => { if (!cancelled) setDefError(e instanceof CatalogError ? e : new CatalogError(0, "The definition could not be read.")); });
     fetchUsage(source, schema, table)
       .then(u => { if (!cancelled) setUsage(u); })
