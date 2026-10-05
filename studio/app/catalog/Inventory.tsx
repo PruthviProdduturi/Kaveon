@@ -131,7 +131,17 @@ export function Inventory({ catalogName, schemaName, action }: {
         }
         setMeasuring(current => ({ ...current, [group.schemaId]: "loading" }));
         try {
-          const list = await fetchInventory(group.schemaId, refresh);
+          let list = await fetchInventory(group.schemaId, refresh);
+          // A catalog inventory is useful only when its basic facts are
+          // present. Metadata ANALYZE reads Parquet footers/manifests (no data
+          // pages), so an Admin opening the page can establish those facts in
+          // one pass. Deeper sketches and cubes remain explicit actions.
+          if (isAdmin && list.some(entry => entry.state === "unmeasured")) {
+            await Promise.allSettled(list
+              .filter(entry => entry.state === "unmeasured")
+              .map(entry => analyzeTable(entry.tableId, {})));
+            list = await fetchInventory(group.schemaId, true);
+          }
           if (!live.current) return;
           setMeasured(current => ({
             ...current,
@@ -147,7 +157,7 @@ export function Inventory({ catalogName, schemaName, action }: {
         setError(e instanceof CatalogError ? e : new CatalogError(0, "The catalog could not be read."));
       }
     }
-  }, [catalogName, schemaName]);
+  }, [catalogName, schemaName, isAdmin]);
 
   // Metadata measurements are footer/manifest reads, so populate the table
   // facts on first open instead of making every user discover Re-measure.
