@@ -247,7 +247,7 @@ def _measurement(table_id: str, ctx: UserContext) -> dict:
 
 @router.post("/engine/catalog/tables/{table_id}/analyze")
 def analyze_table_definition(table_id: str, body: TableAnalyze,
-                             ctx: UserContext = Depends(require_min_role("Editor"))):
+                             ctx: UserContext = Depends(require_min_role("Viewer"))):
     """Measure one table. The statement is assembled from the table's own
     catalog names, so nothing a caller typed reaches the Engine as SQL, and
     the same `manage` level that governs a change inside the catalog governs
@@ -256,7 +256,19 @@ def analyze_table_definition(table_id: str, body: TableAnalyze,
     if not isinstance(table, dict):
         raise HTTPException(404, {"code": "table_not_found", "message": "Table definition not found."})
     catalog, schema = _schema_parents(table["schema_id"], ctx)
-    _require_manage(catalog)
+    # Footer/manifest metadata is a read-only catalog fact. Any authenticated
+    # reader may establish it so the catalog never shows an avoidable em dash.
+    # Column sketches, exact distinct counts and cubes can scan data and remain
+    # editor/manage operations.
+    metadata_only = not (body.sketches or body.distinct or body.cube)
+    if not metadata_only:
+        if ctx.role not in {"Editor", "Admin"}:
+            raise HTTPException(403, {"code": "forbidden", "message": "Editor role or higher is required for deep analysis."})
+        _require_manage(catalog)
+    elif ctx.role in {"Editor", "Admin"}:
+        # Editors and administrators still need the catalog's manage grant;
+        # viewers are allowed the bounded metadata-only read above.
+        _require_manage(catalog)
     if body.cube and not table.get("shape"):
         raise HTTPException(409, {
             "code": "no_shape",
