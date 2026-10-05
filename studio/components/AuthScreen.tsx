@@ -31,6 +31,7 @@ const PROMPTS = [
 export function AuthScreen() {
 	const [signInError, setSignInError] = useState<string | null>(null);
 	const [microsoftProviderEnabled, setMicrosoftProviderEnabled] = useState(false);
+	const [microsoftOAuthEnabled, setMicrosoftOAuthEnabled] = useState(false);
 	const [githubProviderEnabled, setGithubProviderEnabled] = useState(false);
 	const [microsoftPublicToken, setMicrosoftPublicToken] = useState<(() => Promise<string>) | null>(null);
 	const [microsoftPending, setMicrosoftPending] = useState(false);
@@ -42,6 +43,7 @@ export function AuthScreen() {
 			.then((providers) => {
 				if (active) {
 					setMicrosoftProviderEnabled(Boolean(providers?.["microsoft-entra-id"] || providers?.["entra-public"]));
+					setMicrosoftOAuthEnabled(Boolean(providers?.["microsoft-entra-id"]));
 					setGithubProviderEnabled(Boolean(providers?.github));
 				}
 			})
@@ -105,6 +107,12 @@ export function AuthScreen() {
 			const details = error && typeof error === "object" ? error as { errorCode?: unknown; message?: unknown } : {};
 			const rawCode = typeof details.errorCode === "string" ? details.errorCode : "";
 			const code = /^[a-z0-9_-]{1,80}$/i.test(rawCode) ? rawCode : "sign_in_failed";
+			if (microsoftOAuthEnabled && !["user_cancelled", "user_cancelled_error", "popup_window_error", "empty_window_error"].includes(code)) {
+				// Older Entra registrations often have a Web callback but no SPA
+				// callback. Let Auth.js use that registered callback automatically.
+				start("microsoft-entra-id");
+				return;
+			}
 			setSignInError(code === "popup_window_error" || code === "empty_window_error"
 				? "Allow pop-ups for this site, then select Microsoft again."
 				: code === "consent_required" || code === "interaction_required"

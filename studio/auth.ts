@@ -97,7 +97,10 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     ...(googleConfigured
       ? [Google({ clientId: process.env.GOOGLE_ID, clientSecret: process.env.GOOGLE_SECRET })]
       : []),
-    ...(!publicClientEnabled && microsoftConfigured
+    // Keep the confidential OAuth provider available as a compatibility path
+    // when the browser public-client flow cannot complete (for example an
+    // older Entra app registration that has only a Web redirect URI).
+    ...(microsoftConfigured
       ? [
           MicrosoftEntraID({
             clientId: process.env.AUTH_MICROSOFT_ENTRA_ID_ID,
