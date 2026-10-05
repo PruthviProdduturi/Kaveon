@@ -3,12 +3,13 @@
   The AKS topology as native processes on one machine, without Docker.
 
   coordinator :8080 · workers :8081-:8083 · API :8090 · Studio :3002
-  PostgreSQL 17 on :5433 (kaveonmeta, kaveon) installed natively.
+  KaveonDB product authority on local durable files; no PostgreSQL required.
 
 .DESCRIPTION
-  Same environment contract as docker-compose.yml and the Helm charts, so what
-  runs here is what runs on AKS minus TLS, workload identity and ADLS: the lake
-  is a local directory. Development-only tokens; never reuse them anywhere.
+  Same product-authority contract as docker-compose.kavedb.yml and the
+  PostgreSQL-free Helm profile, so what runs here is what runs after retirement
+  minus TLS, workload identity and ADLS: the lake and product log are local
+  directories. Development-only tokens; never reuse them anywhere.
 
   .\scripts\local-cluster.ps1 start   [-DataDir D:\Repos\...\tmp\kaveon-events]
   .\scripts\local-cluster.ps1 stop
@@ -69,8 +70,6 @@ function Wait-Health([string]$url, [int]$seconds = 30) {
 switch ($Action) {
   "start" {
     if (-not (Test-Path $engine)) { throw "Build the Engine first: cargo build --release -p kaveon-server (engine/)" }
-    & "C:\Program Files\PostgreSQL\17\bin\pg_isready.exe" -p 5433 | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "PostgreSQL 17 is not accepting connections on :5433" }
     $pids = @{}
     $pids["coordinator"] = Start-Node "coordinator-1" (Join-Path $root "infra\local\engine\coordinator.toml") 8080 $true
     if (-not (Wait-Health "http://127.0.0.1:8080/health")) { throw "coordinator did not become healthy; see $StateDir\coordinator-1.log.err" }
@@ -79,9 +78,17 @@ switch ($Action) {
     }
     foreach ($i in 1..3) { if (-not (Wait-Health "http://127.0.0.1:$(8080 + $i)/health")) { throw "worker-$i did not become healthy" } }
 
-    # API — the Compose contract, pointed at the native PostgreSQL and the local coordinator.
-    $env:METADATA_DB_TYPE = "postgresql"; $env:METADATA_HOST = "127.0.0.1"; $env:METADATA_PORT = "5433"
-    $env:METADATA_DATABASE = "kaveonmeta"; $env:METADATA_USER = "kaveon"; $env:METADATA_PASSWORD = "kaveon-local-only"; $env:METADATA_SSLMODE = "disable"
+    # API — the PostgreSQL-free product contract, pointed at KaveonDB and the
+    # local coordinator.  PostgreSQL is intentionally neither started nor
+    # configured in this profile.
+    $env:KAVEON_LOCAL_PRODUCT_MODE = "true"
+    $env:KAVEON_POSTGRESQL_RETIREMENT_MODE = "true"
+    $env:KAVEONDB_AUTHORITY_FAMILIES = "ai_configuration,catalog_sources,data_sources,datasets,dataset_semantics,charts,dashboards,favorites,saved_queries,user_themes,user_recents,query_history,activity,context_cache,dlm_generation,chat_history"
+    $env:KAVEONDB_READ_AUTHORITY_FAMILIES = "datasets,charts,dashboards,saved_queries,user_themes,user_recents,favorites,query_history,activity,chat_history,sources,dlm_definitions"
+    $env:KAVEON_PRODUCT_STORAGE_MODE = "local"
+    $env:KAVEON_PRODUCT_LOCAL_PATH = Join-Path $StateDir "product-transactions"
+    New-Item -ItemType Directory -Force -Path $env:KAVEON_PRODUCT_LOCAL_PATH | Out-Null
+    $env:KAVEON_LOCAL_DLM_ARTIFACT_PATH = $env:KAVEON_PRODUCT_LOCAL_PATH
     $env:KAVEON_PROXY_SECRET = "kaveon-local-proxy"
     $env:KAVEON_ENGINE_URL = "http://127.0.0.1:8080"
     $env:KAVEON_ENGINE_BRIDGE_TOKEN = $bridgeToken
@@ -98,7 +105,7 @@ switch ($Action) {
     if (-not (Wait-Health "http://127.0.0.1:8090/api/health" 60)) { Write-Warning "API not healthy yet; see $apiLog.err" }
 
     $pids | ConvertTo-Json | Set-Content $pidFile
-    Write-Host "coordinator :8080 · workers :8081-:8083 · API :8090 · PostgreSQL :5433 · lake $DataDir"
+    Write-Host "coordinator :8080 · workers :8081-:8083 · API :8090 · KaveonDB product log $($env:KAVEON_PRODUCT_LOCAL_PATH) · lake $DataDir"
     Write-Host "Studio: cd studio; `$env:API_URL='http://127.0.0.1:8090'; `$env:KAVEON_PROXY_SECRET='kaveon-local-proxy'; pnpm dev -- -p 3002"
   }
   "stop" {

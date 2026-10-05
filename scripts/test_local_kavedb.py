@@ -20,6 +20,14 @@ class LocalKaveonDbPackageTests(unittest.TestCase):
         self.assertIn("docker-compose.kavedb.yml", (ROOT / "scripts/kavedb.ps1").read_text())
         self.assertIn("docker-compose.kavedb.yml", (ROOT / "scripts/kavedb.sh").read_text())
 
+    def test_native_local_cluster_is_postgresql_free(self):
+        script = (ROOT / "scripts/local-cluster.ps1").read_text(encoding="utf-8").lower()
+        self.assertNotIn("pg_isready", script)
+        self.assertNotIn("metadata_db_type", script)
+        self.assertIn("kaveon_postgresql_retirement_mode", script)
+        self.assertIn("kaveon_product_storage_mode", script)
+        self.assertIn("kaveon_product_local_path", script)
+
 
 if __name__ == "__main__":
     unittest.main()
