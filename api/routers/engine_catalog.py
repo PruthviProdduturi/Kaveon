@@ -273,9 +273,12 @@ def analyze_table_definition(table_id: str, body: TableAnalyze,
         raise HTTPException(409, {
             "code": "no_shape",
             "message": f"{table['name']} declares no shape, so there is nothing for a cube to be built over."})
+    analyze_options = {"sketches": body.sketches, "distinct": body.distinct, "cube": body.cube}
+    if metadata_only:
+        analyze_options["metadata_only"] = True
     statement, result = engine_bridge.analyze_table(
         catalog["name"], schema["name"], table["name"], ctx.email, ctx.role,
-        sketches=body.sketches, distinct=body.distinct, cube=body.cube)
+        **analyze_options)
     _INVENTORY_CACHE.clear()
     rows = result.get("data") or []
     summary = rows[0] if rows and isinstance(rows[0], list) else []

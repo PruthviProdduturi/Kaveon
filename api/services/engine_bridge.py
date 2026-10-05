@@ -773,7 +773,7 @@ def _engine_error_text(body):
 
 
 def analyze_table(catalog, schema, table, actor, role, *, sketches=False, distinct=False,
-                  cube=False, timeout=600):
+                  cube=False, metadata_only=False, timeout=600):
     """Run ANALYZE over one table.
 
     The statement is assembled here from the table's own catalog names and
@@ -792,7 +792,11 @@ def analyze_table(catalog, schema, table, actor, role, *, sketches=False, distin
     statement = f"ANALYZE {_quote_ident(schema)}.{_quote_ident(table)}"
     if properties:
         statement += " WITH (" + ", ".join(properties) + ")"
-    engine_role = _sql_role(role)
+    # The Engine reserves ANALYZE for its catalog-admin principal. The API
+    # exposes the metadata-only form as a bounded read to authenticated users,
+    # so use the bridge's admin capability only for this server-assembled
+    # statement. Deep scans retain the caller's role and editor/manage gate.
+    engine_role = "admin" if metadata_only else _sql_role(role)
     tag = "kaveon-api:" + uuid.uuid4().hex
     payload = _statement_payload(statement, catalog, schema, tag, None)
     try:
