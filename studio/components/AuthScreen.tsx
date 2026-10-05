@@ -95,12 +95,21 @@ export function AuthScreen() {
 		try {
 			if (!microsoftPublicToken) return start("microsoft-entra-id");
 			const token = await microsoftPublicToken();
-			await signIn("entra-public", { token, callbackUrl: signInDestination() });
+			const result = await signIn("entra-public", { token, callbackUrl: signInDestination(), redirect: false });
+			if (result?.error) {
+				setSignInError(`Microsoft sign-in was rejected (${result.error}). Check the account consent and try again.`);
+				return;
+			}
+			window.location.assign(result?.url ?? signInDestination());
 		} catch (error) {
-			const code = error && typeof error === "object" && "errorCode" in error && typeof error.errorCode === "string" && /^[a-z_]{1,80}$/.test(error.errorCode) ? error.errorCode : "sign_in_failed";
+			const details = error && typeof error === "object" ? error as { errorCode?: unknown; message?: unknown } : {};
+			const rawCode = typeof details.errorCode === "string" ? details.errorCode : "";
+			const code = /^[a-z0-9_-]{1,80}$/i.test(rawCode) ? rawCode : "sign_in_failed";
 			setSignInError(code === "popup_window_error" || code === "empty_window_error"
 				? "Allow pop-ups for this site, then select Microsoft again."
-				: `Microsoft sign-in failed (${code}). Please try again.`);
+				: code === "consent_required" || code === "interaction_required"
+					? "Microsoft consent is required for Kaveon. Accept the requested permission, then try again."
+					: `Microsoft sign-in failed (${code}). Please try again.`);
 		} finally {
 			setMicrosoftPending(false);
 		}
