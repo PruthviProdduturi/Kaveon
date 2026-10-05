@@ -17,12 +17,16 @@
 #>
 param(
   [Parameter(Position = 0)][ValidateSet("start", "stop", "status")][string]$Action = "status",
-  [string]$DataDir = (Join-Path $PSScriptRoot "..\tmp\kaveon-events"),
-  [string]$StateDir = (Join-Path $PSScriptRoot "..\tmp\local-cluster"),
+  [string]$DataDir = "",
+  [string]$StateDir = "",
   [int]$Parallelism = 0   # KAVEON_LOCAL_PARALLELISM for every Engine node; 0 leaves the Engine's default
 )
 $ErrorActionPreference = "Stop"
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
+$defaultDataDir = Join-Path $root "tmp\kaveon-events"
+$defaultStateDir = Join-Path $root "tmp\local-cluster"
+if ([string]::IsNullOrWhiteSpace($DataDir)) { $DataDir = $defaultDataDir }
+if ([string]::IsNullOrWhiteSpace($StateDir)) { $StateDir = $defaultStateDir }
 $engine = Join-Path $root "engine\target\release\kaveon-server.exe"
 $DataDir = (Resolve-Path $DataDir).Path
 New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
@@ -84,11 +88,12 @@ switch ($Action) {
     $env:KAVEON_LOCAL_PRODUCT_MODE = "true"
     $env:KAVEON_POSTGRESQL_RETIREMENT_MODE = "true"
     $env:KAVEONDB_AUTHORITY_FAMILIES = "ai_configuration,catalog_sources,data_sources,datasets,dataset_semantics,charts,dashboards,favorites,saved_queries,user_themes,user_recents,query_history,activity,context_cache,dlm_generation,chat_history"
-    $env:KAVEONDB_READ_AUTHORITY_FAMILIES = "datasets,charts,dashboards,saved_queries,user_themes,user_recents,favorites,query_history,activity,chat_history,sources,dlm_definitions"
+    $env:KAVEONDB_READ_AUTHORITY_FAMILIES = "all"
     $env:KAVEON_PRODUCT_STORAGE_MODE = "local"
     $env:KAVEON_PRODUCT_LOCAL_PATH = Join-Path $StateDir "product-transactions"
     New-Item -ItemType Directory -Force -Path $env:KAVEON_PRODUCT_LOCAL_PATH | Out-Null
     $env:KAVEON_LOCAL_DLM_ARTIFACT_PATH = $env:KAVEON_PRODUCT_LOCAL_PATH
+    $env:KAVEON_DLM_LIVE_ARTIFACT_PUBLISH_ENABLED = "true"
     $env:KAVEON_PROXY_SECRET = "kaveon-local-proxy"
     $env:KAVEON_ENGINE_URL = "http://127.0.0.1:8080"
     $env:KAVEON_ENGINE_BRIDGE_TOKEN = $bridgeToken
