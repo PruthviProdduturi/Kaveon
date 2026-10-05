@@ -136,7 +136,7 @@ export function Inventory({ catalogName, schemaName, action }: {
           // present. Metadata ANALYZE reads Parquet footers/manifests (no data
           // pages), so an Admin opening the page can establish those facts in
           // one pass. Deeper sketches and cubes remain explicit actions.
-          if (isAdmin && list.some(entry => entry.state === "unmeasured")) {
+          if (list.some(entry => entry.state === "unmeasured")) {
             await Promise.allSettled(list
               .filter(entry => entry.state === "unmeasured")
               .map(entry => analyzeTable(entry.tableId, {})));
