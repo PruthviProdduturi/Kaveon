@@ -149,7 +149,10 @@ export function Inventory({ catalogName, schemaName, action }: {
     }
   }, [catalogName, schemaName]);
 
-  useEffect(() => { void load(false); }, [load]);
+  // Metadata measurements are footer/manifest reads, so populate the table
+  // facts on first open instead of making every user discover Re-measure.
+  // The explicit button remains available for source changes.
+  useEffect(() => { void load(true); }, [load]);
 
   const refresh = async () => {
     setRefreshing(true);
