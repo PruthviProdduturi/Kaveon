@@ -14130,12 +14130,14 @@ mod tests {
             assert_ne!(child.id, parent);
         }
         let listed = super::list_queries(axum::Extension(admin.clone())).await.0;
-        assert!(
-            listed
-                .iter()
-                .filter(|record| record.sql.starts_with("SELECT COUNT(DISTINCT"))
-                .all(|record| record.context.client_tags == [format!("analyze:{parent}")])
-        );
+        let tagged_distinct = listed
+            .iter()
+            .filter(|record| {
+                record.sql.starts_with("SELECT COUNT(DISTINCT")
+                    && record.context.client_tags == [format!("analyze:{parent}")]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(tagged_distinct.len(), 3);
 
         // SHOW STATS FOR presents the counts.
         let (status, body) = submit(
