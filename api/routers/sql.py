@@ -600,6 +600,21 @@ def execute_engine_sql(data: SqlExecuteBody, response: Response, ctx: UserContex
     schema = dataset.get("schema_name") or None
     if not schema:
         raise HTTPException(status_code=400, detail="Engine dataset is missing schema_name")
+    # Dashboard charts opt into the bounded API result cache.  The Engine
+    # execution path must honor the same contract as the legacy SQL path;
+    # otherwise every dashboard refresh reruns identical distributed work.
+    cache_key = _cache_key(source["engine_catalog"], data.sql_text)
+    cache_ttl = data.cache_ttl or 300
+    if data.use_cache:
+        cached = _cache_get(cache_key, cache_ttl)
+        if cached is not None:
+            return {
+                "columns": cached.get("columns") or [],
+                "rows": cached.get("rows") or [],
+                "query_id": None,
+                "duration_ms": 0,
+                "from_cache": True,
+            }
     started_at = int(time.time() * 1000)
     try:
         result = _execute_engine_read_only(data.sql_text, source["engine_catalog"], ctx, schema)
@@ -632,6 +647,8 @@ def execute_engine_sql(data: SqlExecuteBody, response: Response, ctx: UserContex
     columns, rows = _engine_result_rows(result)
     if data.row_limit:
         rows = rows[:data.row_limit]
+    if data.use_cache:
+        _cache_set(cache_key, {"columns": columns, "rows": rows, "row_count": len(rows)})
     try:
         history_svc.create_history({
             "sql_text": data.sql_text,
