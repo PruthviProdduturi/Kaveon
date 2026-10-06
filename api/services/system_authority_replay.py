@@ -45,6 +45,13 @@ FAMILY_TABLES: dict[str, tuple[str, ...]] = {
 # identifier here.
 _TABLE_TO_FAMILY = {table: family for family, tables in FAMILY_TABLES.items() for table in tables}
 
+# Generated DLM indexes and answer rows are rebuildable artifacts.  They can
+# contain very large JSON payloads and are retired through the immutable ADLS
+# artifact/rebuild evidence path, rather than copied into the typed control
+# plane.  Keeping them out of the row replay prevents oversized or indeterminate
+# Engine transactions from masquerading as a migration failure.
+REBUILDABLE_DLM_TABLES = frozenset({"dlm_value_index", "dlm_answers", "dlm_sketch"})
+
 
 def _json_value(value: Any) -> Any:
     """Convert driver values to deterministic JSON-compatible values."""
@@ -153,6 +160,18 @@ def replay_table(
     compare the returned target row/revision and skip an already matching row
     before invoking this function on a resumed run.
     """
+    if table in REBUILDABLE_DLM_TABLES:
+        count_result = query(f"SELECT COUNT(*) AS row_count FROM {table}")
+        count_rows = count_result.get("rows") if isinstance(count_result, Mapping) else None
+        count_value = count_rows[0].get("row_count", 0) if count_rows and isinstance(count_rows[0], Mapping) else 0
+        try:
+            source_count = int(count_value or 0)
+        except (TypeError, ValueError):
+            raise RuntimeError(f"PostgreSQL returned an invalid {table} count") from None
+        return {"family": _TABLE_TO_FAMILY[table], "table": table,
+                "source_count": source_count, "written": 0, "updated": 0,
+                "skipped": source_count, "disposition": "rebuildable"}
+
     rows = snapshot_table(table, query=query)
     column_types = _table_columns(rows)
     written = 0
@@ -162,6 +181,13 @@ def replay_table(
     # every history row while retaining direct reads for post-commit retry
     # verification. Authority tables are capped below the page bound.
     target_cache: dict[str, dict | None] = {}
+    # A typed-table list can legitimately be temporarily unavailable while
+    # the Engine is compacting a large generated-state table.  Treating a
+    # failed list as an empty table turns an existing row into a duplicate
+    # INSERT and hides the real reconciliation path behind a generic 400.
+    # Keep that distinction so the bounded per-row read can decide whether to
+    # update or create safely.
+    target_page_unavailable = False
     # One bounded snapshot avoids reloading the ADLS manifest for every row.
     if rows and len(rows) <= 1000 and read is engine_system_store.read_row:
         try:
@@ -173,6 +199,7 @@ def replay_table(
             if error.status_code != 502:
                 raise
             page = {"rows": []}
+            target_page_unavailable = True
         target_cache = {str(item["id"]): item for item in page.get("rows", [])
                         if isinstance(item, Mapping) and isinstance(item.get("id"), str)}
         known_target_ids = set(target_cache)
@@ -274,7 +301,7 @@ def replay_table(
     def initial_read(_table: str, row_id: str, _actor: str, _role: str):
         if row_id in known_target_ids:
             return target_cache[row_id]
-        if rows and len(rows) <= 1000 and read is engine_system_store.read_row:
+        if rows and len(rows) <= 1000 and read is engine_system_store.read_row and not target_page_unavailable:
             return None
         return read(_table, row_id, _actor, _role)
 
