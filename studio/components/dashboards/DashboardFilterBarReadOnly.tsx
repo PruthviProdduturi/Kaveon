@@ -83,12 +83,18 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
 
     (async () => {
       try {
-        const chartResps = await Promise.all(
-          chartIds.map((id) => msalFetch(`${API_BASE}/api/v1/charts/${id}`))
-        );
-        const charts: { id: number; dataset_id: number }[] = await Promise.all(
-          chartResps.map((r) => r.json())
-        );
+        // Fetch the chart catalog once. A dashboard with many filters used to
+        // issue one proxy round-trip per chart on mount, competing with the
+        // chart preload and making the page appear stalled on Vercel.
+        const bulk = await msalFetch(`${API_BASE}/api/v1/charts`);
+        if (!bulk.ok) throw new Error(`Failed to load chart catalog: ${bulk.status}`);
+        const payload = await bulk.json();
+        const all = Array.isArray(payload) ? payload : payload.charts || payload.data || [];
+        const byId = new Map(all.map((chart: any) => [String(chart.id), chart]));
+        const charts: { id: number; dataset_id: number }[] = chartIds
+          .map((id) => byId.get(String(id)))
+          .filter((chart: any) => chart && chart.dataset_id)
+          .map((chart: any) => ({ id: Number(chart.id), dataset_id: Number(chart.dataset_id) }));
         const datasetIds = Array.from(new Set(charts.map((c) => c.dataset_id)));
         const colResps = await Promise.all(
           datasetIds.map((id) => msalFetch(`${API_BASE}/api/v1/datasets/${id}/columns`))
