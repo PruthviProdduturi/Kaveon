@@ -1022,23 +1022,33 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
     setIsPreloading(true);
 
     try {
-      // Fetch all charts in parallel using Promise.all
-      const fetchPromises = chartIds.map(async (chartId) => {
-        try {
-          const response = await msalFetch(`${apiBase}/api/v1/charts/${chartId}`);
-          if (!response.ok) {
-            console.error(`Failed to fetch chart ${chartId}: ${response.status}`);
-            return { chartId, data: null };
-          }
-          const data = await response.json();
-          return { chartId, data };
-        } catch (error) {
-          console.error(`Error fetching chart ${chartId}:`, error);
-          return { chartId, data: null };
+      // The list endpoint returns the same chart records in one request. A
+      // dashboard can contain dozens of charts; issuing one proxy round trip
+      // per chart made Vercel queue requests even when Engine execution was
+      // already complete. Keep the per-chart path as a compatibility fallback.
+      let results: { chartId: ChartId; data: any | null }[] = [];
+      try {
+        const response = await msalFetch(`${apiBase}/api/v1/charts`);
+        if (response.ok) {
+          const payload = await response.json();
+          const all = Array.isArray(payload) ? payload : payload.charts || payload.data || [];
+          const byId = new Map(all.map((item: any) => [String(item.id), item]));
+          results = chartIds.map((chartId) => ({ chartId, data: byId.get(String(chartId)) || null }));
         }
-      });
-
-      const results = await Promise.all(fetchPromises);
+      } catch (error) {
+        console.warn("Bulk chart preload failed; falling back to individual requests", error);
+      }
+      if (results.length !== chartIds.length || results.some((item) => !item.data)) {
+        const fallback = await Promise.all(chartIds.map(async (chartId) => {
+          try {
+            const response = await msalFetch(`${apiBase}/api/v1/charts/${chartId}`);
+            return { chartId, data: response.ok ? await response.json() : null };
+          } catch { return { chartId, data: null }; }
+        }));
+        const byId = new Map(results.map((item) => [String(item.chartId), item]));
+        for (const item of fallback) if (!byId.get(String(item.chartId))?.data) byId.set(String(item.chartId), item);
+        results = chartIds.map((chartId) => byId.get(String(chartId)) || { chartId, data: null });
+      }
 
       // Build the cache map
       const newCache = new Map<ChartId, any>();

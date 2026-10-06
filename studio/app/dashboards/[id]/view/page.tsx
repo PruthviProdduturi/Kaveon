@@ -379,8 +379,17 @@ const DashboardViewPage: React.FC = () => {
           try {
             const chartIds = layout.filter((it: any) => it.type === "chart" && it.chartId && !it.exemptFromFilters).map((it: any) => it.chartId);
             if (chartIds.length) {
-              const chartResps = await Promise.all(chartIds.map((cid: string | number) => msalFetch(`${API_BASE}/api/v1/charts/${cid}`)));
-              const charts: { id: number; dataset_id: number }[] = await Promise.all(chartResps.map((r: Response) => r.json()));
+              // Load the chart inventory once instead of opening one proxy
+              // request per tile just to discover dataset IDs.
+              const chartListRes = await msalFetch(`${API_BASE}/api/v1/charts`);
+              if (!chartListRes.ok) throw new Error(`Failed to load chart inventory: ${chartListRes.status}`);
+              const chartPayload = await chartListRes.json();
+              const chartList = Array.isArray(chartPayload) ? chartPayload : chartPayload.charts || chartPayload.data || [];
+              const byId = new Map(chartList.map((chart: any) => [String(chart.id), chart]));
+              const charts: { id: number; dataset_id: number }[] = chartIds
+                .map((cid: string | number) => byId.get(String(cid)))
+                .filter(Boolean)
+                .map((chart: any) => ({ id: Number(chart.id), dataset_id: Number(chart.dataset_id) }));
               const dsIds = Array.from(new Set(charts.map((c) => c.dataset_id)));
               const colResps = await Promise.all(dsIds.map((dsId) => msalFetch(`${API_BASE}/api/v1/datasets/${dsId}/columns`)));
               const allCols: { table_name: string; column_name: string; is_dimension: boolean; semantic_type?: string }[][] =
