@@ -53,13 +53,16 @@ export default function ConnectionsPage() {
           <div className={s.cardId}>
             <div className={s.mark} style={metaIcon ? { background: metaIcon.bg, borderColor: metaIcon.border } : undefined}>{metaIcon?.icon ?? <i className="fas fa-database" />}</div>
             <div style={{ minWidth: 0 }}>
-              <h2 id="meta-title" className={s.cardTitle}>Metadata database</h2>
+              <h2 id="meta-title" className={s.cardTitle}>{meta?.db_type === "postgresql" ? "Legacy metadata database" : "Metadata database"}</h2>
               <p className={s.cardSub}>
-                {meta?.ui_configured ? <>Datasets, charts, dashboards and history live here · <code>{meta.label}</code></> : "Where Kaveon keeps datasets, charts, dashboards and history."}
+                {meta?.ui_configured ? meta.db_type === "postgresql"
+                  ? <>Control-plane metadata is still served by <code>PostgreSQL</code>; KaveonDB is the query runtime. Retirement is pending its final migration gates.</>
+                  : <>Datasets, charts, dashboards and history live here · <code>{meta.label}</code></>
+                  : "Where Kaveon keeps datasets, charts, dashboards and history."}
               </p>
             </div>
           </div>
-          <Status on={metaOn}>{meta === undefined ? "Checking" : meta?.ui_configured ? "Connected" : "Not configured"}</Status>
+          <Status on={meta === undefined ? null : meta?.db_type === "postgresql" ? false : metaOn}>{meta === undefined ? "Checking" : meta?.db_type === "postgresql" ? "Retirement pending" : meta?.ui_configured ? "Connected" : "Not configured"}</Status>
         </div>
         {meta?.ui_configured ? (
           <div className={s.facts}>
@@ -67,8 +70,12 @@ export default function ConnectionsPage() {
               .filter(([, v]) => v).map(([k, v]) => <div key={k} className={s.fact}><div className={s.factLabel}>{k}</div><div className={s.factValue} title={v}>{v}</div></div>)}
           </div>
         ) : meta === null ? (
-          <p className={s.note} style={{ marginTop: 12 }}>Run the setup wizard to connect a metadata database. Nothing can be saved until it exists.</p>
-        ) : null}
+            <p className={s.note} style={{ marginTop: 12 }}>Run the setup wizard to connect a metadata database. Nothing can be saved until it exists.</p>
+          ) : meta?.db_type === "postgresql" ? (
+            <p className={s.note} style={{ marginTop: 12, color: "var(--warning, #f59e0b)" }}>
+              PostgreSQL remains the active control-plane authority in this deployment. Do not delete it until the 16-family replay, shadow parity, write fence, restart, and backup/restore gates pass.
+            </p>
+          ) : null}
       </section>
 
       <section className={s.card} aria-labelledby="db-title">
