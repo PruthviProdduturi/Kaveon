@@ -47,6 +47,23 @@ def register(collection, path, body):
         current = existing.json()
         for key, value in body.items():
             if current.get(key) != value:
+                # A table can be moved to a verified, encoding-optimized
+                # object and receive its declared cube shape in one
+                # optimistic replacement.  The source version changes, so
+                # the Engine invalidates old statistics/cubes and the caller
+                # rebuilds them explicitly below.
+                if (path.startswith('/v1/catalog/tables/')
+                        and key in {'location', 'shape'}):
+                    response = client.put(
+                        path,
+                        headers={'If-Match': str(current['revision'])},
+                        json={**current, **body,
+                              'revision': current['revision'] + 1,
+                              'lifecycle': current.get('lifecycle', 'Active')},
+                    )
+                    response.raise_for_status()
+                    current = response.json()
+                    break
                 if (path.endswith('/' + CATALOG_ID)
                         and key == 'name'
                         and current.get('name') == 'Kaveon'
@@ -72,6 +89,8 @@ parser.add_argument('--definitions-only', action='store_true',
                     help='Register definitions without running reads or updating API metadata')
 parser.add_argument('--retire-legacy-kaveon', action='store_true',
                     help='After a successful Kaveon registration, remove legacy OpenSource Kaveon table definitions; never deletes lake objects')
+parser.add_argument('--build-cube', action='store_true',
+                    help='After verification, build the declared table cubes (one full source read)')
 parser.add_argument('manifests', nargs='+')
 args = parser.parse_args()
 documents = [json.loads(Path(filename).read_text()) for filename in args.manifests]
@@ -191,7 +210,8 @@ for table in tables:
              '/v1/catalog/tables/'+quote(table_id, safe=''),
              {'id': table_id, 'schema_id': schema_id, 'name': table['name'],
               'location': table['location'], 'access': 'Shortcut', 'format': 'Parquet',
-              'columns': table['columns']})
+              'columns': table['columns'],
+              **({'shape': table['shape']} if table.get('shape') else {})})
 
 # Verify actual distributed reads before exposing the source in SQL Lab.
 if args.definitions_only:
@@ -219,6 +239,24 @@ for table in tables:
         raise RuntimeError(f'Engine row-count mismatch for {schema}.{name}: {result.get("error", rows)}')
     checks.append({'table': schema+'.'+name, 'rows': table['row_count'], 'query_id': result.get('id')})
     print('Verified ' + schema+'.'+name + ': ' + str(table['row_count']), flush=True)
+
+if args.build_cube:
+    for table in tables:
+        shape = table.get('shape')
+        if not shape:
+            continue
+        schema = table['schema']
+        name = table['name']
+        response = client.post('/v1/statement', headers={
+            'Authorization': 'Bearer ' + os.environ['KAVEON_ENGINE_BRIDGE_TOKEN'],
+            'x-kaveon-principal': CATALOG.lower() + '-curation', 'x-kaveon-role': 'admin',
+        }, json={'query': f'ANALYZE {schema}.{name} WITH (cube = true)',
+                 'catalog': CATALOG, 'schema': schema, 'source': 'catalog-curation'})
+        response.raise_for_status()
+        result = response.json()
+        if result.get('error'):
+            raise RuntimeError(f'Cube build failed for {schema}.{name}: {result["error"]}')
+        print('Built cube ' + schema+'.'+name, flush=True)
 metadata.execute('''INSERT INTO catalog_sources
     (name, engine_catalog, storage_type, storage_config, data_format,
      credential_kind, credential_ref, adapter_type, adapter_config,

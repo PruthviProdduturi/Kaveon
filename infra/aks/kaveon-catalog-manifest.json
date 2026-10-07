@@ -69,7 +69,7 @@
   {
    "schema": "usage",
    "name": "kaveon_events_enriched",
-   "location": "kaveon_product/kaveon_events_enriched/combined-v1.parquet",
+   "location": "kaveon_product/kaveon_events_enriched_v2/combined-v2.parquet",
    "row_count": 504000000,
    "columns": [
     {
@@ -177,7 +177,101 @@
      "data_type": "Utf8",
      "nullable": true
     }
-   ]
+   ],
+   "shape": {
+    "dimensions": [
+     {
+      "name": "surface",
+      "cap": 8
+     },
+     {
+      "name": "platform",
+      "cap": 8
+     },
+     {
+      "name": "license",
+      "cap": 8
+     },
+     {
+      "name": "segment",
+      "cap": 8
+     },
+     {
+      "name": "industry",
+      "cap": 16
+     },
+     {
+      "name": "region",
+      "cap": 8
+     },
+     {
+      "name": "country",
+      "cap": 40
+     },
+     {
+      "name": "deployment",
+      "cap": 8
+     },
+     {
+      "name": "acquisition_channel",
+      "cap": 8
+     },
+     {
+      "name": "team_size",
+      "cap": 8
+     }
+    ],
+    "measures": [
+     {
+      "column": "actions",
+      "aggregates": [
+       "sum"
+      ]
+     },
+     {
+      "column": "sessions",
+      "aggregates": [
+       "sum"
+      ]
+     },
+     {
+      "column": "duration_sec",
+      "aggregates": [
+       "sum"
+      ]
+     },
+     {
+      "column": "queries_run",
+      "aggregates": [
+       "sum"
+      ]
+     },
+     {
+      "column": "charts_created",
+      "aggregates": [
+       "sum"
+      ]
+     },
+     {
+      "column": "errors",
+      "aggregates": [
+       "sum"
+      ]
+     },
+     {
+      "column": "rows_scanned",
+      "aggregates": [
+       "sum"
+      ]
+     },
+     {
+      "column": "cache_hits",
+      "aggregates": [
+       "sum"
+      ]
+     }
+    ]
+   }
   },
   {
    "schema": "usage",
