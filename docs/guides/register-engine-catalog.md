@@ -146,7 +146,10 @@ rebuild was recovered this way, in this order:
    [`infra/aks/kaveon-catalog-manifest.json`](../../infra/aks/kaveon-catalog-manifest.json).
    The second manifest registers Kaveon-owned usage tables under
    `Kaveon.usage`; it reuses the same immutable ADLS objects and does not
-   migrate or rewrite the backing files.
+   migrate or rewrite the backing files. The telemetry table in that manifest
+   points at the dictionary-encoded `kaveon_events_enriched_v2` object and
+   declares its additive measure shape, so dashboard totals can be answered
+   from an exact cube instead of scanning all 504M rows.
    After both registrations pass their exact row-count checks, run the Kaveon
    manifest once more with `--retire-legacy-kaveon`. That flag removes only the
    old `OpenSource.kaveon_product` definitions and the old
@@ -157,6 +160,11 @@ rebuild was recovered this way, in this order:
    The script registers the catalog, every schema and table, runs `COUNT(*)`
    on each and refuses to update the platform source registry unless every
    count matches the manifest.
+   For the first registration of the optimized telemetry object, add
+   `--build-cube` after the row-count verification. It performs one bounded
+   full read to build the versioned exact additive cube; later queries covered
+   by the shape are served from that cube. Do not use this flag until the v2
+   object has passed the manifest's exact row-count check.
 4. Run `scripts/qualify-dlm-questions.py --execute-live` through the portal;
    the corpus names its datasets, so the restored ids do not matter.
 
