@@ -5,18 +5,18 @@ It is not an independently certified rating. The separate “90% better than
 Trino” target requires a selected metric and a declared workload; it cannot mean
 every SQL feature, deployment scenario, and performance dimension at once.
 
-## Current status — 2026-10-06
+## Current status — 2026-10-07
 
 The historical September 10 table below is a **narrow integrated-direction
-estimate**, not a current release or cloud-certification result. The current
-cross-engine performance evidence remains the five-round matched result of
-1.45× Kaveon throughput versus Trino, below the declared 1.90× (90% better)
-target. The AKS environment needed to rerun that campaign is not currently
-provisioned. Local release microbenchmarks are recorded in
-`docs/qualification/engine-microbenchmarks-2026-10-06.md`; they are diagnostic
-only and do not add readiness points. PostgreSQL retirement and cloud cutover
-evidence are tracked separately and remain open until Claude's live replay,
-fencing, restart, backup/restore, rollback and final validator gates pass.
+estimate**, not a broad production-certification result. The completed six-round
+AKS comparison on the immutable 5M-row fixture measured **2.1254× Kaveon
+throughput versus Trino** (3.8282 versus 1.8012 successful exact-result QPS),
+with all technical gate checks passing. The raw report and gate are archived in
+`docs/qualification/kaveon-trino-aks-2026-10-07-run-d1.json` and
+`docs/qualification/kaveon-trino-aks-2026-10-07-claim-gate.json`. The broad
+claim remains fail-closed until the primary QPS metric is explicitly accepted;
+the result is scoped to the declared workload and does not imply feature parity.
+PostgreSQL retirement and cloud cutover evidence remain tracked separately.
 
 ## Scoring contract
 
@@ -38,15 +38,12 @@ visible when reporting a rating.
 
 ## Current local evidence
 
-> **2026-09-17.** The assessment below is the September 10 scoring and has not
-> been re-scored since. The performance area's "best recorded six-query
-> diagnostic ratio is 1.057×" is superseded by the cluster records under
-> `docs/qualification/`: the matched harness at 1.45× over five rounds
-> (2026-09-15), the scale suite ahead of Trino on 9 of 13 statements
-> (2026-09-16), ClickBench at a 1.39× geometric mean over 42 statements
-> (2026-09-17) and TPC-H 21 of 22 planned and executed; none has completed
-> the declared rounds of `benchmark-program.md`, so the 1.90× gate and the
-> performance score stand as written until a campaign record exists.
+> **Historical note.** The earlier September scoring and diagnostic ratios are
+> retained below for provenance. They are superseded for current performance by
+> the completed six-round publication run archived at
+> `docs/qualification/kaveon-trino-aks-2026-10-07-run-d1.json`; the technical
+> gate passes at 2.1254× aggregate QPS. The QPS metric remains proposed until
+> explicitly accepted for the broad comparison claim.
 
 ### Worker loss — September 21
 
@@ -132,10 +129,10 @@ a released exchange, coordinator-relayed exchanges move only tasks, the
 last worker) and the exchange store's refusal of a superseded attempt.
 The AKS rolling-restart gate on this build is the next measurement.
 
-### Assessment — September 10
+### Assessment — October 7
 
-The evidence-backed score for the current integrated direction is **80/100
-(8.0/10)**. This is a readiness estimate for the declared Engine scope, not a
+The evidence-backed score for the current integrated direction is **85/100
+(8.5/10)**. This is a readiness estimate for the declared Engine scope, not a
 feature-parity score against Trino or PostgreSQL. The threshold is met narrowly;
 the remaining boundaries still prevent a broad production-readiness claim.
 
@@ -147,7 +144,7 @@ the remaining boundaries still prevent a broad production-readiness claim.
 | Authentication and platform integration | 13/15 | Entra/TLS, owner-bound results and transactions, role checks, exchange authentication, fail-closed secrets/configuration | Live rotation/revocation, tenant isolation and adversarial authorization qualification on the release deployment |
 | Storage correctness | 8/10 | Parquet/Delta/Iceberg readers, pinned source identities, authenticated ADLS reads, CAS-backed immutable product/statistics documents | Live ADLS conflict/fault/restart evidence, broader schema evolution and corruption/recovery qualification |
 | Operability | 8/10 | Reproducible CLI/images, Helm/Bicep, health/readiness/metrics/history, immutable ACR build and current-digest AKS rollout, startup stale-exchange reconciliation, and a passing combined restart/fault/pressure gate | Backup/restore, upgrade/rollback, alerting and a sustained current-image soak |
-| Performance | 3/10 | Resource-matched harness, exact-result hashes, fail-closed claim evaluators; best recorded six-query diagnostic ratio is 1.057× | Run the publication-scale extended corpus on immutable current images; the required 1.90× Trino throughput result and PostgreSQL transaction comparison do not exist |
+| Performance | 8/10 | Completed six-round, six-sample-class resource-matched AKS publication run; 12 exact-result query shapes, pinned images, verified ADLS objects, 30 latency samples per engine/case, 6 throughput rounds, technical gate passed, and 2.1254× aggregate QPS ratio | Explicit acceptance of the QPS metric for the broad claim; high-cardinality grouping remains slower, and this result does not establish all-workload or PostgreSQL transaction superiority |
 
 Three material boundaries prevent expanding this narrow 8/10 rating:
 
