@@ -175,6 +175,8 @@ export interface QueryRecord {
   plan?: { logical?: PlanNode | string | null };
   scans: ScanTelemetry[];
   stages: StageTelemetry[];
+  /** Present on compact history rows; full records derive this from stages. */
+  stage_count?: number;
   context: QueryContext;
 }
 

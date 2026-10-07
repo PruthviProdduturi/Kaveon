@@ -4,7 +4,7 @@ use crate::lifecycle::{CancellationToken, TaskClaim, TaskOutcome, TaskOwner};
 use crate::security::Identity;
 use crate::settings::QuerySettings;
 use axum::body::Body;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
@@ -352,6 +352,32 @@ struct QueryRecord {
     scans: Vec<ScanTelemetry>,
     stages: Vec<StageTelemetry>,
     context: QueryContext,
+}
+
+/// Compact history row used by the operations console. Detailed plans,
+/// scans, task telemetry and preview rows remain available from the individual
+/// `/v1/query/{id}` endpoint; sending them for every history row made the
+/// console increasingly slow as the in-memory ledger grew.
+#[derive(Serialize)]
+struct QuerySummary {
+    id: String,
+    sql: String,
+    state: QueryState,
+    row_count: Option<u64>,
+    error: Option<String>,
+    error_code: Option<String>,
+    elapsed_ms: u64,
+    submitted_at_ms: u64,
+    completed_at_ms: u64,
+    context: QueryContext,
+    stage_count: usize,
+    rows: Vec<Vec<serde_json::Value>>,
+    stages: Vec<StageTelemetry>,
+}
+
+#[derive(Deserialize, Default)]
+struct QueryListOptions {
+    summary: Option<bool>,
 }
 
 #[derive(Clone, Serialize)]
@@ -7488,17 +7514,41 @@ async fn get_result_page(
     }
 }
 
-async fn list_queries(Extension(identity): Extension<Identity>) -> Json<Vec<QueryRecord>> {
+async fn list_queries(
+    Query(options): Query<QueryListOptions>,
+    Extension(identity): Extension<Identity>,
+) -> Response {
     let store = QUERY_STORE.read().await;
-    let mut queries: Vec<QueryRecord> = store
+    let mut queries: Vec<&QueryRecord> = store
         .queries
         .values()
         .filter(|record| identity.can_view(record.context.principal.as_deref()))
-        .cloned()
         .collect();
     queries.sort_unstable_by_key(|query| Reverse(query.submitted_at_ms));
     queries.truncate(QUERY_HISTORY_LIMIT);
-    Json(queries)
+    if options.summary.unwrap_or(false) {
+        let summaries = queries
+            .into_iter()
+            .map(|record| QuerySummary {
+                id: record.id.clone(),
+                sql: record.sql.clone(),
+                state: record.state,
+                row_count: record.row_count,
+                error: record.error.clone(),
+                error_code: record.error_code.clone(),
+                elapsed_ms: record.elapsed_ms,
+                submitted_at_ms: record.submitted_at_ms,
+                completed_at_ms: record.completed_at_ms,
+                context: record.context.clone(),
+                stage_count: record.stages.len(),
+                rows: Vec::new(),
+                stages: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        Json(summaries).into_response()
+    } else {
+        Json(queries.into_iter().cloned().collect::<Vec<_>>()).into_response()
+    }
 }
 
 async fn get_query(

@@ -198,7 +198,7 @@ export default function EngineConsolePage() {
                     <span className={s.out}>
                       {running ? <span>{q.state === "QUEUED" ? "queued" : "running"}</span>
                         : failed ? <span>—</span>
-                        : <>{q.rows.length.toLocaleString()} <span>{q.rows.length === 1 ? "row" : "rows"}</span>{q.stages.length ? <> <span>· {q.stages.length} {q.stages.length === 1 ? "stage" : "stages"}</span></> : null}</>}
+                        : <>{(q.row_count ?? q.rows?.length ?? 0).toLocaleString()} <span>{(q.row_count ?? q.rows?.length ?? 0) === 1 ? "row" : "rows"}</span>{(q.stage_count ?? q.stages?.length ?? 0) ? <> <span>· {q.stage_count ?? q.stages?.length} {(q.stage_count ?? q.stages?.length) === 1 ? "stage" : "stages"}</span></> : null}</>}
                     </span>
                   </Link>
                 );
