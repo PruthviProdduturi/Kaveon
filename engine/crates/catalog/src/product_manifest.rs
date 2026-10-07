@@ -1311,7 +1311,7 @@ fn validate_typed_row(row: &TypedRow) -> Result<(), ManifestError> {
     Ok(())
 }
 
-const MAX_TYPED_JSON_BYTES: usize = 1 * 1024 * 1024;
+const MAX_TYPED_JSON_BYTES: usize = 1024 * 1024;
 const MAX_TYPED_JSON_DEPTH: usize = 16;
 
 fn validate_typed_json(value: &serde_json::Value, depth: usize) -> Result<(), ManifestError> {

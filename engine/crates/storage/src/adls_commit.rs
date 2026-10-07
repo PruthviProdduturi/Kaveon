@@ -212,12 +212,42 @@ fn append_bounded(target: &mut Vec<u8>, chunk: &[u8], max_bytes: usize) -> Commi
     Ok(())
 }
 
+/// True when an untyped object-store failure is really a failed precondition.
+///
+/// Matched on the rendered error because the status is not carried in the
+/// variant: Azure says `412 ConditionNotMet`, S3 says `PreconditionFailed`, and
+/// GCS says `conditionNotMet`. A false positive here would turn a genuinely
+/// unknown outcome into a retryable conflict, so the patterns stay narrow and
+/// each one is anchored to a status or a documented error code.
+fn is_precondition_failure(rendered: &str) -> bool {
+    let text = rendered.to_ascii_lowercase();
+    // The provider error codes are unambiguous on their own.
+    if text.contains("conditionnotmet")
+        || text.contains("preconditionfailed")
+        || text.contains("precondition failed")
+    {
+        return true;
+    }
+    // A bare "412" is not: it also appears in byte counts, offsets and request
+    // IDs. Only accept it where the renderer puts a status.
+    [
+        "status: 412",
+        "status code: 412",
+        "status=412",
+        "http 412",
+        "412 ",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
+}
+
 fn classify_error(error: ObjectStoreError) -> CommitError {
     // Keep the public error deliberately coarse, but retain a safe diagnostic
     // in the coordinator logs so cloud authentication/endpoint failures can
     // be distinguished from a missing durable head during startup. The object
     // store error never contains bearer tokens or secret values.
     eprintln!("ADLS object-store request failed: {error:?}");
+    let error_text = error.to_string();
     let kind = match error {
         ObjectStoreError::AlreadyExists { .. }
         | ObjectStoreError::Precondition { .. }
@@ -230,6 +260,16 @@ fn classify_error(error: ObjectStoreError) -> CommitError {
         }
         ObjectStoreError::InvalidPath { .. } | ObjectStoreError::UnknownConfigurationKey { .. } => {
             CommitErrorKind::Invalid
+        }
+        // A failed precondition does not always arrive typed. Azure answers a
+        // conditional PUT whose ETag no longer matches with `412 ConditionNotMet`,
+        // and on several object_store paths that reaches us as `Generic` rather
+        // than `Precondition`. It is still a conflict and nothing was written, so
+        // classifying it as `Retryable` told the caller "indeterminate" about an
+        // outcome that is in fact known — which is what stalled the product
+        // catalog head CAS in the cloud. Read the status before the fallback.
+        ObjectStoreError::Generic { .. } if is_precondition_failure(&error_text) => {
+            CommitErrorKind::Conflict
         }
         // Cloud HTTP and transport failures arrive here after object_store's own
         // retries. The caller must read the durable head before deciding whether
@@ -465,6 +505,36 @@ mod tests {
             store.read("transactions/1.json").await.unwrap().bytes,
             b"first"
         );
+    }
+
+    #[test]
+    fn an_untyped_precondition_failure_is_a_conflict_not_an_unknown_outcome() {
+        // Azure answers a conditional PUT whose ETag has moved with
+        // `412 ConditionNotMet`, and object_store surfaces that as `Generic` on
+        // several paths. Nothing was written, so the caller must be told
+        // `Conflict` — which is safe to retry — rather than a retryable
+        // transport error, which reads as "we do not know whether it committed".
+        for rendered in [
+            "Generic MicrosoftAzure error: Error performing put request header: 412 ConditionNotMet",
+            "Operation failed: status: 412, body: PreconditionFailed",
+            "request failed with HTTP 412",
+        ] {
+            assert!(
+                is_precondition_failure(rendered),
+                "should classify as a precondition failure: {rendered}"
+            );
+        }
+        // And must not fire on a number that merely looks like a status.
+        for rendered in [
+            "Generic error: connection reset after 412000 bytes",
+            "Operation timed out after 3 attempts",
+            "request id 8a412f0c-dead-beef",
+        ] {
+            assert!(
+                !is_precondition_failure(rendered),
+                "should not classify as a precondition failure: {rendered}"
+            );
+        }
     }
 
     #[tokio::test]

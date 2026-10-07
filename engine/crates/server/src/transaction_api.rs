@@ -282,20 +282,18 @@ impl TransactionRegistry {
                 id: row_id,
                 document_json,
             } = &command
+                && kind == "typed_row"
             {
-                if kind == "typed_row" {
-                    let (table, row) = typed_row_document(row_id, document_json, owner, 1)?;
-                    if let Some(existing) = session
-                        .transaction
-                        .snapshot()
-                        .typed_rows
-                        .get(&table)
-                        .and_then(|rows| rows.get(row_id))
-                    {
-                        if existing == &row {
-                            continue;
-                        }
-                    }
+                let (table, row) = typed_row_document(row_id, document_json, owner, 1)?;
+                if let Some(existing) = session
+                    .transaction
+                    .snapshot()
+                    .typed_rows
+                    .get(&table)
+                    .and_then(|rows| rows.get(row_id))
+                    && existing == &row
+                {
+                    continue;
                 }
             }
             let (change, document) =
