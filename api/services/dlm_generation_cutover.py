@@ -17,7 +17,7 @@ def _positive_revision(record: dict | None, label: str) -> int:
 MAX_VERSION_PROBES = 16
 
 
-def publish(payload: dict, actor: str) -> dict:
+def publish(payload: dict, actor: str, role: str = "Viewer") -> dict:
     """Publish bytes, then atomically bind definition and terminal run records.
 
     Immutable bytes intentionally precede the metadata transaction. A failed
@@ -35,8 +35,14 @@ def publish(payload: dict, actor: str) -> dict:
         raise RuntimeError("KaveonDB dataset is missing before DLM generation")
     dataset_revision = _positive_revision(dataset, "dataset")
     owner = str(dataset["document"].get("created_by") or "")
-    if not owner or owner != actor:
-        raise RuntimeError("Only the KaveonDB dataset owner can publish its DLM generation")
+    # Every record below is written as `owner`, never as the caller, so what
+    # this guards is who may trigger a rebuild — not who the records belong to.
+    # Requiring caller == owner left every seeded dataset permanently without
+    # context: those are owned by `system`, which is not a principal anyone can
+    # sign in as, so no one could ever build their DLM. An Admin may rebuild a
+    # dataset they do not own; the artifact still belongs to the dataset.
+    if not owner or (owner != actor and role != "Admin"):
+        raise RuntimeError("Only the dataset owner or an Admin can publish its DLM generation")
 
     definition_document = {"dataset_id": dataset_id, "dataset_revision": dataset_revision}
     definition = product_store.read("dlm_definition", dataset_id, owner, "Admin")

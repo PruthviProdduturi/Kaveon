@@ -327,20 +327,22 @@ def ensure_tables() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def generate_dlm(dataset_id: str, force: bool = False, actor: Optional[str] = None) -> Dict[str, Any]:
+def generate_dlm(dataset_id: str, force: bool = False, actor: Optional[str] = None,
+                 role: str = "Viewer") -> Dict[str, Any]:
     from services import postgresql_retirement_runtime
     if not postgresql_retirement_runtime.requested():
-        return _generate_dlm_impl(dataset_id, force, actor)
+        return _generate_dlm_impl(dataset_id, force, actor, role)
     state = _RetirementBuildState()
     token = _RETIREMENT_BUILD.set(state)
     try:
-        return _generate_dlm_impl(dataset_id, force, actor)
+        return _generate_dlm_impl(dataset_id, force, actor, role)
     finally:
         _RETIREMENT_BUILD.reset(token)
 
 
 def _generate_dlm_impl(dataset_id: str, force: bool = False,
-                       actor: Optional[str] = None) -> Dict[str, Any]:
+                       actor: Optional[str] = None,
+                       role: str = "Viewer") -> Dict[str, Any]:
     """Compile (or refresh) the DLM artifact for one dataset. Idempotent: a
     matching ``source_hash`` short-circuits unless *force*. Returns a summary."""
     import time as _time
@@ -384,7 +386,7 @@ def _generate_dlm_impl(dataset_id: str, force: bool = False,
     try:
         return _generate_dlm_bound(dataset_id, force, actor, ds, state, prior_artifact, database, schema,
                                    columns, dimensions, metrics, binding, engine_table, engine_version,
-                                   _gen_t0)
+                                   _gen_t0, role)
     finally:
         _BOUND_ENGINE_CATALOG.reset(hint_token)
 
@@ -393,7 +395,7 @@ def _generate_dlm_bound(dataset_id: str, force: bool, actor: Optional[str], ds: 
                         prior_artifact: Optional[dict], database: str, schema: str, columns: List[dict],
                         dimensions: List[dict], metrics: List[dict], binding: Optional[dict],
                         engine_table: Optional[dict], engine_version: Optional[dict],
-                        _gen_t0: float) -> Dict[str, Any]:
+                        _gen_t0: float, role: str = "Viewer") -> Dict[str, Any]:
     import time as _time
     shape = (engine_table or {}).get("shape") if binding else None
 
@@ -592,7 +594,7 @@ def _generate_dlm_bound(dataset_id: str, force: bool, actor: Optional[str], ds: 
                 "compiled_context": {"values": state.values, "answers": state.answers,
                     "sketches": state.sketches, "router": state.router,
                     "curation": state.curation},
-            }, publication_actor)
+            }, publication_actor, role)
         else:
             from services import dlm_compiled_artifact, dlm_definition_mutations
             artifact_row = meta.query_one(
