@@ -261,7 +261,15 @@ class Engines:
         self.trino_ssl = ssl.create_default_context(cafile="/trino-tls/ca.crt")
         trino_password = Path("/trino-auth/client-password").read_text().strip()
         self.trino_authorization = "Basic " + base64.b64encode(("qualification:" + trino_password).encode()).decode()
-        suffix = manifest["manifest_payload_sha256"][:12]
+        # Keep catalog identifiers unique per qualification run.  The Engine
+        # intentionally rejects a conflicting immutable definition; reusing a
+        # deterministic manifest-only id after a failed/restarted run can
+        # encounter the prior run's definition during cleanup or recovery.
+        # Include the run id while retaining a stable manifest-derived prefix.
+        run_id = os.environ.get("RUN_ID", "")
+        suffix = hashlib.sha256(
+            (manifest["manifest_payload_sha256"] + ":" + run_id).encode()
+        ).hexdigest()[:12]
         self.catalog_id, self.schema_id = "bench-" + suffix, "bench-schema-" + suffix
         self.catalog, self.schema = "bench_" + suffix, "data"
 
