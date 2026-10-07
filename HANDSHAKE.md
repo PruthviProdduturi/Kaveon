@@ -13,6 +13,9 @@ Engine's 100-change transaction limit and uses bounded batches when a target
 page is temporarily unavailable. The image is deployed as API revision
 `kaveon-api--0986c411`; local replay tests pass.
 
+Follow-up commit `15acb0e7` aligns `engine_system_store.create_rows` validation
+with the same 100-change limit; deploy it with the next API image.
+
 Current cloud blocker: replay of `activity`/`query_history` reaches the ADLS
 product transaction store but returns `TRANSACTION_OUTCOME_INDETERMINATE`,
 with coordinator logs showing ADLS `412 ConditionNotMet` on the product
