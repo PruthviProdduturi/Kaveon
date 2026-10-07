@@ -1711,7 +1711,89 @@ fn encode_group_keys_into(keys: &[AggregateValue], output: &mut Vec<u8>) -> Resu
     Ok(())
 }
 
+fn take_compact_group_key_bytes<'a>(input: &mut &'a [u8], length: usize) -> Result<&'a [u8]> {
+    if length > input.len() {
+        return Err(exec_err("truncated compact aggregate group key"));
+    }
+    let (head, tail) = input.split_at(length);
+    *input = tail;
+    Ok(head)
+}
+
 pub(crate) fn decode_group_keys(bytes: &[u8]) -> Result<Vec<AggregateValue>> {
+    if bytes.starts_with(crate::columnar_aggregate::COMPACT_KEY_MAGIC) {
+        let mut input = &bytes[crate::columnar_aggregate::COMPACT_KEY_MAGIC.len()..];
+        let count = *take_compact_group_key_bytes(&mut input, 1)?
+            .first()
+            .unwrap() as usize;
+        let mut keys = Vec::with_capacity(count);
+        for position in 0..count {
+            let tag = *take_compact_group_key_bytes(&mut input, 1)?
+                .first()
+                .unwrap();
+            let present = *take_compact_group_key_bytes(&mut input, 1)?
+                .first()
+                .unwrap();
+            if present == 0 {
+                keys.push(AggregateValue::Null);
+                continue;
+            }
+            if present != 1 {
+                return Err(exec_err("invalid compact aggregate group key null flag"));
+            }
+            let value = match tag {
+                crate::columnar_aggregate::COMPACT_KEY_INT64 => {
+                    AggregateValue::Int64(i64::from_le_bytes(
+                        take_compact_group_key_bytes(&mut input, 8)?
+                            .try_into()
+                            .unwrap(),
+                    ))
+                }
+                crate::columnar_aggregate::COMPACT_KEY_INT32 => {
+                    AggregateValue::Int32(i32::from_le_bytes(
+                        take_compact_group_key_bytes(&mut input, 4)?
+                            .try_into()
+                            .unwrap(),
+                    ))
+                }
+                crate::columnar_aggregate::COMPACT_KEY_BOOL => {
+                    match *take_compact_group_key_bytes(&mut input, 1)?
+                        .first()
+                        .unwrap()
+                    {
+                        0 => AggregateValue::Bool(false),
+                        1 => AggregateValue::Bool(true),
+                        _ => return Err(exec_err("invalid compact boolean aggregate key")),
+                    }
+                }
+                crate::columnar_aggregate::COMPACT_KEY_TEXT => {
+                    let payload = if position + 1 == count {
+                        let all = input;
+                        input = &[];
+                        all
+                    } else {
+                        let length = u32::from_le_bytes(
+                            take_compact_group_key_bytes(&mut input, 4)?
+                                .try_into()
+                                .unwrap(),
+                        ) as usize;
+                        take_compact_group_key_bytes(&mut input, length)?
+                    };
+                    AggregateValue::Utf8(
+                        std::str::from_utf8(payload)
+                            .map_err(|_| exec_err("compact aggregate group key is not UTF-8"))?
+                            .to_owned(),
+                    )
+                }
+                _ => return Err(exec_err("unknown compact aggregate group key type")),
+            };
+            keys.push(value);
+        }
+        if !input.is_empty() {
+            return Err(exec_err("compact aggregate group key has trailing bytes"));
+        }
+        return Ok(keys);
+    }
     let mut offset = 0;
     let key_count = usize::try_from(read_u64(bytes, &mut offset)?)
         .map_err(|_| exec_err("aggregate group key count is too large"))?;
