@@ -56,5 +56,6 @@ The technical evidence supports the 2.1254× throughput result on this declared
 workload. The fail-closed gate still marks the broad claim as pending because
 the primary metric is `proposed_pending_user_acceptance`; the comparison metric
 must be explicitly accepted as “successful exact-result queries per second.”
-This report does not generalize the result to all workloads or claim complete
-Trino feature parity.
+After that decision, the archived report can be evaluated with
+`trino_cloud_claim_gate.py --accept-primary-metric`. This report does not
+generalize the result to all workloads or claim complete Trino feature parity.

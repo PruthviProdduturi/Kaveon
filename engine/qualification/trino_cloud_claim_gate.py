@@ -49,7 +49,7 @@ def valid_case_execution(case):
     return case.get("name") == "unfiltered_count" and case.get("passed") is True
 
 
-def evaluate(report):
+def evaluate(report, accept_metric=False):
     manifest = report.get("manifest") or {}
     dataset = manifest.get("dataset") or {}
     corpus = manifest.get("query_corpus") or {}
@@ -108,11 +108,13 @@ def evaluate(report):
         "kaveon_restored": not (report.get("restoration") or {}).get("errors"),
     }
     passed = all(checks.values())
-    return {"schema_version": 1, "primary_metric": {"status": "proposed_pending_user_acceptance",
+    metric_status = "accepted" if accept_metric else "proposed_pending_user_acceptance"
+    claim_eligible = passed and accept_metric
+    return {"schema_version": 1, "primary_metric": {"status": metric_status,
             "name": "successful exact-result queries per second", "workload": "extended 12-query AKS workload at concurrency 4",
             "target": TARGET, "observed": throughput.get("kaveon_over_trino")},
-            "technical_gate_passed": passed, "claim_eligible": False,
-            "claim_blocker": "The primary metric remains proposed; this gate cannot publish a broad Trino superiority claim.",
+            "technical_gate_passed": passed, "claim_eligible": claim_eligible,
+            "claim_blocker": None if claim_eligible else ("The primary metric remains proposed; this gate cannot publish a broad Trino superiority claim." if not accept_metric else "Technical checks did not pass."),
             "checks": checks, "failed_checks": [name for name, value in checks.items() if not value],
             "scope": "Three-worker, same-AKS-node-SKU, matched co-tenant warm-cache leases over the declared immutable ADLS fixture."}
 
@@ -121,11 +123,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("report", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--accept-primary-metric", action="store_true",
+                        help="Accept the declared exact-result QPS metric for publication.")
     args = parser.parse_args()
-    result = evaluate(json.loads(args.report.read_text(encoding="utf-8")))
+    result = evaluate(json.loads(args.report.read_text(encoding="utf-8")), args.accept_primary_metric)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-    print(f"technical_gate_passed={str(result['technical_gate_passed']).lower()}; metric_status=proposed")
+    print(f"technical_gate_passed={str(result['technical_gate_passed']).lower()}; metric_status={result['primary_metric']['status']}; claim_eligible={str(result['claim_eligible']).lower()}")
     return 0 if result["technical_gate_passed"] else 2
 
 
