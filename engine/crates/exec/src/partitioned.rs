@@ -262,6 +262,16 @@ pub fn spill_from_environment(memory: &QueryMemoryPool) -> Result<Option<(SpillM
     {
         return Ok(Some((resource.0.clone(), resource.1)));
     }
+    // Qualification and single-node deployments can deliberately choose the
+    // adaptive in-memory partial path. It flushes bounded rounds and passes
+    // through near-unique input without writing a binary state for every row.
+    // Keep disk spill as the safe default for constrained production nodes.
+    if matches!(
+        std::env::var("KAVEON_HASH_SPILL_MODE").as_deref(),
+        Ok("memory") | Ok("memory-only")
+    ) {
+        return Ok(None);
+    }
     let Some(root) = std::env::var_os("KAVEON_HASH_SPILL_ROOT") else {
         return Ok(None);
     };
