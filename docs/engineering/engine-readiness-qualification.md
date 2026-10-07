@@ -5,6 +5,19 @@ It is not an independently certified rating. The separate “90% better than
 Trino” target requires a selected metric and a declared workload; it cannot mean
 every SQL feature, deployment scenario, and performance dimension at once.
 
+## Current status — 2026-10-06
+
+The historical September 10 table below is a **narrow integrated-direction
+estimate**, not a current release or cloud-certification result. The current
+cross-engine performance evidence remains the five-round matched result of
+1.45× Kaveon throughput versus Trino, below the declared 1.90× (90% better)
+target. The AKS environment needed to rerun that campaign is not currently
+provisioned. Local release microbenchmarks are recorded in
+`docs/qualification/engine-microbenchmarks-2026-10-06.md`; they are diagnostic
+only and do not add readiness points. PostgreSQL retirement and cloud cutover
+evidence are tracked separately and remain open until Claude's live replay,
+fencing, restart, backup/restore, rollback and final validator gates pass.
+
 ## Scoring contract
 
 | Area | Points | Evidence required for full credit |
