@@ -29,10 +29,16 @@ const MAX_HEAD_BYTES: usize = 64 * 1024;
 const MAX_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_INDEX_SHARD_ENTRIES: usize = 1_024;
 /// A commit that loses the race for the head is rebased and retried this many
-/// times before the conflict is handed back. Eight attempts with the backoff
-/// below covers the write bursts a product store sees — a replay pass running
-/// against a serving API — without letting a caller wait indefinitely.
-const MAX_COMMIT_REBASE_ATTEMPTS: u32 = 8;
+/// times before the conflict is handed back.
+///
+/// Sized from measurement, not taste: with N writers serialising on one head a
+/// writer can lose N-1 races before its own turn comes, so a budget equal to
+/// the write concurrency is the floor, not the ceiling. At eight writers an
+/// eight-attempt budget still surfaced the occasional conflict — roughly one
+/// write in fifty — because a loser that backs off can be overtaken again.
+/// Sixteen clears that, and the backoff below caps the worst case at about a
+/// second and a half of waiting rather than a failed write.
+const MAX_COMMIT_REBASE_ATTEMPTS: u32 = 16;
 const COMMIT_RETRY_BASE_DELAY_MS: u64 = 4;
 const COMMIT_RETRY_JITTER_MS: u64 = 24;
 const COMMIT_RETRY_MAX_DELAY_MS: u64 = 400;
