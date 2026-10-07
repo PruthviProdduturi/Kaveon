@@ -4606,6 +4606,291 @@ main.main-wide {
   }
 }
 
+/* ── The lane ladder: how a statement is being answered ───────────────────
+   KaveonDB resolves a statement in a fixed order — admission, the result
+   cache, the table statistics or cube, then a read of the data. While the
+   statement runs the Lab renders that order, so the wait reports which lane
+   answered and how little had to be read.
+
+   Exactly one thing moves: the open ring on the step being decided, the same
+   geometry as the O of the wordmark. The ladder itself advances only when the
+   coordinator reports a new fact, never on a timer. */
+.lane-panel {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: var(--bg-surface);
+  /* The accent and success tokens are chart-weight; text needs the darker
+     mix in light themes to stay legible on the surface. */
+  --lane-live-text: var(--accent-dark);
+  --lane-done-text: color-mix(in srgb, var(--success) 72%, var(--text-primary));
+  /* A cache or statistics answer settles in milliseconds. The hold keeps the
+     panel from flashing when the statement never needed it. */
+  animation: lane-panel-in 260ms ease-out 140ms both;
+}
+
+[data-theme="dark"] .lane-panel {
+  --lane-live-text: var(--accent);
+  --lane-done-text: var(--success);
+}
+
+.lane-panel__inner {
+  width: 100%;
+  /* Holds the step notes under about 70 characters a line. */
+  max-width: 31rem;
+}
+
+.lane-panel__head {
+  margin-bottom: 1.4rem;
+}
+
+.lane-panel__headline {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.006em;
+  color: var(--text-primary);
+}
+
+.lane-panel__sub {
+  margin: 0.3rem 0 0;
+  max-width: 34em;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.lane-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lane-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 0.85rem;
+  padding-bottom: 1.1rem;
+  color: var(--text-faint);
+}
+
+.lane-step:last-child {
+  padding-bottom: 0;
+}
+
+/* The rail is the path travelled: it carries the accent only where the
+   statement has already been. */
+.lane-step__rail {
+  position: absolute;
+  top: 24px;
+  bottom: 0;
+  left: 11px;
+  width: 1px;
+  background: var(--border);
+}
+
+.lane-step:last-child .lane-step__rail {
+  display: none;
+}
+
+.lane-step--passed .lane-step__rail,
+.lane-step--deciding .lane-step__rail {
+  background: color-mix(in srgb, var(--accent) 42%, var(--border));
+}
+
+.lane-step__glyph {
+  display: block;
+  width: 24px;
+  height: 24px;
+}
+
+.lane-glyph {
+  display: block;
+  width: 24px;
+  height: 24px;
+  transform-origin: 50% 50%;
+}
+
+.lane-glyph--inline {
+  display: inline-block;
+  width: auto;
+  height: auto;
+  vertical-align: -0.1em;
+}
+
+.lane-step__body {
+  display: block;
+  min-width: 0;
+  padding-top: 1px;
+}
+
+.lane-step__label {
+  display: block;
+  font-size: 0.86rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.lane-step__note {
+  display: block;
+  margin-top: 0.18rem;
+  font-size: 0.79rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.lane-step__status {
+  padding-top: 3px;
+  font-size: 0.73rem;
+  font-weight: 400;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* Passed through: the statement cleared this step without being answered. */
+.lane-step--passed {
+  color: color-mix(in srgb, var(--accent) 60%, var(--text-muted));
+}
+
+.lane-step--passed .lane-step__label {
+  font-weight: 600;
+}
+
+/* Deciding: where the statement stands now. */
+.lane-step--deciding {
+  color: var(--accent);
+}
+
+.lane-step--deciding .lane-step__label {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.lane-step--deciding .lane-step__status {
+  font-weight: 600;
+  color: var(--lane-live-text);
+}
+
+.lane-step--deciding .lane-glyph {
+  animation: kaveon-arc-sweep 1.6s linear infinite;
+}
+
+/* Answered here: this lane produced the result. */
+.lane-step--answered {
+  color: var(--success);
+}
+
+.lane-step--answered .lane-step__label {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.lane-step--answered .lane-step__status {
+  font-weight: 600;
+  color: var(--lane-done-text);
+}
+
+.lane-panel__foot {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  margin-top: 1.5rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--border);
+}
+
+.lane-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  min-width: 0;
+  font-size: 0.77rem;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.lane-facts > span + span::before {
+  content: "·";
+  margin: 0 0.45rem;
+  color: var(--text-muted);
+}
+
+.lane-panel__cancel {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 0.25rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--error);
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.lane-panel__cancel:hover {
+  background: var(--bg-hover);
+  border-color: var(--error);
+}
+
+/* The same mark inline in the results header, where the ladder does not fit. */
+.result-stats__running {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.result-stats__running .lane-glyph--inline {
+  color: var(--accent);
+  animation: kaveon-arc-sweep 1.6s linear infinite;
+}
+
+@keyframes kaveon-arc-sweep {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes lane-panel-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* The ladder is legible with nothing moving: the step states and their words
+   carry it. The hold is kept so a statement answered in milliseconds still
+   does not flash the panel. */
+@media (prefers-reduced-motion: reduce) {
+  .lane-step--deciding .lane-glyph,
+  .result-stats__running .lane-glyph--inline {
+    animation: none;
+  }
+
+  .lane-panel {
+    animation: lane-panel-in 1ms linear 140ms both;
+  }
+}
+
+@media (max-width: 640px) {
+  .lane-step {
+    grid-template-columns: 24px minmax(0, 1fr);
+  }
+
+  .lane-step__status {
+    grid-column: 2;
+    padding-top: 0.25rem;
+  }
+}
+
 .results-container .empty-state {
   position: absolute;
   inset: 0;
