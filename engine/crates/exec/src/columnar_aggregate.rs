@@ -1686,6 +1686,84 @@ impl ColumnarGroups {
         }
     }
 
+    /// Encode the primitive accumulator columns directly in the compact state
+    /// wire format. The generic encoder first reconstructs an
+    /// `AggregateState` for every group; that turns a high-cardinality
+    /// columnar aggregate into millions of short-lived enums and vectors.
+    /// This path is byte-for-byte compatible with that format and is used
+    /// only where every state is a fixed-width primitive.
+    fn encode_primitive_state_into(&self, slot: usize, out: &mut Vec<u8>) -> bool {
+        if self.template.iter().any(|state| {
+            !matches!(
+                state,
+                AggregateState::Count(_)
+                    | AggregateState::IntegerSum { .. }
+                    | AggregateState::IntegerMin(_)
+                    | AggregateState::IntegerMax(_)
+                    | AggregateState::Sum { .. }
+                    | AggregateState::Avg { .. }
+                    | AggregateState::Min(_)
+                    | AggregateState::Max(_)
+            )
+        }) {
+            return false;
+        }
+        out.extend_from_slice(crate::aggregate::compact_state::MAGIC);
+        out.extend_from_slice(&(self.accumulators.len() as u32).to_le_bytes());
+        for accumulator in &self.accumulators {
+            match accumulator {
+                AccColumn::Count(counts) => {
+                    out.push(crate::aggregate::compact_state::TAG_COUNT);
+                    out.extend_from_slice(&counts[slot].to_le_bytes());
+                }
+                AccColumn::IntegerSum { sums, counts } => {
+                    out.push(crate::aggregate::compact_state::TAG_INTEGER_SUM);
+                    out.extend_from_slice(&sums[slot].to_le_bytes());
+                    out.extend_from_slice(&counts[slot].to_le_bytes());
+                }
+                AccColumn::IntegerMin { values, present } => {
+                    out.push(crate::aggregate::compact_state::TAG_INTEGER_MIN);
+                    out.push(u8::from(present[slot]));
+                    if present[slot] {
+                        out.extend_from_slice(&values[slot].to_le_bytes());
+                    }
+                }
+                AccColumn::IntegerMax { values, present } => {
+                    out.push(crate::aggregate::compact_state::TAG_INTEGER_MAX);
+                    out.push(u8::from(present[slot]));
+                    if present[slot] {
+                        out.extend_from_slice(&values[slot].to_le_bytes());
+                    }
+                }
+                AccColumn::Float { sums, counts, avg } => {
+                    out.push(if *avg {
+                        crate::aggregate::compact_state::TAG_AVG
+                    } else {
+                        crate::aggregate::compact_state::TAG_SUM
+                    });
+                    out.extend_from_slice(&sums[slot].to_le_bytes());
+                    out.extend_from_slice(&counts[slot].to_le_bytes());
+                }
+                AccColumn::FloatMin { values, present } => {
+                    out.push(crate::aggregate::compact_state::TAG_MIN);
+                    out.push(u8::from(present[slot]));
+                    if present[slot] {
+                        out.extend_from_slice(&values[slot].to_le_bytes());
+                    }
+                }
+                AccColumn::FloatMax { values, present } => {
+                    out.push(crate::aggregate::compact_state::TAG_MAX);
+                    out.push(u8::from(present[slot]));
+                    if present[slot] {
+                        out.extend_from_slice(&values[slot].to_le_bytes());
+                    }
+                }
+                AccColumn::TextMin(_) | AccColumn::TextMax(_) => return false,
+            }
+        }
+        true
+    }
+
     /// Encoded group keys and compact states, straight from the columns:
     /// the partial stage's output without a row representation.
     pub(crate) fn encode(&self) -> Result<(BinaryBuilder, BinaryBuilder)> {
@@ -1710,9 +1788,11 @@ impl ColumnarGroups {
             key_scratch.clear();
             self.encode_keys_into(slot, &mut key_scratch);
             key_values.append_value(&key_scratch);
-            self.states_into(slot, &mut states);
             state_scratch.clear();
-            compact_state::encode_into(&states, &mut state_scratch)?;
+            if !self.encode_primitive_state_into(slot, &mut state_scratch) {
+                self.states_into(slot, &mut states);
+                compact_state::encode_into(&states, &mut state_scratch)?;
+            }
             state_values.append_value(&state_scratch);
         }
         Ok((key_values, state_values))
@@ -1735,9 +1815,11 @@ impl ColumnarGroups {
             }
             key_scratch.clear();
             self.encode_keys_into(slot, &mut key_scratch);
-            self.states_into(slot, &mut states);
             state_scratch.clear();
-            compact_state::encode_into(&states, &mut state_scratch)?;
+            if !self.encode_primitive_state_into(slot, &mut state_scratch) {
+                self.states_into(slot, &mut states);
+                compact_state::encode_into(&states, &mut state_scratch)?;
+            }
             let (key_values, state_values) = &mut sinks[partition_of(&key_scratch)];
             key_values.append_value(&key_scratch);
             state_values.append_value(&state_scratch);
