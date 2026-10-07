@@ -349,8 +349,15 @@ class Engines:
             if not duplicate:
                 raise
             existing = self.krequest("GET", item)
-            expected = dict(value, revision=2, lifecycle="Active")
-            if existing != expected:
+            # The catalog service owns revision/lifecycle metadata and may
+            # advance the revision when a definition is re-observed after an
+            # engine restart.  Compare the submitted definition fields and
+            # require an active revision, while ignoring service metadata.
+            if (
+                existing.get("lifecycle") != "Active"
+                or int(existing.get("revision", 0)) < 2
+                or any(existing.get(key) != expected for key, expected in value.items())
+            ):
                 raise RuntimeError(f"existing Kaveon catalog object disagrees at {item}") from error
 
     def wait_trino_authenticators(self, timeout=180):
