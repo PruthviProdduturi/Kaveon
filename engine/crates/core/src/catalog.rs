@@ -955,7 +955,15 @@ impl CatalogManager {
         })?;
 
         Ok(ResolvedTable {
-            catalog: catalog_name.to_owned(),
+            // The durable identity, not the name the caller happened to type.
+            // `Kaveon` and `KaveonDB` both resolve to the same catalog, but
+            // everything downstream of this — the durable catalog lookup that
+            // statistics and ANALYZE go through, the plan's table reference —
+            // keys on the name the catalog is actually stored under. Returning
+            // the requested spelling made `ANALYZE KaveonDB.system.activity`
+            // fail as "not in the durable catalog" while the identical
+            // statement under `Kaveon` succeeded.
+            catalog: self.storage_name(catalog_name).to_owned(),
             schema: schema_name.to_owned(),
             table,
             storage: catalog.storage_type().clone(),
@@ -1141,6 +1149,49 @@ mod tests {
         assert_eq!(resolved.table.name, "users");
         assert_eq!(resolved.catalog, "lakehouse");
         assert_eq!(resolved.schema, "default");
+    }
+
+    #[test]
+    fn resolving_under_either_catalog_name_yields_the_durable_one() {
+        // `KaveonDB` is the product-facing name; `Kaveon` is what the catalog
+        // is stored under. Both resolve, and both must report the stored name,
+        // because the durable catalog lookup behind ANALYZE and the statistics
+        // endpoints keys on it. Reporting the requested spelling made
+        // `ANALYZE KaveonDB.system.activity` fail as "not in the durable
+        // catalog" while the same statement under `Kaveon` succeeded.
+        let mut catalog = MemoryCatalog::new(
+            "Kaveon",
+            StorageType::Local {
+                base_path: PathBuf::from("/data"),
+            },
+        )
+        .with_schema("system");
+        catalog
+            .register_table(
+                "system",
+                TableMeta {
+                    name: "activity".into(),
+                    arrow_schema: test_schema(),
+                    location: "activity.parquet".into(),
+                    access: AccessPattern::Shortcut,
+                    format: DataFormat::Parquet,
+                },
+            )
+            .unwrap();
+        let mut mgr = CatalogManager::new("Kaveon", "system");
+        mgr.register_catalog(Box::new(catalog));
+
+        for reference in ["Kaveon.system.activity", "KaveonDB.system.activity"] {
+            let resolved = mgr
+                .resolve_table(&TableReference::parse(reference))
+                .unwrap_or_else(|error| panic!("{reference} did not resolve: {error}"));
+            assert_eq!(
+                resolved.catalog, "Kaveon",
+                "{reference} must report the stored catalog name"
+            );
+            assert_eq!(resolved.schema, "system");
+            assert_eq!(resolved.table.name, "activity");
+        }
     }
 
     #[test]
