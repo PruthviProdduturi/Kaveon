@@ -7,6 +7,23 @@
 
 ## Current handoff - 2026-10-05
 
+### Performance lane update — 2026-10-06
+
+Codex owns the Kaveon-versus-Trino qualification lane while Claude owns the
+PostgreSQL retirement lane. The local Engine is healthy and the current release
+test evidence is 313 server tests, 199 execution tests, and 30 qualification
+gate tests with zero failures. Release operator diagnostics are recorded in
+`docs/qualification/engine-microbenchmarks-2026-10-06.md` and pushed in
+`31ff8fae`.
+
+The personal subscription currently has Container Apps, ACR, Key Vault,
+storage, and PostgreSQL in `kaveon-rg`, but no AKS cluster and no Trino
+reference deployment. The required six-round resource-matched comparison
+therefore cannot be rerun yet. The last valid cross-engine result remains
+1.45x Kaveon throughput versus Trino on the five completed rounds; the 1.90x
+target is still open. Historical ClickBench throughput with admission
+rejections is not eligible evidence for that claim.
+
 The local PostgreSQL retirement gate is verified. The read-only verifier
 `scripts/verify-local-postgresql-retirement.ps1` passed with KaveonDB healthy,
 all 16 authority families available, the Windows PostgreSQL service stopped,
