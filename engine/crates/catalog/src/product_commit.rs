@@ -28,6 +28,17 @@ use crate::{
 const MAX_HEAD_BYTES: usize = 64 * 1024;
 const MAX_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_INDEX_SHARD_ENTRIES: usize = 1_024;
+/// A commit that loses the race for the head is rebased and retried this many
+/// times before the conflict is handed back. Eight attempts with the backoff
+/// below covers the write bursts a product store sees — a replay pass running
+/// against a serving API — without letting a caller wait indefinitely.
+const MAX_COMMIT_REBASE_ATTEMPTS: u32 = 8;
+const COMMIT_RETRY_BASE_DELAY_MS: u64 = 4;
+const COMMIT_RETRY_JITTER_MS: u64 = 24;
+const COMMIT_RETRY_MAX_DELAY_MS: u64 = 400;
+/// `validate_snapshot_id` bounds an identifier at 128 bytes; a rebase suffix
+/// must not push a caller's ID past it.
+const MAX_SNAPSHOT_ID_BYTES: usize = 128;
 const MAX_PRODUCT_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
 
 pub type ProductDocuments = BTreeMap<String, Vec<u8>>;
@@ -192,14 +203,13 @@ impl ProductCatalogCommit {
                 // same store. Reconcile the durable head before reporting a
                 // conflict; an identical verified genesis is a successful
                 // replay, while a different head must still fail closed.
-                if let Ok(current) = self.read_current().await {
-                    if current.reference() == genesis.reference()
-                        && current.operation_id == genesis.operation_id
-                        && current.request_digest == genesis.request_digest
-                    {
-                        attempt.finish(TransactionOutcome::Replayed);
-                        return CommitOutcome::Replayed(current);
-                    }
+                if let Ok(current) = self.read_current().await
+                    && current.reference() == genesis.reference()
+                    && current.operation_id == genesis.operation_id
+                    && current.request_digest == genesis.request_digest
+                {
+                    attempt.finish(TransactionOutcome::Replayed);
+                    return CommitOutcome::Replayed(current);
                 }
                 return finish_storage(attempt, error.kind);
             }
@@ -225,14 +235,13 @@ impl ProductCatalogCommit {
                 // The head may have been created by a concurrent initializer
                 // after our genesis object write. Verify it instead of
                 // turning a safe replay into an indeterminate startup error.
-                if let Ok(current) = self.read_current().await {
-                    if current.reference() == genesis.reference()
-                        && current.operation_id == genesis.operation_id
-                        && current.request_digest == genesis.request_digest
-                    {
-                        attempt.finish(TransactionOutcome::Replayed);
-                        return CommitOutcome::Replayed(current);
-                    }
+                if let Ok(current) = self.read_current().await
+                    && current.reference() == genesis.reference()
+                    && current.operation_id == genesis.operation_id
+                    && current.request_digest == genesis.request_digest
+                {
+                    attempt.finish(TransactionOutcome::Replayed);
+                    return CommitOutcome::Replayed(current);
                 }
                 finish_storage(attempt, error.kind)
             }
@@ -317,55 +326,124 @@ impl ProductCatalogCommit {
 
     /// Publishes create-only product documents before advancing the snapshot head.
     /// Only documents referenced by product creates or updates are accepted.
+    ///
+    /// A commit that loses the race for the head is rebased onto the new head and
+    /// retried, up to [`MAX_COMMIT_REBASE_ATTEMPTS`] times. Losing that race says
+    /// nothing about this commit's own write set: every row precondition — the
+    /// revision on an update or delete, the absence of a key on a create — is
+    /// re-checked by `CatalogSnapshot::prepare` against whatever head the retry
+    /// lands on. A write set that is still valid commits; one that another writer
+    /// has invalidated is rejected on its own merits and never retried.
+    ///
+    /// The rebase is safe to do here because `request_digest` covers the actor and
+    /// the changes only — not `base` — so the operation keeps its identity across
+    /// attempts and the deduplication index still recognises a genuine replay.
+    /// Each attempt mints its own snapshot ID, because snapshot objects are
+    /// create-only and a rebased snapshot has different bytes.
     pub async fn commit_with_documents(
         &self,
         request: PrepareChange,
         documents: ProductDocuments,
     ) -> CommitOutcome {
+        let original_snapshot_id = request.snapshot_id.clone();
+        let mut request = request;
+        for attempt in 0..=MAX_COMMIT_REBASE_ATTEMPTS {
+            if attempt > 0 {
+                // A fresh snapshot ID per attempt; the previous attempt's object
+                // is orphaned, never committed, and must not be overwritten.
+                let candidate = format!("{original_snapshot_id}-r{attempt}");
+                if candidate.len() > MAX_SNAPSHOT_ID_BYTES {
+                    return CommitOutcome::Conflict;
+                }
+                request.snapshot_id = candidate;
+                self.backoff(attempt, &request.operation_id).await;
+            }
+            let (outcome, retry) = self
+                .commit_with_documents_once(request.clone(), documents.clone())
+                .await;
+            if !retry || attempt == MAX_COMMIT_REBASE_ATTEMPTS {
+                return outcome;
+            }
+        }
+        CommitOutcome::Conflict
+    }
+
+    /// Sleeps a little before rebasing, so a crowd of writers that collided does
+    /// not re-collide in the same order. The delay grows with the attempt and is
+    /// spread by the operation ID, which gives each caller its own offset without
+    /// a random number generator in the commit path.
+    async fn backoff(&self, attempt: u32, operation_id: &str) {
+        let step = COMMIT_RETRY_BASE_DELAY_MS.saturating_mul(1u64 << (attempt - 1).min(5));
+        let spread = u64::from(digest(operation_id.as_bytes()).as_bytes()[0]);
+        let delay = step.saturating_add(spread % COMMIT_RETRY_JITTER_MS.max(1));
+        tokio::time::sleep(std::time::Duration::from_millis(
+            delay.min(COMMIT_RETRY_MAX_DELAY_MS),
+        ))
+        .await;
+    }
+
+    /// One commit attempt. The second element of the pair is `true` when the
+    /// attempt lost a race it can simply run again — nothing was committed and
+    /// no precondition of its own failed — and `false` when the outcome is final:
+    /// committed, replayed, rejected on its own write set, or indeterminate.
+    async fn commit_with_documents_once(
+        &self,
+        request: PrepareChange,
+        documents: ProductDocuments,
+    ) -> (CommitOutcome, bool) {
         let attempt = self.metrics.begin();
         let head = match self.read_head().await {
             Ok(head) => head,
-            Err(_) => return finish_indeterminate(attempt),
+            Err(_) => return (finish_indeterminate(attempt), false),
         };
         let Some(index) = &head.operation_index else {
             attempt.finish(TransactionOutcome::Indeterminate);
-            return CommitOutcome::Indeterminate;
+            return (CommitOutcome::Indeterminate, false);
         };
         let shard_key = digest(request.operation_id.as_bytes())[..2].to_owned();
         let mut shard = match self.read_shard(index.get(&shard_key)).await {
             Ok(value) => value,
-            Err(_) => return finish_indeterminate(attempt),
+            Err(_) => return (finish_indeterminate(attempt), false),
         };
         if let Some(existing) = shard.entries.get(&request.operation_id) {
             if existing.request_digest != request.request_digest {
                 attempt.finish(TransactionOutcome::Conflict);
-                return CommitOutcome::Conflict;
+                return (CommitOutcome::Conflict, false);
             }
             match self.read_snapshot_with_bytes(&existing.snapshot).await {
                 Ok((snapshot, bytes)) if digest(&bytes) == existing.snapshot_sha256 => {
                     attempt.finish(TransactionOutcome::Replayed);
-                    return CommitOutcome::Replayed(snapshot);
+                    return (CommitOutcome::Replayed(snapshot), false);
                 }
-                Ok(_) => return finish_indeterminate(attempt),
-                Err(_) => return finish_indeterminate(attempt),
+                Ok(_) => return (finish_indeterminate(attempt), false),
+                Err(_) => return (finish_indeterminate(attempt), false),
             }
         }
+        // Rebase onto the head actually in hand rather than refusing a commit
+        // whose base has moved — but only when every change in the write set
+        // states its own precondition, so `prepare` can judge it against this
+        // head instead of trusting the base. A write set another writer has
+        // invalidated is then rejected there, on its own merits.
+        let mut request = request;
         if request.base != head.snapshot.reference() {
-            attempt.finish(TransactionOutcome::Conflict);
-            return CommitOutcome::Conflict;
+            if !is_rebasable(&request) {
+                attempt.finish(TransactionOutcome::Conflict);
+                return (CommitOutcome::Conflict, false);
+            }
+            request.base = head.snapshot.reference();
         }
         let next = match head.snapshot.prepare(request.clone()) {
             Ok(snapshot) => snapshot,
             Err(_) => {
                 attempt.finish(TransactionOutcome::Rejected);
-                return CommitOutcome::Rejected;
+                return (CommitOutcome::Rejected, false);
             }
         };
         let required_documents = match required_documents(&request) {
             Ok(required) => required,
             Err(()) => {
                 attempt.finish(TransactionOutcome::Rejected);
-                return CommitOutcome::Rejected;
+                return (CommitOutcome::Rejected, false);
             }
         };
         if documents.len() != required_documents.len()
@@ -374,16 +452,16 @@ impl ProductCatalogCommit {
                 .any(|path| !required_documents.contains_key(path))
         {
             attempt.finish(TransactionOutcome::Rejected);
-            return CommitOutcome::Rejected;
+            return (CommitOutcome::Rejected, false);
         }
         for (path, reference) in &required_documents {
             let Some(document) = documents.get(path) else {
                 attempt.finish(TransactionOutcome::Rejected);
-                return CommitOutcome::Rejected;
+                return (CommitOutcome::Rejected, false);
             };
             if document.len() > MAX_PRODUCT_DOCUMENT_BYTES || digest(document) != reference.sha256 {
                 attempt.finish(TransactionOutcome::Rejected);
-                return CommitOutcome::Rejected;
+                return (CommitOutcome::Rejected, false);
             }
         }
         for (path, document) in documents {
@@ -392,20 +470,20 @@ impl ProductCatalogCommit {
                 .await
             {
                 Ok(()) => {}
-                Err(kind) => return finish_storage(attempt, kind),
+                Err(kind) => return (finish_storage(attempt, kind), false),
             }
         }
         let bytes = match encode(&next) {
             Ok(bytes) => bytes,
             Err(()) => {
                 attempt.finish(TransactionOutcome::Rejected);
-                return CommitOutcome::Rejected;
+                return (CommitOutcome::Rejected, false);
             }
         };
         let snapshot_sha256 = digest(&bytes);
         if shard.entries.len() >= MAX_INDEX_SHARD_ENTRIES {
             attempt.finish(TransactionOutcome::Indeterminate);
-            return CommitOutcome::Indeterminate;
+            return (CommitOutcome::Indeterminate, false);
         }
         shard.entries.insert(
             request.operation_id.clone(),
@@ -423,12 +501,12 @@ impl ProductCatalogCommit {
         let mut next_index = index.clone();
         let shard_ref = match self.publish_shard(&shard).await {
             Ok(value) => value,
-            Err(kind) => return finish_storage(attempt, kind),
+            Err(kind) => return (finish_storage(attempt, kind), false),
         };
         next_index.insert(shard_key, shard_ref);
         match self.publish_snapshot(&next.snapshot_id, bytes).await {
             Ok(_) => {}
-            Err(kind) => return finish_storage(attempt, kind),
+            Err(kind) => return (finish_storage(attempt, kind), false),
         }
         let head_bytes = match encode_head(&HeadRecord {
             reference: next.reference(),
@@ -438,7 +516,7 @@ impl ProductCatalogCommit {
             Ok(bytes) => bytes,
             Err(()) => {
                 attempt.finish(TransactionOutcome::Rejected);
-                return CommitOutcome::Rejected;
+                return (CommitOutcome::Rejected, false);
             }
         };
         match self
@@ -448,9 +526,16 @@ impl ProductCatalogCommit {
         {
             Ok(_) => {
                 attempt.finish(TransactionOutcome::Committed);
-                CommitOutcome::Committed(next)
+                (CommitOutcome::Committed(next), false)
             }
-            Err(error) => finish_storage(attempt, error.kind),
+            Err(error) => {
+                // The head moved between our read and this write. The staged
+                // shard and snapshot stay orphaned and invisible — the old head
+                // still names the old operation index — so nothing was committed
+                // and the attempt can simply run again against the new head.
+                let retry = error.kind == CommitErrorKind::Conflict && is_rebasable(&request);
+                (finish_storage(attempt, error.kind), retry)
+            }
         }
     }
 
@@ -871,6 +956,31 @@ fn valid_snapshot_id(value: &str) -> bool {
         && value != "."
         && value != ".."
         && !value.chars().any(char::is_control)
+}
+
+/// True when every change in the write set carries the precondition it needs to
+/// be judged against a head other than the one the caller read.
+///
+/// Product records and typed rows do: a create fails if the key already exists,
+/// an update or delete fails unless the expected revision still stands. Those
+/// can be rebased, because `CatalogSnapshot::prepare` re-checks them in full.
+///
+/// Table, statistics, runtime-source, control and schema publications do not.
+/// They overwrite whatever is present, so the base snapshot the caller read *is*
+/// their precondition, and rebasing one would let a stale publication land on
+/// top of a newer one. Those keep the strict generation check.
+fn is_rebasable(request: &PrepareChange) -> bool {
+    request.changes.iter().all(|change| {
+        matches!(
+            change,
+            CatalogChange::CreateProduct { .. }
+                | CatalogChange::UpdateProduct { .. }
+                | CatalogChange::DeleteProduct { .. }
+                | CatalogChange::InsertTypedRow { .. }
+                | CatalogChange::UpdateTypedRow { .. }
+                | CatalogChange::DeleteTypedRow { .. }
+        )
+    })
 }
 
 fn finish_indeterminate(attempt: crate::product_metrics::TransactionAttempt<'_>) -> CommitOutcome {
@@ -1349,6 +1459,128 @@ mod tests {
             reopened.product_records["dashboard/dash-1"].unique_values["owner_name"].as_str(),
             "alice/left" | "alice/right"
         ));
+    }
+
+    #[tokio::test]
+    async fn concurrent_creates_of_distinct_records_all_commit() {
+        // The defect this covers: every one of these writers creates a
+        // different dashboard, so no write set contends with any other, yet
+        // only one used to commit per snapshot generation and the rest were
+        // refused. All of them must now land.
+        let storage = AdlsConditionalCommit::new(Arc::new(InMemory::new()));
+        let catalog = Arc::new(catalog_with(storage.clone()));
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        catalog.initialize(genesis.clone()).await;
+
+        let base = genesis.reference();
+        let create = move |n: usize, base: SnapshotRef| PrepareChange {
+            base,
+            snapshot_id: format!("snapshot-create-{n}"),
+            operation_id: format!("create-{n}"),
+            request_digest: DIGEST.into(),
+            changes: vec![CatalogChange::CreateProduct {
+                record: dashboard(&format!("dash-{n}"), 1, &format!("alice/{n}")),
+            }],
+        };
+
+        let writers = 8;
+        let mut handles = Vec::new();
+        for n in 0..writers {
+            let catalog = Arc::clone(&catalog);
+            let base = base.clone();
+            handles.push(tokio::spawn(async move {
+                let request = create(n, base);
+                catalog
+                    .commit_with_documents(request.clone(), documents_for(&request))
+                    .await
+            }));
+        }
+        let mut committed = 0;
+        for handle in handles {
+            match handle.await.unwrap() {
+                CommitOutcome::Committed(_) => committed += 1,
+                other => panic!("a distinct-record create did not commit: {other:?}"),
+            }
+        }
+        assert_eq!(committed, writers);
+
+        // Every record is durable, and the generations are the serial order the
+        // commits actually took — one per committed write, none lost.
+        let reopened = catalog_with(storage).read_current().await.unwrap();
+        assert_eq!(reopened.generation, writers as u64);
+        for n in 0..writers {
+            assert_eq!(
+                reopened.product_records[&format!("dashboard/dash-{n}")].revision,
+                1
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stale_record_revision_is_rejected_and_never_retried() {
+        // The retry must not paper over a real conflict: once another writer has
+        // advanced the row, a write set carrying the old expected revision has
+        // to fail, however many times it is rebased.
+        let storage = AdlsConditionalCommit::new(Arc::new(InMemory::new()));
+        let catalog = catalog_with(storage.clone());
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        catalog.initialize(genesis.clone()).await;
+        let create = PrepareChange {
+            base: genesis.reference(),
+            snapshot_id: "snapshot-created".into(),
+            operation_id: "create-dashboard".into(),
+            request_digest: DIGEST.into(),
+            changes: vec![CatalogChange::CreateProduct {
+                record: dashboard("dash-1", 1, "alice/home"),
+            }],
+        };
+        let created = match catalog
+            .commit_with_documents(create.clone(), documents_for(&create))
+            .await
+        {
+            CommitOutcome::Committed(snapshot) => snapshot,
+            other => panic!("unexpected create outcome: {other:?}"),
+        };
+
+        let first = PrepareChange {
+            base: created.reference(),
+            snapshot_id: "snapshot-first".into(),
+            operation_id: "update-first".into(),
+            request_digest: DIGEST.into(),
+            changes: vec![CatalogChange::UpdateProduct {
+                expected_revision: 1,
+                record: dashboard("dash-1", 2, "alice/first"),
+            }],
+        };
+        assert!(matches!(
+            catalog
+                .commit_with_documents(first.clone(), documents_for(&first))
+                .await,
+            CommitOutcome::Committed(_)
+        ));
+
+        // Still expecting revision 1, which no longer exists.
+        let stale = PrepareChange {
+            base: created.reference(),
+            snapshot_id: "snapshot-stale".into(),
+            operation_id: "update-stale".into(),
+            request_digest: DIGEST.into(),
+            changes: vec![CatalogChange::UpdateProduct {
+                expected_revision: 1,
+                record: dashboard("dash-1", 2, "alice/stale"),
+            }],
+        };
+        assert_eq!(
+            catalog
+                .commit_with_documents(stale.clone(), documents_for(&stale))
+                .await,
+            CommitOutcome::Rejected
+        );
+        let reopened = catalog_with(storage).read_current().await.unwrap();
+        assert_eq!(
+            reopened.product_records["dashboard/dash-1"].unique_values["owner_name"].as_str(),
+            "alice/first"
+        );
     }
 
     #[tokio::test]
