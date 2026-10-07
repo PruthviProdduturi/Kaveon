@@ -188,8 +188,11 @@ def create_rows(
     trip per history row.
     """
     table = _valid(table, "table")
-    if not rows or len(rows) > 1000:
-        raise HTTPException(422, "A system row batch requires between 1 and 1000 rows")
+    # The Engine transaction protocol caps one commit at 100 changes. Keep
+    # this API contract aligned with that limit so callers cannot construct a
+    # batch that is guaranteed to fail during commit.
+    if not rows or len(rows) > 100:
+        raise HTTPException(422, "A system row batch requires between 1 and 100 rows")
     owner = owner_principal or actor
     _valid(owner, "owner principal")
     statements: list[str] = []
