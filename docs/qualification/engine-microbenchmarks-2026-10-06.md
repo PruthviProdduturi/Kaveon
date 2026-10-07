@@ -34,3 +34,13 @@ The next valid comparison remains the declared six-round AKS run with the same
 object, worker budgets, warm-up policy, exact-result checks, and no result
 cache. Until that run is complete, the measured 1.45x throughput result and
 the 1.90x objective remain unchanged.
+
+## Scan/decode diagnostic
+
+The release `kaveon-storage` late-materialisation benchmark used a synthetic
+2,000,000-row, 100-column object with a 1/50 LIKE hit rate. The narrow
+`id,url` projection completed in **11–16 ms** on the plain-text fixture with
+the offset index enabled or disabled; the full projection was **210–371 ms**
+depending on encoding and index mode. This confirms that projection width and
+encoding are material levers, but it is a local synthetic result and does not
+replace the 504M-row ADLS comparison.
