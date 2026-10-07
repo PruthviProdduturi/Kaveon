@@ -2,8 +2,10 @@
 
 This is the completed six-round qualification run. The raw report is
 [`kaveon-trino-aks-2026-10-07-run-d1.json`](kaveon-trino-aks-2026-10-07-run-d1.json)
-and the technical gate is
+and the technical gates are
 [`kaveon-trino-aks-2026-10-07-claim-gate.json`](kaveon-trino-aks-2026-10-07-claim-gate.json).
+The accepted-metric publication artifact is
+[`kaveon-trino-aks-2026-10-07-claim-gate-accepted.json`](kaveon-trino-aks-2026-10-07-claim-gate-accepted.json).
 
 ## Setup
 
@@ -52,10 +54,8 @@ has no worker execution stage; its latency and exact result are still recorded.
 
 ## Claim status
 
-The technical evidence supports the 2.1254× throughput result on this declared
-workload. The fail-closed gate still marks the broad claim as pending because
-the primary metric is `proposed_pending_user_acceptance`; the comparison metric
-must be explicitly accepted as “successful exact-result queries per second.”
-After that decision, the archived report can be evaluated with
-`trino_cloud_claim_gate.py --accept-primary-metric`. This report does not
-generalize the result to all workloads or claim complete Trino feature parity.
+The accepted technical evidence supports the 2.1254× throughput result on this
+declared workload. The accepted metric is “successful exact-result queries per
+second”; the archived accepted gate reports `claim_eligible=true`. This report
+does not generalize the result to all workloads or claim complete Trino feature
+parity.

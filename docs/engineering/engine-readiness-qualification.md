@@ -12,10 +12,10 @@ estimate**, not a broad production-certification result. The completed six-round
 AKS comparison on the immutable 5M-row fixture measured **2.1254× Kaveon
 throughput versus Trino** (3.8282 versus 1.8012 successful exact-result QPS),
 with all technical gate checks passing. The raw report and gate are archived in
-`docs/qualification/kaveon-trino-aks-2026-10-07-run-d1.json` and
-`docs/qualification/kaveon-trino-aks-2026-10-07-claim-gate.json`. The broad
-claim remains fail-closed until the primary QPS metric is explicitly accepted;
-the result is scoped to the declared workload and does not imply feature parity.
+`docs/qualification/kaveon-trino-aks-2026-10-07-run-d1.json` and the accepted
+gate in `docs/qualification/kaveon-trino-aks-2026-10-07-claim-gate-accepted.json`.
+The accepted metric is scoped to the declared workload and does not imply
+feature parity.
 PostgreSQL retirement and cloud cutover evidence remain tracked separately.
 
 ## Scoring contract
