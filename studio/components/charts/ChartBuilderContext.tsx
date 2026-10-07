@@ -1408,6 +1408,10 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
   // while it runs, both abort through this controller so the request is
   // withdrawn rather than abandoned.
   const queryAbortRef = useRef<AbortController | null>(null);
+  // The Engine statement's cancellation token. Minted before the request goes
+  // out, because a chart that is navigated away from never receives the
+  // response that carries the query id — so an id cannot be what stops it.
+  const cancelTokenRef = useRef<string | null>(null);
   const activeJobIdRef = useRef<string | null>(null);
   // ChartPreview registers a fn that snapshots the rendered chart to a JPEG data
   // URI, so save() can persist a real thumbnail (like dashboards do).
@@ -3124,7 +3128,19 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
    * left running for a reader who is no longer there.
    */
   useEffect(() => {
-    const release = () => queryAbortRef.current?.abort();
+    const release = () => {
+      queryAbortRef.current?.abort();
+      const token = cancelTokenRef.current;
+      if (!token) return;
+      cancelTokenRef.current = null;
+      // `keepalive` so the cancellation still leaves while the document is
+      // going away. Aborting the fetch only frees the browser and the proxy;
+      // the Engine keeps executing until it is told to stop.
+      void msalFetch(`${API_BASE}/api/v1/sql/engine/cancel/${token}`, {
+        method: "DELETE",
+        keepalive: true,
+      }).catch(() => {});
+    };
     window.addEventListener("pagehide", release);
     return () => {
       window.removeEventListener("pagehide", release);
@@ -3151,6 +3167,11 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
     const abort = new AbortController();
     queryAbortRef.current = abort;
     const signal = abort.signal;
+    const cancelToken =
+      (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}${Math.random()}`)
+        .replace(/[^A-Za-z0-9_-]/g, "")
+        .slice(0, 64);
+    cancelTokenRef.current = cancelToken;
 
     // Acquire a slot from the global semaphore — limits concurrent dashboard queries
     const releaseSlot = await acquireQuerySlot();
@@ -3320,6 +3341,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
         // chart (filter changes, refresh) benefit from sub-ms cache hits.
         use_cache:  isDashboard,
         cache_ttl:  300,
+        cancel_token: cancelToken,
       };
 
       let executeJson: any;
@@ -3784,6 +3806,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
     } finally {
       releaseEngineSlot?.();
       if (queryAbortRef.current === abort) queryAbortRef.current = null;
+      if (cancelTokenRef.current === cancelToken) cancelTokenRef.current = null;
     }
   };
 
@@ -4008,7 +4031,15 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
     setFilters,
     sqlPreview,
     runPreviewQuery,
-    cancelRunningQuery: () => { queryAbortRef.current?.abort(); },
+    cancelRunningQuery: () => {
+      queryAbortRef.current?.abort();
+      const token = cancelTokenRef.current;
+      if (!token) return;
+      cancelTokenRef.current = null;
+      void msalFetch(`${API_BASE}/api/v1/sql/engine/cancel/${token}`, {
+        method: "DELETE",
+      }).catch(() => {});
+    },
     runContext,
     isSaving,
     canSave,

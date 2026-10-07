@@ -195,7 +195,7 @@ def cancel_tagged(tag, actor, role):
     return cancelled
 
 
-def execute(sql, catalog, actor, role, schema=None, timeout=60, settings=None):
+def execute(sql, catalog, actor, role, schema=None, timeout=60, settings=None, tag=None):
     """Run one statement. `timeout` is how long this caller waits for the
     response: 60 s suits an interactive request; a DLM build passes its own
     bound because a full-table aggregate legitimately runs for minutes. When
@@ -203,9 +203,13 @@ def execute(sql, catalog, actor, role, schema=None, timeout=60, settings=None):
     client that has given up must not leave a full-table scan running for
     everyone else. `settings` is the Engine's per-request settings object
     (`query_memory_limit_bytes`, `local_parallelism`, `result_cache`); it is
-    sent only when given, so callers that do not pass it are unchanged."""
+    sent only when given, so callers that do not pass it are unchanged. `tag`
+    lets a caller name this statement on the Engine so it can cancel it through
+    `cancel_tagged` later; one is generated when it is not supplied."""
     engine_role = _sql_role(role)
-    tag = "kaveon-api:" + uuid.uuid4().hex
+    # A caller that needs to cancel this statement later supplies the tag, so
+    # it can name the work without holding the Engine's query id.
+    tag = tag or "kaveon-api:" + uuid.uuid4().hex
     payload = _statement_payload(sql, catalog, schema, tag, settings)
     try:
         result = _request("POST", "/v1/statement", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,

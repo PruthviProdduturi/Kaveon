@@ -12,6 +12,11 @@ def _positive_revision(record: dict | None, label: str) -> int:
     return revision
 
 
+# Enough to clear orphans left by repeated failures, few enough that a
+# genuinely stuck store reports rather than loops.
+MAX_VERSION_PROBES = 16
+
+
 def publish(payload: dict, actor: str) -> dict:
     """Publish bytes, then atomically bind definition and terminal run records.
 
@@ -62,8 +67,19 @@ def publish(payload: dict, actor: str) -> dict:
             if not isinstance(document, dict) or document.get("definition_id") != dataset_id:
                 raise RuntimeError("KaveonDB DLM run identity is invalid")
             highest_version = max(highest_version, int(match.group(1)))
+    # A publication that wrote its bytes and then failed to commit its run
+    # leaves an object no run references, and the version it used still looks
+    # free. Step over any such orphan rather than overwriting it: the bytes
+    # stay immutable and a dataset cannot be wedged by one failed attempt.
     version = highest_version + 1
-    compiled = dlm_compiled_artifact.publish({**payload, "version": version})
+    for _ in range(MAX_VERSION_PROBES):
+        try:
+            compiled = dlm_compiled_artifact.publish({**payload, "version": version})
+            break
+        except dlm_compiled_artifact.VersionOccupied:
+            version += 1
+    else:
+        raise RuntimeError("No free compiled DLM artifact version for this dataset")
     if compiled is None:
         raise RuntimeError("Immutable DLM artifact publication is disabled")
 

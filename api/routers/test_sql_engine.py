@@ -35,7 +35,8 @@ class EngineChartSqlTests(unittest.TestCase):
             result = sql.execute_engine_sql(body, Response(), ctx)
         self.assertEqual(query.call_args.args[1], ["OpenSource"])
         dataset.assert_called_once_with("7", ctx.email, ctx.role)
-        execute.assert_called_once_with(body.sql_text, "OpenSource", ctx, "nyc_taxi")
+        execute.assert_called_once_with(body.sql_text, "OpenSource", ctx, "nyc_taxi",
+                                        cancel_token=None)
         self.assertEqual(result, {
             "columns": ["city", "trips"], "rows": [["Manhattan", 42]],
             "query_id": "query-1", "duration_ms": 12,
@@ -293,6 +294,38 @@ class EngineChartSqlTests(unittest.TestCase):
         self.assertIsNotNone(generated)
         self.assertIn("service_type", generated["sql"])
         self.assertTrue(generated["sql"].endswith("LIMIT 50"), generated["sql"])
+
+
+class EngineCancellationTests(unittest.TestCase):
+    def test_cancel_token_is_scoped_to_the_caller(self):
+        """The token is minted in the browser, so it must not be the Engine tag
+        itself: one principal's token has to be unable to name — and so cancel —
+        another principal's statement."""
+        first = sql.UserContext(email="analyst@example.com", role="Analyst", jwt_roles=[])
+        second = sql.UserContext(email="other@example.com", role="Analyst", jwt_roles=[])
+        token = "abcd1234efgh"
+        self.assertNotEqual(sql._cancel_tag(first, token), sql._cancel_tag(second, token))
+        self.assertEqual(sql._cancel_tag(first, token), sql._cancel_tag(first, token))
+        self.assertIsNone(sql._cancel_tag(first, None))
+
+    def test_cancel_rejects_a_malformed_token_before_reaching_the_engine(self):
+        ctx = sql.UserContext(email="analyst@example.com", role="Analyst", jwt_roles=[])
+        with patch("services.engine_bridge.cancel_tagged") as cancel:
+            with self.assertRaises(sql.HTTPException):
+                sql.cancel_engine_statement("short", ctx)
+            with self.assertRaises(sql.HTTPException):
+                sql.cancel_engine_statement("has spaces and/slashes", ctx)
+            cancel.assert_not_called()
+
+    def test_cancel_reports_nothing_cancelled_rather_than_failing(self):
+        """A statement that finished on its own is simply not running; the
+        reader navigating away must not see an error for that."""
+        ctx = sql.UserContext(email="analyst@example.com", role="Analyst", jwt_roles=[])
+        with patch("services.engine_bridge.cancel_tagged", return_value=0) as cancel:
+            self.assertEqual(sql.cancel_engine_statement("abcd1234efgh", ctx),
+                             {"ok": True, "cancelled": 0})
+        self.assertEqual(cancel.call_args.args[0],
+                         sql._cancel_tag(ctx, "abcd1234efgh"))
 
 
 if __name__ == "__main__":

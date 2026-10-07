@@ -1,6 +1,7 @@
 """SQL router — /api/v1/sql."""
 
 import hashlib
+import re
 import json
 import threading
 import time
@@ -171,13 +172,30 @@ def _engine_history_fields(result: dict) -> dict:
     }
 
 
-def _execute_engine_read_only(sql_text: str, catalog: str, ctx: UserContext, schema: str | None = None) -> dict:
+def _cancel_tag(ctx: UserContext, cancel_token):
+    """The Engine tag for a caller-supplied cancel token.
+
+    The token comes from the browser, so it is never the tag itself: the tag is
+    derived from the caller's identity too, which keeps one principal's tokens
+    from naming -- and so cancelling -- another principal's statements,
+    whatever the client sends.
+    """
+    if not cancel_token:
+        return None
+    seed = ctx.email + chr(0) + cancel_token
+    return "kaveon-api:cancel:" + hashlib.sha256(seed.encode()).hexdigest()
+
+
+def _execute_engine_read_only(sql_text: str, catalog: str, ctx: UserContext,
+                              schema: str | None = None,
+                              cancel_token: str | None = None) -> dict:
     """Run a read-only statement within one catalog selected by the server."""
     from routers.lab import _engine_query
     from services.engine_bridge import execute
 
     scoped_sql = _engine_query(sql_text, catalog)
-    return execute(scoped_sql, catalog, ctx.email, ctx.role, schema)
+    return execute(scoped_sql, catalog, ctx.email, ctx.role, schema,
+                   tag=_cancel_tag(ctx, cancel_token))
 
 
 def _assert_engine_execute_permission(data: SqlExecuteBody, ctx: UserContext) -> None:
@@ -576,6 +594,27 @@ def invalidate_cache(ctx=Depends(require_min_role("Admin"))):
     return {"ok": True, "cleared": True}
 
 
+@router.delete("/sql/engine/cancel/{cancel_token}")
+def cancel_engine_statement(cancel_token: str,
+                            ctx: UserContext = Depends(require_user_context)):
+    """Cancel the statement the caller started under *cancel_token*.
+
+    A dashboard chart abandoned mid-flight cannot cancel by query id: it
+    never receives the response that carries one. So it names the statement
+    up front with a token it minted, and stops it here.
+
+    Idempotent and best effort: a statement that already finished is simply
+    not running any more, which is reported as nothing cancelled rather
+    than as an error.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", cancel_token):
+        raise HTTPException(status_code=400, detail="Invalid cancellation token")
+    from services import engine_bridge
+    cancelled = engine_bridge.cancel_tagged(
+        _cancel_tag(ctx, cancel_token), ctx.email, ctx.role)
+    return {"ok": True, "cancelled": cancelled}
+
+
 @router.post("/sql/engine")
 @statement_route("sql_text")
 def execute_engine_sql(data: SqlExecuteBody, response: Response, ctx: UserContext = Depends(require_user_context)):
@@ -617,7 +656,9 @@ def execute_engine_sql(data: SqlExecuteBody, response: Response, ctx: UserContex
             }
     started_at = int(time.time() * 1000)
     try:
-        result = _execute_engine_read_only(data.sql_text, source["engine_catalog"], ctx, schema)
+        result = _execute_engine_read_only(
+            data.sql_text, source["engine_catalog"], ctx, schema,
+            cancel_token=data.cancel_token)
     except HTTPException as error:
         failure = error.detail if isinstance(error.detail, dict) else {}
         try:
