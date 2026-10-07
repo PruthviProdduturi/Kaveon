@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "primary_metric": {
+    "status": "accepted",
+    "name": "successful exact-result queries per second",
+    "workload": "extended 12-query AKS workload at concurrency 4",
+    "target": 1.9,
+    "observed": 2.1253688901977124
+  },
+  "technical_gate_passed": true,
+  "claim_eligible": true,
+  "claim_blocker": null,
+  "checks": {
+    "three_worker_matched_topology": true,
+    "stable_recorded_co_tenants": true,
+    "matched_role_resources": true,
+    "immutable_images": true,
+    "tls_and_authentication_enforced": true,
+    "same_verified_parquet_objects": true,
+    "publication_dataset": true,
+    "exact_extended_corpus": true,
+    "exact_results": true,
+    "latency_samples": true,
+    "latency_percentiles": true,
+    "frozen_workload_policy": true,
+    "alternating_complete_rounds": true,
+    "throughput_correct": true,
+    "kaveon_execution_metrics_retained": true,
+    "ratio_at_least_1_90": true,
+    "kaveon_restored": true
+  },
+  "failed_checks": [],
+  "scope": "Three-worker, same-AKS-node-SKU, matched co-tenant warm-cache leases over the declared immutable ADLS fixture."
+}
