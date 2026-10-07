@@ -18,6 +18,7 @@ pub mod parquet_reader;
 mod scan_bench;
 pub mod scan_predicate;
 pub mod source_statistics;
+pub mod system_storage;
 pub mod table_rewrite;
 pub mod table_statistics;
 
