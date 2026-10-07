@@ -356,16 +356,10 @@ def _generate_dlm_impl(dataset_id: str, force: bool = False,
     if state is not None:
         if not actor:
             raise RuntimeError("Retirement DLM generation requires actor identity")
-        from services.dlm_compiled_artifact import DefinitionUnavailable
-        try:
-            prior_artifact = get_dlm(str(dataset_id), actor, "Admin")
-        except DefinitionUnavailable:
-            # Nothing compiled for this dataset yet, or the artifact predates
-            # the dataset's current revision. Either way there is no prior
-            # curation to carry forward and compiling is exactly what is being
-            # asked for — propagating the serving path's fail-closed error here
-            # made the first generation for every dataset impossible.
-            prior_artifact = None
+        # None when nothing is compiled yet, or when the artifact predates the
+        # dataset's current revision. Either way there is no prior curation to
+        # carry forward, and compiling is exactly what is being asked for.
+        prior_artifact = get_dlm(str(dataset_id), actor, "Admin")
         prior_context = prior_artifact.get("compiled_context") if prior_artifact else None
         if isinstance(prior_context, dict) and isinstance(prior_context.get("curation"), dict):
             state.curation = dict(prior_context["curation"])
@@ -1122,7 +1116,17 @@ def get_dlm(dataset_id: str, actor: Optional[str] = None, role: str = "Viewer") 
         if not actor:
             raise RuntimeError("PostgreSQL-free DLM reads require actor identity")
         from services import dlm_compiled_artifact
-        return dlm_compiled_artifact.read(str(dataset_id), actor, role)
+        try:
+            return dlm_compiled_artifact.read(str(dataset_id), actor, role)
+        except dlm_compiled_artifact.DefinitionUnavailable:
+            # This function answers with the artifact or None, and the
+            # non-retirement branch below returns None for a dataset with no
+            # row. A dataset that has never been compiled is that same absence,
+            # so it answers the same way: the route turns None into a 404, and
+            # _serving_artifact already has a branch for it. Propagating it
+            # instead made /dlm/coverage fail outright whenever any one dataset
+            # was not yet compiled.
+            return None
     ensure_tables()
     row = meta.query_one(
         "SELECT dataset_id, version, manifest, stats_rollup, usage_rollup, "
