@@ -50,7 +50,14 @@ def validate_snapshot(snapshot):
     if snapshot_digest(snapshot.records, snapshot.chart_snapshot_id) != snapshot.snapshot_sha256:
         raise RuntimeError("dashboard snapshot identity mismatch")
 
-def capture_snapshot():
+def capture_snapshot(*, skip_unresolved: bool = False):
+    """Capture every dashboard whose charts are present in KaveonDB.
+
+    With ``skip_unresolved`` a dashboard referencing a missing chart is left
+    behind and named on stdout rather than aborting the capture, on the same
+    reasoning as charts: it is already broken where it is, and it should not
+    strand the dashboards that are not.
+    """
     with db.transaction() as transaction:
         transaction.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         watermark = transaction.query_one(
@@ -66,15 +73,22 @@ def capture_snapshot():
         chart_ids = _json(row.get("charts"), "charts", [])
         if len(chart_ids) > MAX_CHART_REFS or len({str(value) for value in chart_ids}) != len(chart_ids):
             raise RuntimeError(f"dashboard {record_id} chart references are invalid")
-        revisions = {}
+        revisions, missing_chart = {}, None
         for chart_id in sorted(str(value) for value in chart_ids):
             chart = product_store.migration_read("chart", chart_id, owner, "Admin")
-            if chart is None: raise RuntimeError(f"KaveonDB chart {chart_id} is missing for dashboard")
+            if chart is None:
+                if skip_unresolved:
+                    missing_chart = chart_id
+                    break
+                raise RuntimeError(f"KaveonDB chart {chart_id} is missing for dashboard")
             snapshot_id, revision = str(chart.get("snapshot_id") or ""), chart.get("revision")
             if not snapshot_id or (target_snapshot is not None and snapshot_id != target_snapshot) \
                     or type(revision) is not int or revision < 1:
                 raise RuntimeError("KaveonDB chart snapshot or revision is invalid")
             target_snapshot, revisions[chart_id] = snapshot_id, revision
+        if missing_chart is not None:
+            print(f"[backfill] skipping dashboard {record_id}: chart {missing_chart} does not exist")
+            continue
         visibility = row.get("visibility") or "internal"
         if visibility not in {"private", "internal", "published"}: raise RuntimeError("dashboard visibility is invalid")
         document = {"id": record_id, "name": row.get("name"), "description": row.get("description"),
