@@ -231,10 +231,49 @@ async function send<T>(path: string, init: RequestInit): Promise<T> {
 const json = (method: string, body: unknown, headers: Record<string, string> = {}): RequestInit =>
   ({ method, headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
 
-export const fetchDefinitions = async () =>
-  (await get<{ definitions: CatalogDefinition[] }>("/engine/catalog/definitions")).definitions;
-export const fetchSchemaDefinitions = async (catalogId: string) =>
-  (await get<{ schemas: SchemaDefinition[] }>(`/engine/catalog/definitions/${enc(catalogId)}/schemas`)).schemas;
+// Catalog navigation is visited repeatedly while moving between the overview,
+// schema and table pages. Keep the small, durable definition payload in the
+// browser for a short window and share an in-flight request. This removes the
+// visible "connecting" pause on every route change without making mutations
+// stale: writes invalidate the cache below.
+const DEFINITION_CACHE_MS = 15_000;
+let definitionsCache: { at: number; value: CatalogDefinition[] } | null = null;
+let definitionsRequest: Promise<CatalogDefinition[]> | null = null;
+const schemaCache = new Map<string, { at: number; value: SchemaDefinition[] }>();
+const schemaRequests = new Map<string, Promise<SchemaDefinition[]>>();
+
+export function invalidateDefinitionCache(catalogId?: string) {
+  definitionsCache = null;
+  if (catalogId) schemaCache.delete(catalogId);
+  else schemaCache.clear();
+}
+
+export function fetchDefinitions(): Promise<CatalogDefinition[]> {
+  const now = Date.now();
+  if (definitionsCache && now - definitionsCache.at < DEFINITION_CACHE_MS) return Promise.resolve(definitionsCache.value);
+  if (!definitionsRequest) {
+    definitionsRequest = get<{ definitions: CatalogDefinition[] }>("/engine/catalog/definitions")
+      .then(body => {
+        definitionsCache = { at: Date.now(), value: body.definitions };
+        return body.definitions;
+      })
+      .finally(() => { definitionsRequest = null; });
+  }
+  return definitionsRequest;
+}
+
+export function fetchSchemaDefinitions(catalogId: string): Promise<SchemaDefinition[]> {
+  const now = Date.now();
+  const cached = schemaCache.get(catalogId);
+  if (cached && now - cached.at < DEFINITION_CACHE_MS) return Promise.resolve(cached.value);
+  const pending = schemaRequests.get(catalogId);
+  if (pending) return pending;
+  const request = get<{ schemas: SchemaDefinition[] }>(`/engine/catalog/definitions/${enc(catalogId)}/schemas`)
+    .then(body => { schemaCache.set(catalogId, { at: Date.now(), value: body.schemas }); return body.schemas; })
+    .finally(() => { schemaRequests.delete(catalogId); });
+  schemaRequests.set(catalogId, request);
+  return request;
+}
 
 export const fetchTableDefinitions = async (schemaId: string) =>
   (await get<{ tables: EngineTable[] }>(`/engine/catalog/schemas/${enc(schemaId)}/tables`)).tables;
@@ -285,8 +324,11 @@ export interface AnalyzeResult {
 export const analyzeTable = (tableId: string, depth: AnalyzeDepth) =>
   send<AnalyzeResult>(`/engine/catalog/tables/${enc(tableId)}/analyze`, json("POST", depth));
 
-export const createSchema = async (catalogId: string, name: string) =>
-  (await send<{ schema: SchemaDefinition }>(`/engine/catalog/definitions/${enc(catalogId)}/schemas`, json("POST", { name }))).schema;
+export const createSchema = async (catalogId: string, name: string) => {
+  const schema = (await send<{ schema: SchemaDefinition }>(`/engine/catalog/definitions/${enc(catalogId)}/schemas`, json("POST", { name }))).schema;
+  invalidateDefinitionCache(catalogId);
+  return schema;
+};
 
 export const createTable = async (input: {
   schemaId: string; name: string; location: string; format: TableFormat; columns: ColumnInput[];
