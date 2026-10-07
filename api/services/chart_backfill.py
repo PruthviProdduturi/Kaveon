@@ -99,7 +99,15 @@ def validate_snapshot(snapshot):
         raise RuntimeError("chart snapshot identity mismatch")
 
 
-def capture_snapshot():
+def capture_snapshot(*, skip_unresolved: bool = False):
+    """Capture every chart whose dataset is present in KaveonDB.
+
+    With ``skip_unresolved`` a chart whose dataset is missing is left behind
+    and named on stdout instead of aborting the capture. Such a chart points
+    at a dataset that no longer exists, so it is already unusable where it is:
+    carrying it forward would import a broken record, and stopping on it
+    strands every chart that is fine.
+    """
     with db.transaction() as transaction:
         transaction.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         watermark = transaction.query_one(
@@ -128,6 +136,9 @@ def capture_snapshot():
             raise RuntimeError(f"chart {row['id']} owner is missing")
         dataset = product_store.migration_read("dataset", dataset_id, owner, "Admin")
         if dataset is None:
+            if skip_unresolved:
+                print(f"[backfill] skipping chart {row['id']}: dataset {dataset_id} does not exist")
+                continue
             raise RuntimeError(f"KaveonDB dataset {dataset_id} is missing for chart")
         current_snapshot, revision = str(dataset.get("snapshot_id") or ""), dataset.get("revision")
         if (not current_snapshot or (snapshot_id is not None and current_snapshot != snapshot_id)
