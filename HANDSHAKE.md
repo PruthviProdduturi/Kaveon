@@ -1,5 +1,30 @@
 # Kaveon — Engineer Coordination
 
+## Codex handoff — October 7, 2026 — cloud KaveonDB cutover in progress
+
+The local profile is PostgreSQL-free and verified. The personal Azure cloud
+cutover is not complete yet: the API is healthy only because the source
+PostgreSQL server was temporarily started for migration reads. Do not delete
+`kaveon-db` until the cloud replay and PostgreSQL-unavailable restart pass.
+
+Latest migration fix: commit `0986c411` (`Bound authority replay to engine
+transaction limit`). `api/services/system_authority_replay.py` now uses the
+Engine's 100-change transaction limit and uses bounded batches when a target
+page is temporarily unavailable. The image is deployed as API revision
+`kaveon-api--0986c411`; local replay tests pass.
+
+Current cloud blocker: replay of `activity`/`query_history` reaches the ADLS
+product transaction store but returns `TRANSACTION_OUTCOME_INDETERMINATE`,
+with coordinator logs showing ADLS `412 ConditionNotMet` on the product
+catalog head CAS. The coordinator was restarted once; the conflict still
+needs to be resolved and a confirmed commit/retry path demonstrated. This is
+the next engineering task, not a reason to bypass the evidence gates.
+
+After the CAS issue is fixed: rerun all 16-family replay reports, archive the
+durable evidence/checkpoint bundle, validate shadow parity/write fence/outbox
+drain, rehearse restart with PostgreSQL unavailable, then switch the cloud API
+to KaveonDB/ADLS and only afterward delete the Azure PostgreSQL server.
+
 ## Codex handoff - October 5, 2026
 
 Local PostgreSQL retirement is verified. `scripts/verify-local-postgresql-retirement.ps1`
