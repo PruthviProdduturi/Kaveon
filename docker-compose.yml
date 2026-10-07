@@ -80,6 +80,12 @@ services:
       KAVEON_PRODUCT_STORAGE_MODE: local
       KAVEON_PRODUCT_LOCAL_PATH: /var/lib/kaveon/product-transactions
       KAVEON_PRODUCT_ADLS_PREFIX: kaveon/product-catalog
+      # Tunable for local qualification; keep the conservative default for
+      # ordinary developer machines and raise it explicitly for ClickBench.
+      KAVEON_QUERY_MEMORY_LIMIT_BYTES: ${KAVEON_QUERY_MEMORY_LIMIT_BYTES:-536870912}
+      KAVEON_MEMORY_ADMISSION_LIMIT_BYTES: ${KAVEON_MEMORY_ADMISSION_LIMIT_BYTES:-2147483648}
+      KAVEON_HASH_SPILL_ROOT: ${KAVEON_HASH_SPILL_ROOT:-/tmp/kaveon-spill}
+      KAVEON_HASH_SPILL_PARTITIONS: ${KAVEON_HASH_SPILL_PARTITIONS:-16}
     volumes:
       - ./engine/etc/coordinator.toml:/etc/kaveon/config.toml:ro
       - catalog-data:/var/lib/kaveon
@@ -114,6 +120,10 @@ services:
       KAVEON_ADVERTISED_URI: http://engine-worker-1:8080
       KAVEON_DATA_DIR: /data
       KAVEON_EXCHANGE_TOKEN: ${KAVEON_EXCHANGE_TOKEN:-kaveon-local-exchange}
+      KAVEON_QUERY_MEMORY_LIMIT_BYTES: ${KAVEON_QUERY_MEMORY_LIMIT_BYTES:-536870912}
+      KAVEON_MEMORY_ADMISSION_LIMIT_BYTES: ${KAVEON_MEMORY_ADMISSION_LIMIT_BYTES:-2147483648}
+      KAVEON_HASH_SPILL_ROOT: ${KAVEON_HASH_SPILL_ROOT:-/tmp/kaveon-spill}
+      KAVEON_HASH_SPILL_PARTITIONS: ${KAVEON_HASH_SPILL_PARTITIONS:-16}
     volumes: &engine-worker-volumes
       - ./engine/etc/worker.toml:/etc/kaveon/config.toml:ro
       - type: bind

@@ -10,8 +10,9 @@
 //! the input is drained: no run on disk, and the table is the result;
 //! otherwise the table joins its sub-partitions on disk and each
 //! sub-partition is merged back on its own, one at a time, as a unit of
-//! complete groups. A sub-partition that does not fit fails the query
-//! closed, the way every disk-partitioned operator does.
+//! complete groups. If a sub-partition is still too large, it is recursively
+//! repartitioned with a new hash salt before the query fails closed at the
+//! bounded depth.
 //!
 //! A refusal on the input side is answered the same way: when the budget
 //! refuses a source thread the batch it decoded, the source asks the
@@ -23,7 +24,8 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use ahash::RandomState;
-use arrow::array::{Array, ArrayBuilder, BinaryArray, BinaryBuilder, BooleanArray};
+use arrow::array::{Array, ArrayBuilder, BinaryArray, BinaryBuilder, BooleanArray, UInt32Array};
+use arrow::compute::take;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use kaveon_core::{BatchOperator, KaveonError, MemoryReservation, OperatorMemoryAccount, Result};
@@ -49,6 +51,12 @@ const SPILL_RESERVE_GROUPS: u64 = 4_096;
 /// the batch held, its worst case ensured, its scratch, its groups —
 /// whatever the sibling threads hold of the budget at that moment.
 const PREPAID_BATCHES: u64 = 4;
+/// A skewed final-merge partition is split again instead of failing merely
+/// because one hash bucket is larger than the query budget.  The child salt
+/// changes the bucket layout at every level, so adversarial keys cannot keep
+/// selecting the same child.
+const FINAL_REPARTITION_FACTOR: usize = 16;
+const FINAL_REPARTITION_MAX_LEVEL: u8 = 8;
 
 /// What the merge spilled, for the record.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -88,7 +96,7 @@ pub struct HybridFinalMerge {
     /// Runs on the disk by sub-partition, each a set of distinct groups.
     runs: Vec<Vec<SpillRun>>,
     /// Sub-partitions still to merge back once the input is drained.
-    pending: VecDeque<usize>,
+    pending: VecDeque<(usize, u8)>,
     drained: bool,
     failed: bool,
     spilled: FinalMergeSpill,
@@ -223,9 +231,10 @@ impl HybridFinalMerge {
             self.spill_reserve = None;
             self.pending = (0..self.runs.len())
                 .filter(|partition| !self.runs[*partition].is_empty())
+                .map(|partition| (partition, 0))
                 .collect();
         }
-        let Some(partition) = self.pending.pop_front() else {
+        let Some((partition, level)) = self.pending.pop_front() else {
             // Every unit is out: the prepaid balance goes back with the
             // last reservation that drew on it.
             self.merger_memory = None;
@@ -237,19 +246,126 @@ impl HybridFinalMerge {
             .clone()
             .unwrap_or_else(|| self.memory.clone());
         let mut merger = IncrementalAggregateMerger::new(Some(memory));
-        let mut source = RunSource::new(Arc::clone(&self.schema), runs);
+        // Keep one handle to every input run so a failed merge can close its
+        // reader and repartition the complete original input.
+        let mut source = RunSource::new(Arc::clone(&self.schema), runs.clone());
         while let Some(batch) = source.next_batch()? {
-            merger.push_batch(&batch).map_err(|error| match error {
-                KaveonError::MemoryLimit(message) => KaveonError::MemoryLimit(format!(
-                    "final aggregate sub-partition {} of {} does not fit the budget: {message}",
-                    partition + 1,
-                    self.runs.len()
-                )),
-                error => error,
-            })?;
+            match merger.push_batch(&batch) {
+                Ok(()) => {}
+                Err(KaveonError::MemoryLimit(_message))
+                    if self.spill.is_some() && level < FINAL_REPARTITION_MAX_LEVEL =>
+                {
+                    // Release the failed merger before repartitioning.  The
+                    // child runs are then merged one at a time, each with a
+                    // bounded working set.
+                    drop(merger);
+                    drop(source);
+                    let children = self
+                        .repartition_runs(runs, FINAL_REPARTITION_FACTOR, level)
+                        .map_err(|error| {
+                            KaveonError::MemoryLimit(format!(
+                                "final aggregate sub-partition {} of {} does not fit the budget after {} repartition levels: {error}",
+                                partition + 1,
+                                self.runs.len(),
+                                level
+                            ))
+                        })?;
+                    let first = self.runs.len();
+                    self.runs.extend(children);
+                    for child in first..self.runs.len() {
+                        if !self.runs[child].is_empty() {
+                            self.pending.push_back((child, level + 1));
+                        }
+                    }
+                    return self.advance();
+                }
+                Err(KaveonError::MemoryLimit(message)) => {
+                    return Err(KaveonError::MemoryLimit(format!(
+                        "final aggregate sub-partition {} of {} does not fit the budget after {} repartition levels: {message}",
+                        partition + 1,
+                        self.runs.len(),
+                        level
+                    )));
+                }
+                Err(error) => return Err(error),
+            }
         }
         drop(source);
+        drop(runs);
         Self::finished(merger).map(Some)
+    }
+
+    /// Repartition encoded grouped-state rows after a final merge bucket
+    /// proves too large.  This is intentionally independent from the exchange
+    /// partitioner: the key is already encoded in the first binary column and
+    /// a new salt makes each recursive level an independent hash layout.
+    fn repartition_runs(
+        &self,
+        runs: Vec<SpillRun>,
+        count: usize,
+        level: u8,
+    ) -> Result<Vec<Vec<SpillRun>>> {
+        let (spill, _) = self
+            .spill
+            .clone()
+            .ok_or_else(|| error("final aggregate repartition requires spill"))?;
+        // Keep one handle to every input run so a failed merge can close its
+        // reader and repartition the complete original input.
+        let mut source = RunSource::new(Arc::clone(&self.schema), runs.clone());
+        let mut writers: Vec<Option<SpillRunWriter>> = (0..count).map(|_| None).collect();
+        let salt = HYBRID_PARTITION_SALT
+            .wrapping_add(u64::from(level + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let hasher = &self.hasher;
+        while let Some(batch) = source.next_batch()? {
+            if batch.num_rows() == 0 {
+                continue;
+            }
+            let keys = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<BinaryArray>()
+                .ok_or_else(|| error("grouped-state batch key column is not binary"))?;
+            let mut indices = (0..count).map(|_| Vec::<u32>::new()).collect::<Vec<_>>();
+            for row in 0..batch.num_rows() {
+                if !keys.is_null(row) {
+                    let partition = (crate::exchange::mix(hasher.hash_one(keys.value(row)) ^ salt)
+                        % count as u64) as usize;
+                    indices[partition].push(row as u32);
+                }
+            }
+            let reservation = self.memory.reserve(
+                (batch.get_array_memory_size() as u64)
+                    .saturating_mul(3)
+                    .max(1),
+            )?;
+            for (partition, rows) in indices.into_iter().enumerate() {
+                if rows.is_empty() {
+                    continue;
+                }
+                let rows = UInt32Array::from(rows);
+                let columns = batch
+                    .columns()
+                    .iter()
+                    .map(|column| take(column.as_ref(), &rows, None))
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                let child = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
+                let writer = match &mut writers[partition] {
+                    Some(writer) => writer,
+                    slot => slot.insert(spill.begin_run(&self.schema)?),
+                };
+                writer.write(&child)?;
+            }
+            drop(reservation);
+        }
+        let mut children = (0..count)
+            .map(|_| Vec::new())
+            .collect::<Vec<Vec<SpillRun>>>();
+        for (partition, writer) in writers.into_iter().enumerate() {
+            if let Some(writer) = writer {
+                children[partition].push(writer.finish()?);
+            }
+        }
+        Ok(children)
     }
 
     /// A merge's groups as a unit: the table will not grow again, so the
