@@ -182,6 +182,9 @@ services:
       KAVEON_DLM_LIVE_ARTIFACT_PUBLISH_ENABLED: "true"
       KAVEON_LOCAL_DLM_ARTIFACT_PATH: /var/lib/kaveon/product-transactions
       KAVEON_PROXY_SECRET: ${KAVEON_PROXY_SECRET:-kaveon-local-proxy}
+      # Resolves the credential references in catalog-source registrations.
+      # Unset on a laptop: registration then refuses rather than inventing one.
+      KAVEON_KEY_VAULT_URL: ${KAVEON_KEY_VAULT_URL:-}
       KAVEON_DEV_USER_EMAIL: ""
       KAVEON_ENGINE_URL: http://engine-coordinator:8080
       KAVEON_ENGINE_PRIVATE_HTTP: "true"
