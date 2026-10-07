@@ -25,17 +25,35 @@ class DlmGenerationCutoverTests(unittest.TestCase):
              patch.object(cutover.product_store, "transact",
                           side_effect=lambda *args: order.append("transaction")) as transact:
             result = cutover.publish(payload(), "owner@example.test")
-        self.assertEqual(order, ["artifact", "transaction"])
+        self.assertEqual(order, ["artifact", "transaction", "transaction"])
         self.assertEqual(result["run_id"], "7-v1")
         self.assertEqual(publish.call_args.args[0]["version"], 1)
-        mutations = transact.call_args.args[0]
-        self.assertEqual([(m.operation, m.kind, m.record_id) for m in mutations], [
+        first, second = [call.args[0] for call in transact.call_args_list]
+        self.assertEqual([(m.operation, m.kind, m.record_id) for m in first], [
             ("create", "dlm_definition", "7"),
             ("create", "dlm_run", "7-v1"),
+        ])
+        self.assertEqual([(m.operation, m.kind, m.record_id) for m in second], [
             ("update", "dlm_run", "7-v1"),
         ])
-        self.assertEqual(mutations[-1].expected_revision, 1)
-        self.assertEqual(transact.call_args.args[1:], ("owner@example.test", "Admin"))
+        self.assertEqual(second[0].expected_revision, 1)
+        for call in transact.call_args_list:
+            self.assertEqual(call.args[1:], ("owner@example.test", "Admin"))
+
+    def test_no_transaction_changes_one_record_twice(self):
+        """A product commit applies each change once against a single base, so
+        KaveonDB refuses a transaction that touches a record twice. Publishing
+        once built the run's create and its ready update into one transaction
+        and could therefore never commit — no DLM was publishable at all. The
+        shape, not just the outcome, is what has to stay fixed."""
+        dataset = {"revision": 1, "document": {"created_by": "owner@example.test"}}
+        artifact = {"path": "dlm/7/v1/compiled.json", "sha256": "a" * 64,
+                    "bytes": 10, "version": 1}
+        with patch.object(cutover.product_store, "read", side_effect=[dataset, None]),              patch.object(cutover.product_store, "list_records", return_value=[]),              patch.object(cutover.dlm_compiled_artifact, "publish", return_value=artifact),              patch.object(cutover.product_store, "transact") as transact:
+            cutover.publish(payload(), "owner@example.test")
+        for call in transact.call_args_list:
+            addressed = [(m.kind, m.record_id) for m in call.args[0]]
+            self.assertEqual(len(addressed), len(set(addressed)), addressed)
 
     def test_dataset_revision_change_uses_definition_cas_and_next_run(self):
         dataset = {"revision": 9, "document": {"created_by": "owner"}}
@@ -50,7 +68,7 @@ class DlmGenerationCutoverTests(unittest.TestCase):
              patch.object(cutover.dlm_compiled_artifact, "publish", return_value=artifact), \
              patch.object(cutover.product_store, "transact") as transact:
             result = cutover.publish(payload(), "owner")
-        definition_update = transact.call_args.args[0][0]
+        definition_update = transact.call_args_list[0].args[0][0]
         self.assertEqual((definition_update.operation, definition_update.expected_revision), ("update", 3))
         self.assertEqual(definition_update.document["dataset_revision"], 9)
         self.assertEqual((result["definition_revision"], result["run_id"]), (4, "7-v5"))
@@ -65,7 +83,8 @@ class DlmGenerationCutoverTests(unittest.TestCase):
              patch.object(cutover.dlm_compiled_artifact, "publish", return_value=artifact), \
              patch.object(cutover.product_store, "transact") as transact:
             cutover.publish(payload(), "owner")
-        self.assertEqual([m.kind for m in transact.call_args.args[0]], ["dlm_run", "dlm_run"])
+        self.assertEqual([m.kind for call in transact.call_args_list
+                          for m in call.args[0]], ["dlm_run", "dlm_run"])
 
     def test_owner_or_invalid_run_fails_before_artifact_publication(self):
         cases = (
