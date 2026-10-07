@@ -1014,10 +1014,13 @@ fn finish_storage(
 ) -> CommitOutcome {
     let (outcome, metric) = match kind {
         CommitErrorKind::Conflict => (CommitOutcome::Conflict, TransactionOutcome::Conflict),
-        CommitErrorKind::Retryable
-        | CommitErrorKind::Other
-        | CommitErrorKind::Unsupported
-        | CommitErrorKind::LimitExceeded => (
+        // A size limit is a decision, not an unknown. The snapshot either fits
+        // the bound or it does not, and the answer is the same on every retry,
+        // so reporting it as indeterminate tells a caller its commit might have
+        // landed when it provably did not — and sends operators looking for a
+        // transient fault that is really a structural one.
+        CommitErrorKind::LimitExceeded => (CommitOutcome::Rejected, TransactionOutcome::Rejected),
+        CommitErrorKind::Retryable | CommitErrorKind::Other | CommitErrorKind::Unsupported => (
             CommitOutcome::Indeterminate,
             TransactionOutcome::Indeterminate,
         ),
