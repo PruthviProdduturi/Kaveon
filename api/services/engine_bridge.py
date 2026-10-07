@@ -495,7 +495,10 @@ def cluster(actor, role):
 
 def queries(actor, role):
     """Query history visible to this principal. The Engine applies ownership scoping."""
-    return _request("GET", "/v1/query", "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role))
+    # The operations console only needs compact history rows. Full plans,
+    # scans, stages and preview data are fetched from /{id}; avoiding them in
+    # the list response keeps the console fast as history grows.
+    return _request("GET", "/v1/query?summary=true", "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_read_role(role))
 
 
 def query(query_id, actor, role):

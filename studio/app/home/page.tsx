@@ -306,11 +306,35 @@ export default function Home() {
   const [datasetSchema, setDatasetSchema] = useState<DatasetSchema | null>(null);
   const [schemasReady, setSchemasReady] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const chatAbortRef = useRef<AbortController | null>(null);
+  const chatCancelTokenRef = useRef<string | null>(null);
   // The previous DLM answer's frame (dataset, metric, grouping, filters, time).
   // Sent with every question so a follow-up inherits what it does not restate.
   const lastFrame = useRef<Record<string, unknown> | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const { addRecent } = useRecents();
+
+  // A chat question is interactive work. Leaving Chat or closing the tab
+  // must release a live Engine statement rather than leaving it scanning for
+  // a reader who is no longer present. The token is scoped to this principal
+  // by the API and is safe to send with keepalive during page teardown.
+  useEffect(() => {
+    const release = () => {
+      chatAbortRef.current?.abort();
+      chatAbortRef.current = null;
+      const token = chatCancelTokenRef.current;
+      if (!token) return;
+      chatCancelTokenRef.current = null;
+      void msalFetch(`${API_BASE}/api/v1/sql/engine/cancel/${token}`, {
+        method: "DELETE", keepalive: true,
+      }).catch(() => {});
+    };
+    window.addEventListener("pagehide", release);
+    return () => {
+      window.removeEventListener("pagehide", release);
+      release();
+    };
+  }, []);
 
   // Chat history state
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -735,6 +759,12 @@ export default function Home() {
   // bubble then shows the option the user picked rather than the question.
   async function sendMessage(text: string, resume?: Clarification["resume"]) {
     if (!text.trim() || !canSend) return;
+    const chatAbort = new AbortController();
+    chatAbortRef.current?.abort();
+    chatAbortRef.current = chatAbort;
+    const chatCancelToken = (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}${Math.random()}`)
+      .replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64);
+    chatCancelTokenRef.current = chatCancelToken;
     const question = resume?.question ?? text.trim();
     const userMsg: Message = { role: "user", content: text.trim() };
     const loadingMsg: Message = { role: "assistant", content: "", loading: true };
@@ -797,6 +827,7 @@ export default function Home() {
         const dlmRes = await msalFetch("/api/v1/dlm/ask", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: chatAbort.signal,
           body: JSON.stringify({ question, choices: resume?.choices, frame: lastFrame.current }),
         });
         if (dlmRes.ok) {
@@ -893,8 +924,9 @@ export default function Home() {
               const execRes = await msalFetch(dlm.engine ? "/api/v1/sql/engine" : "/api/v1/sql/execute", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
+                signal: chatAbort.signal,
                 body: JSON.stringify(dlm.engine
-                  ? { sql_text: dlm.sql, database: dlm.database, dataset_id: Number(dlm.dataset_id), source: "chat" }
+                  ? { sql_text: dlm.sql, database: dlm.database, dataset_id: Number(dlm.dataset_id), source: "chat", cancel_token: chatCancelToken }
                   : { sql_text: dlm.sql, database: dlm.database || "kaveon", source: "chat" }),
               });
               if (execRes.ok) {
@@ -1088,6 +1120,8 @@ export default function Home() {
         content: errMsg,
       }]);
     } finally {
+      if (chatAbortRef.current === chatAbort) chatAbortRef.current = null;
+      if (chatCancelTokenRef.current === chatCancelToken) chatCancelTokenRef.current = null;
       setSending(false);
       setTimeout(() => inputRef.current?.focus(), 100);
     }
