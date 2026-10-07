@@ -390,12 +390,29 @@ RECORD_FIELDS = (
 )
 
 
+def _column_names(columns) -> list:
+    """The result's column names, in order."""
+    return [
+        column.get("name", "") if isinstance(column, dict) else str(column)
+        for column in (columns or [])
+    ]
+
+
+def _column_types(columns) -> list:
+    """The Engine's declared type per column, positional with the names and
+    empty where the coordinator named none. The Studio labels the grid header
+    with it, so a reader sees the result's own types rather than a guess from
+    the first row."""
+    return [
+        str(column.get("type") or "") if isinstance(column, dict) else ""
+        for column in (columns or [])
+    ]
+
+
 def _record_view(record: dict) -> dict:
     view = {key: record[key] for key in RECORD_FIELDS if key in record}
-    view["columns"] = [
-        column.get("name", "") if isinstance(column, dict) else str(column)
-        for column in (record.get("columns") or [])
-    ]
+    view["columns"] = _column_names(record.get("columns"))
+    view["column_types"] = _column_types(record.get("columns"))
     workers = set()
     for stage in record.get("stages") or []:
         for task in (stage.get("tasks") or []) if isinstance(stage, dict) else []:
@@ -515,10 +532,8 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
         )
         duration_ms = int(time.time() * 1000) - start_time
         rows = result.get("data", [])
-        columns = [
-            column.get("name", "") if isinstance(column, dict) else str(column)
-            for column in result.get("columns", [])
-        ]
+        columns = _column_names(result.get("columns"))
+        column_types = _column_types(result.get("columns"))
         # Where the Engine answered from: the workers, the coordinator, or
         # its result cache. The Studio labels the result with it.
         details = result.get("query_details") if isinstance(result.get("query_details"), dict) else {}
@@ -537,6 +552,7 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
         return {
             "success": True,
             "columns": columns,
+            "columnTypes": column_types,
             "rows": rows,
             "rowCount": len(rows),
             "executionTime": duration_ms / 1000,

@@ -52,7 +52,7 @@ export default function DataSourcesPage() {
   const [editingDataSource, setEditingDataSource] = useState<DataSource | null>(null);
   const [copyingDataSource, setCopyingDataSource] = useState<DataSource | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
-  const [buildingContextId, setBuildingContextId] = useState<number | null>(null);
+  const [compilingContextId, setCompilingContextId] = useState<number | null>(null);
   const [contextMessage, setContextMessage] = useState<string | null>(null);
   const [tableCounts, setTableCounts] = useState<Record<number, number | null>>({});
   const [search, setSearch] = useState("");
@@ -203,31 +203,50 @@ export default function DataSourcesPage() {
     }
   };
 
-  const buildContext = async (ds: DataSource, e: React.MouseEvent) => {
+  // Context is compiled per dataset by the DLM, so a source-level compile is the
+  // sum of its datasets: recompile each one that reads from this connection.
+  const compileContext = async (ds: DataSource, e: React.MouseEvent) => {
     e.stopPropagation();
 
-    const database = ds.database_name || ds.name;
-    setBuildingContextId(ds.id);
+    const database = (ds.database_name || ds.name).toLowerCase();
+    setCompilingContextId(ds.id);
     setContextMessage(null);
     setError(null);
     try {
-      const response = await msalFetch(`${API_BASE}/api/v1/context/build`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ database, schema_name: "public" }),
-      });
-      if (!response.ok) throw new Error("Failed to build context");
+      const response = await msalFetch(`${API_BASE}/api/v1/datasets`);
+      if (!response.ok) throw new Error("Failed to load the datasets for this data source");
       const data = await response.json();
-      if (data.supported === false) {
-        setError(data.reason || "Context building is not supported for this data source");
-      } else {
-        setContextMessage(`Context built: ${data.tables_profiled} tables, ${data.elements} elements profiled.`);
-        setTimeout(() => setContextMessage(null), 4000);
+      const all = Array.isArray(data) ? data : (data.datasets || data.recent || []);
+      const owned = all.filter((d: any) => (d.database_name || "").toLowerCase() === database);
+
+      if (owned.length === 0) {
+        setError(`No datasets read from ${ds.name}, so there is nothing to compile. Create a dataset on this source first, then compile its context.`);
+        return;
       }
+
+      let compiled = 0;
+      for (const d of owned) {
+        try {
+          const genRes = await msalFetch(`${API_BASE}/api/v1/datasets/${d.id}/dlm/generate?force=true`, { method: "POST" });
+          if (genRes.ok) compiled += 1;
+        } catch {
+          // Counted as a failure below; the per-dataset page reports the reason.
+        }
+      }
+      const failed = owned.length - compiled;
+
+      if (compiled === 0) {
+        setError(`Context compilation failed for all ${failed} dataset${failed !== 1 ? "s" : ""} on ${ds.name}. Open a dataset to see why.`);
+        return;
+      }
+      setContextMessage(failed === 0
+        ? `Context compiled for ${compiled} dataset${compiled !== 1 ? "s" : ""} on ${ds.name}.`
+        : `Context compiled for ${compiled} of ${owned.length} datasets on ${ds.name}; ${failed} could not be compiled.`);
+      setTimeout(() => setContextMessage(null), 4000);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to build context");
+      setError(err instanceof Error ? err.message : "Failed to compile dataset context");
     } finally {
-      setBuildingContextId(null);
+      setCompilingContextId(null);
     }
   };
 
@@ -356,8 +375,8 @@ export default function DataSourcesPage() {
                           <button type="button" className="action-icon-btn" title="Copy data source" onClick={e => { e.stopPropagation(); setCopyingDataSource(ds); }}>
                             <i className="fas fa-copy" />
                           </button>
-                          <button type="button" className="action-icon-btn" title="Build Context" onClick={e => buildContext(ds, e)} disabled={buildingContextId === ds.id}>
-                            <i className={buildingContextId === ds.id ? "fas fa-spinner fa-spin" : "fas fa-brain"} />
+                          <button type="button" className="action-icon-btn" title="Compile DLM context for every dataset on this source" onClick={e => compileContext(ds, e)} disabled={compilingContextId === ds.id}>
+                            <i className={compilingContextId === ds.id ? "fas fa-spinner fa-spin" : "fas fa-brain"} />
                           </button>
                           <button type="button" className="action-icon-btn" title="Edit data source" onClick={e => { e.stopPropagation(); setEditingDataSource(ds); }}>
                             <i className="fas fa-edit" />

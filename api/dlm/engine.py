@@ -356,7 +356,16 @@ def _generate_dlm_impl(dataset_id: str, force: bool = False,
     if state is not None:
         if not actor:
             raise RuntimeError("Retirement DLM generation requires actor identity")
-        prior_artifact = get_dlm(str(dataset_id), actor, "Admin")
+        from services.dlm_compiled_artifact import DefinitionUnavailable
+        try:
+            prior_artifact = get_dlm(str(dataset_id), actor, "Admin")
+        except DefinitionUnavailable:
+            # Nothing compiled for this dataset yet, or the artifact predates
+            # the dataset's current revision. Either way there is no prior
+            # curation to carry forward and compiling is exactly what is being
+            # asked for — propagating the serving path's fail-closed error here
+            # made the first generation for every dataset impossible.
+            prior_artifact = None
         prior_context = prior_artifact.get("compiled_context") if prior_artifact else None
         if isinstance(prior_context, dict) and isinstance(prior_context.get("curation"), dict):
             state.curation = dict(prior_context["curation"])
