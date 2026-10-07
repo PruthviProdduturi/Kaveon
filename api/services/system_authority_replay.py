@@ -217,7 +217,10 @@ def replay_table(
     # One multi-value INSERT per bounded batch is materially faster than a
     # transaction and HTTP round-trip for every history row. Existing rows
     # remain on the normal CAS/update path below, so replay stays resumable.
-    if rows and len(rows) > 1000 and write is engine_system_store.create_row:
+    # A transiently unavailable target page must not force a serial read for
+    # every history row.  Use the same bounded batch path as large tables; a
+    # rejected batch still reconciles that bounded batch row by row below.
+    if rows and (len(rows) > 1000 or target_page_unavailable) and write is engine_system_store.create_row:
         def create_one(row_id: str, row_columns: dict[str, dict[str, Any]]) -> bool:
             """Create one row, returning false when an uncertain commit is found."""
             for attempt in range(6):
@@ -238,6 +241,10 @@ def replay_table(
             raise RuntimeError(f"replay create outcome unresolved for {table}:{row_id}")
 
         pending: list[tuple[str, dict[str, dict[str, Any]]]] = []
+        # The Engine transaction protocol caps one commit at 100 changes.
+        # Keep replay batches at that limit so history/activity migration does
+        # not fall into the slow per-row recovery path.
+        batch_limit = 100
         for row in rows:
             record_id = _record_id(table, row)
             columns = {str(key): _typed_for_column(value, column_types[str(key)]) for key, value in row.items()}
@@ -249,7 +256,7 @@ def replay_table(
                 # Mismatched rows need the revision/owner-aware update path.
                 continue
             pending.append((record_id, columns))
-            if len(pending) == 1000:
+            if len(pending) == batch_limit:
                 try:
                     engine_system_store.create_rows(pending, actor, "Admin", table=table, owner_principal=actor)
                     written += len(pending)
