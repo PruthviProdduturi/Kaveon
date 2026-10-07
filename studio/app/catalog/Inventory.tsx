@@ -121,7 +121,7 @@ export function Inventory({ catalogName, schemaName, action }: {
       const flat = listed.flat();
       if (!live.current) return;
       setGroups(flat);
-      await Promise.all(flat.map(async group => {
+      const hydrate = async (group: Group) => {
         const tables = await fetchTableDefinitions(group.schemaId).catch(() => [] as EngineTable[]);
         if (!live.current) return;
         setGroups(current => (current ?? []).map(g => g.schemaId === group.schemaId ? { ...g, tables } : g));
@@ -151,7 +151,13 @@ export function Inventory({ catalogName, schemaName, action }: {
         } catch {
           if (live.current) setMeasuring(current => ({ ...current, [group.schemaId]: "failed" }));
         }
-      }));
+      };
+      // The catalog structure is the navigation-critical payload. Statistics
+      // can involve one metadata request per schema (and an automatic footer
+      // read for unmeasured tables), so hydrate it after the table list is
+      // visible. Explicit refreshes still wait for a complete inventory.
+      const pending = Promise.all(flat.map(hydrate));
+      if (refresh) await pending;
     } catch (e) {
       if (live.current) {
         setError(e instanceof CatalogError ? e : new CatalogError(0, "The catalog could not be read."));
@@ -159,10 +165,10 @@ export function Inventory({ catalogName, schemaName, action }: {
     }
   }, [catalogName, schemaName, isAdmin]);
 
-  // Metadata measurements are footer/manifest reads, so populate the table
-  // facts on first open instead of making every user discover Re-measure.
-  // The explicit button remains available for source changes.
-  useEffect(() => { void load(true); }, [load]);
+  // Render the catalog structure immediately. Footer statistics hydrate in
+  // the background; the explicit refresh button remains a synchronous
+  // inventory operation.
+  useEffect(() => { void load(false); }, [load]);
 
   const refresh = async () => {
     setRefreshing(true);
