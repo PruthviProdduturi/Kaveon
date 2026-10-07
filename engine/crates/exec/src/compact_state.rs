@@ -1,7 +1,7 @@
 //! Versioned accumulator payload inside the typed grouped Arrow envelope.
 use super::*;
 
-const MAGIC: &[u8; 4] = b"KAS\x01";
+pub(crate) const MAGIC: &[u8; 4] = b"KAS\x01";
 
 /// The state tags, one per accumulator kind the payload carries.
 pub(crate) const TAG_SUM: u8 = 1;

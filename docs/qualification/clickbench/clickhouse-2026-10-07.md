@@ -17,7 +17,8 @@ threads for the constrained comparison.
 
 | Engine | Threads | q33 | q35 | Result |
 |---|---:|---:|---:|---|
-| Kaveon local Docker | two workers, four local lanes each | 43.9 s | 84.0 s | finished, exact rows |
+| Kaveon local Docker (before primitive encoder) | two workers, four local lanes each | 43.9 s | 84.0 s | finished, exact rows |
+| Kaveon local Docker (primitive encoder) | two workers, four local lanes each | 42.2 s | 84.8 s | finished, exact rows |
 | ClickHouse `clickhouse-local` | 2 | 6.89 s | 16.84 s | finished |
 | ClickHouse `clickhouse-local` | default | 5.06 s | 10.23 s | finished |
 
@@ -31,12 +32,15 @@ The ClickHouse command used `FORMAT Null` so result rendering was excluded.
 
 ## Change under test
 
-The columnar aggregate now hashes packed query-local key words with an inline
+The columnar aggregate hashes packed query-local key words with an inline
 non-cryptographic avalanche hash. Equality is still checked on every probe, so
 the result remains exact; the keyed hash remains in use for the text arena.
-The full `kaveon-exec` suite passes (199 passed, 4 ignored). This change did
-not materially change q33 on this machine, which indicates that scan, Arrow
-decode, and/or partial/final exchange work remains the dominant cost.
+Primitive COUNT, SUM, AVG, and numeric MIN/MAX states are now emitted directly
+in the compact wire format, without rebuilding an `AggregateState` per group.
+The full `kaveon-exec` suite passes (199 passed, 4 ignored). The primitive
+encoder reduced q33 by about 4% in this run, while q35 remained unchanged;
+scan, URL key encoding, Arrow decode, and/or partial/final exchange work
+remain the dominant cost.
 
 ## Next performance gate
 
