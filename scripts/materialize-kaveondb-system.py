@@ -46,6 +46,52 @@ def write_table(root: Path, name: str, records: list[dict]) -> int:
     pq.write_table(pa.table(rows(records)), target, compression="zstd")
     return len(records)
 
+def as_list(payload: object, *keys: str) -> list[dict]:
+    """The catalog endpoints answer either a bare list or an object wrapping one."""
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        for key in keys:
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def catalog_hierarchy(base: str, token: str) -> dict[str, list[dict]]:
+    """Walk catalogs -> schemas -> tables, so each level projects its own rows.
+
+    Every row keeps the identity of its parent, because a schema name is only
+    unique within its catalog and a table name only within its schema; without
+    that, `system.tables` could not tell two same-named tables apart.
+    """
+    catalogs = as_list(get_json(base, "/v1/catalog/definitions", token), "catalogs", "records")
+    schemas: list[dict] = []
+    tables: list[dict] = []
+    for catalog in catalogs:
+        catalog_id = str(catalog.get("id", ""))
+        if not catalog_id:
+            continue
+        for schema in as_list(
+            get_json(base, f"/v1/catalog/definitions/{urllib.parse.quote(catalog_id, safe='')}/schemas", token),
+            "schemas", "records",
+        ):
+            schema_id = str(schema.get("id", ""))
+            schemas.append({**schema, "catalog_id": catalog_id,
+                            "catalog_name": catalog.get("name")})
+            if not schema_id:
+                continue
+            for table in as_list(
+                get_json(base, f"/v1/catalog/schemas/{urllib.parse.quote(schema_id, safe='')}/tables", token),
+                "tables", "records",
+            ):
+                tables.append({**table, "schema_id": schema_id,
+                               "schema_name": schema.get("name"),
+                               "catalog_id": catalog_id,
+                               "catalog_name": catalog.get("name")})
+    return {"catalogs": catalogs, "schemas": schemas, "tables": tables}
+
+
 def product_records(base: str, kind: str, token: str) -> list[dict]:
     records: list[dict] = []
     cursor: str | None = None
@@ -68,10 +114,17 @@ def main() -> None:
         print(f"{table}: {count}")
     # Catalog/security metadata is intentionally represented as JSON documents;
     # the source authority remains the Engine catalog and access ledger.
+    # Catalogs, schemas and tables are three different levels of one hierarchy
+    # and each projects its own rows; they used to share a single endpoint, so
+    # all three files held the catalog list.
+    hierarchy = catalog_hierarchy(args.engine, args.token)
+    for table, records in hierarchy.items():
+        wrapped = [{"id": str(row.get("id", index)), "revision": int(row.get("revision", 1)),
+                    "generation": 0, "snapshot_id": "", "document": row}
+                   for index, row in enumerate(records)]
+        print(f"{table}: {write_table(args.root, table, wrapped)}")
+
     for table, path in {
-        "catalogs": "/v1/catalog/definitions",
-        "schemas": "/v1/catalog/definitions",
-        "tables": "/v1/catalog/definitions",
         "permissions": "/v1/admin/catalog-access",
         "audit_log": "/v1/audit?limit=1000",
     }.items():
