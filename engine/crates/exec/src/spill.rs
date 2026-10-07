@@ -257,9 +257,11 @@ impl SpillRunWriter {
         self.inner.bytes_written.fetch_add(bytes, Ordering::AcqRel);
         self.inner.runs_written.fetch_add(1, Ordering::AcqRel);
         Ok(SpillRun {
-            inner: Arc::clone(&self.inner),
-            path: std::mem::take(&mut self.path),
-            bytes,
+            inner: Arc::new(SpillRunInner {
+                inner: Arc::clone(&self.inner),
+                path: std::mem::take(&mut self.path),
+                bytes,
+            }),
         })
     }
 }
@@ -274,42 +276,50 @@ impl Drop for SpillRunWriter {
     }
 }
 
-/// A durable Arrow IPC run whose file and byte reservation are released on drop.
+/// Shared ownership of a durable Arrow IPC run. The file and byte
+/// reservation are released only after the last handle is dropped.
 #[derive(Debug)]
-pub struct SpillRun {
+struct SpillRunInner {
     inner: Arc<SpillInner>,
     path: PathBuf,
     bytes: u64,
 }
 
+/// A durable Arrow IPC run.
+#[derive(Debug, Clone)]
+pub struct SpillRun {
+    inner: Arc<SpillRunInner>,
+}
+
 impl SpillRun {
     #[must_use]
     pub fn path(&self) -> &Path {
-        &self.path
+        &self.inner.path
     }
 
     #[must_use]
     pub fn bytes(&self) -> u64 {
-        self.bytes
+        self.inner.bytes
     }
 
     pub fn read(&self) -> Result<Vec<RecordBatch>> {
         let started = Instant::now();
-        let file = File::open(&self.path)?;
+        let file = File::open(&self.inner.path)?;
         let batches = StreamReader::try_new(file, None)?
             .map(|batch| batch.map_err(KaveonError::from))
             .collect();
         self.inner
+            .inner
             .read_us
             .fetch_add(elapsed_us(started), Ordering::AcqRel);
         batches
     }
 
     pub fn reader(&self) -> Result<SpillRunReader> {
-        let file = File::open(&self.path)?;
+        let file = File::open(&self.inner.path)?;
         Ok(SpillRunReader {
             reader: StreamReader::try_new(file, None)?,
-            inner: Arc::clone(&self.inner),
+            inner: Arc::clone(&self.inner.inner),
         })
     }
 }
@@ -339,7 +349,7 @@ fn elapsed_us(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
 }
 
-impl Drop for SpillRun {
+impl Drop for SpillRunInner {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
         self.inner.release(self.bytes);

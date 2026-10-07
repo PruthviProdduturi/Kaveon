@@ -1,0 +1,471 @@
+{
+  "engine": "local-docker",
+  "memory": "3 GiB query / 4 GiB admission",
+  "statements": [
+    {
+      "id": "q01",
+      "status": 200,
+      "elapsed_s": 0.024,
+      "state": "FINISHED",
+      "rows": 1,
+      "error": null
+    },
+    {
+      "id": "q02",
+      "status": 200,
+      "elapsed_s": 0.2,
+      "state": "FINISHED",
+      "rows": 1,
+      "error": null
+    },
+    {
+      "id": "q03",
+      "status": 200,
+      "elapsed_s": 0.405,
+      "state": "FINISHED",
+      "rows": 1,
+      "error": null
+    },
+    {
+      "id": "q04",
+      "status": 200,
+      "elapsed_s": 0.708,
+      "state": "FINISHED",
+      "rows": 1,
+      "error": null
+    },
+    {
+      "id": "q05",
+      "status": 200,
+      "elapsed_s": 2.993,
+      "state": "FINISHED",
+      "rows": 1,
+      "error": null
+    },
+    {
+      "id": "q06",
+      "status": 200,
+      "elapsed_s": 5.844,
+      "state": "FINISHED",
+      "rows": 1,
+      "error": null
+    },
+    {
+      "id": "q07",
+      "status": 200,
+      "elapsed_s": 0.172,
+      "state": "FINISHED",
+      "rows": 1,
+      "error": null
+    },
+    {
+      "id": "q08",
+      "status": 200,
+      "elapsed_s": 0.196,
+      "state": "FINISHED",
+      "rows": 18,
+      "error": null
+    },
+    {
+      "id": "q09",
+      "status": 200,
+      "elapsed_s": 5.909,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q10",
+      "status": 200,
+      "elapsed_s": 7.622,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q11",
+      "status": 200,
+      "elapsed_s": 1.474,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q12",
+      "status": 200,
+      "elapsed_s": 1.648,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q13",
+      "status": 200,
+      "elapsed_s": 6.348,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q14",
+      "status": 200,
+      "elapsed_s": 11.197,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q15",
+      "status": 200,
+      "elapsed_s": 7.371,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q16",
+      "status": 200,
+      "elapsed_s": 5.076,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q17",
+      "status": 200,
+      "elapsed_s": 13.094,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q18",
+      "status": 200,
+      "elapsed_s": 13.204,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q19",
+      "status": 200,
+      "elapsed_s": 27.04,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q20",
+      "status": 200,
+      "elapsed_s": 0.785,
+      "state": "FINISHED",
+      "rows": 4,
+      "error": null
+    },
+    {
+      "id": "q21",
+      "status": 200,
+      "elapsed_s": 12.681,
+      "state": "FINISHED",
+      "rows": 1,
+      "error": null
+    },
+    {
+      "id": "q22",
+      "status": 200,
+      "elapsed_s": 11.34,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q23",
+      "status": 200,
+      "elapsed_s": 20.532,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q24",
+      "status": 200,
+      "elapsed_s": 37.317,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q25",
+      "status": 200,
+      "elapsed_s": 4.146,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q26",
+      "status": 200,
+      "elapsed_s": 3.305,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q27",
+      "status": 200,
+      "elapsed_s": 4.013,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q28",
+      "status": 200,
+      "elapsed_s": 16.555,
+      "state": "FINISHED",
+      "rows": 25,
+      "error": null
+    },
+    {
+      "id": "q29",
+      "status": 200,
+      "elapsed_s": 36.028,
+      "state": "FINISHED",
+      "rows": 25,
+      "error": null
+    },
+    {
+      "id": "q30",
+      "status": 200,
+      "elapsed_s": 12.235,
+      "state": "FINISHED",
+      "rows": 1,
+      "error": null
+    },
+    {
+      "id": "q31",
+      "status": 200,
+      "elapsed_s": 6.877,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q32",
+      "status": 200,
+      "elapsed_s": 10.536,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q33",
+      "status": 200,
+      "elapsed_s": 41.016,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q34",
+      "status": 200,
+      "elapsed_s": 39.639,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q35",
+      "status": 200,
+      "elapsed_s": 38.872,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q36",
+      "status": 200,
+      "elapsed_s": 8.522,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q37",
+      "status": 200,
+      "elapsed_s": 0.629,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q38",
+      "status": 200,
+      "elapsed_s": 0.305,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q39",
+      "status": 200,
+      "elapsed_s": 0.211,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q40",
+      "status": 200,
+      "elapsed_s": 1.016,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q41",
+      "status": 200,
+      "elapsed_s": 0.166,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q42",
+      "status": 200,
+      "elapsed_s": 0.148,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    },
+    {
+      "id": "q43",
+      "status": 200,
+      "elapsed_s": 0.103,
+      "state": "FINISHED",
+      "rows": 10,
+      "error": null
+    }
+  ],
+  "date": "2026-10-06",
+  "environment": "local Docker Compose",
+  "dataset": "data/adls-mirror/opensource/benchmarks/clickbench/hits.parquet",
+  "rows": 99997497,
+  "query_memory_limit_bytes": 3221225472,
+  "admission_limit_bytes": 4294967296,
+  "spill_partitions": 64,
+  "spill_root": "/tmp/kaveon-spill",
+  "workers": 2,
+  "cluster_after": {
+    "environment": "docker",
+    "required_catalog_snapshot_id": "sha256:67c8e41a0a5010739e811095d8732688cde00953f223b0e79dd1e1b189a2c66e",
+    "coordinator": {
+      "node_id": "coordinator-1",
+      "role": "coordinator",
+      "address": "http://engine-coordinator:8080",
+      "environment": "docker",
+      "version": "0.1.0",
+      "uptime_secs": 1026,
+      "last_heartbeat": 1791348811,
+      "memory_rss_bytes": 342216704,
+      "memory_allocated_bytes": 10321468,
+      "memory_limit_bytes": null,
+      "catalog_snapshot_id": "sha256:67c8e41a0a5010739e811095d8732688cde00953f223b0e79dd1e1b189a2c66e",
+      "result_cache": {
+        "enabled": true,
+        "budget_bytes": 268435456,
+        "ttl_seconds": 600,
+        "entries": 0,
+        "bytes": 0,
+        "hits": 0,
+        "misses": 0,
+        "evictions": 0,
+        "expirations": 0,
+        "refused": 0
+      },
+      "admission": {
+        "limit_bytes": 4294967296,
+        "admitted_bytes": 0,
+        "peak_admitted_bytes": 3221225472,
+        "queue_limit": 64,
+        "queue_depth": 0,
+        "admitted": 90,
+        "queued": 0,
+        "rejected": 0,
+        "withdrawn": 0
+      },
+      "resource_groups": [
+        {
+          "name": "default",
+          "limit_bytes": 4294967296,
+          "max_concurrent": 4,
+          "max_queued": 64,
+          "weight": 1,
+          "running": 0,
+          "queued": 0,
+          "admitted_bytes": 0,
+          "admitted": 90,
+          "queued_total": 0,
+          "rejected": 0,
+          "withdrawn": 0,
+          "wait_ms_p50": 0,
+          "wait_ms_p95": 0
+        }
+      ]
+    },
+    "workers": [
+      {
+        "node_id": "worker-1",
+        "role": "worker",
+        "address": "http://engine-worker-1:8080",
+        "environment": "docker",
+        "version": "0.1.0",
+        "uptime_secs": 1012,
+        "last_heartbeat": 1791348803,
+        "memory_rss_bytes": 1194950656,
+        "memory_allocated_bytes": 3565734,
+        "memory_limit_bytes": null,
+        "catalog_snapshot_id": "sha256:67c8e41a0a5010739e811095d8732688cde00953f223b0e79dd1e1b189a2c66e",
+        "admission": {
+          "limit_bytes": 4294967296,
+          "admitted_bytes": 0,
+          "peak_admitted_bytes": 3221225472,
+          "queue_limit": 64,
+          "queue_depth": 0,
+          "admitted": 242,
+          "queued": 0,
+          "rejected": 0,
+          "withdrawn": 0
+        }
+      },
+      {
+        "node_id": "worker-2",
+        "role": "worker",
+        "address": "http://engine-worker-2:8080",
+        "environment": "docker",
+        "version": "0.1.0",
+        "uptime_secs": 1013,
+        "last_heartbeat": 1791348803,
+        "memory_rss_bytes": 820277248,
+        "memory_allocated_bytes": 3844163,
+        "memory_limit_bytes": null,
+        "catalog_snapshot_id": "sha256:67c8e41a0a5010739e811095d8732688cde00953f223b0e79dd1e1b189a2c66e",
+        "admission": {
+          "limit_bytes": 4294967296,
+          "admitted_bytes": 0,
+          "peak_admitted_bytes": 3221225472,
+          "queue_limit": 64,
+          "queue_depth": 0,
+          "admitted": 160,
+          "queued": 0,
+          "rejected": 0,
+          "withdrawn": 0
+        }
+      }
+    ],
+    "active_workers": 2,
+    "compatible_workers": 2,
+    "total_nodes": 3
+  },
+  "note": "Sequential local regression pass after recursive final-merge repartitioning. Kaveon-specific arithmetic rewrites from kaveon-suite.json were used for q19 and q43. This is not an AKS-vs-Trino qualification run."
+}
