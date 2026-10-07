@@ -14,6 +14,7 @@ import { useDemoQuota } from "../../hooks/useDemoQuota";
 import { RateLimitedError, rateLimitNotice, refusalMessage } from "../../utils/demoQuota";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useRouter, useSearchParams } from "next/navigation";
+import { KaveonArc, QueryLanePanel, SUBMITTED } from "../../components/lab/QueryLanes";
 // using same-origin relative API calls
 const PRIMARY_DB_NAME = process.env.NEXT_PUBLIC_PRIMARY_DATABASE_NAME || "";
 
@@ -71,6 +72,13 @@ interface QueryResult {
  */
 interface StreamProgress {
   state: string;
+  /**
+   * The record's placement, which names the lane that answered: `pending`
+   * while the statement runs, then `cache`, `context`, `distributed` or
+   * `coordinator`. The running state reads it, so the operator is told how
+   * the answer was reached rather than only that something is happening.
+   */
+  mode: string | null;
   /** The record's own elapsed time, known once the statement has finished. */
   elapsedMs: number | null;
   tasksDone: number;
@@ -1276,7 +1284,7 @@ return;
     let gone = false;
     let totalRows: number | null = null;
     const progress: StreamProgress = {
-      state: "RUNNING", elapsedMs: null, tasksDone: 0, tasksTotal: 0, rowsScanned: 0, workers: 0, rowsWritten: 0, rowsReceived: 0,
+      state: "RUNNING", mode: null, elapsedMs: null, tasksDone: 0, tasksTotal: 0, rowsScanned: 0, workers: 0, rowsWritten: 0, rowsReceived: 0,
     };
     const publishProgress = () => setStreamProgress({ ...progress });
 
@@ -1313,6 +1321,7 @@ return;
         if (next.next_uri) pagesReady = true;
         const stage = readStageProgress(next);
         progress.state = next.state;
+        progress.mode = next.execution?.mode ?? null;
         progress.elapsedMs = next.elapsed_ms > 0 ? next.elapsed_ms : null;
         progress.tasksDone = stage.tasksDone;
         progress.tasksTotal = stage.tasksTotal;
@@ -2090,6 +2099,12 @@ return;
   };
 
   const rowCount = results?.rowCount ?? results?.rows?.length ?? 0;
+  // The running state owns the results pane until the first rows land; from
+  // there the grid is the thing worth looking at and the one-line ticker
+  // above it carries the rest.
+  const hasLandedRows = (results?.rows?.length ?? 0) > 0;
+  const showLanePanel = isExecuting && !hasLandedRows && !resultError;
+  const showStreamLine = isExecuting && streamProgress != null && hasLandedRows;
 
   const formatExecutionTime = (seconds: number | undefined | null): string => {
     if (seconds == null || Number.isNaN(seconds)) {
@@ -2802,10 +2817,10 @@ return;
                   )}
                   <span id="resultStats" className="result-stats">
                     {isExecuting && streamProgress?.state === "FINISHED" && (
-                      <><i className="fas fa-spinner fa-spin" style={{ marginRight: "0.4rem" }} />{`Retrieving rows • ${streamProgress.rowsReceived.toLocaleString()} received`}</>
+                      <span className="result-stats__running"><KaveonArc />{`Retrieving rows • ${streamProgress.rowsReceived.toLocaleString()} received`}</span>
                     )}
                     {isExecuting && streamProgress?.state !== "FINISHED" && (
-                      <><i className="fas fa-spinner fa-spin" style={{ marginRight: "0.4rem" }} />{`Running • ${formatExecutionTime((liveElapsedMs ?? 0) / 1000)}`}</>
+                      <span className="result-stats__running"><KaveonArc />{`Running • ${formatExecutionTime((liveElapsedMs ?? 0) / 1000)}`}</span>
                     )}
                     {!isExecuting && results?.cancelled && `Cancelled • ${rowCount.toLocaleString()} rows received • ${formatExecutionTime(executionTime)}`}
                     {!isExecuting && !results?.cancelled && rowCount > 0 && `${rowCount.toLocaleString()} rows • ${executionLabel}${formatExecutionTime(executionTime)}`}
@@ -2879,9 +2894,34 @@ return;
                 </div>
               </div>
 
-              <div id="resultsContainer" className={`results-container${isExecuting && streamProgress ? " results-container--streaming" : ""}`}>
+              <div id="resultsContainer" className={`results-container${showStreamLine ? " results-container--streaming" : ""}`}>
+                {/* ── A statement in flight: which lane is answering it ──
+                    The ladder reports where the statement stands in the order
+                    KaveonDB resolves one — admission, the result cache, the
+                    table statistics, then a read — so the wait says how the
+                    answer was reached and how little was scanned. */}
+                {showLanePanel && (
+                  <QueryLanePanel
+                    signals={streamProgress
+                      ? {
+                          state: streamProgress.state,
+                          mode: streamProgress.mode,
+                          tasksDone: streamProgress.tasksDone,
+                          tasksTotal: streamProgress.tasksTotal,
+                          rowsScanned: streamProgress.rowsScanned,
+                          workers: streamProgress.workers,
+                        }
+                      : usingEngine
+                        ? { state: SUBMITTED, mode: null, tasksDone: 0, tasksTotal: 0, rowsScanned: 0, workers: 0 }
+                        : null}
+                    sourceLabel={currentDataSource?.name ?? currentDatabase ?? null}
+                    elapsedLabel={formatExecutionTime((streamProgress?.elapsedMs ?? liveElapsedMs ?? 0) / 1000)}
+                    onCancel={cancelQuery}
+                  />
+                )}
+
                 {/* ── A KaveonDB statement streaming its rows ── */}
-                {isExecuting && streamProgress && (
+                {showStreamLine && streamProgress && (
                   <div className="lab-stream-line" role="status" aria-live="polite">
                     <span className="lab-stream-line__pulse" aria-hidden="true" />
                     <span className="lab-stream-line__state">
@@ -2954,8 +2994,10 @@ return;
                   </div>
                 )}
 
-                {/* ── Single-statement results ── */}
-                {!multiResults && !results && !resultError && (
+                {/* ── Single-statement results ──
+                    The idle panel stands down while a statement runs: the
+                    lane ladder above has the pane then. */}
+                {!multiResults && !results && !resultError && !isExecuting && (
                   <div className="empty-state">
                     <div className="analysis-ready-mark" aria-hidden="true">
                       <span className="analysis-ready-orbit analysis-ready-orbit-one" />
