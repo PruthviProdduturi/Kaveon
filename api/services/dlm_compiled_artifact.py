@@ -119,16 +119,20 @@ def publish(payload: dict) -> dict | None:
     try:
         client.create_if_absent(path, content)
     except Exception:
-        # The write is create-only, so a failure here is either a genuine
-        # fault or this exact publication already landed and is being retried.
-        existing = client.read(path, MAX_BYTES + 1)
-        if existing is None:
+        # The write is create-only, so a failure here is either a genuine fault
+        # or this exact publication already landed and is being retried.
+        if client.read(path, MAX_BYTES + 1) is None:
             raise
-        if existing != content:
-            raise VersionOccupied(
-                f"Compiled DLM artifact v{version} already holds different bytes") from None
-    if client.read(path, MAX_BYTES + 1) != content:
-        raise RuntimeError("Compiled DLM artifact failed exact publication reconciliation")
+    # The read-back is what settles it, because the two clients report an
+    # occupied key differently: ADLS refuses the conditional write, while the
+    # local client simply does not write. Comparing what is stored covers both,
+    # and is the integrity check this publication needs regardless.
+    stored = client.read(path, MAX_BYTES + 1)
+    if stored is None:
+        raise RuntimeError("Compiled DLM artifact vanished immediately after publication")
+    if stored != content:
+        raise VersionOccupied(
+            f"Compiled DLM artifact v{version} already holds different bytes")
     return {"path": path, "sha256": digest, "bytes": len(content), "version": version}
 
 
