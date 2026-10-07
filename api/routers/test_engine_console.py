@@ -23,7 +23,9 @@ class EngineConsoleTests(unittest.TestCase):
         listing = [{"id": "q1", "state": "FINISHED"}]
         with patch.object(engine_bridge, "_request", return_value=listing) as request:
             self.assertEqual(engine_console.console_queries(ctx), listing)
-        self.assertEqual(request.call_args.args[1], "/v1/query")
+        # The console lists queries in summary form; the full per-query record
+        # is fetched only when one is opened.
+        self.assertEqual(request.call_args.args[1], "/v1/query?summary=true")
         self.assertEqual(request.call_args.kwargs["role"], "admin")
 
     def test_query_lookup_encodes_id_and_maps_missing_to_404(self):
