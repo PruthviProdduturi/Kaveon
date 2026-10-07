@@ -19,6 +19,7 @@ threads for the constrained comparison.
 |---|---:|---:|---:|---|
 | Kaveon local Docker (before primitive encoder) | two workers, four local lanes each | 43.9 s | 84.0 s | finished, exact rows |
 | Kaveon local Docker (primitive encoder) | two workers, four local lanes each | 42.2 s | 84.8 s | finished, exact rows |
+| Kaveon local Docker (compact typed key frame, warmed) | two workers, four local lanes each | 38.7 s | 47.5 s | finished, exact rows |
 | ClickHouse `clickhouse-local` | 2 | 6.89 s | 16.84 s | finished |
 | ClickHouse `clickhouse-local` | default | 5.06 s | 10.23 s | finished |
 
@@ -37,10 +38,13 @@ non-cryptographic avalanche hash. Equality is still checked on every probe, so
 the result remains exact; the keyed hash remains in use for the text arena.
 Primitive COUNT, SUM, AVG, and numeric MIN/MAX states are now emitted directly
 in the compact wire format, without rebuilding an `AggregateState` per group.
-The full `kaveon-exec` suite passes (199 passed, 4 ignored). The primitive
-encoder reduced q33 by about 4% in this run, while q35 remained unchanged;
-scan, URL key encoding, Arrow decode, and/or partial/final exchange work
-remain the dominant cost.
+Grouped keys now use a versioned compact typed frame: schema-known integer
+widths omit repeated type and length fields, while text keeps only the length
+information needed for non-final keys. The legacy frame remains readable.
+The full `kaveon-exec` suite passes (199 passed, 4 ignored). The compact frame
+reduced q33 by about 9% from the prior measured run and q35 by about 44% in the
+warmed run; the first post-rebuild q33 run was 45.2 s, showing a cold-start
+effect. URL payload copying and Arrow decode remain the dominant q35 costs.
 
 ## Next performance gate
 

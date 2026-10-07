@@ -29,6 +29,12 @@ use crate::aggregate::{
 /// The most key columns a row packs into its hash; wider GROUP BYs take the
 /// row path.
 pub const MAX_KEYS: usize = 8;
+/// Versioned compact key frame. Schema metadata supplies logical key types.
+pub(crate) const COMPACT_KEY_MAGIC: &[u8; 3] = b"KP2";
+pub(crate) const COMPACT_KEY_INT64: u8 = 1;
+pub(crate) const COMPACT_KEY_INT32: u8 = 2;
+pub(crate) const COMPACT_KEY_BOOL: u8 = 3;
+pub(crate) const COMPACT_KEY_TEXT: u8 = 4;
 
 /// One group key column at rest.
 enum KeyColumn {
@@ -1093,6 +1099,64 @@ fn parse_key_words(
     words: &mut [u64],
 ) -> Result<u64> {
     let key_count = keys.len();
+    if key.starts_with(COMPACT_KEY_MAGIC) {
+        let mut input = KeyInput(&key[COMPACT_KEY_MAGIC.len()..]);
+        if input.byte()? as usize != key_count {
+            return Err(exec_err("compact partial group key count mismatch"));
+        }
+        let mut null_bits = 0u64;
+        let mut new_bytes = 0u64;
+        for (position, column) in keys.iter_mut().enumerate() {
+            let tag = input.byte()?;
+            let present = input.byte()?;
+            if present == 0 {
+                null_bits |= 1 << position;
+                words[position] = u64::MAX;
+                continue;
+            }
+            if present != 1 {
+                return Err(exec_err("invalid compact partial group key null flag"));
+            }
+            words[position] = match column {
+                KeyColumn::Integer { data_type, .. } => match data_type {
+                    DataType::Int64 if tag == COMPACT_KEY_INT64 => {
+                        i64::from_le_bytes(input.take(8)?.try_into().unwrap()) as u64
+                    }
+                    DataType::Int32 | DataType::Date32 if tag == COMPACT_KEY_INT32 => {
+                        i32::from_le_bytes(input.take(4)?.try_into().unwrap()) as i64 as u64
+                    }
+                    DataType::Boolean if tag == COMPACT_KEY_BOOL => match input.byte()? {
+                        0 => 0,
+                        1 => 1,
+                        _ => return Err(exec_err("invalid compact boolean group key")),
+                    },
+                    _ => return Err(exec_err("compact group key type mismatch")),
+                },
+                KeyColumn::Text { arena, .. } if tag == COMPACT_KEY_TEXT => {
+                    let payload = if position + 1 == key_count {
+                        input.take(input.0.len())?
+                    } else {
+                        let length = input.u32()? as usize;
+                        input.take(length)?
+                    };
+                    let text = std::str::from_utf8(payload)
+                        .map_err(|_| exec_err("partial group key is not valid UTF-8"))?;
+                    let before = arena.bytes();
+                    let id = arena.intern(hasher, text)?.0 as u64;
+                    new_bytes += arena.bytes().saturating_sub(before);
+                    id
+                }
+                KeyColumn::Text { .. } => {
+                    return Err(exec_err("compact group key type mismatch"));
+                }
+            };
+        }
+        if !input.0.is_empty() {
+            return Err(exec_err("trailing compact partial group key bytes"));
+        }
+        words[key_count] = null_bits;
+        return Ok(new_bytes);
+    }
     let mut input = KeyInput(key);
     if input.u64()? != key_count as u64 {
         return Err(exec_err(
@@ -1175,6 +1239,16 @@ impl<'a> KeyInput<'a> {
         Ok(u64::from_le_bytes(
             self.take(8)?.try_into().expect("eight bytes"),
         ))
+    }
+    #[inline]
+    fn u32(&mut self) -> Result<u32> {
+        Ok(u32::from_le_bytes(
+            self.take(4)?.try_into().expect("four bytes"),
+        ))
+    }
+    #[inline]
+    fn byte(&mut self) -> Result<u8> {
+        self.take(1).map(|bytes| bytes[0])
     }
 }
 
@@ -1634,34 +1708,36 @@ impl ColumnarGroups {
         out.extend(self.accumulators.iter().map(|acc| acc.state(slot)));
     }
 
-    /// The group key of `slot` in the exchange's key encoding: a count,
-    /// then each key as a length-prefixed tagged value — the same bytes the
-    /// row encoder writes, produced from the columns.
+    /// The group key of `slot`, written in a compact typed exchange frame.
+    /// Schema-known integer widths need no per-row type or length words; only
+    /// non-final text keys carry a length because the row boundary is known.
     fn encode_keys_into(&self, slot: usize, out: &mut Vec<u8>) {
-        out.extend_from_slice(&(self.keys.len() as u64).to_le_bytes());
-        for key in &self.keys {
-            let length_at = out.len();
-            out.extend_from_slice(&0u64.to_le_bytes());
+        out.extend_from_slice(COMPACT_KEY_MAGIC);
+        out.push(self.keys.len() as u8);
+        for (position, key) in self.keys.iter().enumerate() {
             match key {
                 KeyColumn::Integer {
                     values,
                     nulls,
                     data_type,
                 } => {
+                    out.push(match data_type {
+                        DataType::Int32 | DataType::Date32 => COMPACT_KEY_INT32,
+                        DataType::Boolean => COMPACT_KEY_BOOL,
+                        _ => COMPACT_KEY_INT64,
+                    });
                     if nulls[slot] {
-                        out.push(VALUE_NULL);
+                        out.push(0);
                     } else {
+                        out.push(1);
                         match data_type {
                             DataType::Int32 | DataType::Date32 => {
-                                out.push(VALUE_INT32);
                                 out.extend_from_slice(&(values[slot] as i32).to_le_bytes());
                             }
                             DataType::Boolean => {
-                                out.push(VALUE_BOOL);
                                 out.push(u8::from(values[slot] != 0));
                             }
                             _ => {
-                                out.push(VALUE_INT64);
                                 out.extend_from_slice(&values[slot].to_le_bytes());
                             }
                         }
@@ -1673,16 +1749,21 @@ impl ColumnarGroups {
                     arena,
                     ..
                 } => {
+                    out.push(COMPACT_KEY_TEXT);
                     if nulls[slot] {
-                        out.push(VALUE_NULL);
+                        out.push(0);
                     } else {
-                        out.push(VALUE_UTF8);
-                        out.extend_from_slice(arena.get(words[slot]).as_bytes());
+                        let bytes = arena.get(words[slot]).as_bytes();
+                        out.push(1);
+                        if position + 1 == self.keys.len() {
+                            out.extend_from_slice(bytes);
+                        } else {
+                            out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+                            out.extend_from_slice(bytes);
+                        }
                     }
                 }
             }
-            let length = (out.len() - length_at - 8) as u64;
-            out[length_at..length_at + 8].copy_from_slice(&length.to_le_bytes());
         }
     }
 
