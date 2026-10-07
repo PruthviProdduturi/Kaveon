@@ -1015,7 +1015,7 @@ const INDEX_BUCKET_BYTES_PER_SLOT: u64 = 16;
 
 /// The hash of the group at `slot`, from the columns: the same words the
 /// batch hashed when the group was created.
-fn slot_hash(keys: &[KeyColumn], hasher: &RandomState, slot: usize) -> u64 {
+fn slot_hash(keys: &[KeyColumn], slot: usize) -> u64 {
     let key_count = keys.len();
     let mut packed = [0u64; MAX_KEYS + 1];
     let mut null_bits = 0u64;
@@ -1030,7 +1030,37 @@ fn slot_hash(keys: &[KeyColumn], hasher: &RandomState, slot: usize) -> u64 {
         }
     }
     packed[key_count] = null_bits;
-    hasher.hash_one(&packed[..=key_count])
+    // Group keys are query-local and equality is checked after probing.  A
+    // keyed hash is useful for untrusted map keys, but it is needlessly
+    // expensive in this hot path (the same words are hashed for every input
+    // row and again while growing the table).  Keep the keyed hasher for the
+    // string arena; use the compact, high-diffusion hash for the packed key.
+    packed_hash(&packed[..=key_count])
+}
+
+/// Fast hash for query-local packed group keys.
+///
+/// This is a SplitMix-style finalizer over all key words.  It is deliberately
+/// independent of process-randomized hash state: a collision only adds a
+/// probe because `key_matches` always verifies the complete key.  Keeping the
+/// function inline removes the `Hasher` trait dispatch and slice iteration
+/// overhead from high-cardinality GROUP BYs while retaining good avalanche
+/// behaviour for integer and interned-text keys.
+#[inline(always)]
+fn packed_hash(words: &[u64]) -> u64 {
+    let mut hash = 0x9e37_79b9_7f4a_7c15u64 ^ (words.len() as u64);
+    for &word in words {
+        let mut value = word.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        value ^= value >> 31;
+        hash ^= value;
+        hash = hash
+            .rotate_left(27)
+            .wrapping_mul(5)
+            .wrapping_add(0x52dce729);
+    }
+    hash ^ (hash >> 29)
 }
 
 /// Whether the group at `slot` has the packed key `words` (the key words,
@@ -1380,21 +1410,15 @@ impl ColumnarGroups {
         let stride = self.stride();
         let key_count = self.keys.len();
         self.hashes.clear();
-        self.hashes.extend(
-            self.packed
-                .chunks_exact(stride)
-                .take(rows)
-                .map(|row| self.hasher.hash_one(row)),
-        );
+        self.hashes
+            .extend(self.packed.chunks_exact(stride).take(rows).map(packed_hash));
         self.slots.clear();
         self.slots.reserve(rows);
         let mut created = 0usize;
         for row in 0..rows {
             if self.index.is_full() {
                 let keys = &self.keys;
-                let hasher = &self.hasher;
-                self.index
-                    .grow(|slot| slot_hash(keys, hasher, slot as usize));
+                self.index.grow(|slot| slot_hash(keys, slot as usize));
             }
             if let Some(&ahead) = self.hashes.get(row + PREFETCH_DISTANCE) {
                 self.index.prefetch(ahead);
