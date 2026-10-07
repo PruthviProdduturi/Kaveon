@@ -77,9 +77,16 @@ services:
       # transaction API and native ANALYZE (exact statistics for the planner),
       # the same profile docker-compose.kavedb.yml runs standalone.
       KAVEON_PRODUCT_TRANSACTIONS_ENABLED: "true"
-      KAVEON_PRODUCT_STORAGE_MODE: local
-      KAVEON_PRODUCT_LOCAL_PATH: /var/lib/kaveon/product-transactions
-      KAVEON_PRODUCT_ADLS_PREFIX: kaveon/product-catalog
+      # The system store: everything Kaveon knows about itself. Defaults to a
+      # directory on this host, which is right for a laptop and wrong for
+      # anything that can be replaced — a container's disk does not survive it.
+      # `scripts/kaveon-up.sh --storage` sets these from one URL; see
+      # docs/engineering/system-storage.md.
+      KAVEON_PRODUCT_STORAGE_MODE: ${KAVEON_PRODUCT_STORAGE_MODE:-local}
+      KAVEON_PRODUCT_LOCAL_PATH: ${KAVEON_PRODUCT_LOCAL_PATH:-/var/lib/kaveon/product-transactions}
+      KAVEON_PRODUCT_ADLS_ACCOUNT: ${KAVEON_PRODUCT_ADLS_ACCOUNT:-}
+      KAVEON_PRODUCT_ADLS_CONTAINER: ${KAVEON_PRODUCT_ADLS_CONTAINER:-}
+      KAVEON_PRODUCT_ADLS_PREFIX: ${KAVEON_PRODUCT_ADLS_PREFIX:-kaveon/product-catalog}
       # Tunable for local qualification; keep the conservative default for
       # ordinary developer machines and raise it explicitly for ClickBench.
       KAVEON_QUERY_MEMORY_LIMIT_BYTES: ${KAVEON_QUERY_MEMORY_LIMIT_BYTES:-536870912}

@@ -76,6 +76,43 @@ case "$STORAGE" in
         || note "note: no AWS credentials in the environment; the host must provide them" ;;
 esac
 
+# ── Translate the choice into what the Engine reads ──────────────────────────
+# One URL is what a person should have to think about; these are the variables
+# the Engine takes today. Written into the environment file so the running
+# deployment and the file agree, and so a reader can see what was derived.
+STORAGE_MODE="local"
+STORAGE_LOCAL_PATH="/var/lib/kaveon/product-transactions"
+STORAGE_ACCOUNT=""
+STORAGE_CONTAINER=""
+STORAGE_PREFIX="kaveon/product-catalog"
+
+case "$STORAGE" in
+    file://*)
+        STORAGE_MODE="local"
+        STORAGE_LOCAL_PATH="/${STORAGE#file:///}"
+        ;;
+    adls://*)
+        rest="${STORAGE#adls://}"
+        STORAGE_MODE="adls"
+        STORAGE_ACCOUNT="${rest%%/*}"
+        rest="${rest#*/}"
+        STORAGE_CONTAINER="${rest%%/*}"
+        case "$rest" in
+            */*) STORAGE_PREFIX="${rest#*/}" ;;
+            *) STORAGE_PREFIX="" ;;
+        esac
+        [ -n "$STORAGE_ACCOUNT" ] && [ -n "$STORAGE_CONTAINER" ] \
+            || fail "adls:// needs <account>/<container>[/<prefix>]"
+        ;;
+    s3://*)
+        # The Engine's object layer speaks S3 through the same conditional-write
+        # protocol, but the server still reads the ADLS-named variables. Until
+        # that rename lands, say so plainly rather than starting a deployment
+        # that silently writes to a local directory.
+        fail "s3:// system storage is not wired into the server yet; use adls:// or file:// (see docs/engineering/system-storage.md)"
+        ;;
+esac
+
 # ── Secrets ──────────────────────────────────────────────────────────────────
 # Generated once and then left alone, so re-running never invalidates a running
 # deployment's sessions or breaks the Studio-to-API trust.
@@ -118,6 +155,11 @@ umask 077
     echo
     echo "NODE_ENV=production"
     echo "KAVEON_SYSTEM_STORAGE=${STORAGE}"
+    echo "KAVEON_PRODUCT_STORAGE_MODE=${STORAGE_MODE}"
+    echo "KAVEON_PRODUCT_LOCAL_PATH=${STORAGE_LOCAL_PATH}"
+    echo "KAVEON_PRODUCT_ADLS_ACCOUNT=${STORAGE_ACCOUNT}"
+    echo "KAVEON_PRODUCT_ADLS_CONTAINER=${STORAGE_CONTAINER}"
+    echo "KAVEON_PRODUCT_ADLS_PREFIX=${STORAGE_PREFIX}"
     [ -n "$DATA_PATH" ] && echo "KAVEON_DATA_PATH=${DATA_PATH}"
     echo
     echo "AUTH_SECRET=${AUTH_SECRET_VALUE}"
