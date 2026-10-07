@@ -69,6 +69,28 @@ class DlmGenerationCutoverTests(unittest.TestCase):
                 cutover.publish(payload(), "owner")
         transact.assert_not_called()
 
+    def test_admin_may_rebuild_a_dataset_it_does_not_own(self):
+        """Seeded datasets are owned by `system`, which nobody can sign in as.
+        Requiring caller == owner therefore left every one of them permanently
+        without context — including the 504M-row events dataset every slow
+        dashboard reads. The records are still written as the owner."""
+        dataset = {"revision": 1, "document": {"created_by": "system"}}
+        artifact = {"path": "dlm/7/v1/compiled.json", "sha256": "a" * 64,
+                    "bytes": 10, "version": 1}
+        with patch.object(cutover.product_store, "read", side_effect=[dataset, None]),              patch.object(cutover.product_store, "list_records", return_value=[]),              patch.object(cutover.dlm_compiled_artifact, "publish", return_value=artifact),              patch.object(cutover.product_store, "transact") as transact:
+            cutover.publish(payload(), "admin@example.test", "Admin")
+        for call in transact.call_args_list:
+            self.assertEqual(call.args[1], "system")
+
+    def test_a_non_admin_still_cannot_publish_for_another_owner(self):
+        dataset = {"revision": 1, "document": {"created_by": "someone@example.test"}}
+        with patch.object(cutover.product_store, "read", return_value=dataset),              patch.object(cutover.dlm_compiled_artifact, "publish") as publish:
+            for role in ("Viewer", "Analyst", "Editor"):
+                with self.subTest(role=role):
+                    with self.assertRaisesRegex(RuntimeError, "owner or an Admin"):
+                        cutover.publish(payload(), "other@example.test", role)
+            publish.assert_not_called()
+
     def test_no_transaction_changes_one_record_twice(self):
         """A product commit applies each change once against a single base, so
         KaveonDB refuses a transaction that touches a record twice. Publishing

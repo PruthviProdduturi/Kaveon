@@ -84,7 +84,7 @@ class ServeChartBody(BaseModel):
 def generate(dataset_id: str, force: bool = Query(default=False),
              ctx: UserContext = Depends(require_min_role("Analyst"))):
     """Encode the dataset into its DLM artifact. Idempotent unless force=true."""
-    result = dlm.generate_dlm(dataset_id, force=force, actor=ctx.email)
+    result = dlm.generate_dlm(dataset_id, force=force, actor=ctx.email, role=ctx.role)
     if not result.get("ok"):
         raise HTTPException(status_code=404, detail=result.get("reason", "generate_failed"))
     return result
