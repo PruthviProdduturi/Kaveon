@@ -4,7 +4,10 @@ import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import s from "./catalog.module.css";
-import { CatalogError, EngineSource, enc, fetchSchemas, fetchSources, fetchTables } from "./lib";
+import {
+  CatalogError, EngineSource, enc, fetchDefinitions, fetchSchemaDefinitions,
+  fetchSchemas, fetchSources, fetchTables,
+} from "./lib";
 
 // The product speaks in catalogs. A "source" is the registry row behind a
 // catalog and never appears in a URL or a label; the shell resolves it.
@@ -85,6 +88,12 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
+    // Warm the durable definition snapshot while the shell resolves its
+    // navigation tree. Inventory consumes the shared in-flight request, so
+    // opening KaveonDB does not start a second metadata wait.
+    void fetchDefinitions()
+      .then(definitions => Promise.all(definitions.map(definition => fetchSchemaDefinitions(definition.id))))
+      .catch(() => undefined);
     fetchSources()
       .then(list => {
         if (!cancelled) {
