@@ -197,7 +197,13 @@ def create_catalog_source(data: dict, ctx: UserContext = Depends(require_min_rol
         raise HTTPException(400, f"credential_kind must be one of: {', '.join(sorted(_VALID_CREDENTIAL))}")
     if credential_kind == "secret_store" and not credential_ref:
         raise HTTPException(400, "secret_store credential requires a Key Vault URI in credential_ref")
-    if credential_ref:
+    # A managed or workload identity has no secret to point at — the platform
+    # supplies the credential and the reference is a label for operators. The
+    # read path has always exempted those two kinds; validating them here meant
+    # a source could be read in a shape it could not be created in, and that a
+    # workload-identity registration failed with "source secret reference is
+    # invalid" for a reference it never needed.
+    if credential_ref and credential_kind not in {"managed_identity", "workload_identity"}:
         try: source_secret_store.validate_reference(credential_ref)
         except source_secret_store.SourceSecretError as error: raise HTTPException(400, str(error)) from None
 
