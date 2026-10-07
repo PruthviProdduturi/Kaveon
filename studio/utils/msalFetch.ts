@@ -61,6 +61,9 @@ export async function msalFetchRetry(
 			}
 			return res;
 		} catch (e) {
+			// An abort is the caller's decision, not a transient failure: retrying
+			// it would re-send a request the caller has already walked away from.
+			if (e instanceof Error && e.name === "AbortError") throw e;
 			// Network-level failure (dropped connection, etc.) — retry with backoff.
 			lastErr = e;
 			if (attempt < retries) {

@@ -74,6 +74,20 @@ class CompiledArtifactTests(unittest.TestCase):
             self.assertRaisesRegex(RuntimeError, "corrupt"):
             artifact.read("7", "viewer", "Viewer")
 
+    def test_absent_definition_is_distinguishable_so_generation_can_start(self):
+        """A dataset with no compiled definition must raise the specific
+        DefinitionUnavailable, not a bare RuntimeError. Generation pre-reads the
+        artifact to carry prior curation forward; if it cannot tell "never
+        compiled" from "something is broken" it refuses to compile, and the
+        first DLM for every dataset becomes impossible to build."""
+        dataset = {"revision": 1, "document": {"created_by": "owner", "visibility": "published"}}
+        with patch.object(artifact.product_store, "read", side_effect=[dataset, None]):
+            with self.assertRaises(artifact.DefinitionUnavailable):
+                artifact.read("7", "owner", "Admin")
+        # Serving callers treat this module as fail-closed, so it stays a
+        # RuntimeError for everyone who does not ask for the distinction.
+        self.assertTrue(issubclass(artifact.DefinitionUnavailable, RuntimeError))
+
     def test_read_applies_visibility_after_server_asserted_admin_read(self):
         private = {"revision": 1, "document": {"created_by": "owner", "visibility": "private"}}
         with patch.object(artifact.product_store, "read", return_value=private) as read:

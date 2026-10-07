@@ -65,10 +65,81 @@ const KNOWN_ANSWER_MODES = new Set(["cache", "context"]);
 const READ_MODES = new Set(["distributed", "coordinator"]);
 
 /**
+ * The Guardian O, as a path: a 300-degree arc with its gap at the bottom,
+ * the geometry of the wordmark's O and of `docs/reference/kaveon-icon.svg`,
+ * scaled into a 48-unit box. `pathLength` is declared as 100 wherever this
+ * is drawn, so every dash and offset below is a percentage of the arc.
+ */
+const HALO_ARC = "M 32.5 38.7224 A 17 17 0 1 0 15.5 38.7224";
+
+export interface KaveonHaloProps {
+  /** The fraction of the reported work complete, 0–1, or null when the coordinator has reported none. */
+  progress?: number | null;
+  /** Rendered size in pixels. */
+  size?: number;
+  /** `inline` weights the stroke so the mark still reads at text size. */
+  variant?: "panel" | "inline";
+}
+
+/**
+ * The running mark: the Guardian O in motion.
+ *
+ * Four strokes share the one brand arc, and only one of them loops:
+ *
+ *  - the track, the halo at rest, so the mark is the brand even when still;
+ *  - the read, drawn from the start of the arc to as far as the coordinator
+ *    says the statement has got — completed work, never a timer, and absent
+ *    while the coordinator has reported none;
+ *  - a bloom and the light above it, one dash travelling the arc, out
+ *    through the gap at the bottom and back in on the other side. It is the
+ *    only looping motion in the Lab, and it says the statement is alive.
+ *
+ * `prefers-reduced-motion` drops the travelling light altogether; the track
+ * and the read stay, so the mark still reports where the statement has got.
+ */
+export function KaveonHalo({ progress = null, size = 48, variant = "panel" }: KaveonHaloProps) {
+  const read = progress == null ? null : Math.min(1, Math.max(0, progress)) * 100;
+  return (
+    <svg
+      className={`kv-halo kv-halo--${variant}`}
+      width={size}
+      height={size}
+      viewBox="0 0 48 48"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path className="kv-halo__track" d={HALO_ARC} pathLength={100} />
+      {read != null && (
+        <path
+          className="kv-halo__read"
+          d={HALO_ARC}
+          pathLength={100}
+          style={{ strokeDashoffset: 100 - read }}
+        />
+      )}
+      <path className="kv-halo__bloom" d={HALO_ARC} pathLength={100} />
+      <path className="kv-halo__light" d={HALO_ARC} pathLength={100} />
+    </svg>
+  );
+}
+
+/**
+ * How far the statement has got, as a fraction, or null while there is
+ * nothing measured to report. Only completed tasks count: they are work the
+ * cluster has finished, so the arc never claims progress the coordinator has
+ * not reported.
+ */
+export function reportedProgress(signals: LaneSignals | null): number | null {
+  if (!signals || signals.tasksTotal <= 0) return null;
+  return signals.tasksDone / signals.tasksTotal;
+}
+
+/**
  * The Guardian O — the open ring of the Kaveon wordmark, its gap at the
- * bottom, in a 24-unit box. It carries all four step states: rotating while
- * a step is being decided, still with a filled centre where the statement
- * was answered.
+ * bottom, in a 24-unit box. It carries all four step states, and it is
+ * still in every one of them: the halo at the head of the panel is the only
+ * moving mark, so the ladder reads as a list of facts rather than as four
+ * things competing for the eye.
  */
 function LaneGlyph({ state }: { state: LaneStepState }) {
   if (state === "passed") {
@@ -297,8 +368,11 @@ export function QueryLanePanel({ signals, sourceLabel = null, elapsedLabel, onCa
     <div className="lane-panel">
       <div className="lane-panel__inner">
         <div className="lane-panel__head">
-          <h3 className="lane-panel__headline">{lanes.headline}</h3>
-          {lanes.sub && <p className="lane-panel__sub">{lanes.sub}</p>}
+          <KaveonHalo progress={reportedProgress(signals)} size={46} />
+          <div className="lane-panel__headings">
+            <h3 className="lane-panel__headline">{lanes.headline}</h3>
+            {lanes.sub && <p className="lane-panel__sub">{lanes.sub}</p>}
+          </div>
         </div>
 
         <ol className="lane-steps" aria-hidden="true">
@@ -335,30 +409,6 @@ export function QueryLanePanel({ signals, sourceLabel = null, elapsedLabel, onCa
         {lanes.announcement}
       </p>
     </div>
-  );
-}
-
-/**
- * The open ring on its own, for the places that need the running state in a
- * single inline mark — the results header, where the ladder does not fit.
- */
-export function KaveonArc({ size = 13 }: { size?: number }) {
-  return (
-    <svg
-      className="lane-glyph lane-glyph--inline"
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <path
-        d="M 16.075 19.058 A 8.15 8.15 0 1 0 7.925 19.058"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2.6"
-      />
-    </svg>
   );
 }
 

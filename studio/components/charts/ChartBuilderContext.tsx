@@ -14,6 +14,9 @@ import { acquireQuerySlot, acquireEngineQuerySlot } from "../../utils/querySemap
 const _CLIENT_CACHE = new Map<string, { result: any; ts: number }>();
 const CLIENT_CACHE_TTL = 300_000; // 5 min, matches server TTL
 
+/** The rejection `fetch` raises once its signal is aborted. */
+const isAbortError = (error: unknown): boolean => error instanceof Error && error.name === "AbortError";
+
 interface EngineCatalogSource {
   id: string;
   catalog: string;
@@ -1401,7 +1404,10 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
   const [previewOptions, setPreviewOptions] = useState<any | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
   const isQueryRunningRef = useRef(false);
-  const cancelQueryRef = useRef(false);
+  // The in-flight preview/chart query. Cancelling it, and leaving the page
+  // while it runs, both abort through this controller so the request is
+  // withdrawn rather than abandoned.
+  const queryAbortRef = useRef<AbortController | null>(null);
   const activeJobIdRef = useRef<string | null>(null);
   // ChartPreview registers a fn that snapshots the rendered chart to a JPEG data
   // URI, so save() can persist a real thumbnail (like dashboards do).
@@ -3110,6 +3116,22 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
     });
   }, [previewOptions?.yAxisDateFormat]);
 
+  /**
+   * A chart query the reader walks away from is withdrawn, not abandoned.
+   * Leaving a dashboard or the builder unmounts this provider and closing or
+   * reloading the tab fires `pagehide`; either way the request is aborted so
+   * the server stops holding a connection, and a read in progress is not
+   * left running for a reader who is no longer there.
+   */
+  useEffect(() => {
+    const release = () => queryAbortRef.current?.abort();
+    window.addEventListener("pagehide", release);
+    return () => {
+      window.removeEventListener("pagehide", release);
+      release();
+    };
+  }, []);
+
   const runPreviewQuery = async (forceRegenerate: boolean = false, extraFilters: any[] = []) => {
     if (!selectedDatasetId || !selectedTemplate) {
       return;
@@ -3125,6 +3147,10 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
 
     isQueryRunningRef.current = true;
     setSqlPreview((prev) => ({ ...prev, isRunning: true, error: null }));
+
+    const abort = new AbortController();
+    queryAbortRef.current = abort;
+    const signal = abort.signal;
 
     // Acquire a slot from the global semaphore — limits concurrent dashboard queries
     const releaseSlot = await acquireQuerySlot();
@@ -3181,6 +3207,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(serveBody),
+            signal,
           });
           if (serveRes.ok) {
             const serveJson = await serveRes.json();
@@ -3208,6 +3235,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ dataset_id: selectedDatasetId, chart_type: selectedTemplate.id, config }),
+                  signal,
                 });
                 if (genRes.ok) {
                   const genJson = await genRes.json();
@@ -3232,7 +3260,9 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
               return;
             }
           }
-        } catch {
+        } catch (error) {
+          // A withdrawn request is not a failed serve: let it settle the run.
+          if (isAbortError(error)) throw error;
           // Context serve failed — fall through to SQL path silently
         }
       }
@@ -3253,6 +3283,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
             chart_type: selectedTemplate.id,
             config,
           }),
+          signal,
         });
 
         if (!generateRes.ok) {
@@ -3308,6 +3339,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(executeBody),
+          signal,
         }, engineCatalog ? { retries: 4, backoffMs: 1000 } : {});
         if (!executeRes.ok) {
           const text = await executeRes.text();
@@ -3740,12 +3772,18 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
       // context (source, chart_id, dataset_id, tables_used). No secondary
       // record-query call needed.
     } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Unknown error";
       isQueryRunningRef.current = false;
       releaseSlot();
-      setSqlPreview((prev) => ({ ...prev, isRunning: false, error: message }));
+      // The reader cancelled or left the page: stand the chart down without
+      // reporting a failure that did not happen.
+      if (isAbortError(e)) {
+        setSqlPreview((prev) => ({ ...prev, isRunning: false, error: null }));
+      } else {
+        setSqlPreview((prev) => ({ ...prev, isRunning: false, error: e instanceof Error ? e.message : "Unknown error" }));
+      }
     } finally {
       releaseEngineSlot?.();
+      if (queryAbortRef.current === abort) queryAbortRef.current = null;
     }
   };
 
@@ -3970,7 +4008,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
     setFilters,
     sqlPreview,
     runPreviewQuery,
-    cancelRunningQuery: () => { cancelQueryRef.current = true; },
+    cancelRunningQuery: () => { queryAbortRef.current?.abort(); },
     runContext,
     isSaving,
     canSave,

@@ -31,7 +31,6 @@ interface ChartData {
 interface RouteMeta {
   route: "context" | "hybrid" | "query" | "direct" | "dlm";
   durationMs?: number;
-  elementsChecked?: number;
   approx?: boolean;
   datasetName?: string;
   /** The lane the DLM's answer took — the Engine's word for an Engine-backed
@@ -564,7 +563,7 @@ export default function Home() {
   }, [messages]);
 
   // Cache all dataset schemas for auto-matching
-  type SchemaEntry = { id: number; name: string; sourceId?: number; sourceName?: string; schemaName?: string; schema: DatasetSchema };
+  type SchemaEntry = { id: number; name: string; sourceId?: number; sourceName?: string; schema: DatasetSchema };
   const [allSchemas, setAllSchemas] = useState<SchemaEntry[]>([]);
   const allSchemasRef = useRef<SchemaEntry[]>([]);
 
@@ -592,7 +591,7 @@ export default function Home() {
           const table = d.schema_name && d.schema_name !== "public" && d.schema_name !== "dbo" && !rawTable.includes(".")
             ? `${d.schema_name}.${rawTable}` : rawTable;
           const src = sources.find(s => s.database_name === ds.database_name);
-          return { id: ds.id, name: ds.name, sourceId: src?.id, sourceName: src?.database_name || ds.database_name, schemaName: d.schema_name || "public", schema: { tableName: table, columns: cols, metrics } };
+          return { id: ds.id, name: ds.name, sourceId: src?.id, sourceName: src?.database_name || ds.database_name, schema: { tableName: table, columns: cols, metrics } };
         } catch { return null; }
       })
     ).then(results => {
@@ -608,7 +607,7 @@ export default function Home() {
   function findBestSchema(text: string) {
     const lower = text.toLowerCase();
     const words = lower.split(/\s+/).filter(w => w.length >= 3);
-    let best: { schema: DatasetSchema; sourceId?: number; sourceName?: string; schemaName?: string; confidence: number; name: string; parsed: any } | null = null;
+    let best: { schema: DatasetSchema; sourceId?: number; sourceName?: string; confidence: number; name: string; parsed: any } | null = null;
 
     const schemas = allSchemasRef.current;
     for (const ds of schemas) {
@@ -642,7 +641,7 @@ export default function Home() {
       if (parsed) score += parsed.confidence;
 
       if (score > (best?.confidence ?? 0)) {
-        best = { schema: ds.schema, sourceId: ds.sourceId, sourceName: ds.sourceName, schemaName: ds.schemaName, confidence: score, name: ds.name, parsed };
+        best = { schema: ds.schema, sourceId: ds.sourceId, sourceName: ds.sourceName, confidence: score, name: ds.name, parsed };
       }
     }
 
@@ -657,7 +656,7 @@ export default function Home() {
     parsed: { chartType: string; xAxis: string | null; yAxis: string | null; title: string },
     userQuery: string,
   ): string {
-    // Match column by name — ACR/SQL may return aliased names (e.g. "avg" for AVG(...))
+    // Match column by name — SQL may return aliased names (e.g. "avg" for AVG(...))
     const findCol = (name: string | null): number => {
       if (!name) return -1;
       const lower = name.toLowerCase();
@@ -974,169 +973,74 @@ export default function Home() {
       if (schema && parsed) {
         const dbName = srcDb || "kaveon";
 
-        // ── Try Adaptive Context Routing first (only for profile-synthesizable questions) ──
-        let usedAcr = false;
         const t0 = performance.now();
-        const acrSchemaName = match?.schemaName || "public";
-        // Skip ACR cache when parser already generated SQL — run it fresh
-        const tryAcr = parsed.chartType === "kpi" && parsed.confidence >= 0.9;
-        if (tryAcr) try {
-          const acrRes = await msalFetch("/api/v1/context/ask", {
+
+        // ── Direct SQL execution ─────────────────────────────────────────────
+        try {
+          // After the PostgreSQL retirement `/sql/execute` routes a statement
+          // naming an Engine catalog to the Engine plane, which resolves the
+          // schema from an authorized dataset rather than trusting one the
+          // browser sends. Carry the dataset the question was asked against,
+          // or this fallback answers "an Engine chart query requires a
+          // dataset" for every question.
+          const execRes = await msalFetch("/api/v1/sql/execute", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              question: text.trim(),
+              sql_text: parsed.sql,
               database: dbName,
-              sql: parsed.sql,
-              schema_name: acrSchemaName,
+              ...(selectedDataset ? { dataset_id: Number(selectedDataset) } : {}),
+              source: "chat",
             }),
           });
 
-          if (acrRes.ok) {
-            const acr = await acrRes.json();
-            const durationMs = Math.round(performance.now() - t0);
+          if (execRes.ok) {
+            const execData = await execRes.json();
+            const rows = execData.rows || execData.data || [];
+            const columns = execData.columns || execData.column_names || [];
 
-            // Profile-synthesized answer (no query executed)
-            if (acr.route === "context" && acr.answer && !acr.result) {
-              usedAcr = true;
-              const content = `${acr.answer.explanation || acr.answer.value}`;
+            if (rows.length > 0) {
+              const summary = generateInsight(rows, columns, parsed, text.trim());
               if (sid) {
                 void saveMessage(sid, "user", text.trim());
-                void saveMessage(sid, "assistant", content, { route: "context" });
+                void saveMessage(sid, "assistant", summary, {
+                  sql_query: parsed.sql,
+                  chart_type: wantsChart ? parsed.chartType : undefined,
+                  data: { columns, rows: rows.slice(0, 100), row_count: rows.length },
+                  route: "direct",
+                });
               }
               setMessages(prev => [...prev.slice(0, -1), {
                 role: "assistant",
-                content,
-                routeMeta: { route: "context", durationMs, elementsChecked: Object.keys(acr.validity || {}).length },
+                content: summary,
+                ...(wantsChart ? { chart: { rows, columns, chartType: parsed.chartType, xAxis: parsed.xAxis, yAxis: parsed.yAxis, title: parsed.title, sql: parsed.sql } } : {}),
+                routeMeta: { route: "direct", durationMs: Math.round(performance.now() - t0) },
               }]);
               return;
             }
 
-            // Context-routed with cached result (skip if result has error)
-            if (acr.route === "context" && acr.result && !acr.result.error) {
-              usedAcr = true;
-              const rows = acr.result.rows || [];
-              const columns = acr.result.columns || [];
-              if (rows.length > 0) {
-                const summary = generateInsight(rows, columns, parsed, text.trim());
-                if (sid) {
-                  void saveMessage(sid, "user", text.trim());
-                  void saveMessage(sid, "assistant", summary, { sql_query: parsed.sql, chart_type: wantsChart ? parsed.chartType : undefined, route: "context" });
-                }
-                setMessages(prev => [...prev.slice(0, -1), {
-                  role: "assistant",
-                  content: summary,
-                  ...(wantsChart ? { chart: { rows, columns, chartType: parsed.chartType, xAxis: parsed.xAxis, yAxis: parsed.yAxis, title: parsed.title, sql: parsed.sql } } : {}),
-                  routeMeta: { route: "context", durationMs, elementsChecked: Object.keys(acr.validity || {}).length },
-                }]);
-                return;
-              }
-            }
-
-            // Live query path — ACR executed the SQL and refreshed elements
-            if ((acr.route === "query" || acr.route === "hybrid") && acr.result && !acr.result.error) {
-              usedAcr = true;
-              const rows = acr.result.rows || [];
-              const columns = acr.result.columns || [];
-              if (rows.length > 0) {
-                const summary = generateInsight(rows, columns, parsed, text.trim());
-                if (sid) {
-                  void saveMessage(sid, "user", text.trim());
-                  void saveMessage(sid, "assistant", summary, { sql_query: parsed.sql, chart_type: wantsChart ? parsed.chartType : undefined, route: acr.route });
-                }
-                setMessages(prev => [...prev.slice(0, -1), {
-                  role: "assistant",
-                  content: summary,
-                  ...(wantsChart ? { chart: { rows, columns, chartType: parsed.chartType, xAxis: parsed.xAxis, yAxis: parsed.yAxis, title: parsed.title, sql: parsed.sql } } : {}),
-                  routeMeta: { route: acr.route, durationMs, elementsChecked: Object.keys(acr.validity || {}).length },
-                }]);
-                return;
-              }
-            }
-          }
-        } catch {
-          // ACR not available (no context built, or endpoint error) — fall through to direct
-        }
-
-        // ── Direct SQL execution (fallback) ─────────────────────────────────
-        if (!usedAcr) {
-          try {
-            // After the PostgreSQL retirement `/sql/execute` routes a statement
-            // naming an Engine catalog to the Engine plane, which resolves the
-            // schema from an authorized dataset rather than trusting one the
-            // browser sends. Carry the dataset the question was asked against,
-            // or this fallback answers "an Engine chart query requires a
-            // dataset" for every question.
-            const execRes = await msalFetch("/api/v1/sql/execute", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                sql_text: parsed.sql,
-                database: dbName,
-                ...(selectedDataset ? { dataset_id: Number(selectedDataset) } : {}),
-                source: "chat",
-              }),
-            });
-
-            if (execRes.ok) {
-              const execData = await execRes.json();
-              const rows = execData.rows || execData.data || [];
-              const columns = execData.columns || execData.column_names || [];
-
-              if (rows.length > 0) {
-                const summary = generateInsight(rows, columns, parsed, text.trim());
-                if (sid) {
-                  void saveMessage(sid, "user", text.trim());
-                  void saveMessage(sid, "assistant", summary, {
-                    sql_query: parsed.sql,
-                    chart_type: wantsChart ? parsed.chartType : undefined,
-                    data: { columns, rows: rows.slice(0, 100), row_count: rows.length },
-                    route: "direct",
-                  });
-                }
-                setMessages(prev => [...prev.slice(0, -1), {
-                  role: "assistant",
-                  content: summary,
-                  ...(wantsChart ? { chart: { rows, columns, chartType: parsed.chartType, xAxis: parsed.xAxis, yAxis: parsed.yAxis, title: parsed.title, sql: parsed.sql } } : {}),
-                  routeMeta: { route: "direct", durationMs: Math.round(performance.now() - t0) },
-                }]);
-                return;
-              }
-
-              const noResultMsg = `The query completed successfully but returned no rows.\n\nSQL: \`${parsed.sql}\``;
-              if (sid) {
-                void saveMessage(sid, "user", text.trim());
-                void saveMessage(sid, "assistant", noResultMsg, { sql_query: parsed.sql, route: "direct" });
-              }
-              setMessages(prev => [...prev.slice(0, -1), {
-                role: "assistant",
-                content: noResultMsg,
-              }]);
-              return;
-            } else {
-              const errText = await execRes.text().catch(() => "");
-              const notice = rateLimitNotice(execRes.status, (() => { try { return JSON.parse(errText); } catch { return null; } })());
-              if (notice) {
-                demoQuota.refresh();
-                setMessages(prev => [...prev.slice(0, -1), { role: "assistant", content: quotaNotice(notice), notice: true }]);
-                return;
-              }
-              const errMsg = `The query could not be completed (status ${execRes.status}).\n\nSQL: \`${parsed.sql}\`\n\n${errText.substring(0, 200)}`;
-              if (sid) {
-                void saveMessage(sid, "user", text.trim());
-                void saveMessage(sid, "assistant", errMsg, { sql_query: parsed.sql, route: "error" });
-              }
-              setMessages(prev => [...prev.slice(0, -1), {
-                role: "assistant",
-                content: errMsg,
-              }]);
-              return;
-            }
-          } catch (execErr) {
-            const errMsg = `The query could not be executed: ${execErr instanceof Error ? execErr.message : "an unexpected error occurred"}.\n\nSQL: \`${parsed.sql}\``;
+            const noResultMsg = `The query completed successfully but returned no rows.\n\nSQL: \`${parsed.sql}\``;
             if (sid) {
               void saveMessage(sid, "user", text.trim());
-              void saveMessage(sid, "assistant", errMsg, { route: "error" });
+              void saveMessage(sid, "assistant", noResultMsg, { sql_query: parsed.sql, route: "direct" });
+            }
+            setMessages(prev => [...prev.slice(0, -1), {
+              role: "assistant",
+              content: noResultMsg,
+            }]);
+            return;
+          } else {
+            const errText = await execRes.text().catch(() => "");
+            const notice = rateLimitNotice(execRes.status, (() => { try { return JSON.parse(errText); } catch { return null; } })());
+            if (notice) {
+              demoQuota.refresh();
+              setMessages(prev => [...prev.slice(0, -1), { role: "assistant", content: quotaNotice(notice), notice: true }]);
+              return;
+            }
+            const errMsg = `The query could not be completed (status ${execRes.status}).\n\nSQL: \`${parsed.sql}\`\n\n${errText.substring(0, 200)}`;
+            if (sid) {
+              void saveMessage(sid, "user", text.trim());
+              void saveMessage(sid, "assistant", errMsg, { sql_query: parsed.sql, route: "error" });
             }
             setMessages(prev => [...prev.slice(0, -1), {
               role: "assistant",
@@ -1144,6 +1048,17 @@ export default function Home() {
             }]);
             return;
           }
+        } catch (execErr) {
+          const errMsg = `The query could not be executed: ${execErr instanceof Error ? execErr.message : "an unexpected error occurred"}.\n\nSQL: \`${parsed.sql}\``;
+          if (sid) {
+            void saveMessage(sid, "user", text.trim());
+            void saveMessage(sid, "assistant", errMsg, { route: "error" });
+          }
+          setMessages(prev => [...prev.slice(0, -1), {
+            role: "assistant",
+            content: errMsg,
+          }]);
+          return;
         }
       }
 
@@ -1409,7 +1324,6 @@ export default function Home() {
                             {m.routeMeta.durationMs != null && <span>{m.routeMeta.durationMs >= 1000 ? (m.routeMeta.durationMs / 1000).toFixed(1) + "s" : m.routeMeta.durationMs + "ms"}</span>}
                             {m.routeMeta.route === "context" && !m.routeMeta.approx && <span style={{ color: "#10b981" }}>&middot; no scan</span>}
                             {m.routeMeta.route === "context" && m.routeMeta.approx && <span style={{ color: "#10b981" }} title="Sketch estimate with its error stated in the evidence; no scan">&middot; ≈ estimate &middot; no scan</span>}
-                            {m.routeMeta.elementsChecked != null && <span>&middot; {m.routeMeta.elementsChecked} elements</span>}
                             {m.routeMeta.datasetName && <span>&middot; {m.routeMeta.datasetName}</span>}
                             {m.routeMeta.questionClass && (
                               <span title="The question class the DLM answered as">

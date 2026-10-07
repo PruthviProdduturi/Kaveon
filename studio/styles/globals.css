@@ -4286,8 +4286,13 @@ main.main-wide {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
+/* A column's type is metadata, never a label competing with its name: the
+   same quiet mono the Catalog's column table uses, one step down in size. */
 .column-type {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.72rem;
   color: var(--text-muted);
+  white-space: nowrap;
 }
 
 .column-loading,
@@ -4496,29 +4501,235 @@ main.main-wide {
   height: 100vh !important;
 }
 
-.results-section .section-header {
-  background: var(--bg-elevated);
-  border-bottom-color: var(--border);
-}
-
-.results-section .section-header h3 {
-  font-size: 0.9rem;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-}
-
-.results-actions {
+/* ── The results bar ──────────────────────────────────────────────────────
+   One bar above the grid, read left to right: what the result is, how it is
+   being narrowed, then what can be done with it. The facts carry the
+   hierarchy — the count in the body weight, the lane and the timing after it
+   in muted type on one baseline — and every control is the same height on
+   the same grid, grouped by what it does. */
+.results-bar {
   display: flex;
   align-items: center;
   gap: 1rem;
+  flex-shrink: 0;
+  padding: 0.5rem 0.9rem 0.5rem 1.1rem;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
 }
 
-.result-stats {
-  font-size: 0.9rem;
-  font-weight: 500;
+.results-bar__lead {
+  display: flex;
+  align-items: baseline;
+  gap: 0.85rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.results-bar__title {
+  margin: 0;
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.results-bar__summary {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  min-width: 0;
+  font-size: 0.8rem;
   color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.results-bar__lede {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* Each following fact is separated by one middot, so the summary stays a
+   sentence of facts rather than a row of chips. */
+.results-bar__fact::before {
+  content: "·";
+  margin: 0 0.45rem;
+  color: var(--text-faint);
+}
+
+.results-bar__controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-shrink: 0;
+}
+
+/* Controls that belong together sit together; the gap between groups is the
+   only separator, which is quieter than a rule and never misaligns. */
+.results-bar__group {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.results-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  height: 28px;
+  padding: 0 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-surface);
+  transition: border-color 0.15s ease;
+}
+
+.results-filter:focus-within {
+  border-color: var(--accent);
+}
+
+.results-filter i {
+  font-size: 0.68rem;
+  color: var(--text-faint);
+}
+
+.results-filter input {
+  width: 128px;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.78rem;
+  outline: none;
+}
+
+.results-filter input::placeholder {
+  color: var(--text-muted);
+}
+
+.results-bar__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: 28px;
+  padding: 0 0.6rem;
+  border-radius: 5px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.results-bar__btn--icon {
+  padding: 0 0.5rem;
+}
+
+.results-bar__btn--quiet {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-muted);
+}
+
+.results-bar__badge {
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-align: center;
+}
+
+.results-bar__menu {
+  position: relative;
+}
+
+.results-bar__scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 199;
+}
+
+.results-bar__sheet {
+  position: absolute;
+  top: calc(100% + 5px);
+  right: 0;
+  z-index: 200;
+  min-width: 160px;
+  padding: 0.3rem 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
+}
+
+.results-bar__sheet--columns {
+  min-width: 190px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.results-bar__sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.25rem 0.7rem 0.4rem;
+  margin-bottom: 0.25rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.results-bar__sheet-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.results-bar__sheet-actions button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+
+.results-bar__sheet-actions button:last-child {
+  color: var(--text-secondary);
+}
+
+.results-bar__item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.33rem 0.7rem;
+  border: 0;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.79rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.results-bar__item:hover {
+  background: var(--bg-hover);
+}
+
+.results-bar__item i {
+  width: 14px;
+  color: var(--text-muted);
+}
+
+.results-bar__item--check input {
+  accent-color: var(--accent);
 }
 
 .results-container {
@@ -4551,14 +4762,6 @@ main.main-wide {
   font-size: 0.78rem;
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
-}
-
-.lab-stream-line__pulse {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--accent);
-  animation: sql-runtime-pulse 1.4s ease-out infinite;
 }
 
 .lab-stream-line__state {
@@ -4600,12 +4803,6 @@ main.main-wide {
   border-color: var(--error);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .lab-stream-line__pulse {
-    animation: none;
-  }
-}
-
 /* ── The lane ladder: how a statement is being answered ───────────────────
    KaveonDB resolves a statement in a fixed order — admission, the result
    cache, the table statistics or cube, then a read of the data. While the
@@ -4643,7 +4840,15 @@ main.main-wide {
 }
 
 .lane-panel__head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 1.05rem;
   margin-bottom: 1.4rem;
+}
+
+.lane-panel__headings {
+  min-width: 0;
 }
 
 .lane-panel__headline {
@@ -4715,13 +4920,6 @@ main.main-wide {
   transform-origin: 50% 50%;
 }
 
-.lane-glyph--inline {
-  display: inline-block;
-  width: auto;
-  height: auto;
-  vertical-align: -0.1em;
-}
-
 .lane-step__body {
   display: block;
   min-width: 0;
@@ -4773,10 +4971,6 @@ main.main-wide {
 .lane-step--deciding .lane-step__status {
   font-weight: 600;
   color: var(--lane-live-text);
-}
-
-.lane-step--deciding .lane-glyph {
-  animation: kaveon-arc-sweep 1.6s linear infinite;
 }
 
 /* Answered here: this lane produced the result. */
@@ -4839,22 +5033,88 @@ main.main-wide {
   border-color: var(--error);
 }
 
-/* The same mark inline in the results header, where the ladder does not fit. */
+/* ── The running mark: the Guardian O in motion ───────────────────────────
+   Four strokes share the one brand arc — the halo at rest, the arc already
+   read, and a travelling light with its bloom. The light is the only thing
+   in the Lab that loops, and it leaves and re-enters the arc through the
+   gap at the bottom, which is the wordmark's own signature. */
+/* fill, stroke-linecap and stroke-width are inherited SVG properties, so the
+   svg sets the defaults for all four strokes and each stroke overrides only
+   what it needs. */
+.kv-halo {
+  display: block;
+  overflow: visible;
+  fill: none;
+  stroke-linecap: butt;
+}
+
+.kv-halo--panel {
+  stroke-width: 4;
+}
+
+/* At text size the arc needs the wordmark's heavier weight to stay legible. */
+.kv-halo--inline {
+  display: inline-block;
+  vertical-align: -0.16em;
+  flex-shrink: 0;
+  stroke-width: 7;
+}
+
+.kv-halo--panel .kv-halo__bloom {
+  stroke-width: 9;
+}
+
+.kv-halo--inline .kv-halo__bloom {
+  stroke-width: 14;
+}
+
+.kv-halo__track {
+  stroke: var(--border);
+}
+
+/* Completed work, as reported: the arc fills from its start and eases to
+   each new figure, so the mark never animates past what the Engine said. */
+.kv-halo__read {
+  stroke: color-mix(in srgb, var(--accent) 52%, var(--border));
+  stroke-dasharray: 100;
+  transition: stroke-dashoffset 320ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.kv-halo__bloom {
+  stroke: var(--accent);
+  stroke-dasharray: 17 83;
+  opacity: 0.2;
+  animation: kaveon-halo-travel 1.6s linear infinite;
+}
+
+.kv-halo__light {
+  stroke: var(--accent);
+  stroke-dasharray: 9 91;
+  stroke-linecap: round;
+  animation: kaveon-halo-travel 1.6s linear infinite;
+}
+
+@keyframes kaveon-halo-travel {
+  from {
+    stroke-dashoffset: 100;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* The same mark inline where the ladder does not fit: the results summary
+   and the streaming line above the grid. */
+/* The running summary: the mark, then the same lede-and-facts line a settled
+   result gets, so the bar does not change shape when the rows land. The
+   facts bring their own middot, so only the mark needs spacing of its own. */
 .result-stats__running {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
 }
 
-.result-stats__running .lane-glyph--inline {
-  color: var(--accent);
-  animation: kaveon-arc-sweep 1.6s linear infinite;
-}
-
-@keyframes kaveon-arc-sweep {
-  to {
-    transform: rotate(360deg);
-  }
+.result-stats__running .kv-halo {
+  margin-right: 0.45rem;
 }
 
 @keyframes lane-panel-in {
@@ -4867,12 +5127,19 @@ main.main-wide {
 }
 
 /* The ladder is legible with nothing moving: the step states and their words
-   carry it. The hold is kept so a statement answered in milliseconds still
-   does not flash the panel. */
+   carry it, and the halo still reports how far the statement has got. The
+   hold is kept so a statement answered in milliseconds does not flash the
+   panel. */
 @media (prefers-reduced-motion: reduce) {
-  .lane-step--deciding .lane-glyph,
-  .result-stats__running .lane-glyph--inline {
-    animation: none;
+  /* A stationary dash would read as a defect, so the travelling light is not
+     drawn at all; the halo and the arc already read carry the mark. */
+  .kv-halo__bloom,
+  .kv-halo__light {
+    display: none;
+  }
+
+  .kv-halo__read {
+    transition: none;
   }
 
   .lane-panel {
@@ -5119,7 +5386,7 @@ main.main-wide {
 
 .results-table th {
   background: var(--bg-surface);
-  padding: 0.75rem;
+  padding: 0.55rem 0.75rem;
   text-align: left;
   font-weight: 600;
   color: var(--text-primary);
@@ -5132,11 +5399,39 @@ main.main-wide {
   user-select: none;
 }
 
+.results-table th .column-header-line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
 .results-table th .column-header-label {
-  margin-right: 0.4rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The column's declared type, as the Engine reports it: a second line of
+   quiet mono under the name — legible at a glance, and never a chip
+   competing with the name above it. The same treatment the Catalog's column
+   table gives a type, one size down for the density of a result grid. */
+.results-table th .column-header-type {
+  display: block;
+  margin-top: 1px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.66rem;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .results-table th .column-sort-icon {
+  flex-shrink: 0;
   font-size: 0.7rem;
   color: var(--text-muted);
 }

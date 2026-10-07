@@ -83,8 +83,8 @@ def _async_job_run(job_id: str, data: SqlExecuteBody, user_id: str) -> None:
                 "dataset_id": data.dataset_id,
                 "started_at": start_time,
             }, user_id)
-        except Exception:
-            pass
+        except Exception as history_error:
+            print(f"[History] Failed to save history: {history_error}")
         finish({
             "status": "success",
             "columns": result.get("columns") or [],
@@ -368,8 +368,8 @@ def distinct_filter_values(
                 "run_context": run_context, "dataset_id": int(dataset_id),
                 "started_at": start_time,
             }, user_id)
-        except Exception:
-            pass
+        except Exception as history_error:
+            print(f"[History] Failed to save history: {history_error}")
         raise HTTPException(status_code=500, detail="Query execution failed")
 
     duration_ms = int(time.time() * 1000) - start_time
@@ -384,8 +384,8 @@ def distinct_filter_values(
             "started_at": start_time,
             **(engine_history if engine_source else {}),
         }, user_id)
-    except Exception:
-        pass
+    except Exception as history_error:
+        print(f"[History] Failed to save history: {history_error}")
 
     rows = result.get("rows_objects") or result.get("rows") or []
     values = []
@@ -635,8 +635,8 @@ def execute_engine_sql(data: SqlExecuteBody, response: Response, ctx: UserContex
                 **({"engine_details": failure["engine_details"]}
                    if isinstance(failure.get("engine_details"), dict) else {}),
             }, ctx.email)
-        except Exception:
-            pass
+        except Exception as history_error:
+            print(f"[History] Failed to save history: {history_error}")
         if failure:
             raise HTTPException(
                 status_code=error.status_code,
@@ -661,7 +661,7 @@ def execute_engine_sql(data: SqlExecuteBody, response: Response, ctx: UserContex
             "tables_used": data.tables_used or json.dumps(extract_tables_from_sql(data.sql_text)),
             **_engine_history_fields(result),
         }, ctx.email)
-    except Exception:
-        pass
+    except Exception as history_error:
+        print(f"[History] Failed to save history: {history_error}")
     return {"columns": columns, "rows": rows,
             "query_id": result.get("id"), "duration_ms": result.get("elapsed_ms", 0)}

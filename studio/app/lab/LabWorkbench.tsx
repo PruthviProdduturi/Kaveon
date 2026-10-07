@@ -14,7 +14,7 @@ import { useDemoQuota } from "../../hooks/useDemoQuota";
 import { RateLimitedError, rateLimitNotice, refusalMessage } from "../../utils/demoQuota";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useRouter, useSearchParams } from "next/navigation";
-import { KaveonArc, QueryLanePanel, SUBMITTED } from "../../components/lab/QueryLanes";
+import { KaveonHalo, QueryLanePanel, reportedProgress, SUBMITTED } from "../../components/lab/QueryLanes";
 // using same-origin relative API calls
 const PRIMARY_DB_NAME = process.env.NEXT_PUBLIC_PRIMARY_DATABASE_NAME || "";
 
@@ -56,6 +56,12 @@ interface ColumnInfo {
 
 interface QueryResult {
   columns: string[];
+  /**
+   * The Engine's declared type per column, positional with `columns`. A
+   * federated source reports none, so the grid header simply carries no type
+   * for it rather than inferring one from the rows.
+   */
+  columnTypes?: string[];
   rows: unknown[][];
   executionTime?: number;
   rowCount?: number;
@@ -96,6 +102,7 @@ interface StreamRecord {
   state: string;
   elapsed_ms: number;
   columns: string[];
+  column_types?: string[];
   stages?: Array<{ state: string; task_count: number; completed_tasks: number }>;
   scans?: Array<{ rows_selected: number; rows_emitted?: number | null }>;
   workers?: number;
@@ -144,6 +151,20 @@ function readStageProgress(record: StreamRecord): Pick<StreamProgress, "tasksDon
 function retryAfterMs(res: Response): number {
   const seconds = Number(res.headers.get("Retry-After"));
   return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : STREAM_PAGE_RETRY_MS;
+}
+
+/**
+ * Release a streamed KaveonDB statement on the coordinator, which stops its
+ * scan and frees its pages. `keepalive` is set so a cancellation sent while
+ * the page is being left still leaves the browser.
+ */
+function releaseStreamedStatement(run: StreamRun): void {
+  run.cancelled = true;
+  run.active = false;
+  void msalFetch(`${API_BASE}/api/v1/lab/query/${encodeURIComponent(run.queryId)}`, {
+    method: "DELETE",
+    keepalive: true,
+  }).catch(() => {});
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -362,6 +383,7 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
   // Column visibility + fullscreen
   const [hiddenColumns, setHiddenColumns] = useState<Set<number>>(new Set());
   const [isColumnPickerOpen, setIsColumnPickerOpen] = useState(false);
+  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const [isResultsFullscreen, setIsResultsFullscreen] = useState(false);
 
 
@@ -1211,6 +1233,7 @@ return;
       const limitedRows = rowLimit > 0 ? allRows.slice(0, rowLimit) : allRows;
       setResults({
         columns: data.columns || [],
+        columnTypes: data.columnTypes || [],
         rows: limitedRows,
         executionTime: data.executionTime,
         rowCount: data.rowCount,
@@ -1275,6 +1298,7 @@ return;
     const recordUrl = `${API_BASE}/api/v1/lab/query/${encodeURIComponent(run.queryId)}`;
 
     let columns: string[] = [];
+    let columnTypes: string[] = [];
     let columnsShown = false;
     let received = 0;
     let record: StreamRecord | null = null;
@@ -1288,11 +1312,12 @@ return;
     };
     const publishProgress = () => setStreamProgress({ ...progress });
 
-    const showColumns = (names: string[]) => {
+    const showColumns = (names: string[], types: string[]) => {
       if (columnsShown || names.length === 0) return;
       columns = names;
+      columnTypes = types;
       columnsShown = true;
-      setResults((prev) => ({ columns: names, rows: prev?.rows ?? [], execution: null }));
+      setResults((prev) => ({ columns: names, columnTypes: types, rows: prev?.rows ?? [], execution: null }));
       setColumnWidths([]);
       setCurrentPage(0);
       setHiddenColumns(new Set());
@@ -1317,7 +1342,10 @@ return;
         const body = await res.json();
         const next: StreamRecord = body.query;
         record = next;
-        showColumns(Array.isArray(next.columns) ? next.columns : []);
+        showColumns(
+          Array.isArray(next.columns) ? next.columns : [],
+          Array.isArray(next.column_types) ? next.column_types : [],
+        );
         if (next.next_uri) pagesReady = true;
         const stage = readStageProgress(next);
         progress.state = next.state;
@@ -1386,7 +1414,7 @@ return;
             received += kept.length;
             // Append: the grid renders one PAGE_SIZE window of `rows`, so a
             // page landing re-renders that window, never the whole result.
-            setResults((prev) => (prev ? { ...prev, rows: prev.rows.concat(kept) } : { columns, rows: kept, execution: null }));
+            setResults((prev) => (prev ? { ...prev, rows: prev.rows.concat(kept) } : { columns, columnTypes, rows: kept, execution: null }));
           }
           progress.rowsWritten = Number(body.row_count) || progress.rowsWritten;
           progress.rowsReceived = received;
@@ -1456,6 +1484,7 @@ return;
     }
     setResults((prev) => ({
       columns: prev?.columns.length ? prev.columns : columns,
+      columnTypes: prev?.columnTypes?.length ? prev.columnTypes : columnTypes,
       rows: prev?.rows ?? [],
       rowCount: totalRows ?? received,
       executionTime: elapsedSeconds,
@@ -1465,10 +1494,7 @@ return;
 
   const cancelQuery = () => {
     const run = streamRunRef.current;
-    if (run && run.active && !run.cancelled) {
-      run.cancelled = true;
-      void msalFetch(`${API_BASE}/api/v1/lab/query/${encodeURIComponent(run.queryId)}`, { method: "DELETE" });
-    }
+    if (run && run.active && !run.cancelled) releaseStreamedStatement(run);
     abortControllerRef.current?.abort();
   };
 
@@ -1776,16 +1802,41 @@ return;
   useEffect(() => { runCurrentQueryRef.current = runCurrentQuery; });
   useEffect(() => { applySqlFormattingRef.current = applySqlFormattingToActiveQuery; });
 
-  // Escape exits fullscreen / closes the column picker
+  // Escape exits fullscreen / closes an open menu in the results bar
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setIsResultsFullscreen(false);
         setIsColumnPickerOpen(false);
+        setIsExportMenuOpen(false);
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  /**
+   * A statement the reader walks away from is cancelled, not abandoned.
+   * Leaving the Lab unmounts this component and closing or reloading the tab
+   * fires `pagehide`; either way the statement is released rather than left
+   * scanning for a reader who is no longer there and leaving a RUNNING
+   * record behind. A streamed KaveonDB statement is cancelled by id, which
+   * the coordinator honours; a synchronous statement is cancelled by
+   * aborting its request, which the API's disconnect watcher turns into a
+   * cancel on the source.
+   */
+  useEffect(() => {
+    const release = () => {
+      const run = streamRunRef.current;
+      if (run && run.active && !run.cancelled) releaseStreamedStatement(run);
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
+    };
+    window.addEventListener("pagehide", release);
+    return () => {
+      window.removeEventListener("pagehide", release);
+      release();
+    };
   }, []);
 
   /** Commit an in-progress tab rename. */
@@ -2105,6 +2156,16 @@ return;
   const hasLandedRows = (results?.rows?.length ?? 0) > 0;
   const showLanePanel = isExecuting && !hasLandedRows && !resultError;
   const showStreamLine = isExecuting && streamProgress != null && hasLandedRows;
+  // What the running mark reports. While the statement is being executed
+  // that is the cluster's completed tasks; once the coordinator has finished
+  // and the Studio is still reading pages it is the rows retrieved against
+  // the rows the coordinator has written. Null when neither is known yet, so
+  // the mark shows activity without claiming a figure.
+  const runningProgress = streamProgress == null
+    ? null
+    : streamProgress.state === "FINISHED" && streamProgress.rowsWritten > 0
+      ? streamProgress.rowsReceived / streamProgress.rowsWritten
+      : reportedProgress(streamProgress);
 
   const formatExecutionTime = (seconds: number | undefined | null): string => {
     if (seconds == null || Number.isNaN(seconds)) {
@@ -2125,11 +2186,11 @@ return;
   // "From context" / "Live query" pair so a served result is never mistaken
   // for a measurement.
   const executionLabel = results?.execution
-    ? (results.execution.mode === "cache"
-        ? "From cache"
-        : results.execution.mode === "context"
-          ? "From context · no scan"
-          : "Live query") + " · "
+    ? results.execution.mode === "cache"
+      ? "From cache"
+      : results.execution.mode === "context"
+        ? "From context · no scan"
+        : "Live query"
     : "";
   const sortedRows = getSortedRows();
   const filteredRows = resultFilter.trim()
@@ -2450,7 +2511,7 @@ return;
                                       >
                                         {col.name}
                                       </span>
-                                      <span className="column-type" style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{col.dataType}</span>
+                                      <span className="column-type">{col.dataType}</span>
                                     </div>
                                   ))}
                                 </>
@@ -2800,94 +2861,180 @@ return;
             />
 
             <div className={`results-section${isResultsFullscreen ? " results-section--fullscreen" : ""}`}>
-              <div className="section-header">
-                <h3 id="resultsTitle">
-                  <i className="fas fa-table" /> Query Results
-                </h3>
-                <div className="results-actions">
-                  {/* Filter + stats */}
-                  {(results || multiResults) && !isExecuting && (
-                    <input
-                      type="text"
-                      placeholder="Filter rows…"
-                      value={resultFilter}
-                      onChange={(e) => { setResultFilter(e.target.value); setCurrentPage(0); }}
-                      style={{ padding: "0.2rem 0.5rem", fontSize: "0.75rem", border: "1px solid var(--border)", borderRadius: 4, width: 130 }}
-                    />
-                  )}
-                  <span id="resultStats" className="result-stats">
-                    {isExecuting && streamProgress?.state === "FINISHED" && (
-                      <span className="result-stats__running"><KaveonArc />{`Retrieving rows • ${streamProgress.rowsReceived.toLocaleString()} received`}</span>
-                    )}
-                    {isExecuting && streamProgress?.state !== "FINISHED" && (
-                      <span className="result-stats__running"><KaveonArc />{`Running • ${formatExecutionTime((liveElapsedMs ?? 0) / 1000)}`}</span>
-                    )}
-                    {!isExecuting && results?.cancelled && `Cancelled • ${rowCount.toLocaleString()} rows received • ${formatExecutionTime(executionTime)}`}
-                    {!isExecuting && !results?.cancelled && rowCount > 0 && `${rowCount.toLocaleString()} rows • ${executionLabel}${formatExecutionTime(executionTime)}`}
+              {/* ── The results bar ───────────────────────────────────────
+                  One bar read left to right: what the result is, how it is
+                  being narrowed, then what can be done with it. The facts
+                  carry the hierarchy — the count leads, the lane and the
+                  timing follow it in muted type — and every control takes
+                  its geometry from `results-bar__btn` over the same button
+                  skin the editor bar uses, so the row is one family rather
+                  than a line of one-off controls. */}
+              <div className="results-bar">
+                <div className="results-bar__lead">
+                  <h3 className="results-bar__title">Results</h3>
+                  <span className="results-bar__summary">
+                    {isExecuting ? (
+                      <span className="result-stats__running">
+                        <KaveonHalo size={13} variant="inline" progress={runningProgress} />
+                        <strong className="results-bar__lede">
+                          {streamProgress?.state === "FINISHED" ? "Retrieving rows" : "Running"}
+                        </strong>
+                        <span className="results-bar__fact">
+                          {streamProgress?.state === "FINISHED"
+                            ? `${streamProgress.rowsReceived.toLocaleString()} received`
+                            : formatExecutionTime((liveElapsedMs ?? 0) / 1000)}
+                        </span>
+                      </span>
+                    ) : results?.cancelled ? (
+                      <>
+                        <strong className="results-bar__lede">Cancelled</strong>
+                        <span className="results-bar__fact">{rowCount.toLocaleString()} rows received</span>
+                        <span className="results-bar__fact">{formatExecutionTime(executionTime)}</span>
+                      </>
+                    ) : rowCount > 0 ? (
+                      <>
+                        <strong className="results-bar__lede">{rowCount.toLocaleString()} rows</strong>
+                        {executionLabel && <span className="results-bar__fact">{executionLabel}</span>}
+                        <span className="results-bar__fact">{formatExecutionTime(executionTime)}</span>
+                      </>
+                    ) : null}
                   </span>
+                </div>
+
+                <div className="results-bar__controls">
+                  {(results || multiResults) && !isExecuting && (
+                    <label className="results-filter">
+                      <i className="fas fa-filter" aria-hidden="true" />
+                      <input
+                        type="text"
+                        placeholder="Filter rows"
+                        aria-label="Filter the rows on screen"
+                        value={resultFilter}
+                        onChange={(e) => { setResultFilter(e.target.value); setCurrentPage(0); }}
+                      />
+                    </label>
+                  )}
 
                   {results && !isExecuting && (
                     <>
-                      {/* Analyse */}
-                      <button type="button" className="template-btn" style={{ padding: "0.25rem 0.6rem", fontSize: "0.75rem" }} onClick={() => { setVisualizeError(null); setIsVisualizeModalOpen(true); }} title="Create a chart from this query">
-                        <i className="fas fa-chart-bar" /> Visualize
-                      </button>
-
-                      {/* Export */}
-                      <button type="button" className="template-btn" style={{ padding: "0.25rem 0.6rem", fontSize: "0.75rem" }} onClick={exportCsv} title="Download as CSV"><i className="fas fa-file-csv" /> CSV</button>
-                      <button type="button" className="template-btn" style={{ padding: "0.25rem 0.6rem", fontSize: "0.75rem" }} onClick={exportExcel} title="Download as Excel"><i className="fas fa-file-excel" /> Excel</button>
-                      <button type="button" className="template-btn" style={{ padding: "0.25rem 0.6rem", fontSize: "0.75rem" }} onClick={exportJson} title="Download as JSON"><i className="fas fa-file-code" /> JSON</button>
-
-                      {/* Persist + share */}
-
-                      <button type="button" className="template-btn" style={{ padding: "0.25rem 0.6rem", fontSize: "0.75rem" }} onClick={copyPermalink} title="Copy shareable link">
-                        <i className="fas fa-link" /> Share
-                      </button>
-
-                      {/* View controls */}
-                      <span style={{ width: 1, background: "var(--border)", alignSelf: "stretch", margin: "4px 2px" }} />
-                      <div style={{ position: "relative" }}>
-                        <button type="button" className="template-btn" style={{ padding: "0.25rem 0.6rem", fontSize: "0.75rem" }} onClick={() => setIsColumnPickerOpen((p) => !p)} title="Show/hide columns">
-                          <i className="fas fa-columns" /> Columns
-                          {hiddenColumns.size > 0 && (
-                            <span style={{ marginLeft: 4, background: "var(--accent)", color: "#fff", borderRadius: 9, padding: "0 5px", fontSize: "0.7rem" }}>{hiddenColumns.size}</span>
-                          )}
+                      <div className="results-bar__group">
+                        <button
+                          type="button"
+                          className="template-btn results-bar__btn"
+                          onClick={() => { setVisualizeError(null); setIsVisualizeModalOpen(true); }}
+                          title="Create a chart from this query"
+                        >
+                          <i className="fas fa-chart-bar" /> Visualize
                         </button>
-                        {isColumnPickerOpen && (
-                          <>
-                            <div style={{ position: "fixed", inset: 0, zIndex: 199 }} onClick={() => setIsColumnPickerOpen(false)} />
-                            <div style={{ position: "absolute", top: "110%", right: 0, zIndex: 200, background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 8, boxShadow: "var(--shadow-md)", minWidth: 180, maxHeight: 280, overflowY: "auto", padding: "0.4rem 0" }}>
-                              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.3rem 0.75rem", borderBottom: "1px solid var(--border)", marginBottom: "0.25rem" }}>
-                                <span style={{ fontSize: "0.7rem", fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Columns</span>
-                                <div style={{ display: "flex", gap: 6 }}>
-                                  <button type="button" style={{ fontSize: "0.7rem", color: "var(--accent)", background: "none", border: "none", cursor: "pointer", padding: 0 }} onClick={() => setHiddenColumns(new Set())}>All</button>
-                                  <button type="button" style={{ fontSize: "0.7rem", color: "var(--text-secondary)", background: "none", border: "none", cursor: "pointer", padding: 0 }} onClick={() => setHiddenColumns(new Set(results.columns.map((_, i) => i)))}>None</button>
-                                </div>
+
+                        {/* One export control. Which of the three formats is
+                            the menu's business, not the bar's. */}
+                        <div className="results-bar__menu">
+                          <button
+                            type="button"
+                            className="template-btn results-bar__btn"
+                            aria-haspopup="true"
+                            aria-expanded={isExportMenuOpen}
+                            onClick={() => setIsExportMenuOpen((p) => !p)}
+                            title="Download the result"
+                          >
+                            <i className="fas fa-download" /> Export
+                          </button>
+                          {isExportMenuOpen && (
+                            <>
+                              <div className="results-bar__scrim" onClick={() => setIsExportMenuOpen(false)} />
+                              <div className="results-bar__sheet" role="menu" aria-label="Export format">
+                                <button type="button" role="menuitem" className="results-bar__item" onClick={() => { setIsExportMenuOpen(false); exportCsv(); }}>
+                                  <i className="fas fa-file-csv" aria-hidden="true" /> CSV
+                                </button>
+                                <button type="button" role="menuitem" className="results-bar__item" onClick={() => { setIsExportMenuOpen(false); exportExcel(); }}>
+                                  <i className="fas fa-file-excel" aria-hidden="true" /> Excel
+                                </button>
+                                <button type="button" role="menuitem" className="results-bar__item" onClick={() => { setIsExportMenuOpen(false); exportJson(); }}>
+                                  <i className="fas fa-file-code" aria-hidden="true" /> JSON
+                                </button>
                               </div>
-                              {results.columns.map((col, idx) => (
-                                <label key={idx} style={{ display: "flex", alignItems: "center", gap: 8, padding: "0.3rem 0.75rem", cursor: "pointer", fontSize: "0.8rem", color: "var(--text-primary)" }}
-                                  onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
-                                  onMouseLeave={(e) => (e.currentTarget.style.background = "")}
-                                >
-                                  <input type="checkbox" checked={!hiddenColumns.has(idx)} onChange={() => setHiddenColumns((prev) => { const next = new Set(prev); next.has(idx) ? next.delete(idx) : next.add(idx); return next; })} style={{ accentColor: "var(--accent)" }} />
-                                  {col}
-                                </label>
-                              ))}
-                            </div>
-                          </>
-                        )}
+                            </>
+                          )}
+                        </div>
+
+                        <button
+                          type="button"
+                          className="template-btn results-bar__btn"
+                          onClick={copyPermalink}
+                          title="Copy a link to this query"
+                        >
+                          <i className="fas fa-link" /> Share
+                        </button>
                       </div>
 
-                      {/* Expand/compress — second to last */}
-                      <button type="button" className="template-btn" style={{ padding: "0.25rem 0.5rem", fontSize: "0.75rem" }} onClick={() => setIsResultsFullscreen((p) => !p)} title={isResultsFullscreen ? "Exit fullscreen (Esc)" : "Expand fullscreen"}>
-                        <i className={`fas fa-${isResultsFullscreen ? "compress-alt" : "expand-alt"}`} />
-                      </button>
+                      <div className="results-bar__group">
+                        <div className="results-bar__menu">
+                          <button
+                            type="button"
+                            className="template-btn results-bar__btn"
+                            aria-haspopup="true"
+                            aria-expanded={isColumnPickerOpen}
+                            onClick={() => setIsColumnPickerOpen((p) => !p)}
+                            title="Show or hide columns"
+                          >
+                            <i className="fas fa-columns" /> Columns
+                            {hiddenColumns.size > 0 && (
+                              <span className="results-bar__badge">{hiddenColumns.size}</span>
+                            )}
+                          </button>
+                          {isColumnPickerOpen && (
+                            <>
+                              <div className="results-bar__scrim" onClick={() => setIsColumnPickerOpen(false)} />
+                              <div className="results-bar__sheet results-bar__sheet--columns">
+                                <div className="results-bar__sheet-head">
+                                  <span>Columns</span>
+                                  <span className="results-bar__sheet-actions">
+                                    <button type="button" onClick={() => setHiddenColumns(new Set())}>All</button>
+                                    <button type="button" onClick={() => setHiddenColumns(new Set(results.columns.map((_, i) => i)))}>None</button>
+                                  </span>
+                                </div>
+                                {results.columns.map((col, idx) => (
+                                  <label key={`${idx}-${col}`} className="results-bar__item results-bar__item--check">
+                                    <input
+                                      type="checkbox"
+                                      checked={!hiddenColumns.has(idx)}
+                                      onChange={() => setHiddenColumns((prev) => {
+                                        const next = new Set(prev);
+                                        if (next.has(idx)) next.delete(idx);
+                                        else next.add(idx);
+                                        return next;
+                                      })}
+                                    />
+                                    {col}
+                                  </label>
+                                ))}
+                              </div>
+                            </>
+                          )}
+                        </div>
+
+                        <button
+                          type="button"
+                          className="template-btn results-bar__btn results-bar__btn--icon"
+                          onClick={() => setIsResultsFullscreen((p) => !p)}
+                          title={isResultsFullscreen ? "Exit fullscreen (Esc)" : "Expand to fullscreen"}
+                          aria-label={isResultsFullscreen ? "Exit fullscreen" : "Expand to fullscreen"}
+                        >
+                          <i className={`fas fa-${isResultsFullscreen ? "compress-alt" : "expand-alt"}`} />
+                        </button>
+                      </div>
                     </>
                   )}
 
-                  {/* Clear — always last */}
                   {(results || multiResults || resultError) && !isExecuting && !isResultsFullscreen && (
-                    <button type="button" className="template-btn" style={{ padding: "0.25rem 0.5rem", fontSize: "0.75rem", color: "var(--text-secondary)" }} onClick={() => { setResults(null); setMultiResults(null); setResultError(null); setResultFilter(""); }} title="Clear results">
+                    <button
+                      type="button"
+                      className="template-btn results-bar__btn results-bar__btn--icon results-bar__btn--quiet"
+                      onClick={() => { setResults(null); setMultiResults(null); setResultError(null); setResultFilter(""); }}
+                      title="Clear the result"
+                      aria-label="Clear the result"
+                    >
                       <i className="fas fa-times" />
                     </button>
                   )}
@@ -2923,7 +3070,7 @@ return;
                 {/* ── A KaveonDB statement streaming its rows ── */}
                 {showStreamLine && streamProgress && (
                   <div className="lab-stream-line" role="status" aria-live="polite">
-                    <span className="lab-stream-line__pulse" aria-hidden="true" />
+                    <KaveonHalo size={12} variant="inline" progress={runningProgress} />
                     <span className="lab-stream-line__state">
                       {streamProgress.state === "QUEUED" ? "Queued" : streamProgress.state === "FINISHED" ? "Retrieving rows" : "Running"}
                     </span>
@@ -3069,6 +3216,10 @@ return;
                               : "fas fa-sort-down column-sort-icon";
 
                             const explicitWidth = columnWidths[colIndex];
+                            // The Engine's own type for the column. A
+                            // federated source declares none, and nothing is
+                            // inferred from the rows in its place.
+                            const dataType = (results.columnTypes?.[colIndex] ?? "").trim();
 
                             return (
                               <th
@@ -3077,8 +3228,11 @@ return;
                                 className={isSorted ? "sorted" : undefined}
                                 style={explicitWidth ? { width: explicitWidth } : undefined}
                               >
-                                <span className="column-header-label">{col}</span>
-                                <i className={sortIconClass} />
+                                <span className="column-header-line">
+                                  <span className="column-header-label">{col}</span>
+                                  <i className={sortIconClass} />
+                                </span>
+                                {dataType && <span className="column-header-type">{dataType}</span>}
                                 <div
                                   className="column-resizer"
                                   onMouseDown={(event) =>

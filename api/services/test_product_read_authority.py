@@ -116,6 +116,22 @@ class ProductReadAuthorityTests(unittest.TestCase):
                           side_effect=lambda kind, *args, **kwargs: favorites if kind == "favorite" else records):
             self.assertTrue(authority.list_documents("datasets", "alice", "Viewer")[0]["favorite"])
 
+    def test_owner_scoped_family_reads_its_own_records_without_admin(self):
+        """An owner-scoped document names its owner in ``user_email`` and carries
+        no ``created_by``, ``owner`` or ``visibility``. The private-visibility
+        test has to recognise that field, or a caller reading their own history
+        at a non-Admin role gets an empty list and no error."""
+        records = [{"document": {
+            "id": "q-1", "sql_text": "SELECT 1", "user_email": "alice@example.com",
+            "executed_at": "2026-01-01T00:00:00", "status": "success",
+        }}]
+        with patch.dict(os.environ, {authority.ENVIRONMENT_KEY: "query_history"}, clear=True),              patch.object(authority.product_store, "list_records",
+                          side_effect=lambda kind, *args, **kwargs: records):
+            own = authority.list_documents("query_history", "alice@example.com", "Viewer")
+            self.assertEqual([item["id"] for item in own], ["q-1"])
+            # Another principal's history stays invisible at the same role.
+            self.assertEqual(
+                authority.list_documents("query_history", "bob@example.com", "Viewer"), [])
 
 if __name__ == "__main__":
     unittest.main()

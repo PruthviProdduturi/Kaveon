@@ -9,6 +9,19 @@ from pathlib import Path
 from services import adls_artifact_client, product_outbox, product_store
 
 
+class DefinitionUnavailable(RuntimeError):
+    """No compiled definition describes this dataset at its current revision.
+
+    Distinguished from the module's other failures because it is the expected
+    input to generation rather than a fault: a dataset that has never been
+    compiled, or whose artifact predates its current revision, has no artifact
+    to serve and needs one built. Serving still fails closed on it — a
+    RuntimeError subclass, so every caller that treats this module as
+    fail-closed keeps doing so — while the generator can recognise it and
+    compile from scratch instead of refusing to start.
+    """
+
+
 MAX_BYTES = 16 * 1024 * 1024
 LIVE_PUBLISH_KEY = "KAVEON_DLM_LIVE_ARTIFACT_PUBLISH_ENABLED"
 _FIELDS = frozenset({"dataset_id", "version", "manifest", "stats_rollup", "usage_rollup",
@@ -136,7 +149,7 @@ def read(dataset_id: str, actor: str, role: str) -> dict | None:
     definition = product_store.read("dlm_definition", dataset_id, actor, "Admin")
     expected_definition = {"dataset_id": dataset_id, "dataset_revision": dataset_revision}
     if not definition or definition.get("document") != expected_definition:
-        raise RuntimeError("Compiled DLM definition is missing or stale")
+        raise DefinitionUnavailable("Compiled DLM definition is missing or stale")
     definition_revision = definition.get("revision")
     if type(definition_revision) is not int or definition_revision < 1:
         raise RuntimeError("Compiled DLM definition revision is invalid")

@@ -132,7 +132,13 @@ def list_documents(family: str, actor: str, role: str) -> list[dict]:
             item["favorite"] = ("source", identity) in favorite_ids if family == "sources" else False
             documents.append(item); continue
         visibility = document.get("visibility") or ("private" if family in _OWNER_FAMILIES else "internal")
-        owner = document.get("created_by") or document.get("owner")
+        # An owner-scoped family names its owner in ``user_email`` and carries
+        # neither ``created_by`` nor ``owner`` — the migration snapshot asserts
+        # that equivalence when it validates each record. Without it here the
+        # private-visibility test below compares None against the actor and
+        # discards every one of the caller's own records, which is how query
+        # history came back empty for every non-Admin read.
+        owner = document.get("created_by") or document.get("owner") or document.get("user_email")
         if not (role == "Admin" or visibility == "published"
             or visibility == "internal" and role in {"Analyst", "Editor"}
             or visibility == "private" and owner == actor): continue
