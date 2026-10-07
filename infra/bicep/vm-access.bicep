@@ -20,6 +20,13 @@ param storageAccountName string
 @description('Container registry the host pulls images from. Empty to skip.')
 param registryName string = ''
 
+@description('''What the principal is. A host's managed identity is a
+ServicePrincipal; a person granting themselves the same access for an
+operational task is a User, and Azure refuses the assignment when this does
+not match the principal it finds.''')
+@allowed(['ServicePrincipal', 'User', 'Group'])
+param principalType string = 'ServicePrincipal'
+
 // Built-in role definition IDs are stable across clouds and tenants.
 var storageBlobDataContributor = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 var acrPull = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
@@ -40,7 +47,7 @@ resource lakeAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributor)
     principalId: principalId
-    principalType: 'ServicePrincipal'
+    principalType: principalType
   }
 }
 
@@ -50,7 +57,7 @@ resource registryAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = i
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPull)
     principalId: principalId
-    principalType: 'ServicePrincipal'
+    principalType: principalType
   }
 }
 

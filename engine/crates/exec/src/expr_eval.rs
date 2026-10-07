@@ -1826,6 +1826,16 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let fmt_arr = as_string_array(&args[1])?;
             eval_to_char(source, fmt_arr, num_rows)
         }
+        // `ARRAY[…]` is carried this far as a call because one construct does
+        // read it — APPROX_PERCENTILE's percentile list, which consumes the
+        // constants while binding and never reaches evaluation. Arriving here
+        // means it was written somewhere that wants an array *value*, and the
+        // Engine has no array type to give. Say which, rather than reporting an
+        // unknown function the caller plainly did write.
+        "ARRAY" => Err(KaveonError::Execution(
+            "ARRAY[…] is supported only as the percentile list of APPROX_PERCENTILE,              as in APPROX_PERCENTILE(column, ARRAY[0.5, 0.9]); the Engine has no              general array type"
+                .into(),
+        )),
         other => Err(KaveonError::Execution(format!(
             "unknown scalar function: {other}"
         ))),
