@@ -1061,12 +1061,19 @@ export default function Home() {
         // ── Direct SQL execution (fallback) ─────────────────────────────────
         if (!usedAcr) {
           try {
+            // After the PostgreSQL retirement `/sql/execute` routes a statement
+            // naming an Engine catalog to the Engine plane, which resolves the
+            // schema from an authorized dataset rather than trusting one the
+            // browser sends. Carry the dataset the question was asked against,
+            // or this fallback answers "an Engine chart query requires a
+            // dataset" for every question.
             const execRes = await msalFetch("/api/v1/sql/execute", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 sql_text: parsed.sql,
                 database: dbName,
+                ...(selectedDataset ? { dataset_id: Number(selectedDataset) } : {}),
                 source: "chat",
               }),
             });
