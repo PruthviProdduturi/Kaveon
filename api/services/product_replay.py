@@ -76,16 +76,21 @@ def apply_event(event: dict) -> int | None:
             "update", kind, record_id, document, int(target["revision"])
         )
 
+    # A dlm_run is replayed through the same two commits the backfill uses, so
+    # it lands at the revision a backfilled run has. They cannot share one
+    # transaction: a product commit applies each change once against a single
+    # base, and KaveonDB rejects a record changed more than once in it.
+    replay_ready = None
     if kind == "dlm_run" and operation == "create":
         building = {**document, "status": "building", "artifact": None}
-        mutations = [
-            product_store.ProductMutation("create", kind, record_id, building),
-            product_store.ProductMutation("update", kind, record_id, document, 1),
-        ]
+        mutations = [product_store.ProductMutation("create", kind, record_id, building)]
+        replay_ready = product_store.ProductMutation("update", kind, record_id, document, 1)
     else:
         mutations = [mutation]
     try:
         committed = product_store.transact(mutations, owner, "Admin")
+        if replay_ready is not None:
+            committed = product_store.transact([replay_ready], owner, "Admin")
     except HTTPException as error:
         if error.status_code != 409:
             raise

@@ -79,13 +79,23 @@ def publish(payload: dict, actor: str) -> dict:
         "status": "ready",
         "artifact": {"path": compiled["path"], "sha256": compiled["sha256"]},
     }
-    mutations.extend((
-        product_store.ProductMutation("create", "dlm_run", run_id, building),
-        product_store.ProductMutation(
-            "update", "dlm_run", run_id, ready, expected_revision=1,
-        ),
-    ))
+    # The run's two revisions are two commits, not one. A product commit
+    # applies each change once against a single base snapshot, so KaveonDB
+    # rejects a transaction that touches one record twice ("product record
+    # 'dlm_run/<id>' is changed more than once") — which is why no DLM could
+    # ever be published. dlm_run_backfill already builds the same lifecycle as
+    # separate commits; this now matches it, so a run reaches revision 2 by the
+    # same route however it was created.
+    #
+    # Splitting costs nothing a reader can observe. The bytes are already
+    # published, and `read` only ever resolves a run whose status is ready, so
+    # a failure between the two commits strands a building run that every
+    # reader ignores and the next generation supersedes.
+    mutations.append(product_store.ProductMutation("create", "dlm_run", run_id, building))
     product_store.transact(mutations, owner, "Admin")
+    product_store.transact([product_store.ProductMutation(
+        "update", "dlm_run", run_id, ready, expected_revision=1,
+    )], owner, "Admin")
     return {
         "definition_id": dataset_id,
         "definition_revision": definition_revision,
