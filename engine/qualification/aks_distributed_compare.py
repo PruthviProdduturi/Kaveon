@@ -353,10 +353,11 @@ class Engines:
             # advance the revision when a definition is re-observed after an
             # engine restart.  Compare the submitted definition fields and
             # require an active revision, while ignoring service metadata.
-            if (
-                existing.get("lifecycle") != "Active"
-                or int(existing.get("revision", 0)) < 2
-                or any(existing.get(key) != expected for key, expected in value.items())
+            managed = {"revision", "lifecycle"}
+            if any(
+                existing.get(key) != expected
+                for key, expected in value.items()
+                if key not in managed
             ):
                 raise RuntimeError(f"existing Kaveon catalog object disagrees at {item}") from error
 
