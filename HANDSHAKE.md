@@ -1896,3 +1896,95 @@ let source = DeltaTableReader::new(table_directory)
 | 2026-09-23 | Codex | Parallel migration pass: `6d36acec` adds bounded replay for the six remaining data families (`ai_configuration`, `catalog_sources`, `data_sources`, `dataset_semantics`, `context_cache`, `dlm_generation`) with whitelist validation, deterministic typed conversion, stable resumable IDs and reports; `0f1574a4` adds the explicit `KAVEONDB_READ_AUTHORITY_FAMILIES=all` switch for all currently implemented product families; `deee855c` adds admin-only bounded system-row filters and deterministic ordering over one immutable snapshot. Tests: replay 18 pass, API authority 15 pass plus 23 subtests, Engine system query and transaction tests pass. These are migration capabilities, not retirement evidence; live replay and all PostgreSQL-free qualification gates remain. |
 | 2026-09-24 | Codex | Live retirement attempt on personal ACA: API image `d39217ca` added a controlled one-shot system replay, but the revision did not become healthy and was rolled back to healthy `3fb07336`. The replay reached PostgreSQL and found the personal baseline lacks `ai_providers`, `user_ai_keys`, and `dlm_value_index`; no complete replay report or retirement evidence was emitted. API health is restored; PostgreSQL remains authoritative and no write fence or stop was attempted. |
 | 2026-09-24 | Codex | Personal metadata baseline completed: `ai_providers`, `user_ai_keys`, and `dlm_value_index` (including unique/value indexes) now exist and were verified by direct TLS PostgreSQL inventory; `dlm_value_index` contains 1,635 rows, with the other two currently empty. A combined replay-enabled image was built (`74adc277`, then validation fix `3fbcf88b`) and deployed as ACA revisions `0000708`/`0000710`; those revisions did not report healthy, so traffic was returned to the known healthy `9cbc05bd` revision and one-shot replay was disabled. API health, metadata connectivity, and all 835 API tests (132 subtests) pass. This is a completed schema/build/health checkpoint, not retirement evidence: replay report, shadow parity, fencing, restart without PostgreSQL, backup/restore, rollback, and final evidence gates remain blocking. |
+
+## Claude — October 6, 2026 — OWNERSHIP TRANSFER: PostgreSQL retirement and the product-store transactional core
+
+**Architect's direction, 2026-10-06:** "take the PostgreSQL dependency off and make
+KaveonDB a super transactional db", and then "codex will not come in on postgres
+retirement so take it all for yours". The PostgreSQL retirement track and the
+product-store transactional core transfer from Codex to Claude as of this entry.
+That includes `engine/crates/catalog/src/product_commit.rs`,
+`engine/crates/catalog/src/product_manifest.rs`,
+`engine/crates/storage/src/adls_commit.rs`, `api/services/system_authority_replay.py`
+and the replay/backfill services, and the ordered gate sequence recorded in
+`docs/engineering/codex-continuation.md` and `docs/engineering/postgresql-retirement.md`.
+Codex keeps the rest of the Engine. The evidence gates themselves are unchanged
+and are not being relaxed by this transfer — only the owner changes.
+
+**Measured first, on the local Compose stack.** Creating N *distinct* dashboards
+through `POST /api/v1/dashboards` — no two writers touching the same row:
+
+| writers | accepted | 409 | throughput |
+|--------:|---------:|----:|-----------:|
+| 1 | 24/24 | 0 | 4.5 rows/s |
+| 2 | 12/24 | 12 | 5.1 rows/s |
+| 4 | 6/24 | 17 | 3.9 rows/s |
+| 8 | 3/24 | 21 | 2.1 rows/s |
+
+Accepted ≈ rows ÷ writers: exactly one writer commits per snapshot generation and
+every other concurrent write is rejected outright. Throughput falls as concurrency
+rises. Updates and deletes behave the same way. Correctness held throughout — 16
+writers contending on one row produced no lost update, the final value was always
+one of the accepted writes, and no unrelated row was ever touched.
+
+**Root cause, one line.** `product_commit.rs:353`:
+
+    if request.base != head.snapshot.reference() { return CommitOutcome::Conflict; }
+
+This is a *generation* check sitting on top of row preconditions that
+`product_manifest.rs::prepare` already validates completely and correctly —
+`CreateProduct` fails when the key exists, `UpdateProduct` and `DeleteProduct`
+fail unless `current.revision == expected_revision`, `InsertTypedRow` fails on a
+duplicate primary key. The row-level concurrency control is already right. The
+generation check rejects commits the layer beneath it had already proved safe.
+
+**This is the same defect as the cloud blocker in the Oct 7 handoff.** The stuck
+`activity`/`query_history` replay is this check failing under a concurrent writer,
+surfacing at the storage layer as ADLS `412 ConditionNotMet` on the product
+catalog head CAS. Two findings for that specifically:
+
+1. **A 412 on the head CAS is a clean `Conflict`, not `Indeterminate`.** I traced
+   the publish order: shard (`:424`) and snapshot (`:429`) are both staged before
+   the head CAS (`:443`), and the old head still points at the old operation index,
+   so a failed CAS leaves the staged objects orphaned and *invisible*. Nothing
+   committed. It is therefore safe to retry. `adls_commit.rs:237` classifies
+   `ObjectStoreError::Generic` as `Retryable` → `Indeterminate`; Azure's 412 arrives
+   as `Generic` on several `object_store` paths rather than `Precondition`, which is
+   why a safe retry currently looks unsafe to the caller.
+2. **Replay cannot win this race while the API serves traffic.** `activity` and
+   `query_history` are the two highest-write-rate families; the ordered gate list
+   puts the write fence *after* replay. With a whole-store generation check, any
+   live write starves the replay. Either fence first, or land the retry below.
+
+**What I am changing.**
+
+1. `adls_commit.rs` — a precondition/412 failure classifies as `CommitErrorKind::Conflict`
+   so it reaches the caller as a retryable `Conflict`, never `Indeterminate`.
+2. `product_commit.rs` — bounded rebase-and-retry with jitter around the commit:
+   on a generation conflict, re-read the head and re-run `prepare()`, which
+   re-validates every row precondition. A genuine row conflict (revision mismatch,
+   duplicate key) still fails immediately and is never retried. This is Iceberg's
+   `commit.retry.num-retries` loop; the idempotency index already present here is
+   something Iceberg does not have, and it makes the retry strictly safer.
+3. Tests: concurrent writers on distinct rows all commit; concurrent writers on one
+   row leave exactly one winner and real conflicts for the rest; a simulated 412
+   retries and commits; a row-revision conflict is not retried.
+
+No redesign: the architecture — immutable snapshots, a single atomic head pointer,
+an operation-id dedup index — is the correct one and matches Iceberg's commit
+protocol. Only the concurrency-control layer above it was missing.
+
+**Order of work now that the track is mine.** The transactional fix comes first
+because the cloud replay cannot pass while it stands. Then, in the sequence the
+retirement doc already fixes: preserve and verify the cloud backup/snapshot and
+ADLS inventory → run the 16-family replay with durable ADLS checkpoints and
+immutable reports → shadow parity, outbox drain, write fence, final watermark →
+rehearse restart with PostgreSQL unavailable, backup/restore and rollback → the
+fail-closed evidence validator. Only a passing report permits cloud cutover, and
+`kaveon-db` is retained through the agreed rollback window after it. One change to
+the plan, from finding 2 above: the write fence moves ahead of the replay for the
+live-write families, because replay cannot win a race against the serving API.
+
+**Nothing cloud-side has been touched yet.** No resource in `kaveon-rg` has been
+read or modified in this session; the first cloud action will be the backup
+verification, and it needs an `az login` from the architect.
