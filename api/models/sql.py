@@ -22,6 +22,12 @@ class SqlExecuteBody(BaseModel):
     row_limit: Optional[int] = Field(default=None, ge=1, le=5000)
     use_cache: Optional[bool] = Field(default=False)
     cache_ttl: Optional[int] = Field(default=300, ge=30, le=3600)
+    # A token the caller mints before it sends the statement, so it can cancel
+    # the statement without having seen the response. A chart that is navigated
+    # away from never receives its query id, so an id returned in the body
+    # cannot be used to stop the work it started.
+    cancel_token: Optional[str] = Field(default=None, min_length=8, max_length=64,
+                                        pattern=r"^[A-Za-z0-9_-]+$")
 
     @field_validator("chart_id", mode="before")
     @classmethod

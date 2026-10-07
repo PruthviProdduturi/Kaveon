@@ -40,6 +40,35 @@ class DlmGenerationCutoverTests(unittest.TestCase):
         for call in transact.call_args_list:
             self.assertEqual(call.args[1:], ("owner@example.test", "Admin"))
 
+    def test_orphaned_artifact_version_is_stepped_over_not_overwritten(self):
+        """A publication that wrote its bytes then failed to commit its run
+        leaves an object no run references, so the version still looks free.
+        Retrying rebuilds bytes that differ by at least `built_at`, finds the
+        slot taken, and before this would fail reconciliation forever — one
+        failed attempt wedged the dataset permanently."""
+        dataset = {"revision": 1, "document": {"created_by": "owner"}}
+        attempted = []
+
+        def publish(value):
+            attempted.append(value["version"])
+            if value["version"] < 3:
+                raise cutover.dlm_compiled_artifact.VersionOccupied("taken")
+            return {"path": f"dlm/7/v{value['version']}/compiled.json",
+                    "sha256": "c" * 64, "bytes": 10, "version": value["version"]}
+
+        with patch.object(cutover.product_store, "read", side_effect=[dataset, None]),              patch.object(cutover.product_store, "list_records", return_value=[]),              patch.object(cutover.dlm_compiled_artifact, "publish", side_effect=publish),              patch.object(cutover.product_store, "transact"):
+            result = cutover.publish(payload(), "owner")
+        self.assertEqual(attempted, [1, 2, 3])
+        self.assertEqual(result["run_id"], "7-v3")
+
+    def test_wedged_artifact_store_reports_rather_than_looping(self):
+        dataset = {"revision": 1, "document": {"created_by": "owner"}}
+        with patch.object(cutover.product_store, "read", side_effect=[dataset, None]),              patch.object(cutover.product_store, "list_records", return_value=[]),              patch.object(cutover.dlm_compiled_artifact, "publish",
+                          side_effect=cutover.dlm_compiled_artifact.VersionOccupied("taken")),              patch.object(cutover.product_store, "transact") as transact:
+            with self.assertRaisesRegex(RuntimeError, "No free compiled DLM artifact version"):
+                cutover.publish(payload(), "owner")
+        transact.assert_not_called()
+
     def test_no_transaction_changes_one_record_twice(self):
         """A product commit applies each change once against a single base, so
         KaveonDB refuses a transaction that touches a record twice. Publishing

@@ -9,6 +9,19 @@ from pathlib import Path
 from services import adls_artifact_client, product_outbox, product_store
 
 
+class VersionOccupied(RuntimeError):
+    """This version's object already holds different bytes.
+
+    Artifacts are write-once, and a version's path is derived from the run
+    version, which in turn comes from the runs already recorded. So a
+    publication that writes its bytes and then fails to commit its run leaves
+    an object no run references — and every retry picks that same version,
+    builds bytes that differ (if only by `built_at`), and finds the slot taken.
+    Reported distinctly so the caller can move to the next version instead of
+    being wedged on an orphan forever; the bytes are never overwritten.
+    """
+
+
 class DefinitionUnavailable(RuntimeError):
     """No compiled definition describes this dataset at its current revision.
 
@@ -106,8 +119,14 @@ def publish(payload: dict) -> dict | None:
     try:
         client.create_if_absent(path, content)
     except Exception:
-        if client.read(path, MAX_BYTES + 1) != content:
+        # The write is create-only, so a failure here is either a genuine
+        # fault or this exact publication already landed and is being retried.
+        existing = client.read(path, MAX_BYTES + 1)
+        if existing is None:
             raise
+        if existing != content:
+            raise VersionOccupied(
+                f"Compiled DLM artifact v{version} already holds different bytes") from None
     if client.read(path, MAX_BYTES + 1) != content:
         raise RuntimeError("Compiled DLM artifact failed exact publication reconciliation")
     return {"path": path, "sha256": digest, "bytes": len(content), "version": version}
