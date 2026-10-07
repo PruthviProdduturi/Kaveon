@@ -74,6 +74,36 @@ class CompiledArtifactTests(unittest.TestCase):
             self.assertRaisesRegex(RuntimeError, "corrupt"):
             artifact.read("7", "viewer", "Viewer")
 
+    def test_a_silently_occupied_key_is_reported_as_occupied(self):
+        """The two artifact clients disagree about how an occupied key is
+        reported: ADLS refuses the conditional write and raises, the local
+        client simply does not write and returns. Only the read-back covers
+        both, so an orphan left by a failed publication is recognised either
+        way instead of surfacing as a bare reconciliation failure that wedges
+        the dataset forever."""
+        class Occupied:
+            def create_if_absent(self, path, content):
+                return None  # the local client's create-only behaviour
+
+            def read(self, path, max_bytes):
+                return b"bytes from an earlier attempt"
+
+        with patch.dict(os.environ, {artifact.LIVE_PUBLISH_KEY: "true"}),              patch.object(artifact, "_client", return_value=Occupied()):
+            with self.assertRaises(artifact.VersionOccupied):
+                artifact.publish({**payload(), "version": 2})
+
+    def test_a_vanished_object_is_not_mistaken_for_an_occupied_one(self):
+        class Vanishing:
+            def create_if_absent(self, path, content):
+                return None
+
+            def read(self, path, max_bytes):
+                return None
+
+        with patch.dict(os.environ, {artifact.LIVE_PUBLISH_KEY: "true"}),              patch.object(artifact, "_client", return_value=Vanishing()):
+            with self.assertRaisesRegex(RuntimeError, "vanished"):
+                artifact.publish({**payload(), "version": 2})
+
     def test_absent_definition_is_distinguishable_so_generation_can_start(self):
         """A dataset with no compiled definition must raise the specific
         DefinitionUnavailable, not a bare RuntimeError. Generation pre-reads the
