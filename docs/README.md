@@ -21,6 +21,8 @@ are planned rather than executable.
 - [Iceberg reader qualification, local](qualification/iceberg/local-2026-09-21.md) — a pyiceberg v2 table with a delete, read against its Parquet twin
 - [The 9/10 program](engineering/nine-of-ten-program.md) — the 2026-09-18 baseline scores per area, what 9 means, and the ordered workstreams
 - [Decision log](engineering/decision-log.md) — the dated non-obvious calls with their reasons and consequences, each cited to a commit or HANDSHAKE row
+- [Self-host Kaveon](guides/self-hosting.md) — one command on any Docker host; choosing the system store
+- [System storage](engineering/system-storage.md) — the one configured store that holds everything Kaveon knows about itself
 - [Run the full stack locally with Docker](guides/local-stack.md)
 - [Use the Engine CLI](guides/engine-cli.md)
 - [Deploy and connect to the Engine on AKS](engineering/azure-deployment-guide.md)
