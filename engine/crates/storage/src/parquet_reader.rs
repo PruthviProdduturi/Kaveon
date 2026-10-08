@@ -24,7 +24,9 @@ use std::time::Instant;
 use crate::scan_predicate::RowFilterPlan;
 use crate::{ScanMetrics, ScanPartition};
 
-const DEFAULT_BATCH_SIZE: usize = 8_192;
+// Larger batches amortize parquet decoder and aggregate dispatch overhead on
+// analytic scans while remaining bounded by the query memory admission.
+const DEFAULT_BATCH_SIZE: usize = 65_536;
 
 #[derive(Clone, Debug)]
 pub struct ParquetFileMetadata {

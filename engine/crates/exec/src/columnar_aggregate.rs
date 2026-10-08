@@ -134,9 +134,19 @@ impl Arena {
 #[inline(always)]
 fn text_hash(bytes: &[u8]) -> u64 {
     let mut hash = 0x9e37_79b9_7f4a_7c15u64 ^ (bytes.len() as u64);
-    for chunk in bytes.chunks(8) {
+    let mut chunks = bytes.chunks_exact(8);
+    for chunk in &mut chunks {
+        let mut word = u64::from_le_bytes(chunk.try_into().expect("chunks_exact is eight bytes"));
+        word ^= word >> 30;
+        word = word.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        word ^= word >> 27;
+        hash ^= word;
+        hash = hash.rotate_left(23).wrapping_mul(0x2127_599b_0f5d_6d3d);
+    }
+    let remainder = chunks.remainder();
+    if !remainder.is_empty() {
         let mut word = 0u64;
-        for (shift, byte) in chunk.iter().enumerate() {
+        for (shift, byte) in remainder.iter().enumerate() {
             word |= (*byte as u64) << (shift * 8);
         }
         word ^= word >> 30;
