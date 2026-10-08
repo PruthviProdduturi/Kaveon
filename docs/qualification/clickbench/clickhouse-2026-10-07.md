@@ -43,6 +43,10 @@ its eight- and twelve-worker runs were **22.3 s** and **22.5 s**, respectively,
 so that shape is currently limited by final aggregation and exchange rather
 than scan width.
 
+A 24-worker, one-lane-per-worker run reached **13.5 s** for q35, still about
+1.9x slower than ClickHouse. This rules out simple worker-count scaling as the
+complete fix; the operator and exchange paths need vectorized CPU work.
+
 For a fresh local reference, ClickHouse `clickhouse-local` on the same host and
 file completed q35 in **7.2 s** and q33 in **4.9 s** (default settings; the
 8-thread q35 run was 7.2 s). Kaveon therefore remains behind ClickHouse by
