@@ -5830,3 +5830,20 @@ main.main-wide {
 @media (prefers-reduced-motion: reduce) {
   .table-preview-btn { transition: none; }
 }
+
+/* A measurement the Engine estimated rather than counted. Quiet, because it
+   qualifies the number rather than warning about it — but always present, so a
+   reader never takes an estimate for an exact count. */
+.chart-estimated {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+  cursor: help;
+  white-space: nowrap;
+}

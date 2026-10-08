@@ -993,6 +993,11 @@ export interface SqlPreviewState {
   // Optional server-side Fabric execution time reported
   // by the /sql/execute endpoint.
   fabricDurationMs?: number | null;
+  // Whether the Engine answered any part of this statement from a sketch
+  // rather than by counting. A distinct count over a very large table is
+  // estimated so the tile answers at once; the number — and, where groups sit
+  // close together, their order — is an estimate, and must say so.
+  approx?: boolean;
   rowCount: number | null;
   // Saved SQL text from database (loaded when opening existing chart)
   savedSql: string | null;
@@ -3237,6 +3242,11 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
                 columns: serveJson.columns || [],
                 rows: serveJson.rows || [],
                 from_context: true,
+                // The DLM reports its own approximation the same way the
+                // Engine does: a metric its context spec marks approximate is
+                // answered from a sketch, and the tile has to say so whichever
+                // of the two served it.
+                approx: serveJson.approx === true,
               };
               const totalDurationMs = performance.now() - start;
               const rows = executeJson.rows;
@@ -3273,6 +3283,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
                 error: null,
                 durationMs: totalDurationMs,
                 fabricDurationMs: null,
+                approx: executeJson?.approx === true,
                 rowCount: rows.length,
                 savedSql: sqlPreview.savedSql,
               });
@@ -3785,6 +3796,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
         // perspective, including network and SQL generation.
         durationMs: totalDurationMs,
         fabricDurationMs,
+        approx: executeJson?.approx === true,
         rowCount: Array.isArray(rows) ? rows.length : 0,
         savedSql: sqlPreview.savedSql,
       });
