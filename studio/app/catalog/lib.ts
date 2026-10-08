@@ -97,7 +97,12 @@ export function sampleSql(schema: string, table: string, limit: number) {
   return `SELECT * FROM ${quoteIdent(schema)}.${quoteIdent(table)} LIMIT ${limit}`;
 }
 export function labHref(catalog: string, schema: string, table: string) {
-  const sql = `SELECT *\nFROM ${quoteIdent(catalog)}.${quoteIdent(schema)}.${quoteIdent(table)}\nLIMIT 100`;
+  // Two parts, not three. The catalog travels as `catalog=`, which is what
+  // selects the Lab's source. Naming it in the statement as well only adds a
+  // second place for it to disagree with the selected source, and the Lab
+  // refuses that outright. A schema-qualified name cannot reach another
+  // catalog, so the scoping that refusal protects is kept by construction.
+  const sql = `SELECT *\nFROM ${quoteIdent(schema)}.${quoteIdent(table)}\nLIMIT 100`;
   return `/lab?catalog=${enc(catalog)}&schema=${enc(schema)}&name=${enc(table)}&query=${encodeURIComponent(sql)}`;
 }
 // ── Reading the measurements ─────────────────────────────────────────────────

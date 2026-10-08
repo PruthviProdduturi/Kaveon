@@ -264,7 +264,13 @@ def _engine_query(sql: str, catalog: str) -> str:
         raise HTTPException(400, "Engine SQL Lab accepts one SELECT or WITH statement")
     for index in range(len(tokens) - 4):
         if tokens[index + 1] == '.' and tokens[index + 3] == '.' and tokens[index].casefold() != catalog.casefold():
-            raise HTTPException(403, "Engine query references a catalog outside the selected source")
+            # Name both halves: the reader has to know which catalog is
+            # selected to see why their statement was refused, and the usual
+            # cause is a three-part name carried over from another source.
+            raise HTTPException(403, (
+                f"This statement names the catalog '{tokens[index]}', but the selected "
+                f"source is '{catalog}'. Select that catalog, or drop the catalog "
+                f"prefix and qualify the table by schema only."))
     return sql.strip().rstrip(';').rstrip()
 
 
