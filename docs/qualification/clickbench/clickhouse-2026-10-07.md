@@ -482,3 +482,11 @@ A spill chunk cap increase from **65,536** to **131,072** groups was tested.
 q33 remained exact but regressed to **20.007 s** from the 19.087 s retained
 baseline. The larger chunks increase per-run memory and do not pay back their
 reduced run count; the 65,536 default was restored.
+
+
+An all-key partitioned final merge was tested for source-threaded grouped
+aggregates, removing the broadcast selector for integer keys. q33 returned
+the expected top-count rows in **19.242 s** without a material improvement; q35
+failed with a bounded-memory reservation error in `fragment-project` near the
+512 MiB per-worker limit. The existing text-only partitioned guard and integer
+key broadcast path were restored.
