@@ -88,3 +88,21 @@ profile for q33/q35, then optimize the largest measured stage. The likely
 follow-on work is a typed exchange path that avoids compact-state
 encode/decode for columnar aggregates, plus scan/aggregation morsel sizing;
 those are intentionally not asserted as complete by this spot comparison.
+
+## 2026-10-07 duplicate-hash qualification
+
+The aggregate arena previously hashed every newly admitted text key twice: once
+to probe and again for the hash table insertion callback. Storing the computed
+hash alongside each arena entry removes the second full-byte pass without
+changing equality verification. Commit `81e9bfff` passed the full execution
+suite (**199 passed, 4 ignored**) and storage remained **117 passed, 1
+ignored**. On the same two-worker, 8 GiB, eight-lane Docker qualification,
+uncached q35 returned the exact ClickHouse-matching rows in **32.5 s** (q35
+repeats ranged 31.0–32.5 s); q33 measured **23.6 s**. This is a material
+improvement over the prior 39.2 s q35 run, but ClickHouse's 10.23 s default
+run is still faster by about 3.2x.
+
+An experimental local row-group lane reader was rejected after directory-table
+assembly exposed an out-of-bounds failure; it was fully reverted and is not
+part of the qualified build. The next gate remains a profiled typed exchange
+or scan/aggregation optimization, followed by repeated exact q33/q35 runs.
