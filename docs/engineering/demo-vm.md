@@ -1,6 +1,23 @@
 # Public demo host
 
-The public demo runs on one Oracle Cloud **Always Free** instance —
+> **What actually runs today (2026-10-07).** The public demo runs on the Azure
+> VM `kaveon-vm` in `kaveon-rg` (`Standard_B2als_v2`, 2 vCPU / 3 GB), reached at
+> `kaveon-api-wus2.westus2.cloudapp.azure.com` on a static IP, hosting the
+> Compose stack from `/opt/Kaveon`: the KaveonDB coordinator and two workers,
+> the API, Studio and Caddy. **There is no PostgreSQL anywhere in it** — the
+> control plane is KaveonDB (`KAVEON_POSTGRESQL_RETIREMENT_MODE=true`,
+> `KAVEONDB_READ_AUTHORITY_FAMILIES` covering all 13 families) and the lake is
+> the ADLS account `kaveonlake`, not a local disk. See
+> [lake-delta-and-cube.md](lake-delta-and-cube.md) for how the lake is stored
+> and made fast, and [postgresql-retirement.md](postgresql-retirement.md) for
+> the retirement itself.
+>
+> The Oracle Always Free plan below is the **superseded** September 10 decision,
+> kept as a record of why Azure Spot and the credit-limited shapes were ruled
+> out. Its `infra/oci` Terraform was never the deployed path. Read the rest of
+> this file as that plan, not as the running system.
+
+The public demo was planned on one Oracle Cloud **Always Free** instance —
 `VM.Standard.A1.Flex`, 4 OCPU / 24 GB, arm64 — hosting the Compose stack:
 KaveonDB coordinator and two workers, the API, PostgreSQL metadata, and Caddy as
 the only public door. Studio stays on Vercel and reaches the API over HTTPS through
@@ -100,9 +117,13 @@ with `azcopy` (user-delegation SAS) to a workstation, then `rsync` it to
 Storage as a *local* source at `/data/opensource`, synchronize, and register the
 schemas and tables from the snapshot manifest as on AKS.
 
-Metadata: `pg_dump` the Azure PostgreSQL `kaveonmeta` database and restore it into
-the stack's `postgres` container; verify dashboards, charts and DLM artifacts open
-in Studio before anything in Azure is removed.
+Metadata: **superseded.** This step restored `kaveonmeta` into a `postgres`
+container, which the retirement removed — the stack has no PostgreSQL and
+KaveonDB is the authority for all 13 product families. The control plane moves
+by replaying those families into KaveonDB, not by a dump and restore; see
+[postgresql-retirement.md](postgresql-retirement.md). The dumps taken on
+2026-10-07 live in `opensource/backups/postgresql/2026-10-07` and exist to make
+deletion reversible, not as a restore step.
 
 ## Point Studio at it
 
@@ -115,15 +136,42 @@ Entra client-secret item.
 
 | Resource (`kaveon-rg`) | Action |
 |---|---|
-| `kaveon-db` (PostgreSQL Flexible Server) | delete after `pg_dump` is restored and verified on the host |
-| `kaveon-api` (Container App) and `kaveon-env` | delete |
-| `kaveon-logs` (Log Analytics) | delete |
-| `kaveonacr` | delete once GHCR images are in use |
-| `kaveon-kv` (Key Vault) | keep or delete; secrets live in the host's `.env` |
+| `kaveon-db` (PostgreSQL Flexible Server) | **stopped** 2026-10-07, not deleted — see below |
+| `kaveon-api`, `kaveon-coordinator`, `kaveon-worker-1`, `kaveon-worker-2` (Container Apps) and `kaveon-env` | still Running; nothing uses them (1 request in 14h). Scale to zero, then delete after a soak |
+| `kaveon-logs` (Log Analytics) | delete with the Container Apps environment |
+| `kaveonacr` | keep: `kaveon-vm` pulls its images from it |
+| `kaveon-kv` (Key Vault) | **keep** — the API on the host reads it (`KAVEON_KEY_VAULT_URL`) |
+| `kaveonlake` (Storage) | **keep** — this is the lake and the system storage |
 
-Deleting the database server is the one irreversible step; it waits for the
-verified restore. The work-tenant AKS cluster and its ADLS account are
-untouched by this plan.
+Deleting the database server is the one irreversible step, and it is not done.
+A Flexible Server deletion takes its backups with it (a 5-day best-effort
+`ReviveDropped` aside), and these tables exist nowhere else: `kaveon_users`
+(3M), `user_agg` (2.5M), `query_history` (122k), `activity` (40k),
+`ai_benchmarks.models`, `dim_geography`, `dim_platform`, `nyc_taxi_summary`.
+`query_history` and `activity` have no home in KaveonDB under the 8 MiB
+snapshot ceiling, which is the open design question gating deletion.
+
+What has been done instead, so the decision stays reversible:
+
+- the first dump of the `kaveon` warehouse (82 MB custom-format, 37 tables with
+  data, read back with `pg_restore -l` to prove it parses) and the `kaveonmeta`
+  dump are both in `opensource/backups/postgresql/2026-10-07`;
+- `kaveon_events_daily` is excluded by **data** only, not by schema: its
+  504,000,000 rows are already in the lake as
+  `public.kaveon_events_enriched`, verified at exactly that count;
+- the server is **stopped**, which ends compute billing but **auto-restarts
+  after 7 days** — so this is a decision with a clock, not a resting state.
+
+Take the dump with a client matching the server's major version. The server is
+PostgreSQL 18 and `pg_dump` refuses a newer server rather than risk an
+incomplete dump; run it from `postgres:18-alpine` and send the archive over
+stdout, because Docker Desktop does not resolve a Git Bash path like `/tmp/...`
+to its Windows original and will silently write the dump inside its own VM.
+
+Also outstanding on this server: a firewall rule named `allow-all` opens
+`0.0.0.0`–`255.255.255.255`. Remove it whether or not the server is deleted.
+
+The work-tenant AKS cluster and its ADLS account are untouched by this plan.
 
 ## Operations
 
