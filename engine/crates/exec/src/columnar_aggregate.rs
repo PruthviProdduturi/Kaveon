@@ -1001,7 +1001,7 @@ const INDEX_MIN_BUCKETS: usize = 16;
 /// small tables retain the lower-memory doubling behavior.
 const INDEX_LARGE_GROWTH_THRESHOLD: usize = 1 << 16;
 /// Rows between a bucket's prefetch and its probe.
-const PREFETCH_DISTANCE: usize = 16;
+const PREFETCH_DISTANCE: usize = 32;
 
 /// Where a probe ended: the slot whose key matched, or the empty bucket a
 /// new slot takes.
