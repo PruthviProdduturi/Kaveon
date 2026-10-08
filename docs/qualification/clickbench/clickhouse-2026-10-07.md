@@ -752,3 +752,13 @@ duplicate or null key, but the per-row uniqueness set and key construction
 cost more than the existing columnar table: q33 regressed to **21.90 s**
 (q35 remained **13.57 s**). The code was removed; no result or memory
 semantics changed in the shipped path.
+
+## 2026-10-08 — raw-row aggregate exchange (rejected)
+
+An opt-in `PartialRaw`/`FinalRaw` path preserved raw rows through the aggregate exchange and re-aggregated after repartitioning. It returned exact schemas and rows for both controls, but did not improve the paired result: q33 completed in 19.303 s and q35 in 13.775 s, versus the clean grouped-state baseline of approximately 19.7 s and 13.5 s. The q33 improvement was outweighed by the q35 regression, so the prototype was reverted and the grouped-state exchange remains the default.
+
+## 2026-10-08 — clean default control after rebuild
+
+The rebuilt default grouped-state path passed the worker snapshot handshake after the normal synchronization interval (`2/2` compatible workers). The paired controls completed exactly with 10 rows each: q33 `20.598 s` and q35 `13.472 s`. The q33 profile confirms the current bottleneck: near-unique grouping creates about 100 million partial groups, sends roughly 8.9 GiB of exchange payload, and each final task decodes about 2.18 GiB and spills about 2.18 GiB under the 512 MiB per-query limit. Final aggregate CPU is negligible; exchange decoding, allocation and spill dominate.
+
+The first post-rebuild request was intentionally rejected by the coordinator while workers were still synchronizing (`NO_COMPATIBLE_WORKER`). This is expected fail-closed behavior, but deployment qualification must wait for the heartbeat to report compatible workers before issuing benchmark traffic.
