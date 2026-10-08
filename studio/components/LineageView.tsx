@@ -53,11 +53,16 @@ export function LineageView() {
   const build = useCallback(async () => {
     setLoading(true);
     try {
-      const [srcRes, dsRes, dashRes, dlmRes] = await Promise.all([
+      const [srcRes, dsRes, dashRes, dlmRes, chartRes] = await Promise.all([
         msalFetch("/api/v1/data-sources/active"),
         msalFetch("/api/v1/datasets"),
         msalFetch("/api/v1/dashboards"),
         msalFetch("/api/v1/dlm/coverage"),
+        // Every chart in one request. This used to read each chart of each
+        // dashboard individually — up to twenty per dashboard, a batch per
+        // dashboard, in series — so a handful of dashboards meant well over a
+        // hundred round trips before the graph could be drawn.
+        msalFetch("/api/v1/charts"),
       ]);
 
       const sources: DataSource[] = srcRes.ok ? await srcRes.json().then((d: { dataSources?: DataSource[]; result?: DataSource[] } | DataSource[]) => Array.isArray(d) ? d : d.dataSources || d.result || []) : [];
@@ -70,12 +75,30 @@ export function LineageView() {
       const ns: LineageNode[] = [];
       const es: LineageEdge[] = [];
 
+      // Where the data actually comes from. `/data-sources/active` lists
+      // federated connections only, and after the PostgreSQL retirement there
+      // are none — every dataset reads an Engine catalog — so the column stood
+      // empty and nothing downstream had anything to hang off. The catalogs
+      // the datasets name are added alongside whatever federated sources
+      // remain, so the graph starts where the data does.
       const srcMap = new Map<string, number>();
-      sources.forEach((s, i) => {
-        const id = `src-${s.id}`;
-        srcMap.set(s.name, i);
-        if (s.database_name) srcMap.set(s.database_name, i);
-        ns.push({ id, type: "source", label: s.name, sublabel: s.engine || "", col: 0, row: i, meta: s as unknown as Record<string, unknown> });
+      const sourceNodes: { id: string; label: string; sublabel: string }[] = sources.map((source) => ({
+        id: `src-${source.id}`,
+        label: source.name,
+        sublabel: source.engine || "",
+      }));
+      sources.forEach((source, i) => {
+        srcMap.set(source.name, i);
+        if (source.database_name) srcMap.set(source.database_name, i);
+      });
+      for (const dataset of datasets) {
+        const catalog = dataset.database_name;
+        if (!catalog || srcMap.has(catalog)) continue;
+        srcMap.set(catalog, sourceNodes.length);
+        sourceNodes.push({ id: `src-catalog-${catalog}`, label: catalog, sublabel: "Engine catalog" });
+      }
+      sourceNodes.forEach((source, i) => {
+        ns.push({ id: source.id, type: "source", label: source.label, sublabel: source.sublabel, col: 0, row: i });
       });
 
       const dsMap = new Map<string | number, number>();
@@ -87,9 +110,8 @@ export function LineageView() {
 
         if (d.database_name) {
           const srcIdx = srcMap.get(d.database_name);
-          if (srcIdx != null) {
-            es.push({ from: `src-${sources[srcIdx].id}`, to: id });
-          }
+          const source = srcIdx != null ? sourceNodes[srcIdx] : null;
+          if (source) es.push({ from: source.id, to: id });
         }
 
         if (dlm) {
@@ -104,24 +126,23 @@ export function LineageView() {
         }
       });
 
+      const charts: { id: string | number; dataset_id?: string | number }[] = chartRes.ok
+        ? await chartRes.json().then((d: { result?: never[] } | never[]) => Array.isArray(d) ? d : (d.result || []))
+        : [];
+      const chartById = new Map(charts.map((chart) => [String(chart.id), chart]));
+
       const chartDatasetMap = new Map<string | number, Set<string | number>>();
       for (const dash of dashboards) {
         try {
           const chartIds: number[] = JSON.parse(dash.charts || "[]");
-          if (chartIds.length) {
-            const chartResps = await Promise.all(
-              chartIds.slice(0, 20).map((cid) => msalFetch(`/api/v1/charts/${cid}`).catch(() => null))
-            );
-            const dsIds = new Set<string | number>();
-            for (const resp of chartResps) {
-              if (resp?.ok) {
-                const chart = await resp.json();
-                if (chart.dataset_id) dsIds.add(chart.dataset_id);
-              }
-            }
-            chartDatasetMap.set(dash.id, dsIds);
+          if (!chartIds.length) continue;
+          const dsIds = new Set<string | number>();
+          for (const chartId of chartIds) {
+            const datasetId = chartById.get(String(chartId))?.dataset_id;
+            if (datasetId) dsIds.add(datasetId);
           }
-        } catch { /* ignore parse errors */ }
+          chartDatasetMap.set(dash.id, dsIds);
+        } catch { /* a dashboard with an unreadable chart list contributes none */ }
       }
 
       let dashRow = 0;
