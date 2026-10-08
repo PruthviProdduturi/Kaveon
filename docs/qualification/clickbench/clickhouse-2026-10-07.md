@@ -563,3 +563,10 @@ The columnar aggregate's hash-table look-ahead was increased from **16** to
 **12.827 s** with the result cache disabled, while q33 completed exactly in
 **19.407 s**. This is a small improvement without changing the memory
 contract, so the 32-row prefetch distance is retained for the next round.
+
+
+A count-only text fast path was prototyped for dictionary and UTF-8-view
+columns. It preserved the exact q35 rows but measured **13.153 s**, slower
+than the retained implementation, because building a per-batch code table
+added work for this nearly unique URL distribution. The prototype was removed
+and the tested prefetch-only implementation remains.
