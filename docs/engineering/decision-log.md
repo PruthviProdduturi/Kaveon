@@ -1,5 +1,20 @@
 # Decision log
 
+### Mixed-key final-merge partitioning remains rejected
+
+- **Decision (2026-10-08).** Keep the final aggregate's established
+  broadcast/selection path for mixed unsigned and text keys. Do not enable
+  `BroadcastPartitioned` merely because a text key is present.
+- **Evidence.** On the fixed 100M-row ClickBench `hits` control, enabling the
+  path for q33 (`WatchID, ClientIP`) completed correctly in 20.26 s versus
+  the clean ~19–20 s baseline; q35 completed in 13.55 s versus the clean
+  ~12.6–13.5 s baseline. Both were slower and showed no compensating
+  reduction in the qualified end-to-end result.
+- **Consequence.** The unsigned-key guard remains in
+  `engine/crates/server/src/fragment_exec.rs`. The experiment is not part of
+  the shipped runtime; future work must reduce exchange decode and spill
+  cost without adding a full-batch repartition copy to this path.
+
 The non-obvious calls behind the Engine and the platform, dated, three
 lines each — what was decided, why, and what it commits us to — with the
 commit on `dev` or the HANDSHAKE Log row that records it. A call that the
