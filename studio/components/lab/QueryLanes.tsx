@@ -19,9 +19,6 @@ import React from "react";
  * there, and a lane is named only when the record names it.
  */
 
-/** Where a statement stands relative to one step of the ladder. */
-export type LaneStepState = "answered" | "passed" | "deciding" | "unreached";
-
 /** The live signals the Studio holds while a KaveonDB statement runs. */
 export interface LaneSignals {
   /** The coordinator's statement state: QUEUED, RUNNING, FINISHED, FAILED, CANCELED. */
@@ -34,22 +31,10 @@ export interface LaneSignals {
   workers: number;
 }
 
-interface LaneStep {
-  id: string;
-  label: string;
-  /** The one-line consequence of this step for this statement, or null when it has nothing to say yet. */
-  note: string | null;
-  /** What the step is doing, in words, so the state never rests on colour. */
-  status: string;
-  state: LaneStepState;
-}
-
 interface Lanes {
+  /** Where the answer came from, in one phrase.  */
   headline: string;
-  /** The claim the ladder is making, shown only while no lane has answered. */
-  sub: string | null;
-  steps: LaneStep[];
-  /** One sentence for assistive technology; it changes only when the ladder moves. */
+  /** One sentence for assistive technology; it changes only when the phrase does. */
   announcement: string;
 }
 
@@ -141,43 +126,6 @@ export function reportedProgress(signals: LaneSignals | null): number | null {
  * moving mark, so the ladder reads as a list of facts rather than as four
  * things competing for the eye.
  */
-function LaneGlyph({ state }: { state: LaneStepState }) {
-  if (state === "passed") {
-    return (
-      <svg className="lane-glyph" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-        <path
-          d="M 7.4 9.8 L 12 14.4 L 16.6 9.8"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.7"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    );
-  }
-
-  if (state === "unreached") {
-    return (
-      <svg className="lane-glyph" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-        <circle cx="12" cy="12" r="2.4" fill="none" stroke="currentColor" strokeWidth="1.3" />
-      </svg>
-    );
-  }
-
-  return (
-    <svg className="lane-glyph" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path
-        d="M 16.075 19.058 A 8.15 8.15 0 1 0 7.925 19.058"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2.1"
-      />
-      {state === "answered" && <circle cx="12" cy="12" r="2.7" fill="currentColor" />}
-    </svg>
-  );
-}
-
 function workerPhrase(workers: number): string {
   if (workers <= 0) return "across the cluster";
   return `across ${workers} ${workers === 1 ? "worker" : "workers"}`;
@@ -196,147 +144,31 @@ function engineLanes(signals: LaneSignals): Lanes {
   // or scanned rows; before that the statement is still being placed.
   const reading = signals.tasksTotal > 0 || signals.workers > 0 || signals.rowsScanned > 0;
 
-  const admitted: LaneStep = queued
-    ? {
-        id: "admitted",
-        label: "Admission",
-        note: submitting
-          ? "Submitted to the coordinator."
-          : "Waiting for a slot in the resource group.",
-        status: submitting ? "submitting" : "queued",
-        state: "deciding",
-      }
-    : {
-        id: "admitted",
-        label: "Admission",
-        note: "Running under its resource group.",
-        status: "passed through",
-        state: "passed",
-      };
-
-  let known: LaneStep;
-  if (mode === "cache") {
-    known = {
-      id: "known",
-      label: "Known answers",
-      note: "The result cache already held this statement. No data was read.",
-      status: "answered here",
-      state: "answered",
-    };
-  } else if (mode === "context") {
-    known = {
-      id: "known",
-      label: "Known answers",
-      note: "The table statistics describe exactly this version. No data was read.",
-      status: "answered here",
-      state: "answered",
-    };
-  } else if (answeredByReading || reading) {
-    known = {
-      id: "known",
-      label: "Known answers",
-      note: "Neither the result cache nor the statistics held this answer.",
-      status: "passed through",
-      state: "passed",
-    };
-  } else if (queued) {
-    known = { id: "known", label: "Known answers", note: null, status: "not reached", state: "unreached" };
-  } else {
-    known = {
-      id: "known",
-      label: "Known answers",
-      note: "Checking the result cache, then the table statistics and cube.",
-      status: "checking",
-      state: "deciding",
-    };
-  }
-
-  let read: LaneStep;
-  if (mode === "distributed") {
-    read = {
-      id: "read",
-      label: "Data read",
-      note: `Scanned ${workerPhrase(signals.workers)}.`,
-      status: "answered here",
-      state: "answered",
-    };
-  } else if (mode === "coordinator") {
-    read = {
-      id: "read",
-      label: "Data read",
-      note: "This shape has no distributed plan, so the coordinator read it.",
-      status: "answered here",
-      state: "answered",
-    };
-  } else if (answeredWithoutReading) {
-    read = { id: "read", label: "Data read", note: "Not needed.", status: "not reached", state: "unreached" };
-  } else if (reading) {
-    read = {
-      id: "read",
-      label: "Data read",
-      note:
-        signals.tasksTotal > 0
-          ? `${signals.tasksDone.toLocaleString()} of ${signals.tasksTotal.toLocaleString()} tasks complete ${workerPhrase(signals.workers)}.`
-          : `Reading ${workerPhrase(signals.workers)}.`,
-      status: "reading",
-      state: "deciding",
-    };
-  } else {
-    read = {
-      id: "read",
-      label: "Data read",
-      note: null,
-      status: "not reached",
-      state: "unreached",
-    };
-  }
-
-  const steps = [admitted, known, read];
-
   let headline: string;
   if (mode === "cache") headline = "Served from the result cache";
-  else if (mode === "context") headline = "Answered from table statistics";
+  else if (mode === "context") headline = "Answered without reading data";
   else if (mode === "distributed") headline = `Scanned ${workerPhrase(signals.workers)}`;
   else if (mode === "coordinator") headline = "Read on the coordinator";
-  else if (submitting) headline = "Submitted to KaveonDB";
-  else if (queued) headline = "Queued for admission";
-  else headline = "Choosing how to answer";
-
-  const sub = mode == null ? "Kaveon answers without reading data whenever it already knows the answer." : null;
-  const current = steps.find((step) => step.state === "answered")
-    ?? steps.find((step) => step.state === "deciding")
-    ?? steps[steps.length - 1];
+  // Before the coordinator has placed the statement there is nothing to
+  // report but that it is running. Narrating the steps it is about to take
+  // describes the engine rather than the reader's query.
+  else if (queued && !submitting) headline = "Queued";
+  else headline = "Running";
 
   return {
     headline,
-    sub,
-    steps,
-    announcement: `${headline}. ${current.label}: ${current.status}.`,
+    announcement: headline + ".",
   };
 }
 
 /**
- * The ladder for a statement on a federated source. There are no lanes
- * there: Kaveon holds no statistics and no cached result for a table it does
- * not own, so the statement runs on the source. Saying so is honest; showing
- * three steps it never takes would not be.
+ * A federated source holds no Kaveon statistics and no cached result for a
+ * table it does not own, so the statement is always a live read there and
+ * there is nothing to choose between.
  */
 function federatedLanes(sourceLabel: string | null): Lanes {
   const target = sourceLabel ? `Running on ${sourceLabel}` : "Running on the source";
-  return {
-    headline: target,
-    sub: "A federated source holds no Kaveon statistics or cached result, so every statement is a live read.",
-    steps: [
-      {
-        id: "read",
-        label: "Live read",
-        note: "The statement is running on the source and its rows are on the way.",
-        status: "reading",
-        state: "deciding",
-      },
-    ],
-    announcement: `${target}. Live read: reading.`,
-  };
+  return { headline: target, announcement: target + "." };
 }
 
 export interface QueryLanePanelProps {
@@ -371,25 +203,8 @@ export function QueryLanePanel({ signals, sourceLabel = null, elapsedLabel, onCa
           <KaveonHalo progress={reportedProgress(signals)} size={46} />
           <div className="lane-panel__headings">
             <h3 className="lane-panel__headline">{lanes.headline}</h3>
-            {lanes.sub && <p className="lane-panel__sub">{lanes.sub}</p>}
           </div>
         </div>
-
-        <ol className="lane-steps" aria-hidden="true">
-          {lanes.steps.map((step) => (
-            <li key={step.id} className={`lane-step lane-step--${step.state}`}>
-              <span className="lane-step__rail" />
-              <span className="lane-step__glyph">
-                <LaneGlyph state={step.state} />
-              </span>
-              <span className="lane-step__body">
-                <span className="lane-step__label">{step.label}</span>
-                {step.note && <span className="lane-step__note">{step.note}</span>}
-              </span>
-              <span className="lane-step__status">{step.status}</span>
-            </li>
-          ))}
-        </ol>
 
         <div className="lane-panel__foot">
           <span className="lane-facts" aria-hidden="true">
