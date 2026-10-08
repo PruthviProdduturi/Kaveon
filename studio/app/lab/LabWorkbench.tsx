@@ -14,7 +14,7 @@ import { useDemoQuota } from "../../hooks/useDemoQuota";
 import { RateLimitedError, rateLimitNotice, refusalMessage } from "../../utils/demoQuota";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useRouter, useSearchParams } from "next/navigation";
-import { KaveonHalo, QueryLanePanel, reportedProgress, SUBMITTED } from "../../components/lab/QueryLanes";
+import { KaveonHalo, QueryProgress, reportedProgress, SUBMITTED } from "../../components/lab/QueryLanes";
 // using same-origin relative API calls
 const PRIMARY_DB_NAME = process.env.NEXT_PUBLIC_PRIMARY_DATABASE_NAME || "";
 
@@ -3042,29 +3042,8 @@ return;
               </div>
 
               <div id="resultsContainer" className={`results-container${showStreamLine ? " results-container--streaming" : ""}`}>
-                {/* ── A statement in flight: which lane is answering it ──
-                    The ladder reports where the statement stands in the order
-                    KaveonDB resolves one — admission, the result cache, the
-                    table statistics, then a read — so the wait says how the
-                    answer was reached and how little was scanned. */}
                 {showLanePanel && (
-                  <QueryLanePanel
-                    signals={streamProgress
-                      ? {
-                          state: streamProgress.state,
-                          mode: streamProgress.mode,
-                          tasksDone: streamProgress.tasksDone,
-                          tasksTotal: streamProgress.tasksTotal,
-                          rowsScanned: streamProgress.rowsScanned,
-                          workers: streamProgress.workers,
-                        }
-                      : usingEngine
-                        ? { state: SUBMITTED, mode: null, tasksDone: 0, tasksTotal: 0, rowsScanned: 0, workers: 0 }
-                        : null}
-                    sourceLabel={currentDataSource?.name ?? currentDatabase ?? null}
-                    elapsedLabel={formatExecutionTime((streamProgress?.elapsedMs ?? liveElapsedMs ?? 0) / 1000)}
-                    onCancel={cancelQuery}
-                  />
+                  <QueryProgress progress={runningProgress} onCancel={cancelQuery} />
                 )}
 
                 {/* ── A KaveonDB statement streaming its rows ── */}

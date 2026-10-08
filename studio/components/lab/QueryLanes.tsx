@@ -3,20 +3,12 @@
 import React from "react";
 
 /**
- * How a statement is being answered, shown while it runs.
+ * What the Studio shows while a statement is in flight.
  *
- * KaveonDB resolves a statement in a fixed order: it takes a slot under its
- * resource group, then takes two chances to answer with no read at all — the
- * coordinator's result cache, then the table's statistics or cube — and only
- * if neither holds the answer does it read the data. That order is the
- * product's claim: Kaveon knows a table rather than re-reading it. A wait
- * that renders the order, and says which lane answered and how little it had
- * to read, reports something; a spinner reports nothing.
- *
- * Nothing here guesses. The record names its placement (`execution.mode`)
- * only once the statement has settled — until then it reads `pending` — so a
- * step is marked "deciding" only while the live signals put the statement
- * there, and a lane is named only when the record names it.
+ * The signals are the coordinator's own: its statement state, the placement
+ * it reports once the statement settles, and the task and row counts it
+ * publishes as it goes. Nothing here guesses — a figure is shown only when
+ * the record carries it.
  */
 
 /** The live signals the Studio holds while a KaveonDB statement runs. */
@@ -29,13 +21,6 @@ export interface LaneSignals {
   tasksTotal: number;
   rowsScanned: number;
   workers: number;
-}
-
-interface Lanes {
-  /** Where the answer came from, in one phrase.  */
-  headline: string;
-  /** One sentence for assistive technology; it changes only when the phrase does. */
-  announcement: string;
 }
 
 /**
@@ -119,112 +104,43 @@ export function reportedProgress(signals: LaneSignals | null): number | null {
   return signals.tasksDone / signals.tasksTotal;
 }
 
-/**
- * The Guardian O — the open ring of the Kaveon wordmark, its gap at the
- * bottom, in a 24-unit box. It carries all four step states, and it is
- * still in every one of them: the halo at the head of the panel is the only
- * moving mark, so the ladder reads as a list of facts rather than as four
- * things competing for the eye.
- */
-function workerPhrase(workers: number): string {
-  if (workers <= 0) return "across the cluster";
-  return `across ${workers} ${workers === 1 ? "worker" : "workers"}`;
-}
-
-/** The ladder for a statement running on KaveonDB. */
-function engineLanes(signals: LaneSignals): Lanes {
-  const mode = signals.mode && signals.mode !== "pending" ? signals.mode : null;
-  const answeredWithoutReading = mode != null && KNOWN_ANSWER_MODES.has(mode);
-  const answeredByReading = mode != null && READ_MODES.has(mode);
-  // Before the first record read the Studio knows only that it submitted;
-  // saying so is more honest than claiming a place in the admission queue.
-  const submitting = signals.state === SUBMITTED;
-  const queued = submitting || signals.state === "QUEUED";
-  // The read has started the moment the coordinator reports tasks, workers
-  // or scanned rows; before that the statement is still being placed.
-  const reading = signals.tasksTotal > 0 || signals.workers > 0 || signals.rowsScanned > 0;
-
-  let headline: string;
-  if (mode === "cache") headline = "Served from the result cache";
-  else if (mode === "context") headline = "Answered without reading data";
-  else if (mode === "distributed") headline = `Scanned ${workerPhrase(signals.workers)}`;
-  else if (mode === "coordinator") headline = "Read on the coordinator";
-  // Before the coordinator has placed the statement there is nothing to
-  // report but that it is running. Narrating the steps it is about to take
-  // describes the engine rather than the reader's query.
-  else if (queued && !submitting) headline = "Queued";
-  else headline = "Running";
-
-  return {
-    headline,
-    announcement: headline + ".",
-  };
-}
-
-/**
- * A federated source holds no Kaveon statistics and no cached result for a
- * table it does not own, so the statement is always a live read there and
- * there is nothing to choose between.
- */
-function federatedLanes(sourceLabel: string | null): Lanes {
-  const target = sourceLabel ? `Running on ${sourceLabel}` : "Running on the source";
-  return { headline: target, announcement: target + "." };
-}
-
-export interface QueryLanePanelProps {
-  /** The coordinator's live signals, or null when the statement runs on a federated source. */
-  signals: LaneSignals | null;
-  /** The federated source the statement is running on, when it is not on KaveonDB. */
-  sourceLabel?: string | null;
-  /** Elapsed time, already formatted by the caller so the Lab has one time format. */
-  elapsedLabel: string;
+export interface QueryProgressProps {
+  /** Completed fraction when the coordinator has reported one, else null. */
+  progress: number | null;
   onCancel?: () => void;
 }
 
 /**
- * The Lab's running state: the lane ladder, the facts the coordinator has
- * reported so far, and the cancel the operator needs. It reads state the
- * query path already publishes and adds no work to it.
+ * A statement in flight.
+ *
+ * This used to be a four-step ladder naming admission, the result cache,
+ * the statistics and the read. Those are the engine's own stages, written
+ * in the engine's words, and with the cube answering a breakdown in about
+ * 150ms there is no wait long enough to read them in. Where the answer came
+ * from is worth saying, and the results bar says it once the rows land.
+ *
+ * What a reader needs while waiting is that it is moving, and a way out.
+ * The bar fills to whatever the coordinator reports and otherwise travels,
+ * and it holds still for anyone who asked for less motion.
  */
-export function QueryLanePanel({ signals, sourceLabel = null, elapsedLabel, onCancel }: QueryLanePanelProps) {
-  const lanes = signals ? engineLanes(signals) : federatedLanes(sourceLabel);
-
-  const facts: string[] = [elapsedLabel];
-  if (signals) {
-    if (signals.rowsScanned > 0) facts.push(`${signals.rowsScanned.toLocaleString()} rows scanned`);
-    else if (signals.mode && KNOWN_ANSWER_MODES.has(signals.mode)) facts.push("no rows scanned");
-    if (signals.workers > 0) facts.push(`${signals.workers} ${signals.workers === 1 ? "worker" : "workers"}`);
-  }
-
+export function QueryProgress({ progress, onCancel }: QueryProgressProps) {
+  const determinate = progress != null && progress > 0;
   return (
-    <div className="lane-panel">
-      <div className="lane-panel__inner">
-        <div className="lane-panel__head">
-          <KaveonHalo progress={reportedProgress(signals)} size={46} />
-          <div className="lane-panel__headings">
-            <h3 className="lane-panel__headline">{lanes.headline}</h3>
-          </div>
-        </div>
-
-        <div className="lane-panel__foot">
-          <span className="lane-facts" aria-hidden="true">
-            {facts.map((fact) => (
-              <span key={fact}>{fact}</span>
-            ))}
-          </span>
-          {onCancel && (
-            <button type="button" className="lane-panel__cancel" onClick={onCancel} title="Cancel the statement">
-              Cancel
-            </button>
-          )}
-        </div>
+    <div className="query-progress" role="status" aria-live="polite">
+      <div className={`query-progress__track${determinate ? "" : " query-progress__track--roving"}`}>
+        <span
+          className="query-progress__fill"
+          style={determinate ? { width: `${Math.min(100, Math.round(progress * 100))}%` } : undefined}
+        />
       </div>
-
-      <p className="sr-only" role="status" aria-live="polite">
-        {lanes.announcement}
-      </p>
+      {onCancel && (
+        <button type="button" className="query-progress__cancel" onClick={onCancel}>
+          Cancel
+        </button>
+      )}
+      <span className="sr-only">Running your query.</span>
     </div>
   );
 }
 
-export default QueryLanePanel;
+export default QueryProgress;
