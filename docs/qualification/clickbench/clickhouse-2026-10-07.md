@@ -157,3 +157,12 @@ prior **25.1 s** run, and the ten returned rows were identical. The same
 build's q35 runs measured **34.6–35.0 s** with identical rows, so it is a
 targeted q33 improvement and not ClickHouse parity; ClickHouse remains about
 4.9 s for q33 and 7.2 s for q35 on this host.
+
+## 2026-10-08 local parallelism default
+
+The Docker worker default local parallelism is now eight lanes (up from four)
+with the normal 512 MiB per-query limit. On the clean two-worker stack, fresh
+uncached runs returned the exact ten-row results and measured q35 at **30.2 s**
+and q33 at **24.4 s**. This is a configuration improvement, but it remains
+far from ClickHouse's **7.2 s** q35 and **4.9 s** q33 results; no parity claim
+is made.

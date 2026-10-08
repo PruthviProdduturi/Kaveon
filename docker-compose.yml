@@ -94,7 +94,10 @@ services:
       KAVEON_HASH_SPILL_ROOT: ${KAVEON_HASH_SPILL_ROOT:-/tmp/kaveon-spill}
       KAVEON_HASH_SPILL_PARTITIONS: ${KAVEON_HASH_SPILL_PARTITIONS:-16}
       KAVEON_HASH_SPILL_MODE: ${KAVEON_HASH_SPILL_MODE:-disk}
-      KAVEON_LOCAL_PARALLELISM: ${KAVEON_LOCAL_PARALLELISM:-4}
+      # Eight local lanes match the default 2-worker ClickBench profile and
+      # improve both scan/aggregate workloads without increasing the query
+      # memory budget.
+      KAVEON_LOCAL_PARALLELISM: ${KAVEON_LOCAL_PARALLELISM:-8}
     volumes:
       - ./engine/etc/coordinator.toml:/etc/kaveon/config.toml:ro
       - catalog-data:/var/lib/kaveon
