@@ -597,14 +597,22 @@ export default function DatasetDetailPage() {
         const qualifiedTable = dataset.schema_name && dataset.schema_name !== "dbo" && dataset.schema_name !== "public"
           ? `${dataset.schema_name}.${dataset.table_name}`
           : dataset.table_name;
-        const isPg = dataset.database_name === "kaveon" || dataset.schema_name === "climate_energy" || dataset.schema_name === "public";
-        // For PostgreSQL: simple SELECT * LIMIT — bypass the complex dimension JOIN builder
-        // which generates SQL Server syntax and breaks on PG
+        // The join builder exists to reach a dataset's dimension tables, and it
+        // writes SQL Server: TOP, bracket quoting, and columns qualified by
+        // schema *and* table. A dataset with no dimensions needs none of that,
+        // and the Engine refuses a three-part name that does not match the
+        // selected catalog — which is what the builder produced here, because
+        // it qualifies a date column the table does not even have.
+        //
+        // It used to be chosen by a hardcoded list of schema names from the
+        // warehouse era, so a dataset simply named outside that list took the
+        // SQL Server path regardless of where it actually lives.
+        const joinsDimensions = (dataset.dimensions || []).length > 0;
         const sql = dataset.sql_text && !dataset.table_name
           ? `SELECT * FROM (${dataset.sql_text.replace(/;\s*$/, "").trim()}) AS _preview LIMIT 100`
-          : isPg
-            ? `SELECT * FROM ${qualifiedTable} LIMIT 100`
-            : buildDatasetPreviewSql(dataset, 100);
+          : joinsDimensions
+            ? buildDatasetPreviewSql(dataset, 100)
+            : `SELECT * FROM ${qualifiedTable} LIMIT 100`;
         setPreviewSql(sql);
 
         // Build list of tables used in this query for query history
