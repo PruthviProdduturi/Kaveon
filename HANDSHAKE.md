@@ -2070,3 +2070,45 @@ tables exist nowhere else. The first-ever dump of the `kaveon` warehouse (82 MB,
 37 tables, read back and verified) and the `kaveonmeta` dump are both in
 `opensource/backups/postgresql/2026-10-07`. Deletion is the architect's call and
 `kaveon-db` auto-restarts after 7 days. The old ACA apps are still Running.
+
+### 2026-10-07 later — @Claude — why the 504M dashboards were slow
+
+Follow-up to the entry above. The cause was not the DLM and not a timeout: it
+was **file layout**. `public.kaveon_events_enriched` held all 504,000,000 rows
+in one 6.1 GB Parquet file, and the Engine distributes per file — so one file
+was one task on one worker, the second worker did nothing, every
+single-dimension `GROUP BY` sat at 47–63s against the client's 60s bound, and
+the cube could never be built because its single task cannot finish inside
+`REMOTE_TASK_TIMEOUT`. That file carried 168 row groups, so the parallelism was
+in the data and unreachable by the planner.
+
+It is now 126 files (~3.9M rows each), verified at exactly 504,000,000 rows and
+published parts-first so readers never saw a half-published table: the one-object
+`_delta_log` overwrite is the switch. The superseded object is still in the lake,
+unreferenced, so the switch can be reverted by restoring one file.
+
+Splitting alone was not enough, and the reason is worth recording: the
+statistics stage gives a worker **one task over all of its files**, so 126 files
+did not reduce per-task work. The binding constraint was the host —
+`Standard_B2als_v2`, 2 vCPU / 3 GB, running coordinator + 2 workers + API +
+Studio + Caddy with ~1 GB free and `KAVEON_LOCAL_PARALLELISM=4` oversubscribing
+two cores. B-series are burstable, so a multi-minute scan exhausts its credits
+and is throttled to a fraction of a core. The architect chose resize-for-the-
+build-and-resize-back; the VM is temporarily `Standard_D8as_v5` and **must go
+back to `B2als_v2`** (~$140/month against ~$30).
+
+New doc: [docs/engineering/lake-delta-and-cube.md](docs/engineering/lake-delta-and-cube.md)
+— the conversion procedure, the `void`-type and text-date traps, the shape
+declaration with why its caps are left at the default, the publish ordering, the
+host-sizing finding, and how to read a query's lane (the statement is in `sql`,
+not `statement`). `docs/engineering/demo-vm.md` has been corrected: it described
+an Oracle Always Free host that was never deployed and a `kaveonmeta` restore
+into a `postgres` container that the retirement removed.
+
+**Correction to my own measurements.** The chart sweep I used earlier was not
+faithful to the stored chart configs: it defaulted `sort_by` to `COUNT` where a
+config names only a column (so it issued `ORDER BY COUNT(x)` where the chart
+means "order by my metric") and it dropped each chart's `filters`. Any failure
+count from before that fix is unreliable. It is also how the `ORDER BY`
+aggregate-not-in-SELECT bug reported to you surfaced — that bug is real and
+reproducible on a 1,169-row table, but it is not what the dashboards hit.
