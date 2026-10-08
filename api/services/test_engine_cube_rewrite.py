@@ -19,6 +19,7 @@ class RecognisedShapeTests(unittest.TestCase):
         )
         self.assertEqual(plan.sort_keys, ((1, True),))
         self.assertEqual(plan.limit, 500)
+        self.assertEqual(plan.width, 2)
         self.assertTrue(plan.grouped)
 
     def test_dimension_sorted_breakdown_resolves_the_grouping_column(self):
@@ -87,9 +88,9 @@ class RecognisedShapeTests(unittest.TestCase):
         self.assertFalse(plan.grouped)
 
     def test_global_aggregate_ordering_is_a_no_op_even_when_unresolvable(self):
-        plan = rewrite.plan("SELECT AVG(latency) AS ms FROM public.events "
+        plan = rewrite.plan("SELECT MAX(latency) AS ms FROM public.events "
                             "ORDER BY something_else DESC LIMIT 500")
-        self.assertEqual(plan.statement, "SELECT AVG(latency) AS ms FROM public.events")
+        self.assertEqual(plan.statement, "SELECT MAX(latency) AS ms FROM public.events")
         self.assertEqual(plan.sort_keys, ())
         self.assertIsNone(plan.limit)
 
@@ -98,6 +99,200 @@ class RecognisedShapeTests(unittest.TestCase):
                             "GROUP BY region LIMIT 10")
         self.assertEqual(plan.sort_keys, ())
         self.assertEqual(plan.limit, 10)
+
+
+class AverageSubstitutionTests(unittest.TestCase):
+    """AVG is issued as the sum and the count the cube can answer from."""
+
+    def test_an_average_breakdown_becomes_a_sum_and_a_count(self):
+        plan = rewrite.plan(
+            'SELECT surface, AVG(latency_p75_ms) AS "Avg Latency (ms)" '
+            'FROM public.kaveon_events_enriched GROUP BY surface '
+            'ORDER BY "Avg Latency (ms)" DESC NULLS LAST LIMIT 500'
+        )
+        self.assertEqual(
+            plan.statement,
+            'SELECT surface, SUM(latency_p75_ms) AS "__kaveon_avg_sum_1", '
+            'COUNT(latency_p75_ms) AS "__kaveon_avg_count_1" '
+            'FROM public.kaveon_events_enriched GROUP BY surface',
+        )
+        self.assertEqual(plan.width, 3)
+        self.assertEqual(plan.columns, (
+            rewrite._Output(source=0, divisor=None, name=None),
+            rewrite._Output(source=1, divisor=2, name="Avg Latency (ms)"),
+        ))
+        self.assertEqual(plan.sort_keys, ((1, True),))
+
+    def test_a_global_average_becomes_a_sum_and_a_count(self):
+        plan = rewrite.plan('SELECT AVG(latency_p75_ms) AS "ms" '
+                            'FROM public.kaveon_events_enriched LIMIT 500')
+        self.assertEqual(
+            plan.statement,
+            'SELECT SUM(latency_p75_ms) AS "__kaveon_avg_sum_0", '
+            'COUNT(latency_p75_ms) AS "__kaveon_avg_count_0" '
+            'FROM public.kaveon_events_enriched',
+        )
+        self.assertEqual(plan.columns,
+                         (rewrite._Output(source=0, divisor=1, name="ms"),))
+
+    def test_an_average_beside_other_aggregates_keeps_every_position(self):
+        plan = rewrite.plan(
+            "SELECT region, SUM(a) AS s, AVG(b) AS m, COUNT(DISTINCT c) AS d "
+            "FROM s.t GROUP BY region ORDER BY m DESC LIMIT 7"
+        )
+        self.assertEqual(
+            plan.statement,
+            'SELECT region, SUM(a) AS s, SUM(b) AS "__kaveon_avg_sum_2", '
+            'COUNT(b) AS "__kaveon_avg_count_2", COUNT(DISTINCT c) AS d '
+            "FROM s.t GROUP BY region",
+        )
+        self.assertEqual(plan.width, 5)
+        self.assertEqual([output.source for output in plan.columns], [0, 1, 2, 4])
+        self.assertEqual([output.divisor for output in plan.columns],
+                         [None, None, 3, None])
+        self.assertEqual(plan.sort_keys, ((2, True),))
+
+    def test_several_averages_are_each_substituted(self):
+        plan = rewrite.plan("SELECT k, AVG(a) AS x, AVG(b) AS y FROM s.t "
+                            "GROUP BY k ORDER BY y DESC LIMIT 3")
+        self.assertEqual(
+            plan.statement,
+            'SELECT k, SUM(a) AS "__kaveon_avg_sum_1", COUNT(a) AS "__kaveon_avg_count_1", '
+            'SUM(b) AS "__kaveon_avg_sum_2", COUNT(b) AS "__kaveon_avg_count_2" '
+            "FROM s.t GROUP BY k",
+        )
+        self.assertEqual(plan.width, 5)
+        self.assertEqual([output.divisor for output in plan.columns], [None, 2, 4])
+        self.assertEqual(plan.sort_keys, ((2, True),))
+
+    def test_the_average_argument_is_taken_exactly_as_written(self):
+        plan = rewrite.plan("SELECT k, AVG( t.latency_p75_ms ) AS m FROM s.t AS t "
+                            "GROUP BY k ORDER BY m LIMIT 2")
+        self.assertEqual(
+            plan.statement,
+            'SELECT k, SUM(t.latency_p75_ms) AS "__kaveon_avg_sum_1", '
+            'COUNT(t.latency_p75_ms) AS "__kaveon_avg_count_1" '
+            "FROM s.t AS t GROUP BY k",
+        )
+
+    def test_the_average_output_name_and_position_are_the_caller_s(self):
+        plan = rewrite.plan('SELECT k, AVG(a) AS "Avg A", SUM(b) AS "B" FROM s.t '
+                            'GROUP BY k ORDER BY "Avg A" DESC LIMIT 2')
+        names, rows = rewrite.finish_rows(
+            ["k", "__kaveon_avg_sum_1", "__kaveon_avg_count_1", "B"],
+            [["x", 10, 4, 99], ["y", 9, 3, 98]], plan)
+        self.assertEqual(names, ["k", "Avg A", "B"])
+        self.assertEqual(rows, [["y", 3.0, 98], ["x", 2.5, 99]])
+
+    def test_the_substituted_columns_never_reach_the_response(self):
+        plan = rewrite.plan("SELECT k, AVG(a) AS m FROM s.t GROUP BY k LIMIT 5")
+        names, rows = rewrite.finish_rows(
+            ["k", "__kaveon_avg_sum_1", "__kaveon_avg_count_1"],
+            [["x", 7, 2]], plan)
+        self.assertEqual(names, ["k", "m"])
+        self.assertEqual(rows, [["x", 3.5]])
+
+    def test_a_group_with_no_non_null_value_is_null_not_zero(self):
+        plan = rewrite.plan("SELECT k, AVG(a) AS m FROM s.t GROUP BY k LIMIT 5")
+        _, rows = rewrite.finish_rows(
+            ["k", "s", "n"],
+            [["empty", None, 0], ["also", 0, 0], ["real", 9, 2]], plan)
+        self.assertEqual(rows, [["empty", None], ["also", None], ["real", 4.5]])
+
+    def test_the_quotient_is_true_division_and_is_never_rounded(self):
+        plan = rewrite.plan("SELECT k, AVG(a) AS m FROM s.t GROUP BY k LIMIT 5")
+        _, rows = rewrite.finish_rows(["k", "s", "n"], [["x", 7, 2], ["y", 1, 3]], plan)
+        self.assertEqual(rows[0][1], 3.5)
+        self.assertEqual(rows[1][1], 1 / 3)
+        self.assertIsInstance(rows[0][1], float)
+
+    def test_the_quotient_matches_the_engine_s_own_average_bit_for_bit(self):
+        # Measured on public.kaveon_events_enriched: AVG(latency_p75_ms) against
+        # SUM(latency_p75_ms) / COUNT(latency_p75_ms) over the same six groups.
+        measured = {
+            "API": (23022504115, 84100000, 273.75153525564804),
+            "Chart Builder": (96525876823, 84100000, 1147.7512107372177),
+            "Chat": (24629988691, 84100000, 292.8655016765755),
+            "Dashboard": (71484955523, 84100000, 849.9994711414982),
+            "Export": (50273982606, 84100000, 597.7881403804994),
+            "SQL Lab": (147175025292, 84100000, 1750.0003007372177),
+        }
+        plan = rewrite.plan("SELECT surface, AVG(latency_p75_ms) AS m "
+                            "FROM public.events GROUP BY surface LIMIT 500")
+        _, rows = rewrite.finish_rows(
+            ["surface", "s", "n"],
+            [[name, total, count] for name, (total, count, _) in measured.items()],
+            plan)
+        for name, value in rows:
+            self.assertEqual(value.hex(), measured[name][2].hex(), name)
+
+    def test_an_average_sort_key_is_ordered_after_the_quotient_is_formed(self):
+        # The sums alone rank the groups differently from their means, so an
+        # ordering applied before the division would return the wrong rows.
+        plan = rewrite.plan("SELECT k, AVG(a) AS m FROM s.t GROUP BY k "
+                            "ORDER BY m DESC LIMIT 2")
+        _, rows = rewrite.finish_rows(
+            ["k", "s", "n"],
+            [["big sum, small mean", 1000, 1000],
+             ["small sum, big mean", 50, 2],
+             ["middling", 90, 9]], plan)
+        self.assertEqual(rows, [["small sum, big mean", 25.0], ["middling", 10.0]])
+
+    def test_an_average_sort_key_named_by_its_expression_still_resolves(self):
+        plan = rewrite.plan("SELECT k, AVG(a) AS m FROM s.t GROUP BY k "
+                            "ORDER BY avg(A) ASC LIMIT 5")
+        self.assertEqual(plan.sort_keys, ((1, False),))
+        _, rows = rewrite.finish_rows(
+            ["k", "s", "n"], [["x", 10, 1], ["y", 4, 2]], plan)
+        self.assertEqual(rows, [["y", 2.0], ["x", 10.0]])
+
+    def test_a_null_average_sorts_above_every_value_as_the_engine_ranks_it(self):
+        plan = rewrite.plan("SELECT k, AVG(a) AS m FROM s.t GROUP BY k "
+                            "ORDER BY m DESC LIMIT 3")
+        _, rows = rewrite.finish_rows(
+            ["k", "s", "n"], [["has", 4, 2], ["none", None, 0], ["more", 9, 3]], plan)
+        self.assertEqual(rows, [["none", None], ["more", 3.0], ["has", 2.0]])
+
+    def test_average_distinct_is_refused(self):
+        self.assertIsNone(rewrite.plan("SELECT k, AVG(DISTINCT a) AS m FROM s.t "
+                                       "GROUP BY k ORDER BY m LIMIT 5"))
+        self.assertIsNone(rewrite.plan("SELECT k, avg( distinct a ) AS m FROM s.t "
+                                       "GROUP BY k ORDER BY m LIMIT 5"))
+
+    def test_an_unaliased_average_is_refused(self):
+        # The Engine names an unaliased projection positionally (expr_1), which
+        # is a convention this module will not depend on reproducing.
+        self.assertIsNone(rewrite.plan("SELECT k, AVG(a) FROM s.t GROUP BY k "
+                                       "ORDER BY k LIMIT 5"))
+        self.assertIsNone(rewrite.plan("SELECT AVG(a) FROM s.t LIMIT 5"))
+
+    def test_an_average_that_is_not_one_column_is_refused(self):
+        self.assertIsNone(rewrite.plan("SELECT k, AVG(*) AS m FROM s.t "
+                                       "GROUP BY k ORDER BY m LIMIT 5"))
+        self.assertIsNone(rewrite.plan("SELECT k, AVG(a, b) AS m FROM s.t "
+                                       "GROUP BY k ORDER BY m LIMIT 5"))
+        self.assertIsNone(rewrite.plan("SELECT k, AVG() AS m FROM s.t "
+                                       "GROUP BY k ORDER BY m LIMIT 5"))
+
+    def test_a_statement_spelling_a_reserved_name_is_refused(self):
+        self.assertIsNone(rewrite.plan(
+            'SELECT k, SUM(a) AS "__kaveon_avg_sum_1" FROM s.t '
+            'GROUP BY k ORDER BY k LIMIT 5'))
+        self.assertIsNone(rewrite.plan(
+            "SELECT k, SUM(__kaveon_avg_count_0) AS v FROM s.t "
+            "GROUP BY k ORDER BY k LIMIT 5"))
+
+    def test_a_count_that_is_not_a_whole_number_is_refused(self):
+        plan = rewrite.plan("SELECT k, AVG(a) AS m FROM s.t GROUP BY k LIMIT 5")
+        self.assertIsNone(rewrite.finish_rows(["k", "s", "n"], [["x", 1, 2.5]], plan))
+        self.assertIsNone(rewrite.finish_rows(["k", "s", "n"], [["x", 1, "2"]], plan))
+        self.assertIsNone(rewrite.finish_rows(["k", "s", "n"], [["x", 1, -1]], plan))
+        self.assertIsNone(rewrite.finish_rows(["k", "s", "n"], [["x", "1", 2]], plan))
+
+    def test_a_result_that_is_not_as_wide_as_the_statement_is_refused(self):
+        plan = rewrite.plan("SELECT k, AVG(a) AS m FROM s.t GROUP BY k LIMIT 5")
+        self.assertIsNone(rewrite.finish_rows(["k", "s"], [["x", 1]], plan))
+        self.assertIsNone(rewrite.finish_rows(["k", "s", "n"], [["x", 1]], plan))
 
 
 class RefusedShapeTests(unittest.TestCase):
@@ -232,32 +427,34 @@ class RefusedShapeTests(unittest.TestCase):
 class OrderingTests(unittest.TestCase):
     """The API-side ordering reproduces what the Engine's Sort/TopN produces."""
 
-    def plan(self, sql):
+    def finish(self, sql, rows):
         plan = rewrite.plan(sql)
         self.assertIsNotNone(plan, sql)
-        return plan
+        finished = rewrite.finish_rows(
+            [f"c{at}" for at in range(plan.width)], rows, plan)
+        return None if finished is None else finished[1]
 
     def test_numbers_are_ordered_as_numbers_not_as_text(self):
-        plan = self.plan("SELECT region, SUM(a) AS v FROM t GROUP BY region ORDER BY v DESC")
-        rows = [["a", 9], ["b", 100], ["c", 11.5]]
-        self.assertEqual(rewrite.order_rows(rows, plan),
-                         [["b", 100], ["c", 11.5], ["a", 9]])
+        self.assertEqual(
+            self.finish("SELECT region, SUM(a) AS v FROM t GROUP BY region ORDER BY v DESC",
+                        [["a", 9], ["b", 100], ["c", 11.5]]),
+            [["b", 100], ["c", 11.5], ["a", 9]])
 
     def test_text_is_ordered_by_code_point_like_arrow(self):
-        plan = self.plan("SELECT provider, MAX(e) AS v FROM t GROUP BY provider "
-                         "ORDER BY provider DESC")
-        rows = [["Anthropic", 1], ["xAI", 2], ["OpenAI", 3]]
-        self.assertEqual(rewrite.order_rows(rows, plan),
-                         [["xAI", 2], ["OpenAI", 3], ["Anthropic", 1]])
+        self.assertEqual(
+            self.finish("SELECT provider, MAX(e) AS v FROM t GROUP BY provider "
+                        "ORDER BY provider DESC",
+                        [["Anthropic", 1], ["xAI", 2], ["OpenAI", 3]]),
+            [["xAI", 2], ["OpenAI", 3], ["Anthropic", 1]])
 
     def test_nulls_rank_above_every_value_in_both_directions(self):
-        descending = self.plan("SELECT p, MAX(e) AS v FROM t GROUP BY p ORDER BY v DESC")
-        ascending = self.plan("SELECT p, MAX(e) AS v FROM t GROUP BY p ORDER BY v ASC")
         rows = [["a", 2], ["b", None], ["c", 1]]
-        self.assertEqual(rewrite.order_rows(rows, descending),
-                         [["b", None], ["a", 2], ["c", 1]])
-        self.assertEqual(rewrite.order_rows(rows, ascending),
-                         [["c", 1], ["a", 2], ["b", None]])
+        self.assertEqual(
+            self.finish("SELECT p, MAX(e) AS v FROM t GROUP BY p ORDER BY v DESC", rows),
+            [["b", None], ["a", 2], ["c", 1]])
+        self.assertEqual(
+            self.finish("SELECT p, MAX(e) AS v FROM t GROUP BY p ORDER BY v ASC", rows),
+            [["c", 1], ["a", 2], ["b", None]])
 
     def test_an_explicit_nulls_clause_is_not_honoured_because_the_engine_ignores_it(self):
         # Measured on the live Engine: DESC NULLS LAST and DESC NULLS FIRST
@@ -265,56 +462,62 @@ class OrderingTests(unittest.TestCase):
         # rows a chart shows rather than preserve them.
         rows = [["a", 2], ["b", None], ["c", 1]]
         for clause in ("NULLS LAST", "NULLS FIRST"):
-            plan = self.plan("SELECT p, MAX(e) AS v FROM t GROUP BY p "
-                             "ORDER BY v DESC " + clause)
-            self.assertEqual(rewrite.order_rows(rows, plan),
-                             [["b", None], ["a", 2], ["c", 1]], clause)
+            self.assertEqual(
+                self.finish("SELECT p, MAX(e) AS v FROM t GROUP BY p "
+                            "ORDER BY v DESC " + clause, rows),
+                [["b", None], ["a", 2], ["c", 1]], clause)
 
     def test_the_limit_is_applied_after_the_ordering(self):
-        plan = self.plan("SELECT p, SUM(a) AS v FROM t GROUP BY p ORDER BY v DESC LIMIT 2")
-        rows = [["a", 1], ["b", 3], ["c", 2]]
-        self.assertEqual(rewrite.order_rows(rows, plan), [["b", 3], ["c", 2]])
+        self.assertEqual(
+            self.finish("SELECT p, SUM(a) AS v FROM t GROUP BY p ORDER BY v DESC LIMIT 2",
+                        [["a", 1], ["b", 3], ["c", 2]]),
+            [["b", 3], ["c", 2]])
 
     def test_an_unordered_limit_keeps_the_engine_s_own_row_order(self):
-        plan = self.plan("SELECT p, SUM(a) AS v FROM t GROUP BY p LIMIT 2")
-        rows = [["c", 1], ["a", 3], ["b", 2]]
-        self.assertEqual(rewrite.order_rows(rows, plan), [["c", 1], ["a", 3]])
+        self.assertEqual(
+            self.finish("SELECT p, SUM(a) AS v FROM t GROUP BY p LIMIT 2",
+                        [["c", 1], ["a", 3], ["b", 2]]),
+            [["c", 1], ["a", 3]])
 
     def test_several_keys_order_by_the_first_key_first(self):
-        plan = self.plan("SELECT p, q, SUM(a) AS v FROM t GROUP BY p, q "
-                         "ORDER BY p ASC, v DESC")
-        rows = [["b", "x", 1], ["a", "y", 1], ["a", "z", 9]]
-        self.assertEqual(rewrite.order_rows(rows, plan),
-                         [["a", "z", 9], ["a", "y", 1], ["b", "x", 1]])
+        self.assertEqual(
+            self.finish("SELECT p, q, SUM(a) AS v FROM t GROUP BY p, q "
+                        "ORDER BY p ASC, v DESC",
+                        [["b", "x", 1], ["a", "y", 1], ["a", "z", 9]]),
+            [["a", "z", 9], ["a", "y", 1], ["b", "x", 1]])
 
     def test_ties_keep_the_order_the_engine_returned(self):
-        plan = self.plan("SELECT p, SUM(a) AS v FROM t GROUP BY p ORDER BY v DESC")
         rows = [["first", 1], ["second", 1], ["third", 1]]
-        self.assertEqual(rewrite.order_rows(rows, plan), rows)
+        self.assertEqual(
+            self.finish("SELECT p, SUM(a) AS v FROM t GROUP BY p ORDER BY v DESC", rows),
+            rows)
 
     def test_booleans_order_as_booleans(self):
-        plan = self.plan("SELECT flag, SUM(a) AS v FROM t GROUP BY flag ORDER BY flag ASC")
-        rows = [[True, 1], [False, 2], [None, 3]]
-        self.assertEqual(rewrite.order_rows(rows, plan), [[False, 2], [True, 1], [None, 3]])
+        self.assertEqual(
+            self.finish("SELECT flag, SUM(a) AS v FROM t GROUP BY flag ORDER BY flag ASC",
+                        [[True, 1], [False, 2], [None, 3]]),
+            [[False, 2], [True, 1], [None, 3]])
 
     def test_a_sort_column_that_cannot_be_ordered_here_gives_up(self):
-        plan = self.plan("SELECT p, SUM(a) AS v FROM t GROUP BY p ORDER BY v DESC")
-        self.assertIsNone(rewrite.order_rows([["a", 1], ["b", "two"]], plan))
-        self.assertIsNone(rewrite.order_rows([["a", 1], ["b", float("nan")]], plan))
-        self.assertIsNone(rewrite.order_rows([["a", True], ["b", 2]], plan))
+        sql = "SELECT p, SUM(a) AS v FROM t GROUP BY p ORDER BY v DESC"
+        self.assertIsNone(self.finish(sql, [["a", 1], ["b", "two"]]))
+        self.assertIsNone(self.finish(sql, [["a", 1], ["b", float("nan")]]))
+        self.assertIsNone(self.finish(sql, [["a", True], ["b", 2]]))
 
     def test_an_all_null_sort_column_is_left_as_the_engine_returned_it(self):
-        plan = self.plan("SELECT p, SUM(a) AS v FROM t GROUP BY p ORDER BY v DESC")
         rows = [["a", None], ["b", None]]
-        self.assertEqual(rewrite.order_rows(rows, plan), rows)
+        self.assertEqual(
+            self.finish("SELECT p, SUM(a) AS v FROM t GROUP BY p ORDER BY v DESC", rows),
+            rows)
 
     def test_an_empty_result_stays_empty(self):
-        plan = self.plan("SELECT p, SUM(a) AS v FROM t GROUP BY p ORDER BY v DESC LIMIT 5")
-        self.assertEqual(rewrite.order_rows([], plan), [])
+        self.assertEqual(
+            self.finish("SELECT p, SUM(a) AS v FROM t GROUP BY p ORDER BY v DESC LIMIT 5", []),
+            [])
 
 
 class EquivalenceTests(unittest.TestCase):
-    """The rewrite plus the API-side ordering equals the Engine's own answer."""
+    """The rewrite plus the API-side finish equals the Engine's own answer."""
 
     ENGINE_ROWS = [
         ["Africa", 783964414], ["Asia", 1372576329], ["Europe", 1569471524],
@@ -343,8 +546,9 @@ class EquivalenceTests(unittest.TestCase):
         ]:
             plan = rewrite.plan(sql)
             self.assertIsNotNone(plan, sql)
-            self.assertEqual(rewrite.order_rows(self.ENGINE_ROWS, plan),
-                             self.engine_order(index, descending)[:limit], sql)
+            names, rows = rewrite.finish_rows(["region", "A"], self.ENGINE_ROWS, plan)
+            self.assertEqual(names, ["region", "A"], sql)
+            self.assertEqual(rows, self.engine_order(index, descending)[:limit], sql)
 
 
 if __name__ == "__main__":

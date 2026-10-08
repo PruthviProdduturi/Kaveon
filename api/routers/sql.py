@@ -206,8 +206,11 @@ def _execute_engine_read_only(sql_text: str, catalog: str, ctx: UserContext,
 # instead of scanning the table, but an ORDER BY or a LIMIT disqualifies that
 # match while every chart statement carries both.  So a statement that can be
 # ordered and limited here is issued without those clauses and finished here
-# over the handful of rows a breakdown returns.  services.engine_cube_rewrite
-# owns the rule for which statements qualify and reproduces the ordering.
+# over the handful of rows a breakdown returns.  An AVG projection is also
+# substituted, because the cube holds a column's sum and its count but not its
+# mean.  services.engine_cube_rewrite owns the rule for which statements
+# qualify, and reduces the rows that come back to the ones the caller asked
+# for.
 
 # The most rows the rewrite will order in the API.  A grouped result wider
 # than this is already past what any Studio surface renders, so the rewrite is
@@ -248,15 +251,15 @@ def _decline_engine_cube(key: str) -> None:
         _ENGINE_CUBE_DECLINED[key] = now
 
 
-def _execute_engine_chart_statement(sql_text: str, catalog: str, ctx: UserContext,
-                                    schema: str | None,
-                                    cancel_token: str | None) -> tuple[dict, list | None]:
+def _execute_engine_chart_statement(
+        sql_text: str, catalog: str, ctx: UserContext, schema: str | None,
+        cancel_token: str | None) -> tuple[dict, tuple[list, list] | None]:
     """Run one chart statement, letting the Engine's cube answer it when the
-    statement's ordering and limit can be applied here instead.
+    statement's averages, ordering and limit can be applied here instead.
 
-    Returns the Engine result and, when the rewrite was used, the ordered and
-    limited rows; None means the caller reads the rows out of the result as it
-    always has.
+    Returns the Engine result and, when the rewrite was used, the columns and
+    rows the caller's own statement would have returned; None means the caller
+    reads them out of the result as it always has.
     """
     rewrite = engine_cube_rewrite.plan(sql_text)
     if rewrite is None:
@@ -276,11 +279,11 @@ def _execute_engine_chart_statement(sql_text: str, catalog: str, ctx: UserContex
                 raise
             _decline_engine_cube(declined_key)
         else:
-            _, rows = _engine_result_rows(result)
-            ordered = (engine_cube_rewrite.order_rows(rows, rewrite)
-                       if len(rows) <= ENGINE_CUBE_ROW_CAP else None)
-            if ordered is not None:
-                return result, ordered
+            columns, rows = _engine_result_rows(result)
+            finished = (engine_cube_rewrite.finish_rows(columns, rows, rewrite)
+                        if len(rows) <= ENGINE_CUBE_ROW_CAP else None)
+            if finished is not None:
+                return result, finished
             _decline_engine_cube(declined_key)
     return _execute_engine_read_only(sql_text, catalog, ctx, schema,
                                      cancel_token=cancel_token), None
@@ -744,7 +747,7 @@ def execute_engine_sql(data: SqlExecuteBody, response: Response, ctx: UserContex
             }
     started_at = int(time.time() * 1000)
     try:
-        result, ordered_rows = _execute_engine_chart_statement(
+        result, finished = _execute_engine_chart_statement(
             data.sql_text, source["engine_catalog"], ctx, schema,
             data.cancel_token)
     except HTTPException as error:
@@ -774,8 +777,8 @@ def execute_engine_sql(data: SqlExecuteBody, response: Response, ctx: UserContex
             ) from None
         raise
     columns, rows = _engine_result_rows(result)
-    if ordered_rows is not None:
-        rows = ordered_rows
+    if finished is not None:
+        columns, rows = finished
     if data.row_limit:
         rows = rows[:data.row_limit]
     if data.use_cache:
