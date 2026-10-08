@@ -468,3 +468,11 @@ worker admission limit to **4 GiB**. q33 completed exactly in **19.091 s**
 and q35 regressed to **17.818 s**, versus the 512 MiB qualified q33/q35
 results of **19.087 s** and **12.666 s**. More admission memory does not
 remove the exchange bottleneck and the defaults were restored.
+
+
+An exchange fan-out reduction from **4** to **2** partitions was also tested.
+The q33 run did not complete successfully: the final TopN stage hit the 512 MiB
+per-query reservation ceiling (`cannot reserve 854,912 bytes` with 536,149,748
+bytes already reserved). The four-partition default was restored; this confirms
+that reducing fan-out increases per-task state beyond the current bounded-memory
+contract.
