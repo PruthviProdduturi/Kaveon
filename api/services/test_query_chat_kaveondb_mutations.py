@@ -22,8 +22,14 @@ def test_query_history_create_and_retention_are_one_kaveondb_transaction():
         result = query_history.create_history(
             {"sql_text": "SELECT 1", "status": "success", "started_at": 1_789_000_000_000}, "alice")
     assert result["sql_text"] == "SELECT 1"
-    assert [(item.operation, item.expected_revision) for item in mutations] == [
-        ("create", None), ("delete", 3)]
+    # One transaction still carries both the new record and the retention it
+    # forces. Retention removes a batch rather than the single oldest record,
+    # because finding the oldest costs a full listing and doing that per write
+    # was most of a statement's latency.
+    assert mutations[0].operation == "create" and mutations[0].expected_revision is None
+    assert {item.operation for item in mutations[1:]} == {"delete"}
+    assert all(item.expected_revision == 3 for item in mutations[1:])
+    assert len(mutations) == 1 + query_history._RETENTION_TRIM_BATCH + 1
     assert mutations[0].document["user_email"] == "alice"
 
 
