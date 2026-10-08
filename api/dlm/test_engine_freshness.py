@@ -60,6 +60,35 @@ class ChartFreshnessTests(unittest.TestCase):
         self.assertTrue(answer["ok"], answer)
         self.assertTrue(answer.get("from_context"), answer)
 
+    def test_a_catalog_bound_dataset_is_engine_backed_under_retirement(self):
+        """Every migrated dataset carries `source: null` and a catalog name.
+        Skipping the native-catalog lookup under the PostgreSQL-free runtime
+        left all of them unbound, so every question fell through to the retired
+        warehouse and answered "Metadata database is not configured" — the DLM
+        could not assemble SQL for any dataset at all."""
+        dataset = {"id": "7", "database_name": "OpenSource", "schema_name": "public",
+                   "table_name": "events", "source": None}
+        definition = {"id": "table:OpenSource:public:events", "shape": None}
+        with patch("services.postgresql_retirement_runtime.requested", return_value=True),              patch("services.engine_bridge.table_definition", return_value=definition),              patch.object(engine.meta, "query_one",
+                          side_effect=AssertionError("PostgreSQL read reached")):
+            engine._TABLE_ID_CACHE.pop("7", None)
+            self.addCleanup(engine._TABLE_ID_CACHE.pop, "7", None)
+            binding = engine._engine_binding(dataset, native=bool(engine._native_catalog("OpenSource")))
+        self.assertEqual(binding["table_id"], "table:OpenSource:public:events")
+        self.assertEqual(binding["catalog"], "OpenSource")
+
+    def test_an_unresolvable_table_is_still_unbound(self):
+        """Treating any catalog name as native is only safe because the Engine
+        settles it: a table it cannot resolve must yield no binding."""
+        dataset = {"id": "8", "database_name": "Nonsense", "schema_name": "public",
+                   "table_name": "events", "source": None}
+        with patch("services.postgresql_retirement_runtime.requested", return_value=True),              patch("services.engine_bridge.table_definition",
+                   side_effect=RuntimeError("no such catalog")):
+            engine._TABLE_ID_CACHE.pop("8", None)
+            self.addCleanup(engine._TABLE_ID_CACHE.pop, "8", None)
+            binding = engine._engine_binding(dataset, native=bool(engine._native_catalog("Nonsense")))
+        self.assertIsNone(binding)
+
     def test_authenticated_serving_uses_the_legacy_tables_until_retirement_is_requested(self):
         # PostgreSQL remains the DLM authority until the PostgreSQL-free
         # runtime is requested: an authenticated caller must not install the
