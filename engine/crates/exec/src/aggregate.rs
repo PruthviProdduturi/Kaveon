@@ -1724,15 +1724,18 @@ pub(crate) fn decode_group_keys(bytes: &[u8]) -> Result<Vec<AggregateValue>> {
     if bytes.starts_with(crate::columnar_aggregate::FIXED_KEY_MAGIC) {
         let mut input = &bytes[crate::columnar_aggregate::FIXED_KEY_MAGIC.len()..];
         let count = *take_compact_group_key_bytes(&mut input, 1)?.first().unwrap() as usize;
-        let tags = (0..count)
-            .map(|_| Ok(*take_compact_group_key_bytes(&mut input, 1)?.first().unwrap()))
-            .collect::<Result<Vec<_>>>()?;
+        let tagged = input.len() != count * 8 && input.len() != count * 4 && input.len() != count;
+        let tags = if tagged { Some((0..count).map(|_| Ok(*take_compact_group_key_bytes(&mut input, 1)?.first().unwrap())).collect::<Result<Vec<_>>>()?) } else { None };
         let mut keys = Vec::with_capacity(count);
-        for tag in tags {
+        for position in 0..count {
+            let tag = tags.as_ref().map(|tags| tags[position]);
             keys.push(match tag {
-                crate::columnar_aggregate::COMPACT_KEY_INT64 => AggregateValue::Int64(i64::from_le_bytes(take_compact_group_key_bytes(&mut input, 8)?.try_into().unwrap())),
-                crate::columnar_aggregate::COMPACT_KEY_INT32 => AggregateValue::Int32(i32::from_le_bytes(take_compact_group_key_bytes(&mut input, 4)?.try_into().unwrap())),
-                crate::columnar_aggregate::COMPACT_KEY_BOOL => AggregateValue::Bool(match *take_compact_group_key_bytes(&mut input, 1)?.first().unwrap() { 0 => false, 1 => true, _ => return Err(exec_err("invalid fixed boolean aggregate key")) }),
+                None if input.len() == (count - position) * 8 => AggregateValue::Int64(i64::from_le_bytes(take_compact_group_key_bytes(&mut input, 8)?.try_into().unwrap())),
+                None if input.len() == (count - position) * 4 => AggregateValue::Int32(i32::from_le_bytes(take_compact_group_key_bytes(&mut input, 4)?.try_into().unwrap())),
+                None if input.len() == count - position => AggregateValue::Bool(match *take_compact_group_key_bytes(&mut input, 1)?.first().unwrap() { 0 => false, 1 => true, _ => return Err(exec_err("invalid fixed boolean aggregate key")) }),
+                Some(crate::columnar_aggregate::COMPACT_KEY_INT64) => AggregateValue::Int64(i64::from_le_bytes(take_compact_group_key_bytes(&mut input, 8)?.try_into().unwrap())),
+                Some(crate::columnar_aggregate::COMPACT_KEY_INT32) => AggregateValue::Int32(i32::from_le_bytes(take_compact_group_key_bytes(&mut input, 4)?.try_into().unwrap())),
+                Some(crate::columnar_aggregate::COMPACT_KEY_BOOL) => AggregateValue::Bool(match *take_compact_group_key_bytes(&mut input, 1)?.first().unwrap() { 0 => false, 1 => true, _ => return Err(exec_err("invalid fixed boolean aggregate key")) }),
                 _ => return Err(exec_err("unknown fixed aggregate group key type")),
             });
         }

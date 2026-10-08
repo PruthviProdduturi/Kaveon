@@ -1222,16 +1222,24 @@ fn parse_key_words(
         if input.byte()? as usize != key_count {
             return Err(exec_err("fixed partial group key count mismatch"));
         }
-        let tags = (0..key_count).map(|_| input.byte()).collect::<Result<Vec<_>>>()?;
+        let untagged_bytes = keys.iter().map(|column| match column {
+            KeyColumn::Integer { data_type: DataType::Int32 | DataType::Date32, .. } => 4,
+            KeyColumn::Integer { data_type: DataType::Boolean, .. } => 1,
+            KeyColumn::Integer { .. } => 8,
+            _ => 0,
+        }).sum::<usize>();
+        let tagged = input.0.len() != untagged_bytes;
+        let tags = if tagged { Some((0..key_count).map(|_| input.byte()).collect::<Result<Vec<_>>>()?) } else { None };
         for (position, column) in keys.iter().enumerate() {
-            words[position] = match (column, tags[position]) {
-                (KeyColumn::Integer { data_type: DataType::Int64, .. }, COMPACT_KEY_INT64) => {
+            let tag = tags.as_ref().map(|tags| tags[position]);
+            words[position] = match (column, tag) {
+                (KeyColumn::Integer { data_type: DataType::Int64, .. }, None | Some(COMPACT_KEY_INT64)) => {
                     i64::from_le_bytes(input.take(8)?.try_into().unwrap()) as u64
                 }
-                (KeyColumn::Integer { data_type: DataType::Int32 | DataType::Date32, .. }, COMPACT_KEY_INT32) => {
+                (KeyColumn::Integer { data_type: DataType::Int32 | DataType::Date32, .. }, None | Some(COMPACT_KEY_INT32)) => {
                     i32::from_le_bytes(input.take(4)?.try_into().unwrap()) as i64 as u64
                 }
-                (KeyColumn::Integer { data_type: DataType::Boolean, .. }, COMPACT_KEY_BOOL) => match input.byte()? {
+                (KeyColumn::Integer { data_type: DataType::Boolean, .. }, None | Some(COMPACT_KEY_BOOL)) => match input.byte()? {
                     0 => 0,
                     1 => 1,
                     _ => return Err(exec_err("invalid fixed boolean group key")),
@@ -1895,9 +1903,19 @@ impl ColumnarGroups {
         if fixed {
             out.extend_from_slice(FIXED_KEY_MAGIC);
             out.push(self.keys.len() as u8);
-            for key in &self.keys {
-                if let KeyColumn::Integer { data_type, .. } = key {
-                    out.push(match data_type { DataType::Int32 | DataType::Date32 => COMPACT_KEY_INT32, DataType::Boolean => COMPACT_KEY_BOOL, _ => COMPACT_KEY_INT64 });
+            let first_type = self.keys.first().and_then(|key| match key { KeyColumn::Integer { data_type, .. } => Some(data_type), _ => None });
+            let homogeneous = first_type.is_some() && self.keys.iter().all(|key| match (first_type, key) {
+                (Some(DataType::Int64), KeyColumn::Integer { data_type: DataType::Int64, .. })
+                | (Some(DataType::Int32), KeyColumn::Integer { data_type: DataType::Int32, .. })
+                | (Some(DataType::Date32), KeyColumn::Integer { data_type: DataType::Date32, .. })
+                | (Some(DataType::Boolean), KeyColumn::Integer { data_type: DataType::Boolean, .. }) => true,
+                _ => false,
+            });
+            if !homogeneous {
+                for key in &self.keys {
+                    if let KeyColumn::Integer { data_type, .. } = key {
+                        out.push(match data_type { DataType::Int32 | DataType::Date32 => COMPACT_KEY_INT32, DataType::Boolean => COMPACT_KEY_BOOL, _ => COMPACT_KEY_INT64 });
+                    }
                 }
             }
             for key in &self.keys {
