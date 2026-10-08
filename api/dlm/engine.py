@@ -382,24 +382,7 @@ def _generate_dlm_impl(dataset_id: str, force: bool = False,
         from services import engine_datasets
         engine_table = engine_datasets.resolve_table(binding["table_id"], _SERVICE_ACTOR, "Admin")
         engine_version = _engine_version(binding["table_id"])
-        # The Engine's definition is what the statements will actually run
-        # against, so its column types win over the dataset's record of them.
-        # Those drift: a dataset modelled when a column was a warehouse DATE
-        # keeps saying `date` after the same column lands in the lake as text,
-        # and the assembled predicate then compares a DATE literal to a Utf8
-        # column — which the Engine rejects outright, so the question fails
-        # rather than answering slowly. A type is only taken for a column the
-        # Engine actually reports.
-        engine_types = {str(column.get("name") or ""): column.get("data_type")
-                        for column in (engine_table.get("columns") or [])
-                        if isinstance(column, dict) and column.get("data_type")}
-        if engine_types:
-            columns = [
-                {**column, "data_type": engine_types.get(
-                    str(column.get("column_name") or column.get("name") or ""),
-                    column.get("data_type"))}
-                for column in columns
-            ]
+        columns = _with_engine_column_types(ds, columns)
     hint_token = _BOUND_ENGINE_CATALOG.set(binding["catalog"] if binding else None)
     try:
         return _generate_dlm_bound(dataset_id, force, actor, ds, state, prior_artifact, database, schema,
@@ -2085,7 +2068,7 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
     if not fact:
         return {"ok": False, "reason": "no_fact_table"}
     date_column = ds.get("date_column")
-    columns = ds.get("columns") or []
+    columns = _with_engine_column_types(ds, ds.get("columns") or [])
     metrics = ds.get("metrics") or []
     dims = [c for c in columns if c.get("is_dimension")]
 
@@ -5277,6 +5260,41 @@ def _engine_binding(ds: dict, native: Optional[bool] = None) -> Optional[Dict[st
     if key:
         _TABLE_ID_CACHE[key] = {"table": (catalog, schema, table), "binding": binding}
     return binding
+
+
+def _with_engine_column_types(ds: dict, columns: list) -> list:
+    """The dataset's columns, retyped from the Engine where it knows better.
+
+    A dataset's record of a column's type drifts from the table it reads. 144
+    was modelled when `event_date` was a warehouse DATE and still said so after
+    the same column landed in the lake as text, so the assembled predicate
+    compared a DATE literal to a Utf8 column and the Engine refused the
+    statement outright. What the statement runs against is the Engine's
+    definition, so that is what decides the type. A column the Engine does not
+    report keeps the dataset's type, which leaves a federated or
+    partly-modelled dataset untouched.
+    """
+    if not columns:
+        return columns
+    binding = _engine_binding(ds)
+    if not binding:
+        return columns
+    try:
+        from services import engine_datasets
+        table = engine_datasets.resolve_table(binding["table_id"], _SERVICE_ACTOR, "Admin")
+    except Exception:
+        logger.warning("Engine column types unavailable for dataset %s", ds.get("id"))
+        return columns
+    engine_types = {str(column.get("name") or ""): column.get("data_type")
+                    for column in (table.get("columns") or [])
+                    if isinstance(column, dict) and column.get("data_type")}
+    if not engine_types:
+        return columns
+    return [
+        {**column, "data_type": engine_types.get(
+            str(column.get("column_name") or column.get("name") or ""), column.get("data_type"))}
+        for column in columns
+    ]
 
 
 def _engine_version(table_id: str) -> Optional[Dict[str, Any]]:
