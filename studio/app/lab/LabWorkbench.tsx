@@ -2329,7 +2329,7 @@ return;
 
               {usingEngine && (
                 <>
-                  <div className="sidebar-db-wrap" style={{ marginTop: "0.75rem" }}>
+                  <div className="sidebar-db-wrap" style={{ marginTop: "1.35rem" }}>
                     <i className="fas fa-layer-group sidebar-db-icon" />
                     <label htmlFor="lab-catalog-select" style={{ position: "absolute", top: "-0.85rem", left: 0, fontSize: "0.7rem", color: "var(--text-muted)" }}>Catalog</label>
                     <select
@@ -3202,7 +3202,12 @@ return;
                               if (hiddenColumns.has(cIdx)) return null;
                               const isNull = cell == null;
                               const stringValue = isNull ? "" : cell instanceof Date ? (cell as Date).toISOString() : String(cell);
-                              const isNumeric = !isNull && !Number.isNaN(Number.parseFloat(stringValue)) && stringValue.trim() !== "";
+                              // The whole value has to be a number, not merely
+                              // start with one: parseFloat("2026-08-11") is
+                              // 2026, which had every date column rendering as
+                              // a figure.
+                              const trimmed = stringValue.trim();
+                              const isNumeric = !isNull && trimmed !== "" && Number.isFinite(Number(trimmed));
                               const explicitWidth = columnWidths[cIdx];
 
                               // eslint-disable-next-line react/no-array-index-key
