@@ -517,6 +517,13 @@ opt-in probe and its compose setting were removed; the normal memory-sized
 first round remains the release behavior.
 
 
+A high-memory control raised the per-query limit from **512 MiB** to **4 GiB**
+and worker admission from **2 GiB** to **8 GiB**. q35 remained exact but
+measured **17.703 s** and **18.942 s** across two runs, slower than the
+qualified 512 MiB profile. The larger live tables increase allocation and
+merge cost; the 512 MiB/2 GiB defaults were restored.
+
+
 A four-worker Docker scale-out was tested against the two-worker baseline on
 the same host and data. Both queries remained exact, but q33 measured
 **20.372 s** and q35 **14.516 s**, versus approximately **19.1 s** and
