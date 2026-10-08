@@ -596,3 +596,5 @@ An exchange fan-out control raised `KAVEON_EXCHANGE_PARTITIONS` from **4** to **
 A specialized single-UTF8-key `COUNT(*)` path was tested for the q35 hot shape. It removed the arena's second deduplication probe and preserved all **200** execution tests, but the live exact q35 run measured **12.852 s**, slower than the retained **12.6–12.8 s** generic path. The path was removed and the clean generic runtime rebuilt.
 
 An opt-in memory-mapped local Parquet reader was implemented with zero-copy range slices and passed the storage suite (**117 passed**). On the same two-worker stack, exact q35 measured **17.198 s**, materially slower than the standard reader. The mmap path, dependency, and Compose switch were removed; standard buffered file reads remain selected.
+
+An index-growth control raised the minimum aggregate hash table from 16 to 65,536 buckets to avoid early doublings. Exact q35 measured **13.491 s** and **13.728 s**; q33 measured **18.997 s** once, with no reproducible q35 improvement and an unnecessary baseline allocation. The change was removed and the 16-bucket default restored.
