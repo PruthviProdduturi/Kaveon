@@ -620,3 +620,9 @@ The same-host ClickHouse control was refreshed after the control rebuild on
 and q33 in **5.088 s** over the same mounted `hits.parquet`. Kaveon's matching
 exact runs were **12.916 s** and **19.182 s**. The challenge remains open;
 these are the current comparison numbers, not a parity claim.
+
+After reverting that experiment and rebuilding the release image, the clean
+qualified Docker runtime returned exact q35 in **13.523 s** and q33 in
+**20.156 s** (10 rows each, no errors). These are the authoritative Kaveon
+controls for this pass; the experimental timings above are not retained as
+release performance.
