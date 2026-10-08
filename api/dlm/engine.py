@@ -2364,12 +2364,19 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
     # dataset over a native catalog is Engine-backed once its table id resolves.
     # The PostgreSQL-free runtime serves compiled context and keeps the legacy
     # behaviour for datasets without a binding.
+    # A dataset bound to an Engine table by id is Engine-backed outright; one
+    # over a native catalog is Engine-backed once its table id resolves. The
+    # second case used to be skipped under the PostgreSQL-free runtime, on the
+    # grounds that a dataset without an explicit binding kept legacy behaviour.
+    # There is no legacy behaviour left to keep: every dataset here carries
+    # `source: null` and a catalog name, so skipping the lookup left them all
+    # unbound and every question fell through to the retired warehouse, which
+    # answered "Metadata database is not configured". The lookup resolves
+    # through the Engine either way.
     if datasets_svc.source_binding(ds.get("source")):
         binding = _engine_binding(ds)
-    elif _RETIREMENT_SERVING.get() is None:
-        binding = _engine_binding(ds, native=_native())
     else:
-        binding = None
+        binding = _engine_binding(ds, native=_native())
 
     # The slot set one statement answers. A derived class (a comparison, a
     # share, a ratio) runs the same resolver twice with two of these rather
@@ -5189,6 +5196,15 @@ def _native_catalog(database: str) -> Optional[Dict[str, Any]]:
         return {"engine_catalog": database}
     bound = _BOUND_ENGINE_CATALOG.get()
     if bound and bound == database:
+        return {"engine_catalog": database}
+    from services import postgresql_retirement_runtime
+    if postgresql_retirement_runtime.requested():
+        # There is no catalog_sources table to read any more, and nothing here
+        # may touch PostgreSQL. The caller resolves the dataset's table through
+        # the Engine immediately after this, and returns no binding when that
+        # fails — so the Engine's own answer is the authority on whether the
+        # catalog is real, and asserting it twice would only add a way to be
+        # wrong.
         return {"engine_catalog": database}
     return meta.query_one(
         "SELECT engine_catalog FROM catalog_sources "

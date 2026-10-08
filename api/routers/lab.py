@@ -520,6 +520,7 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
     database = _resolve_db(data.database)
     engine_source_id = data.engineSourceId
     engine_schema = data.engineSchema
+    resolved_source = None
     if not engine_source_id and database:
         # A caller that names a logical catalog rather than a source id is not
         # asking for legacy execution — the dataset page's preview does exactly
@@ -528,20 +529,24 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
         # plane uses, and take the schema from the authorized dataset rather
         # than from anything the browser sent.
         from routers.sql import _engine_source_for_catalog
-        resolved = _engine_source_for_catalog(database)
-        if resolved:
-            engine_source_id = resolved.get("id")
+        resolved_source = _engine_source_for_catalog(database)
+        if resolved_source:
             if not engine_schema and data.datasetId is not None:
                 dataset = datasets_svc.get_dataset_by_id(str(data.datasetId), ctx.email, ctx.role)
                 if not dataset:
                     raise HTTPException(404, "Dataset not found")
                 if (dataset.get("database_name") or "").casefold() != (
-                        resolved["engine_catalog"] or "").casefold():
+                        resolved_source["engine_catalog"] or "").casefold():
                     raise HTTPException(400, "Dataset is not bound to the selected Engine catalog")
                 engine_schema = dataset.get("schema_name") or None
-    if engine_source_id:
+    if engine_source_id or resolved_source:
         from services import engine_bridge
-        source = _engine_source(engine_source_id)
+        # The catalog is already resolved when it was found by name. Re-reading
+        # it through `_engine_source` would not round-trip: the source listing
+        # publishes ids with the `catalog-` prefix stripped and `_engine_source`
+        # puts it back, so an id taken straight from the registry is looked up
+        # as `catalog-catalog-...` and is never found.
+        source = resolved_source or _engine_source(engine_source_id)
         scoped_sql = _engine_query(sql, source["engine_catalog"])
         start_time = int(time.time() * 1000)
         if data.stream:
