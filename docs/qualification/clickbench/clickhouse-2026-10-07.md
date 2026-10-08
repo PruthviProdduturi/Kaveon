@@ -244,3 +244,10 @@ two-worker stack. Two uncached repetitions measured q35 at **27.45 s** and
 **28.84 s**, and q33 at **23.81 s** and **24.57 s**. The q33 change is within
 run variance and q35 regressed; the qualified default is restored to eight
 lanes. No configuration change is retained from this experiment.
+## 2026-10-08 rejected recent-value cache
+
+A 4,096-slot direct-mapped cache was added temporarily to the per-batch text
+arena. It preserved byte-equality checks and all columnar aggregate tests, but
+two uncached q35 runs measured **27.15 s** and **27.34 s**, so it did not beat
+the qualified **26.6–27.0 s** range. The code was reverted and the runtime was
+rebuilt from the qualified source.
