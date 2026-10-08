@@ -290,3 +290,13 @@ temporary map and string copies increased memory pressure: the qualified
 and the Docker runtime rebuilt from the qualified source. This confirms that
 the next useful optimization must avoid materialising duplicate URL strings,
 not add another hash table beside the aggregate.
+
+## 2026-10-08 rejected positional local reader
+
+A local `ChunkReader` using positional reads was tested to remove the seek and
+file-handle work in parquet-rs' standard `File` reader. It compiled and
+returned exact q33/q35 result shapes, but q35 remained **14.96 s** and q33
+regressed to **29.9 s** (from the qualified ~20 s range). The reader was
+removed and the portable parquet-rs path restored. The result confirms that
+the remaining gap is decode and aggregation CPU, rather than local cursor
+syscall overhead.
