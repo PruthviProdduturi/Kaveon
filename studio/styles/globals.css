@@ -3811,13 +3811,15 @@ main.main-wide {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
 }
 
+/* Sits under the engine's name now, carrying what it is pointed at and how
+   much is there, so the space belongs above it rather than below. */
 .connection-status {
   display: flex;
   align-items: center;
   gap: 0.45rem;
   font-size: 0.75rem;
   color: var(--text-muted);
-  margin-bottom: 0.5rem;
+  margin-top: 0.4rem;
 }
 
 .connection-status .fa-circle {
@@ -3899,14 +3901,16 @@ main.main-wide {
   box-shadow: none;
 }
 
+/* A count beside the source, not a pill competing with the heading above it:
+   it is the quietest fact on the line and should look like one. */
 .table-stats {
-  font-size: 0.85rem;
-  color: var(--text-secondary);
-  background: color-mix(in srgb, var(--lens-primary, #0078D4) 8%, transparent);
-  padding: 0.3rem 0.8rem;
-  border-radius: 12px;
+  margin-left: auto;
+  padding-left: 0.6rem;
+  font-size: 0.75rem;
   font-weight: 500;
-  display: inline-block;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .database-selector {

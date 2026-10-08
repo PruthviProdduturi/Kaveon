@@ -2221,30 +2221,14 @@ return;
           {!embedded && (
           <aside className="sidebar" style={{ width: sidebarWidth, minWidth: 240, maxWidth: 600 }}>
             <div className="sidebar-header">
-              <div className="connection-status">
-                <i
-                  className={
-                    "fas fa-circle " +
-                    (currentDataSource || currentEngineSource ? "status-connected" : "status-disconnected")
-                  }
-                />
-                <span className="connection-text">
-                  {currentEngineSource
-                    ? currentEngineSource.catalog
-                    : currentDataSource
-                    ? `Connected to ${currentDataSource.name}`
-                    : "Select Data Source"}
-                </span>
-              </div>
+              {/* The engine names itself first; what it is pointed at, and how
+                  much is there, is the line beneath. */}
               <div className="sidebar-header-main-row">
                 <h3>
                   {usingEngine
                     ? <KaveonMark size={15} className="sidebar-brand-mark" />
                     : <i className="fas fa-table" />}
                   {usingEngine ? "KaveonDB" : "Database Tables"}
-                  <span className="table-stats" style={{ marginLeft: '0.75rem' }}>
-                    {isLoadingTables ? "Loading tables..." : `${filteredTables.length} tables`}
-                  </span>
                 </h3>
                 <button
                   type="button"
@@ -2274,6 +2258,26 @@ return;
                 >
                   <i className={isLoadingTables ? "fas fa-sync-alt fa-spin" : "fas fa-sync-alt"} />
                 </button>
+              </div>
+              <div className="connection-status">
+                <i
+                  className={
+                    "fas fa-circle " +
+                    (currentDataSource || currentEngineSource ? "status-connected" : "status-disconnected")
+                  }
+                />
+                <span className="connection-text">
+                  {currentEngineSource
+                    ? currentEngineSource.catalog
+                    : currentDataSource
+                    ? `Connected to ${currentDataSource.name}`
+                    : "Select Data Source"}
+                </span>
+                {(currentEngineSource || currentDataSource) && (
+                  <span className="table-stats">
+                    {isLoadingTables ? "Loading tables…" : `${filteredTables.length} tables`}
+                  </span>
+                )}
               </div>
             </div>
 
