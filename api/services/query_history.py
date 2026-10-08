@@ -112,6 +112,38 @@ def list_history(user_id: Optional[str], limit: int = 50) -> List[dict]:
     return result["rows"]
 
 
+# How many records each owner holds, as last observed. Retention is a bound,
+# not an invariant, so an approximate count is the right instrument: the worst
+# a stale one does is list a little early or let an owner sit a few records
+# over the bound until the next write corrects it. A process that has never
+# listed for an owner assumes the bound is in reach and lists once.
+_HISTORY_COUNTS: dict[str, int] = {}
+_HISTORY_COUNT_LOCK = threading.Lock()
+# Far enough below the bound that an uncounted write cannot carry an owner
+# past it before the next listing.
+_RETENTION_CHECK_MARGIN = 50
+
+
+def _at_retention_bound(owner: str) -> bool:
+    with _HISTORY_COUNT_LOCK:
+        known = _HISTORY_COUNTS.get(owner)
+    return known is None or known >= MAX_HISTORY_PER_OWNER - _RETENTION_CHECK_MARGIN
+
+
+def _remember_history_count(owner: str, count: int) -> None:
+    with _HISTORY_COUNT_LOCK:
+        _HISTORY_COUNTS[owner] = count
+
+
+def _count_one_more(owner: str, *, trimmed: bool) -> None:
+    """One record added, and one removed when retention trimmed."""
+    with _HISTORY_COUNT_LOCK:
+        known = _HISTORY_COUNTS.get(owner)
+        if known is None:
+            return
+        _HISTORY_COUNTS[owner] = known if trimmed else known + 1
+
+
 def create_history(data: dict, user_id: str) -> dict:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     started_at = data.get("started_at")
@@ -136,10 +168,18 @@ def create_history(data: dict, user_id: str) -> dict:
             "dataset_id": data.get("dataset_id"), "tables_used": data.get("tables_used"),
         }
         document = migration_document(result)
-        # Owner-scoped listing makes retention deterministic without exposing
-        # another principal's query text to the API process.
-        records = product_store.list_records(
-            "query_history", user_id, "Viewer", max_records=MAX_HISTORY_PER_OWNER)
+        # Retention needs the owner's oldest record only once they are at the
+        # bound, and the listing that finds it is paged a hundred at a time —
+        # so doing it before every write made each query wait on up to ten
+        # round trips to append one row. That was most of the time a statement
+        # took: the Engine answered a cube breakdown in ~200ms while the write
+        # behind it spent seconds. The count is remembered per owner and the
+        # listing happens only when it says the bound is in reach.
+        records: list = []
+        if _at_retention_bound(user_id):
+            records = product_store.list_records(
+                "query_history", user_id, "Viewer", max_records=MAX_HISTORY_PER_OWNER)
+            _remember_history_count(user_id, len(records))
         mutations = [product_store.ProductMutation(
             "create", "query_history", new_id, document)]
         if len(records) == MAX_HISTORY_PER_OWNER:
@@ -155,6 +195,7 @@ def create_history(data: dict, user_id: str) -> dict:
             mutations.append(product_store.ProductMutation(
                 "delete", "query_history", str(item["id"]), expected_revision=revision))
         product_store.transact(mutations, user_id, "Analyst")
+        _count_one_more(user_id, trimmed=len(mutations) > 1)
         return {**result, "engine_query_id": engine_query_id,
                 "engine_details": json.loads(engine_details) if engine_details else None}
     supports_details=_supports_engine_details()
