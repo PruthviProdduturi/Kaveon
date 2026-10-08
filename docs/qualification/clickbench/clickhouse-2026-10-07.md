@@ -377,3 +377,20 @@ qualified ten-row results; q33 returned ten rows with no error. The normal
 reader remains the default while this representation is qualified across the
 broader SQL suite; the measured gain is currently about 5% on the URL-heavy
 queries and does not close the ClickHouse gap by itself.
+
+## 2026-10-08 retained single-probe text interning
+
+`Arena::intern` now uses one `hashbrown::HashTable::entry` lookup for both
+existing and new URL values. The previous implementation probed once for an
+exact match and then performed a second insertion probe for every new value;
+the replacement keeps the byte-for-byte equality check and the same arena
+layout. The release execution suite passed **204 tests (4 ignored)**.
+
+On the rebuilt two-worker Docker profile, with the result cache and statistics
+disabled, q35 completed in **12.729 s, 12.961 s, and 13.035 s** across three
+runs; q34 completed in **12.674 s**; q33 completed in **18.997 s**. Each
+returned ten rows without an execution error. These runs improve on the prior
+qualified q35 range (**14.07–15.44 s**) and q33 range (**19.79–20.99 s**),
+but ClickHouse on the same mounted file remains substantially faster (q35
+**6.316 s**, q33 **4.552 s**). The optimization is retained as a small,
+reproducible improvement; it does not establish ClickHouse parity.
