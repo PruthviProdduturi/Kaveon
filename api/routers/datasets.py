@@ -53,6 +53,12 @@ def create_dataset(
     data: DatasetCreate,
     ctx: UserContext = Depends(require_min_role("Analyst")),
 ):
+    # A create has no prior value for any field, so "omitted" and "sent as
+    # null" mean the same thing here — the field has no value — and dropping
+    # the null is the correct reading. It is also the safe one: the store
+    # defaults an absent `schema_name` to `dbo` and an absent `database_name`
+    # to the empty string, both NOT NULL columns that an explicit null would
+    # violate. Only an update has two meanings to keep apart.
     payload = data.model_dump(exclude_none=True)
     # Only Editors+ may publish directly on create
     if payload.get("visibility") == "published" and not can_publish(ctx):
@@ -63,19 +69,23 @@ def create_dataset(
     return svc.create_dataset(payload, ctx.email)
 
 
-@router.put("/datasets/{dataset_id}")
-def update_dataset(
-    dataset_id: str,
-    data: DatasetUpdate,
-    ctx: UserContext = Depends(require_user_context),
-):
+def _apply_dataset_update(dataset_id: str, data: DatasetUpdate, ctx: UserContext) -> dict:
+    """Apply a partial dataset update.
+
+    `exclude_unset` is what makes the update honest: the payload carries only
+    the fields the caller actually sent, so an omitted field is left as it
+    stands while a field sent as `null` reaches the store as `None` and is
+    cleared. `exclude_none` could not tell those two apart and answered 200
+    to a clear request that changed nothing. `DatasetUpdate` refuses `null`
+    for the fields that have no cleared state, so every `None` that arrives
+    here names a field the store can genuinely empty."""
     existing = svc.get_dataset_by_id(dataset_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Dataset not found")
     if not can_write(existing["created_by"], ctx):
         raise HTTPException(status_code=403, detail="You don't have permission to edit this dataset")
 
-    payload = data.model_dump(exclude_none=True)
+    payload = data.model_dump(exclude_unset=True)
     if payload.get("visibility") == "published" and not can_publish(ctx):
         payload["visibility"] = "internal"
     payload = engine_datasets.apply_binding(payload, ctx.email, ctx.role, existing=existing)
@@ -84,6 +94,15 @@ def update_dataset(
     if not result:
         raise HTTPException(status_code=404, detail="Dataset not found")
     return result
+
+
+@router.put("/datasets/{dataset_id}")
+def update_dataset(
+    dataset_id: str,
+    data: DatasetUpdate,
+    ctx: UserContext = Depends(require_user_context),
+):
+    return _apply_dataset_update(dataset_id, data, ctx)
 
 
 @router.patch("/datasets/{dataset_id}")
@@ -92,21 +111,7 @@ def patch_dataset(
     data: DatasetUpdate,
     ctx: UserContext = Depends(require_user_context),
 ):
-    existing = svc.get_dataset_by_id(dataset_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-    if not can_write(existing["created_by"], ctx):
-        raise HTTPException(status_code=403, detail="You don't have permission to edit this dataset")
-
-    payload = data.model_dump(exclude_none=True)
-    if payload.get("visibility") == "published" and not can_publish(ctx):
-        payload["visibility"] = "internal"
-    payload = engine_datasets.apply_binding(payload, ctx.email, ctx.role, existing=existing)
-
-    result = svc.update_dataset(dataset_id, payload, ctx.email)
-    if not result:
-        raise HTTPException(status_code=404, detail="Dataset not found")
-    return result
+    return _apply_dataset_update(dataset_id, data, ctx)
 
 
 @router.delete("/datasets/{dataset_id}", status_code=204)
