@@ -797,3 +797,13 @@ A two-lane final merge was tested to give each merge table more of the shared
 512 MiB budget. It preserved exact ten-row results but regressed q33 to
 **21.48 s** and q35 to **16.70 s**. Eight lanes remain the qualified default;
 the added merge concurrency is preferable to the larger per-lane spill tables.
+
+## 2026-10-08 — fixed-width primitive group-key frames
+
+The grouped-state exchange now uses a schema-validated `KF3` frame when every
+group key is a non-null primitive integer. It removes repeated per-row type and
+null markers for q33 while retaining the existing `KP2` frame for nullable,
+text, dictionary, and mixed keys. Columnar aggregate tests passed, q33 remained
+exact with 10 rows, and the rebuilt two-worker run measured **19.15 s**. q35
+also remained exact at **13.61 s**. This is a small improvement, not ClickHouse
+parity; exchange fetch/decode and spill remain the dominant costs.
