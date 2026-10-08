@@ -656,3 +656,14 @@ passed (**200 passed, 4 ignored**). On the rebuilt two-worker profile, exact
 q35 measured **12.822 s** and q33 **19.333 s**, which is within the clean
 **12.8–13.5 s / 19.0–20.2 s** ranges and did not produce a reproducible gain.
 The CRC branch was reverted; the generic packed hash remains selected.
+
+## 2026-10-08 — release merge microbenchmarks
+
+The existing release microbenchmarks were rerun to locate the next structural
+target. The q19-shaped final merge folded **4,000,000** partial rows into
+**3,750,000** groups at **9.0M rows/s** (**110–111 ns/row**) with no spill.
+Under a refusing 640 MiB budget, the q33-shaped final path decoded **6M**
+rows at **28 ns/row** and partitioned them at **165 ns/row**; replay and merge
+took about **3.15 s** and **1.02 s** respectively while spilling. This rules
+out the final merge as the dominant clean q33 bottleneck: the next material
+target is scan/decode plus the worker-side high-cardinality aggregate.
