@@ -807,3 +807,13 @@ text, dictionary, and mixed keys. Columnar aggregate tests passed, q33 remained
 exact with 10 rows, and the rebuilt two-worker run measured **19.15 s**. q35
 also remained exact at **13.61 s**. This is a small improvement, not ClickHouse
 parity; exchange fetch/decode and spill remain the dominant costs.
+
+## 2026-10-08 — exchange accounting reuse (qualified, no latency gain)
+
+`DiskExchangeInput` now computes Arrow `occupied_bytes` once per decoded batch
+and reuses that value for both admission and metrics. The change preserves the
+wire format, ownership, spill behavior, and results. The execution suite passed
+**200 tests, 4 ignored**. Rebuilt two-worker controls remained exact but measured
+q33 **28.01 s** and q35 **15.13 s**, within normal run variance and without a
+measurable latency improvement. It is retained as a low-risk CPU reduction;
+the next meaningful work is a typed exchange and spill/final-merge redesign.
