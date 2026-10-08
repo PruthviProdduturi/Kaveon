@@ -408,3 +408,9 @@ execution suite, but the rebuilt q35 run measured **13.028 s**, within the
 existing range and no better than the retained single-probe path. The eager
 capacity reservation was removed; it adds memory pressure without a measured
 end-to-end gain.
+
+A one-task-per-worker run (`KAVEON_SCAN_PARTITIONS_PER_WORKER=1`) was also
+qualified. q35 took **24.488 s**, versus approximately **12.8–13.0 s** with
+four partitions per worker. The fewer task boundaries serialize too much
+Parquet work, so the four-partition default remains selected; this does not
+solve the duplicate partial-dictionary exchange.
