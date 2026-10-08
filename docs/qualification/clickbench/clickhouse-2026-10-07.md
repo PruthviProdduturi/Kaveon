@@ -394,3 +394,8 @@ qualified q35 range (**14.07–15.44 s**) and q33 range (**19.79–20.99 s**),
 but ClickHouse on the same mounted file remains substantially faster (q35
 **6.316 s**, q33 **4.552 s**). The optimization is retained as a small,
 reproducible improvement; it does not establish ClickHouse parity.
+
+A controlled scan-partition check raised `KAVEON_SCAN_PARTITIONS_PER_WORKER`
+from 4 to 8. q35 was **12.708 s** and q33 **19.076 s**, effectively the same
+as the retained default, so the higher fan-out is not selected. More task
+fragments alone do not remove the scan/decode bottleneck on this host.
