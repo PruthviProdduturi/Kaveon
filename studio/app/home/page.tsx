@@ -631,7 +631,7 @@ export default function Home() {
   function findBestSchema(text: string) {
     const lower = text.toLowerCase();
     const words = lower.split(/\s+/).filter(w => w.length >= 3);
-    let best: { schema: DatasetSchema; sourceId?: number; sourceName?: string; confidence: number; name: string; parsed: any } | null = null;
+    let best: { schema: DatasetSchema; datasetId: number; sourceId?: number; sourceName?: string; confidence: number; name: string; parsed: any } | null = null;
 
     const schemas = allSchemasRef.current;
     for (const ds of schemas) {
@@ -665,7 +665,7 @@ export default function Home() {
       if (parsed) score += parsed.confidence;
 
       if (score > (best?.confidence ?? 0)) {
-        best = { schema: ds.schema, sourceId: ds.sourceId, sourceName: ds.sourceName, confidence: score, name: ds.name, parsed };
+        best = { schema: ds.schema, datasetId: ds.id, sourceId: ds.sourceId, sourceName: ds.sourceName, confidence: score, name: ds.name, parsed };
       }
     }
 
@@ -1021,7 +1021,15 @@ export default function Home() {
             body: JSON.stringify({
               sql_text: parsed.sql,
               database: dbName,
-              ...(selectedDataset ? { dataset_id: Number(selectedDataset) } : {}),
+              // The dataset of the table this statement actually reads, which
+              // is the one the question matched — not whatever is selected in
+              // the sidebar. The Engine resolves the schema from the dataset,
+              // so sending the selected one asked for a table in the wrong
+              // schema: "table 'OpenSource.ai_benchmarks.kaveon_events_enriched'
+              // not found".
+              ...(match?.datasetId ?? selectedDataset
+                ? { dataset_id: Number(match?.datasetId ?? selectedDataset) }
+                : {}),
               source: "chat",
             }),
           });

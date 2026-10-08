@@ -13,6 +13,7 @@ import database.pool as pool
 import database.metadata as meta_db
 import services.saved_queries as saved_q_svc
 import services.query_history as history_svc
+import services.datasets as datasets_svc
 from services import postgresql_retirement_runtime, product_read_authority
 from services.query_generator import quote_identifier
 from services.sql_guard import PLATFORM_METADATA_TABLES, assert_no_platform_tables
@@ -519,6 +520,25 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
     database = _resolve_db(data.database)
     engine_source_id = data.engineSourceId
     engine_schema = data.engineSchema
+    if not engine_source_id and database:
+        # A caller that names a logical catalog rather than a source id is not
+        # asking for legacy execution — the dataset page's preview does exactly
+        # this, and before the retirement it fell through to the warehouse.
+        # Resolve the catalog through the same server-side registry the chart
+        # plane uses, and take the schema from the authorized dataset rather
+        # than from anything the browser sent.
+        from routers.sql import _engine_source_for_catalog
+        resolved = _engine_source_for_catalog(database)
+        if resolved:
+            engine_source_id = resolved.get("id")
+            if not engine_schema and data.datasetId is not None:
+                dataset = datasets_svc.get_dataset_by_id(str(data.datasetId), ctx.email, ctx.role)
+                if not dataset:
+                    raise HTTPException(404, "Dataset not found")
+                if (dataset.get("database_name") or "").casefold() != (
+                        resolved["engine_catalog"] or "").casefold():
+                    raise HTTPException(400, "Dataset is not bound to the selected Engine catalog")
+                engine_schema = dataset.get("schema_name") or None
     if engine_source_id:
         from services import engine_bridge
         source = _engine_source(engine_source_id)
