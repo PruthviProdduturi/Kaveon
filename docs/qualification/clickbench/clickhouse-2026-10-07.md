@@ -667,3 +667,14 @@ rows at **28 ns/row** and partitioned them at **165 ns/row**; replay and merge
 took about **3.15 s** and **1.02 s** respectively while spilling. This rules
 out the final merge as the dominant clean q33 bottleneck: the next material
 target is scan/decode plus the worker-side high-cardinality aggregate.
+
+## 2026-10-08 — compact integer-key decoder (rejected)
+
+The final merge was given a validated fixed-width decoder for compact keys made
+entirely of integer columns, the exact encoding used by q33. The generic
+decoder remained the fallback and malformed tags, widths, null flags, and
+trailing bytes still failed closed. The aggregate tests passed, but two exact
+q33 runs measured **20.790 s** and **21.162 s**, and q35 measured **13.822 s**
+and **14.096 s**. That did not beat the clean **19.0–20.2 s / 12.8–13.5 s**
+controls, so the specialization was reverted and the portable generic decoder
+remains the release path.
