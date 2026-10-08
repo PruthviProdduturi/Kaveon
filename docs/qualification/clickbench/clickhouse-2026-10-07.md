@@ -31,6 +31,25 @@ not the last decimal place.
 The Kaveon run completed with no worker restarts, query rejects, or failures.
 The ClickHouse command used `FORMAT Null` so result rendering was excluded.
 
+## 2026-10-07 width qualification
+
+To separate local operator cost from cluster width, the same immutable input
+was run through temporary Docker workers on the same host. Every run used the
+uncached statement, 8 GiB per-query memory, and exact result comparison. The
+four-worker run completed q35 in **21.7 s**; eight workers reduced it to
+**17.6 s**; twelve workers reduced it further to **15.5 s**. The q35 ten-row
+result and counts matched ClickHouse on every run. The q33 result also matched;
+its eight- and twelve-worker runs were **22.3 s** and **22.5 s**, respectively,
+so that shape is currently limited by final aggregation and exchange rather
+than scan width.
+
+For a fresh local reference, ClickHouse `clickhouse-local` on the same host and
+file completed q35 in **7.2 s** and q33 in **4.9 s** (default settings; the
+8-thread q35 run was 7.2 s). Kaveon therefore remains behind ClickHouse by
+about 2.1x on q35 and 4.6x on q33 in this run. The width result is a scaling
+signal, not parity: the next qualification must profile and reduce vectorized
+aggregation, Parquet decode, and final exchange CPU before claiming a win.
+
 ## 2026-10-07 follow-up: URL-key hash
 
 After rebuilding the engine with the query-local text-key hash, the identical
