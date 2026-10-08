@@ -476,3 +476,9 @@ per-query reservation ceiling (`cannot reserve 854,912 bytes` with 536,149,748
 bytes already reserved). The four-partition default was restored; this confirms
 that reducing fan-out increases per-task state beyond the current bounded-memory
 contract.
+
+
+A spill chunk cap increase from **65,536** to **131,072** groups was tested.
+q33 remained exact but regressed to **20.007 s** from the 19.087 s retained
+baseline. The larger chunks increase per-run memory and do not pay back their
+reduced run count; the 65,536 default was restored.
