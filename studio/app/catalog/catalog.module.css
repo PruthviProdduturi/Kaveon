@@ -6,27 +6,36 @@
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--text-primary);
   --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  display: grid; grid-template-columns: 236px minmax(0, 1fr); gap: 16px;
+  /* The rail's column carries its own 32px inset, so it is wider than the
+     rail's content by exactly the page padding it bleeds into. */
+  display: grid; grid-template-columns: 268px minmax(0, 1fr); gap: 28px;
   min-height: calc(100vh - 56px);
   align-items: start;
 }
-.rootCollapsed { grid-template-columns: 44px minmax(0, 1fr) }
+.rootCollapsed { grid-template-columns: 76px minmax(0, 1fr) }
 
-/* ── Tree ─────────────────────────────────────────────────────────────────── */
+/* ── Tree ─────────────────────────────────────────────────────────────────
+   The rail is a column of the page, not a card floating inside it: it bleeds
+   into the shell's padding on three sides, runs the full height of the
+   viewport, and is divided from the pane by one hairline. ──────────────── */
 .tree {
-  position: sticky; top: 28px; align-self: start;
-  background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-sm);
-  display: flex; flex-direction: column; max-height: calc(100vh - 56px); overflow: hidden;
+  position: sticky; top: 0; align-self: start; z-index: 1;
+  margin: -28px 0 -28px -32px; padding-left: 32px;
+  background: var(--bg-surface); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; height: calc(100vh - 56px); overflow: hidden;
 }
-.treeHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 12px 10px 14px; border-bottom: 1px solid var(--border) }
-.productEyebrow { color: var(--text-faint); font-size: 10px; font-weight: 700; letter-spacing: .12em; line-height: 1.2; margin-bottom: 4px; text-transform: uppercase }
-.treeTitle { margin: 0; font-size: 13px; font-weight: 600 }
+/* The rail's heading sits on the same line as the page's, so the two columns
+   open together rather than one starting above the other. */
+.treeHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 58px 12px 12px 2px; border-bottom: 1px solid var(--border) }
+.treeTitle { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -.01em }
 .treeTitle span { font-weight: 500; color: var(--text-muted); margin-left: 6px; font-family: var(--mono); font-size: 11px }
 .collapse { width: 26px; height: 26px; display: grid; place-items: center; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer }
 .collapse:hover { color: var(--text-primary); border-color: var(--border); background: var(--bg-hover) }
-.treeBody { overflow: auto; padding: 6px 6px 10px }
-.treeFoot { padding: 10px 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px }
-.node { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 28px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); font: 12.5px Inter, sans-serif; text-align: left; cursor: pointer; text-decoration: none }
+/* The tree scrolls vertically only: a long table name ellipsizes inside its
+   row rather than pushing the rail sideways. */
+.treeBody { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 8px 6px 12px 0 }
+.treeFoot { padding: 12px 12px 26px 2px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px }
+.node { display: flex; align-items: center; gap: 6px; box-sizing: border-box; width: 100%; min-height: 28px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); font: 12.5px Inter, sans-serif; text-align: left; cursor: pointer; text-decoration: none }
 .node:hover { background: var(--bg-hover); color: var(--text-primary) }
 .node[aria-current="page"] { background: rgba(var(--accent-rgb), .10); color: var(--text-primary); font-weight: 600 }
 .node:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
@@ -58,7 +67,7 @@
 .level1 { padding-left: 22px } .level2 { padding-left: 38px }
 .treeNote { padding: 6px 14px; font-size: 12px; color: var(--text-muted) }
 .treeErr { color: var(--error) }
-.rail { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 0 }
+.rail { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 58px 0 0 }
 
 /* One control size across the page, and the same one the Library header uses:
    34px tall, a 10px radius, the surface behind it. */
@@ -80,21 +89,72 @@
 .crumbs b { color: var(--text-secondary); font-weight: 500 }
 .crumbs i { font-style: normal; color: var(--text-faint) }
 /* ── Inventory ─────────────────────────────────────────────────────────────
-   The table list is the page. It is one continuous surface, not a deck of
+   The page is a reading of the lake followed by the list it reads. The
+   reading is measured, not explained: four figures on one baseline and a rule
+   under them that shows how much of the lake answers from statistics rather
+   than from its rows. The list is one continuous surface, not a deck of
    cards: a hairline between rows, names in Inter, everything measured in mono
-   and right-aligned so a column of numbers can be compared down its edge. A
-   schema is a section label, written once, in the qualified form a reader
-   types into SQL Lab. Colour appears in exactly one place — the verdict in
-   the last column — and nowhere else. ──────────────────────────────────── */
+   and right-aligned so a column of numbers can be compared down its edge.
+   Colour appears in two places only — the rule, and a row that departs from
+   the baseline the rule establishes. ──────────────────────────────────── */
 
-/* The title and the controls share one line and one centre line; the sentence
-   that explains the last column sits under both, at reading width. */
-.invHead { margin: 0 2px 14px }
-.invHeadTop { display: flex; align-items: center; justify-content: space-between; gap: 16px 24px; flex-wrap: wrap; min-height: 34px }
-.invTitle { margin: 0; font-size: 19px; font-weight: 600; letter-spacing: -.012em; color: var(--text-primary) }
-.invLede { margin: 10px 0 0; max-width: 78ch; font-size: 12.5px; line-height: 1.6; color: var(--text-muted) }
-.invActions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap }
+.band {
+  margin: 0 0 20px; padding: 24px 24px 20px;
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow-sm);
+}
+.bandTop { display: flex; align-items: center; justify-content: space-between; gap: 16px 24px; flex-wrap: wrap; min-height: 34px }
+.bandTitle { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -.015em; color: var(--text-primary) }
+.bandActions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap }
 .rotate { animation: spin .9s linear infinite }
+
+/* Four readings on one baseline, divided by the hairlines between them rather
+   than carried in four boxes, so the band stays one instrument. */
+.figures { display: flex; flex-wrap: wrap; gap: 0 36px; margin: 22px 0 0 }
+.figure {
+  display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 2px 0 2px 20px;
+  border-left: 1px solid var(--border);
+}
+.figure:first-child { padding-left: 0; border-left: 0 }
+.figureValue {
+  font: 600 25px/1.1 var(--mono); letter-spacing: -.02em; font-variant-numeric: tabular-nums;
+  color: var(--text-primary); white-space: nowrap;
+}
+.figureValueOn { color: var(--accent) }
+.figureLabel { font: 500 12.5px Inter, sans-serif; color: var(--text-secondary); white-space: nowrap }
+.figureNote { font: 11.5px Inter, sans-serif; color: var(--text-muted); white-space: nowrap }
+
+/* The rule is measured in rows, because one table of five hundred million and
+   fifteen of a few thousand are not two halves of anything. A tenth of a
+   percent is drawn at a legible minimum; the figures beside it are exact. */
+.coverage { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border) }
+.rule { display: flex; gap: 2px; height: 5px }
+.seg { min-width: 4px; border-radius: 3px }
+.segSketch { background: var(--accent) }
+.segBase { background: rgba(var(--accent-rgb), .28) }
+.segStale { background: var(--warning) }
+.segNone { background: var(--bg-hover); box-shadow: inset 0 0 0 1px var(--border) }
+
+.legend { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 28px; margin: 12px 0 0; padding: 0 }
+.legend li { display: inline-flex; align-items: center; gap: 8px; font: 12px Inter, sans-serif; color: var(--text-secondary) }
+.legend b { font: 600 12px var(--mono); font-variant-numeric: tabular-nums; color: var(--text-primary) }
+.legendShare { font: 11.5px var(--mono); color: var(--text-muted) }
+.legendQuiet { color: var(--text-muted) }
+.legendAction { margin-left: auto }
+.key { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0 }
+
+/* The one row that needs a reader is reachable in one click, and the control
+   that reaches it exists only while there is something behind it. */
+.chip {
+  display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 11px;
+  font: 500 12px Inter, sans-serif; color: var(--warning); cursor: pointer;
+  background: transparent; border: 1px solid var(--warning); border-radius: 13px;
+}
+.chip i { font-size: 10px }
+.chip:hover { background: rgba(245, 158, 11, .1) }
+/* Pressed is a filled tint and a weightier label, not amber behind white:
+   there is no text colour that reads well on this amber in both themes. */
+.chipOn { background: rgba(245, 158, 11, .16); box-shadow: inset 0 0 0 1px var(--warning); font-weight: 600 }
+.chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px }
 
 .search {
   display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px;
@@ -105,38 +165,47 @@
 .search input { width: 190px; max-width: 42vw; border: 0; outline: 0; background: transparent; font: 13px Inter, sans-serif; color: var(--text-primary) }
 .search input::placeholder { color: var(--text-muted) }
 
-.invSummary { margin: 12px 2px 14px; font-size: 12.5px; line-height: 1.55; color: var(--text-secondary); font-variant-numeric: tabular-nums }
-
 /* One table for the whole catalog: the columns line up across every schema,
    and a schema is a band across it rather than a separate grid. */
-.tableWrap { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden }
+.tableWrap { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow-sm) }
 .inv { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12.5px }
-.inv thead th { padding: 7px 10px; text-align: left; font: 600 11px Inter, sans-serif; color: var(--text-muted); background: var(--bg-elevated); border-bottom: 1px solid var(--border); white-space: nowrap }
-.inv td { padding: 0 10px; height: 36px; border-top: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle }
+.inv thead th { padding: 8px 12px; text-align: left; font: 600 11px Inter, sans-serif; color: var(--text-muted); background: var(--bg-elevated); border-bottom: 1px solid var(--border); white-space: nowrap }
+.inv td { padding: 0 12px; height: 38px; border-top: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle }
 .invRow:hover td { background: var(--bg-hover) }
 .invRowOpen td { background: var(--bg-hover) }
 
+/* The band carries what its schema holds, so it reads rather than divides.
+   An empty schema says so in the slot the counts would have filled, which
+   leaves the row grid below it a row grid. */
 .groupRow th {
   padding: 0; text-align: left; border-top: 1px solid var(--border); background: var(--bg-primary);
 }
 .schemaBody:first-of-type .groupRow th { border-top: 0 }
-.groupBand { display: flex; align-items: baseline; gap: 12px; padding: 9px 12px 7px }
+/* Scoped to one schema there is no band, so the first row would draw its own
+   rule directly under the head's and thicken it. */
+.schemaBody:first-of-type tr:first-child td { border-top: 0 }
+.groupBand { display: flex; align-items: baseline; gap: 10px 20px; padding: 10px 12px 9px; flex-wrap: wrap }
 .groupName { min-width: 0; font: 600 12.5px var(--mono); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 .groupCatalog { font-weight: 400; color: var(--text-muted) }
-.groupCount { margin-left: auto; font: 500 11px Inter, sans-serif; color: var(--text-muted); flex-shrink: 0 }
-.groupEmpty { font-size: 12.5px; color: var(--text-muted); white-space: normal }
+.groupMeta { margin-left: auto; display: inline-flex; align-items: baseline; gap: 18px; font: 500 11.5px Inter, sans-serif; color: var(--text-muted); flex-shrink: 0 }
+.groupNum { font: 11.5px var(--mono); font-variant-numeric: tabular-nums }
+.groupQuiet { color: var(--text-faint) }
+.groupLink { color: var(--accent); text-decoration: none; font-weight: 500 }
+.groupLink:hover { text-decoration: underline }
 
-.cDisclose { width: 28px; padding: 0 !important; text-align: center }
+/* Names hold the left edge; everything measured holds the right one. Nothing
+   is stacked: a second line inside a cell reads as cramped, not as dense. */
+.cDisclose { width: 30px; padding: 0 !important; text-align: center }
 .cName { min-width: 0 }
-.cFormat { width: 74px }
-.cRows { width: 98px; text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--text-secondary) }
-.cSize { width: 84px; text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--text-secondary) }
-.cWhen { width: 72px; text-align: right; color: var(--text-muted) }
-.cState { width: 120px; border-left: 1px solid var(--border) }
-th.cRows, th.cSize, th.cWhen { text-align: right }
+.cFormat { width: 104px; text-align: right; color: var(--text-secondary) }
+.cRows { width: 112px; text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--text-secondary) }
+.cSize { width: 88px; text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--text-secondary) }
+.cFiles { width: 56px; text-align: right; font: 11.5px var(--mono); font-variant-numeric: tabular-nums; color: var(--text-faint) }
+.cWhen { width: 78px; text-align: right; color: var(--text-muted) }
+.cStand { width: 118px; text-align: right }
+th.cFormat, th.cRows, th.cSize, th.cFiles, th.cWhen, th.cStand { text-align: right }
 th.cRows .sortBtn, th.cSize .sortBtn, th.cWhen .sortBtn { justify-content: flex-end; width: 100% }
-.sizeCell { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 1px; line-height: 1.25 }
-.sizeFiles { font-size: 10.5px; color: var(--text-faint) }
+.formatMark { margin-left: 7px; font: 11.5px var(--mono); color: var(--text-faint) }
 
 .sortBtn { display: inline-flex; align-items: center; gap: 5px; padding: 0; border: 0; background: none; font: inherit; color: inherit; cursor: pointer }
 .sortBtn i { font-size: 9px; color: var(--text-faint); visibility: hidden }
@@ -157,22 +226,26 @@ th.cRows .sortBtn, th.cSize .sortBtn, th.cWhen .sortBtn { justify-content: flex-
 .nameLine { display: flex; align-items: baseline; gap: 7px; min-width: 0 }
 .tableName { font-weight: 500; color: var(--text-primary); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 .tableName:hover { color: var(--accent) }
-.mark { flex-shrink: 0; font: 500 10px Inter, sans-serif; color: var(--text-muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px }
+.mark { flex-shrink: 0; font: 500 10.5px Inter, sans-serif; color: var(--text-muted); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px }
+/* A declared shape is what distinguishes this platform's tables from a file
+   listing, so it is the one mark on the name line that carries colour. */
+.markShape { color: var(--accent); border-color: rgba(var(--accent-rgb), .45); background: rgba(var(--accent-rgb), .08) }
 .narrowFacts { display: none }
-
-.formatCell { display: inline-flex; flex-direction: column; gap: 1px; line-height: 1.25; color: var(--text-secondary) }
-.formatKind { font-size: 10.5px; color: var(--text-faint) }
 
 .dash { color: var(--text-faint) }
 .skel { display: inline-block; height: 9px; border-radius: 3px; background: var(--bg-hover); border: 1px solid var(--border); vertical-align: middle }
 
-.stateCell { display: inline-flex; flex-direction: column; gap: 1px; line-height: 1.25; cursor: help }
-.stateWord { font-weight: 600; font-size: 12px }
-.stateDepth { font-size: 10.5px; color: var(--text-muted) }
-.toneOk .stateWord { color: var(--success) }
-.toneWarn .stateWord { color: var(--warning) }
-.toneBad .stateWord { color: var(--error) }
-.toneOff .stateWord { color: var(--text-faint) }
+/* The last cell is empty for a table that sits at the baseline the header
+   states. It speaks only where a table exceeds that baseline or falls short
+   of it, so sixteen rows of agreement become the one row that needs a reader. */
+.stand {
+  display: inline-flex; align-items: center; height: 20px; padding: 0 8px; cursor: help;
+  font: 600 11px Inter, sans-serif; border-radius: 10px; white-space: nowrap;
+}
+.standSketch { color: var(--accent); background: rgba(var(--accent-rgb), .12) }
+.standStale { color: var(--warning); background: rgba(245, 158, 11, .14) }
+.standNone { color: var(--text-muted); background: var(--bg-hover) }
+.standBad { color: var(--error); background: rgba(239, 68, 68, .12) }
 
 /* The detail opens inside the row it belongs to, so the address a reader
    just read stays directly above what it describes. */
@@ -200,20 +273,29 @@ th.cRows .sortBtn, th.cSize .sortBtn, th.cWhen .sortBtn { justify-content: flex-
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap }
 
 /* Narrowing drops columns rather than folding the grid into cards: the facts
-   that leave the row reappear beneath the name, and the verdict never goes. */
-/* A dropped column still takes its share of a fixed layout's slack, so once
+   that leave the row reappear beneath the name, and the acceleration cell
+   never goes, since it is the only cell that can need a reader.
+   A dropped column still takes its share of a fixed layout's slack, so once
    columns start leaving, the table sizes itself and the name cell claims what
-   the verdict leaves (`max-width: 0` lets a long name ellipsize rather than
-   widen the table). */
-@media (max-width: 880px) {
+   is left (`max-width: 0` lets a long name ellipsize rather than widen it). */
+@media (max-width: 1040px) {
   .inv { table-layout: auto }
-  .inv .cWhen { display: none }
+  .inv .cFiles, .inv .cWhen { display: none }
   .inv .cName { width: 100%; max-width: 0 }
 }
-@media (max-width: 660px) {
+/* The band's figures are a strip, not a grid: once they wrap, the hairlines
+   that divided them would fall in the wrong places, so they go. */
+@media (max-width: 860px) {
+  .band { padding: 18px 18px 16px }
+  .figures { gap: 18px 30px }
+  .figure { padding-left: 0; border-left: 0 }
+  .figureValue { font-size: 21px }
+  .legendAction { margin-left: 0 }
+}
+@media (max-width: 760px) {
   .inv .cFormat, .inv .cRows, .inv .cSize { display: none }
-  .inv td { height: auto; padding-top: 8px; padding-bottom: 8px }
-  .inv .cState { width: 92px }
+  .inv td { height: auto; padding-top: 9px; padding-bottom: 9px }
+  .inv .cStand { width: 96px }
   .inv .cDisclose { width: 26px }
   .narrowFacts { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 3px; font: 11px var(--mono); color: var(--text-muted) }
   .detail { padding-left: 18px }
@@ -231,9 +313,18 @@ th.cRows .sortBtn, th.cSize .sortBtn, th.cWhen .sortBtn { justify-content: flex-
 .emptyBody { margin: 0; font-size: 13px; max-width: 520px; line-height: 1.55 }
 .emptyActions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; justify-content: center }
 
+/* Stacked, the rail is a panel again: it has no column to be the edge of,
+   so it takes back its border and stops bleeding into the shell's padding. */
 @media (max-width: 900px) {
-  .root, .rootCollapsed { grid-template-columns: 1fr }
-  .tree { position: static; max-height: 320px }
+  .root, .rootCollapsed { grid-template-columns: 1fr; gap: 18px }
+  .tree {
+    position: static; height: auto; max-height: 320px; margin: 0; padding-left: 0;
+    border: 1px solid var(--border); border-radius: 12px;
+  }
+  .treeHead { padding: 12px 12px 10px 14px }
+  .treeBody { padding: 8px 6px 12px }
+  .treeFoot { padding: 12px 14px }
+  .rail { padding: 10px 0; align-items: center }
 }
 @media (prefers-reduced-motion: reduce) { .root * { transition: none !important } }
 

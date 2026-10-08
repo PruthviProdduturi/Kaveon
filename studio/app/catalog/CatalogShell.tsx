@@ -140,10 +140,9 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
           ) : (
             <>
               <div className={s.treeHead}>
-                <div>
-                  <div className={s.productEyebrow}>Data catalog</div>
-                  <h2 className={s.treeTitle}>Catalogs{catalogs && <span>{catalogs.length}</span>}</h2>
-                </div>
+                {/* The rail's one job is named once. A label above the label
+                    would say "Data catalog" to a reader already inside it. */}
+                <h2 className={s.treeTitle}>Catalogs{catalogs && <span>{catalogs.length}</span>}</h2>
                 <button type="button" className={s.collapse} onClick={() => setCollapsed(true)} aria-label="Collapse catalog tree"><i className="fas fa-angles-left" /></button>
               </div>
               <div className={s.treeBody}>
