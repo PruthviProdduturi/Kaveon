@@ -322,3 +322,13 @@ to **26.36 s** (qualified baseline about **20–21 s**); q35 was about **14.9 s*
 with no measurable improvement. The full text fingerprint is restored. This
 experiment confirms that reducing the arena's hash input does not address the
 dominant decode/aggregation cost and increases probe work through collisions.
+
+## 2026-10-08 rejected fused text COUNT path
+
+A narrow fused operator for one UTF-8 key plus `COUNT(*)` was tested. It
+combined arena admission, hash probing, group creation and count updates into
+one row pass, and the execution suite remained green (**199 passed, 4
+ignored**). q35 returned the exact ten rows but measured **15.03 s** on the
+first clean run, versus the qualified **14–15 s** range, with no reproducible
+gain. The path was removed; the general columnar aggregate remains the release
+implementation until a profile identifies a larger source of CPU time.
