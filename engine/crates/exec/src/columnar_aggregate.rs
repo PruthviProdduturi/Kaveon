@@ -17,7 +17,7 @@ use arrow::array::{
     Int32DictionaryArray, Int64Array, StringArray, StringViewArray, UInt64Array,
 };
 use arrow::datatypes::{DataType, Date32Type, Float64Type, Int32Type, Int64Type};
-use hashbrown::HashTable;
+use hashbrown::{HashTable, hash_table::Entry};
 use kaveon_core::{KaveonError, Result};
 
 use crate::aggregate::compact_state;
@@ -90,27 +90,30 @@ impl Arena {
         let hash = text_hash(text.as_bytes());
         let bytes = &self.bytes;
         let offsets = &self.offsets;
-        let found = self.index.find(hash, |&id| {
-            let (start, end) = (
-                offsets[id as usize] as usize,
-                offsets[id as usize + 1] as usize,
-            );
-            &bytes[start..end] == text.as_bytes()
-        });
-        if let Some(&id) = found {
-            return Ok((id, false));
-        }
         let id = u32::try_from(self.offsets.len() - 1)
             .map_err(|_| exec_err("too many distinct strings for one task"))?;
-        self.bytes.extend_from_slice(text.as_bytes());
-        let end =
-            u32::try_from(self.bytes.len()).map_err(|_| exec_err("string arena exceeds 4 GiB"))?;
-        self.offsets.push(end);
-        self.hashes.push(hash);
-        let hashes = &self.hashes;
-        self.index
-            .insert_unique(hash, id, |&other| hashes[other as usize]);
-        Ok((id, true))
+        match self.index.entry(
+            hash,
+            |&other| {
+                let (start, end) = (
+                    offsets[other as usize] as usize,
+                    offsets[other as usize + 1] as usize,
+                );
+                &bytes[start..end] == text.as_bytes()
+            },
+            |&other| self.hashes[other as usize],
+        ) {
+            Entry::Occupied(entry) => Ok((*entry.get(), false)),
+            Entry::Vacant(entry) => {
+                self.bytes.extend_from_slice(text.as_bytes());
+                let end = u32::try_from(self.bytes.len())
+                    .map_err(|_| exec_err("string arena exceeds 4 GiB"))?;
+                self.offsets.push(end);
+                self.hashes.push(hash);
+                entry.insert(id);
+                Ok((id, true))
+            }
+        }
     }
     fn bytes(&self) -> u64 {
         (self.bytes.capacity() + self.offsets.capacity() * 4 + self.index.capacity() * 8) as u64
