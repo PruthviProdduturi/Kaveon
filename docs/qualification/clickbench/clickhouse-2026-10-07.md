@@ -705,3 +705,12 @@ when it needed **1,338,738** more bytes with **1,073,735,108** already
 reserved. The qualified 512 MiB configuration was restored. A previously
 measured 8 GiB configuration avoided spill but was slower overall, so memory
 alone is not the ClickHouse gap.
+
+## 2026-10-08 — two-integer probe specialization (rejected)
+
+The columnar aggregate briefly used a dedicated exact probe loop for two
+primitive integer keys, avoiding generic key-enum dispatch while retaining the
+same hash, equality, growth, and nullable-key semantics. The full execution
+suite remained green (**200 passed, 4 ignored**), but rebuilt exact controls
+measured q33 at **19.962 s** and q35 at **13.639 s**, within variance and not
+better than the clean qualified ranges. The specialization was reverted.
