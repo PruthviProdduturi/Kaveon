@@ -253,8 +253,9 @@ the qualified **26.6–27.0 s** range. The code was reverted and the runtime was
 rebuilt from the qualified source.
 ## 2026-10-08 row-group task fan-out
 
-The distributed planner now schedules four scan partitions per compatible
-worker. A two-worker deployment therefore reads a two-file table as eight
+The distributed planner can schedule multiple scan partitions per compatible
+worker through `KAVEON_SCAN_PARTITIONS_PER_WORKER`. The local ClickBench
+profile sets it to four, so a two-worker deployment reads a two-file table as eight
 row-group tasks instead of two whole-file tasks, allowing Parquet decode and
 partial aggregation to overlap across the workers. The q35 ten-row result was
 byte-for-byte identical to the qualified result; q33 preserved the same count
@@ -264,6 +265,7 @@ unspecified.
 On the rebuilt two-worker Docker stack, two uncached repetitions measured q35
 at **14.07 s** and **15.44 s**, and q33 at **19.79 s** and **20.99 s**. The
 eight-partitions-per-worker trial measured q35 at **14.44 s** and q33 at
-**22.01 s**, so it was rejected. The four-way fan-out is retained as the
-qualified default; ClickHouse remains faster on this control (6.316 s q35,
+**22.01 s**, so it was rejected. The four-way fan-out is retained in the
+ClickBench profile; ordinary deployments default to one for compatibility.
+ClickHouse remains faster on this control (6.316 s q35,
 4.552 s q33).
