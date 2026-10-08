@@ -738,3 +738,12 @@ q33 **19.39 s** and q35 **13.75 s**, so the normal reader remains selected.
 All runs returned the exact ten rows without execution errors. These controls
 change no shipped defaults; they narrow the next implementation target to
 reducing encoded high-cardinality exchange state and external spill work.
+
+## 2026-10-08 — direct unique-pair partial encoder (rejected)
+
+A narrowly gated encoder for q33's two-integer `COUNT`/`SUM`/`AVG` shape was
+tested. It emitted canonical state rows directly and fell back exactly on a
+duplicate or null key, but the per-row uniqueness set and key construction
+cost more than the existing columnar table: q33 regressed to **21.90 s**
+(q35 remained **13.57 s**). The code was removed; no result or memory
+semantics changed in the shipped path.
