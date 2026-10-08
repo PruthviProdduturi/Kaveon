@@ -490,3 +490,9 @@ the expected top-count rows in **19.242 s** without a material improvement; q35
 failed with a bounded-memory reservation error in `fragment-project` near the
 512 MiB per-worker limit. The existing text-only partitioned guard and integer
 key broadcast path were restored.
+
+
+The exchange chunk cutter was changed experimentally from `drain(..take)` to
+`split_off` plus buffer replacement to avoid shifting the IPC tail. q35 measured
+**13.036 s** and q33 **19.632 s**, both exact but slower than the retained
+12.666 s / 19.087 s baseline. The original cutter was restored.
