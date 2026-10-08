@@ -1317,6 +1317,16 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
       <div className="chart-builder-preview-header">
         <div className="chart-builder-preview-meta">
           {subtitle && <div>{subtitle}</div>}
+          {sqlPreview.approx && (
+            <span
+              className="chart-estimated"
+              title={"Distinct counts here are estimated from a sketch rather than counted row by row, "
+                + "which is what lets this answer immediately instead of reading the whole table. "
+                + "Values are within a few per cent, and groups that sit close together can swap order."}
+            >
+              Estimated
+            </span>
+          )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {/* In a dashboard tile the tile title already shows an info icon next to
