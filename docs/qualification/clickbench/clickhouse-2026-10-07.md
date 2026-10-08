@@ -556,3 +556,10 @@ the 2 GiB run completed exactly but took **17.325 s**, slower than the retained
 12.7–12.9 s q35 profile. The conservative eight-lane/four-partition and
 512 MiB defaults were restored. More task fan-out therefore increases
 high-cardinality aggregate pressure rather than closing the ClickHouse gap.
+
+
+The columnar aggregate's hash-table look-ahead was increased from **16** to
+**32** rows on the same 24-core host. q35 completed exactly in **12.804 s** and
+**12.827 s** with the result cache disabled, while q33 completed exactly in
+**19.407 s**. This is a small improvement without changing the memory
+contract, so the 32-row prefetch distance is retained for the next round.
