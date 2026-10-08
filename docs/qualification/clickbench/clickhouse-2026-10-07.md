@@ -461,3 +461,10 @@ rows to reduce exchange batch count. Both queries remained exact and completed,
 but q33 regressed to **19.726 s** (qualified 8,192-row result: **19.087 s**)
 and q35 measured **13.393 s** (qualified: **12.666 s**). The larger batches
 were removed and the 8,192-row default restored.
+
+
+A second memory experiment raised the per-query limit to **2 GiB** and the
+worker admission limit to **4 GiB**. q33 completed exactly in **19.091 s**
+and q35 regressed to **17.818 s**, versus the 512 MiB qualified q33/q35
+results of **19.087 s** and **12.666 s**. More admission memory does not
+remove the exchange bottleneck and the defaults were restored.
