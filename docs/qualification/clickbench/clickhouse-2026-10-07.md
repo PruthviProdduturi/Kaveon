@@ -585,3 +585,8 @@ A temporary host-native release image (`-C target-cpu=native`) was measured
 against the portable release image. q35 took **13.111 s**, slower than the
 12.8 s portable result, so the compiler flag was rejected and the portable
 image was rebuilt and restored.
+
+
+Internal aggregation parallelism was increased from **8** to **12** lanes
+without changing scan partitioning. q35 completed exactly but regressed to
+**14.177 s**, so the eight-lane default was restored.
