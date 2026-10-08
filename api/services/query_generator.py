@@ -974,11 +974,15 @@ def _engine_cube_distinct_sql(col_name: str, fact_table: str, limit: int) -> str
     quoted_col = quote_identifier(col_name)
     qk = quote_identifier("key")
     qv = quote_identifier("value")
+    # No ORDER BY and no LIMIT. Either one disqualifies the cube match, and
+    # this statement exists only to reach the cube — with them it scanned the
+    # whole table and took the better part of a minute, which is exactly what
+    # it was written to avoid. A dropdown holds a handful of values, so the
+    # caller sorts and trims what comes back.
     return (
         f"SELECT {quoted_col} AS {qk}, {quoted_col} AS {qv}, "
         f"COUNT(*) AS {quote_alias(_CUBE_COUNT_ALIAS)} "
-        f"FROM {fact_table} GROUP BY {quoted_col} "
-        f"ORDER BY {qv} LIMIT {int(limit) + 1}"
+        f"FROM {fact_table} GROUP BY {quoted_col}"
     )
 
 
