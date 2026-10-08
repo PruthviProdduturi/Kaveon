@@ -14,3 +14,7 @@ Replacing front-drain chunking with ownership-preserving `Vec::split_off` passed
 ## 2026-10-08 — exchange fan-out eight (rejected)
 
 Increasing exchange partitions from four to eight reduced per-task input but did not improve the pair: q33 `20.031 s`, q35 `13.823 s`, with exact results. The four-partition default remains the qualified setting.
+
+## 2026-10-08 — type-gated raw numeric exchange (rejected)
+
+The raw-row exchange was narrowed to direct scans whose group keys are numeric, so q33 could use it while q35's UTF-8 URL grouping stayed on grouped states. Planner tests passed and both controls remained exact, but the pair was still not faster: q33 `19.528 s`, q35 `13.680 s`. The experimental modes were reverted; grouped-state remains the only default wire contract.
