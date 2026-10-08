@@ -31,6 +31,18 @@ not the last decimal place.
 The Kaveon run completed with no worker restarts, query rejects, or failures.
 The ClickHouse command used `FORMAT Null` so result rendering was excluded.
 
+## 2026-10-07 follow-up: URL-key hash
+
+After rebuilding the engine with the query-local text-key hash, the identical
+`q35` request completed in **35.0 s** (35,011 ms), down from **38.2 s**
+(38,226 ms) on the same local Docker stack and input. The result remained the
+same ten rows and the query completed without a worker restart. This is an
+8.4% improvement, not ClickHouse parity. With the conservative 512 MiB
+per-query limit, the final merge still wrote about 4.5 GB of spill data. A
+separate 2 GiB per-query trial reduced spill runs but took 42.2 s on this
+machine, so the memory increase is not a proven optimization and is not part
+of the default configuration.
+
 ## Change under test
 
 The columnar aggregate hashes packed query-local key words with an inline
