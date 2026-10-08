@@ -776,3 +776,10 @@ qualification run did not reach a result after the eight scan tasks finished
 after the final-stage sort made no observable progress. No correctness claim
 was made and the prototype was removed. The shipped grouped-state final merge
 and its measured controls remain unchanged.
+
+## 2026-10-08 — single local final-merge lane (rejected)
+
+Reducing `KAVEON_LOCAL_PARALLELISM` from the qualified eight lanes to one was
+tested to avoid duplicate final-stage readers. It remained exact but regressed
+both controls: q33 **22.69 s** and q35 **25.30 s**. The default eight-lane
+configuration is restored.
