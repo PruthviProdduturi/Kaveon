@@ -251,3 +251,19 @@ arena. It preserved byte-equality checks and all columnar aggregate tests, but
 two uncached q35 runs measured **27.15 s** and **27.34 s**, so it did not beat
 the qualified **26.6–27.0 s** range. The code was reverted and the runtime was
 rebuilt from the qualified source.
+## 2026-10-08 row-group task fan-out
+
+The distributed planner now schedules four scan partitions per compatible
+worker. A two-worker deployment therefore reads a two-file table as eight
+row-group tasks instead of two whole-file tasks, allowing Parquet decode and
+partial aggregation to overlap across the workers. The q35 ten-row result was
+byte-for-byte identical to the qualified result; q33 preserved the same count
+ordering, with only rows tied at `COUNT = 1` changing order, which SQL leaves
+unspecified.
+
+On the rebuilt two-worker Docker stack, two uncached repetitions measured q35
+at **14.07 s** and **15.44 s**, and q33 at **19.79 s** and **20.99 s**. The
+eight-partitions-per-worker trial measured q35 at **14.44 s** and q33 at
+**22.01 s**, so it was rejected. The four-way fan-out is retained as the
+qualified default; ClickHouse remains faster on this control (6.316 s q35,
+4.552 s q33).

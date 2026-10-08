@@ -49,6 +49,11 @@ struct QueryStore {
     queries: HashMap<String, QueryRecord>,
 }
 
+/// Number of scan partitions scheduled per compatible worker. Splitting a
+/// large Parquet file by row groups keeps decoder and partial-aggregate work
+/// concurrent even when a deployment has only a few workers.
+const DISTRIBUTED_SCAN_PARTITIONS_PER_WORKER: usize = 4;
+
 /// Where the query ran, and why, when it did not run on the workers.
 #[derive(Clone, Serialize, PartialEq, Debug)]
 struct ExecutionPlacement {
@@ -9364,10 +9369,14 @@ async fn execute_distributed_fragments(
         return None;
     }
 
+    let partition_count = workers
+        .len()
+        .saturating_mul(DISTRIBUTED_SCAN_PARTITIONS_PER_WORKER);
+
     let planning_start = Instant::now();
     // A shape the stage planner cannot express runs on the coordinator
     // instead; that downgrade is worth a line in the log.
-    let graph = match crate::planner::build_stage_graph(query_id, plan, workers.len()) {
+    let graph = match crate::planner::build_stage_graph(query_id, plan, partition_count) {
         Ok(graph) => graph,
         Err(error) => {
             eprintln!("query {query_id} runs on the coordinator: stage graph: {error}");
@@ -9379,7 +9388,7 @@ async fn execute_distributed_fragments(
         query_id,
         plan,
         catalog_snapshot,
-        workers.len(),
+        partition_count,
         pins,
     ) {
         Ok(fragments) => fragments,
