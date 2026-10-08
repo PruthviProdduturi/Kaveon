@@ -431,3 +431,9 @@ removed and the broadcast path restored; the restored q33 run returned the
 qualified count-2 rows in **19.593 s**. This identifies a required invariant
 for any future optimization: the exchange partition hash must be identical to
 the final decoded group-key hash, including encoded numeric types.
+
+A correctness-preserving variant partitioned integer grouped-state payloads before
+merge and disabled the redundant per-thread selector. q33 returned the exact
+qualified count-2 rows, but measured **19.207 s**, effectively unchanged from
+the broadcast path at **19.593 s**. The extra partition/copy work cancels the
+avoided duplicate decode, so integer-key repartition is not selected.

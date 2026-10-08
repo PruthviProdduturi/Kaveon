@@ -1228,6 +1228,22 @@ pub(crate) fn compile_final_aggregate_parallel(
     // operator of the final's schema.
     let schema =
         Arc::clone(apply_tail(Box::new(BatchInput::new(final_schema, Vec::new())), None)?.schema());
+    // Text keys are expensive to broadcast because every merge worker must
+    // decode and hash the same wide encoded key batch. Partitioning the
+    // source-thread batches once avoids that duplicate work. Integer keys
+    // stay on broadcast: their compact merge is faster than repartitioning.
+    let key_types = grouped_aggregate_key_types(sources.schema())?;
+    let source_threaded = matches!(&sources, Sources::Threads { .. });
+    let has_text_key = key_types
+        .iter()
+        .any(|data_type| matches!(data_type, DataType::Utf8 | DataType::LargeUtf8));
+    let has_unsigned_key = key_types.iter().any(|data_type| {
+        matches!(
+            data_type,
+            DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64
+        )
+    });
+    let partitioned = source_threaded && has_text_key && !has_unsigned_key;
     let thread_tail = tail.clone();
     // No thread emits before every thread has finished merging: a
     // thread's output would otherwise compete for the budget with its
@@ -1253,26 +1269,6 @@ pub(crate) fn compile_final_aggregate_parallel(
                 None => Ok(merged),
             }
         });
-    // Text keys are expensive to broadcast because every merge worker must
-    // decode and hash the same wide encoded key batch. Partitioning the
-    // source-thread batches once avoids that duplicate work. Integer keys
-    // stay on broadcast: their compact merge is faster than repartitioning.
-    let key_types = grouped_aggregate_key_types(sources.schema())?;
-    let source_threaded = matches!(&sources, Sources::Threads { .. });
-    let has_text_key = key_types
-        .iter()
-        .any(|data_type| matches!(data_type, DataType::Utf8 | DataType::LargeUtf8));
-    // Unsigned identifiers (for example ClickBench's WatchID) are usually
-    // near-unique. Repartitioning those mixed keys retains too many state
-    // rows per worker under the normal query budget, so keep the established
-    // broadcast/selection path for them.
-    let has_unsigned_key = key_types.iter().any(|data_type| {
-        matches!(
-            data_type,
-            DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64
-        )
-    });
-    let partitioned = source_threaded && has_text_key && !has_unsigned_key;
     let partials = if partitioned {
         kaveon_exec::local_parallel::ParallelPartials::broadcast_partitioned(
             sources,
