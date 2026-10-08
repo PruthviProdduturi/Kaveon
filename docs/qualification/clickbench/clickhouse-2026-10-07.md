@@ -437,3 +437,18 @@ merge and disabled the redundant per-thread selector. q33 returned the exact
 qualified count-2 rows, but measured **19.207 s**, effectively unchanged from
 the broadcast path at **19.593 s**. The extra partition/copy work cancels the
 avoided duplicate decode, so integer-key repartition is not selected.
+
+
+## 2026-10-08 rejected fixed-width exchange state and larger query memory
+
+A fixed-size Arrow state column was tested for primitive q33/q35 aggregate
+states to remove per-row Binary offsets. Mixed partial producers still emit
+variable-length compact states, and Arrow correctly rejected the mixed batch
+(`expected FixedSizeBinary(59) but found Binary`). The change was removed
+rather than weakening the schema contract.
+
+Raising the per-query memory ceiling from **512 MiB** to **1 GiB** was also
+measured on q33. It completed correctly but regressed to **20.740 s** versus
+**19.087 s** at the qualified 512 MiB setting, so the default was restored.
+The current gap is therefore exchange/spill execution work, not a memory-limit
+setting that can be changed without a controlled end-to-end benefit.
