@@ -309,3 +309,7 @@ in **14.42 s** and q33 in **22.06 s**, versus approximately **14–15 s** and
 **20 s** on the qualified two-worker profile. The extra workers were removed:
 row-group decode and exact high-cardinality aggregation, not task admission,
 are the limiting stages.
+
+## 2026-10-08 rejected native Snappy decoder
+
+A Linux-only parquet experiment linked the native `libsnappy` decoder through a vendored parquet-rs build. The image built and the worker binary linked `libsnappy.so.1`; q35 and q33 returned the same ten-row result shape under the normal two-worker profile. It did not improve the bottleneck: q35 measured **15.34 s** and q33 **22.81 s**, versus the qualified portable path at approximately **14–15 s** and **20–21 s**. The native dependency and vendored parquet fork were removed, and the portable decoder remains the release path. The result points back to decode-to-Arrow and high-cardinality string aggregation as the next profiling target, rather than Snappy decompression alone.
