@@ -51,6 +51,21 @@ The change is retained because it removes work without changing semantics;
 the remaining latency is still dominated by URL payload exchange and the
 high-cardinality final merge.
 
+## 2026-10-07 batch and admission qualification
+
+The local Parquet reader now uses 65,536-row batches (the prior default was
+8,192), and the query-local text hash reads aligned eight-byte words. Storage
+qualification passed **117/117** tests and execution qualification passed
+**199/199** tests. On the same two-worker Docker stack, with query memory set to
+8 GiB and local aggregate parallelism set to 8, exact uncached runs measured
+q33 at **29.2 s** and q35 at **39.2 s**; repeated runs varied with host I/O
+contention. The q35 result rows and counts matched the prior exact result.
+
+The larger admission budget removes final-stage spill, but it does not close
+the ClickHouse gap: the q35 scan/partial aggregate still spends about 33 s in
+the two worker tasks, while ClickHouse remains about 10.23 s with its default
+thread count. This is a measured improvement path, not parity evidence.
+
 ## Change under test
 
 The columnar aggregate hashes packed query-local key words with an inline
