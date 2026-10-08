@@ -3260,7 +3260,17 @@ def invalidate_caches(dataset_id: Optional[str] = None) -> int:
 def check_freshness(dataset_id: str, actor: Optional[str] = None,
                     role: str = "Viewer") -> Dict[str, Any]:
     """Compute how fresh a dataset's DLM context is, combining time decay since
-    the artifact was built with the data-change signal from pg_stat_user_tables.
+    the artifact was built with a data-change signal.
+
+    Which change signal depends on where the dataset lives. An Engine-backed
+    dataset compares the source version the artifact recorded against the
+    table's current one (`engine_source_version`): the Delta version's
+    `identity_sha256` either matches or it does not, so the change is a fact
+    rather than an estimate. A warehouse table had no such identity, so it was
+    inferred from `pg_stat_user_tables`' own modification counter — a counter
+    rather than a scan, which is what made measuring staleness nearly free.
+    That path went with PostgreSQL and remains only for a non-retired source.
+
     Returns a recommendation: use_context / rebuild / no_context."""
     if actor and _RETIREMENT_SERVING.get() is None:
         return _with_serving_identity(actor, role, lambda: check_freshness(dataset_id))
@@ -3377,7 +3387,7 @@ def _trigger_background_rebuild(dataset_id: str, actor: Optional[str] = None) ->
         try:
             logger.info("Auto-rebuild started for dataset %s", dataset_id)
             if actor:
-                generate_dlm(dataset_id, force=True, actor=actor)
+                generate_dlm(dataset_id, force=True, actor=actor, role="Admin")
             else:
                 generate_dlm(dataset_id, force=True)
             logger.info("Auto-rebuild completed for dataset %s", dataset_id)
@@ -3392,20 +3402,32 @@ def _trigger_background_rebuild(dataset_id: str, actor: Optional[str] = None) ->
     return True
 
 
-def maybe_auto_rebuild(dataset_id: str) -> Optional[bool]:
+def maybe_auto_rebuild(dataset_id: str, actor: Optional[str] = None,
+                       role: str = "Viewer") -> Optional[bool]:
     """Check freshness and trigger a background rebuild when stale. Called from
     the ask/serve path so context stays current without manual intervention.
     Returns True if rebuild was triggered, False if skipped, None if context is
-    fresh (no action needed)."""
+    fresh (no action needed).
+
+    A PostgreSQL-free read needs an identity, so the caller's is installed here
+    when one is not already. Without that this returned False for every call
+    the ask path made — freshness detected staleness correctly and nothing ever
+    acted on it, leaving context to be refreshed only by hand."""
     from services import postgresql_retirement_runtime
     if postgresql_retirement_runtime.requested() and _RETIREMENT_SERVING.get() is None:
-        return False
+        if not actor:
+            return False
+        return _with_serving_identity(
+            actor, role, lambda: maybe_auto_rebuild(dataset_id, actor, role))
     freshness = check_freshness(dataset_id)
     if freshness["fresh"]:
         return None
     if freshness["recommendation"] != "rebuild":
         return None
-    return _trigger_background_rebuild(dataset_id)
+    # The rebuild runs on its own thread, outside this request's serving state,
+    # so it has to carry the identity rather than inherit it. Admin because a
+    # seeded dataset is owned by `system` and only an Admin may publish for it.
+    return _trigger_background_rebuild(dataset_id, actor)
 
 
 _SWEEP_INTERVAL_SECONDS = 1800.0  # 30 minutes
@@ -3416,9 +3438,40 @@ def _postgresql_freshness_sweep_disabled() -> bool:
     return postgresql_write_fence.enabled() or postgresql_retirement_runtime.requested()
 
 
-def freshness_sweep() -> Dict[str, Any]:
+def freshness_sweep(actor: Optional[str] = None, role: str = "Admin") -> Dict[str, Any]:
     """Check all datasets and trigger rebuilds for any that are stale. Returns
-    a summary of what was found and triggered — useful for cron/health checks."""
+    a summary of what was found and triggered — useful for cron/health checks.
+
+    The PostgreSQL sweep enumerated `dlm_artifact`, which no longer exists, so
+    the retirement path enumerates the compiled artifacts KaveonDB holds for the
+    caller instead. It needs an identity to read them: an unattended sweep has
+    none and reports that rather than silently checking nothing, which is what
+    the disabled sweep did."""
+    from services import postgresql_retirement_runtime
+    if postgresql_retirement_runtime.requested():
+        if not actor:
+            return {"checked": 0, "stale": 0, "triggered": 0, "datasets": [],
+                    "skipped": "a PostgreSQL-free sweep needs a caller identity"}
+        if _RETIREMENT_SERVING.get() is None:
+            return _with_serving_identity(actor, role,
+                                          lambda: freshness_sweep(actor, role))
+        results: Dict[str, Any] = {"checked": 0, "stale": 0, "triggered": 0, "datasets": []}
+        for artifact in _serving_artifacts():
+            dataset_id = str((artifact or {}).get("dataset_id") or "")
+            if not dataset_id:
+                continue
+            results["checked"] += 1
+            freshness = check_freshness(dataset_id)
+            if freshness["fresh"] or freshness["recommendation"] != "rebuild":
+                continue
+            results["stale"] += 1
+            triggered = _trigger_background_rebuild(dataset_id, actor)
+            if triggered:
+                results["triggered"] += 1
+            results["datasets"].append({"dataset_id": dataset_id,
+                                        "score": freshness["score"],
+                                        "triggered": triggered})
+        return results
     if _postgresql_freshness_sweep_disabled():
         return {"checked": 0, "stale": 0, "triggered": 0, "datasets": []}
     ensure_tables()
