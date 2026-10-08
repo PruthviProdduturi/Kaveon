@@ -419,3 +419,15 @@ A native release build (`RUSTFLAGS=-C target-cpu=native`) was measured on the
 same two-worker host. q35 completed in **13.292 s**, with no improvement over
 the generic release binary. The flag was removed so published images remain
 portable across AKS and local CPUs.
+
+## 2026-10-08 rejected integer-key final repartition
+
+The final grouped-state merge was changed experimentally to hash-partition
+all key types instead of broadcasting integer-key states to every merge
+thread. q33 improved from about 19.5 s to **14.7–15.3 s**, but the result was
+wrong: duplicate groups were split across merge threads, and the returned top
+rows had count 1 where the qualified exact result has count 2. The change was
+removed and the broadcast path restored; the restored q33 run returned the
+qualified count-2 rows in **19.593 s**. This identifies a required invariant
+for any future optimization: the exchange partition hash must be identical to
+the final decoded group-key hash, including encoded numeric types.
