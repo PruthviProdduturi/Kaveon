@@ -1024,7 +1024,15 @@ fn build_aggregate(
     let group_by: Vec<Expr> = group_by_ast
         .iter()
         .map(ast_expr_to_expr)
-        .collect::<Result<_>>()?;
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        // A literal contributes the same value to every input row.  Keeping
+        // it as a hash key needlessly widens every partial group and exchange
+        // frame (ClickBench q35 uses `GROUP BY 1, URL`).  The projection
+        // above the aggregate still evaluates the literal for each output
+        // row, so SQL results and column order are unchanged.
+        .filter(|expr| !matches!(expr, Expr::Literal(_)))
+        .collect();
 
     let mut aggregates = Vec::new();
     for item in &select.projection {
@@ -2863,6 +2871,27 @@ mod tests {
             matches!(&aggregates[0], AggregateExpr::Sum { expr: Expr::Column(name), .. } if name == "__kaveon_arg_0")
         );
         assert!(matches!(&columns[1], Expr::Column(name) if name == "sum___kaveon_arg_0"));
+    }
+
+    #[test]
+    fn constant_group_key_is_projected_without_hashing() {
+        let plan = sql_to_logical_plan(
+            "SELECT 1, URL, COUNT(*) AS c FROM hits GROUP BY 1, URL ORDER BY c DESC LIMIT 10",
+        )
+        .unwrap();
+        let LogicalPlan::Limit { input, .. } = plan else {
+            panic!("limit");
+        };
+        let LogicalPlan::Sort { input, .. } = *input else {
+            panic!("sort");
+        };
+        let LogicalPlan::Project { input, .. } = *input else {
+            panic!("projection");
+        };
+        let LogicalPlan::Aggregate { group_by, .. } = *input else {
+            panic!("aggregate");
+        };
+        assert_eq!(group_by, vec![Expr::Column("URL".into())]);
     }
 
     #[test]
