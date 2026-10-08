@@ -145,3 +145,15 @@ Two additional experiments were rejected: a fused COUNT/SUM/AVG update loop
 was exact but slower (28.4–28.8 s q33), and round-robin local partial
 aggregation was neutral on q33 but regressed q35 to 37.6 s. Neither is in the
 qualified build.
+
+## 2026-10-07 integer aggregate index growth
+
+The columnar hash index now grows fourfold only for large integer-only group
+keys; text-key indexes retain the previous doubling policy. This reduces
+rehash passes for q33 without changing key comparison or load-factor rules.
+The execution tests passed (**199 passed, 4 ignored**). Two uncached q33 runs
+with 8 GiB per-query memory measured **22.0 s** and **22.3 s**, versus the
+prior **25.1 s** run, and the ten returned rows were identical. The same
+build's q35 runs measured **34.6–35.0 s** with identical rows, so it is a
+targeted q33 improvement and not ClickHouse parity; ClickHouse remains about
+4.9 s for q33 and 7.2 s for q35 on this host.
