@@ -714,3 +714,12 @@ same hash, equality, growth, and nullable-key semantics. The full execution
 suite remained green (**200 passed, 4 ignored**), but rebuilt exact controls
 measured q33 at **19.962 s** and q35 at **13.639 s**, within variance and not
 better than the clean qualified ranges. The specialization was reverted.
+
+## 2026-10-08 — fixed primitive state merge (rejected)
+
+The final merge briefly recognized q33's exact `COUNT` + integer `SUM` +
+integer `AVG` compact state envelope and merged its validated fixed-width
+payload without the generic state cursor. The full execution suite remained
+green, but q33 measured **19.782 s**, with no reproducible gain over the clean
+control. The branch was reverted; all other aggregate layouts remain on the
+generic checked merge path.
