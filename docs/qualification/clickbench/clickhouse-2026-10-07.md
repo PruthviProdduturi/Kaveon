@@ -724,6 +724,11 @@ green, but q33 measured **19.782 s**, with no reproducible gain over the clean
 control. The branch was reverted; all other aggregate layouts remain on the
 generic checked merge path.
 
+An allocation-reduced variant using a fixed `(i64, i32)` uniqueness set was
+also tested for q33. It remained exact but measured **21.21 s** (q35
+**13.76 s**); the existing columnar partial path remains faster and the
+variant was removed.
+
 ## 2026-10-08 — paired runtime controls retained
 
 Fresh controls on the clean two-worker image confirm the current bottleneck
