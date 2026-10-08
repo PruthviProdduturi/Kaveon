@@ -131,6 +131,20 @@ impl Arena {
 /// prefixes shared by many rows.
 #[inline(always)]
 fn text_hash(bytes: &[u8]) -> u64 {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    if is_x86_feature_detected!("sse4.2") {
+        // CRC32C is used only to choose an open-addressing bucket; byte
+        // equality remains the authority on collisions. On the benchmark's
+        // x86 hosts this removes several scalar mixing instructions from the
+        // high-cardinality URL path, while the scalar implementation below
+        // remains the portable fallback.
+        return unsafe { text_hash_crc32(bytes) };
+    }
+    text_hash_scalar(bytes)
+}
+
+#[inline(always)]
+fn text_hash_scalar(bytes: &[u8]) -> u64 {
     let mut hash = 0x9e37_79b9_7f4a_7c15u64 ^ (bytes.len() as u64);
     let mut chunks = bytes.chunks_exact(8);
     for chunk in &mut chunks {
@@ -154,6 +168,44 @@ fn text_hash(bytes: &[u8]) -> u64 {
         hash = hash.rotate_left(23).wrapping_mul(0x2127_599b_0f5d_6d3d);
     }
     hash ^ (hash >> 29)
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sse4.2")]
+unsafe fn text_hash_crc32(bytes: &[u8]) -> u64 {
+    use std::arch::x86_64::{_mm_crc32_u8, _mm_crc32_u64};
+
+    let mut hash = 0x9e37_79b9_7f4a_7c15u64 ^ bytes.len() as u64;
+    let mut chunks = bytes.chunks_exact(8);
+    for chunk in &mut chunks {
+        let word = u64::from_le_bytes(chunk.try_into().expect("chunks_exact is eight bytes"));
+        hash = _mm_crc32_u64(hash, word);
+    }
+    for &byte in chunks.remainder() {
+        hash = _mm_crc32_u8(hash as u32, byte) as u64;
+    }
+    // Widen the 32-bit CRC into a well-mixed 64-bit bucket hash.
+    let mut mixed = hash ^ (hash >> 29);
+    mixed = mixed.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    mixed ^ (mixed >> 32)
+}
+
+#[cfg(target_arch = "x86")]
+#[target_feature(enable = "sse4.2")]
+unsafe fn text_hash_crc32(bytes: &[u8]) -> u64 {
+    use std::arch::x86::{_mm_crc32_u8, _mm_crc32_u32};
+
+    let mut hash = 0x9e37_79b9u32 ^ bytes.len() as u32;
+    let mut chunks = bytes.chunks_exact(4);
+    for chunk in &mut chunks {
+        let word = u32::from_le_bytes(chunk.try_into().expect("chunks_exact is four bytes"));
+        hash = _mm_crc32_u32(hash, word);
+    }
+    for &byte in chunks.remainder() {
+        hash = _mm_crc32_u8(hash, byte);
+    }
+    let mixed = (hash as u64) ^ ((hash as u64) << 32);
+    mixed ^ (mixed >> 29)
 }
 
 /// One aggregate's accumulators for every slot.

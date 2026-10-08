@@ -183,3 +183,18 @@ in **25.7 s** and **25.6 s** without memory failures. These measurements are
 within normal run variance and do not establish ClickHouse parity (reference
 q35 ~7.2 s, q33 ~4.9 s). The change is retained as a guarded optimization,
 with q33 explicitly protected from the failed mixed-key path.
+
+## 2026-10-08 SSE4.2 text-key hashing
+
+The columnar aggregate now uses a runtime-detected SSE4.2 CRC32C hash for
+plain text group keys on x86, with the existing scalar hash as the portable
+fallback. CRC only selects hash buckets; byte equality still decides key
+identity, so the result semantics are unchanged.
+
+The full execution suite passed (**199 passed, 4 ignored**). On the rebuilt
+two-worker Docker stack with 8 local lanes and a 512 MiB query limit, q35
+returned the exact ten rows in **27.0 s** and **27.0 s** across two uncached
+runs. q33 returned exact counts and values in **37.2 s** on its first run and
+**25.7 s** on its second run, with no memory failures. The q35 improvement is
+repeatable against the prior ~30 s baseline, but ClickHouse remains about
+**7.2 s** on q35 and **4.9 s** on q33; this is not parity.
