@@ -4751,57 +4751,11 @@ main.main-wide {
   height: auto;
 }
 
-.lab-stream-line {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  flex-shrink: 0;
-  padding: 0.45rem 1.25rem;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-surface);
-  font-size: 0.78rem;
-  color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
-}
 
-.lab-stream-line__state {
-  font-weight: 600;
-  color: var(--text-primary);
-  letter-spacing: 0.01em;
-}
 
-.lab-stream-line__facts {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.35rem 0;
-  min-width: 0;
-}
 
-.lab-stream-line__facts > span + span::before {
-  content: "·";
-  margin: 0 0.5rem;
-  color: var(--text-muted);
-}
 
-.lab-stream-line__cancel {
-  margin-left: auto;
-  padding: 0.2rem 0.65rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--error);
-  font: inherit;
-  font-size: 0.75rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease;
-}
 
-.lab-stream-line__cancel:hover {
-  background: var(--bg-hover);
-  border-color: var(--error);
-}
 
 /* ── The lane ladder: how a statement is being answered ───────────────────
    KaveonDB resolves a statement in a fixed order — admission, the result
@@ -4978,51 +4932,12 @@ main.main-wide {
   margin-bottom: 0.35rem;
 }
 
-.analysis-ready-core {
-  position: relative;
-  z-index: 2;
-  display: grid;
-  width: 52px;
-  height: 52px;
-  place-items: center;
-  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
-  border-radius: 16px;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, var(--bg-primary));
-  box-shadow: 0 12px 36px color-mix(in srgb, var(--accent) 18%, transparent);
-  animation: analysis-ready-breathe 3.2s ease-in-out infinite;
-}
 
-.analysis-ready-orbit {
-  position: absolute;
-  inset: 7px;
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  border-radius: 24px;
-  animation: analysis-ready-orbit 4.8s linear infinite;
-}
 
-.analysis-ready-orbit-two {
-  inset: 0;
-  border-style: dashed;
-  opacity: 0.45;
-  animation-direction: reverse;
-  animation-duration: 7s;
-}
 
-@keyframes analysis-ready-breathe {
-  0%, 100% { transform: translateY(0); box-shadow: 0 12px 36px color-mix(in srgb, var(--accent) 14%, transparent); }
-  50% { transform: translateY(-4px); box-shadow: 0 18px 42px color-mix(in srgb, var(--accent) 24%, transparent); }
-}
 
-@keyframes analysis-ready-orbit {
-  to { transform: rotate(360deg); }
-}
 
 @media (prefers-reduced-motion: reduce) {
-  .analysis-ready-core,
-  .analysis-ready-orbit {
-    animation: none;
-  }
 }
 
 .results-table-container {
