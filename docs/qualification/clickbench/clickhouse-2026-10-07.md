@@ -614,3 +614,9 @@ completed in **12.916 s** and q33 in **19.182 s**. Those results overlap the
 qualified **12.6–12.8 s / 19.0–19.5 s** ranges and do not establish a
 repeatable improvement over the selected path, so the experiment was reverted
 and the release source/runtime remains unchanged.
+
+The same-host ClickHouse control was refreshed after the control rebuild on
+2026-10-08: `clickhouse-local` with `FORMAT Null` completed q35 in **6.744 s**
+and q33 in **5.088 s** over the same mounted `hits.parquet`. Kaveon's matching
+exact runs were **12.916 s** and **19.182 s**. The challenge remains open;
+these are the current comparison numbers, not a parity claim.
