@@ -687,3 +687,12 @@ additional fan-out could not reserve its bounded working set under the 512 MiB
 query limit (**21,388,906 bytes requested with 529,264,241 already reserved**).
 The default of 16 partitions was restored; no result or correctness claim is
 made for this configuration.
+
+## 2026-10-08 — local parallelism sweep
+
+The clean two-worker image was also measured with per-query local parallelism
+set to **1, 2, 4, and 8**. Exact q33 completed in **24.121 s**, **21.853 s**,
+**19.643 s**, and **19.940 s**, respectively. Four threads is marginally best
+on this host but does not close the ClickHouse control (**5.088 s**), so the
+deployment default of eight remains unchanged for general workloads and no
+parity claim is made.
