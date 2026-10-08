@@ -14188,12 +14188,24 @@ mod tests {
             assert_eq!(child.context.principal.as_deref(), Some("admin"));
             assert_ne!(child.id, parent);
         }
-        let listed = super::list_queries(axum::Extension(admin.clone())).await.0;
+        let listed = json_body(
+            super::list_queries(
+                axum::extract::Query(super::QueryListOptions::default()),
+                axum::Extension(admin.clone()),
+            )
+            .await,
+        )
+        .await;
         let tagged_distinct = listed
+            .as_array()
+            .expect("query list is an array")
             .iter()
             .filter(|record| {
-                record.sql.starts_with("SELECT COUNT(DISTINCT")
-                    && record.context.client_tags == [format!("analyze:{parent}")]
+                record["sql"]
+                    .as_str()
+                    .is_some_and(|sql| sql.starts_with("SELECT COUNT(DISTINCT"))
+                    && record["context"]["client_tags"]
+                        == serde_json::json!([format!("analyze:{parent}")])
             })
             .collect::<Vec<_>>();
         assert_eq!(tagged_distinct.len(), 3);
