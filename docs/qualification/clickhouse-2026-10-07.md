@@ -6,3 +6,7 @@ A paired control with 1 GiB per-query memory and 8 GiB cluster admission complet
 ## 2026-10-08 — final spill-run compaction (rejected)
 
 A qualification-only final-merge compaction pass reduced the number of spill runs before replay. It preserved exact q33/q35 results, but the paired timings were q33 `19.420 s` and q35 `13.842 s`; the q35 regression outweighed the q33 improvement. The pass was reverted and remains disabled.
+
+## 2026-10-08 — exchange chunk-buffer split (rejected)
+
+Replacing front-drain chunking with ownership-preserving `Vec::split_off` passed all 22 exchange tests and preserved both controls, but did not improve the pair: q33 `19.738 s`, q35 `13.696 s`. The change was reverted; Arrow state encoding/decoding and final aggregation remain the measured bottleneck.
