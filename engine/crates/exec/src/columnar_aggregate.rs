@@ -79,8 +79,13 @@ impl Arena {
         // SAFETY: only `&str` bytes are appended.
         unsafe { std::str::from_utf8_unchecked(&self.bytes[start..end]) }
     }
-    fn intern(&mut self, hasher: &RandomState, text: &str) -> Result<(u32, bool)> {
-        let hash = hasher.hash_one(text.as_bytes());
+    fn intern(&mut self, _hasher: &RandomState, text: &str) -> Result<(u32, bool)> {
+        // Group keys are query-local. Equality is still checked byte-for-byte
+        // by the HashTable probe, so a fast non-cryptographic hash is safe here
+        // and avoids running the keyed hasher over every high-cardinality URL.
+        // Keep the RandomState parameter for the legacy call sites and for the
+        // security-sensitive paths outside this aggregate.
+        let hash = text_hash(text.as_bytes());
         let bytes = &self.bytes;
         let offsets = &self.offsets;
         let found = self.index.find(hash, |&id| {
@@ -106,7 +111,7 @@ impl Arena {
                 offsets[other as usize] as usize,
                 offsets[other as usize + 1] as usize,
             );
-            hasher.hash_one(&bytes[start..end])
+            text_hash(&bytes[start..end])
         });
         Ok((id, true))
     }
@@ -119,6 +124,28 @@ impl Arena {
         self.offsets.truncate(1);
         self.index.clear();
     }
+}
+
+/// Fast query-local hash for variable-width group keys. The table always
+/// verifies equality after a hash match, so this deliberately trades keyed
+/// hashing for fewer instructions and sequential byte reads. The avalanche is
+/// sufficient to keep the open-addressed arena index distributed even for URL
+/// prefixes shared by many rows.
+#[inline(always)]
+fn text_hash(bytes: &[u8]) -> u64 {
+    let mut hash = 0x9e37_79b9_7f4a_7c15u64 ^ (bytes.len() as u64);
+    for chunk in bytes.chunks(8) {
+        let mut word = 0u64;
+        for (shift, byte) in chunk.iter().enumerate() {
+            word |= (*byte as u64) << (shift * 8);
+        }
+        word ^= word >> 30;
+        word = word.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        word ^= word >> 27;
+        hash ^= word;
+        hash = hash.rotate_left(23).wrapping_mul(0x2127_599b_0f5d_6d3d);
+    }
+    hash ^ (hash >> 29)
 }
 
 /// One aggregate's accumulators for every slot.
