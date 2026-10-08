@@ -3805,7 +3805,7 @@ main.main-wide {
 }
 
 .sidebar-header {
-  padding: 1.5rem 1.25rem;
+  padding: 1.1rem 1.25rem 1.25rem;
   border-bottom: 1px solid var(--border);
   background: linear-gradient(135deg, var(--bg-surface) 0%, var(--bg-elevated) 100%);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
@@ -3843,10 +3843,20 @@ main.main-wide {
   color: var(--text-primary);
   font-size: 1.1rem;
   font-weight: 600;
-  margin-bottom: 0.6rem;
+  /* No bottom margin: this sits in a flex row whose own gap does the
+     spacing, and the margin was opening a band of dead space under it. */
+  margin: 0;
   display: flex;
   align-items: center;
   letter-spacing: -0.025em;
+}
+
+/* The brand mark stands where the glyph used to, with the same gap. It is an
+   svg, so the `h3 i` rule below never reached it and it sat flush against the
+   name. */
+.sidebar-header h3 .sidebar-brand-mark {
+  margin-right: 0.6rem;
+  flex-shrink: 0;
 }
 
 .sidebar-header h3 i {
@@ -5184,8 +5194,10 @@ main.main-wide {
   background: var(--bg-hover);
 }
 
+/* Every column reads from the left edge, so the eye has one starting line
+   down the grid instead of one per column. Figures keep tabular numerals so
+   their digits still stack. */
 .results-table td.numeric-cell {
-  text-align: right;
   font-variant-numeric: tabular-nums;
 }
 
@@ -5666,7 +5678,12 @@ main.main-wide {
 
 /* A statement in flight. A bar and a way out — the engine's stages are not
    the reader's business, and a cube answer lands in about 150ms, which is
-   less time than any sentence takes to read. */
+   less time than any sentence takes to read.
+
+   The indeterminate sweep is a comet, not a block: a bright leading edge with
+   the colour falling away behind it. An edge travelling at constant speed
+   reads as quick, where a solid bar easing in and out reads as laboured —
+   the query is fast and the bar should not argue with it. */
 .query-progress {
   display: flex;
   align-items: center;
@@ -5678,7 +5695,7 @@ main.main-wide {
   flex: 1;
   height: 3px;
   border-radius: 999px;
-  background: var(--border);
+  background: color-mix(in srgb, var(--accent) 12%, var(--border));
   overflow: hidden;
 }
 .query-progress__fill {
@@ -5687,15 +5704,23 @@ main.main-wide {
   width: 100%;
   border-radius: inherit;
   background: var(--accent);
-  transition: width 220ms ease-out;
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 55%, transparent);
+  transition: width 160ms linear;
 }
 .query-progress__track--roving .query-progress__fill {
-  width: 34%;
-  animation: query-progress-rove 1150ms cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  width: 42%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--accent) 28%, transparent) 42%,
+    var(--accent) 88%,
+    var(--accent) 100%
+  );
+  animation: query-progress-rove 780ms linear infinite;
 }
 @keyframes query-progress-rove {
-  0%   { transform: translateX(-110%); }
-  100% { transform: translateX(330%); }
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(240%); }
 }
 .query-progress__cancel {
   flex-shrink: 0;
@@ -5710,6 +5735,8 @@ main.main-wide {
 }
 .query-progress__cancel:hover { color: var(--text-primary); border-color: var(--text-muted); }
 @media (prefers-reduced-motion: reduce) {
-  .query-progress__track--roving .query-progress__fill { animation: none; width: 100%; opacity: 0.4; }
-  .query-progress__fill { transition: none; }
+  .query-progress__track--roving .query-progress__fill {
+    animation: none; width: 100%; background: var(--accent); opacity: 0.4;
+  }
+  .query-progress__fill { transition: none; box-shadow: none; }
 }
