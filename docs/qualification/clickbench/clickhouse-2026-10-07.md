@@ -313,3 +313,12 @@ are the limiting stages.
 ## 2026-10-08 rejected native Snappy decoder
 
 A Linux-only parquet experiment linked the native `libsnappy` decoder through a vendored parquet-rs build. The image built and the worker binary linked `libsnappy.so.1`; q35 and q33 returned the same ten-row result shape under the normal two-worker profile. It did not improve the bottleneck: q35 measured **15.34 s** and q33 **22.81 s**, versus the qualified portable path at approximately **14–15 s** and **20–21 s**. The native dependency and vendored parquet fork were removed, and the portable decoder remains the release path. The result points back to decode-to-Arrow and high-cardinality string aggregation as the next profiling target, rather than Snappy decompression alone.
+## 2026-10-08 rejected sampled text fingerprint
+
+The columnar text arena was tested with a collision-safe fingerprint over URL
+prefix, middle, suffix and length instead of hashing every byte. Full equality
+remained authoritative and q35 returned the exact ten rows, but q33 regressed
+to **26.36 s** (qualified baseline about **20–21 s**); q35 was about **14.9 s**
+with no measurable improvement. The full text fingerprint is restored. This
+experiment confirms that reducing the arena's hash input does not address the
+dominant decode/aggregation cost and increases probe work through collisions.
