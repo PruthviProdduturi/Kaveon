@@ -227,3 +227,13 @@ preserving dictionaries on the bind mount measured q35 at **28.86 s** and was
 reverted. The qualified default remains the plain reader and Windows bind
 mount; the storage control identifies filesystem sharing as a measurable
 benchmark confounder rather than an Engine optimization.
+## 2026-10-08 same-container ClickHouse control
+
+For a same-host control, the official `clickhouse/clickhouse-server:latest`
+image read the same Windows-mounted file through `clickhouse-local` with
+`max_threads = 8` and `FORMAT Null`. It completed q35 in **6.316 s** and q33
+in **4.552 s**. This removes the native-host versus container-storage
+ambiguity from the comparison: Kaveon's qualified bind-mount runs remain
+about **27–30 s** for q35 and **24–37 s** for q33. Both controls returned
+the expected result shape in non-Null validation runs; Kaveon remains behind
+ClickHouse and the ClickBench goal is still open.
