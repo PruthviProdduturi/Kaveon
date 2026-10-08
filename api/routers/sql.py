@@ -17,6 +17,7 @@ import services.query_history as history_svc
 from services.query_generator import build_chart_preview_query, build_distinct_filter_values_query
 from services.sql_table_extractor import extract_tables_from_sql
 from services.sql_guard import assert_no_platform_tables, assert_read_only
+from services import engine_cube_rewrite
 import database.pool as pool
 import database.metadata as meta_db
 from services import postgresql_retirement_runtime, product_read_authority
@@ -188,14 +189,101 @@ def _cancel_tag(ctx: UserContext, cancel_token):
 
 def _execute_engine_read_only(sql_text: str, catalog: str, ctx: UserContext,
                               schema: str | None = None,
-                              cancel_token: str | None = None) -> dict:
+                              cancel_token: str | None = None,
+                              timeout: int | None = None) -> dict:
     """Run a read-only statement within one catalog selected by the server."""
     from routers.lab import _engine_query
     from services.engine_bridge import execute
 
     scoped_sql = _engine_query(sql_text, catalog)
+    bound = {} if timeout is None else {"timeout": timeout}
     return execute(scoped_sql, catalog, ctx.email, ctx.role, schema,
-                   tag=_cancel_tag(ctx, cancel_token))
+                   tag=_cancel_tag(ctx, cancel_token), **bound)
+
+
+# ── Cube-shaped chart statements ────────────────────────────────────────────
+# The Engine answers a cube-shaped grouped aggregate from precomputed cells
+# instead of scanning the table, but an ORDER BY or a LIMIT disqualifies that
+# match while every chart statement carries both.  So a statement that can be
+# ordered and limited here is issued without those clauses and finished here
+# over the handful of rows a breakdown returns.  services.engine_cube_rewrite
+# owns the rule for which statements qualify and reproduces the ordering.
+
+# The most rows the rewrite will order in the API.  A grouped result wider
+# than this is already past what any Studio surface renders, so the rewrite is
+# only ever used where the unordered result would itself have been renderable;
+# a wider one is discarded and the caller's own statement runs unchanged.
+ENGINE_CUBE_ROW_CAP = MAX_RESULT_ROWS
+
+# How long the rewritten statement may take before the rewrite is abandoned.
+# A cube answer over a 504M-row table completes in about 0.15 s of Engine
+# time, so this leaves a wide margin for admission queueing and transport
+# while staying a small fraction of what the sorted form costs.  A statement
+# that cannot finish inside it is scanning — which is what the rewrite had
+# nothing to offer — and it is cancelled on the Engine before the original
+# statement runs.
+ENGINE_CUBE_PROBE_SECONDS = 5
+
+# Rewrites that over-ran the row cap, could not be ordered here, or did not
+# complete.  Dashboards re-run the same statements continuously, so retrying a
+# rewrite that has already been shown not to pay would add its cost to every
+# refresh.  An entry only ever removes the rewrite, never changes a result.
+_ENGINE_CUBE_DECLINED: dict[str, float] = {}
+_ENGINE_CUBE_DECLINED_LOCK = threading.Lock()
+_ENGINE_CUBE_DECLINED_TTL = 300
+
+
+def _engine_cube_declined(key: str) -> bool:
+    with _ENGINE_CUBE_DECLINED_LOCK:
+        declined_at = _ENGINE_CUBE_DECLINED.get(key)
+    return declined_at is not None and (time.time() - declined_at) < _ENGINE_CUBE_DECLINED_TTL
+
+
+def _decline_engine_cube(key: str) -> None:
+    now = time.time()
+    with _ENGINE_CUBE_DECLINED_LOCK:
+        for stale in [k for k, at in list(_ENGINE_CUBE_DECLINED.items())
+                      if now - at >= _ENGINE_CUBE_DECLINED_TTL]:
+            _ENGINE_CUBE_DECLINED.pop(stale, None)
+        _ENGINE_CUBE_DECLINED[key] = now
+
+
+def _execute_engine_chart_statement(sql_text: str, catalog: str, ctx: UserContext,
+                                    schema: str | None,
+                                    cancel_token: str | None) -> tuple[dict, list | None]:
+    """Run one chart statement, letting the Engine's cube answer it when the
+    statement's ordering and limit can be applied here instead.
+
+    Returns the Engine result and, when the rewrite was used, the ordered and
+    limited rows; None means the caller reads the rows out of the result as it
+    always has.
+    """
+    rewrite = engine_cube_rewrite.plan(sql_text)
+    if rewrite is None:
+        return _execute_engine_read_only(sql_text, catalog, ctx, schema,
+                                         cancel_token=cancel_token), None
+    declined_key = _cache_key(catalog, rewrite.statement)
+    if not _engine_cube_declined(declined_key):
+        try:
+            result = _execute_engine_read_only(
+                rewrite.statement, catalog, ctx, schema,
+                cancel_token=cancel_token, timeout=ENGINE_CUBE_PROBE_SECONDS)
+        except HTTPException as error:
+            # A refusal or an exhausted admission queue is the Engine's answer
+            # to the caller's statement too: report it rather than spending a
+            # second attempt on the same refusal.
+            if error.status_code in {403, 429}:
+                raise
+            _decline_engine_cube(declined_key)
+        else:
+            _, rows = _engine_result_rows(result)
+            ordered = (engine_cube_rewrite.order_rows(rows, rewrite)
+                       if len(rows) <= ENGINE_CUBE_ROW_CAP else None)
+            if ordered is not None:
+                return result, ordered
+            _decline_engine_cube(declined_key)
+    return _execute_engine_read_only(sql_text, catalog, ctx, schema,
+                                     cancel_token=cancel_token), None
 
 
 def _assert_engine_execute_permission(data: SqlExecuteBody, ctx: UserContext) -> None:
@@ -656,9 +744,9 @@ def execute_engine_sql(data: SqlExecuteBody, response: Response, ctx: UserContex
             }
     started_at = int(time.time() * 1000)
     try:
-        result = _execute_engine_read_only(
+        result, ordered_rows = _execute_engine_chart_statement(
             data.sql_text, source["engine_catalog"], ctx, schema,
-            cancel_token=data.cancel_token)
+            data.cancel_token)
     except HTTPException as error:
         failure = error.detail if isinstance(error.detail, dict) else {}
         try:
@@ -686,6 +774,8 @@ def execute_engine_sql(data: SqlExecuteBody, response: Response, ctx: UserContex
             ) from None
         raise
     columns, rows = _engine_result_rows(result)
+    if ordered_rows is not None:
+        rows = ordered_rows
     if data.row_limit:
         rows = rows[:data.row_limit]
     if data.use_cache:

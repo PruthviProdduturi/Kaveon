@@ -1,3 +1,4 @@
+import time
 import unittest
 from unittest.mock import patch
 import sys
@@ -326,6 +327,111 @@ class EngineCancellationTests(unittest.TestCase):
                              {"ok": True, "cancelled": 0})
         self.assertEqual(cancel.call_args.args[0],
                          sql._cancel_tag(ctx, "abcd1234efgh"))
+
+
+class EngineCubeRewriteRoutingTests(unittest.TestCase):
+    """How the chart path uses the cube rewrite, and when it gives it up."""
+
+    CTX = UserContext("analyst@example.com", "Analyst")
+    SORTED_SQL = ('SELECT region, SUM(actions) AS "A" FROM public.events '
+                  'GROUP BY region ORDER BY "A" DESC NULLS LAST LIMIT 2')
+    REWRITTEN = ('SELECT region, SUM(actions) AS "A" FROM public.events '
+                 'GROUP BY region')
+
+    def setUp(self):
+        sql._ENGINE_CUBE_DECLINED.clear()
+
+    tearDown = setUp
+
+    @staticmethod
+    def result(rows):
+        return {"id": "query-1", "elapsed_ms": 150,
+                "columns": [{"name": "region"}, {"name": "A"}], "data": rows}
+
+    def run_chart(self, side_effect):
+        with patch.object(sql, "_execute_engine_read_only", side_effect=side_effect) as execute:
+            result, rows = sql._execute_engine_chart_statement(
+                self.SORTED_SQL, "OpenSource", self.CTX, "public", None)
+        return execute, result, rows
+
+    def test_the_cube_shaped_statement_is_issued_and_finished_in_the_api(self):
+        rows = [["Asia", 2], ["Europe", 3], ["Oceania", 1]]
+        execute, result, ordered = self.run_chart([self.result(rows)])
+        self.assertEqual(execute.call_count, 1)
+        self.assertEqual(execute.call_args.args[0], self.REWRITTEN)
+        self.assertEqual(execute.call_args.kwargs["timeout"], sql.ENGINE_CUBE_PROBE_SECONDS)
+        self.assertEqual(result["id"], "query-1")
+        self.assertEqual(ordered, [["Europe", 3], ["Asia", 2]])
+
+    def test_a_statement_outside_the_recognised_shape_is_run_as_written(self):
+        unsupported = "SELECT * FROM public.events ORDER BY region LIMIT 2"
+        with patch.object(sql, "_execute_engine_read_only",
+                          return_value=self.result([["Asia", 2]])) as execute:
+            _, ordered = sql._execute_engine_chart_statement(
+                unsupported, "OpenSource", self.CTX, "public", None)
+        self.assertIsNone(ordered)
+        self.assertEqual(execute.call_args.args[0], unsupported)
+        self.assertNotIn("timeout", execute.call_args.kwargs)
+
+    def test_a_result_wider_than_the_cap_falls_back_to_the_caller_s_statement(self):
+        wide = [[str(index), index] for index in range(sql.ENGINE_CUBE_ROW_CAP + 1)]
+        execute, _, ordered = self.run_chart([self.result(wide), self.result([["Asia", 2]])])
+        self.assertIsNone(ordered)
+        self.assertEqual(execute.call_count, 2)
+        self.assertEqual(execute.call_args_list[0].args[0], self.REWRITTEN)
+        self.assertEqual(execute.call_args_list[1].args[0], self.SORTED_SQL)
+
+    def test_a_result_the_api_cannot_order_falls_back_to_the_caller_s_statement(self):
+        mixed = [["Asia", 2], ["Europe", "three"]]
+        execute, _, ordered = self.run_chart([self.result(mixed), self.result([["Asia", 2]])])
+        self.assertIsNone(ordered)
+        self.assertEqual(execute.call_count, 2)
+        self.assertEqual(execute.call_args_list[1].args[0], self.SORTED_SQL)
+
+    def test_a_rewrite_that_did_not_complete_falls_back_and_is_not_retried(self):
+        timeout = HTTPException(504, "Engine statement exceeded the client bound (5s)")
+        execute, _, ordered = self.run_chart([timeout, self.result([["Asia", 2]])])
+        self.assertIsNone(ordered)
+        self.assertEqual(execute.call_count, 2)
+        # The outcome is remembered, so the next execution goes straight to
+        # the caller's own statement rather than probing again.
+        with patch.object(sql, "_execute_engine_read_only",
+                          return_value=self.result([["Asia", 2]])) as again:
+            sql._execute_engine_chart_statement(
+                self.SORTED_SQL, "OpenSource", self.CTX, "public", None)
+        self.assertEqual(again.call_count, 1)
+        self.assertEqual(again.call_args.args[0], self.SORTED_SQL)
+
+    def test_a_refusal_or_exhausted_admission_queue_is_reported_not_retried(self):
+        for status in (403, 429):
+            sql._ENGINE_CUBE_DECLINED.clear()
+            refusal = HTTPException(status, "refused")
+            with patch.object(sql, "_execute_engine_read_only", side_effect=refusal) as execute:
+                with self.assertRaises(HTTPException) as error:
+                    sql._execute_engine_chart_statement(
+                        self.SORTED_SQL, "OpenSource", self.CTX, "public", None)
+            self.assertEqual(error.exception.status_code, status)
+            self.assertEqual(execute.call_count, 1)
+
+    def test_a_declined_rewrite_expires(self):
+        key = sql._cache_key("OpenSource", self.REWRITTEN)
+        sql._decline_engine_cube(key)
+        self.assertTrue(sql._engine_cube_declined(key))
+        sql._ENGINE_CUBE_DECLINED[key] = time.time() - sql._ENGINE_CUBE_DECLINED_TTL - 1
+        self.assertFalse(sql._engine_cube_declined(key))
+
+    def test_the_route_returns_the_ordered_rows_in_the_unchanged_response_shape(self):
+        body = SqlExecuteBody(sql_text=self.SORTED_SQL, database="OpenSource",
+                              dataset_id=7, source="dashboard-chart")
+        rows = [["Asia", 2], ["Europe", 3], ["Oceania", 1]]
+        with patch.object(sql, "_engine_source_for_catalog",
+                          return_value={"engine_catalog": "OpenSource"}),              patch.object(sql.datasets_svc, "get_dataset_by_id",
+                          return_value={"database_name": "OpenSource", "schema_name": "public"}),              patch.object(sql, "_execute_engine_read_only", return_value=self.result(rows)),              patch.object(sql.history_svc, "create_history"),              patch.object(sql.sql_execute_limiter, "check"):
+            answer = sql.execute_engine_sql(body, Response(), self.CTX)
+        self.assertEqual(answer, {
+            "columns": ["region", "A"], "rows": [["Europe", 3], ["Asia", 2]],
+            "query_id": "query-1", "duration_ms": 150,
+        })
 
 
 if __name__ == "__main__":
