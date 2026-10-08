@@ -517,6 +517,13 @@ opt-in probe and its compose setting were removed; the normal memory-sized
 first round remains the release behavior.
 
 
+The local Parquet reader was run on an opt-in four-thread Tokio runtime with
+the object-store reader attached to that runtime. q35 remained exact at
+**12.833 s** and **12.692 s** across two runs, indistinguishable from the
+current-thread qualified **12.719 s** run. The opt-in runtime setting was
+removed; the reader-runtime change does not address the decode cost.
+
+
 A high-memory control raised the per-query limit from **512 MiB** to **4 GiB**
 and worker admission from **2 GiB** to **8 GiB**. q35 remained exact but
 measured **17.703 s** and **18.942 s** across two runs, slower than the
