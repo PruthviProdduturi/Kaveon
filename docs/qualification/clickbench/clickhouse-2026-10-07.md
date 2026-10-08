@@ -602,3 +602,15 @@ An index-growth control raised the minimum aggregate hash table from 16 to 65,53
 A bounded-sampling URL hash (length plus first, middle, and last bytes) was tested to reduce full-string hashing. The q35 run caused the coordinator/workers to restart before producing a result, so it failed the stability gate and was removed immediately. The original hardware-CRC hash is restored.
 
 An Arrow `StringViewArray::value_unchecked` micro-optimization was tested in the URL key loop. The exact q35 run required a retry after worker restarts and measured **13.341 s**; q33 measured **19.105 s**, with no improvement over the selected path. The change was removed and the checked access path restored.
+
+## 2026-10-08 — StringView byte-iterator control (rejected)
+
+The UTF-8 view grouping loop was changed temporarily to consume
+`StringViewArray::bytes_iter()` and convert the already validated bytes to
+`&str`, avoiding the generic `value(row)` accessor while keeping the existing
+arena hash and byte-equality checks. The full execution suite remained green
+(200 passed, 4 ignored). On the clean two-worker Docker profile, exact q35
+completed in **12.916 s** and q33 in **19.182 s**. Those results overlap the
+qualified **12.6–12.8 s / 19.0–19.5 s** ranges and do not establish a
+repeatable improvement over the selected path, so the experiment was reverted
+and the release source/runtime remains unchanged.
