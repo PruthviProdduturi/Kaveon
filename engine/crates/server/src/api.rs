@@ -1784,6 +1784,11 @@ impl DiskExchangeInput {
                     return Ok(None);
                 };
                 let bytes = kaveon_exec::local_parallel::occupied_bytes(&batch)?;
+                // `occupied_bytes` walks every Arrow buffer.  Keep the result
+                // computed here and reuse it for both admission and metrics;
+                // decoding a batch used to traverse all buffers twice before
+                // the first operator saw it.
+                self.metrics.bytes.fetch_add(bytes, Ordering::AcqRel);
                 (batch, bytes)
             }
         };
@@ -1813,10 +1818,6 @@ impl DiskExchangeInput {
                     .elapsed_us
                     .fetch_add(elapsed_us(decode_started), Ordering::AcqRel);
                 self.metrics.batches.fetch_add(1, Ordering::AcqRel);
-                self.metrics.bytes.fetch_add(
-                    kaveon_exec::local_parallel::occupied_bytes(&batch)?,
-                    Ordering::AcqRel,
-                );
                 return Ok(Some(batch));
             }
             self.payloads.pop_front();
