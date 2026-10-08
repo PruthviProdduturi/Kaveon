@@ -626,3 +626,14 @@ qualified Docker runtime returned exact q35 in **13.523 s** and q33 in
 **20.156 s** (10 rows each, no errors). These are the authoritative Kaveon
 controls for this pass; the experimental timings above are not retained as
 release performance.
+
+## 2026-10-08 — specialized packed two-key hash (rejected)
+
+The packed group-key hash was given a length-specialized combiner for the
+common two-key numeric layout, reducing the number of SplitMix rounds while
+leaving equality checks and collision behavior unchanged. The execution suite
+remained green (200 passed, 4 ignored). Two exact runs measured q35 at
+**13.222 s** and q33 at **19.858 s**, compared with the clean controls of
+**13.523 s** and **20.156 s**; the differences were within run variance and
+did not beat the retained **12.6–12.8 s / 19.0–19.5 s** qualified ranges.
+The branch was reverted and the generic packed hash remains selected.
