@@ -345,3 +345,13 @@ s**, compared with the qualified **14.07–15.44 s** range. q33 completed in
 reproducible improvement. The source change was removed. Exchange framing is
 therefore not the current ClickBench bottleneck; profiling should stay focused
 on Parquet-to-Arrow decode and high-cardinality string aggregation.
+
+## 2026-10-08 rejected non-null UTF-8 offset fast path
+
+The columnar key path was specialized for non-null `StringArray` batches so it
+could read Arrow offsets and the UTF-8 value buffer directly, avoiding the
+per-row `value()` and null checks. The change passed the full execution suite
+(**203 passed, 4 ignored**), but the clean two-worker q35 run completed in
+**14.836 s**, inside the qualified **14.07–15.44 s** range. It was removed
+because the end-to-end result did not demonstrate a reproducible improvement;
+the remaining cost is deeper in Parquet decode and text interning.
