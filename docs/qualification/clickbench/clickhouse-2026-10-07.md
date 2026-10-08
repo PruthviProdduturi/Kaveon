@@ -790,3 +790,10 @@ The Arrow IPC spool reader was tested with a 1 MiB `BufReader` window instead of
 8 KiB. Transport tests passed and both controls stayed exact, but q33 measured
 **20.10 s** and q35 **13.85 s**, versus the qualified approximately 19.1 s and
 13.6 s. The change was reverted; the standard reader remains selected.
+
+## 2026-10-08 — two local final-merge lanes (rejected)
+
+A two-lane final merge was tested to give each merge table more of the shared
+512 MiB budget. It preserved exact ten-row results but regressed q33 to
+**21.48 s** and q35 to **16.70 s**. Eight lanes remain the qualified default;
+the added merge concurrency is preferable to the larger per-lane spill tables.
