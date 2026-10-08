@@ -244,6 +244,7 @@ pub fn build_stage_graph(
     let query_id = query_id.into();
     let mut builder = StageGraphBuilder {
         worker_count,
+        exchange_partition_count: exchange_partition_count(worker_count),
         stages: Vec::new(),
         exchanges: Vec::new(),
     };
@@ -256,6 +257,19 @@ pub fn build_stage_graph(
     };
     graph.validate()?;
     Ok(graph)
+}
+
+/// Number of destination partitions for distributed aggregates. Scan stages
+/// may deliberately have more tasks than the merge stage: this keeps Parquet
+/// decode and partial aggregation parallel without multiplying the amount of
+/// grouped state copied through the exchange. The default remains the worker
+/// count so ordinary deployments preserve the original graph shape.
+fn exchange_partition_count(worker_count: usize) -> usize {
+    std::env::var("KAVEON_EXCHANGE_PARTITIONS")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| (1..=64).contains(value))
+        .unwrap_or(worker_count)
 }
 
 pub fn build_executable_fragments(
@@ -1295,6 +1309,7 @@ fn fragment_join_type(join_type: JoinType) -> FragmentJoinType {
 
 struct StageGraphBuilder {
     worker_count: usize,
+    exchange_partition_count: usize,
     stages: Vec<StageFragment>,
     exchanges: Vec<ExchangeDescriptor>,
 }
@@ -1317,12 +1332,12 @@ impl StageGraphBuilder {
                 } else {
                     Partitioning::Hash {
                         columns: keys,
-                        partition_count: self.worker_count,
+                        partition_count: self.exchange_partition_count,
                     }
                 };
                 let task_count = match &partitioning {
                     Partitioning::Single => 1,
-                    _ => self.worker_count,
+                    _ => self.exchange_partition_count,
                 };
                 let target =
                     self.add_exchange_stage("FinalAggregate", aggregate.attributes, task_count, 1);

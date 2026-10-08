@@ -269,3 +269,12 @@ eight-partitions-per-worker trial measured q35 at **14.44 s** and q33 at
 ClickBench profile; ordinary deployments default to one for compatibility.
 ClickHouse remains faster on this control (6.316 s q35,
 4.552 s q33).
+
+The planner now also supports a smaller aggregate exchange fan-in through
+`KAVEON_EXCHANGE_PARTITIONS`. The local profile uses four merge partitions
+while retaining eight source scan tasks. This reduced each source task from
+eight exchange output copies to four and kept the final merge at four tasks;
+the measured q35 latency remained **14.45–14.67 s**, so the dominant cost is
+still source decode and string-key aggregation rather than exchange fan-in.
+The two-partition trial was also unchanged at **14.54 s** and was not made the
+profile default.
