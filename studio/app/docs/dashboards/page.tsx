@@ -37,10 +37,14 @@ export default function DashboardsDocs() {
       <h2>Canvas layout</h2>
       <p>
         The canvas uses <a href="https://github.com/react-grid-layout/react-grid-layout" target="_blank" rel="noreferrer">react-grid-layout v2</a>.
-        The grid is <strong>12 columns</strong> on desktop and tablet (12 lg/md), reflowing to 6 (small), 2 (mobile),
-        and 1 (extra-small); the default tile is 6×8. Vertical
-        compaction pulls tiles up to fill gaps, and the layout reflows responsively at each breakpoint. Every tile stores
-        its <code>x, y, w, h</code> in the dashboard JSON.
+        The grid is <strong>12 columns</strong> at every width and the default tile is 6×8; every tile stores its
+        <code>x, y, w, h</code> in the dashboard JSON. Vertical compaction pulls tiles up to fill gaps.
+      </p>
+      <p>
+        Narrow canvases reflow rather than losing columns: under <strong>900px</strong> tiles pair up two per row, and
+        under <strong>600px</strong> each tile takes a full row. Tiles reflow in reading order, a tile wider than half
+        the grid keeps a row to itself, and rows are packed edge to edge so none is left half empty. Edit mode always
+        shows the authored 12-column grid, so the coordinates you drag are the coordinates that get saved.
       </p>
 
       <h2>Adding content</h2>

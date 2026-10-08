@@ -1,10 +1,15 @@
 /**
  * Dashboard Canvas
  *
- * Flat layouts (charts/text positioned by x/y/w/h) render on a real responsive
- * react-grid-layout (v2) grid: drag any tile to reposition, drag a corner/edge
- * to resize width AND height independently, vertical compaction, and mobile
- * reflow (12→6→2→1 cols by breakpoint).
+ * Flat layouts (charts/text positioned by x/y/w/h) render on a fixed
+ * twelve-column react-grid-layout (v2) grid: drag any tile to reposition, drag
+ * a corner/edge to resize width AND height independently, with vertical
+ * compaction.
+ *
+ * Responsiveness is derived here rather than delegated to react-grid-layout's
+ * breakpoints — see utils/dashboardGrid. Edit mode always renders the authored
+ * grid, because onLayoutChange persists whatever coordinates are on screen and
+ * a derived layout must never be written back.
  *
  * Legacy dashboards built with nested row/column containers fall back to the
  * original vertical stack so they keep rendering.
@@ -12,13 +17,28 @@
 'use client';
 
 import React from 'react';
-// react-grid-layout v2 API (installed 2.2.3). @types are v1, so treat as any.
+// react-grid-layout v2 API (installed 2.2.4). @types are v1, so treat as any.
 import * as RGL from 'react-grid-layout';
 import { useDashboard } from './DashboardContext';
 import DashboardItem from './DashboardItem';
+import {
+  DASHBOARD_GRID_COLS,
+  GridPlacement,
+  reflowPlacements,
+  tilesPerRow,
+} from '../../utils/dashboardGrid';
 
-const ResponsiveGridLayout: any = (RGL as any).ResponsiveGridLayout;
+const GridLayout: any = (RGL as any).GridLayout;
 const useContainerWidth: any = (RGL as any).useContainerWidth;
+
+const GRID_CONFIG = {
+  cols: DASHBOARD_GRID_COLS,
+  rowHeight: 30,
+  margin: [20, 20] as [number, number],
+  containerPadding: [4, 4] as [number, number],
+};
+const DRAG_CANCEL = 'button, a, input, select, textarea, .chart-actions-overlay, .no-drag';
+const RESIZE_HANDLES = ['se', 'e', 's'];
 
 interface DashboardCanvasProps {
   className?: string;
@@ -26,7 +46,8 @@ interface DashboardCanvasProps {
 
 const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => {
   const { layout, setLayout, isEditMode, addLayoutItem } = useDashboard();
-  const { width, containerRef } = useContainerWidth();
+  // Measure before the first paint so tiles never land on a stale width.
+  const { width, mounted, containerRef } = useContainerWidth({ measureBeforeMount: true });
 
   const rootItems = layout.filter((item) => !item.parentId);
   const hasContainers = rootItems.some((i) => i.type === 'row' || i.type === 'column');
@@ -64,8 +85,8 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
     );
   }
 
-  // ── Flat responsive grid ─────────────────────────────────────────────────────
-  const rglLayout = rootItems.map((it) => ({
+  // ── Flat grid ────────────────────────────────────────────────────────────────
+  const authored: GridPlacement[] = rootItems.map((it) => ({
     i: it.i,
     x: typeof it.x === 'number' ? it.x : 0,
     y: typeof it.y === 'number' ? it.y : 0,
@@ -75,6 +96,11 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
     minH: it.minH || 2,
   }));
 
+  const perRow = isEditMode ? null : tilesPerRow(width);
+  const placements = perRow === null ? authored : reflowPlacements(authored, perRow);
+
+  // Only edit mode persists, and edit mode always renders the authored grid, so
+  // the coordinates written back are always the ones the dashboard stores.
   const handleLayoutChange = (current: any[]) => {
     if (!isEditMode || !Array.isArray(current)) return;
     const byId = new Map(current.map((l) => [l.i, l]));
@@ -90,18 +116,13 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
 
   return (
     <div ref={containerRef} className={`dashboard-canvas ${className}`} style={{ paddingBottom: 32 }}>
-      {width > 0 && (
-        <ResponsiveGridLayout
+      {mounted && width > 0 && (
+        <GridLayout
           width={width}
-          layouts={{ lg: rglLayout }}
-          breakpoints={{ lg: 1200, md: 996, sm: 768, xs: 480, xxs: 0 }}
-          cols={{ lg: 12, md: 12, sm: 6, xs: 2, xxs: 1 }}
-          rowHeight={30}
-          margin={[20, 20]}
-          containerPadding={[4, 4]}
-          compactType="vertical"
-          dragConfig={{ enabled: isEditMode, cancel: 'button, a, input, select, textarea, .chart-actions-overlay, .no-drag' }}
-          resizeConfig={{ enabled: isEditMode, handles: ['se', 'e', 's'] }}
+          layout={placements}
+          gridConfig={GRID_CONFIG}
+          dragConfig={{ enabled: isEditMode, cancel: DRAG_CANCEL }}
+          resizeConfig={{ enabled: isEditMode, handles: RESIZE_HANDLES }}
           onLayoutChange={handleLayoutChange}
         >
           {rootItems.map((item) => (
@@ -109,7 +130,7 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
               <DashboardItem item={item} isEditMode={isEditMode} />
             </div>
           ))}
-        </ResponsiveGridLayout>
+        </GridLayout>
       )}
 
       {isEditMode && (
