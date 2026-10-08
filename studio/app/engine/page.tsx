@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { KaveonMark } from "../../components/KaveonMark";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import s from "./engine.module.css";
 import {
@@ -93,7 +94,7 @@ export default function EngineConsolePage() {
     <div className={`page-shell ${s.root}`}>
       <header className={s.mast}>
         <div className={s.mastLeft}>
-          <div className={s.mark} aria-hidden="true"><i className="fas fa-bolt" /></div>
+          <div className={s.mark} aria-hidden="true"><KaveonMark size={26} /></div>
           <div style={{ minWidth: 0 }}>
             <h1 className={s.title}>KaveonDB</h1>
             <p className={s.sub}>

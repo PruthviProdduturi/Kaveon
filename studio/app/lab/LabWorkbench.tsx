@@ -15,6 +15,7 @@ import { RateLimitedError, rateLimitNotice, refusalMessage } from "../../utils/d
 import { useTheme } from "../../contexts/ThemeContext";
 import { useRouter, useSearchParams } from "next/navigation";
 import { KaveonHalo, QueryProgress, reportedProgress, SUBMITTED } from "../../components/lab/QueryLanes";
+import { KaveonMark } from "../../components/KaveonMark";
 // using same-origin relative API calls
 const PRIMARY_DB_NAME = process.env.NEXT_PUBLIC_PRIMARY_DATABASE_NAME || "";
 
@@ -2236,7 +2237,10 @@ return;
               </div>
               <div className="sidebar-header-main-row">
                 <h3>
-                  <i className="fas fa-table" /> {usingEngine ? "KaveonDB" : "Database Tables"}
+                  {usingEngine
+                    ? <KaveonMark size={15} className="sidebar-brand-mark" />
+                    : <i className="fas fa-table" />}
+                  {usingEngine ? "KaveonDB" : "Database Tables"}
                   <span className="table-stats" style={{ marginLeft: '0.75rem' }}>
                     {isLoadingTables ? "Loading tables..." : `${filteredTables.length} tables`}
                   </span>
@@ -3042,40 +3046,10 @@ return;
               </div>
 
               <div id="resultsContainer" className={`results-container${showStreamLine ? " results-container--streaming" : ""}`}>
-                {showLanePanel && (
+                {/* A statement in flight looks the same whether its rows are
+                    still coming or have not started: a bar and a way out. */}
+                {(showLanePanel || showStreamLine) && (
                   <QueryProgress progress={runningProgress} onCancel={cancelQuery} />
-                )}
-
-                {/* ── A KaveonDB statement streaming its rows ── */}
-                {showStreamLine && streamProgress && (
-                  <div className="lab-stream-line" role="status" aria-live="polite">
-                    <KaveonHalo size={12} variant="inline" progress={runningProgress} />
-                    <span className="lab-stream-line__state">
-                      {streamProgress.state === "QUEUED" ? "Queued" : streamProgress.state === "FINISHED" ? "Retrieving rows" : "Running"}
-                    </span>
-                    <span className="lab-stream-line__facts">
-                      <span>{formatExecutionTime((streamProgress.elapsedMs ?? liveElapsedMs ?? 0) / 1000)}</span>
-                      {streamProgress.tasksTotal > 0 && (
-                        <span>{streamProgress.tasksDone.toLocaleString()} of {streamProgress.tasksTotal.toLocaleString()} tasks</span>
-                      )}
-                      {streamProgress.rowsScanned > 0 && (
-                        <span>{streamProgress.rowsScanned.toLocaleString()} rows scanned</span>
-                      )}
-                      {streamProgress.workers > 0 && (
-                        <span>{streamProgress.workers} {streamProgress.workers === 1 ? "worker" : "workers"}</span>
-                      )}
-                      <span>
-                        {streamProgress.rowsReceived > 0
-                          ? `${streamProgress.rowsReceived.toLocaleString()} rows received`
-                          : streamProgress.rowsWritten > 0
-                          ? `${streamProgress.rowsWritten.toLocaleString()} rows ready`
-                          : "Waiting for the first page"}
-                      </span>
-                    </span>
-                    <button type="button" className="lab-stream-line__cancel" onClick={cancelQuery} title="Cancel the statement">
-                      Cancel
-                    </button>
-                  </div>
                 )}
 
                 {/* ── Multiple-statement results ── */}
@@ -3126,9 +3100,7 @@ return;
                 {!multiResults && !results && !resultError && !isExecuting && (
                   <div className="empty-state">
                     <div className="analysis-ready-mark" aria-hidden="true">
-                      <span className="analysis-ready-orbit analysis-ready-orbit-one" />
-                      <span className="analysis-ready-orbit analysis-ready-orbit-two" />
-                      <span className="analysis-ready-core"><i className="fas fa-chart-bar" /></span>
+                      <KaveonMark size={64} />
                     </div>
                     <h3>Ready for Analysis</h3>
                     <p>

@@ -15,9 +15,12 @@
   background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-sm);
 }
 .mastLeft { display: flex; align-items: center; gap: 16px; min-width: 0 }
+/* The Guardian O carries the colour, so the tile behind it stays quiet; a
+   saturated gradient would bury a blue mark in blue. */
 .mark {
   width: 44px; height: 44px; border-radius: 11px; flex-shrink: 0; display: grid; place-items: center;
-  background: linear-gradient(135deg, rgba(var(--accent-rgb), .9), var(--accent-dark)); color: #fff; font-size: 18px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
 }
 .title { margin: 0; font-size: 1.15rem; font-weight: 700; letter-spacing: -.01em }
 .sub { margin: 3px 0 0; font-size: .85rem; color: var(--text-muted) }
