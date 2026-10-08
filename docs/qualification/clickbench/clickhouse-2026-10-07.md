@@ -579,3 +579,9 @@ was removed. A single-worker, 4 GiB-memory control was also slower at
 **47.698 s** for q35, confirming that the two-worker exchange is not the sole
 source of the gap. The retained runtime is the two-worker, 512 MiB bounded
 profile.
+
+
+A temporary host-native release image (`-C target-cpu=native`) was measured
+against the portable release image. q35 took **13.111 s**, slower than the
+12.8 s portable result, so the compiler flag was rejected and the portable
+image was rebuilt and restored.
