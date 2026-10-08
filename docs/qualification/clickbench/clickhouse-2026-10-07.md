@@ -414,3 +414,8 @@ qualified. q35 took **24.488 s**, versus approximately **12.8–13.0 s** with
 four partitions per worker. The fewer task boundaries serialize too much
 Parquet work, so the four-partition default remains selected; this does not
 solve the duplicate partial-dictionary exchange.
+
+A native release build (`RUSTFLAGS=-C target-cpu=native`) was measured on the
+same two-worker host. q35 completed in **13.292 s**, with no improvement over
+the generic release binary. The flag was removed so published images remain
+portable across AKS and local CPUs.
