@@ -382,6 +382,24 @@ def _generate_dlm_impl(dataset_id: str, force: bool = False,
         from services import engine_datasets
         engine_table = engine_datasets.resolve_table(binding["table_id"], _SERVICE_ACTOR, "Admin")
         engine_version = _engine_version(binding["table_id"])
+        # The Engine's definition is what the statements will actually run
+        # against, so its column types win over the dataset's record of them.
+        # Those drift: a dataset modelled when a column was a warehouse DATE
+        # keeps saying `date` after the same column lands in the lake as text,
+        # and the assembled predicate then compares a DATE literal to a Utf8
+        # column — which the Engine rejects outright, so the question fails
+        # rather than answering slowly. A type is only taken for a column the
+        # Engine actually reports.
+        engine_types = {str(column.get("name") or ""): column.get("data_type")
+                        for column in (engine_table.get("columns") or [])
+                        if isinstance(column, dict) and column.get("data_type")}
+        if engine_types:
+            columns = [
+                {**column, "data_type": engine_types.get(
+                    str(column.get("column_name") or column.get("name") or ""),
+                    column.get("data_type"))}
+                for column in columns
+            ]
     hint_token = _BOUND_ENGINE_CATALOG.set(binding["catalog"] if binding else None)
     try:
         return _generate_dlm_bound(dataset_id, force, actor, ds, state, prior_artifact, database, schema,
