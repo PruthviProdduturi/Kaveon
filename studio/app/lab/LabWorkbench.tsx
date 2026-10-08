@@ -16,6 +16,7 @@ import { useTheme } from "../../contexts/ThemeContext";
 import { useRouter, useSearchParams } from "next/navigation";
 import { KaveonHalo, QueryProgress, reportedProgress, SUBMITTED } from "../../components/lab/QueryLanes";
 import { KaveonMark } from "../../components/KaveonMark";
+import { CatalogPicker } from "../../components/lab/CatalogPicker";
 // using same-origin relative API calls
 const PRIMARY_DB_NAME = process.env.NEXT_PUBLIC_PRIMARY_DATABASE_NAME || "";
 
@@ -2329,26 +2330,20 @@ return;
 
               {usingEngine && (
                 <>
-                  <div className="sidebar-db-wrap" style={{ marginTop: "1.35rem" }}>
-                    <i className="fas fa-layer-group sidebar-db-icon" />
-                    <label htmlFor="lab-catalog-select" style={{ position: "absolute", top: "-0.85rem", left: 0, fontSize: "0.7rem", color: "var(--text-muted)" }}>Catalog</label>
-                    <select
-                      id="lab-catalog-select"
-                      className="sidebar-db-select"
-                      aria-label="Catalog"
-                      value={currentEngineSourceId ?? ""}
-                      disabled={isLoadingEngineSources || isLoadingTables || engineSources.length === 0}
-                      onChange={async (e) => {
-                        const id = e.target.value;
-                        if (!id) return;
-                        setCurrentEngineSourceId(id);
-                        lastEngineSourceIdRef.current = id;
-                        try { await loadEngineSchemas(id); } catch (error) { setLoadError(error instanceof Error ? error.message : "Failed to load Engine catalog"); }
-                      }}
-                    >
-                      {engineSources.map((source) => <option key={source.id} value={source.id}>{source.catalog}</option>)}
-                    </select>
-                  </div>
+                  <CatalogPicker
+                    options={engineSources.map((source) => ({
+                      id: source.id,
+                      catalog: source.catalog,
+                      schemas: source.id === currentEngineSourceId ? engineSchemas.length : null,
+                    }))}
+                    value={currentEngineSourceId}
+                    disabled={isLoadingEngineSources || isLoadingTables}
+                    onSelect={async (id) => {
+                      setCurrentEngineSourceId(id);
+                      lastEngineSourceIdRef.current = id;
+                      try { await loadEngineSchemas(id); } catch (error) { setLoadError(error instanceof Error ? error.message : "Failed to load Engine catalog"); }
+                    }}
+                  />
                 </>
               )}
 
@@ -3049,7 +3044,7 @@ return;
                 {/* A statement in flight looks the same whether its rows are
                     still coming or have not started: a bar and a way out. */}
                 {(showLanePanel || showStreamLine) && (
-                  <QueryProgress progress={runningProgress} onCancel={cancelQuery} />
+                  <QueryProgress progress={runningProgress} onCancel={cancelQuery} centered />
                 )}
 
                 {/* ── Multiple-statement results ── */}

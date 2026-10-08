@@ -108,6 +108,8 @@ export interface QueryProgressProps {
   /** Completed fraction when the coordinator has reported one, else null. */
   progress: number | null;
   onCancel?: () => void;
+  /** Hold the middle of the pane rather than sitting along its top edge. */
+  centered?: boolean;
 }
 
 /**
@@ -123,10 +125,14 @@ export interface QueryProgressProps {
  * The bar fills to whatever the coordinator reports and otherwise travels,
  * and it holds still for anyone who asked for less motion.
  */
-export function QueryProgress({ progress, onCancel }: QueryProgressProps) {
+export function QueryProgress({ progress, onCancel, centered = false }: QueryProgressProps) {
   const determinate = progress != null && progress > 0;
   return (
-    <div className="query-progress" role="status" aria-live="polite">
+    <div
+      className={`query-progress${centered ? " query-progress--centered" : ""}`}
+      role="status"
+      aria-live="polite"
+    >
       <div className={`query-progress__track${determinate ? "" : " query-progress__track--roving"}`}>
         <span
           className="query-progress__fill"

@@ -5740,3 +5740,99 @@ main.main-wide {
   }
   .query-progress__fill { transition: none; box-shadow: none; }
 }
+
+/* Which catalog the Lab is reading. Drawn rather than native, because a
+   select's list is painted by the operating system and reads as a hole in a
+   dark workbench. */
+.catalog-picker { position: relative; display: block; }
+.catalog-picker__label {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.catalog-picker__control {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: 0.84rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease;
+}
+.catalog-picker__control:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: var(--bg-elevated);
+}
+.catalog-picker__control:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.catalog-picker__control:disabled { opacity: 0.55; cursor: not-allowed; }
+.catalog-picker__glyph { font-size: 0.78rem; color: var(--accent); flex-shrink: 0; }
+.catalog-picker__name {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.catalog-picker__caret { font-size: 0.6rem; color: var(--text-muted); flex-shrink: 0; }
+
+.catalog-picker__list {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 5px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.26);
+}
+.catalog-picker__option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.44rem 0.55rem;
+  border-radius: 7px;
+  font-size: 0.83rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.catalog-picker__option--active {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text-primary);
+}
+.catalog-picker__option--selected { color: var(--text-primary); font-weight: 600; }
+.catalog-picker__option-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.catalog-picker__option-note { font-size: 0.72rem; color: var(--text-muted); font-weight: 400; }
+.catalog-picker__tick { font-size: 0.68rem; color: var(--accent); }
+
+/* Holding the middle of the pane, so a running statement reads as the pane's
+   own state rather than a strip stuck to its top edge. */
+.query-progress--centered {
+  flex-direction: column;
+  justify-content: center;
+  gap: 16px;
+  min-height: 190px;
+  height: 100%;
+  padding: 0 clamp(1.5rem, 18%, 9rem);
+}
+.query-progress--centered .query-progress__track { width: 100%; flex: 0 0 auto; }
