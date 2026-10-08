@@ -14,6 +14,10 @@ export interface CatalogPickerProps {
   value: string | null;
   disabled?: boolean;
   onSelect: (id: string) => void;
+  /** A quiet fact about what is selected, shown against the label. */
+  meta?: React.ReactNode;
+  /** An action belonging to the selection, shown beside the control. */
+  action?: React.ReactNode;
 }
 
 /**
@@ -26,7 +30,7 @@ export interface CatalogPickerProps {
  * jump to first and last, Escape to leave it as it was, and the fact that the
  * open list is what takes the arrows.
  */
-export function CatalogPicker({ options, value, disabled = false, onSelect }: CatalogPickerProps) {
+export function CatalogPicker({ options, value, disabled = false, onSelect, meta, action }: CatalogPickerProps) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -102,7 +106,11 @@ export function CatalogPicker({ options, value, disabled = false, onSelect }: Ca
 
   return (
     <div className="catalog-picker" ref={rootRef} onKeyDown={onKeyDown}>
-      <span className="catalog-picker__label" id={`${listId}-label`}>Catalog</span>
+      <div className="catalog-picker__labelrow">
+        <span className="catalog-picker__label" id={`${listId}-label`}>Catalog</span>
+        {meta && <span className="catalog-picker__meta">{meta}</span>}
+      </div>
+      <div className="catalog-picker__row">
       <button
         type="button"
         className="catalog-picker__control"
@@ -125,6 +133,8 @@ export function CatalogPicker({ options, value, disabled = false, onSelect }: Ca
           aria-hidden="true"
         />
       </button>
+      {action}
+      </div>
 
       {open && (
         <ul className="catalog-picker__list" role="listbox" aria-labelledby={`${listId}-label`} tabIndex={-1}>
