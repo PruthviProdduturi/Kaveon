@@ -18,3 +18,7 @@ Increasing exchange partitions from four to eight reduced per-task input but did
 ## 2026-10-08 — type-gated raw numeric exchange (rejected)
 
 The raw-row exchange was narrowed to direct scans whose group keys are numeric, so q33 could use it while q35's UTF-8 URL grouping stayed on grouped states. Planner tests passed and both controls remained exact, but the pair was still not faster: q33 `19.528 s`, q35 `13.680 s`. The experimental modes were reverted; grouped-state remains the only default wire contract.
+
+## 2026-10-08 — raw exchange with local parallel final aggregate (rejected)
+
+The numeric raw-row path was tested with local parallel partial aggregation at the final task. Planner qualification passed and q33/q35 remained exact, but the pair was not improved: q33 `19.880 s`, q35 `14.223 s`. The path was reverted with the other raw exchange variants.
