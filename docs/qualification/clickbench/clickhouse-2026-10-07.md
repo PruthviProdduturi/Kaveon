@@ -399,3 +399,12 @@ A controlled scan-partition check raised `KAVEON_SCAN_PARTITIONS_PER_WORKER`
 from 4 to 8. q35 was **12.708 s** and q33 **19.076 s**, effectively the same
 as the retained default, so the higher fan-out is not selected. More task
 fragments alone do not remove the scan/decode bottleneck on this host.
+
+## 2026-10-08 rejected eager text-arena reservation
+
+Reserving one arena index slot per incoming row before URL interning was tested
+to avoid hash-table growth and rehashing. It compiled and preserved the
+execution suite, but the rebuilt q35 run measured **13.028 s**, within the
+existing range and no better than the retained single-probe path. The eager
+capacity reservation was removed; it adds memory pressure without a measured
+end-to-end gain.
