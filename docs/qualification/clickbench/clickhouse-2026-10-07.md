@@ -496,3 +496,13 @@ The exchange chunk cutter was changed experimentally from `drain(..take)` to
 `split_off` plus buffer replacement to avoid shifting the IPC tail. q35 measured
 **13.036 s** and q33 **19.632 s**, both exact but slower than the retained
 12.666 s / 19.087 s baseline. The original cutter was restored.
+
+
+An execution-level parallelism check lowered `KAVEON_LOCAL_PARALLELISM` from
+the default **8** to **4** per worker. On a freshly recreated two-worker
+Docker stack, q33 remained exact but took **20.865 s**, compared with the
+retained ~**19.087 s** baseline. The q35 run completed without an execution
+error at about **12.8 s**, with no improvement over the retained **12.666 s**
+run. The environment override was removed and the default of 8 restored.
+Lowering local parallelism therefore increases contention/serialization on
+this workload and is not selected.
