@@ -600,3 +600,5 @@ An opt-in memory-mapped local Parquet reader was implemented with zero-copy rang
 An index-growth control raised the minimum aggregate hash table from 16 to 65,536 buckets to avoid early doublings. Exact q35 measured **13.491 s** and **13.728 s**; q33 measured **18.997 s** once, with no reproducible q35 improvement and an unnecessary baseline allocation. The change was removed and the 16-bucket default restored.
 
 A bounded-sampling URL hash (length plus first, middle, and last bytes) was tested to reduce full-string hashing. The q35 run caused the coordinator/workers to restart before producing a result, so it failed the stability gate and was removed immediately. The original hardware-CRC hash is restored.
+
+An Arrow `StringViewArray::value_unchecked` micro-optimization was tested in the URL key loop. The exact q35 run required a retry after worker restarts and measured **13.341 s**; q33 measured **19.105 s**, with no improvement over the selected path. The change was removed and the checked access path restored.
