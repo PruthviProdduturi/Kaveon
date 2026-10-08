@@ -355,3 +355,13 @@ per-row `value()` and null checks. The change passed the full execution suite
 **14.836 s**, inside the qualified **14.07–15.44 s** range. It was removed
 because the end-to-end result did not demonstrate a reproducible improvement;
 the remaining cost is deeper in Parquet decode and text interning.
+
+## 2026-10-08 rejected Parquet dictionary preservation
+
+The ClickBench file uses dictionary pages for the URL column, so an opt-in
+reader was added to preserve flat UTF-8 dictionary arrays through Arrow and
+feed the aggregate's dictionary-key path. It compiled cleanly, but the q35
+result regressed to **26.487 s** versus the qualified **14.07–15.44 s** range.
+The reader and compose switch were removed. Preserving the physical
+dictionary adds more decode overhead for this file than it saves in the
+aggregate, so the normal logical UTF-8 reader remains the release path.
