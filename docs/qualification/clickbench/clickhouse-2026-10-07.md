@@ -570,3 +570,12 @@ columns. It preserved the exact q35 rows but measured **13.153 s**, slower
 than the retained implementation, because building a per-batch code table
 added work for this nearly unique URL distribution. The prototype was removed
 and the tested prefetch-only implementation remains.
+
+
+The exchange `Vec::drain` path was replaced experimentally with an
+offset-based chunk buffer to avoid shifting unread IPC bytes. q35 remained
+within noise at **12.722 s**, while q33 regressed to **20.820 s**; the change
+was removed. A single-worker, 4 GiB-memory control was also slower at
+**47.698 s** for q35, confirming that the two-worker exchange is not the sole
+source of the gap. The retained runtime is the two-worker, 512 MiB bounded
+profile.
