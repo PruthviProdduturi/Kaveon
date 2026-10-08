@@ -43,6 +43,14 @@ separate 2 GiB per-query trial reduced spill runs but took 42.2 s on this
 machine, so the memory increase is not a proven optimization and is not part
 of the default configuration.
 
+The follow-up also removes q35's literal `1` from the aggregate key while
+keeping it in the projected result. The warmed rerun remained about 35.1 s,
+so this is not yet a wall-clock win, but partial exchange bytes fell from
+about 2.27 GB to 2.14 GB per worker and the returned rows remained identical.
+The change is retained because it removes work without changing semantics;
+the remaining latency is still dominated by URL payload exchange and the
+high-cardinality final merge.
+
 ## Change under test
 
 The columnar aggregate hashes packed query-local key words with an inline
