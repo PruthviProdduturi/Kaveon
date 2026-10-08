@@ -31,6 +31,8 @@ use crate::aggregate::{
 pub const MAX_KEYS: usize = 8;
 /// Versioned compact key frame. Schema metadata supplies logical key types.
 pub(crate) const COMPACT_KEY_MAGIC: &[u8; 3] = b"KP2";
+/// Fixed-width non-null primitive key frame. Schema metadata supplies types.
+pub(crate) const FIXED_KEY_MAGIC: &[u8; 3] = b"KF3";
 pub(crate) const COMPACT_KEY_INT64: u8 = 1;
 pub(crate) const COMPACT_KEY_INT32: u8 = 2;
 pub(crate) const COMPACT_KEY_BOOL: u8 = 3;
@@ -1215,6 +1217,33 @@ fn parse_key_words(
     words: &mut [u64],
 ) -> Result<u64> {
     let key_count = keys.len();
+    if key.starts_with(FIXED_KEY_MAGIC) {
+        let mut input = KeyInput(&key[FIXED_KEY_MAGIC.len()..]);
+        if input.byte()? as usize != key_count {
+            return Err(exec_err("fixed partial group key count mismatch"));
+        }
+        for (position, column) in keys.iter().enumerate() {
+            words[position] = match column {
+                KeyColumn::Integer { data_type: DataType::Int64, .. } => {
+                    i64::from_le_bytes(input.take(8)?.try_into().unwrap()) as u64
+                }
+                KeyColumn::Integer { data_type: DataType::Int32 | DataType::Date32, .. } => {
+                    i32::from_le_bytes(input.take(4)?.try_into().unwrap()) as i64 as u64
+                }
+                KeyColumn::Integer { data_type: DataType::Boolean, .. } => match input.byte()? {
+                    0 => 0,
+                    1 => 1,
+                    _ => return Err(exec_err("invalid fixed boolean group key")),
+                },
+                _ => return Err(exec_err("fixed group key type mismatch")),
+            };
+        }
+        if !input.0.is_empty() {
+            return Err(exec_err("trailing fixed partial group key bytes"));
+        }
+        words[key_count] = 0;
+        return Ok(0);
+    }
     if key.starts_with(COMPACT_KEY_MAGIC) {
         let mut input = KeyInput(&key[COMPACT_KEY_MAGIC.len()..]);
         if input.byte()? as usize != key_count {
@@ -1859,6 +1888,25 @@ impl ColumnarGroups {
     /// Schema-known integer widths need no per-row type or length words; only
     /// non-final text keys carry a length because the row boundary is known.
     fn encode_keys_into(&self, slot: usize, out: &mut Vec<u8>) {
+        let fixed = self.keys.iter().all(|key| {
+            matches!(key, KeyColumn::Integer { nulls, .. } if !nulls[slot])
+        });
+        if fixed {
+            out.extend_from_slice(FIXED_KEY_MAGIC);
+            out.push(self.keys.len() as u8);
+            for key in &self.keys {
+                if let KeyColumn::Integer { values, data_type, .. } = key {
+                    match data_type {
+                        DataType::Int32 | DataType::Date32 => {
+                            out.extend_from_slice(&(values[slot] as i32).to_le_bytes())
+                        }
+                        DataType::Boolean => out.push(u8::from(values[slot] != 0)),
+                        _ => out.extend_from_slice(&values[slot].to_le_bytes()),
+                    }
+                }
+            }
+            return;
+        }
         out.extend_from_slice(COMPACT_KEY_MAGIC);
         out.push(self.keys.len() as u8);
         for (position, key) in self.keys.iter().enumerate() {
