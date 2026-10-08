@@ -2488,7 +2488,7 @@ impl HashAggregate {
                 let f = source_schema.field_with_name(col).unwrap();
                 Field::new(
                     f.name(),
-                    logical_data_type(f.data_type()).clone(),
+                    execution_data_type(f.data_type()),
                     f.is_nullable(),
                 )
             })
@@ -4768,13 +4768,22 @@ fn extract_utf8_value(arr: &ArrayRef, row: usize) -> Result<String> {
 /// The type a group key has once it leaves an operator: a dictionary-encoded
 /// column's value type, everything else itself.
 pub fn exchanged_group_key_type(data_type: &DataType) -> DataType {
-    logical_data_type(data_type).clone()
+    execution_data_type(data_type)
 }
 
 fn logical_data_type(data_type: &DataType) -> &DataType {
     match data_type {
         DataType::Dictionary(_, value_type) => value_type.as_ref(),
         _ => data_type,
+    }
+}
+
+/// Arrow's UTF-8 view is an execution representation; aggregate results keep
+/// the engine's stable logical UTF-8 schema after the view-backed scan.
+fn execution_data_type(data_type: &DataType) -> DataType {
+    match data_type {
+        DataType::Utf8View => DataType::Utf8,
+        other => logical_data_type(other).clone(),
     }
 }
 
@@ -4793,6 +4802,7 @@ fn supported_group_key_type(data_type: &DataType) -> bool {
             | DataType::Float64
             | DataType::Utf8
             | DataType::LargeUtf8
+            | DataType::Utf8View
     ) && match data_type {
         DataType::Dictionary(key, _) => matches!(key.as_ref(), DataType::Int32),
         _ => true,
