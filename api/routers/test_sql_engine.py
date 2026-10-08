@@ -337,6 +337,13 @@ class EngineCubeRewriteRoutingTests(unittest.TestCase):
                   'GROUP BY region ORDER BY "A" DESC NULLS LAST LIMIT 2')
     REWRITTEN = ('SELECT region, SUM(actions) AS "A" FROM public.events '
                  'GROUP BY region')
+    AVERAGE_SQL = ('SELECT surface, AVG(latency) AS "Avg Latency (ms)" '
+                   'FROM public.events GROUP BY surface '
+                   'ORDER BY "Avg Latency (ms)" DESC NULLS LAST LIMIT 2')
+    AVERAGE_REWRITTEN = (
+        'SELECT surface, SUM(latency) AS "__kaveon_avg_sum_1", '
+        'COUNT(latency) AS "__kaveon_avg_count_1" '
+        'FROM public.events GROUP BY surface')
 
     def setUp(self):
         sql._ENGINE_CUBE_DECLINED.clear()
@@ -344,54 +351,78 @@ class EngineCubeRewriteRoutingTests(unittest.TestCase):
     tearDown = setUp
 
     @staticmethod
-    def result(rows):
+    def result(rows, names=("region", "A")):
         return {"id": "query-1", "elapsed_ms": 150,
-                "columns": [{"name": "region"}, {"name": "A"}], "data": rows}
+                "columns": [{"name": name} for name in names], "data": rows}
 
-    def run_chart(self, side_effect):
-        with patch.object(sql, "_execute_engine_read_only", side_effect=side_effect) as execute:
-            result, rows = sql._execute_engine_chart_statement(
-                self.SORTED_SQL, "OpenSource", self.CTX, "public", None)
-        return execute, result, rows
+    def run_chart(self, side_effect, sql_text=None):
+        with patch.object(sql, "_execute_engine_read_only",
+                          side_effect=side_effect) as execute:
+            result, finished = sql._execute_engine_chart_statement(
+                sql_text or self.SORTED_SQL, "OpenSource", self.CTX, "public", None)
+        return execute, result, finished
 
     def test_the_cube_shaped_statement_is_issued_and_finished_in_the_api(self):
         rows = [["Asia", 2], ["Europe", 3], ["Oceania", 1]]
-        execute, result, ordered = self.run_chart([self.result(rows)])
+        execute, result, finished = self.run_chart([self.result(rows)])
         self.assertEqual(execute.call_count, 1)
         self.assertEqual(execute.call_args.args[0], self.REWRITTEN)
         self.assertEqual(execute.call_args.kwargs["timeout"], sql.ENGINE_CUBE_PROBE_SECONDS)
         self.assertEqual(result["id"], "query-1")
-        self.assertEqual(ordered, [["Europe", 3], ["Asia", 2]])
+        self.assertEqual(finished, (["region", "A"], [["Europe", 3], ["Asia", 2]]))
+
+    def test_an_average_is_issued_as_a_sum_and_a_count_and_divided_here(self):
+        execute, _, finished = self.run_chart(
+            [self.result([["Chat", 9, 3], ["API", 10, 4]],
+                         names=("surface", "__kaveon_avg_sum_1", "__kaveon_avg_count_1"))],
+            self.AVERAGE_SQL)
+        self.assertEqual(execute.call_args.args[0], self.AVERAGE_REWRITTEN)
+        # The caller sees its own two columns, under its own names, ordered by
+        # the quotient rather than by the sum that produced it.
+        self.assertEqual(finished,
+                         (["surface", "Avg Latency (ms)"], [["Chat", 3.0], ["API", 2.5]]))
 
     def test_a_statement_outside_the_recognised_shape_is_run_as_written(self):
         unsupported = "SELECT * FROM public.events ORDER BY region LIMIT 2"
         with patch.object(sql, "_execute_engine_read_only",
                           return_value=self.result([["Asia", 2]])) as execute:
-            _, ordered = sql._execute_engine_chart_statement(
+            _, finished = sql._execute_engine_chart_statement(
                 unsupported, "OpenSource", self.CTX, "public", None)
-        self.assertIsNone(ordered)
+        self.assertIsNone(finished)
         self.assertEqual(execute.call_args.args[0], unsupported)
         self.assertNotIn("timeout", execute.call_args.kwargs)
 
     def test_a_result_wider_than_the_cap_falls_back_to_the_caller_s_statement(self):
         wide = [[str(index), index] for index in range(sql.ENGINE_CUBE_ROW_CAP + 1)]
-        execute, _, ordered = self.run_chart([self.result(wide), self.result([["Asia", 2]])])
-        self.assertIsNone(ordered)
+        execute, _, finished = self.run_chart(
+            [self.result(wide), self.result([["Asia", 2]])])
+        self.assertIsNone(finished)
         self.assertEqual(execute.call_count, 2)
         self.assertEqual(execute.call_args_list[0].args[0], self.REWRITTEN)
         self.assertEqual(execute.call_args_list[1].args[0], self.SORTED_SQL)
 
     def test_a_result_the_api_cannot_order_falls_back_to_the_caller_s_statement(self):
         mixed = [["Asia", 2], ["Europe", "three"]]
-        execute, _, ordered = self.run_chart([self.result(mixed), self.result([["Asia", 2]])])
-        self.assertIsNone(ordered)
+        execute, _, finished = self.run_chart(
+            [self.result(mixed), self.result([["Asia", 2]])])
+        self.assertIsNone(finished)
         self.assertEqual(execute.call_count, 2)
         self.assertEqual(execute.call_args_list[1].args[0], self.SORTED_SQL)
 
+    def test_a_result_the_api_cannot_divide_falls_back_to_the_caller_s_statement(self):
+        unusable = self.result(
+            [["Chat", 9, "three"]],
+            names=("surface", "__kaveon_avg_sum_1", "__kaveon_avg_count_1"))
+        execute, _, finished = self.run_chart(
+            [unusable, self.result([["Chat", 3.0]])], self.AVERAGE_SQL)
+        self.assertIsNone(finished)
+        self.assertEqual(execute.call_count, 2)
+        self.assertEqual(execute.call_args_list[1].args[0], self.AVERAGE_SQL)
+
     def test_a_rewrite_that_did_not_complete_falls_back_and_is_not_retried(self):
         timeout = HTTPException(504, "Engine statement exceeded the client bound (5s)")
-        execute, _, ordered = self.run_chart([timeout, self.result([["Asia", 2]])])
-        self.assertIsNone(ordered)
+        execute, _, finished = self.run_chart([timeout, self.result([["Asia", 2]])])
+        self.assertIsNone(finished)
         self.assertEqual(execute.call_count, 2)
         # The outcome is remembered, so the next execution goes straight to
         # the caller's own statement rather than probing again.
@@ -406,7 +437,8 @@ class EngineCubeRewriteRoutingTests(unittest.TestCase):
         for status in (403, 429):
             sql._ENGINE_CUBE_DECLINED.clear()
             refusal = HTTPException(status, "refused")
-            with patch.object(sql, "_execute_engine_read_only", side_effect=refusal) as execute:
+            with patch.object(sql, "_execute_engine_read_only",
+                              side_effect=refusal) as execute:
                 with self.assertRaises(HTTPException) as error:
                     sql._execute_engine_chart_statement(
                         self.SORTED_SQL, "OpenSource", self.CTX, "public", None)
@@ -420,16 +452,35 @@ class EngineCubeRewriteRoutingTests(unittest.TestCase):
         sql._ENGINE_CUBE_DECLINED[key] = time.time() - sql._ENGINE_CUBE_DECLINED_TTL - 1
         self.assertFalse(sql._engine_cube_declined(key))
 
-    def test_the_route_returns_the_ordered_rows_in_the_unchanged_response_shape(self):
-        body = SqlExecuteBody(sql_text=self.SORTED_SQL, database="OpenSource",
+    def route(self, sql_text, result):
+        body = SqlExecuteBody(sql_text=sql_text, database="OpenSource",
                               dataset_id=7, source="dashboard-chart")
-        rows = [["Asia", 2], ["Europe", 3], ["Oceania", 1]]
+        dataset = {"database_name": "OpenSource", "schema_name": "public"}
         with patch.object(sql, "_engine_source_for_catalog",
-                          return_value={"engine_catalog": "OpenSource"}),              patch.object(sql.datasets_svc, "get_dataset_by_id",
-                          return_value={"database_name": "OpenSource", "schema_name": "public"}),              patch.object(sql, "_execute_engine_read_only", return_value=self.result(rows)),              patch.object(sql.history_svc, "create_history"),              patch.object(sql.sql_execute_limiter, "check"):
-            answer = sql.execute_engine_sql(body, Response(), self.CTX)
+                          return_value={"engine_catalog": "OpenSource"}), \
+             patch.object(sql.datasets_svc, "get_dataset_by_id", return_value=dataset), \
+             patch.object(sql, "_execute_engine_read_only", return_value=result), \
+             patch.object(sql.history_svc, "create_history"), \
+             patch.object(sql.sql_execute_limiter, "check"):
+            return sql.execute_engine_sql(body, Response(), self.CTX)
+
+    def test_the_route_returns_the_finished_rows_in_the_unchanged_response_shape(self):
+        answer = self.route(
+            self.SORTED_SQL,
+            self.result([["Asia", 2], ["Europe", 3], ["Oceania", 1]]))
         self.assertEqual(answer, {
             "columns": ["region", "A"], "rows": [["Europe", 3], ["Asia", 2]],
+            "query_id": "query-1", "duration_ms": 150,
+        })
+
+    def test_the_route_never_leaks_the_substituted_sum_and_count(self):
+        answer = self.route(
+            self.AVERAGE_SQL,
+            self.result([["Chat", 9, 3], ["API", 10, 4]],
+                        names=("surface", "__kaveon_avg_sum_1", "__kaveon_avg_count_1")))
+        self.assertEqual(answer, {
+            "columns": ["surface", "Avg Latency (ms)"],
+            "rows": [["Chat", 3.0], ["API", 2.5]],
             "query_id": "query-1", "duration_ms": 150,
         })
 

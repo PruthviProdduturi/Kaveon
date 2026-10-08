@@ -450,6 +450,7 @@ export default function DatasetDetailPage() {
   const { addRecent } = useRecents();
   const [previewColumns, setPreviewColumns] = useState<string[]>([]);
   const [previewRows, setPreviewRows] = useState<any[][]>([]);
+  const [previewOpen, setPreviewOpen] = useState(true);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewSortColumnIndex, setPreviewSortColumnIndex] = useState<number | null>(null);
@@ -988,11 +989,21 @@ export default function DatasetDetailPage() {
         <DatasetContextEditor datasetId={datasetId} />
 
         {/* ── Data Preview ── */}
-        <div className="card" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 20px", minHeight: 300, marginBottom: 12 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)", marginBottom: 10, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div className="card" style={{ flex: previewOpen ? 1 : "0 0 auto", display: "flex", flexDirection: "column", overflow: "hidden", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 20px", minHeight: previewOpen ? 300 : 0, marginBottom: 12 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)", marginBottom: previewOpen ? 10 : 0, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span
+              role="button"
+              tabIndex={0}
+              aria-expanded={previewOpen}
+              onClick={() => setPreviewOpen((open) => !open)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setPreviewOpen((open) => !open); }
+              }}
+              style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+            >
               <i className="fas fa-table" style={{ fontSize: 12, color: "var(--accent)", opacity: 0.7 }} />
               Data Preview <span style={{ fontWeight: 400, color: "var(--text-muted)", fontSize: 12 }}>(top 100 rows)</span>
+              <i className={`fas fa-chevron-${previewOpen ? "up" : "down"}`} style={{ fontSize: 10, color: "var(--text-muted)" }} />
             </span>
             {previewSql && (
               <div style={{ display: "flex", gap: 6 }}>
@@ -1013,9 +1024,16 @@ export default function DatasetDetailPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    const encoded = encodeURIComponent(previewSql);
-                    const db = dataset.database_name ? `&db=${encodeURIComponent(dataset.database_name)}` : "";
-                    router.push(`/lab?query=${encoded}${db}`);
+                    // `database_name` is the Engine catalog, and the Lab
+                    // picks its source from `catalog`. Sent as `db` it was
+                    // read as a schema, so the Lab stayed on its default
+                    // source while the statement named another catalog:
+                    // "Engine query references a catalog outside the
+                    // selected source".
+                    const parts = [`query=${encodeURIComponent(previewSql)}`];
+                    if (dataset.database_name) parts.push(`catalog=${encodeURIComponent(dataset.database_name)}`);
+                    if (dataset.schema_name) parts.push(`schema=${encodeURIComponent(dataset.schema_name)}`);
+                    router.push(`/lab?${parts.join("&")}`);
                   }}
                   style={{
                     fontSize: 11.5, padding: "4px 10px", borderRadius: 6,
@@ -1031,14 +1049,14 @@ export default function DatasetDetailPage() {
               </div>
             )}
           </div>
-            {isLoadingPreview && <p className="muted">Loading preview…</p>}
-            {previewError && !isLoadingPreview && (
+            {previewOpen && isLoadingPreview && <p className="muted">Loading preview…</p>}
+            {previewOpen && previewError && !isLoadingPreview && (
               <p className="page-empty-body">{previewError}</p>
             )}
-            {!isLoadingPreview && !previewError && previewColumns.length === 0 && (
+            {previewOpen && !isLoadingPreview && !previewError && previewColumns.length === 0 && (
               <p className="page-empty-body">No rows returned.</p>
             )}
-            {!isLoadingPreview && !previewError && previewColumns.length > 0 && (
+            {previewOpen && !isLoadingPreview && !previewError && previewColumns.length > 0 && (
               <div style={{ flex: 1, overflow: "auto", minHeight: 0, border: "1px solid var(--border)", borderRadius: 8 }}>
                 <table className="results-table" style={{ width: "100%", fontSize: 12 }}>
                   <thead style={{ position: "sticky", top: 0, zIndex: 2 }}>
