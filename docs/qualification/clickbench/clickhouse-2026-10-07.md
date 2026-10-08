@@ -592,3 +592,5 @@ without changing scan partitioning. q35 completed exactly but regressed to
 **14.177 s**, so the eight-lane default was restored.
 
 An exchange fan-out control raised `KAVEON_EXCHANGE_PARTITIONS` from **4** to **8** on the same two-worker stack. q35 stayed exact but took **14.002 s**, slower than the retained **12.8 s** profile. The four-partition default was restored; increasing destination fan-out adds exchange overhead on this host rather than improving the high-cardinality merge.
+
+A specialized single-UTF8-key `COUNT(*)` path was tested for the q35 hot shape. It removed the arena's second deduplication probe and preserved all **200** execution tests, but the live exact q35 run measured **12.852 s**, slower than the retained **12.6–12.8 s** generic path. The path was removed and the clean generic runtime rebuilt.
