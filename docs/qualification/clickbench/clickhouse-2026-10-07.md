@@ -278,3 +278,15 @@ the measured q35 latency remained **14.45–14.67 s**, so the dominant cost is
 still source decode and string-key aggregation rather than exchange fan-in.
 The two-partition trial was also unchanged at **14.54 s** and was not made the
 profile default.
+
+## 2026-10-08 rejected batch-local string coding
+
+A narrow `GROUP BY` one-text-key plus `COUNT(*)` path was tested in the
+distributed columnar partial aggregate. It reduced the resident table's
+per-row probes by coding duplicate values in a temporary batch map, but the
+temporary map and string copies increased memory pressure: the qualified
+512 MiB query budget failed closed on q35, and a 2 GiB trial completed in
+**29.2 s**, slower than the clean baseline. The implementation was removed
+and the Docker runtime rebuilt from the qualified source. This confirms that
+the next useful optimization must avoid materialising duplicate URL strings,
+not add another hash table beside the aggregate.
