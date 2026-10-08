@@ -564,16 +564,18 @@ def distinct_filter_values(
             entry = {"key": row.get("key", row.get("value")), "value": row.get("value", row.get("key"))}
         else:
             entry = {"key": row, "value": row}
-        # The Engine cube path cannot carry an `IS NOT NULL` — any WHERE puts
-        # the statement back on a scan — so a NULL group is dropped here
-        # instead, and the page is capped at the limit the caller asked for.
-        # Every other path excludes nulls and limits in SQL, where both of
-        # these are no-ops.
+        # The cube answers neither an `IS NOT NULL` nor an `ORDER BY`: a WHERE
+        # or an ORDER BY puts the statement back on a full scan, which is the
+        # whole thing this path exists to avoid. So the null group is dropped,
+        # the order imposed and the page capped here instead. Every other path
+        # does all three in SQL, where these are no-ops over an already sorted,
+        # already limited, already null-free result.
         if entry["value"] is None:
             continue
         values.append(entry)
-        if len(values) >= row_limit:
-            break
+
+    values.sort(key=lambda entry: (entry["value"] is None, str(entry["value"])))
+    values = values[:row_limit]
 
     return {"success": True, "values": values, "keyColumn": key_column, "filteringTier": filtering_tier}
 

@@ -47,8 +47,7 @@ class EngineCubeShapeTests(unittest.TestCase):
         self.assertEqual(
             result["sql"],
             'SELECT region AS key, region AS value, COUNT(*) AS "__kaveon_filter_rows" '
-            "FROM public.kaveon_events_enriched GROUP BY region "
-            "ORDER BY value LIMIT 101",
+            "FROM public.kaveon_events_enriched GROUP BY region"
         )
 
     def test_the_aggregate_is_present_because_a_bare_group_by_scans(self):
@@ -60,17 +59,22 @@ class EngineCubeShapeTests(unittest.TestCase):
     def test_one_dimension_only_is_grouped(self):
         sql = generate()["sql"]
         self.assertEqual(sql.count("GROUP BY"), 1)
-        self.assertTrue(sql.split("GROUP BY")[1].startswith(" region ORDER BY"), sql)
+        self.assertTrue(sql.split("GROUP BY")[1].strip() == "region", sql)
 
     def test_ordering_is_by_the_display_value_as_before(self):
-        self.assertIn("ORDER BY value", generate()["sql"])
+        # Deliberately absent: an ORDER BY disqualifies the cube match, and
+        # this statement exists only to reach the cube. The caller orders the
+        # handful of values it gets back.
+        self.assertNotIn("ORDER BY", generate()["sql"])
 
     def test_one_row_over_the_limit_is_requested_to_absorb_a_null_group(self):
         """The cube path cannot exclude NULLs with a WHERE, so the route drops
         a NULL group from the result. Asking for one extra row keeps a full
         page of selectable values after that drop."""
-        self.assertTrue(generate(limit=25)["sql"].endswith("LIMIT 26"))
-        self.assertTrue(generate(limit=500)["sql"].endswith("LIMIT 501"))
+        # A LIMIT disqualifies the cube too, so the statement carries none
+        # and the caller trims. Asking for more rows cannot change the SQL.
+        self.assertNotIn("LIMIT", generate(limit=25)["sql"])
+        self.assertEqual(generate(limit=25)["sql"], generate(limit=500)["sql"])
 
     def test_every_declared_dimension_takes_the_cube_path(self):
         for column in DIMENSIONS:
