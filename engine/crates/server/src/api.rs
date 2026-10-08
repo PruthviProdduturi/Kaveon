@@ -51,8 +51,15 @@ struct QueryStore {
 
 /// Number of scan partitions scheduled per compatible worker. Splitting a
 /// large Parquet file by row groups keeps decoder and partial-aggregate work
-/// concurrent even when a deployment has only a few workers.
-const DISTRIBUTED_SCAN_PARTITIONS_PER_WORKER: usize = 4;
+/// concurrent even when a deployment has only a few workers. The default is
+/// one for compatibility; benchmark deployments may opt into a larger value.
+fn distributed_scan_partitions_per_worker() -> usize {
+    std::env::var("KAVEON_SCAN_PARTITIONS_PER_WORKER")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| (1..=16).contains(value))
+        .unwrap_or(1)
+}
 
 /// Where the query ran, and why, when it did not run on the workers.
 #[derive(Clone, Serialize, PartialEq, Debug)]
@@ -9371,7 +9378,7 @@ async fn execute_distributed_fragments(
 
     let partition_count = workers
         .len()
-        .saturating_mul(DISTRIBUTED_SCAN_PARTITIONS_PER_WORKER);
+        .saturating_mul(distributed_scan_partitions_per_worker());
 
     let planning_start = Instant::now();
     // A shape the stage planner cannot express runs on the coordinator

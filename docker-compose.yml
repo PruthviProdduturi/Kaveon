@@ -98,6 +98,9 @@ services:
       # improve both scan/aggregate workloads without increasing the query
       # memory budget.
       KAVEON_LOCAL_PARALLELISM: ${KAVEON_LOCAL_PARALLELISM:-8}
+      # Split large Parquet files into row-group tasks in this local benchmark
+      # stack; deployments default to one unless explicitly configured.
+      KAVEON_SCAN_PARTITIONS_PER_WORKER: ${KAVEON_SCAN_PARTITIONS_PER_WORKER:-4}
     volumes:
       - ./engine/etc/coordinator.toml:/etc/kaveon/config.toml:ro
       - catalog-data:/var/lib/kaveon
@@ -138,6 +141,7 @@ services:
       KAVEON_HASH_SPILL_PARTITIONS: ${KAVEON_HASH_SPILL_PARTITIONS:-16}
       KAVEON_HASH_SPILL_MODE: ${KAVEON_HASH_SPILL_MODE:-disk}
       KAVEON_LOCAL_PARALLELISM: ${KAVEON_LOCAL_PARALLELISM:-8}
+      KAVEON_SCAN_PARTITIONS_PER_WORKER: ${KAVEON_SCAN_PARTITIONS_PER_WORKER:-4}
     volumes: &engine-worker-volumes
       - ./engine/etc/worker.toml:/etc/kaveon/config.toml:ro
       - type: bind
