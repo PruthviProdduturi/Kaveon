@@ -80,7 +80,7 @@ use crate::{
     parquet_reader::projection_indices,
 };
 
-const DEFAULT_BATCH_SIZE: usize = 8_192;
+const DEFAULT_BATCH_SIZE: usize = 65_536;
 const METADATA_READ_CONCURRENCY: usize = 16;
 /// A partition may carry this fraction more than its fair share of bytes in
 /// whole files before the largest whole file is split by row group instead:
