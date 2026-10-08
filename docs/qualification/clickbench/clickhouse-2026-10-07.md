@@ -637,3 +637,13 @@ remained green (200 passed, 4 ignored). Two exact runs measured q35 at
 **13.523 s** and **20.156 s**; the differences were within run variance and
 did not beat the retained **12.6–12.8 s / 19.0–19.5 s** qualified ranges.
 The branch was reverted and the generic packed hash remains selected.
+
+## 2026-10-08 — fused COUNT/SUM/AVG update (rejected)
+
+The columnar aggregate briefly fused q33's `COUNT(*)`, integer `SUM`, and
+integer `AVG` updates into one row pass after exact slot resolution, avoiding
+three accumulator scans. All **200** execution tests passed. Three exact q33
+runs measured **18.530 s**, **19.981 s**, and **20.693 s**; q35 measured
+**12.964 s**. The spread overlaps the clean **19.0–20.2 s / 12.8–13.5 s**
+controls and does not establish a reproducible gain, so the specialization was
+removed and the clean generic accumulator path restored.
