@@ -1222,15 +1222,16 @@ fn parse_key_words(
         if input.byte()? as usize != key_count {
             return Err(exec_err("fixed partial group key count mismatch"));
         }
+        let tags = (0..key_count).map(|_| input.byte()).collect::<Result<Vec<_>>>()?;
         for (position, column) in keys.iter().enumerate() {
-            words[position] = match column {
-                KeyColumn::Integer { data_type: DataType::Int64, .. } => {
+            words[position] = match (column, tags[position]) {
+                (KeyColumn::Integer { data_type: DataType::Int64, .. }, COMPACT_KEY_INT64) => {
                     i64::from_le_bytes(input.take(8)?.try_into().unwrap()) as u64
                 }
-                KeyColumn::Integer { data_type: DataType::Int32 | DataType::Date32, .. } => {
+                (KeyColumn::Integer { data_type: DataType::Int32 | DataType::Date32, .. }, COMPACT_KEY_INT32) => {
                     i32::from_le_bytes(input.take(4)?.try_into().unwrap()) as i64 as u64
                 }
-                KeyColumn::Integer { data_type: DataType::Boolean, .. } => match input.byte()? {
+                (KeyColumn::Integer { data_type: DataType::Boolean, .. }, COMPACT_KEY_BOOL) => match input.byte()? {
                     0 => 0,
                     1 => 1,
                     _ => return Err(exec_err("invalid fixed boolean group key")),
@@ -1894,6 +1895,11 @@ impl ColumnarGroups {
         if fixed {
             out.extend_from_slice(FIXED_KEY_MAGIC);
             out.push(self.keys.len() as u8);
+            for key in &self.keys {
+                if let KeyColumn::Integer { data_type, .. } = key {
+                    out.push(match data_type { DataType::Int32 | DataType::Date32 => COMPACT_KEY_INT32, DataType::Boolean => COMPACT_KEY_BOOL, _ => COMPACT_KEY_INT64 });
+                }
+            }
             for key in &self.keys {
                 if let KeyColumn::Integer { values, data_type, .. } = key {
                     match data_type {
