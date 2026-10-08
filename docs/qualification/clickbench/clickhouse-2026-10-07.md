@@ -523,3 +523,13 @@ the same host and data. Both queries remained exact, but q33 measured
 **12.7 s** with two workers. The extra workers increase exchange and storage
 contention on this host rather than improving throughput, so they were
 removed and the two-worker baseline restored.
+
+
+An exact encoded-key selector was then tested to remove the final merge's
+broadcast-and-filter step. It partitions grouped-state batches with the same
+hash function used by the merge selector and disables the second filter. q33
+remained exact but measured **20.376 s**; q35 failed closed at the 512 MiB
+limit while materializing TopN/project state. The implementation was removed.
+This confirms that repartitioning state batches still pays more copying and
+memory pressure than the current broadcast path; a future win must avoid
+materializing the encoded state twice rather than only change its routing.
