@@ -139,8 +139,10 @@ def put_context(dataset_id: str, body: CurationBody,
 @router.get("/datasets/{dataset_id}/freshness")
 def freshness(dataset_id: str, ctx: UserContext = Depends(require_user_context)):
     """How fresh is this dataset's DLM context? Combines time decay since the
-    artifact was built with live data-change signals from pg_stat_user_tables.
-    Returns a score in [0,1] and a recommendation: use_context / rebuild / no_context."""
+    artifact was built with a data-change signal: for an Engine-backed dataset,
+    whether the table's source version still matches the one the artifact
+    recorded. Returns a score in [0,1] and a recommendation:
+    use_context / rebuild / no_context."""
     return dlm.check_freshness(dataset_id, ctx.email, ctx.role)
 
 
@@ -172,7 +174,7 @@ def ask(body: AskBody, ctx: UserContext = Depends(require_user_context)):
                      frame=body.frame, actor=ctx.email, role=ctx.role)
     dataset_id = result.get("dataset_id")
     if dataset_id and result.get("ok"):
-        rebuilt = dlm.maybe_auto_rebuild(dataset_id)
+        rebuilt = dlm.maybe_auto_rebuild(dataset_id, ctx.email, ctx.role)
         if rebuilt is True:
             result["_rebuild_triggered"] = True
     return result
@@ -283,7 +285,7 @@ def invalidate_cache(
 def sweep(ctx: UserContext = Depends(require_min_role("Admin"))):
     """Check all datasets for freshness and trigger rebuilds for stale ones.
     Runs automatically every 30 minutes; this endpoint triggers it manually."""
-    return dlm.freshness_sweep()
+    return dlm.freshness_sweep(ctx.email, ctx.role)
 
 
 @router.post("/dlm/notify-data-change")

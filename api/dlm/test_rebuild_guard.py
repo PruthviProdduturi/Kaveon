@@ -188,5 +188,43 @@ class BoundedScanTests(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs.get("timeout_seconds"), engine._BUILD_QUERY_TIMEOUT_SECONDS)
 
 
+class RetirementAutoRebuildTests(unittest.TestCase):
+    """A PostgreSQL-free read needs an identity. Without one, both automatic
+    rebuild paths answered "nothing to do" for every call: freshness detected
+    staleness correctly and nothing ever acted on it."""
+
+    def test_ask_path_rebuild_installs_the_callers_identity(self):
+        stale = {"fresh": False, "recommendation": "rebuild", "score": 0.3}
+        with patch("services.postgresql_retirement_runtime.requested", return_value=True),              patch.object(engine, "check_freshness", return_value=stale),              patch.object(engine, "_trigger_background_rebuild", return_value=True) as trigger:
+            self.assertIs(engine.maybe_auto_rebuild("7", "owner@example.test", "Admin"), True)
+        # The rebuild runs on its own thread, so it must carry the identity.
+        self.assertEqual(trigger.call_args.args, ("7", "owner@example.test"))
+
+    def test_rebuild_without_an_identity_is_refused_not_silently_skipped(self):
+        with patch("services.postgresql_retirement_runtime.requested", return_value=True),              patch.object(engine, "_trigger_background_rebuild") as trigger:
+            self.assertIs(engine.maybe_auto_rebuild("7"), False)
+            trigger.assert_not_called()
+
+    def test_fresh_context_triggers_nothing(self):
+        fresh = {"fresh": True, "recommendation": "use_context", "score": 0.9}
+        with patch("services.postgresql_retirement_runtime.requested", return_value=True),              patch.object(engine, "check_freshness", return_value=fresh),              patch.object(engine, "_trigger_background_rebuild") as trigger:
+            self.assertIsNone(engine.maybe_auto_rebuild("7", "owner@example.test", "Admin"))
+            trigger.assert_not_called()
+
+    def test_sweep_enumerates_kaveondb_artifacts_not_the_retired_table(self):
+        stale = {"fresh": False, "recommendation": "rebuild", "score": 0.2}
+        with patch("services.postgresql_retirement_runtime.requested", return_value=True),              patch.object(engine, "_serving_artifacts",
+                          return_value=[{"dataset_id": "7"}, {"dataset_id": "9"}]),              patch.object(engine, "check_freshness", return_value=stale),              patch.object(engine, "_trigger_background_rebuild", return_value=True),              patch.object(engine.meta, "query") as postgres:
+            result = engine.freshness_sweep("admin@example.test", "Admin")
+            postgres.assert_not_called()
+        self.assertEqual((result["checked"], result["stale"], result["triggered"]), (2, 2, 2))
+
+    def test_unattended_sweep_says_so_rather_than_reporting_a_clean_run(self):
+        with patch("services.postgresql_retirement_runtime.requested", return_value=True):
+            result = engine.freshness_sweep()
+        self.assertEqual(result["checked"], 0)
+        self.assertIn("identity", result["skipped"])
+
+
 if __name__ == "__main__":
     unittest.main()
