@@ -10,3 +10,7 @@ A qualification-only final-merge compaction pass reduced the number of spill run
 ## 2026-10-08 — exchange chunk-buffer split (rejected)
 
 Replacing front-drain chunking with ownership-preserving `Vec::split_off` passed all 22 exchange tests and preserved both controls, but did not improve the pair: q33 `19.738 s`, q35 `13.696 s`. The change was reverted; Arrow state encoding/decoding and final aggregation remain the measured bottleneck.
+
+## 2026-10-08 — exchange fan-out eight (rejected)
+
+Increasing exchange partitions from four to eight reduced per-task input but did not improve the pair: q33 `20.031 s`, q35 `13.823 s`, with exact results. The four-partition default remains the qualified setting.
