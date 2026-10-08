@@ -332,3 +332,16 @@ ignored**). q35 returned the exact ten rows but measured **15.03 s** on the
 first clean run, versus the qualified **14–15 s** range, with no reproducible
 gain. The path was removed; the general columnar aggregate remains the release
 implementation until a profile identifies a larger source of CPU time.
+
+## 2026-10-08 rejected compact single-text exchange frame
+
+The one-text-key aggregate exchange frame was shortened from the general KP2
+header to a KP3 frame whose key count and type are implicit. The frame kept
+the complete UTF-8 payload and exact equality semantics, and the execution
+suite remained green (**199 passed, 4 ignored**). On the rebuilt two-worker
+Docker profile, q35 returned the exact ten rows in **14.729 s** and **15.740
+s**, compared with the qualified **14.07–15.44 s** range. q33 completed in
+**19.214 s**, within the qualified **19.79–20.99 s** range but without a
+reproducible improvement. The source change was removed. Exchange framing is
+therefore not the current ClickBench bottleneck; profiling should stay focused
+on Parquet-to-Arrow decode and high-cardinality string aggregation.
