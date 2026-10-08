@@ -198,3 +198,16 @@ runs. q33 returned exact counts and values in **37.2 s** on its first run and
 **25.7 s** on its second run, with no memory failures. The q35 improvement is
 repeatable against the prior ~30 s baseline, but ClickHouse remains about
 **7.2 s** on q35 and **4.9 s** on q33; this is not parity.
+
+## 2026-10-08 rejected storage and arena experiments
+
+Two controlled changes were reverted because they failed the performance gate.
+A query-local open-addressed replacement for the text arena's general-purpose
+hash table preserved exact results and passed the execution suite, but q35 was
+**26.6–27.0 s** and q33 regressed to **36.9–50.1 s**. Increasing the local
+Parquet batch from 65,536 to 131,072 rows measured q35 at **27.55–28.03 s**.
+Finally, forcing Arrow to preserve Parquet UTF-8 dictionary arrays measured
+q35 at **34.7 s**. The qualified runtime is therefore unchanged: plain UTF-8
+materialization, 65,536-row batches, guarded text exchange partitioning, and
+SSE4.2 text hashing. These experiments narrow the next work to a profiled
+decoder/aggregation design rather than another hash-table or batch-size tweak.
