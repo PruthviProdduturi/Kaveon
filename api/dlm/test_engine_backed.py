@@ -420,5 +420,33 @@ class WarehouseEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["reproduce"]["sql"], evidence["sql"])
 
 
+class EngineColumnTypesWinTests(unittest.TestCase):
+    """A dataset's record of a column's type drifts; the Engine's does not.
+
+    `kaveon_events_enriched.event_date` lands in the lake as text, while the
+    dataset — modelled when the same column was a warehouse DATE — still said
+    `date`. The dialect then assembled `event_date >= DATE '2026-08-01'`, and
+    the Engine refused it: "predicate value type does not match column
+    'event_date' (Utf8)". The question failed outright rather than answering.
+    """
+
+    def test_a_date_window_over_a_text_column_is_not_a_date_literal(self):
+        from dlm import engine_dialect
+        columns = [{"column_name": "event_date", "data_type": "varchar"}]
+        predicate = engine_dialect.ENGINE.window_predicate(
+            "event_date", "2026-08-01", "2026-08-02", columns)
+        self.assertNotIn("DATE '", predicate)
+        self.assertEqual(
+            predicate,
+            "event_date >= '2026-08-01' AND event_date < '2026-08-02'")
+
+    def test_a_real_date_column_still_takes_date_literals(self):
+        from dlm import engine_dialect
+        columns = [{"column_name": "order_date", "data_type": "date"}]
+        predicate = engine_dialect.ENGINE.window_predicate(
+            "order_date", "2026-08-01", None, columns)
+        self.assertEqual(predicate, "order_date >= DATE '2026-08-01'")
+
+
 if __name__ == "__main__":
     unittest.main()
