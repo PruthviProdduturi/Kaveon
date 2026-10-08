@@ -515,3 +515,11 @@ exact at **19.166 s** and q35 at **13.434 s**, with no improvement over the
 retained defaults. A **4 MiB** probe made q33 worse at **21.298 s**. The
 opt-in probe and its compose setting were removed; the normal memory-sized
 first round remains the release behavior.
+
+
+A four-worker Docker scale-out was tested against the two-worker baseline on
+the same host and data. Both queries remained exact, but q33 measured
+**20.372 s** and q35 **14.516 s**, versus approximately **19.1 s** and
+**12.7 s** with two workers. The extra workers increase exchange and storage
+contention on this host rather than improving throughput, so they were
+removed and the two-worker baseline restored.
