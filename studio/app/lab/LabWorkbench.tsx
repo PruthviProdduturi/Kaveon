@@ -2220,65 +2220,54 @@ return;
           {/* Sidebar */}
           {!embedded && (
           <aside className="sidebar" style={{ width: sidebarWidth, minWidth: 240, maxWidth: 600 }}>
+            {/* The catalog picker is the header: it names what the Lab is
+                reading and is how that is changed, so the panel does not need
+                a heading repeating the product's own name above it. The count
+                and the resync belong to the selection, so they sit with it. */}
             <div className="sidebar-header">
-              {/* The engine names itself first; what it is pointed at, and how
-                  much is there, is the line beneath. */}
-              <div className="sidebar-header-main-row">
-                <h3>
-                  {usingEngine
-                    ? <KaveonMark size={15} className="sidebar-brand-mark" />
-                    : <i className="fas fa-table" />}
-                  {usingEngine ? "KaveonDB" : "Database Tables"}
-                </h3>
-                <button
-                  type="button"
-                  className="sidebar-sync-btn"
-                  title="Sync schema from source"
-                  onClick={() => {
-                    setResultError(null);
-                    setSelectedTableId(null);
-                    setTableColumns({});
-                    setExpandedTables({});
-                    setExpandedSchemas({});
-                    setTableSearch("");
-
-                    const run = async () => {
-                      try {
-                        setIsLoadingTables(true);
-                        if (usingEngine && currentEngineSourceId) await loadEngineSchemas(currentEngineSourceId);
-                        else await loadTables(true);
-                      } finally {
-                        setIsLoadingTables(false);
-                      }
-                    };
-
-                    void run();
-                  }}
-                  disabled={isLoadingTables || !currentDatabase}
-                >
-                  <i className={isLoadingTables ? "fas fa-sync-alt fa-spin" : "fas fa-sync-alt"} />
-                </button>
-              </div>
-              <div className="connection-status">
-                <i
-                  className={
-                    "fas fa-circle " +
-                    (currentDataSource || currentEngineSource ? "status-connected" : "status-disconnected")
-                  }
-                />
-                <span className="connection-text">
-                  {currentEngineSource
-                    ? currentEngineSource.catalog
-                    : currentDataSource
-                    ? `Connected to ${currentDataSource.name}`
-                    : "Select Data Source"}
-                </span>
-                {(currentEngineSource || currentDataSource) && (
-                  <span className="table-stats">
-                    {isLoadingTables ? "Loading tables…" : `${filteredTables.length} tables`}
-                  </span>
+              <CatalogPicker
+                options={engineSources.map((source) => ({
+                  id: source.id,
+                  catalog: source.catalog,
+                  schemas: source.id === currentEngineSourceId ? engineSchemas.length : null,
+                }))}
+                value={currentEngineSourceId}
+                disabled={isLoadingEngineSources || isLoadingTables}
+                meta={isLoadingTables ? "Loading…" : `${filteredTables.length} tables`}
+                onSelect={async (id) => {
+                  setCurrentEngineSourceId(id);
+                  lastEngineSourceIdRef.current = id;
+                  try { await loadEngineSchemas(id); } catch (error) { setLoadError(error instanceof Error ? error.message : "Failed to load Engine catalog"); }
+                }}
+                action={(
+                  <button
+                    type="button"
+                    className="sidebar-sync-btn"
+                    title="Resync this catalog's schemas and tables"
+                    aria-label="Resync this catalog"
+                    onClick={() => {
+                      setResultError(null);
+                      setSelectedTableId(null);
+                      setTableColumns({});
+                      setExpandedTables({});
+                      setExpandedSchemas({});
+                      setTableSearch("");
+                      const run = async () => {
+                        try {
+                          setIsLoadingTables(true);
+                          if (usingEngine && currentEngineSourceId) await loadEngineSchemas(currentEngineSourceId);
+                          else await loadTables(true);
+                        } finally {
+                          setIsLoadingTables(false);
+                        }
+                      };
+                      void run();
+                    }}
+                  >
+                    <i className={isLoadingTables ? "fas fa-sync-alt fa-spin" : "fas fa-sync-alt"} />
+                  </button>
                 )}
-              </div>
+              />
             </div>
 
             <div className="sidebar-controls">
@@ -2330,25 +2319,6 @@ return;
                   {engineSources.length > 0 && <option value="kaveon">KaveonDB</option>}
                 </select>
               </div>
-              )}
-
-              {usingEngine && (
-                <>
-                  <CatalogPicker
-                    options={engineSources.map((source) => ({
-                      id: source.id,
-                      catalog: source.catalog,
-                      schemas: source.id === currentEngineSourceId ? engineSchemas.length : null,
-                    }))}
-                    value={currentEngineSourceId}
-                    disabled={isLoadingEngineSources || isLoadingTables}
-                    onSelect={async (id) => {
-                      setCurrentEngineSourceId(id);
-                      lastEngineSourceIdRef.current = id;
-                      try { await loadEngineSchemas(id); } catch (error) { setLoadError(error instanceof Error ? error.message : "Failed to load Engine catalog"); }
-                    }}
-                  />
-                </>
               )}
 
               <div className="sidebar-search-wrap">

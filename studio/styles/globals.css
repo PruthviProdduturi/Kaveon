@@ -5840,3 +5840,47 @@ main.main-wide {
   padding: 0 clamp(1.5rem, 18%, 9rem);
 }
 .query-progress--centered .query-progress__track { width: 100%; flex: 0 0 auto; }
+
+/* The picker is the panel's header, so its label line carries the count and
+   its control line carries the resync. */
+.catalog-picker__labelrow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+.catalog-picker__labelrow .catalog-picker__label { margin-bottom: 0; }
+.catalog-picker__meta {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.catalog-picker__row { display: flex; align-items: stretch; gap: 0.4rem; }
+.catalog-picker__row .catalog-picker__control { flex: 1; min-width: 0; }
+
+/* Beside the catalog control, so it squares with it rather than floating at
+   whatever size the old header row gave it. */
+.catalog-picker__row .sidebar-sync-btn {
+  flex: 0 0 auto;
+  width: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+.catalog-picker__row .sidebar-sync-btn:hover {
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: var(--bg-elevated);
+}
+.catalog-picker__row .sidebar-sync-btn:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
