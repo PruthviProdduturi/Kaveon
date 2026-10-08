@@ -783,3 +783,10 @@ Reducing `KAVEON_LOCAL_PARALLELISM` from the qualified eight lanes to one was
 tested to avoid duplicate final-stage readers. It remained exact but regressed
 both controls: q33 **22.69 s** and q35 **25.30 s**. The default eight-lane
 configuration is restored.
+
+## 2026-10-08 — larger exchange spool read window (rejected)
+
+The Arrow IPC spool reader was tested with a 1 MiB `BufReader` window instead of
+8 KiB. Transport tests passed and both controls stayed exact, but q33 measured
+**20.10 s** and q35 **13.85 s**, versus the qualified approximately 19.1 s and
+13.6 s. The change was reverted; the standard reader remains selected.
