@@ -723,3 +723,18 @@ payload without the generic state cursor. The full execution suite remained
 green, but q33 measured **19.782 s**, with no reproducible gain over the clean
 control. The branch was reverted; all other aggregate layouts remain on the
 generic checked merge path.
+
+## 2026-10-08 — paired runtime controls retained
+
+Fresh controls on the clean two-worker image confirm the current bottleneck
+is the high-cardinality exchange and spill path. Raising scan partitions per
+worker from 4 to 8 measured q33 **21.42 s** and was reverted. Raising the
+per-query budget to 2 GiB reduced spill volume but measured q33 **19.24 s** and
+q35 **15.17 s**, so it was reverted. Four local merge lanes measured q33
+**19.42 s** and q35 **14.14 s**; the paired regression kept the default at
+eight. Spill fan-out 8 measured q33 **19.73 s** and q35 **13.90 s** versus
+fan-out 16, and was reverted. Requalifying `KAVEON_USE_UTF8_VIEW=1` measured
+q33 **19.39 s** and q35 **13.75 s**, so the normal reader remains selected.
+All runs returned the exact ten rows without execution errors. These controls
+change no shipped defaults; they narrow the next implementation target to
+reducing encoded high-cardinality exchange state and external spill work.
