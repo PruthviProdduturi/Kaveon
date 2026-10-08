@@ -452,3 +452,12 @@ measured on q33. It completed correctly but regressed to **20.740 s** versus
 **19.087 s** at the qualified 512 MiB setting, so the default was restored.
 The current gap is therefore exchange/spill execution work, not a memory-limit
 setting that can be changed without a controlled end-to-end benefit.
+
+
+## 2026-10-08 rejected 16,384-row Parquet batches
+
+The ADLS/Parquet reader batch size was raised from **8,192** to **16,384**
+rows to reduce exchange batch count. Both queries remained exact and completed,
+but q33 regressed to **19.726 s** (qualified 8,192-row result: **19.087 s**)
+and q35 measured **13.393 s** (qualified: **12.666 s**). The larger batches
+were removed and the 8,192-row default restored.
