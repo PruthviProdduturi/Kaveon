@@ -237,3 +237,10 @@ ambiguity from the comparison: Kaveon's qualified bind-mount runs remain
 about **27–30 s** for q35 and **24–37 s** for q33. Both controls returned
 the expected result shape in non-Null validation runs; Kaveon remains behind
 ClickHouse and the ClickBench goal is still open.
+## 2026-10-08 rejected lane-width increase
+
+Doubling each local worker from eight to sixteen lanes was tested on the same
+two-worker stack. Two uncached repetitions measured q35 at **27.45 s** and
+**28.84 s**, and q33 at **23.81 s** and **24.57 s**. The q33 change is within
+run variance and q35 regressed; the qualified default is restored to eight
+lanes. No configuration change is retained from this experiment.
