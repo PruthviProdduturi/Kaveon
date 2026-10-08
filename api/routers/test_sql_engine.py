@@ -40,8 +40,11 @@ class EngineChartSqlTests(unittest.TestCase):
                                         cancel_token=None)
         self.assertEqual(result, {
             "columns": ["city", "trips"], "rows": [["Manhattan", 42]],
-            "query_id": "query-1", "duration_ms": 12,
+            "query_id": "query-1", "duration_ms": 12, "approx": False,
         })
+        # A statement with no distinct count runs under the Engine's own
+        # defaults; no settings object is sent for it at all.
+        self.assertNotIn("settings", execute.call_args.kwargs)
 
     def test_missing_or_inactive_catalog_does_not_reach_engine(self):
         body = SqlExecuteBody(sql_text="SELECT 1", database="untrusted", dataset_id=7, source="chart-builder")
@@ -470,7 +473,7 @@ class EngineCubeRewriteRoutingTests(unittest.TestCase):
             self.result([["Asia", 2], ["Europe", 3], ["Oceania", 1]]))
         self.assertEqual(answer, {
             "columns": ["region", "A"], "rows": [["Europe", 3], ["Asia", 2]],
-            "query_id": "query-1", "duration_ms": 150,
+            "query_id": "query-1", "duration_ms": 150, "approx": False,
         })
 
     def test_the_route_never_leaks_the_substituted_sum_and_count(self):
@@ -481,8 +484,115 @@ class EngineCubeRewriteRoutingTests(unittest.TestCase):
         self.assertEqual(answer, {
             "columns": ["surface", "Avg Latency (ms)"],
             "rows": [["Chat", 3.0], ["API", 2.5]],
-            "query_id": "query-1", "duration_ms": 150,
+            "query_id": "query-1", "duration_ms": 150, "approx": False,
         })
+
+
+class EngineApproximateDistinctTests(unittest.TestCase):
+    """A chart's distinct count is answered from the cube's sketches, and the
+    response says so."""
+
+    CTX = UserContext("analyst@example.com", "Analyst")
+    DISTINCT_SQL = ('SELECT region, COUNT(DISTINCT user_id) AS "Users" '
+                    "FROM public.events GROUP BY region "
+                    'ORDER BY "Users" DESC NULLS LAST LIMIT 12')
+    DISTINCT_REWRITTEN = ('SELECT region, COUNT(DISTINCT user_id) AS "Users" '
+                          "FROM public.events GROUP BY region")
+    EXACT_SQL = ('SELECT region, SUM(actions) AS "Actions" FROM public.events '
+                 'GROUP BY region ORDER BY "Actions" DESC LIMIT 12')
+
+    def setUp(self):
+        sql._ENGINE_CUBE_DECLINED.clear()
+
+    tearDown = setUp
+
+    @staticmethod
+    def result(rows, approximate=None):
+        details = {"execution": {"mode": "context"}}
+        if approximate is not None:
+            details["execution"]["approximate"] = approximate
+        return {"id": "query-1", "elapsed_ms": 195, "query_details": details,
+                "columns": [{"name": "region"}, {"name": "Users"}], "data": rows}
+
+    def run_chart(self, sql_text, result):
+        with patch.object(sql, "_execute_engine_read_only",
+                          return_value=result) as execute:
+            sql._execute_engine_chart_statement(
+                sql_text, "OpenSource", self.CTX, "public", None)
+        return execute
+
+    def test_a_distinct_count_is_run_under_the_approximate_setting(self):
+        execute = self.run_chart(
+            self.DISTINCT_SQL, self.result([["Europe", 783627]]))
+        self.assertEqual(execute.call_args.args[0], self.DISTINCT_REWRITTEN)
+        self.assertEqual(execute.call_args.kwargs["settings"], {"approximate": True})
+
+    def test_a_statement_with_no_distinct_count_sends_no_settings(self):
+        execute = self.run_chart(self.EXACT_SQL, self.result([["Europe", 3]]))
+        self.assertNotIn("settings", execute.call_args.kwargs)
+
+    def test_the_fallback_runs_under_the_same_setting_as_the_rewrite(self):
+        # Otherwise one chart would report one estimate when the rewrite
+        # answers and a different one when it does not.
+        wide = self.result([[str(at), at] for at in range(sql.ENGINE_CUBE_ROW_CAP + 1)])
+        with patch.object(sql, "_execute_engine_read_only",
+                          side_effect=[wide, self.result([["Europe", 1]])]) as execute:
+            sql._execute_engine_chart_statement(
+                self.DISTINCT_SQL, "OpenSource", self.CTX, "public", None)
+        self.assertEqual(execute.call_count, 2)
+        self.assertEqual(execute.call_args_list[1].args[0], self.DISTINCT_SQL)
+        for call in execute.call_args_list:
+            self.assertEqual(call.kwargs["settings"], {"approximate": True})
+
+    def test_a_decline_of_the_exact_statement_does_not_suppress_the_approximate_one(self):
+        exact = sql._engine_cube_key("OpenSource", self.DISTINCT_REWRITTEN, None)
+        approximate = sql._engine_cube_key(
+            "OpenSource", self.DISTINCT_REWRITTEN, {"approximate": True})
+        self.assertNotEqual(exact, approximate)
+        sql._decline_engine_cube(exact)
+        execute = self.run_chart(
+            self.DISTINCT_SQL, self.result([["Europe", 783627]]))
+        self.assertEqual(execute.call_count, 1)
+        self.assertEqual(execute.call_args.args[0], self.DISTINCT_REWRITTEN)
+        self.assertEqual(execute.call_args.kwargs["timeout"],
+                         sql.ENGINE_CUBE_PROBE_SECONDS)
+
+    def test_the_engine_s_own_report_of_what_it_estimated_reaches_the_response(self):
+        notes = [{"function": "COUNT", "argument": "user_id",
+                  "sketch": "hyperloglog p=11", "error": 0.0325,
+                  "error_kind": "relative_standard_error"}]
+        answer = self.route(self.DISTINCT_SQL, self.result([["Europe", 783627]], notes))
+        self.assertTrue(answer["approx"])
+        self.assertEqual(answer["rows"], [["Europe", 783627]])
+
+    def test_an_exact_answer_is_not_labelled_an_estimate(self):
+        answer = self.route(self.EXACT_SQL, self.result([["Europe", 3]]))
+        self.assertFalse(answer["approx"])
+        answer = self.route(self.DISTINCT_SQL, self.result([["Europe", 3]], []))
+        self.assertFalse(answer["approx"])
+
+    def test_the_cached_answer_carries_the_same_label(self):
+        notes = [{"function": "COUNT", "argument": "user_id"}]
+        first = self.route(self.DISTINCT_SQL,
+                           self.result([["Europe", 783627]], notes), cache=True)
+        self.assertTrue(first["approx"])
+        self.assertFalse(first.get("from_cache"))
+        second = self.route(self.DISTINCT_SQL,
+                            self.result([["Europe", 783627]], notes), cache=True)
+        self.assertTrue(second["from_cache"])
+        self.assertTrue(second["approx"], "a refresh must not drop the estimate label")
+
+    def route(self, sql_text, result, cache=False):
+        body = SqlExecuteBody(sql_text=sql_text, database="OpenSource", dataset_id=7,
+                              source="dashboard-chart", use_cache=cache)
+        dataset = {"database_name": "OpenSource", "schema_name": "public"}
+        with patch.object(sql, "_engine_source_for_catalog",
+                          return_value={"engine_catalog": "OpenSource"}), \
+             patch.object(sql.datasets_svc, "get_dataset_by_id", return_value=dataset), \
+             patch.object(sql, "_execute_engine_read_only", return_value=result), \
+             patch.object(sql.history_svc, "create_history"), \
+             patch.object(sql.sql_execute_limiter, "check"):
+            return sql.execute_engine_sql(body, Response(), self.CTX)
 
 
 if __name__ == "__main__":

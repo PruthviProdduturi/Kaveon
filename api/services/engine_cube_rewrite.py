@@ -56,6 +56,15 @@ refused.  And an ``AVG`` projection must carry an explicit alias, because the
 Engine names an unaliased projection positionally (``expr_1``) and that is a
 convention rather than a contract -- a statement that would depend on
 reproducing it is refused instead.
+
+``counts_distinct`` is the module's other entry point, and it rewrites
+nothing.  A distinct count is the one aggregate the cube can only answer from
+its cell sketches, which the Engine does under a per-request setting rather
+than under a different statement, so the caller needs to know whether the
+statement asks for one.  The answer comes off the same lexer as everything
+else here, so ``COUNT`` and ``DISTINCT`` inside a string literal, or a column
+named ``count_distinct_users``, are read as what they are and not as a
+distinct count.
 """
 
 from dataclasses import dataclass
@@ -134,6 +143,28 @@ def plan(sql: str) -> EngineCubeRewrite | None:
         return _plan(sql or "")
     except _Refused:
         return None
+
+
+def counts_distinct(sql: str) -> bool:
+    """Whether *sql* asks for a ``COUNT(DISTINCT ...)``.
+
+    The caller uses this to decide whether to let the Engine answer the
+    statement from its sketches.  It is read off the statement's tokens, so a
+    literal (``WHERE note = 'count(distinct x)'``), a quoted identifier and an
+    identifier that merely contains the words (``count_distinct_users``) are
+    all correctly not distinct counts.  A statement this module cannot lex at
+    all -- one carrying a comment, say -- answers False: an exact answer is
+    never the wrong answer, only the slower one.
+    """
+    try:
+        tokens = _scan(sql or "")
+    except _Refused:
+        return False
+    return any(_word(token) == "count"
+               and at + 2 < len(tokens)
+               and _punct(tokens[at + 1], "(")
+               and _word(tokens[at + 2]) == "distinct"
+               for at, token in enumerate(tokens))
 
 
 def finish_rows(columns: list, rows: list,
