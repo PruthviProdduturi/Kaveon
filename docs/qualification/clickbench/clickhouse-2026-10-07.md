@@ -506,3 +506,12 @@ error at about **12.8 s**, with no improvement over the retained **12.666 s**
 run. The environment override was removed and the default of 8 restored.
 Lowering local parallelism therefore increases contention/serialization on
 this workload and is not selected.
+
+
+An adaptive-partial probe was also tested. It capped only the first grouped
+partial round at **16 MiB**, allowing the high-cardinality q33 shape to switch
+to pass-through earlier without changing final merge semantics. q33 remained
+exact at **19.166 s** and q35 at **13.434 s**, with no improvement over the
+retained defaults. A **4 MiB** probe made q33 worse at **21.298 s**. The
+opt-in probe and its compose setting were removed; the normal memory-sized
+first round remains the release behavior.
