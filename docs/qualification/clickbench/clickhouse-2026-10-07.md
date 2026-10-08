@@ -678,3 +678,12 @@ q33 runs measured **20.790 s** and **21.162 s**, and q35 measured **13.822 s**
 and **14.096 s**. That did not beat the clean **19.0–20.2 s / 12.8–13.5 s**
 controls, so the specialization was reverted and the portable generic decoder
 remains the release path.
+
+## 2026-10-08 — spill fan-out 32 (rejected)
+
+Doubling `KAVEON_HASH_SPILL_PARTITIONS` from 16 to 32 was tested on the clean
+two-worker image. q33 failed closed during the partial stage because the
+additional fan-out could not reserve its bounded working set under the 512 MiB
+query limit (**21,388,906 bytes requested with 529,264,241 already reserved**).
+The default of 16 partitions was restored; no result or correctness claim is
+made for this configuration.
