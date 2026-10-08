@@ -211,3 +211,19 @@ q35 at **34.7 s**. The qualified runtime is therefore unchanged: plain UTF-8
 materialization, 65,536-row batches, guarded text exchange partitioning, and
 SSE4.2 text hashing. These experiments narrow the next work to a profiled
 decoder/aggregation design rather than another hash-table or batch-size tweak.
+
+## 2026-10-08 storage-path control
+
+The same 13.8 GiB ClickBench file was copied into a disposable Linux-side
+Docker volume to separate Windows bind-mount overhead from Engine work. With
+the qualified plain UTF-8 reader, q35 measured **21.88–22.35 s** on that
+volume, versus about **26.6–27.0 s** on the Windows bind mount; q33 remained
+variable (**36.6–49.3 s**) and exact. ClickHouse's reference numbers were
+captured against its native host path, so the volume result is not a parity
+claim until both engines use the same storage location.
+
+An exact dictionary-code slot-reuse fast path passed the execution suite, but
+preserving dictionaries on the bind mount measured q35 at **28.86 s** and was
+reverted. The qualified default remains the plain reader and Windows bind
+mount; the storage control identifies filesystem sharing as a measurable
+benchmark confounder rather than an Engine optimization.
