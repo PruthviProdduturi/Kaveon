@@ -512,6 +512,7 @@ pub struct ParallelPartials {
 }
 
 /// How rows reach the threads.
+#[derive(Clone)]
 enum Dispatch {
     /// Rows go to the thread their key hashes to, so the threads hold
     /// disjoint keys; unkeyed, slices round-robin. Keys that are all
@@ -528,6 +529,10 @@ enum Dispatch {
     /// hashed or copied on the way, and sources read on their own threads
     /// feed the threads straight.
     Broadcast,
+    /// Every source-thread batch is partitioned once by an encoded key before
+    /// it enters the merge workers. This is used only where the encoded key
+    /// hash is cheaper than broadcasting a wide text-key partial batch.
+    BroadcastPartitioned { keys: Vec<String> },
 }
 
 impl ParallelPartials {
@@ -679,6 +684,31 @@ impl ParallelPartials {
         )
     }
 
+    /// Like `broadcast`, but partition source-thread batches once by `keys`.
+    /// The final aggregate uses this only for text-key partials; integer-key
+    /// partials stay on the broadcast path because their merge is cheaper
+    /// than repartitioning.
+    pub fn broadcast_partitioned(
+        sources: Sources,
+        schema: SchemaRef,
+        keys: Vec<String>,
+        operator: ThreadOperator,
+        pool: QueryMemoryPool,
+        workers: usize,
+    ) -> Result<Self> {
+        if keys.is_empty() {
+            return Err(error("partitioned broadcast needs at least one key"));
+        }
+        Self::over(
+            sources,
+            schema,
+            Dispatch::BroadcastPartitioned { keys },
+            operator,
+            pool,
+            workers,
+        )
+    }
+
     fn over(
         sources: Sources,
         schema: SchemaRef,
@@ -813,7 +843,7 @@ impl ParallelPartials {
                     )?)
                 }
             }
-            Dispatch::Broadcast => None,
+            Dispatch::Broadcast | Dispatch::BroadcastPartitioned { .. } => None,
         };
         // Sources of their own threads: each reads its source and hands
         // every batch to every thread; the threads see the end of input
@@ -821,7 +851,9 @@ impl ParallelPartials {
         // holds a sender, so the calling thread's go now.
         let openers = std::mem::take(&mut self.openers);
         let pumps = openers.len();
+        let dispatch = self.dispatch.clone();
         for (index, opener) in openers.into_iter().enumerate() {
+            let dispatch = dispatch.clone();
             let senders = senders.clone();
             let schema = Arc::clone(&self.source_schema);
             let queue = Arc::clone(&queue);
@@ -834,9 +866,27 @@ impl ParallelPartials {
                     .name(format!("kaveon-parallel-source-{index}"))
                     .spawn(move || {
                         let result = catch_worker_failure(|| {
+                            let source_partitioner = match &dispatch {
+                                Dispatch::BroadcastPartitioned { keys } => {
+                                    Some(HashPartitioner::try_new_salted(
+                                        &schema,
+                                        keys,
+                                        senders.len(),
+                                        crate::exchange::THREAD_PARTITION_SALT,
+                                    )?)
+                                }
+                                _ => None,
+                            };
                             run_pump(
-                                opener, &schema, &senders, &queue, pumps, &pool, &stopped,
+                                opener,
+                                &schema,
+                                &senders,
+                                &queue,
+                                pumps,
+                                &pool,
+                                &stopped,
                                 &pressure,
+                                source_partitioner.as_ref(),
                             )
                         });
                         drop(senders);
@@ -897,6 +947,9 @@ impl ParallelPartials {
                             },
                         ));
                     }
+                }
+                (Dispatch::BroadcastPartitioned { .. }, _) => {
+                    return Err(error("partitioned source dispatch reached local source"));
                 }
                 (Dispatch::Keyed { .. }, Some(partitioner)) => {
                     for (worker, part) in partitioner.partition(&batch)?.into_iter().enumerate() {
@@ -1155,6 +1208,7 @@ fn run_pump(
     pool: &QueryMemoryPool,
     stopped: &AtomicBool,
     pressure: &Pressure,
+    partitioner: Option<&HashPartitioner>,
 ) -> Result<()> {
     let mut source = opener()?;
     if source.schema() != schema {
@@ -1200,16 +1254,33 @@ fn run_pump(
                 }
             }
         };
-        for sender in senders {
-            send_bounded(
-                sender,
-                QueuedBatch {
-                    batch: batch.clone(),
-                    _memory: held.clone(),
-                },
-                stopped,
-                pool,
-            )?;
+        if let Some(partitioner) = partitioner {
+            for (worker, part) in partitioner.partition(&batch)?.into_iter().enumerate() {
+                if part.num_rows() == 0 {
+                    continue;
+                }
+                send_bounded(
+                    &senders[worker],
+                    QueuedBatch {
+                        batch: part,
+                        _memory: held.clone(),
+                    },
+                    stopped,
+                    pool,
+                )?;
+            }
+        } else {
+            for sender in senders {
+                send_bounded(
+                    sender,
+                    QueuedBatch {
+                        batch: batch.clone(),
+                        _memory: held.clone(),
+                    },
+                    stopped,
+                    pool,
+                )?;
+            }
         }
     }
 }

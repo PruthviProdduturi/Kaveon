@@ -166,3 +166,20 @@ uncached runs returned the exact ten-row results and measured q35 at **30.2 s**
 and q33 at **24.4 s**. This is a configuration improvement, but it remains
 far from ClickHouse's **7.2 s** q35 and **4.9 s** q33 results; no parity claim
 is made.
+
+## 2026-10-08 text-key source partitioning guard
+
+Final aggregate partials with text keys and no unsigned identifier keys may now
+partition each exchange source batch once before merge workers consume it. This
+avoids broadcasting the same encoded text keys to every worker. Mixed keys that
+include unsigned identifiers remain on the established broadcast path because
+near-unique identifiers can exhaust the normal 512 MiB query budget when
+repartitioned.
+
+The execution suite passed (**199 passed, 4 ignored**). On the rebuilt
+8-lane, 512 MiB, two-worker Docker stack, q35 returned the exact ten rows in
+**28.4 s** and **31.3 s** across two uncached runs; q33 returned exact results
+in **25.7 s** and **25.6 s** without memory failures. These measurements are
+within normal run variance and do not establish ClickHouse parity (reference
+q35 ~7.2 s, q33 ~4.9 s). The change is retained as a guarded optimization,
+with q33 explicitly protected from the failed mixed-key path.
