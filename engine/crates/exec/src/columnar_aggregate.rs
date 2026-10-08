@@ -14,7 +14,7 @@ use std::sync::Arc;
 use ahash::RandomState;
 use arrow::array::{
     Array, ArrayRef, AsArray, BinaryArray, BinaryBuilder, BooleanArray, Float64Array, Int32Array,
-    Int32DictionaryArray, Int64Array, StringArray, UInt64Array,
+    Int32DictionaryArray, Int64Array, StringArray, StringViewArray, UInt64Array,
 };
 use arrow::datatypes::{DataType, Date32Type, Float64Type, Int32Type, Int64Type};
 use hashbrown::HashTable;
@@ -785,6 +785,7 @@ pub fn supports_key(data_type: &DataType) -> bool {
             | DataType::Boolean
             | DataType::Utf8
             | DataType::LargeUtf8
+            | DataType::Utf8View
     ) || matches!(data_type, DataType::Dictionary(key, values)
         if key.as_ref() == &DataType::Int32 && matches!(values.as_ref(), DataType::Utf8 | DataType::LargeUtf8))
 }
@@ -811,7 +812,7 @@ pub fn supports_aggregate(
                 | AggregateState::IntegerMax(_)
                 | AggregateState::Count(_)
         ),
-        Some(DataType::Utf8 | DataType::LargeUtf8) => {
+        Some(DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) => {
             matches!(aggregate.func, AggFunc::Min | AggFunc::Max | AggFunc::Count)
         }
         Some(DataType::Dictionary(key, values)) => {
@@ -901,6 +902,21 @@ fn key_words(
                         } else {
                             write(row, Some(intern(values.value(row))?));
                         }
+                    }
+                }
+                *new_bytes += arena.bytes().saturating_sub(before);
+            }
+            DataType::Utf8View => {
+                let before = arena.bytes();
+                let values = array
+                    .as_any()
+                    .downcast_ref::<StringViewArray>()
+                    .ok_or_else(|| exec_err("UTF-8 view key array has an invalid type"))?;
+                for row in 0..rows {
+                    if values.is_null(row) {
+                        write(row, None);
+                    } else {
+                        write(row, Some(arena.intern(hasher, values.value(row))?.0 as u64));
                     }
                 }
                 *new_bytes += arena.bytes().saturating_sub(before);
@@ -1392,6 +1408,12 @@ impl ColumnarGroups {
                     nulls: Vec::new(),
                     arena: Arena::new(),
                     large: true,
+                },
+                DataType::Utf8View => KeyColumn::Text {
+                    words: Vec::new(),
+                    nulls: Vec::new(),
+                    arena: Arena::new(),
+                    large: false,
                 },
                 DataType::Dictionary(_, values) if supports_key(data_type) => KeyColumn::Text {
                     words: Vec::new(),
@@ -2509,6 +2531,27 @@ mod tests {
         assert_eq!(states[0], AggregateState::Count(3));
         assert_eq!(states[1], AggregateState::IntegerSum { sum: 15, count: 3 });
         assert_eq!(states[3], AggregateState::Utf8Max(Some("z".into())));
+    }
+
+    #[test]
+    fn utf8_view_keys_fold_with_the_logical_utf8_result() {
+        let mut groups =
+            ColumnarGroups::new(&[DataType::Utf8View], &[AggregateState::Count(0)]).unwrap();
+        let values: ArrayRef = Arc::new(StringViewArray::from(vec![
+            Some("alpha"),
+            Some("alpha"),
+            None,
+            Some("beta"),
+        ]));
+        let (created, _) = groups.push_batch(&[values], &[None], 4).unwrap();
+        assert_eq!(created, 3);
+        assert_eq!(groups.len(), 3);
+        assert_eq!(groups.group(0).0, vec![GroupKey::Utf8(Arc::from("alpha"))]);
+        assert_eq!(groups.group(0).1, vec![AggregateState::Count(2)]);
+        assert_eq!(groups.group(1).0, vec![GroupKey::Null]);
+        assert_eq!(groups.group(1).1, vec![AggregateState::Count(1)]);
+        assert_eq!(groups.group(2).0, vec![GroupKey::Utf8(Arc::from("beta"))]);
+        assert_eq!(groups.key_arrays()[0].data_type(), &DataType::Utf8);
     }
 
     #[test]

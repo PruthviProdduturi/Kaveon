@@ -104,6 +104,7 @@ services:
       # Keep the aggregate merge fan-in bounded while scan tasks fan out.
       # Four destination partitions are enough for the two-worker benchmark.
       KAVEON_EXCHANGE_PARTITIONS: ${KAVEON_EXCHANGE_PARTITIONS:-4}
+      KAVEON_USE_UTF8_VIEW: ${KAVEON_USE_UTF8_VIEW:-}
     volumes:
       - ./engine/etc/coordinator.toml:/etc/kaveon/config.toml:ro
       - catalog-data:/var/lib/kaveon
@@ -146,6 +147,7 @@ services:
       KAVEON_LOCAL_PARALLELISM: ${KAVEON_LOCAL_PARALLELISM:-8}
       KAVEON_SCAN_PARTITIONS_PER_WORKER: ${KAVEON_SCAN_PARTITIONS_PER_WORKER:-4}
       KAVEON_EXCHANGE_PARTITIONS: ${KAVEON_EXCHANGE_PARTITIONS:-4}
+      KAVEON_USE_UTF8_VIEW: ${KAVEON_USE_UTF8_VIEW:-}
     volumes: &engine-worker-volumes
       - ./engine/etc/worker.toml:/etc/kaveon/config.toml:ro
       - type: bind

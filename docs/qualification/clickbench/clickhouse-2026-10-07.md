@@ -365,3 +365,15 @@ result regressed to **26.487 s** versus the qualified **14.07–15.44 s** range.
 The reader and compose switch were removed. Preserving the physical
 dictionary adds more decode overhead for this file than it saves in the
 aggregate, so the normal logical UTF-8 reader remains the release path.
+
+## 2026-10-08 UTF-8 view path retained for qualification
+
+Parquet-rs can decode flat UTF-8 columns as Arrow `Utf8View` arrays. Kaveon's
+scan and columnar aggregate paths now carry that representation without
+changing the logical result schema. With `KAVEON_USE_UTF8_VIEW=1` on the same
+two-worker Docker profile, q35 completed in **13.896 s** and **14.256 s**, q34
+in **13.938 s**, and q33 in **20.155 s**. q35 and q34 returned the exact
+qualified ten-row results; q33 returned ten rows with no error. The normal
+reader remains the default while this representation is qualified across the
+broader SQL suite; the measured gain is currently about 5% on the URL-heavy
+queries and does not close the ClickHouse gap by itself.

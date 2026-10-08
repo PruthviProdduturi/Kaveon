@@ -1,4 +1,4 @@
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchReader as ArrowRecordBatchReader};
 use kaveon_core::{BatchSource, CompareOp, KaveonError, Result, ScalarValue, StoragePredicate};
 use parquet::arrow::ProjectionMask;
@@ -501,13 +501,55 @@ impl ParquetReader {
         } else {
             metadata
         };
-        let arrow_metadata =
-            ArrowReaderMetadata::try_new(Arc::new(metadata), ArrowReaderOptions::new())
-                .map_err(parquet_error)?;
+        let options = if std::env::var_os("KAVEON_USE_UTF8_VIEW").is_some() {
+            Self::utf8_view_reader_options(&metadata)
+        } else {
+            ArrowReaderOptions::new()
+        };
+        let arrow_metadata = ArrowReaderMetadata::try_new(Arc::new(metadata), options)
+            .map_err(parquet_error)?;
         Ok(ParquetRecordBatchReaderBuilder::new_with_metadata(
             file,
             arrow_metadata,
         ))
+    }
+
+    /// Experimental ClickBench switch: ask parquet-rs for Arrow UTF-8 views
+    /// so decoded strings can refer to their backing buffers rather than being
+    /// copied into a fresh offsets/value array for each batch.
+    fn utf8_view_reader_options(metadata: &ParquetMetaData) -> ArrowReaderOptions {
+        let Ok(schema) = parquet::arrow::parquet_to_arrow_schema(
+            metadata.file_metadata().schema_descr(),
+            metadata.file_metadata().key_value_metadata(),
+        ) else {
+            return ArrowReaderOptions::new();
+        };
+        let fields: Vec<Field> = schema
+            .fields()
+            .iter()
+            .map(|field| {
+                if matches!(field.data_type(), DataType::Utf8) {
+                    Field::new(
+                        field.name(),
+                        DataType::Utf8View,
+                        field.is_nullable(),
+                    )
+                    .with_metadata(field.metadata().clone())
+                } else {
+                    field.as_ref().clone()
+                }
+            })
+            .collect();
+        if !fields
+            .iter()
+            .any(|field| field.data_type() == &DataType::Utf8View)
+        {
+            return ArrowReaderOptions::new();
+        }
+        ArrowReaderOptions::new().with_schema(Arc::new(Schema::new_with_metadata(
+            fields,
+            schema.metadata().clone(),
+        )))
     }
 
     fn configure_builder(
