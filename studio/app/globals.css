@@ -45,6 +45,38 @@
   --shadow-lg: 0 8px 24px rgba(0,0,0,0.5);
 }
 
+/* One shared navigation fallback. It stays out of the document flow so a
+   route transition never shifts the page or competes with query progress. */
+.global-loading {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 10000;
+  height: 3px;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.global-loading__track {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+.global-loading__pulse {
+  position: absolute;
+  inset: 0 auto 0 -35%;
+  width: 35%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, var(--accent), #8bc7f5, var(--accent), transparent);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 70%, transparent);
+  animation: global-loading-sweep 1.15s cubic-bezier(.4, 0, .2, 1) infinite;
+}
+@keyframes global-loading-sweep {
+  from { transform: translateX(0); }
+  to { transform: translateX(385%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .global-loading__pulse { animation-duration: 2.5s; }
+}
+
 /* ─── Scrollbar styling ─── */
 * {
   scrollbar-width: thin;
