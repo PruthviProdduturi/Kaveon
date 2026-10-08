@@ -647,3 +647,12 @@ runs measured **18.530 s**, **19.981 s**, and **20.693 s**; q35 measured
 **12.964 s**. The spread overlaps the clean **19.0–20.2 s / 12.8–13.5 s**
 controls and does not establish a reproducible gain, so the specialization was
 removed and the clean generic accumulator path restored.
+
+## 2026-10-08 — SSE4.2 packed-key hash (rejected)
+
+Packed numeric group keys were temporarily hashed with hardware CRC32C before
+the existing avalanche, using CRC only for bucket selection. The full suite
+passed (**200 passed, 4 ignored**). On the rebuilt two-worker profile, exact
+q35 measured **12.822 s** and q33 **19.333 s**, which is within the clean
+**12.8–13.5 s / 19.0–20.2 s** ranges and did not produce a reproducible gain.
+The CRC branch was reverted; the generic packed hash remains selected.
