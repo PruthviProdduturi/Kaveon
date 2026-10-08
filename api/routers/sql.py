@@ -190,15 +190,60 @@ def _cancel_tag(ctx: UserContext, cancel_token):
 def _execute_engine_read_only(sql_text: str, catalog: str, ctx: UserContext,
                               schema: str | None = None,
                               cancel_token: str | None = None,
-                              timeout: int | None = None) -> dict:
-    """Run a read-only statement within one catalog selected by the server."""
+                              timeout: int | None = None,
+                              settings: dict | None = None) -> dict:
+    """Run a read-only statement within one catalog selected by the server.
+
+    `settings` is the Engine's per-request settings object, forwarded only
+    when a caller chose one, so a caller that does not stays exactly as it was.
+    """
     from routers.lab import _engine_query
     from services.engine_bridge import execute
 
     scoped_sql = _engine_query(sql_text, catalog)
-    bound = {} if timeout is None else {"timeout": timeout}
+    chosen = {}
+    if timeout is not None:
+        chosen["timeout"] = timeout
+    if settings is not None:
+        chosen["settings"] = settings
     return execute(scoped_sql, catalog, ctx.email, ctx.role, schema,
-                   tag=_cancel_tag(ctx, cancel_token), **bound)
+                   tag=_cancel_tag(ctx, cancel_token), **chosen)
+
+
+def _engine_chart_settings(sql_text: str) -> dict | None:
+    """The Engine settings a chart statement runs under, or None for the
+    Engine's own defaults.
+
+    A distinct count is the one aggregate the cube cannot answer exactly: it
+    holds a HyperLogLog sketch per cell, and the Engine reads it only under
+    `approximate`. A dashboard breakdown of distinct users is allowed to be an
+    estimate — the product decision — so a chart statement that asks for one
+    is run that way, and the response says the answer is approximate. The
+    statement is read by the lexer in services.engine_cube_rewrite, so the
+    words inside a literal or inside a longer identifier do not count.
+
+    This is the same mechanism and the same setting the DLM chooses for an
+    approximate metric (`api/dlm/engine.py`, `_engine_settings`); nothing
+    about the statement text changes.
+    """
+    if not engine_cube_rewrite.counts_distinct(sql_text):
+        return None
+    return {"approximate": True}
+
+
+def _engine_approximate(result: dict) -> bool:
+    """Whether the Engine answered any of this statement's outputs from a
+    sketch rather than exactly.
+
+    The Engine names what it estimated on the query record it keeps
+    (`execution.approximate`); this is its own word on the matter, not an
+    inference from the statement. The DLM reads the same field and reports it
+    to its clients as `approx`, so the chart path spells it the same way.
+    """
+    details = result.get("query_details")
+    execution = details.get("execution") if isinstance(details, dict) else None
+    notes = execution.get("approximate") if isinstance(execution, dict) else None
+    return bool(notes)
 
 
 # ── Cube-shaped chart statements ────────────────────────────────────────────
@@ -236,6 +281,14 @@ _ENGINE_CUBE_DECLINED_LOCK = threading.Lock()
 _ENGINE_CUBE_DECLINED_TTL = 300
 
 
+def _engine_cube_key(catalog: str, statement: str, settings: dict | None) -> str:
+    """The decline memo's key: the statement as it would be issued, and the
+    settings it would be issued under.  The same statement run exact and run
+    approximate is not the same work, and a decline of one must never suppress
+    the other."""
+    return _cache_key(catalog, json.dumps(settings, sort_keys=True) + "\x00" + statement)
+
+
 def _engine_cube_declined(key: str) -> bool:
     with _ENGINE_CUBE_DECLINED_LOCK:
         declined_at = _ENGINE_CUBE_DECLINED.get(key)
@@ -261,16 +314,22 @@ def _execute_engine_chart_statement(
     rows the caller's own statement would have returned; None means the caller
     reads them out of the result as it always has.
     """
+    # Decided once, from the caller's own statement, and used for the rewrite
+    # and for the fallback alike: a chart must not report one number when the
+    # rewrite answers and a different one when it does not.
+    settings = _engine_chart_settings(sql_text)
+    chosen = {} if settings is None else {"settings": settings}
     rewrite = engine_cube_rewrite.plan(sql_text)
     if rewrite is None:
         return _execute_engine_read_only(sql_text, catalog, ctx, schema,
-                                         cancel_token=cancel_token), None
-    declined_key = _cache_key(catalog, rewrite.statement)
+                                         cancel_token=cancel_token, **chosen), None
+    declined_key = _engine_cube_key(catalog, rewrite.statement, settings)
     if not _engine_cube_declined(declined_key):
         try:
             result = _execute_engine_read_only(
                 rewrite.statement, catalog, ctx, schema,
-                cancel_token=cancel_token, timeout=ENGINE_CUBE_PROBE_SECONDS)
+                cancel_token=cancel_token, timeout=ENGINE_CUBE_PROBE_SECONDS,
+                **chosen)
         except HTTPException as error:
             # A refusal or an exhausted admission queue is the Engine's answer
             # to the caller's statement too: report it rather than spending a
@@ -286,7 +345,7 @@ def _execute_engine_chart_statement(
                 return result, finished
             _decline_engine_cube(declined_key)
     return _execute_engine_read_only(sql_text, catalog, ctx, schema,
-                                     cancel_token=cancel_token), None
+                                     cancel_token=cancel_token, **chosen), None
 
 
 def _assert_engine_execute_permission(data: SqlExecuteBody, ctx: UserContext) -> None:
@@ -744,6 +803,7 @@ def execute_engine_sql(data: SqlExecuteBody, response: Response, ctx: UserContex
                 "query_id": None,
                 "duration_ms": 0,
                 "from_cache": True,
+                "approx": bool(cached.get("approx")),
             }
     started_at = int(time.time() * 1000)
     try:
@@ -781,8 +841,10 @@ def execute_engine_sql(data: SqlExecuteBody, response: Response, ctx: UserContex
         columns, rows = finished
     if data.row_limit:
         rows = rows[:data.row_limit]
+    approximate = _engine_approximate(result)
     if data.use_cache:
-        _cache_set(cache_key, {"columns": columns, "rows": rows, "row_count": len(rows)})
+        _cache_set(cache_key, {"columns": columns, "rows": rows,
+                               "row_count": len(rows), "approx": approximate})
     try:
         history_svc.create_history({
             "sql_text": data.sql_text,
@@ -797,5 +859,9 @@ def execute_engine_sql(data: SqlExecuteBody, response: Response, ctx: UserContex
         }, ctx.email)
     except Exception as history_error:
         print(f"[History] Failed to save history: {history_error}")
+    # `approx` is the Engine's own report that an output came from a sketch.
+    # The chart reads it to label the number as an estimate, so it is always
+    # present rather than only when it is true.
     return {"columns": columns, "rows": rows,
-            "query_id": result.get("id"), "duration_ms": result.get("elapsed_ms", 0)}
+            "query_id": result.get("id"), "duration_ms": result.get("elapsed_ms", 0),
+            "approx": approximate}

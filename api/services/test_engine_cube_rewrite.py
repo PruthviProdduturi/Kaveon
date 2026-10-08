@@ -295,6 +295,79 @@ class AverageSubstitutionTests(unittest.TestCase):
         self.assertIsNone(rewrite.finish_rows(["k", "s", "n"], [["x", 1]], plan))
 
 
+class DistinctCountDetectionTests(unittest.TestCase):
+    """Whether a statement asks for a distinct count, read off its tokens."""
+
+    def test_a_distinct_count_is_recognised_however_it_is_spaced_or_cased(self):
+        for sql in [
+            'SELECT region, COUNT(DISTINCT user_id) AS "Users" FROM t GROUP BY region',
+            "SELECT COUNT( DISTINCT t.user_id ) FROM t",
+            "select count(distinct x) from t",
+            "SELECT COUNT\n(\n  DISTINCT x\n) FROM t",
+            "SELECT SUM(a) AS s, COUNT(DISTINCT b) AS d FROM t WHERE c IN (1, 2)",
+            'SELECT COUNT(DISTINCT "user id") FROM t',
+        ]:
+            self.assertTrue(rewrite.counts_distinct(sql), sql)
+
+    def test_a_statement_without_one_is_not_recognised(self):
+        for sql in [
+            "SELECT region, SUM(actions) FROM t GROUP BY region",
+            "SELECT COUNT(x) FROM t",
+            "SELECT COUNT(*) FROM t",
+            "SELECT DISTINCT region FROM t",
+            "SELECT APPROX_COUNT_DISTINCT(x) FROM t",
+            "",
+        ]:
+            self.assertFalse(rewrite.counts_distinct(sql), sql)
+
+    def test_an_identifier_that_merely_contains_the_words_is_not_one(self):
+        for sql in [
+            "SELECT count_distinct_users FROM t",
+            "SELECT my_count_distinct_thing, SUM(a) FROM t GROUP BY my_count_distinct_thing",
+            "SELECT counts(distinct_users) FROM t",
+            "SELECT distinct_count(x) FROM t",
+        ]:
+            self.assertFalse(rewrite.counts_distinct(sql), sql)
+
+    def test_the_words_inside_a_literal_are_not_a_distinct_count(self):
+        for sql in [
+            "SELECT a FROM t WHERE note = 'COUNT(DISTINCT x)'",
+            "SELECT 'count(distinct user_id)' AS label, SUM(a) FROM t GROUP BY label",
+        ]:
+            self.assertFalse(rewrite.counts_distinct(sql), sql)
+
+    def test_the_words_inside_a_quoted_identifier_are_not_a_distinct_count(self):
+        self.assertFalse(rewrite.counts_distinct('SELECT "COUNT"("DISTINCT") FROM t'))
+        self.assertFalse(rewrite.counts_distinct(
+            'SELECT a AS "COUNT(DISTINCT x)" FROM t'))
+
+    def test_a_statement_that_cannot_be_lexed_is_treated_as_exact(self):
+        # An exact answer is never the wrong answer, only the slower one, so a
+        # statement this module cannot read is left to run exactly.
+        for sql in [
+            "SELECT a FROM t -- COUNT(DISTINCT x)",
+            "SELECT a FROM t /* COUNT(DISTINCT x) */ WHERE b = 1",
+            "SELECT COUNT(DISTINCT x) FROM t WHERE y = $$z$$",
+            "SELECT COUNT(DISTINCT x) FROM t WHERE y = 'unterminated",
+        ]:
+            self.assertFalse(rewrite.counts_distinct(sql), sql)
+
+    def test_a_distinct_count_breakdown_is_still_rewritten_for_the_cube(self):
+        # Both treatments apply to the same statement: the ordering and limit
+        # come off, and the caller runs it under `approximate`.
+        plan = rewrite.plan(
+            'SELECT region, COUNT(DISTINCT user_id) AS "Users" '
+            "FROM public.kaveon_events_enriched GROUP BY region "
+            'ORDER BY "Users" DESC NULLS LAST LIMIT 12')
+        self.assertEqual(
+            plan.statement,
+            'SELECT region, COUNT(DISTINCT user_id) AS "Users" '
+            "FROM public.kaveon_events_enriched GROUP BY region")
+        self.assertTrue(rewrite.counts_distinct(plan.statement))
+        self.assertEqual(plan.sort_keys, ((1, True),))
+        self.assertEqual(plan.limit, 12)
+
+
 class RefusedShapeTests(unittest.TestCase):
     """Anything the recognizer is not certain about runs exactly as written."""
 
