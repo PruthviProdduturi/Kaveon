@@ -1222,6 +1222,19 @@ fn parse_key_words(
         if input.byte()? as usize != key_count {
             return Err(exec_err("fixed partial group key count mismatch"));
         }
+        // ClickBench's high-cardinality path uses two non-null integer keys
+        // (Int64, Int32). Decode that fixed frame without constructing the
+        // generic key-type/width metadata on every exchanged row.
+        if key_count == 2
+            && matches!(keys[0], KeyColumn::Integer { data_type: DataType::Int64, .. })
+            && matches!(keys[1], KeyColumn::Integer { data_type: DataType::Int32 | DataType::Date32, .. })
+            && input.0.len() == 12
+        {
+            words[0] = u64::from_le_bytes(input.take(8)?.try_into().unwrap());
+            words[1] = i32::from_le_bytes(input.take(4)?.try_into().unwrap()) as i64 as u64;
+            words[key_count] = 0;
+            return Ok(0);
+        }
         let untagged_bytes = keys.iter().map(|column| match column {
             KeyColumn::Integer { data_type: DataType::Int32 | DataType::Date32, .. } => 4,
             KeyColumn::Integer { data_type: DataType::Boolean, .. } => 1,
