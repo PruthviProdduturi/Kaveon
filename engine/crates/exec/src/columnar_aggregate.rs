@@ -108,7 +108,8 @@ impl Arena {
         self.offsets.push(end);
         self.hashes.push(hash);
         let hashes = &self.hashes;
-        self.index.insert_unique(hash, id, |&other| hashes[other as usize]);
+        self.index
+            .insert_unique(hash, id, |&other| hashes[other as usize]);
         Ok((id, true))
     }
     fn bytes(&self) -> u64 {
@@ -924,6 +925,10 @@ struct SlotIndex {
 const INDEX_LOAD_NUMERATOR: usize = 3;
 const INDEX_LOAD_DENOMINATOR: usize = 4;
 const INDEX_MIN_BUCKETS: usize = 16;
+/// Large high-cardinality aggregates spend substantial time rehashing while
+/// an index doubles. Grow those tables by four once they are already large;
+/// small tables retain the lower-memory doubling behavior.
+const INDEX_LARGE_GROWTH_THRESHOLD: usize = 1 << 16;
 /// Rows between a bucket's prefetch and its probe.
 const PREFETCH_DISTANCE: usize = 16;
 
@@ -1005,8 +1010,14 @@ impl SlotIndex {
 
     /// Double the buckets and place every slot again from `hash_of`,
     /// called in slot order.
-    fn grow(&mut self, mut hash_of: impl FnMut(u32) -> u64) {
-        let buckets = (self.tags.len() * 2).max(INDEX_MIN_BUCKETS);
+    fn grow(&mut self, large_integer_growth: bool, mut hash_of: impl FnMut(u32) -> u64) {
+        let multiplier = if large_integer_growth && self.tags.len() >= INDEX_LARGE_GROWTH_THRESHOLD
+        {
+            4
+        } else {
+            2
+        };
+        let buckets = (self.tags.len() * multiplier).max(INDEX_MIN_BUCKETS);
         let mask = buckets - 1;
         let mut tags = vec![0u8; buckets];
         let mut slots = vec![0u32; buckets];
@@ -1436,11 +1447,34 @@ impl ColumnarGroups {
         if capacity < 1 << 16 || self.len + incoming <= capacity {
             return 0;
         }
-        // The last doubling within `incoming` copies the largest table.
-        while capacity.saturating_mul(2) < self.len + incoming {
-            capacity = capacity.saturating_mul(2);
+        // Find the largest table that will be copied by a growth within the
+        // batch. The reservation is the additional allocation: one current
+        // table for a doubling, three current tables for a fourfold growth.
+        while self.len + incoming > capacity {
+            let multiplier = if self.uses_large_integer_growth()
+                && capacity / INDEX_LOAD_NUMERATOR * INDEX_LOAD_DENOMINATOR
+                    >= INDEX_LARGE_GROWTH_THRESHOLD
+            {
+                4
+            } else {
+                2
+            };
+            let next = capacity.saturating_mul(multiplier);
+            if next >= self.len + incoming {
+                return (capacity as u64)
+                    .saturating_mul((multiplier - 1) as u64)
+                    .saturating_mul(self.slot_bytes());
+            }
+            capacity = next;
         }
-        (capacity as u64).saturating_mul(self.slot_bytes())
+        0
+    }
+
+    #[inline]
+    fn uses_large_integer_growth(&self) -> bool {
+        self.keys
+            .iter()
+            .all(|key| matches!(key, KeyColumn::Integer { .. }))
     }
 
     /// Bytes the encoded partial batch takes: per group its length-prefixed
@@ -1526,7 +1560,9 @@ impl ColumnarGroups {
         for row in 0..rows {
             if self.index.is_full() {
                 let keys = &self.keys;
-                self.index.grow(|slot| slot_hash(keys, slot as usize));
+                self.index.grow(self.uses_large_integer_growth(), |slot| {
+                    slot_hash(keys, slot as usize)
+                });
             }
             if let Some(&ahead) = self.hashes.get(row + PREFETCH_DISTANCE) {
                 self.index.prefetch(ahead);
@@ -2603,7 +2639,7 @@ mod tests {
     }
 
     #[test]
-    fn growth_bytes_covers_the_largest_doubling_a_batch_can_cause() {
+    fn growth_bytes_covers_the_largest_index_growth_a_batch_can_cause() {
         let mut groups =
             ColumnarGroups::new(&[DataType::Int64], &[AggregateState::Count(0)]).unwrap();
         assert_eq!(groups.growth_bytes(1 << 20), 0);
@@ -2615,15 +2651,15 @@ mod tests {
         assert!(groups.len() <= capacity);
         // Fits: nothing to reserve.
         assert_eq!(groups.growth_bytes(capacity - groups.len()), 0);
-        // One doubling: the current table is copied.
+        // One large-table growth: the current table is copied.
         assert_eq!(
             groups.growth_bytes(capacity - groups.len() + 1),
-            capacity as u64 * groups.slot_bytes()
+            (capacity as u64) * 3 * groups.slot_bytes()
         );
-        // Three doublings within one batch: the third copies the largest.
+        // Further growth within one batch reserves the largest table copied.
         assert_eq!(
             groups.growth_bytes(capacity * 4 + 1 - groups.len()),
-            (capacity as u64) * 4 * groups.slot_bytes()
+            (capacity as u64) * 12 * groups.slot_bytes()
         );
     }
 }
