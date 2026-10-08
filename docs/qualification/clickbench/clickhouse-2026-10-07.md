@@ -696,3 +696,12 @@ set to **1, 2, 4, and 8**. Exact q33 completed in **24.121 s**, **21.853 s**,
 on this host but does not close the ClickHouse control (**5.088 s**), so the
 deployment default of eight remains unchanged for general workloads and no
 parity claim is made.
+
+## 2026-10-08 — 1 GiB query budget (rejected)
+
+Raising the per-query budget from the qualified 512 MiB to 1 GiB did not
+remove the pressure path: q33 failed closed in the parallel partial aggregate
+when it needed **1,338,738** more bytes with **1,073,735,108** already
+reserved. The qualified 512 MiB configuration was restored. A previously
+measured 8 GiB configuration avoided spill but was slower overall, so memory
+alone is not the ClickHouse gap.
