@@ -779,21 +779,34 @@ def _engine_error_text(body):
     return "The Engine could not read this location."
 
 
+# A cube is built in a single pass over the whole table, so its bound is bulk
+# work rather than an interactive read. At 600s a build over a large fact table
+# was cancelled partway through every time — and because the caller cancels the
+# statement when its bound passes, the work was thrown away rather than left to
+# finish. A build this long is still better triggered off the request path than
+# held open by one.
+CUBE_ANALYZE_TIMEOUT_SECONDS = 10_800
+READ_ANALYZE_TIMEOUT_SECONDS = 600
+
+
 def analyze_table(catalog, schema, table, actor, role, *, sketches=False, distinct=False,
-                  cube=False, metadata_only=False, timeout=600):
+                  cube=False, metadata_only=False, timeout=None):
     """Run ANALYZE over one table.
 
     The statement is assembled here from the table's own catalog names and
     boolean properties — never from caller text — so no free SQL reaches the
-    Engine through this path. A full read (sketches or a cube) legitimately
-    runs for minutes, so the bound is generous, and a caller that gives up
-    cancels the statement rather than leaving a scan running for everyone.
+    Engine through this path. A full read legitimately runs for minutes and a
+    cube build for far longer, so each gets its own bound, and a caller that
+    gives up cancels the statement rather than leaving a scan running for
+    everyone.
 
     ANALYZE answers inline, and its refusals are the ones the person who
     asked for it has to act on — an unreadable location, a table the durable
     catalog does not hold, a cell limit. The Engine's own message is raised
     verbatim instead of a generic rejection.
     """
+    if timeout is None:
+        timeout = CUBE_ANALYZE_TIMEOUT_SECONDS if cube else READ_ANALYZE_TIMEOUT_SECONDS
     properties = [f"{name} = true" for name, on in
                   (("distinct", distinct), ("sketches", sketches), ("cube", cube)) if on]
     statement = f"ANALYZE {_quote_ident(schema)}.{_quote_ident(table)}"

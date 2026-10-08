@@ -444,6 +444,28 @@ class MeasurementBridgeTests(unittest.TestCase):
             result = engine_bridge.table_measurement("t", "a@b.c", "Viewer")
         self.assertEqual(result, {"state": "unreadable", "error": message})
 
+    def test_a_cube_build_is_bounded_as_bulk_work_not_as_a_read(self):
+        """The caller cancels the statement when its bound passes, so a bound
+        shorter than the build throws the work away. A cube over a large fact
+        table was cancelled at 600s on every attempt."""
+        self.assertGreater(engine_bridge.CUBE_ANALYZE_TIMEOUT_SECONDS,
+                           engine_bridge.READ_ANALYZE_TIMEOUT_SECONDS)
+        seen = []
+
+        def capture(method, path, token, actor, payload=None, role=None, timeout=None):
+            seen.append(timeout)
+            raise AssertionError("stop after recording the bound")
+
+        for cube, expected in ((True, engine_bridge.CUBE_ANALYZE_TIMEOUT_SECONDS),
+                               (False, engine_bridge.READ_ANALYZE_TIMEOUT_SECONDS)):
+            with self.subTest(cube=cube):
+                seen.clear()
+                with patch.object(engine_bridge, "_send", side_effect=capture):
+                    with self.assertRaises(AssertionError):
+                        engine_bridge.analyze_table("C", "s", "t", "a@b.c", "Editor",
+                                                    sketches=True, cube=cube)
+                self.assertEqual(seen, [expected])
+
     def test_analyze_assembles_the_statement_and_raises_the_engines_refusal(self):
         with patch.object(engine_bridge, "_send",
                           return_value=self._Response(200, {"id": "q", "data": [], "columns": []})) as send:
