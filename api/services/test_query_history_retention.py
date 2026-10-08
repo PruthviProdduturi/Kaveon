@@ -51,8 +51,17 @@ class RetentionListingTests(unittest.TestCase):
              patch.object(history.product_store, "list_records", return_value=full), \
              patch.object(history.product_store, "transact") as transact:
             history.create_history(payload, owner)
-        operations = [m.operation for m in transact.call_args.args[0]]
-        self.assertEqual(operations, ["create", "delete"], "the oldest record is removed")
+        mutations = transact.call_args.args[0]
+        operations = [m.operation for m in mutations]
+        self.assertEqual(operations[0], "create")
+        self.assertEqual(set(operations[1:]), {"delete"})
+        # A batch, not one record: the listing that found them is what costs,
+        # so it is amortised over the writes that follow rather than repeated.
+        self.assertEqual(len(mutations), 1 + history._RETENTION_TRIM_BATCH + 1)
+        self.assertLessEqual(len(mutations), 100, "a transaction carries at most 100 mutations")
+        # The owner is left below the bound, so the next write skips the listing.
+        self.assertLess(history._HISTORY_COUNTS[owner], history.MAX_HISTORY_PER_OWNER)
+        self.assertFalse(history._at_retention_bound(owner))
 
     def test_the_count_tracks_writes_so_the_bound_is_still_reached(self):
         owner = "owner@example.test"

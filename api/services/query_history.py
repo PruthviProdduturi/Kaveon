@@ -122,6 +122,10 @@ _HISTORY_COUNT_LOCK = threading.Lock()
 # Far enough below the bound that an uncounted write cannot carry an owner
 # past it before the next listing.
 _RETENTION_CHECK_MARGIN = 50
+# Records removed beyond the one the bound requires, so the listing that
+# found them is amortised over the writes that follow. A transaction
+# carries at most a hundred mutations and one of them is the new record.
+_RETENTION_TRIM_BATCH = 79
 
 
 def _at_retention_bound(owner: str) -> bool:
@@ -182,20 +186,31 @@ def create_history(data: dict, user_id: str) -> dict:
             _remember_history_count(user_id, len(records))
         mutations = [product_store.ProductMutation(
             "create", "query_history", new_id, document)]
-        if len(records) == MAX_HISTORY_PER_OWNER:
+        trimmed = 0
+        over = len(records) + 1 - MAX_HISTORY_PER_OWNER
+        if over > 0:
             def ordering(record):
                 item = record.get("document") or {}
                 return (str(item.get("executed_at") or ""), str(item.get("id") or ""))
-            oldest = min(records, key=ordering)
-            revision = oldest.get("revision")
-            item = oldest.get("document")
-            if type(revision) is not int or revision < 1 or not isinstance(item, dict) \
-                    or item.get("user_email") != user_id:
-                raise RuntimeError("KaveonDB query history retention state is invalid")
-            mutations.append(product_store.ProductMutation(
-                "delete", "query_history", str(item["id"]), expected_revision=revision))
+            # Trim a batch, not the single oldest record. Finding the oldest
+            # costs a full listing, and at the bound that listing ran on every
+            # write — ten paged reads to delete one row, which was most of
+            # what a statement took. Taking a batch leaves the owner below the
+            # bound, so the writes that follow skip the listing and pay only
+            # the commit.
+            for oldest in sorted(records, key=ordering)[:over + _RETENTION_TRIM_BATCH]:
+                revision = oldest.get("revision")
+                item = oldest.get("document")
+                if type(revision) is not int or revision < 1 or not isinstance(item, dict)                         or item.get("user_email") != user_id:
+                    raise RuntimeError("KaveonDB query history retention state is invalid")
+                mutations.append(product_store.ProductMutation(
+                    "delete", "query_history", str(item["id"]), expected_revision=revision))
+                trimmed += 1
         product_store.transact(mutations, user_id, "Analyst")
-        _count_one_more(user_id, trimmed=len(mutations) > 1)
+        if records:
+            _remember_history_count(user_id, len(records) + 1 - trimmed)
+        else:
+            _count_one_more(user_id, trimmed=False)
         return {**result, "engine_query_id": engine_query_id,
                 "engine_details": json.loads(engine_details) if engine_details else None}
     supports_details=_supports_engine_details()
