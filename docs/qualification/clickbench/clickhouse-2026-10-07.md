@@ -547,3 +547,12 @@ limit while materializing TopN/project state. The implementation was removed.
 This confirms that repartitioning state batches still pays more copying and
 memory pressure than the current broadcast path; a future win must avoid
 materializing the encoded state twice rather than only change its routing.
+
+
+A higher scan fan-out was tested on the 24-core host: **16** local lanes and
+eight scan partitions per worker, first at the 512 MiB query cap and then at a
+2 GiB cap. The 512 MiB run failed closed with per-task aggregate reservations;
+the 2 GiB run completed exactly but took **17.325 s**, slower than the retained
+12.7–12.9 s q35 profile. The conservative eight-lane/four-partition and
+512 MiB defaults were restored. More task fan-out therefore increases
+high-cardinality aggregate pressure rather than closing the ClickHouse gap.
