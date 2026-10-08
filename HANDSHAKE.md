@@ -1988,3 +1988,85 @@ live-write families, because replay cannot win a race against the serving API.
 **Nothing cloud-side has been touched yet.** No resource in `kaveon-rg` has been
 read or modified in this session; the first cloud action will be the backup
 verification, and it needs an `az login` from the architect.
+
+---
+
+## 2026-10-07 — @Claude — PostgreSQL retirement: lake is all-Delta, DLM generation unblocked
+
+Shipped on `dev` (`2a8779f7`, `2fe29e8d`, `1f452962`, plus the DLM and bound fixes
+that follow them). All API/Studio-side; no Engine crate touched.
+
+**The lake is Delta end to end.** All 15 tables in the `OpenSource` catalog are
+registered `format: Delta`; none is Parquet. The conversion wrote only each
+table's `_delta_log` over the Parquet already in ADLS — no data was re-uploaded,
+which mattered for the 6 GB events table — and every table's row count was
+re-verified through the Delta reader against what the Parquet registration had
+reported (`covid.reported_cases` 583,440; `public.kaveon_events_enriched`
+504,000,000). Two root causes worth knowing:
+
+- `ai_benchmarks.leaderboard` refused with `unsupported Delta logical type void`.
+  Three score columns were NULL in all 34 rows, so Parquet typed them `null` and
+  Delta's protocol has no such type. Retyped to `double`, matching the sibling
+  score columns. `ai_benchmarks.benchmark_scores` hit the same thing on an
+  all-NULL `eval_date` and was typed `date32` from the source DDL.
+- `climate_energy.energy_annual_delta` was a proof-of-concept duplicate of
+  `energy_annual` and is dropped now that the original is itself Delta.
+
+**No dataset could ever have had a DLM.** Four defects in series, each hiding the
+next, all now fixed with regression tests:
+
+1. Generation pre-reads the compiled artifact to carry human curation forward,
+   and that read fails closed on a dataset with no definition — i.e. every
+   dataset before its first build. The fail-closed stance is right for serving
+   and is kept; the absent case is now `DefinitionUnavailable`, a `RuntimeError`
+   subclass so existing fail-closed callers are unchanged.
+2. Publication built a `dlm_run` `create` and its `ready` `update` into one
+   transaction. A product commit applies each change once against one base, so
+   KaveonDB refuses a record changed twice in it. `dlm_run_backfill` already
+   used two separate commits; both broken sites match it now. `product_replay`
+   had the identical defect.
+3. A publication that wrote its bytes then failed to commit left an orphan no
+   run referenced, and the version still looked free — so every retry reused it
+   with bytes differing by at least `built_at` and wedged the dataset forever.
+   Note for anyone touching this: the two artifact clients disagree about an
+   occupied key. ADLS refuses the conditional write and raises; the local client
+   returns without writing. The read-back is what settles it for both.
+4. Publication required caller == dataset owner. Seeded datasets are owned by
+   `system`, which nobody can sign in as, so none of them could ever be built.
+   An Admin may now rebuild a dataset they do not own; records stay owned by the
+   dataset. The caller's role is threaded from the route for that decision.
+
+All 9 datasets now have a compiled DLM. `answers_precomputed` is 0 for every
+Engine-backed dataset and that is correct — their answer-from-context is the
+Engine's cube, not copied answer cells.
+
+**REQUEST @Codex — `REMOTE_TASK_TIMEOUT` is a hard ceiling on cube builds.**
+`engine/crates/server/src/api.rs:8735` fixes one coordinator-to-worker task at
+600s, and `docs/engine/settings.md` lists it as a source constant. Because the
+Engine distributes per file, a table held in one large file is one task, so a
+cube over it cannot be built at all: `ANALYZE … WITH (cube = true)` over
+`public.kaveon_events_enriched` failed with `statistics read failed: worker
+'worker-1' did not finish the task within 600s`. I have worked around it from my
+side by splitting that table into 128 files, so nothing is blocked on you. But
+the ceiling is worth making a setting, or worth splitting a large file's work by
+row group — that table carried 168 row groups inside its single file, so the
+parallelism was present in the data and unreachable by the planner. Your call on
+whether either is worth doing; no action needed for the retirement track.
+
+**Also fixed, same track.** Query history read back empty for every non-Admin:
+`product_read_authority.list_documents` checks an owner-scoped family's owner via
+`user_email`, then fell through to a generic visibility gate that re-derived the
+owner from `created_by`/`owner` — fields these documents do not carry — so
+private visibility compared `None` to the caller and dropped all of their own
+records. `read_document` returns early for these families and never hit it.
+A chart's statement is now cancelled on the Engine when the reader navigates
+away, through a token the caller mints before it sends (an abandoned chart never
+receives the query id, so an id cannot stop it); SQL Lab already cancelled for
+real, the chart path only aborted the fetch.
+
+**Cloud state.** `kaveon-db` is stopped, not deleted: `kaveon_users` (3M),
+`user_agg` (2.5M), `query_history` (122k), `activity` (40k) and the `dim_*`
+tables exist nowhere else. The first-ever dump of the `kaveon` warehouse (82 MB,
+37 tables, read back and verified) and the `kaveonmeta` dump are both in
+`opensource/backups/postgresql/2026-10-07`. Deletion is the architect's call and
+`kaveon-db` auto-restarts after 7 days. The old ACA apps are still Running.
