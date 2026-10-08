@@ -60,6 +60,7 @@ enum KeyColumn {
 struct Arena {
     bytes: Vec<u8>,
     offsets: Vec<u32>,
+    hashes: Vec<u64>,
     index: HashTable<u32>,
 }
 
@@ -68,6 +69,7 @@ impl Arena {
         Self {
             bytes: Vec::new(),
             offsets: vec![0],
+            hashes: Vec::new(),
             index: HashTable::new(),
         }
     }
@@ -104,15 +106,9 @@ impl Arena {
         let end =
             u32::try_from(self.bytes.len()).map_err(|_| exec_err("string arena exceeds 4 GiB"))?;
         self.offsets.push(end);
-        let bytes = &self.bytes;
-        let offsets = &self.offsets;
-        self.index.insert_unique(hash, id, |&other| {
-            let (start, end) = (
-                offsets[other as usize] as usize,
-                offsets[other as usize + 1] as usize,
-            );
-            text_hash(&bytes[start..end])
-        });
+        self.hashes.push(hash);
+        let hashes = &self.hashes;
+        self.index.insert_unique(hash, id, |&other| hashes[other as usize]);
         Ok((id, true))
     }
     fn bytes(&self) -> u64 {
@@ -122,6 +118,7 @@ impl Arena {
     fn clear(&mut self) {
         self.bytes.clear();
         self.offsets.truncate(1);
+        self.hashes.clear();
         self.index.clear();
     }
 }
