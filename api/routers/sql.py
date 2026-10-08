@@ -559,11 +559,21 @@ def distinct_filter_values(
     values = []
     for row in rows:
         if isinstance(row, list):
-            values.append({"key": row[0], "value": row[1] if len(row) > 1 else row[0]})
+            entry = {"key": row[0], "value": row[1] if len(row) > 1 else row[0]}
         elif isinstance(row, dict):
-            values.append({"key": row.get("key", row.get("value")), "value": row.get("value", row.get("key"))})
+            entry = {"key": row.get("key", row.get("value")), "value": row.get("value", row.get("key"))}
         else:
-            values.append({"key": row, "value": row})
+            entry = {"key": row, "value": row}
+        # The Engine cube path cannot carry an `IS NOT NULL` — any WHERE puts
+        # the statement back on a scan — so a NULL group is dropped here
+        # instead, and the page is capped at the limit the caller asked for.
+        # Every other path excludes nulls and limits in SQL, where both of
+        # these are no-ops.
+        if entry["value"] is None:
+            continue
+        values.append(entry)
+        if len(values) >= row_limit:
+            break
 
     return {"success": True, "values": values, "keyColumn": key_column, "filteringTier": filtering_tier}
 

@@ -1,7 +1,7 @@
 """Pydantic models — Datasets."""
 
-from typing import Any, Literal, Optional
-from pydantic import BaseModel, Field
+from typing import Any, ClassVar, Literal, Optional
+from pydantic import BaseModel, Field, model_validator
 
 
 class DatasetSource(BaseModel):
@@ -31,6 +31,20 @@ class DatasetCreate(BaseModel):
 
 
 class DatasetUpdate(BaseModel):
+    """An update carries only the fields the caller sent. A field the caller
+    omits is left as it stands; a field the caller sends as `null` is cleared.
+
+    `NOT_CLEARABLE` names the fields that have no cleared state — a dataset
+    always has a name, a table, a schema and a visibility, and a component
+    collection is emptied with `[]` rather than with `null`. Sending `null`
+    for one of those is a caller mistake, answered with 422 rather than with
+    a constraint violation from the store or a silently ignored field."""
+
+    NOT_CLEARABLE: ClassVar[tuple[str, ...]] = (
+        "name", "table_name", "schema_name", "visibility",
+        "dimensions", "columns", "metrics",
+    )
+
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     source: Optional[DatasetSource] = None
     table_name: Optional[str] = Field(default=None, max_length=255)
@@ -43,3 +57,15 @@ class DatasetUpdate(BaseModel):
     metrics: Optional[list[dict[str, Any]]] = None
     date_column: Optional[str] = Field(default=None, max_length=128)
     visibility: Optional[Literal["private", "internal", "published"]] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_unclearable_nulls(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        sent_null = [f for f in cls.NOT_CLEARABLE if f in data and data[f] is None]
+        if sent_null:
+            raise ValueError(
+                f"{', '.join(sent_null)} cannot be cleared; omit the field to leave it unchanged"
+            )
+        return data

@@ -918,6 +918,70 @@ def _distinct_kv_sql(limit: int, cols: str, from_clause: str, where_clause: str)
     return f"SELECT DISTINCT TOP {int(limit)} {cols} {from_clause} {where_clause} ORDER BY {qv}"
 
 
+# The Engine's cube over a declared table holds every declared dimension's
+# values as cells, so a single-dimension grouped aggregate over that table is
+# answered from the cube ("context" mode) instead of scanning. `SELECT
+# DISTINCT` is not one of the forms it answers, so a filter dropdown's
+# distinct values are read as a `GROUP BY` of the dimension instead.
+#
+# Observed against `public.kaveon_events_enriched` (504,600,000 rows), on the
+# `region` dimension, as a shape check and not as a benchmark claim — these
+# are single observations of which plan the Engine chose, read from
+# `execution.mode` on the Engine's own query record:
+#   SELECT DISTINCT region … ORDER BY value LIMIT 100     scanned; did not
+#                                                         finish inside the
+#                                                         gateway's window
+#   … COUNT(*) … GROUP BY region ORDER BY value LIMIT n   "context"
+#   the same GROUP BY with no aggregate at all            scanned
+#   the same GROUP BY plus WHERE region IS NOT NULL       "distributed"
+#   the same GROUP BY plus WHERE <other dimension> = …    "distributed"
+#   a GROUP BY of a column declared as no dimension       scanned
+#   a two-dimension GROUP BY                              scanned
+#
+# Hence the conditions guarding this path: the aggregate is required, a WHERE
+# of any kind disqualifies it, the column must be a declared dimension of the
+# fact table, and only one dimension may be grouped. Every other case falls
+# back to the statement this module already built — which costs nothing where
+# no cube exists, since the two forms then scan alike.
+_CUBE_COUNT_ALIAS = "__kaveon_filter_rows"
+
+
+def _fact_dimension_columns(columns: list, datasource: str) -> set:
+    """Names of the columns the dataset declares as dimensions of its fact
+    table, lowercased. A column with no `table_name` is taken as the fact
+    table's own, which is how a flat Engine dataset is modelled."""
+    fact = normalize_column_name(datasource).lower()
+    fact_leaf = fact.split(".")[-1]
+    names = set()
+    for col in (columns or []):
+        if not col.get("is_dimension"):
+            continue
+        name = col.get("column_name")
+        if not name:
+            continue
+        table = normalize_column_name(col.get("table_name") or "").lower()
+        if not table or table in (fact, fact_leaf):
+            names.add(str(name).lower())
+    return names
+
+
+def _engine_cube_distinct_sql(col_name: str, fact_table: str, limit: int) -> str:
+    """A single-dimension grouped aggregate the Engine's cube answers.
+
+    One row over the limit is requested so that dropping a NULL group — which
+    the cube path cannot exclude with a WHERE — still leaves a full page of
+    values for the caller to show."""
+    quoted_col = quote_identifier(col_name)
+    qk = quote_identifier("key")
+    qv = quote_identifier("value")
+    return (
+        f"SELECT {quoted_col} AS {qk}, {quoted_col} AS {qv}, "
+        f"COUNT(*) AS {quote_alias(_CUBE_COUNT_ALIAS)} "
+        f"FROM {fact_table} GROUP BY {quoted_col} "
+        f"ORDER BY {qv} LIMIT {int(limit) + 1}"
+    )
+
+
 def _dim_direct_subquery(dim_entry: dict, col_name: str, limit: int) -> Optional[str]:
     table_raw = normalize_column_name(dim_entry.get("table") or "")
     if not table_raw:
@@ -999,6 +1063,27 @@ def build_distinct_filter_values_query(params: dict) -> Optional[dict]:
         # WHERE — the fast dim-direct path can't relate two different columns.
         qk = quote_identifier("key")
         qv = quote_identifier("value")
+
+        # ── Engine cube path ──────────────────────────────────────────────────
+        # Read the dimension's values from the Engine's cube instead of scanning
+        # the fact table. Only the exact shape the cube answers qualifies: an
+        # Engine catalog, no cascading filter (any WHERE puts the statement back
+        # on a scan), no dimension joins, and a column the dataset declares as a
+        # dimension of the fact table. Anything else keeps the statement below.
+        if (
+            bool(params.get("engine_source"))
+            and not narrow_filters
+            and not dimensions
+            and not required_dims
+            and alias == fact_alias
+            and col_name
+            and col_name.lower() in _fact_dimension_columns(columns, datasource)
+        ):
+            return {
+                "sql": _engine_cube_distinct_sql(col_name, fact_table, limit),
+                "keyColumn": key_column,
+                "filteringTier": tier,
+            }
 
         if narrow_filters:
             target_quoted = _qualified_column(alias, col_name)
