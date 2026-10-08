@@ -764,3 +764,15 @@ The rebuilt default grouped-state path passed the worker snapshot handshake afte
 The first post-rebuild request was intentionally rejected by the coordinator while workers were still synchronizing (`NO_COMPATIBLE_WORKER`). This is expected fail-closed behavior, but deployment qualification must wait for the heartbeat to report compatible workers before issuing benchmark traffic.
 
 Two additional clean q33 controls completed after synchronization at `19.364 s` and `20.112 s` (10 rows each), putting the observed default median at about `19.7 s`; q35 remained `13.472 s` in the paired run. This confirms normal variance around the documented baseline rather than a performance regression from the rebuild.
+
+## 2026-10-08 — external sorted final aggregate (rejected)
+
+An opt-in final-stage prototype sorted the exchanged grouped-state rows by the
+canonical group-key bytes and merged one contiguous key at a time, allowing a
+bounded-memory finalizer to spill through the existing sort operator. The
+implementation compiled and the planner suite remained green, but the q33
+qualification run did not reach a result after the eight scan tasks finished
+(the default path normally completes in about 20 seconds); it was canceled
+after the final-stage sort made no observable progress. No correctness claim
+was made and the prototype was removed. The shipped grouped-state final merge
+and its measured controls remain unchanged.
