@@ -129,3 +129,19 @@ An experimental local row-group lane reader was rejected after directory-table
 assembly exposed an out-of-bounds failure; it was fully reverted and is not
 part of the qualified build. The next gate remains a profiled typed exchange
 or scan/aggregation optimization, followed by repeated exact q33/q35 runs.
+
+## 2026-10-07 scan-width ceiling qualification
+
+To test whether more scan tasks alone could close q33, the same two Parquet
+files were assigned to 24 temporary one-lane workers. The uncached q33 result
+remained exact and completed in **23.6 s**. The stage counters explain why
+width stopped helping: aggregate file-read time rose to about **32.9 s** in
+aggregate, versus about **8.2 s** with two workers, because each task reopened
+the same large files. This is evidence for shared decode/read reuse, not a
+worker-count recommendation. The temporary workers were removed after the
+run and the normal two-worker Docker stack was restored.
+
+Two additional experiments were rejected: a fused COUNT/SUM/AVG update loop
+was exact but slower (28.4–28.8 s q33), and round-robin local partial
+aggregation was neutral on q33 but regressed q35 to 37.6 s. Neither is in the
+qualified build.
