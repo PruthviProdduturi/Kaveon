@@ -300,3 +300,12 @@ regressed to **29.9 s** (from the qualified ~20 s range). The reader was
 removed and the portable parquet-rs path restored. The result confirms that
 the remaining gap is decode and aggregation CPU, rather than local cursor
 syscall overhead.
+
+## 2026-10-08 rejected eight-worker width
+
+A temporary six-worker expansion (eight workers total, one scan task per
+worker) was run against the same two-worker baseline and file. q35 completed
+in **14.42 s** and q33 in **22.06 s**, versus approximately **14–15 s** and
+**20 s** on the qualified two-worker profile. The extra workers were removed:
+row-group decode and exact high-cardinality aggregation, not task admission,
+are the limiting stages.
