@@ -10241,10 +10241,18 @@ async fn execute_distributed_aggregate(
 /// snapshot. Keeping it out of distributed execution avoids decoding and
 /// exchanging every row merely to add per-partition counters.
 fn exact_metadata_count_plan(plan: &LogicalPlan) -> bool {
-    let aggregate = match plan {
-        LogicalPlan::Project { input, .. } => input.as_ref(),
-        _ => plan,
-    };
+    // COUNT(*) produces exactly one row. A projection used for an alias and
+    // any positive LIMIT preserve the metadata answer; without unwrapping
+    // those common dashboard wrappers the planner falls back to decoding the
+    // entire source just to count it.
+    let mut aggregate = plan;
+    loop {
+        aggregate = match aggregate {
+            LogicalPlan::Project { input, .. } => input.as_ref(),
+            LogicalPlan::Limit { input, count } if *count > 0 => input.as_ref(),
+            _ => break,
+        };
+    }
     matches!(
         aggregate,
         LogicalPlan::Aggregate {
