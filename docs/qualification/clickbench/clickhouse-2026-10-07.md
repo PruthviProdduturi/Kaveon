@@ -866,3 +866,9 @@ profile made q35 slower at **18.721 s** than the 2 GiB disk-spill profile's
 **14.278 s**. This confirms a workload-sensitive memory trade-off rather than
 a universal setting; the reproducible balanced qualification profile remains
 2 GiB plus bounded disk spill.
+
+A temporary four-worker control (same image, data, and 8 scan partitions per
+worker) was also rejected: q35 completed exactly but regressed to **18.562 s**
+with 32 scan tasks, versus **14.278 s** on two workers. The extra workers
+increased task and exchange fan-in without reducing the local read bottleneck;
+they were removed after the control.
