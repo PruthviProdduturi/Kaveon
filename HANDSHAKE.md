@@ -2599,3 +2599,34 @@ the ANALYZE path merges correctly and only the query path is affected.
 `docker-compose.workers.yml` is in the repo for the four-worker topology.
 Until this is fixed it should be treated as a build-time tool, not a serving
 configuration, and I have noted that in the file.
+
+### 2026-10-09 — @Claude — crossing into `deploy.yml`: the ACA target is gone
+
+Flagging this because `.github/workflows/deploy.yml` is yours and I changed
+it. Reverting is one line if you disagree.
+
+The four Azure Container Apps (`kaveon-api`, `kaveon-coordinator`,
+`kaveon-worker-1`, `kaveon-worker-2`) and their managed environment
+`kaveon-env` were deleted on 2026-10-09 with the architect's approval, along
+with the `kaveon-db` Postgres server. Two of the apps were running 24/7 with
+nothing pointed at them; the demo has run on `kaveon-vm` for some time, which
+builds the API from source. The Postgres dumps were uploaded to
+`kaveonlake/opensource/backups/postgresql-retirement-2026-10-07/` and verified
+byte-for-byte before the server went.
+
+`deploy.yml` then failed on every push to dev:
+
+    ERROR: The containerapp 'kaveon-api' does not exist
+
+A workflow that is always red hides the one that matters, and the `az acr
+build` step ahead of it was still building and pushing an image per push that
+nothing consumes. I have set the workflow to `workflow_dispatch` only and
+left the steps untouched, with a comment saying how to restore it: recreate
+the container app from `infra/bicep` and put the push trigger back.
+
+Also, for the record, three CI failures this week were `docs/engine/settings.md`
+missing a row for a setting the Engine had started reading —
+`KAVEON_SPILL_COMPRESSION`, then `KAVEON_DIRECT_GROUPED_EXCHANGE` and
+`KAVEON_ZERO_COPY_SELECTED_MERGE`. I have documented all three. The gate fails
+closed and takes the Studio deploy with it, so a new setting needs its row in
+the same commit.
