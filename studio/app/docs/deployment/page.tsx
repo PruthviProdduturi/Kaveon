@@ -8,85 +8,101 @@ export default function DeploymentDocs() {
       <PageHeader
         eyebrow="Deploy &amp; Operate"
         title="Deployment"
-        lead="The shipping platform uses Vercel, Azure Container Apps, and PostgreSQL. The Rust Engine has a separate local/Docker alpha topology and is not yet in the production request path."
+        lead="Studio runs on Vercel. Everything else — the API, the Kaveon Engine and its workers — runs on one Azure VM, and reads Delta tables from ADLS Gen2. The Engine is the query path, not a parallel experiment."
       />
 
       <h2>Topology</h2>
       <Diagram
         src="/docs/architecture/kaveon-deployment-topology.svg"
-        alt="Kaveon shipping platform, Engine alpha, and distributed target deployment topology"
-        caption="Shipping, alpha, and target paths are deliberately separated. Worker discovery in the alpha topology is not distributed query execution."
+        alt="Browser to Studio on Vercel, through a same-origin proxy to the API on kaveon-vm, into the Kaveon Engine coordinator and two workers, reading Delta tables in ADLS Gen2"
+        caption="One request path. The platform's own records live in KaveonDB, the Engine's built-in transactional catalog."
       />
       <Code lang="text">{`Browser ──► Vercel  (Kaveon Studio · Auth.js: GitHub / Google / Microsoft)
                │  same-origin /api/kaveon proxy (injects X-User-* + secret)
                ▼
-            Azure Container Apps  (kaveon-api · FastAPI · image from kaveonacr)
-               │  psycopg2 / DefaultAzureCredential (Managed Identity)
+            kaveon-vm  ── Caddy (TLS) ──► API + DLM (FastAPI)
+               │
+               ├──► Kaveon Engine coordinator ──► worker-1, worker-2
+               │         planning, cube and statistics   fragment execution
+               │                                         Arrow exchange
                ▼
-            Azure PostgreSQL Flexible Server (PG 18)
-               ├── kaveonmeta  (control plane + DLM/context)
-               └── kaveon      (data warehouse — the rows)`}</Code>
+            ADLS Gen2  (kaveonlake / opensource)
+               ├── Delta tables — the rows
+               └── kaveon.product.*  (KaveonDB — the platform's own records)`}</Code>
       <p>
-        The browser only talks to Vercel; the proxy forwards to the Container App with <code>X-User-*</code> headers
-        stamped by <code>KAVEON_PROXY_SECRET</code>, which the API validates (see <a href="/docs/auth">Auth &amp; RBAC</a>).
+        The browser only talks to Vercel. The proxy forwards to the API with <code>X-User-*</code> headers stamped by{" "}
+        <code>KAVEON_PROXY_SECRET</code>, which the API validates (see <a href="/docs/auth">Auth &amp; RBAC</a>). The
+        Engine&rsquo;s own ports are bound to localhost on the VM and are never reachable from outside it.
       </p>
+
       <Callout type="note">
-        Both databases live on one <strong>Azure Database for PostgreSQL Flexible Server (PG 18)</strong>:{" "}
-        <code>kaveonmeta</code> holds Kaveon&rsquo;s own state plus the DLM context, and <code>kaveon</code> is the data
-        warehouse. In production both authenticate via <strong>Managed Identity</strong> — no stored password. Self-hosting
-        elsewhere only needs the <code>METADATA_*</code> connection settings changed.
+        <strong>There is no PostgreSQL.</strong> Kaveon used to keep its control plane in{" "}
+        <code>kaveonmeta</code> and its warehouse in <code>kaveon</code> on an Azure Database for PostgreSQL Flexible
+        Server. Both are retired. Datasets, charts, dashboards, saved statements, chat history and audit entries are now
+        transactional rows in <code>kaveon.product.*</code>, written only through KaveonDB&rsquo;s transaction boundary;
+        the data itself is Delta in object storage. A legacy database passthrough still exists in the code and answers{" "}
+        <code>503</code> — it is a signpost, not a path.
       </Callout>
+
+      <h2>Where a query actually runs</h2>
+      <p>
+        A chart or a question reaches the Engine, and the Engine decides between two lanes. A cube-shaped aggregate is
+        answered from precomputed cells and HyperLogLog sketches without reading the table; anything else is planned
+        into fragments and executed across the workers with Arrow exchange, retry and cancellation. The Engine reports
+        which lane it took on every statement, and Studio shows it. See <a href="/docs/engine">Kaveon Engine</a> for the
+        execution model and <a href="/docs/freshness">Freshness</a> for when a precomputed answer is allowed to stand.
+      </p>
 
       <h2>CI/CD</h2>
       <p>
-        <code>.github/workflows/ci.yml</code> runs on every push and PR to <code>dev</code>:
+        <code>.github/workflows/ci.yml</code> runs on every push and PR to <code>dev</code>: type-check and build Studio,
+        run the API test suite, scan for secrets, and validate the documentation. The documentation gate fails closed —
+        a new Engine setting without a row in <a href="/docs/engine">the settings table</a> turns CI red and holds the
+        Studio deploy with it. On a green run, Studio deploys to Vercel.
       </p>
-      <ul>
-        <li><strong>web</strong> — install, type-check shared types, lint, tsc, and build Kaveon Studio.</li>
-        <li><strong>api</strong> — install, <code>compileall</code>, and run pytest if tests exist.</li>
-        <li><strong>secrets</strong> — a gitleaks scan.</li>
-        <li><strong>deploy (web)</strong> — on push to <code>dev</code> (after web passes), <code>vercel deploy --prod</code>
-          using the <code>VERCEL_TOKEN</code> / <code>VERCEL_ORG_ID</code> / <code>VERCEL_PROJECT_ID</code> secrets.</li>
-      </ul>
       <p>
-        <code>.github/workflows/deploy.yml</code> ships the API on push to <code>dev</code>: it builds and pushes the
-        image to <code>kaveonacr.azurecr.io</code> and runs <code>az containerapp update</code> to roll it out. The Vercel
-        build installs with <code>npm install --legacy-peer-deps</code> (pnpm fails in Vercel&rsquo;s build sandbox).
+        The API ships by rebuilding its image on the VM from the checked-out commit, not by rolling a registry tag.{" "}
+        <code>.github/workflows/deploy.yml</code> still describes the Azure Container Apps rollout and is{" "}
+        <strong>manual-only</strong>: the container app it targeted was deleted once the VM became the deployment, and a
+        workflow that always fails hides the one that matters.
       </p>
 
-      <h2>Engine alpha deployment</h2>
+      <h2>Running the whole platform locally</h2>
       <p>
-        The root <code>docker-compose.yml</code> starts Studio, API/DLM, PostgreSQL, one Engine coordinator, and two workers. <code>engine/docker-compose.yml</code> remains available for Engine-only topology validation.
-        Nodes register and heartbeat, but statements execute on the receiving node: there is no fragment scheduling,
-        Arrow exchange, shuffle, or cross-worker retry. Populate the mounted Parquet data path before startup and keep
-        the unauthenticated Engine HTTP port behind a trusted boundary.
+        The root <code>docker-compose.yml</code> starts Studio, the API and DLM, an Engine coordinator and two workers.
+        Point <code>KAVEON_DATA_PATH</code> at a directory of Delta or Parquet tables before starting; the workers mount
+        it read-only.
       </p>
-      <Code lang="powershell">{`$env:KAVEON_DATA_PATH='F:\\kaveon-data' # optional
+      <Code lang="powershell">{`$env:KAVEON_DATA_PATH = 'F:\\kaveon-data'
 docker compose up --build
 
 # Studio:   http://localhost:3000
 # API:      http://localhost:8080
 # Engine:   http://localhost:8081/ui`}</Code>
+      <p>
+        <code>docker-compose.workers.yml</code> adds two more workers. It exists for one reason: the statistics and cube
+        pass gives each worker a single task over all of its files, and that task has a hard 600&nbsp;second ceiling, so
+        a large table can only be cubed by putting fewer files in each task. Use it to build, then take the extra
+        workers down — see the warning in that file before serving from it.
+      </p>
 
       <h2>Key environment variables</h2>
       <table>
         <thead><tr><th>Where</th><th>Vars</th></tr></thead>
         <tbody>
           <tr><td>Both tiers</td><td><code>KAVEON_PROXY_SECRET</code> (must match)</td></tr>
-          <tr><td>Web (Vercel)</td><td><code>AUTH_SECRET</code>, <code>AUTH_URL</code>, provider IDs/secrets, <code>API_URL</code></td></tr>
-          <tr><td>API (Azure Container Apps)</td><td><code>METADATA_DATABASE</code> (=<code>kaveonmeta</code>), <code>AAD_DATABASES</code> (=<code>kaveon</code>), <code>METADATA_HOST</code>/<code>PORT</code>/<code>SSLMODE</code>, <code>KAVEON_PROXY_SECRET</code></td></tr>
+          <tr><td>Studio (Vercel)</td><td><code>AUTH_SECRET</code>, <code>AUTH_URL</code>, provider IDs and secrets, <code>API_URL</code>, <code>AUTH_ADMIN_EMAILS</code></td></tr>
+          <tr><td>API (kaveon-vm)</td><td><code>KAVEON_PROXY_SECRET</code>, <code>KAVEON_ENGINE_BRIDGE_TOKEN</code>, <code>KAVEON_ENGINE_CATALOG_TOKEN</code>, <code>KAVEON_CREDENTIAL_KEYS</code>, <code>KAVEON_CREDENTIAL_ACTIVE_KEY</code></td></tr>
+          <tr><td>Engine (coordinator and workers)</td><td><code>KAVEON_DATA_DIR</code>, <code>KAVEON_EXCHANGE_TOKEN</code>, <code>KAVEON_DISCOVERY_URI</code>, memory and spill settings</td></tr>
         </tbody>
       </table>
-      <Callout type="tip">
-        First run needs no database config — the setup wizard appears on first sign-in and initializes the metadata schema
-        for you. Supported Studio connector types are registered in the UI; API-only connector types use the data-source API.
-      </Callout>
 
       <h2>Production notes</h2>
       <p>
-        The reference deployment is a zero-cost demo, not hardened. For production, put the API on private networking, use
-        managed secrets (e.g. Key Vault), run a dedicated warehouse, and prefer managed-identity auth for Fabric/Azure SQL
-        over connection strings.
+        The reference deployment is a small demo host, not a hardened one: a single burstable VM runs the API, the
+        coordinator, both workers and the edge, and a cube build needs it temporarily resized. For production, separate
+        the Engine from the API, put both on private networking, keep secrets in a managed store such as Key Vault, and
+        prefer managed-identity auth for registered Fabric and Azure SQL sources over connection strings.
       </p>
 
       <Pager prev={{ href: "/docs/sql-compatibility", title: "SQL Compatibility" }} next={{ href: "/docs/auth", title: "Auth & RBAC" }} />

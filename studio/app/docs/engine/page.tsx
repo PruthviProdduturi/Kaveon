@@ -10,18 +10,20 @@ export default function EngineDocs() {
       lead="A vectorized columnar query engine in Rust: its own SQL parser, planner, optimizer, catalog, and distributed runtime, reading Parquet and Delta directly over Arrow."
     />
 
-    <Callout type="warn">
-      <strong>Alpha.</strong> Engine is not yet Studio&rsquo;s execution backend — queries you run in the UI do
-      not automatically go through it. An opt-in platform bridge delegates authenticated queries and
-      catalog synchronization. Engine now supports authenticated principals, TLS, queued resource groups,
-      and partitioned aggregate/join spill. Live cloud qualification, broader SQL coverage, and sustained
-      production-scale performance remain open gates.
+    <Callout type="note">
+      <strong>Engine is Studio&rsquo;s execution backend.</strong> Every chart, question and statement is
+      planned and run here, against Delta tables in ADLS Gen2. It also holds the platform&rsquo;s own
+      records: <code>kaveon.product.*</code> is a transactional catalog inside the Engine, and
+      <a href="/docs/datasets">datasets</a>, charts and dashboards are rows in it. Authenticated
+      principals, queued resource groups and partitioned aggregate and join spill are in. Statement
+      clients still have no end-user authentication or TLS of their own, so the Engine stays behind a
+      trusted boundary; S3, Iceberg, and sustained production-scale qualification remain open gates.
     </Callout>
 
     <Diagram
       src="/docs/architecture/kaveon-engine-pipeline.svg"
       alt="Kaveon Engine coordinator, distributed vectorized execution, exchange, catalog, and lake-read pipeline"
-      caption="The coordinator pins versioned fragments and table snapshots; workers execute Arrow batches and exchange partitions. Cloud deployment qualification and advanced optimization remain targets."
+      caption="The coordinator pins versioned fragments and table snapshots; workers execute Arrow batches and exchange partitions. A cube-shaped aggregate is answered from precomputed cells and never reaches this pipeline."
     />
 
     <h2>Why it exists</h2>
