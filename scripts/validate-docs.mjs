@@ -3,7 +3,14 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
-const ignoredDirectories = new Set([".git", ".next", "node_modules", "target", "tmp"]);
+// Worktrees and generated build trees are not product documentation. In
+// particular, .claude/worktrees contains a full checkout per agent and used
+// to inflate the validation count into the thousands while checking the same
+// files repeatedly.
+const ignoredDirectories = new Set([
+  ".git", ".next", ".claude", "node_modules", "target", "tmp", "dist",
+  "build", "coverage", ".pytest_cache",
+]);
 const markdownLinkPattern = /\[[^\]]+\]\(([^)\s]+)\)/g;
 const docsRoutePattern = /href:\s*"(\/docs[^"]*)"/g;
 const failures = [];
