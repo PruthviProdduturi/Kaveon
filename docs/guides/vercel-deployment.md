@@ -1,11 +1,11 @@
 # Deploying kaveon-studio to Vercel
 
-`kaveon-studio` (Next.js 15) deploys to Vercel. `kaveon-api` runs on Azure Container Apps, backed by Azure PostgreSQL (`kaveonmeta` + `kaveon`) — see [deploy-vercel-azure-postgres.md](deploy-vercel-azure-postgres.md) for the full two-service deploy.
+`kaveon-studio` (Next.js 15) is an optional Vercel hosting path for the Studio frontend. The API and DLM run as long-lived containers on the chosen VM or AKS deployment, and KaveonDB stores product records in the configured local or ADLS-backed system store. PostgreSQL is not required.
 
 ## Prerequisites
 
 - Vercel account linked to the `Kaveon` GitHub repo
-- A reachable `kaveon-api` over HTTPS (Azure Container Apps)
+- A reachable `kaveon-api` over HTTPS (VM, AKS, or another supported container host)
 - At least one OAuth provider configured (GitHub, Google, and/or Microsoft Entra ID)
 
 ## 1 · Link the project
@@ -35,7 +35,7 @@ vercel env add AUTH_MICROSOFT_ENTRA_ID_SECRET production
 vercel env add AUTH_MICROSOFT_ENTRA_ID_ISSUER production  # https://login.microsoftonline.com/<tenant>/v2.0
 
 # API proxy (required)
-vercel env add API_URL production                   # https://kaveon-api.<env>.azurecontainerapps.io
+vercel env add API_URL production                   # https://<your-api-host>
 vercel env add KAVEON_PROXY_SECRET production       # must match kaveon-api
 ```
 
@@ -50,7 +50,7 @@ vercel --prod
 
 ### Automation status
 
-The checked-in GitHub deployment workflow currently deploys the API only. Studio deployment remains the explicit `vercel --prod` operation above until a verified Vercel job or native Git integration is configured.
+The checked-in CI workflow validates the Studio build. Deploy Studio with the linked Vercel project or `vercel --prod`; deploy the API, DLM and Engine through the VM or AKS runbook before pointing `API_URL` at them.
 
 Config: [`studio/vercel.json`](../../studio/vercel.json).
 
@@ -73,7 +73,7 @@ https://<your-project>.vercel.app/api/auth/callback/microsoft-entra-id
 
 ## 5 · Wire up CORS on kaveon-api
 
-Set `WEB_URL` on the Container App to `https://<your-project>.vercel.app` and redeploy.
+Set `WEB_URL` on the API host to `https://<your-project>.vercel.app` and redeploy.
 
 ## Architecture
 
@@ -81,8 +81,8 @@ Set `WEB_URL` on the Container App to `https://<your-project>.vercel.app` and re
 flowchart TD
     B["🌐 Browser"]
     V["▲ Vercel · kaveon-studio<br/><small>NextAuth session (server-side)<br/>/api/kaveon/[...path] proxy → X-User-* + KAVEON_PROXY_SECRET</small>"]
-    A["⚙️ Azure Container Apps · kaveon-api"]
+    A["⚙️ Kaveon API + DLM · VM or AKS"]
     B --> V --> A
 ```
 
-The API is not on Vercel. Serverless functions cannot hold a persistent pyodbc connection pool; the API needs a long-lived process for the warm-pool + heartbeat behaviour.
+The API is not on Vercel. Serverless functions cannot hold KaveonDB and Engine bridge processes, query admission, or the warm connection pools; the API and Engine need a long-lived VM or container deployment.

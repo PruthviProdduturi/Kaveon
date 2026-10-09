@@ -8,7 +8,7 @@ export default function OperationsDocs() {
 
     <h2>Know your deployment</h2>
     <p>
-      One request path: browser → Studio on Vercel → its same-origin proxy → the API → the Kaveon Engine coordinator →
+      One request path: browser → Studio (Vercel, AKS, or VM) → its same-origin proxy → the API → the Kaveon Engine coordinator →
       its workers → object storage. The Engine is the query path for every chart, dashboard and question; nothing
       answers around it. Studio is the only front door, and the API trusts the proxy header, so the API and the
       Engine must never be published.
