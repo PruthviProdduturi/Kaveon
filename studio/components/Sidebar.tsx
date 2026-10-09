@@ -8,6 +8,7 @@ import { useAuth } from "../auth/useAuth";
 import { useTheme } from "../contexts/ThemeContext";
 import { useGuardedNavigate } from "../contexts/NavigationGuardContext";
 import { useRole } from "../hooks/useRole";
+import { ConfirmModal } from "./ConfirmModal";
 import { useRecents, RecentItem } from "../hooks/useRecents";
 import { msalFetch } from "../utils/msalFetch";
 
@@ -356,7 +357,12 @@ const RECENT_TYPES: { key: RecentItem["type"] | "all"; label: string }[] = [
 export function Sidebar({ children }: SidebarProps) {
   const { account, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
-  const { recents, addRecent, removeRecent, clearRecents } = useRecents();
+  const { recents, addRecent, removeRecent, clearRecents, conversationsClearedBy } = useRecents();
+  // Clearing is destructive now: a conversation is only listed here, so
+  // removing it from the list removes it. The dialog has to say so before
+  // anything happens.
+  const [pendingClear, setPendingClear] = useState<{ type?: RecentItem["type"]; conversations: number } | null>(null);
+  const [clearing, setClearing] = useState(false);
   const [recentFilter, setRecentFilter] = useState<RecentItem["type"] | "all">("all");
   const [recentMenuOpen, setRecentMenuOpen] = useState(false);
   const [recentsCollapsed, setRecentsCollapsed] = useState(false);
@@ -671,7 +677,11 @@ export function Sidebar({ children }: SidebarProps) {
                           })}
                           <div style={{ height: 1, background: "var(--border)", margin: "4px 0" }} />
                           <button type="button"
-                            onClick={() => { clearRecents(recentFilter === "all" ? undefined : recentFilter); setRecentMenuOpen(false); }}
+                            onClick={() => {
+                              const type = recentFilter === "all" ? undefined : recentFilter;
+                              setPendingClear({ type, conversations: conversationsClearedBy(type) });
+                              setRecentMenuOpen(false);
+                            }}
                             style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "7px 10px", border: "none", background: "transparent", color: "#f87171", fontSize: 13, cursor: "pointer", borderRadius: 6, textAlign: "left", fontFamily: "inherit" }}
                             onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(220,38,38,0.1)")}
                             onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
@@ -825,6 +835,33 @@ export function Sidebar({ children }: SidebarProps) {
       </div>
 
       {searchOpen && <SpotlightSearch recents={recents} onClose={() => setSearchOpen(false)} onNavigate={(href) => { setSearchOpen(false); navigate(href); }} />}
+
+      <ConfirmModal
+        isOpen={pendingClear !== null}
+        danger
+        busy={clearing}
+        title={pendingClear?.conversations ? "Clear recents and delete conversations" : "Clear recents"}
+        message={
+          pendingClear?.conversations
+            ? `This removes the list and permanently deletes ${pendingClear.conversations} `
+              + `${pendingClear.conversations === 1 ? "conversation" : "conversations"}, with every question `
+              + "and answer in them. Conversations are only listed here, so there is nowhere to recover them from. "
+              + "Dashboards, charts and datasets are only removed from the list."
+            : "This removes these items from the list. Nothing they point to is deleted."
+        }
+        confirmLabel={pendingClear?.conversations ? "Delete and clear" : "Clear"}
+        onConfirm={async () => {
+          if (!pendingClear) return;
+          setClearing(true);
+          try {
+            await clearRecents(pendingClear.type);
+          } finally {
+            setClearing(false);
+            setPendingClear(null);
+          }
+        }}
+        onCancel={() => { if (!clearing) setPendingClear(null); }}
+      />
     </div>
   );
 }

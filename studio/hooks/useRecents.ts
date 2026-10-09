@@ -190,14 +190,45 @@ export function useRecents() {
     }).catch(() => {});
   }, []);
 
-  // Clear all recents, or just one type — updates local + state + the per-user DB.
-  const clearRecents = useCallback((type?: RecentItem["type"]) => {
-    const next = type ? loadLocal().filter((r) => r.type !== type) : [];
+  /**
+   * Clear the list, or one kind of it.
+   *
+   * A conversation is not a pointer to something else — Recents is the only
+   * place conversations are listed, and they are drawn from the conversation
+   * records themselves. So clearing one has to delete it: hiding it would
+   * leave it with nowhere to be found, which is worse than removing it. The
+   * caller is responsible for saying so before calling this.
+   */
+  const clearRecents = useCallback(async (type?: RecentItem["type"]) => {
+    const current = loadLocal();
+    const next = type ? current.filter((r) => r.type !== type) : [];
     saveLocal(next);
     setRecents(next);            // update this instance immediately
+
     const qs = type ? `?type=${encodeURIComponent(type)}` : "";
-    msalFetch(`/api/v1/user/recents${qs}`, { method: "DELETE" }).catch(() => {});
+    const work: Promise<unknown>[] = [
+      msalFetch(`/api/v1/user/recents${qs}`, { method: "DELETE" }).catch(() => {}),
+    ];
+    if (!type || type === "chat") {
+      for (const item of current) {
+        if (item.type !== "chat") continue;
+        const sessionId = item.id.startsWith("chat-") ? item.id.slice(5) : item.id;
+        if (!sessionId) continue;
+        work.push(
+          msalFetch(`/api/v1/chat/history/${encodeURIComponent(sessionId)}`, {
+            method: "DELETE",
+          }).catch(() => {}),
+        );
+      }
+    }
+    await Promise.all(work);
   }, []);
 
-  return { recents, addRecent, touchRecent, removeRecent, clearRecents };
+  /** How many conversations a clear of this kind would delete. */
+  const conversationsClearedBy = useCallback((type?: RecentItem["type"]) => {
+    if (type && type !== "chat") return 0;
+    return loadLocal().filter((r) => r.type === "chat").length;
+  }, []);
+
+  return { recents, addRecent, touchRecent, removeRecent, clearRecents, conversationsClearedBy };
 }
