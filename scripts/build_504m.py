@@ -2,6 +2,11 @@
 Build kaveon_events_daily (504M rows) via COPY FROM STDIN.
 Run directly: python scripts/build_504m.py
 Expected: ~78 min on a fast machine, UNLOGGED table on B1ms.
+
+Superseded by scripts/build_kaveon_events_table.py, which writes the table
+straight to the lake as Parquet and Delta. This loads PostgreSQL, which is
+no longer where the events table lives, and its columns are the patterned
+`low + abs((user_id * seed) % range)` draws the rebuild replaced.
 """
 import psycopg2
 import numpy as np

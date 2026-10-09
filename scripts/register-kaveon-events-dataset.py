@@ -41,7 +41,7 @@ MEASURES = ("actions", "sessions", "duration_sec", "queries_run", "charts_create
             "errors", "rows_scanned", "cache_hits", "latency_p75_ms")
 
 COLUMNS = (
-    [{"table_name": TABLE, "column_name": "event_date", "data_type": "varchar", "is_dimension": False, "is_metric": False, "semantic_type": "date"},
+    [{"table_name": TABLE, "column_name": "event_date", "data_type": "date", "is_dimension": False, "is_metric": False, "semantic_type": "date"},
      {"table_name": TABLE, "column_name": "user_id", "data_type": "bigint", "is_dimension": False, "is_metric": False}]
     + [{"table_name": TABLE, "column_name": m, "data_type": "bigint", "is_dimension": False, "is_metric": True} for m in MEASURES]
     + [{"table_name": TABLE, "column_name": d, "data_type": "varchar", "is_dimension": True, "is_metric": False} for d in DIMENSIONS]

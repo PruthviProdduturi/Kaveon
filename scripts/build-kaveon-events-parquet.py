@@ -1,5 +1,13 @@
 """Build the 504M-row product telemetry table for KaveonDB.
 
+**Superseded by `scripts/build_kaveon_events_table.py`.** That script is what
+built the published `public.kaveon_events_enriched`: it stores `event_date` as
+`date32` rather than text, draws every metric from a distribution instead of
+`low + abs((user_id * seed) % range)`, and covers 185 countries rather than 26.
+This file is kept because it documents how the table was first assembled and
+because `scripts/build_504m.py`'s column formulas are only recorded here; do
+not use it to rebuild the table.
+
 Reproduces `scripts/build_504m.py` exactly — the same hash-derived columns for
 the same 3,000,000 users over 2026-07-04..2026-07-31 and six surfaces — but
 writes one sorted Parquet file instead of loading PostgreSQL. Each user's
