@@ -117,16 +117,85 @@ def test_chat_routes_create_and_append_without_postgresql():
     assert appended["id"] == 12
 
 
-def test_stale_chat_session_conflict_does_not_retry_as_id_collision():
-    session = {"revision": 4, "document": {
+def _session(revision: int) -> dict:
+    return {"revision": revision, "document": {
         "id": "11", "user_email": "alice", "title": "Chat",
         "created_at": "x", "updated_at": "x"}}
+
+
+def test_contended_chat_append_commits_against_the_current_revision():
+    """A turn is two appends, so neither may be dropped when they collide.
+
+    Appending touches the conversation record, so the question and the answer
+    contend on its revision and KaveonDB rejects the loser — as an upstream
+    refusal, not a 409, which is how a reopened conversation came back holding
+    the questions and none of the answers. The append now reloads the
+    conversation and commits against the revision it actually holds.
+    """
+    attempts = []
+
+    def transact(values, *_):
+        attempts.append(values)
+        if len(attempts) == 1:
+            raise HTTPException(502, "transaction rejected")
+        return {}
+
     with patch.object(chat_history_store.product_store, "read",
-                      side_effect=[session, {**session, "revision": 5}]), \
+                      side_effect=[_session(4), None, _session(5)]), \
+         patch.object(chat_history_store, "_new_id", return_value="12"), \
+         patch.object(chat_history_store.product_store, "transact", side_effect=transact):
+        result = chat_history_store.add_message(
+            "11", "alice", role="assistant", content="the answer", route="dlm")
+    assert result["id"] == "12" and result["content"] == "the answer"
+    # The retry keeps the message identity and advances only the revision the
+    # conversation's touch commits against.
+    assert [[item.record_id for item in values] for values in attempts] == [
+        ["12", "11"], ["12", "11"]]
+    assert [values[0].expected_revision for values in attempts] == [None, None]
+    assert [values[1].expected_revision for values in attempts] == [4, 5]
+
+
+def test_rejected_chat_append_that_already_committed_is_not_written_twice():
+    message = {"id": "12", "session_id": "11", "user_email": "alice",
+               "role": "assistant", "content": "the answer", "sql_query": None,
+               "chart_type": None, "data": None, "route": "dlm", "created_at": "x"}
+    with patch.object(chat_history_store, "_now", return_value="x"), \
+         patch.object(chat_history_store, "_new_id", return_value="12"), \
+         patch.object(chat_history_store.product_store, "read",
+                      side_effect=[_session(4), {"revision": 1, "document": message}]), \
          patch.object(chat_history_store.product_store, "transact",
-                      side_effect=HTTPException(409, "conflict")):
+                      side_effect=HTTPException(502, "transaction rejected")) as transact:
+        result = chat_history_store.add_message(
+            "11", "alice", role="assistant", content="the answer", route="dlm")
+    assert result == message
+    transact.assert_called_once()
+
+
+def test_rejected_chat_append_on_an_unchanged_conversation_is_not_retried():
+    """A refusal that is not contention must surface rather than loop."""
+    with patch.object(chat_history_store.product_store, "read",
+                      side_effect=[_session(4), None, _session(4)]), \
+         patch.object(chat_history_store.product_store, "transact",
+                      side_effect=HTTPException(502, "statement rejected")) as transact:
         try:
             chat_history_store.add_message("11", "alice", role="user", content="hello")
-            assert False, "stale session must fail"
+            assert False, "a refusal that is not contention must surface"
         except HTTPException as error:
-            assert error.status_code == 409
+            assert error.status_code == 502
+    transact.assert_called_once()
+
+
+def test_oversized_chat_answer_keeps_its_text_and_marks_the_rows_omitted():
+    """Rows are the one part the stored statement reproduces, so they give way."""
+    wide = {"columns": ["c"], "rows": [["x" * 4096] for _ in range(512)],
+            "row_count": 512, "meta": {"lane": "live"}}
+    with patch.object(chat_history_store.product_store, "read", return_value=_session(4)), \
+         patch.object(chat_history_store, "_new_id", return_value="12"), \
+         patch.object(chat_history_store.product_store, "transact", return_value={}):
+        result = chat_history_store.add_message(
+            "11", "alice", role="assistant", content="the answer",
+            sql_query="SELECT 1", chart_type="bar", data=wide, route="dlm")
+    assert result["content"] == "the answer" and result["sql_query"] == "SELECT 1"
+    assert result["data"] == {"row_count": 512, "meta": {"lane": "live"},
+                              "rows_omitted": True}
+    assert chat_history_store._document_bytes(result) <= chat_history_store.MAX_DOCUMENT_BYTES

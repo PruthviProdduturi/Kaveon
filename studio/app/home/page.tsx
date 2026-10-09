@@ -89,6 +89,64 @@ function renderAssistantHtml(content: string): string {
   return escaped.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
 }
 
+/** Everything an answer showed beyond its text: the lane it took, the evidence
+ *  behind it and the chart's axes. It rides in the message's `data` blob —
+ *  free-form JSON on `chat_message` — because reopening a conversation has to
+ *  restore the answer, not a paragraph of it. Result rows are stored alongside
+ *  (first 100) and are the one part the API will drop to stay inside KaveonDB's
+ *  document bound, since the stored statement reproduces them. */
+function persistedMeta(meta: RouteMeta, chart: ChartData | null): Record<string, unknown> {
+  return {
+    lane: meta.lane, approx: meta.approx, datasetName: meta.datasetName,
+    questionClass: meta.questionClass, durationMs: meta.durationMs,
+    evidence: meta.evidence, headline: meta.headline,
+    ...(chart ? { chart: { xAxis: chart.xAxis, yAxis: chart.yAxis, title: chart.title } } : {}),
+  };
+}
+
+/** The routes that name a lane and so render as a provenance badge. `clarify`,
+ *  `error`, `unanswerable`, `out_of_scope` and `no_match` are recorded for
+ *  provenance but describe no query; restoring them as a badge labelled every
+ *  one of them "Live query". */
+const BADGED_ROUTES = new Set<string>(["context", "hybrid", "query", "direct", "dlm"]);
+
+/** A stored message as the transcript renders it — the exact reverse of what
+ *  `persistedMeta` writes. */
+function restoreMessage(stored: Record<string, unknown>): Message {
+  const data = (stored.data ?? null) as Record<string, unknown> | null;
+  const meta = (data?.meta ?? null) as Record<string, unknown> | null;
+  const chartMeta = (meta?.chart ?? null) as Record<string, unknown> | null;
+  const rows = (data?.rows as ChartData["rows"] | undefined) ?? [];
+  const columns = (data?.columns as string[] | undefined) ?? [];
+  const chartType = (stored.chart_type ?? null) as ChartData["chartType"] | null;
+  const route = String(stored.route ?? "");
+  return {
+    role: stored.role as Message["role"],
+    content: String(stored.content ?? ""),
+    ...(chartType && rows.length > 0 ? {
+      chart: {
+        rows, columns, chartType,
+        xAxis: (chartMeta?.xAxis as string | null | undefined) ?? null,
+        yAxis: (chartMeta?.yAxis as string | null | undefined) ?? null,
+        title: (chartMeta?.title as string | undefined) ?? "",
+        sql: (stored.sql_query as string | null | undefined) ?? "",
+      },
+    } : {}),
+    ...(BADGED_ROUTES.has(route) ? {
+      routeMeta: {
+        route: route as RouteMeta["route"],
+        lane: meta?.lane as RouteMeta["lane"] | undefined,
+        approx: meta?.approx as boolean | undefined,
+        datasetName: meta?.datasetName as string | undefined,
+        questionClass: meta?.questionClass as string | undefined,
+        durationMs: meta?.durationMs as number | undefined,
+        evidence: meta?.evidence as Evidence | undefined,
+        headline: (meta?.headline as Row | undefined) ?? headlineOf(rows),
+      },
+    } : {}),
+  };
+}
+
 /** Compact number format for context hints (3.9M / 12.4K / 1,234). */
 function fmtNum(v: number | string | null): string {
   if (v == null) return "—";
@@ -410,6 +468,18 @@ export default function Home() {
     }
   }, []);
 
+  // One turn — the question and the answer — appended in order.
+  const saveTurn = useCallback(async (sessionId: number, question: string, answer: string, extra?: { sql_query?: string; chart_type?: string; data?: Record<string, unknown>; route?: string }) => {
+    // Appending a message also touches the conversation it belongs to, so two
+    // appends to one conversation contend on that record's revision and
+    // KaveonDB rejects whichever commit loses. Firing both at once therefore
+    // dropped one of every pair, which is why a reopened conversation came
+    // back holding the questions and none of the answers. They go in order,
+    // and the answer is attempted whatever became of the question.
+    await saveMessage(sessionId, "user", question);
+    await saveMessage(sessionId, "assistant", answer, extra);
+  }, [saveMessage]);
+
   // Load messages from a past session
   const loadSession = useCallback(async (sessionId: number) => {
     setLoadingSession(true);
@@ -420,23 +490,7 @@ export default function Home() {
       const body = await res.json();
       const withFrame = [...(body.messages || [])].reverse().find((m: Record<string, unknown>) => (m.data as Record<string, unknown> | null)?.frame);
       lastFrame.current = withFrame ? ((withFrame.data as Record<string, unknown>).frame as Record<string, unknown>) : null;
-      const msgs: Message[] = (body.messages || []).map((m: Record<string, unknown>) => ({
-        role: m.role as "user" | "assistant",
-        content: m.content as string,
-        ...(m.chart_type && m.data ? {
-          chart: {
-            rows: (m.data as Record<string, unknown>).rows || [],
-            columns: (m.data as Record<string, unknown>).columns || [],
-            chartType: m.chart_type as ChartData["chartType"],
-            xAxis: null,
-            yAxis: null,
-            title: "",
-            sql: (m.sql_query as string) || "",
-          },
-        } : {}),
-        ...(m.route ? { routeMeta: { route: m.route as RouteMeta["route"] } } : {}),
-      }));
-      setMessages(msgs);
+      setMessages((body.messages || []).map(restoreMessage));
       setActiveSessionId(sessionId);
     } catch {
       // Failed to load session
@@ -549,9 +603,9 @@ export default function Home() {
   const datasetSchema: DatasetSchema | null =
     catalogue.find(entry => entry.id === selectedDataset)?.schema ?? null;
 
-  // Auto-scroll
+  // Auto-scroll to the end of the conversation.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages]);
 
   // Each catalogue entry bound to the source it is queried through. The
@@ -792,8 +846,7 @@ export default function Home() {
           if (!dlm?.ok && dlm?.reason === "clarify" && dlm.clarification) {
             const prompt: string = dlm.clarification.prompt;
             if (sid) {
-              void saveMessage(sid, "user", text.trim());
-              void saveMessage(sid, "assistant", prompt, { route: "clarify" });
+              void saveTurn(sid, text.trim(), prompt, { route: "clarify" });
             }
             setMessages(prev => [...prev.slice(0, -1), {
               role: "assistant",
@@ -805,8 +858,7 @@ export default function Home() {
           if (!dlm?.ok && dlm?.reason === "query_failed") {
             const failMsg = `The query could not be completed: ${String(dlm.message || "the Engine refused the statement")}.`;
             if (sid) {
-              void saveMessage(sid, "user", text.trim());
-              void saveMessage(sid, "assistant", failMsg, { sql_query: dlm.sql, route: "error" });
+              void saveTurn(sid, text.trim(), failMsg, { sql_query: dlm.sql, route: "error" });
             }
             setMessages(prev => [...prev.slice(0, -1), {
               role: "assistant",
@@ -822,8 +874,7 @@ export default function Home() {
             const closest: string[] = dlm.closest || [];
             const why = String(dlm.answer || dlm.why || "That question cannot be answered from this dataset.");
             if (sid) {
-              void saveMessage(sid, "user", text.trim());
-              void saveMessage(sid, "assistant", why, { route: "unanswerable" });
+              void saveTurn(sid, text.trim(), why, { route: "unanswerable" });
             }
             setMessages(prev => [...prev.slice(0, -1), {
               role: "assistant",
@@ -847,8 +898,7 @@ export default function Home() {
                 ? "No datasets are registered yet. Create a dataset in the Library, then return here to ask questions about it."
                 : `That question is outside the data Kaveon holds. Ask about one of these datasets: ${names.map(n => `**${n}**`).join(", ")}.`;
             if (sid) {
-              void saveMessage(sid, "user", text.trim());
-              void saveMessage(sid, "assistant", scopeMsg, { route: "out_of_scope" });
+              void saveTurn(sid, text.trim(), scopeMsg, { route: "out_of_scope" });
             }
             setMessages(prev => [...prev.slice(0, -1), { role: "assistant", content: scopeMsg }]);
             return;
@@ -913,17 +963,36 @@ export default function Home() {
               const parsedLike = { sql: dlm.sql, chartType: dlm.chartType, xAxis: dlm.xAxis, yAxis: dlm.yAxis, title: dlm.title, confidence: dlm.confidence ?? 0.5 };
               const insight = generateInsight(rows, columns, parsedLike, question);
               const summary = dlm.note ? `${dlm.note}\n\n${insight}` : insight;
+              const answerMeta: RouteMeta = {
+                route, lane, evidence, headline: headlineOf(rows),
+                durationMs: Math.round(performance.now() - dlmT0),
+                approx: !!dlm.approx, datasetName: dlm.dataset_name,
+                questionClass: dlm.question_class,
+              };
+              const answerChart: ChartData | null = wantsChart
+                ? { rows, columns, chartType: dlm.chartType, xAxis: dlm.xAxis, yAxis: dlm.yAxis, title: dlm.title, sql: dlm.sql }
+                : null;
               if (sid) {
-                void saveMessage(sid, "user", text.trim());
                 // The frame rides along in the message's data blob so a reopened
-                // session resumes with the same context the DLM last answered in.
-                void saveMessage(sid, "assistant", summary, { sql_query: dlm.sql, chart_type: wantsChart ? dlm.chartType : undefined, data: { columns, rows: rows.slice(0, 100), row_count: rows.length, ...(dlm.frame ? { frame: dlm.frame } : {}) }, route });
+                // session resumes with the same context the DLM last answered in;
+                // `meta` carries the rest of the answer, so reopening restores
+                // its lane, its evidence and its chart rather than the text alone.
+                void saveTurn(sid, text.trim(), summary, {
+                  sql_query: dlm.sql,
+                  chart_type: wantsChart ? dlm.chartType : undefined,
+                  data: {
+                    columns, rows: rows.slice(0, 100), row_count: rows.length,
+                    ...(dlm.frame ? { frame: dlm.frame } : {}),
+                    meta: persistedMeta(answerMeta, answerChart),
+                  },
+                  route,
+                });
               }
               setMessages(prev => [...prev.slice(0, -1), {
                 role: "assistant",
                 content: summary,
-                ...(wantsChart ? { chart: { rows, columns, chartType: dlm.chartType, xAxis: dlm.xAxis, yAxis: dlm.yAxis, title: dlm.title, sql: dlm.sql } } : {}),
-                routeMeta: { route, lane, evidence, headline: headlineOf(rows), durationMs: Math.round(performance.now() - dlmT0), approx: !!dlm.approx, datasetName: dlm.dataset_name, questionClass: dlm.question_class },
+                ...(answerChart ? { chart: answerChart } : {}),
+                routeMeta: answerMeta,
               }]);
               return;
             }
@@ -1004,28 +1073,36 @@ export default function Home() {
 
             if (rows.length > 0) {
               const summary = generateInsight(rows, columns, parsed, text.trim());
+              const directMeta: RouteMeta = {
+                route: "direct", durationMs: Math.round(performance.now() - t0),
+                headline: headlineOf(rows),
+              };
+              const directChart: ChartData | null = wantsChart
+                ? { rows, columns, chartType: parsed.chartType, xAxis: parsed.xAxis, yAxis: parsed.yAxis, title: parsed.title, sql: parsed.sql }
+                : null;
               if (sid) {
-                void saveMessage(sid, "user", text.trim());
-                void saveMessage(sid, "assistant", summary, {
+                void saveTurn(sid, text.trim(), summary, {
                   sql_query: parsed.sql,
                   chart_type: wantsChart ? parsed.chartType : undefined,
-                  data: { columns, rows: rows.slice(0, 100), row_count: rows.length },
+                  data: {
+                    columns, rows: rows.slice(0, 100), row_count: rows.length,
+                    meta: persistedMeta(directMeta, directChart),
+                  },
                   route: "direct",
                 });
               }
               setMessages(prev => [...prev.slice(0, -1), {
                 role: "assistant",
                 content: summary,
-                ...(wantsChart ? { chart: { rows, columns, chartType: parsed.chartType, xAxis: parsed.xAxis, yAxis: parsed.yAxis, title: parsed.title, sql: parsed.sql } } : {}),
-                routeMeta: { route: "direct", durationMs: Math.round(performance.now() - t0) },
+                ...(directChart ? { chart: directChart } : {}),
+                routeMeta: directMeta,
               }]);
               return;
             }
 
             const noResultMsg = `The query completed successfully but returned no rows.\n\nSQL: \`${parsed.sql}\``;
             if (sid) {
-              void saveMessage(sid, "user", text.trim());
-              void saveMessage(sid, "assistant", noResultMsg, { sql_query: parsed.sql, route: "direct" });
+              void saveTurn(sid, text.trim(), noResultMsg, { sql_query: parsed.sql, route: "direct" });
             }
             setMessages(prev => [...prev.slice(0, -1), {
               role: "assistant",
@@ -1042,8 +1119,7 @@ export default function Home() {
             }
             const errMsg = `The query could not be completed (status ${execRes.status}).\n\nSQL: \`${parsed.sql}\`\n\n${errText.substring(0, 200)}`;
             if (sid) {
-              void saveMessage(sid, "user", text.trim());
-              void saveMessage(sid, "assistant", errMsg, { sql_query: parsed.sql, route: "error" });
+              void saveTurn(sid, text.trim(), errMsg, { sql_query: parsed.sql, route: "error" });
             }
             setMessages(prev => [...prev.slice(0, -1), {
               role: "assistant",
@@ -1054,8 +1130,7 @@ export default function Home() {
         } catch (execErr) {
           const errMsg = `The query could not be executed: ${execErr instanceof Error ? execErr.message : "an unexpected error occurred"}.\n\nSQL: \`${parsed.sql}\``;
           if (sid) {
-            void saveMessage(sid, "user", text.trim());
-            void saveMessage(sid, "assistant", errMsg, { route: "error" });
+            void saveTurn(sid, text.trim(), errMsg, { route: "error" });
           }
           setMessages(prev => [...prev.slice(0, -1), {
             role: "assistant",
@@ -1073,8 +1148,7 @@ export default function Home() {
         ? "No datasets are available yet. Please create a dataset in the Workspace, then return here to ask questions about your data."
         : `I wasn't able to match that request to your data. The following datasets are available: **${availableDatasets}**\n\nYou might try, for example:\n• "Show [metric] by [column]"\n• "Top 10 [column] by [metric]"\n• "Total [metric]"\n• "Trend of [metric] over time"`;
       if (sid) {
-        void saveMessage(sid, "user", text.trim());
-        void saveMessage(sid, "assistant", fallbackMsg, { route: "no_match" });
+        void saveTurn(sid, text.trim(), fallbackMsg, { route: "no_match" });
       }
       setMessages(prev => [...prev.slice(0, -1), {
         role: "assistant",
@@ -1083,8 +1157,7 @@ export default function Home() {
     } catch (e) {
       const errMsg = `Something went wrong. ${e instanceof Error ? e.message : "Please try again."}`;
       if (sid) {
-        void saveMessage(sid, "user", text.trim());
-        void saveMessage(sid, "assistant", errMsg, { route: "error" });
+        void saveTurn(sid, text.trim(), errMsg, { route: "error" });
       }
       setMessages(prev => [...prev.slice(0, -1), {
         role: "assistant",
@@ -1126,13 +1199,18 @@ export default function Home() {
     <div
       style={{
         position: "relative",
-        minHeight: "100vh",
+        height: "100dvh",
         display: "flex",
         background: "var(--bg-primary)",
       }}
     >
-      {/* Main content — chat history lives in Recents now, no separate sidebar */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: "100vh" }}>
+      {/* Main content — chat history lives in Recents now, no separate sidebar.
+          The column is exactly as tall as the viewport so the transcript below
+          is the element that scrolls: the app shell's main column is an
+          `overflow: auto` box whose height is its own content, which makes it a
+          scroll container that never scrolls. Without a definite height here
+          the window scrolled instead and carried the composer off screen. */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, height: "100%" }}>
 
         {/* Available-context banner — what's compiled & testable (date ranges, values) */}
         <ContextBanner />
@@ -1142,6 +1220,8 @@ export default function Home() {
           <div
             style={{
               flex: 1,
+              minHeight: 0,
+              overflowY: "auto",
               display: "flex",
               flexDirection: "column",
               alignItems: "center",
@@ -1159,7 +1239,7 @@ export default function Home() {
 
 
               {/* Input */}
-              <div style={{ width: "100%", maxWidth: 640, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 16, padding: "16px", boxShadow: "0 0 0 1px rgba(var(--accent-rgb), 0.06), 0 4px 20px rgba(0,0,0,0.3)", display: "flex", flexDirection: "column", gap: 10 }}>
+              <div style={{ width: "100%", maxWidth: 640, background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 16, padding: "16px", boxShadow: "0 0 0 1px rgba(var(--accent-rgb), 0.06), var(--shadow-lg)", display: "flex", flexDirection: "column", gap: 10 }}>
                 <textarea
                   ref={inputRef as any}
                   value={query}
@@ -1167,14 +1247,14 @@ export default function Home() {
                   onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }}
                   placeholder={placeholder}
                   rows={2}
-                  style={{ width: "100%", border: "none", outline: "none", background: "transparent", color: "#f0f0f2", fontSize: 15, lineHeight: 1.5, resize: "none", fontFamily: "inherit" }}
+                  style={{ width: "100%", border: "none", outline: "none", background: "transparent", color: "var(--text-primary)", fontSize: 15, lineHeight: 1.5, resize: "none", fontFamily: "inherit" }}
                 />
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-                  <span style={{ fontSize: 11.5, color: demoQuota.quota?.remaining === 0 ? "#d97706" : "#64748b", minHeight: 16 }}
+                  <span style={{ fontSize: 11.5, color: demoQuota.quota?.remaining === 0 ? "var(--warning)" : "var(--text-muted)", minHeight: 16 }}
                     title={demoQuota.label ? "This demo allows a fixed number of live reads per rolling window; answers from precomputed context and the result cache do not count." : undefined}>
                     {demoQuota.label ?? ""}
                   </span>
-                  <button onClick={submit} disabled={!query.trim() || !canSend} style={{ width: 34, height: 34, borderRadius: 10, border: "none", background: query.trim() && canSend ? "var(--accent)" : "rgba(255,255,255,0.08)", color: query.trim() && canSend ? "#fff" : "#64748b", cursor: query.trim() && canSend ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, transition: "all 0.15s" }}>
+                  <button onClick={submit} disabled={!query.trim() || !canSend} style={{ width: 34, height: 34, borderRadius: 10, border: "none", background: query.trim() && canSend ? "var(--accent)" : "var(--bg-hover)", color: query.trim() && canSend ? "#fff" : "var(--text-muted)", cursor: query.trim() && canSend ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, transition: "all 0.15s" }}>
                     ↑
                   </button>
                 </div>
@@ -1203,153 +1283,170 @@ export default function Home() {
         {loadingSession && <KaveonLoading message="Loading conversation" />}
 
         {inConversation && !loadingSession && (
-          <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+          <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
 
-            {/* Messages */}
-            <div style={{ flex: 1, overflow: "auto", padding: "32px 24px", display: "flex", flexDirection: "column", gap: 16 }}>
-              {messages.map((m, i) => (
-                <div key={i} style={{ display: "flex", flexDirection: m.role === "user" ? "row-reverse" : "row", gap: 10, alignItems: "flex-start" }}>
-                  {/* Avatar */}
-                  <div style={{
-                    width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    background: m.role === "user" ? "var(--accent)" : "transparent",
-                    fontSize: 12, fontWeight: 600, color: m.role === "user" ? "#fff" : "var(--text-secondary)",
-                  }}>
-                    {m.role === "user" ? (account?.name?.[0] ?? "U") : <KaveonMark size={22} useDirectColor />}
-                  </div>
+            {/* The transcript scrolls under a soft fade; the composer below it
+                never moves. The fade is painted over the foot of the scroller
+                rather than inside it, so a message passing beneath the composer
+                dissolves into the page ground instead of being cut at a hard
+                edge, and it takes no pointer events so the wheel still reaches
+                the transcript under it. */}
+            <div style={{ position: "relative", flex: 1, minHeight: 0, display: "flex" }}>
+              <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "32px 24px", display: "flex", flexDirection: "column", gap: 16 }}>
+                {messages.map((m, i) => (
+                  <div key={i} style={{ display: "flex", flexDirection: m.role === "user" ? "row-reverse" : "row", gap: 10, alignItems: "flex-start" }}>
+                    {/* Avatar */}
+                    <div style={{
+                      width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      background: m.role === "user" ? "var(--accent)" : "transparent",
+                      fontSize: 12, fontWeight: 600, color: m.role === "user" ? "#fff" : "var(--text-secondary)",
+                    }}>
+                      {m.role === "user" ? (account?.name?.[0] ?? "U") : <KaveonMark size={22} useDirectColor />}
+                    </div>
 
-                  {/* Bubble */}
-                  <div style={{
-                    maxWidth: m.chart ? "90%" : "75%",
-                    padding: "10px 14px",
-                    borderRadius: m.role === "user" ? "14px 4px 14px 14px" : "4px 14px 14px 14px",
-                    background: m.role === "user" ? "var(--accent)" : "var(--bg-surface)",
-                    color: m.role === "user" ? "#fff" : "var(--text-primary)",
-                    border: m.role === "user" ? "none" : "1px solid var(--border)",
-                    fontSize: 14, lineHeight: 1.6,
-                    overflow: "hidden",
-                  }}>
-                    {m.loading ? (
-                      m.liveSince ? (
-                        <div style={{ padding: "8px 14px", fontSize: 12.5, color: "var(--text-secondary)" }}>
-                          {m.contextHints && m.contextHints.length > 0 && (
-                            <div style={{ marginBottom: 8 }}>
-                              <div style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "2px 9px", borderRadius: 999, background: "rgba(16,185,129,0.1)", color: "#10b981", fontSize: 11, fontWeight: 600, marginBottom: 6 }}>
-                                <i className="fas fa-bolt" style={{ fontSize: 8 }} /> From context
-                              </div>
-                              <div style={{ color: "var(--text-muted)", marginBottom: 4 }}>What we already know, instantly:</div>
-                              {m.contextHints.map((h, i) => (
-                                <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 16, padding: "2px 0", maxWidth: 320 }}>
-                                  <span>{h.label}</span><strong style={{ color: "var(--text-primary)" }}>{fmtNum(h.value)}</strong>
+                    {/* Bubble */}
+                    <div style={{
+                      maxWidth: m.chart ? "90%" : "75%",
+                      padding: "10px 14px",
+                      borderRadius: m.role === "user" ? "14px 4px 14px 14px" : "4px 14px 14px 14px",
+                      background: m.role === "user" ? "var(--accent)" : "var(--bg-surface)",
+                      color: m.role === "user" ? "#fff" : "var(--text-primary)",
+                      border: m.role === "user" ? "none" : "1px solid var(--border)",
+                      fontSize: 14, lineHeight: 1.6,
+                      overflow: "hidden",
+                    }}>
+                      {m.loading ? (
+                        m.liveSince ? (
+                          <div style={{ padding: "8px 14px", fontSize: 12.5, color: "var(--text-secondary)" }}>
+                            {m.contextHints && m.contextHints.length > 0 && (
+                              <div style={{ marginBottom: 8 }}>
+                                <div style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "2px 9px", borderRadius: 999, background: "rgba(16,185,129,0.1)", color: "#10b981", fontSize: 11, fontWeight: 600, marginBottom: 6 }}>
+                                  <i className="fas fa-bolt" style={{ fontSize: 8 }} /> From context
                                 </div>
-                              ))}
+                                <div style={{ color: "var(--text-muted)", marginBottom: 4 }}>What we already know, instantly:</div>
+                                {m.contextHints.map((h, i) => (
+                                  <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 16, padding: "2px 0", maxWidth: 320 }}>
+                                    <span>{h.label}</span><strong style={{ color: "var(--text-primary)" }}>{fmtNum(h.value)}</strong>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "2px 9px", borderRadius: 999, background: "rgba(74,158,232,0.12)", color: "#4A9EE8", fontSize: 11, fontWeight: 600 }}>
+                                <i className="fas fa-database" style={{ fontSize: 8 }} /> Live query
+                              </span>
+                              <span>fetching the exact figure&hellip; <LiveTimer since={m.liveSince} /></span>
+                            </div>
+                          </div>
+                        ) : (
+                          <ThinkingBubble />
+                        )
+                      ) : (
+                        <>
+                          {m.notice && (
+                            <div style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "2px 9px", borderRadius: 999, background: "rgba(217,119,6,0.12)", color: "#d97706", fontSize: 11, fontWeight: 600, marginBottom: 6 }}>
+                              <i className="fas fa-hourglass-half" style={{ fontSize: 8 }} /> Live-query quota
                             </div>
                           )}
-                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                            <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "2px 9px", borderRadius: 999, background: "rgba(74,158,232,0.12)", color: "#4A9EE8", fontSize: 11, fontWeight: 600 }}>
-                              <i className="fas fa-database" style={{ fontSize: 8 }} /> Live query
-                            </span>
-                            <span>fetching the exact figure&hellip; <LiveTimer since={m.liveSince} /></span>
-                          </div>
-                        </div>
-                      ) : (
-                        <ThinkingBubble />
-                      )
-                    ) : (
-                      <>
-                        {m.notice && (
-                          <div style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "2px 9px", borderRadius: 999, background: "rgba(217,119,6,0.12)", color: "#d97706", fontSize: 11, fontWeight: 600, marginBottom: 6 }}>
-                            <i className="fas fa-hourglass-half" style={{ fontSize: 8 }} /> Live-query quota
-                          </div>
-                        )}
-                        {m.content && (
-                          <div style={{ padding: m.chart ? "0 0 8px" : 0, whiteSpace: "pre-wrap", lineHeight: 1.6, color: m.notice ? "var(--text-secondary)" : undefined }}
-                            dangerouslySetInnerHTML={{ __html: renderAssistantHtml(m.content) }}
-                          />
-                        )}
-                        {m.clarification && (
-                          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
-                            {m.clarification.options.map(opt => {
-                              const picked = m.chosen === opt.id;
-                              const settled = m.chosen != null;
-                              return (
-                                <button
-                                  key={opt.id}
-                                  type="button"
-                                  disabled={settled || sending}
-                                  title={opt.description || undefined}
-                                  onClick={() => {
-                                    const c = m.clarification!;
-                                    setMessages(prev => prev.map((x, j) => (j === i ? { ...x, chosen: opt.id } : x)));
-                                    if (c.kind === "question") {
-                                      void sendMessage(opt.label);   // a whole question, asked afresh
-                                    } else {
-                                      void sendMessage(opt.label, { question: c.resume.question, choices: { ...c.resume.choices, [c.kind]: opt.id } });
-                                    }
-                                  }}
-                                  style={{
-                                    padding: "6px 12px", borderRadius: 8, fontSize: 12.5, fontWeight: 500,
-                                    cursor: settled ? "default" : "pointer",
-                                    border: `1px solid ${picked ? "var(--accent)" : "var(--border)"}`,
-                                    background: picked ? "rgba(var(--accent-rgb), 0.12)" : "var(--bg-surface)",
-                                    color: picked ? "var(--accent)" : settled ? "var(--text-faint)" : "var(--text-primary)",
-                                  }}
-                                >
-                                  {opt.label}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        )}
-                        {m.chart && (
-                          <InlineChart
-                            rows={m.chart.rows}
-                            columns={m.chart.columns}
-                            chartType={m.chart.chartType}
-                            xAxis={m.chart.xAxis}
-                            yAxis={m.chart.yAxis}
-                            title={m.chart.title}
-                            sql={m.chart.sql}
-                          />
-                        )}
-                        {m.routeMeta && (
-                          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 10.5, color: "var(--text-faint)" }}>
-                            <span style={{
-                              display: "inline-flex", alignItems: "center", gap: 4,
-                              padding: "2px 8px", borderRadius: 10,
-                              background: m.routeMeta.route === "context" ? "rgba(16,185,129,0.1)" : m.routeMeta.route === "direct" ? "rgba(255,255,255,0.04)" : "rgba(74,158,232,0.1)",
-                              color: m.routeMeta.route === "context" ? "#10b981" : m.routeMeta.route === "direct" ? "var(--text-faint)" : "#4A9EE8",
-                              fontWeight: 600,
-                            }}>
-                              <i className={`fas ${m.routeMeta.route === "context" ? "fa-bolt" : m.routeMeta.route === "direct" ? "fa-database" : "fa-route"}`} style={{ fontSize: 8 }} />
-                              {m.routeMeta.route === "context" ? (m.routeMeta.approx ? "From sketch" : "From context") : m.routeMeta.route === "direct" ? "Live query" : m.routeMeta.route === "hybrid" ? "Hybrid" : m.routeMeta.lane === "cache" ? "From cache" : "Live query"}
-                            </span>
-                            {m.routeMeta.durationMs != null && <span>{m.routeMeta.durationMs >= 1000 ? (m.routeMeta.durationMs / 1000).toFixed(1) + "s" : m.routeMeta.durationMs + "ms"}</span>}
-                            {m.routeMeta.route === "context" && !m.routeMeta.approx && <span style={{ color: "#10b981" }}>&middot; no scan</span>}
-                            {m.routeMeta.route === "context" && m.routeMeta.approx && <span style={{ color: "#10b981" }} title="Sketch estimate with its error stated in the evidence; no scan">&middot; ≈ estimate &middot; no scan</span>}
-                            {m.routeMeta.datasetName && <span>&middot; {m.routeMeta.datasetName}</span>}
-                            {m.routeMeta.questionClass && (
-                              <span title="The question class the DLM answered as">
-                                &middot; {m.routeMeta.questionClass.replace(/_/g, " ")}
+                          {m.content && (
+                            <div style={{ padding: m.chart ? "0 0 8px" : 0, whiteSpace: "pre-wrap", lineHeight: 1.6, color: m.notice ? "var(--text-secondary)" : undefined }}
+                              dangerouslySetInnerHTML={{ __html: renderAssistantHtml(m.content) }}
+                            />
+                          )}
+                          {m.clarification && (
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+                              {m.clarification.options.map(opt => {
+                                const picked = m.chosen === opt.id;
+                                const settled = m.chosen != null;
+                                return (
+                                  <button
+                                    key={opt.id}
+                                    type="button"
+                                    disabled={settled || sending}
+                                    title={opt.description || undefined}
+                                    onClick={() => {
+                                      const c = m.clarification!;
+                                      setMessages(prev => prev.map((x, j) => (j === i ? { ...x, chosen: opt.id } : x)));
+                                      if (c.kind === "question") {
+                                        void sendMessage(opt.label);   // a whole question, asked afresh
+                                      } else {
+                                        void sendMessage(opt.label, { question: c.resume.question, choices: { ...c.resume.choices, [c.kind]: opt.id } });
+                                      }
+                                    }}
+                                    style={{
+                                      padding: "6px 12px", borderRadius: 8, fontSize: 12.5, fontWeight: 500,
+                                      cursor: settled ? "default" : "pointer",
+                                      border: `1px solid ${picked ? "var(--accent)" : "var(--border)"}`,
+                                      background: picked ? "rgba(var(--accent-rgb), 0.12)" : "var(--bg-surface)",
+                                      color: picked ? "var(--accent)" : settled ? "var(--text-faint)" : "var(--text-primary)",
+                                    }}
+                                  >
+                                    {opt.label}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                          {m.chart && (
+                            <InlineChart
+                              rows={m.chart.rows}
+                              columns={m.chart.columns}
+                              chartType={m.chart.chartType}
+                              xAxis={m.chart.xAxis}
+                              yAxis={m.chart.yAxis}
+                              title={m.chart.title}
+                              sql={m.chart.sql}
+                            />
+                          )}
+                          {m.routeMeta && (
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 10.5, color: "var(--text-faint)" }}>
+                              <span style={{
+                                display: "inline-flex", alignItems: "center", gap: 4,
+                                padding: "2px 8px", borderRadius: 10,
+                                background: m.routeMeta.route === "context" ? "rgba(16,185,129,0.1)" : m.routeMeta.route === "direct" ? "rgba(255,255,255,0.04)" : "rgba(74,158,232,0.1)",
+                                color: m.routeMeta.route === "context" ? "#10b981" : m.routeMeta.route === "direct" ? "var(--text-faint)" : "#4A9EE8",
+                                fontWeight: 600,
+                              }}>
+                                <i className={`fas ${m.routeMeta.route === "context" ? "fa-bolt" : m.routeMeta.route === "direct" ? "fa-database" : "fa-route"}`} style={{ fontSize: 8 }} />
+                                {m.routeMeta.route === "context" ? (m.routeMeta.approx ? "From sketch" : "From context") : m.routeMeta.route === "direct" ? "Live query" : m.routeMeta.route === "hybrid" ? "Hybrid" : m.routeMeta.lane === "cache" ? "From cache" : "Live query"}
                               </span>
-                            )}
-                          </div>
-                        )}
-                        {m.routeMeta?.evidence && (
-                          <EvidencePanel evidence={m.routeMeta.evidence} headline={m.routeMeta.headline ?? null} canRunLive={canRunLive} />
-                        )}
-                      </>
-                    )}
+                              {m.routeMeta.durationMs != null && <span>{m.routeMeta.durationMs >= 1000 ? (m.routeMeta.durationMs / 1000).toFixed(1) + "s" : m.routeMeta.durationMs + "ms"}</span>}
+                              {m.routeMeta.route === "context" && !m.routeMeta.approx && <span style={{ color: "#10b981" }}>&middot; no scan</span>}
+                              {m.routeMeta.route === "context" && m.routeMeta.approx && <span style={{ color: "#10b981" }} title="Sketch estimate with its error stated in the evidence; no scan">&middot; ≈ estimate &middot; no scan</span>}
+                              {m.routeMeta.datasetName && <span>&middot; {m.routeMeta.datasetName}</span>}
+                              {m.routeMeta.questionClass && (
+                                <span title="The question class the DLM answered as">
+                                  &middot; {m.routeMeta.questionClass.replace(/_/g, " ")}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                          {m.routeMeta?.evidence && (
+                            <EvidencePanel evidence={m.routeMeta.evidence} headline={m.routeMeta.headline ?? null} canRunLive={canRunLive} />
+                          )}
+                        </>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
-              <div ref={bottomRef} />
+                ))}
+                <div ref={bottomRef} />
+              </div>
+              <div
+                aria-hidden
+                style={{
+                  position: "absolute", left: 0, right: 0, bottom: 0, height: 28,
+                  pointerEvents: "none",
+                  background: "linear-gradient(to bottom, transparent, var(--bg-primary))",
+                }}
+              />
             </div>
 
-            {/* Input bar (bottom) — matches homepage textarea */}
-            <div style={{ padding: "16px 24px", flexShrink: 0 }}>
-              <div style={{ maxWidth: 700, margin: "0 auto", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 16, padding: "16px", boxShadow: "0 0 0 1px rgba(var(--accent-rgb), 0.06), 0 4px 20px rgba(0,0,0,0.3)", display: "flex", flexDirection: "column", gap: 10 }}>
+            {/* Composer — on the page ground below the transcript, so it holds
+                its place however far the conversation is scrolled and however
+                short the window is. */}
+            <div style={{ flexShrink: 0, padding: "0 24px 16px" }}>
+              <div style={{ maxWidth: 700, margin: "0 auto", background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 16, padding: "16px", boxShadow: "0 0 0 1px rgba(var(--accent-rgb), 0.06), var(--shadow-lg)", display: "flex", flexDirection: "column", gap: 10 }}>
                 <textarea
                   ref={inputRef as any}
                   value={query}
@@ -1357,19 +1454,19 @@ export default function Home() {
                   onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }}
                   placeholder="Ask anything..."
                   rows={2}
-                  style={{ width: "100%", border: "none", outline: "none", background: "transparent", color: "#f0f0f2", fontSize: 15, lineHeight: 1.5, resize: "none", fontFamily: "inherit" }}
+                  style={{ width: "100%", border: "none", outline: "none", background: "transparent", color: "var(--text-primary)", fontSize: 15, lineHeight: 1.5, resize: "none", fontFamily: "inherit" }}
                 />
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-                  <span style={{ fontSize: 11.5, color: demoQuota.quota?.remaining === 0 ? "#d97706" : "#64748b", minHeight: 16 }}
+                  <span style={{ fontSize: 11.5, color: demoQuota.quota?.remaining === 0 ? "var(--warning)" : "var(--text-muted)", minHeight: 16 }}
                     title={demoQuota.label ? "This demo allows a fixed number of live reads per rolling window; answers from precomputed context and the result cache do not count." : undefined}>
                     {demoQuota.label ?? ""}
                   </span>
-                  <button onClick={submit} disabled={!query.trim() || !canSend} style={{ width: 34, height: 34, borderRadius: 10, border: "none", background: query.trim() && canSend ? "var(--accent)" : "rgba(255,255,255,0.08)", color: query.trim() && canSend ? "#fff" : "#64748b", cursor: query.trim() && canSend ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, transition: "all 0.15s" }}>
+                  <button onClick={submit} disabled={!query.trim() || !canSend} style={{ width: 34, height: 34, borderRadius: 10, border: "none", background: query.trim() && canSend ? "var(--accent)" : "var(--bg-hover)", color: query.trim() && canSend ? "#fff" : "var(--text-muted)", cursor: query.trim() && canSend ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, transition: "all 0.15s" }}>
                     ↑
                   </button>
                 </div>
               </div>
-              <p style={{ textAlign: "center", fontSize: 11, color: "#444", margin: "6px 0 0" }}>Kaveon generates SQL from your questions. Always verify queries before running in production.</p>
+              <p style={{ textAlign: "center", fontSize: 11, color: "var(--text-faint)", margin: "6px 0 0" }}>Kaveon generates SQL from your questions. Always verify queries before running in production.</p>
             </div>
           </div>
         )}

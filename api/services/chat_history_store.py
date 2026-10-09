@@ -1,7 +1,9 @@
 """Direct KaveonDB mutations for owner-isolated chat history."""
 
+import json
 import uuid
 from datetime import datetime, timezone
+from typing import Optional
 
 from fastapi import HTTPException
 
@@ -11,6 +13,17 @@ from services.chat_history_backfill import MAX_DOCUMENT_BYTES, session_document,
 
 MAX_OWNER_MESSAGES = 1_000
 DELETE_BATCH_SIZE = 100
+# Appending a message also touches the conversation it belongs to, so two
+# appends to one conversation contend on that record's revision and KaveonDB
+# rejects whichever commit loses. A chat turn is two appends — the question and
+# the answer — so a lost append is half the conversation gone. Each attempt
+# reloads the conversation and commits against the revision it actually holds.
+APPEND_ATTEMPTS = 8
+# KaveonDB reports a rejected transaction as a revision conflict, and as an
+# upstream refusal when the coordinator declines the commit outright. Neither
+# status says which record lost, so an append confirms itself by reading back
+# rather than by the status alone.
+_REJECTED_STATUSES = frozenset({409, 502})
 
 
 def _new_id() -> str:
@@ -21,12 +34,55 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _document_bytes(document: dict) -> int:
+    return len(json.dumps(document, sort_keys=True, separators=(",", ":"),
+                          ensure_ascii=False).encode())
+
+
 def _bounded(document: dict) -> dict:
-    import json
-    if len(json.dumps(document, sort_keys=True, separators=(",", ":"),
-                      ensure_ascii=False).encode()) > MAX_DOCUMENT_BYTES:
+    if _document_bytes(document) > MAX_DOCUMENT_BYTES:
         raise HTTPException(422, "Chat record exceeds its byte bound")
     return document
+
+
+def _persistable(fields: dict) -> dict:
+    """The message as it will be stored, trimmed only where it can be recovered.
+
+    An assistant turn carries its result rows so a reopened conversation
+    renders the same chart without re-querying. A wide enough result can push
+    the record past KaveonDB's document bound, and refusing the write there
+    would lose the answer itself. The rows are the one part the stored
+    statement reproduces, so they are what gives way — marked rather than
+    silently dropped — while the text, the statement, the route and the
+    answer's evidence are always kept.
+    """
+    document = message_document(fields)
+    if _document_bytes(document) <= MAX_DOCUMENT_BYTES:
+        return document
+    data = document.get("data")
+    if isinstance(data, dict) and ("rows" in data or "columns" in data):
+        trimmed = {key: value for key, value in data.items()
+                   if key not in {"rows", "columns"}}
+        trimmed["rows_omitted"] = True
+        return _bounded(message_document({**fields, "data": trimmed}))
+    return _bounded(document)
+
+
+def _owned_session(session_id: str, owner: str) -> tuple[dict, int]:
+    """The caller's conversation and the revision an append must commit against."""
+    session = product_store.read("chat_session", session_id, owner, "Viewer")
+    document = session.get("document") if isinstance(session, dict) else None
+    revision = session.get("revision") if isinstance(session, dict) else None
+    if not isinstance(document, dict) or document.get("user_email") != owner \
+            or type(revision) is not int or revision < 1:
+        raise HTTPException(404, {"code": "not_found", "message": "Session not found."})
+    return document, revision
+
+
+def _stored_message(message_id: str, owner: str) -> Optional[dict]:
+    record = product_store.read("chat_message", message_id, owner, "Viewer")
+    document = record.get("document") if isinstance(record, dict) else None
+    return document if isinstance(document, dict) else None
 
 
 def create_session(owner: str, title: str) -> dict:
@@ -49,39 +105,47 @@ def create_session(owner: str, title: str) -> dict:
 
 def add_message(session_id: str, owner: str, *, role: str, content: str,
                 sql_query=None, chart_type=None, data=None, route=None) -> dict:
-    session = product_store.read("chat_session", session_id, owner, "Viewer")
-    if session is None:
-        raise HTTPException(404, {"code": "not_found", "message": "Session not found."})
-    revision, session_value = session.get("revision"), session.get("document")
-    if type(revision) is not int or revision < 1 or not isinstance(session_value, dict) \
-            or session_value.get("user_email") != owner:
-        raise HTTPException(404, {"code": "not_found", "message": "Session not found."})
     if role not in {"user", "assistant"}:
-        raise HTTPException(400, {"code": "invalid_role", "message": "Role must be 'user' or 'assistant'."})
-    now = _now()
-    for _attempt in range(5):
-        message_id = _new_id()
-        message = _bounded(message_document({
+        raise HTTPException(400, {"code": "invalid_role",
+                                  "message": "Role must be 'user' or 'assistant'."})
+    message_id, now = _new_id(), _now()
+    session_value, revision = _owned_session(session_id, owner)
+    for _attempt in range(APPEND_ATTEMPTS):
+        message = _persistable({
             "id": message_id, "session_id": session_id, "user_email": owner,
             "role": role, "content": content, "sql_query": sql_query,
-            "chart_type": chart_type, "data": data, "route": route, "created_at": now,
-        }))
-        updated_session = {**session_value, "updated_at": now}
+            "chart_type": chart_type, "data": data, "route": route,
+            "created_at": now,
+        })
         try:
             product_store.transact([
                 product_store.ProductMutation("create", "chat_message", message_id, message),
                 product_store.ProductMutation("update", "chat_session", session_id,
-                                              updated_session, revision),
+                                              {**session_value, "updated_at": now}, revision),
             ], owner, "Analyst")
             return message
         except HTTPException as error:
-            if error.status_code != 409:
+            if error.status_code not in _REJECTED_STATUSES:
                 raise
-            # Distinguish a random message-ID collision from a stale session.
-            current = product_store.read("chat_session", session_id, owner, "Viewer")
-            if current is None or current.get("revision") != revision:
-                raise HTTPException(409, "Chat session changed concurrently; retry") from error
-    raise RuntimeError("KaveonDB could not allocate a unique chat message ID")
+            stored = _stored_message(message_id, owner)
+            if stored == message:
+                # The transaction committed and only its acknowledgement was
+                # lost. Reporting a failure here would have the caller append
+                # the same turn a second time.
+                return message
+            if stored is not None:
+                # Another record already holds the generated ID, so nothing
+                # about this append conflicts. Allocate a new one and retry.
+                message_id = _new_id()
+                continue
+            current_value, current_revision = _owned_session(session_id, owner)
+            if current_revision == revision:
+                # The conversation is exactly as this attempt found it, so the
+                # rejection was not contention and a retry cannot change it.
+                raise
+            session_value, revision = current_value, current_revision
+    raise HTTPException(409, {"code": "conflict", "message":
+                              "Another message was appended to this conversation; retry."})
 
 
 def delete_session(session_id: str, owner: str) -> bool:
