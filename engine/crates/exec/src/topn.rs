@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use arrow::array::{Array, Int64Array, UInt32Array};
+use arrow::array::{Array, Int64Array, UInt32Array, UInt64Array};
 use arrow::compute::{SortColumn, SortOptions, concat_batches, lexsort_to_indices, take};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -253,16 +253,39 @@ pub fn merge_top_n(
 
 // Common integer ORDER BY keys can compare typed values directly. Other types
 // and nullable arrays retain Arrow's complete ordering semantics.
+#[derive(Clone, Copy)]
+enum IntegerSortKey<'a> {
+    Signed(&'a Int64Array),
+    Unsigned(&'a UInt64Array),
+}
+
+impl IntegerSortKey<'_> {
+    fn len(self) -> usize {
+        match self {
+            Self::Signed(values) => values.len(),
+            Self::Unsigned(values) => values.len(),
+        }
+    }
+}
+
 fn integer_top_n_indices(columns: &[SortColumn], limit: usize) -> Option<UInt32Array> {
-    if columns.len() < 2 {
+    // COUNT/SUM results are commonly a single non-null UInt64 ordering key.
+    // Keep that hot path on the selection algorithm too; falling back to
+    // lexsort here makes every 4K-row final aggregate batch pay a full sort.
+    if columns.is_empty() {
         return None;
     }
     let keys = columns
         .iter()
         .map(|column| {
-            let values = column.values.as_any().downcast_ref::<Int64Array>()?;
-            (values.null_count() == 0)
-                .then_some((values, column.options.unwrap_or_default().descending))
+            let values = column.values.as_any();
+            let key = if let Some(values) = values.downcast_ref::<Int64Array>() {
+                IntegerSortKey::Signed(values)
+            } else {
+                IntegerSortKey::Unsigned(values.downcast_ref::<UInt64Array>()?)
+            };
+            (column.values.null_count() == 0)
+                .then_some((key, column.options.unwrap_or_default().descending))
         })
         .collect::<Option<Vec<_>>>()?;
     let rows = keys.first()?.0.len();
@@ -272,7 +295,14 @@ fn integer_top_n_indices(columns: &[SortColumn], limit: usize) -> Option<UInt32A
     let mut indices: Vec<u32> = (0..rows as u32).collect();
     let compare = |a: &u32, b: &u32| {
         for (key, descending) in &keys {
-            let ordering = key.value(*a as usize).cmp(&key.value(*b as usize));
+            let ordering = match key {
+                IntegerSortKey::Signed(values) => {
+                    values.value(*a as usize).cmp(&values.value(*b as usize))
+                }
+                IntegerSortKey::Unsigned(values) => {
+                    values.value(*a as usize).cmp(&values.value(*b as usize))
+                }
+            };
             if !ordering.is_eq() {
                 return if *descending {
                     ordering.reverse()
@@ -384,6 +414,31 @@ mod tests {
             },
         ];
         assert!(integer_top_n_indices(&nullable, 1).is_none());
+    }
+
+    #[test]
+    fn typed_unsigned_single_key_topn_matches_arrow() {
+        let values = Arc::new(UInt64Array::from(vec![
+            0,
+            u64::MAX,
+            4,
+            4,
+            17,
+            2,
+        ]));
+        let columns = vec![SortColumn {
+            values: values.clone(),
+            options: Some(SortOptions {
+                descending: true,
+                nulls_first: false,
+            }),
+        }];
+        let actual = integer_top_n_indices(&columns, 3).unwrap();
+        let expected = lexsort_to_indices(&columns, Some(3)).unwrap();
+        assert_eq!(
+            take(values.as_ref(), &actual, None).unwrap().to_data(),
+            take(values.as_ref(), &expected, None).unwrap().to_data()
+        );
     }
 
     struct MockOperator {
