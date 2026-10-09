@@ -886,3 +886,18 @@ The execution suite passed **203 tests (4 ignored)**. On the same rebuilt two-wo
 ## 2026-10-08 high-cardinality exchange redesign boundary
 
 The q33 review confirms the remaining gap is below the Arrow operator layer: grouped keys and aggregate states are already compact-encoded inside Arrow binary columns, but the stage still emits **8.73 GB** of exchange output, copies **10.66 GB**, and spills **8.81 GB** in the final stage. Encoding took **4.68 s**; final-stage decode took **2.78 s**, while spill and merge dominated the stage. A compact envelope alone would not address that cost. The next structural optimization is a direct grouped-state exchange stream whose producer and consumer merge compact states without materializing Arrow `RecordBatch` objects; it must be designed as a full media path with retry, checksum, memory accounting, and exact fallback semantics. No speculative wire-format change was shipped.
+
+## 2026-10-08 opt-in spill LZ4 experiment
+
+Arrow IPC spill runs can now be compressed with `KAVEON_SPILL_COMPRESSION=lz4`.
+The default remains uncompressed, and the setting is exposed in Docker Compose
+for workload-specific qualification. Focused spill tests passed **26 tests**.
+On the rebuilt two-worker ClickBench profile, q33 completed in **19.154 s**
+with spill LZ4 versus **20.686 s** for the paired uncompressed control. q35
+completed in **14.883 s** versus **16.486 s**. Both runs finished with ten
+rows; q35 results were byte-for-byte identical and q33's tied `COUNT(*)=1`
+rows differed only in unspecified tie order, as permitted by its `ORDER BY c
+DESC` clause. The improvement is promising but not yet a ClickHouse parity
+result: the qualified ClickHouse references remain q33 **4.552 s** and q35
+**6.316 s**, and the option stays opt-in until repeated runs establish a stable
+CPU/I/O trade-off.

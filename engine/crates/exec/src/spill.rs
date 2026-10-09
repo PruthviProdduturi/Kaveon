@@ -11,13 +11,36 @@ use std::{
 
 use arrow::{
     datatypes::SchemaRef,
-    ipc::{reader::StreamReader, writer::StreamWriter},
+    ipc::{
+        reader::StreamReader,
+        writer::{IpcWriteOptions, StreamWriter},
+    },
     record_batch::RecordBatch,
 };
 use kaveon_core::{KaveonError, Result};
 
 static NEXT_SPILL_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 static NEXT_RUN: AtomicU64 = AtomicU64::new(0);
+
+/// Spill compression is opt-in while it is being qualified.  LZ4 can reduce
+/// the disk traffic of high-cardinality grouped-state runs, but it also adds
+/// CPU work and must be measured against the uncompressed default.
+fn spill_writer_options() -> Result<IpcWriteOptions> {
+    let compression = match std::env::var("KAVEON_SPILL_COMPRESSION")
+        .ok()
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("lz4") | Some("lz4_frame") | Some("true") | Some("1") => {
+            Some(arrow::ipc::CompressionType::LZ4_FRAME)
+        }
+        _ => None,
+    };
+    IpcWriteOptions::default()
+        .try_with_compression(compression)
+        .map_err(|error| KaveonError::Execution(format!("spill IPC compression: {error}")))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpillSnapshot {
@@ -183,13 +206,14 @@ impl SpillManager {
             .create_new(true)
             .open(&path)?;
         let output = BoundedSpillWriter::new(BufWriter::new(file), Arc::clone(&self.inner));
-        let writer = match StreamWriter::try_new(output, schema) {
-            Ok(writer) => writer,
-            Err(error) => {
-                let _ = fs::remove_file(&path);
-                return Err(error.into());
-            }
-        };
+        let writer =
+            match StreamWriter::try_new_with_options(output, schema, spill_writer_options()?) {
+                Ok(writer) => writer,
+                Err(error) => {
+                    let _ = fs::remove_file(&path);
+                    return Err(error.into());
+                }
+            };
         Ok(SpillRunWriter {
             writer: Some(writer),
             schema: Arc::clone(schema),
