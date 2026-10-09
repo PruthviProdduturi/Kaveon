@@ -922,3 +922,20 @@ in more than one producer payload. Assigning whole payloads to local threads
 would silently split duplicate keys. The safe next design must carry a
 worker-local partition identity through the exchange, so each final thread can
 consume a disjoint grouped-state stream without a second local repartition.
+
+## 2026-10-08 final-merge qualification closeout
+
+The scan review found no safe scan-side win: q33 selects all required row groups,
+and the reader already projects only the five referenced columns. The remaining
+cost is final exchange/fan-in. A fixed-width `COUNT`/integer `SUM`/`AVG` state
+encoding passed the execution tests but did not apply to q33's passthrough path,
+so it was removed. Integer-key final repartitioning and higher exchange fan-out
+also preserved exact rows but regressed the paired controls and remain rejected.
+
+The balanced local profile is restored (`2 GiB` per-query admission, disk spill,
+four exchange partitions, eight local lanes, two compatible workers). The engine
+execution workspace suite's focused and full `kaveon-exec` tests pass; the
+ClickHouse parity goal remains open until the direct worker-local grouped-state
+exchange is implemented and measured. Current qualified references remain
+ClickHouse q33 **4.552 s** / q35 **6.316 s** versus Kaveon's approximately
+q33 **19--21 s** / q35 **13--16 s** on this two-worker host.
