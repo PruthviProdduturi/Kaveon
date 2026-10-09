@@ -8,7 +8,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{collections::VecDeque, sync::Arc};
 
-use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
+use arrow::{compute::concat_batches, datatypes::SchemaRef, record_batch::RecordBatch};
 use kaveon_core::{
     BatchOperator, Expr, KaveonError, MemoryReservation, OperatorMemoryAccount, QueryMemoryPool,
     Result,
@@ -887,6 +887,10 @@ pub struct FlushingPartialAggregate {
     passthrough_rounds: u64,
     encoder: Option<PartialBatchEncoder>,
     passthrough_rows: u64,
+    /// Optional coalescing for high-cardinality pass-through partials.  The
+    /// default is zero (one output batch per source batch); the opt-in is
+    /// deliberately guarded until its memory and exchange effect is measured.
+    coalesce_rows: Option<usize>,
 }
 
 impl FlushingPartialAggregate {
@@ -908,6 +912,7 @@ impl FlushingPartialAggregate {
         let schema =
             grouped_aggregate_states_to_schema_batch(&[], &group_types, &output_types)?.schema();
         let settings = AdaptivePartialSettings::for_query(memory.query())?;
+        let multi_key_partial = group_by.len() >= 2;
         Ok(Self {
             source: Rc::new(RefCell::new(Some(source))),
             exhausted: Rc::new(Cell::new(false)),
@@ -925,6 +930,17 @@ impl FlushingPartialAggregate {
             passthrough_rounds: PASSTHROUGH_ROUNDS_FIRST,
             encoder: None,
             passthrough_rows: 0,
+            // The observed win is specific to the multi-key, high-cardinality
+            // shape (q33): one-key pass-throughs such as q35 regress when
+            // their batches are copied into larger arrays.
+            coalesce_rows: multi_key_partial
+                .then(|| {
+                    std::env::var("KAVEON_COALESCE_PARTIAL_ROWS")
+                        .ok()
+                        .and_then(|value| value.parse::<usize>().ok())
+                        .filter(|value| *value >= 2)
+                })
+                .flatten(),
         })
     }
 
@@ -1051,6 +1067,42 @@ impl FlushingPartialAggregate {
         Ok(Some(encoded))
     }
 
+    /// Combine several pass-through batches before they reach the exchange.
+    /// Pass-through is intentionally row-exact, so concatenation changes only
+    /// the Arrow batch boundary.  The normal path remains unchanged unless
+    /// `KAVEON_COALESCE_PARTIAL_ROWS` is explicitly set.
+    fn coalesced_passthrough_batch(&mut self) -> Result<Option<RecordBatch>> {
+        let Some(target) = self.coalesce_rows else {
+            let PartialMode::PassThrough { remaining } = self.mode else {
+                return Ok(None);
+            };
+            return self.passthrough_batch(remaining);
+        };
+        let mut batches = Vec::new();
+        let mut rows = 0usize;
+        loop {
+            let PartialMode::PassThrough { remaining } = self.mode else {
+                break;
+            };
+            match self.passthrough_batch(remaining)? {
+                Some(batch) if batch.num_rows() > 0 => {
+                    rows = rows.saturating_add(batch.num_rows());
+                    batches.push(batch);
+                    if rows >= target {
+                        break;
+                    }
+                }
+                Some(_) => {}
+                None => break,
+            }
+        }
+        match batches.len() {
+            0 => Ok(None),
+            1 => Ok(batches.pop()),
+            _ => Ok(Some(concat_batches(&self.schema, &batches)?)),
+        }
+    }
+
     /// Bytes held before a flush: a sixth of the query budget, divided
     /// among the operators running side by side. A flush emits every group
     /// held once more, so the fewer the rounds the less the exchange
@@ -1086,7 +1138,8 @@ impl BatchOperator for FlushingPartialAggregate {
                     }
                 }
                 PartialMode::PassThrough { remaining } => {
-                    match self.passthrough_batch(remaining)? {
+                    let _ = remaining;
+                    match self.coalesced_passthrough_batch()? {
                         Some(batch) if batch.num_rows() > 0 => return Ok(Some(batch)),
                         Some(_) => {}
                         None => {
