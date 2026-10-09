@@ -451,7 +451,9 @@ th.cFormat .sortBtn, th.cRows .sortBtn, th.cSize .sortBtn, th.cWhen .sortBtn { j
 @container inv (max-width: 700px) {
   .inv .cRows, .inv .cSize { width: 0; padding: 0; overflow: hidden; opacity: 0 }
   .inv td { height: auto; padding-top: 9px; padding-bottom: 9px }
-  .inv .cAnswer { width: 128px }
+  /* The cell that says what a question costs keeps its full wording: it is
+     the one cell a reader came for, and an ellipsis in it says nothing. */
+  .inv .cAnswer { width: 146px; padding-left: 10px }
   .narrowFacts { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; margin-left: 29px; font: 500 var(--fs-micro) Inter, sans-serif; font-variant-numeric: tabular-nums lining-nums; color: var(--text-muted) }
 }
 /* The band's two readings sit side by side while both can hold their
@@ -471,8 +473,11 @@ th.cFormat .sortBtn, th.cRows .sortBtn, th.cSize .sortBtn, th.cWhen .sortBtn { j
    keeps its line and the controls keep theirs, as one group under it. */
 @container band (max-width: 620px) {
   .bandTop { flex-wrap: wrap; gap: 14px }
-  .bandActions { flex-basis: 100%; justify-content: flex-start }
-  .search { flex: 1 1 200px; max-width: 320px }
+  .bandActions { flex-basis: 100%; justify-content: flex-start; flex-wrap: wrap }
+  /* The field takes its own line rather than being squeezed to its icon by
+     three buttons that cannot shrink. */
+  .search { flex: 1 1 100%; max-width: none; order: 2 }
+  .bandActions > :not(.search) { order: 1 }
 }
 @media (max-width: 860px) {
   .band { padding: 18px 18px 16px }
