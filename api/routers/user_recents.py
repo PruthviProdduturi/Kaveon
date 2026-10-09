@@ -1,5 +1,7 @@
 """User recents router — /api/v1/user/recents."""
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from middleware.auth import require_user_context, UserContext
@@ -8,12 +10,20 @@ import services.user_recents as svc
 
 router = APIRouter()
 
+# A recent is stored as a reference to a real product record, so it can only
+# name a kind the product store holds. This once read "dashboard | chart |
+# dataset | query | chat" as a comment while the storage layer accepted three,
+# so opening a chat posted a recent the store refused and the refusal surfaced
+# as an unhandled 500 on every navigation. Declaring the vocabulary here keeps
+# the two in step and makes an unsupported kind a 422 the caller can read.
+RecentType = Literal["dashboard", "chart", "dataset"]
+
 
 class RecentItem(BaseModel):
     item_id: str
     label: str
     href: str
-    type: str  # "dashboard" | "chart" | "dataset" | "query" | "chat"
+    type: RecentType
 
 
 @router.get("/user/recents")

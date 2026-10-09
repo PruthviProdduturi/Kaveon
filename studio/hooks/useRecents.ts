@@ -11,6 +11,17 @@ export interface RecentItem {
   timestamp: number;
 }
 
+// A recent is stored server-side as a reference to a real product record, so
+// only these kinds can be persisted. A chat or a saved query has no such
+// record to point at: the API refuses it, and posting one anyway turned every
+// navigation into a failed request. Those kinds stay in local storage, which
+// is where the sidebar reads them from anyway.
+const PERSISTED_TYPES = new Set<RecentItem["type"]>(["dashboard", "chart", "dataset"]);
+
+function isPersisted(item: Pick<RecentItem, "type">): boolean {
+  return PERSISTED_TYPES.has(item.type);
+}
+
 const STORAGE_KEY = "kaveon-recents";
 const SYNC_EVENT = "kaveon-recents-updated";
 const MAX_RECENTS = 20;
@@ -69,11 +80,13 @@ export function useRecents() {
             if (!ids.has(l.id)) {
               merged.push(l);
               // Sync local-only items to API
-              msalFetch("/api/v1/user/recents", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ item_id: l.id, label: l.label, href: l.href, type: l.type }),
-              }).catch(() => {});
+              if (isPersisted(l)) {
+                msalFetch("/api/v1/user/recents", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ item_id: l.id, label: l.label, href: l.href, type: l.type }),
+                }).catch(() => {});
+              }
             }
           }
           const final = merged.slice(0, MAX_RECENTS);
@@ -101,11 +114,13 @@ export function useRecents() {
     saveLocal(next);
 
     // Persist to API (fire and forget)
-    msalFetch("/api/v1/user/recents", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ item_id: item.id, label: item.label, href: item.href, type: item.type }),
-    }).catch(() => {});
+    if (isPersisted(item)) {
+      msalFetch("/api/v1/user/recents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ item_id: item.id, label: item.label, href: item.href, type: item.type }),
+      }).catch(() => {});
+    }
   }, []);
 
   const removeRecent = useCallback((id: string) => {
