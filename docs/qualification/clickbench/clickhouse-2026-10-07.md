@@ -904,3 +904,11 @@ CPU/I/O trade-off.
 A second LZ4 run on the same host measured q33 **22.752 s** and q35
 **18.568 s**, confirming that the first paired improvement is not yet
 reproducible enough to make compression the default.
+
+## 2026-10-08 native CPU target control (rejected)
+
+A temporary Docker build with `RUSTFLAGS=-C target-cpu=native` was compared on
+this host against the generic release build. It regressed q33 to **24.289 s**
+and q35 to **20.148 s** (generic balanced controls were approximately 18--20 s
+and 14--16 s). The Dockerfile was restored to the portable generic release
+build; no native-only assumption is retained.

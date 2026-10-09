@@ -3,6 +3,8 @@
 import json
 import logging
 import re
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -15,6 +17,9 @@ logger = logging.getLogger(__name__)
 VALID_VISIBILITY = {"private", "internal", "published"}
 MAX_DATASET_COMPONENTS = 10_000
 MAX_DATASET_DOCUMENT_BYTES = 4 * 1024 * 1024
+
+_name_index_cache: tuple[float, dict[str, str]] | None = None
+_name_index_lock = threading.Lock()
 
 
 def _observe_post_write(event) -> None:
@@ -130,6 +135,54 @@ def _vis_clause(role_idx: int, email_idx: int, alias: str = "d") -> str:
         f"OR ({alias}.visibility = 'private' AND {alias}.created_by = @param{email_idx}) "
         f"OR @param{role_idx} = 'Admin')"
     )
+
+
+def _read_name_index(actor: str) -> dict[str, str]:
+    """Read every dataset's identity and display name, and nothing else."""
+    if product_read_authority.enabled("datasets"):
+        documents = [record.get("document") for record
+                     in product_store.list_records("dataset", actor, "Admin")]
+    else:
+        documents = db.query(
+            "SELECT id, dataset_name FROM dbo.datasets WHERE id IS NOT NULL"
+        )["rows"]
+    index: dict[str, str] = {}
+    for document in documents:
+        if not isinstance(document, dict):
+            continue
+        identity = str(document.get("id") or "")
+        name = document.get("name") or document.get("dataset_name")
+        if identity and isinstance(name, str) and name:
+            index[identity] = name
+    return index
+
+
+def dataset_name_index(actor: str, *, max_age_seconds: float = 0.0) -> dict[str, str]:
+    """Dataset identity → display name for every dataset in the deployment.
+
+    A chart record names its dataset by identity, so a chart read has to resolve
+    the name itself. Reading the dataset per chart would be seventy product
+    reads on one Library load, so the whole index is read in a single bounded
+    call. ``max_age_seconds`` lets a single-record read reuse an index a list
+    read already paid for instead of adding a round trip to name one chart;
+    a list read passes nothing and always sees current names.
+
+    The index deliberately carries every dataset regardless of its visibility,
+    matching the dataset join the PostgreSQL chart queries have always used: a
+    caller who can already read the chart can already see which dataset it is
+    built on.
+    """
+    global _name_index_cache
+    if max_age_seconds > 0:
+        cached = _name_index_cache
+        if cached and time.monotonic() - cached[0] < max_age_seconds:
+            return cached[1]
+    # Read outside the lock: two concurrent misses cost one extra bounded read
+    # rather than making every caller queue behind one round trip.
+    index = _read_name_index(actor)
+    with _name_index_lock:
+        _name_index_cache = (time.monotonic(), index)
+    return index
 
 
 def list_datasets(user_email: str, role: str = "Viewer") -> List[dict]:

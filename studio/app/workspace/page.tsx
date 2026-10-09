@@ -162,11 +162,55 @@ const TAB_LAYOUT: Record<TabKey, "cards" | "rows" | "custom"> = {
   queries: "rows",
 };
 
-// Which field groups a tab's items. Only charts have many items across several
-// datasets, so only charts are grouped; the rest render as one flat list.
-function groupKeyFor(tab: TabKey, item: WorkspaceItem): string {
-  if (tab === "charts") return item.dataset_name || "Other";
-  return "";
+// How the Charts tab is sectioned. Dataset is the default: every chart is built
+// on exactly one dataset, so it is a true partition of the tab. Dashboard is
+// offered because that is how charts are read rather than how they are built —
+// it is not a partition, since a chart can sit on several dashboards or on none,
+// and both of those cases are shown rather than hidden.
+type ChartGrouping = "dataset" | "dashboard";
+
+const CHART_GROUPINGS: { key: ChartGrouping; label: string }[] = [
+  { key: "dataset", label: "Dataset" },
+  { key: "dashboard", label: "Dashboard" },
+];
+
+// Headings for the charts a grouping cannot place. Named for what is actually
+// true of them, so neither an ordinary state nor a fault lands in a catch-all.
+const UNPLACED_HEADING: Record<ChartGrouping, string> = {
+  dataset: "Dataset unavailable",
+  dashboard: "Not on a dashboard",
+};
+
+// Chart identities a dashboard holds. The record carries them as a JSON array,
+// serialized by some read paths and already parsed by others.
+function dashboardChartIds(dashboard: { charts?: unknown }): string[] {
+  let held: unknown = dashboard.charts;
+  if (typeof held === "string") {
+    try { held = JSON.parse(held); } catch { return []; }
+  }
+  if (!Array.isArray(held)) return [];
+  return held
+    .map((entry) => (entry !== null && typeof entry === "object"
+      ? String((entry as { chart_id?: unknown; id?: unknown }).chart_id
+        ?? (entry as { id?: unknown }).id ?? "")
+      : String(entry ?? "")))
+    .filter((identity) => identity !== "");
+}
+
+// Which sections a tab's items belong to. Only charts are sectioned; the rest
+// render as one flat list. A chart on two dashboards belongs to both.
+function groupKeysFor(
+  tab: TabKey,
+  item: WorkspaceItem,
+  grouping: ChartGrouping,
+  placements: Map<string, string[]> | null,
+): string[] {
+  if (tab !== "charts") return [""];
+  if (grouping === "dashboard") {
+    const on = placements?.get(String(item.id));
+    return on && on.length > 0 ? on : [UNPLACED_HEADING.dashboard];
+  }
+  return [item.dataset_name?.trim() || UNPLACED_HEADING.dataset];
 }
 
 const RECENT_ICON: Record<string, string> = {
@@ -205,6 +249,13 @@ export default function WorkspacePage() {
   const [loadedTab, setLoadedTab] = useState<TabKey | null>(null);
   // Groups are collapsed by default; a set of expanded group keys.
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  // How the Charts tab is sectioned, and the chart→dashboard placements that
+  // the dashboard sectioning needs. Placements are read once, from the same
+  // dashboard list the Dashboards tab uses, and only when that grouping is
+  // chosen — the default grouping costs no extra request.
+  const [chartGrouping, setChartGrouping] = useState<ChartGrouping>("dataset");
+  const [placements, setPlacements] = useState<Map<string, string[]> | null>(null);
+  const [placementsFailed, setPlacementsFailed] = useState(false);
 
   const toggleGroup = useCallback((key: string) => {
     setExpandedGroups((prev) => {
@@ -229,20 +280,40 @@ export default function WorkspacePage() {
     router.push(`/workspace?tab=${key}`);
   };
 
+  // Sections belong to a tab and, on Charts, to the chosen grouping — the two
+  // groupings have different headings, so they remember their own open sections.
+  const sectionScope = activeTab === "charts" ? `charts:${chartGrouping}` : activeTab;
+
+  // Restore the chosen chart grouping before anything is sectioned by it.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const stored = sessionStorage.getItem("ws-group-charts");
+      if (CHART_GROUPINGS.some((option) => option.key === stored)) {
+        setChartGrouping(stored as ChartGrouping);
+      }
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try { sessionStorage.setItem("ws-group-charts", chartGrouping); } catch {}
+  }, [chartGrouping]);
+
   // Persist + restore expanded sections and scroll per tab, so navigating away
   // (opening a chart) and back returns you to the exact position you left.
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
-      const raw = sessionStorage.getItem(`ws-exp-${activeTab}`);
+      const raw = sessionStorage.getItem(`ws-exp-${sectionScope}`);
       setExpandedGroups(raw ? new Set<string>(JSON.parse(raw)) : new Set());
     } catch { setExpandedGroups(new Set()); }
-  }, [activeTab]);
+  }, [sectionScope]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    try { sessionStorage.setItem(`ws-exp-${activeTab}`, JSON.stringify([...expandedGroups])); } catch {}
-  }, [expandedGroups, activeTab]);
+    try { sessionStorage.setItem(`ws-exp-${sectionScope}`, JSON.stringify([...expandedGroups])); } catch {}
+  }, [expandedGroups, sectionScope]);
 
   // Save scroll position per tab (throttled).
   useEffect(() => {
@@ -302,6 +373,38 @@ export default function WorkspacePage() {
 
   useEffect(() => { void load(); }, [load]);
 
+  // Chart→dashboard placements, read once from the dashboard list. The list
+  // already carries each dashboard's chart identities, so sectioning seventy
+  // charts by dashboard costs one request, not one per dashboard.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    if (activeTab !== "charts" || chartGrouping !== "dashboard") return;
+    if (placements || placementsFailed) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await msalFetch("/api/v1/dashboards");
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const list: { id?: string | number; name?: string; charts?: unknown }[] =
+          Array.isArray(data) ? data : [];
+        const map = new Map<string, string[]>();
+        for (const dashboard of list) {
+          const name = dashboard.name?.trim() || "Untitled dashboard";
+          for (const chartId of dashboardChartIds(dashboard)) {
+            const on = map.get(chartId);
+            if (!on) map.set(chartId, [name]);
+            else if (!on.includes(name)) on.push(name);
+          }
+        }
+        if (!cancelled) setPlacements(map);
+      } catch {
+        if (!cancelled) setPlacementsFailed(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isAuthenticated, activeTab, chartGrouping, placements, placementsFailed]);
+
   const [deletingId, setDeletingId] = useState<string | number | null>(null);
   const [confirmItem, setConfirmItem] = useState<WorkspaceItem | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -353,8 +456,13 @@ export default function WorkspacePage() {
   }, [confirmItem, tab.endpoint, tab.label]);
 
   const email = account?.email ?? "";
+  // A dashboard list that cannot be read is said so rather than silently
+  // sectioning every chart as unplaced; the tab falls back to dataset sections
+  // meanwhile, so the cards stay usable.
+  const grouping: ChartGrouping = placementsFailed ? "dataset" : chartGrouping;
+  const placementsPending = activeTab === "charts" && grouping === "dashboard" && !placements;
   // Only trust `items` once they've been loaded for the CURRENT tab.
-  const ready = loadedTab === activeTab && !loading;
+  const ready = loadedTab === activeTab && !loading && !placementsPending;
   const filtered = (ready ? items : []).filter((item) => {
     const label = (item.name ?? item.title ?? "").toLowerCase();
     if (search && !label.includes(search.toLowerCase())) return false;
@@ -368,25 +476,33 @@ export default function WorkspacePage() {
     .sort((a, b) => (a.name ?? a.title ?? "").localeCompare(b.name ?? b.title ?? ""));
   const unpinned = filtered.filter((i) => !i.favorite);
 
-  // Group items by their organizing unit (dataset/source) and assign one calm
-  // accent per group. Dashboards return "" from groupKeyFor → a single group.
+  // Section items by their organizing unit and assign one calm accent per
+  // section. Every tab but Charts returns "" → a single, unheaded group.
+  const unplacedHeading = UNPLACED_HEADING[grouping];
   const grouped = (() => {
     const map = new Map<string, WorkspaceItem[]>();
     for (const it of unpinned) {
-      const key = groupKeyFor(activeTab, it);
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(it);
+      for (const key of groupKeysFor(activeTab, it, grouping, placements)) {
+        if (!map.has(key)) map.set(key, []);
+        map.get(key)!.push(it);
+      }
     }
-    // Sections ordered alphabetically by name (ungrouped "" sorts last).
+    // Named sections alphabetically; the unplaced section and the unheaded
+    // single group both sort last.
+    const order = (key: string) => (key === "" || key === unplacedHeading ? 1 : 0);
     const entries = Array.from(map.entries()).sort((a, b) =>
-      (a[0] || "￿").localeCompare(b[0] || "￿")
+      order(a[0]) - order(b[0]) || a[0].localeCompare(b[0])
     );
     return entries.map(([key, groupItems], idx) => ({
       key,
       items: [...groupItems].sort((a, b) =>
         (a.name ?? a.title ?? "").localeCompare(b.name ?? b.title ?? "")
       ),
-      accent: key === "" ? NEUTRAL_ACCENT : GROUP_ACCENTS[idx % GROUP_ACCENTS.length],
+      // The unplaced section is neutral: it is not one more dataset or
+      // dashboard, so it does not take a hue from the palette.
+      accent: key === "" || key === unplacedHeading
+        ? NEUTRAL_ACCENT
+        : GROUP_ACCENTS[idx % GROUP_ACCENTS.length],
     }));
   })();
   const useSections = grouped.length > 1 || (grouped.length === 1 && grouped[0].key !== "");
@@ -725,6 +841,29 @@ export default function WorkspacePage() {
           ))}
         </div>
 
+        {/* Section the Charts tab by how a chart is built (its dataset) or by
+            where it is read (its dashboards). Only Charts spans both. */}
+        {activeTab === "charts" && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+            <span style={{ fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap" }}>Group by</span>
+            <div style={{ display: "flex", gap: 0, background: "var(--bg-surface)", borderRadius: 8, border: "1px solid var(--border)", overflow: "hidden" }}>
+              {CHART_GROUPINGS.map((option) => {
+                const chosen = chartGrouping === option.key;
+                return (
+                  <button key={option.key} type="button" onClick={() => setChartGrouping(option.key)} style={{
+                    padding: "6px 14px", fontSize: 12, fontWeight: chosen ? 600 : 400,
+                    color: chosen ? "var(--text-primary)" : "var(--text-muted)",
+                    background: chosen ? "var(--bg-hover)" : "transparent",
+                    border: "none", cursor: "pointer", transition: "all 0.15s", whiteSpace: "nowrap",
+                  }}>
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Search */}
         <div style={{ position: "relative", flex: 1, minWidth: 0, maxWidth: 200 }}>
           <input
@@ -818,6 +957,24 @@ export default function WorkspacePage() {
               {pinned.map((item) => renderCard(item, NEUTRAL_ACCENT))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* The dashboard list is what makes dashboard sections possible. If it
+          cannot be read, say so and show dataset sections instead. */}
+      {activeTab === "charts" && chartGrouping === "dashboard" && placementsFailed && (
+        <div style={{
+          marginTop: 16, padding: "10px 14px", borderRadius: 10,
+          border: "1px solid var(--border)", background: "var(--bg-surface)",
+          display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
+          fontSize: 12.5, color: "var(--text-secondary)",
+        }}>
+          <span>Dashboards could not be read, so these charts are grouped by dataset.</span>
+          <button type="button" onClick={() => setPlacementsFailed(false)} style={{
+            padding: "5px 12px", fontSize: 12, border: "1px solid var(--border)",
+            borderRadius: 8, background: "var(--bg-elevated)",
+            color: "var(--text-secondary)", cursor: "pointer",
+          }}>Try again</button>
         </div>
       )}
 
