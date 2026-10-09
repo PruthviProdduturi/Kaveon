@@ -8,7 +8,7 @@ export default function Quickstart() {
       <PageHeader
         eyebrow="Getting Started"
         title="Quickstart"
-        lead="Bring up the full stack locally — Studio, the API, and a two-worker Engine cluster — then run your first query, ask your first question, and query a Parquet file with the Engine CLI."
+        lead="A five-minute local walkthrough for Studio, the API, and the Engine. Use Install and deploy for VM, AKS, or Vercel hosting; use Deployment topology and Operations for production operation."
       />
 
       <h2>Prerequisites</h2>
@@ -58,36 +58,16 @@ curl -s localhost:8081/health         # Engine coordinator`}</Code>
         sign in with your Microsoft account; otherwise Studio uses the local development Admin.
       </p>
 
-      <h2>3 · Run your first query</h2>
+      <h2>3 · Run your first read query</h2>
       <p>
-        Compose creates two databases: <code>kaveonmeta</code> for Kaveon&rsquo;s own state, and an empty{" "}
-        <code>kaveon</code> warehouse for your data. Open <strong>Lab</strong>, select the{" "}
-        <code>kaveon</code> database in the toolbar, and create something to query:
+        Open <strong>Catalog</strong> to choose a registered catalog and schema, then open <strong>SQL Lab</strong>.
+        The local showcase uses read-only Parquet and Delta tables; Kaveon catalog DDL registers existing lake data and
+        does not create arbitrary PostgreSQL-style user tables.
       </p>
-      <Code lang="sql">{`CREATE TABLE orders (
-  id       SERIAL PRIMARY KEY,
-  region   TEXT   NOT NULL,
-  plan     TEXT   NOT NULL,
-  total    NUMERIC(10,2) NOT NULL,
-  ordered  DATE   NOT NULL
-);
-
-INSERT INTO orders (region, plan, total, ordered) VALUES
-  ('North America', 'Enterprise', 1200.00, '2026-08-02'),
-  ('North America', 'Team',        340.00, '2026-08-11'),
-  ('Europe',        'Enterprise',  980.00, '2026-08-14'),
-  ('Europe',        'Team',        210.00, '2026-08-21'),
-  ('Asia',          'Enterprise',  760.00, '2026-09-01'),
-  ('Asia',          'Team',        150.00, '2026-09-02');`}</Code>
-      <p>Press <code>Ctrl/Cmd + Enter</code> to run, then query it:</p>
-      <Code lang="sql">{`SELECT region, SUM(total) AS revenue
-FROM   orders
-GROUP  BY region
-ORDER  BY revenue DESC;`}</Code>
-      <Code lang="text">{`region          revenue
-North America   1540.00
-Europe          1190.00
-Asia             910.00`}</Code>
+      <Code lang="sql">{`SELECT *
+FROM OpenSource.public.nyc_taxi_borough
+LIMIT 25;`}</Code>
+      <p>This table is part of the OpenSource showcase manifest. For another lake, replace it with a table shown by <code>SHOW TABLES</code>. Press <code>Ctrl/Cmd + Enter</code> to run the query.</p>
       <p>
         Results are cached by SHA of the query text, so re-running is instant. Full editor reference:{" "}
         <a href="/docs/sql-lab">SQL Lab</a>.
@@ -96,13 +76,13 @@ Asia             910.00`}</Code>
       <h2>4 · Define a semantic dataset</h2>
       <p>
         A dataset names your dimensions and metrics once so charts and questions can be built without
-        rewriting SQL. Go to <strong>Datasets → New Dataset</strong>, choose the <code>orders</code> table,
+        rewriting SQL. Go to <strong>Datasets → New Dataset</strong>, choose the table you just queried,
         and mark:
       </p>
       <ul>
-        <li><strong>Dimensions</strong> — <code>region</code>, <code>plan</code></li>
-        <li><strong>Metrics</strong> — <code>SUM(total)</code> as <em>Revenue</em></li>
-        <li><strong>Time column</strong> — <code>ordered</code></li>
+        <li><strong>Dimensions</strong> — choose categorical columns such as borough, country, or status</li>
+        <li><strong>Metrics</strong> — choose a numeric column and aggregation such as <code>SUM</code> or <code>COUNT</code></li>
+        <li><strong>Time column</strong> — choose a date or timestamp column when the table has one</li>
       </ul>
       <p>
         This is the input the DLM compiles against. Details: <a href="/docs/datasets">Semantic Datasets</a>.
@@ -141,9 +121,8 @@ Asia             910.00`}</Code>
 
       <h2>7 · Query a Parquet file with the Engine</h2>
       <p>
-        The Engine is a separate runtime with its own SQL. It is <strong>not</strong> wired into Studio yet —
-        the query above went through the platform API, not through the Engine. To use it, point the stack at
-        a directory of Parquet files and restart:
+        Studio sends analytical statements through the Engine. For direct Engine access, point the CLI at a directory
+        of Parquet or Delta files and restart:
       </p>
       <Code lang="bash">{`KAVEON_DATA_PATH=/path/to/parquet docker compose up -d`}</Code>
       <p>Install the CLI and connect it to the running coordinator:</p>
@@ -151,8 +130,7 @@ Asia             910.00`}</Code>
 
 kaveon --server http://localhost:8081`}</Code>
       <p>
-        Tables are auto-discovered from <code>.parquet</code> files in that directory, under the{" "}
-        <code>kaveon</code> catalog:
+        Tables are auto-discovered from <code>.parquet</code> files in that directory, under the configured local catalog:
       </p>
       <Code lang="sql">{`SHOW CATALOGS;
 SHOW TABLES;
@@ -182,7 +160,7 @@ docker compose down -v       # stop and delete the volumes — see below`}</Code
           <tr><td>Connect a real warehouse instead of the local one</td><td><a href="/docs/data-sources">Data Sources</a> · <a href="/docs/connectors">Connector matrix</a></td></tr>
           <tr><td>Build charts and dashboards</td><td><a href="/docs/charts">Chart Builder</a> · <a href="/docs/dashboards">Dashboards</a></td></tr>
           <tr><td>Go deeper on the Engine</td><td><a href="/docs/engine">Kaveon Engine</a></td></tr>
-          <tr><td>Deploy beyond localhost</td><td><a href="/docs/deployment">Deployment</a></td></tr>
+          <tr><td>Deploy beyond localhost</td><td><a href="/docs/installation">Install &amp; deploy</a> · <a href="/docs/deployment">Deployment topology</a></td></tr>
         </tbody>
       </table>
 

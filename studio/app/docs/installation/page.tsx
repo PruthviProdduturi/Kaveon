@@ -6,15 +6,15 @@ export default function InstallationDocs() {
   return (
     <div className="docs-prose">
       <PageHeader
-        eyebrow="Install Kaveon"
-        title="Installation"
-        lead="Run Kaveon locally, on a Linux host, or as a managed Kubernetes workload. Choose one deployment shape; the Engine, API, and Studio keep the same contracts in each."
+        eyebrow="Deploy &amp; Operate"
+        title="Install and deploy Kaveon"
+        lead="Choose a hosting shape, install the same Kaveon contracts, verify the request path, and then hand off to operations."
       />
 
       <p>
         A Kaveon deployment has an Engine coordinator, optional Engine workers, the API and Studio. Table data stays in
-        Parquet, Delta or Iceberg storage; KaveonDB stores the platform records transactionally. Studio can be hosted on
-        Vercel while the data plane runs on your infrastructure.
+        Parquet, Delta or Iceberg storage; KaveonDB stores the platform records transactionally. Studio is portable: it
+        can run on Vercel for managed frontend hosting or inside the same AKS or VM deployment as the API and Engine.
       </p>
 
       <h2>Choose a deployment</h2>
@@ -52,8 +52,16 @@ helm upgrade --install kaveon infra/helm/kaveon-test --namespace kaveon --create
   --set image.digest=sha256:<immutable-digest>`}</Code>
       <p>Use the Azure deployment guide for the Bicep workflow, workload identity, secrets, TLS and autoscaler verification. The chart is deliberately separate from infrastructure creation so credentials never enter source control.</p>
 
-      <h2>Studio on Vercel</h2>
-      <p>Studio is a separate web deployment. The repository CI workflow validates and deploys the Studio build to Vercel; it does not replace the Engine or API. Configure the same-origin API proxy and the deployed Engine/API URL in Vercel environment variables.</p>
+      <h2>Studio hosting choices</h2>
+      <p>Vercel is optional managed frontend hosting for previews, CDN delivery and a low-operations public site. It does not replace the API or Engine, and its Hobby tier has provider usage and commercial limits. The same Studio image can run inside AKS with the portal Helm chart, alongside the API and Engine, when one cluster should own the complete product surface.</p>
+      <Code lang="bash">{`helm upgrade --install kaveon-portal infra/helm/kaveon-portal-test \\
+  --namespace kaveon --create-namespace \\
+  --set images.studio.repository=<registry>/kaveon-studio \\
+  --set images.studio.digest=sha256:<immutable-digest> \\
+  --set images.api.repository=<registry>/kaveon-api \\
+  --set images.api.digest=sha256:<immutable-digest> \\
+  --set secrets.portalAuth=kaveon-portal-auth`}</Code>
+      <p>Vercel and AKS can coexist during migration. Switch traffic only after the AKS ingress, OAuth callbacks, API health, catalog restore and dashboard smoke tests pass. Continue with <a href="/docs/deployment">Deployment topology</a>, then <a href="/docs/operations">Operations</a>.</p>
 
       <h2>After installation</h2>
       <ol>
