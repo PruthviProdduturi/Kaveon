@@ -55,6 +55,98 @@ cutover and PostgreSQL scale-down/deletion. Start with
 local commands recorded in the continuation brief.
 
 
+## Claude update — The Catalog is a measurement record — October 9, 2026
+
+`/catalog` opened on four unrelated counts, a decorative rule and a list sorted
+by the alphabet, with the one fact the platform is built on — what answers
+without a scan — reduced to a badge in the last column. It now opens on the
+answering position: how many rows answer from sketches and cube cells and how
+many from counts and bounds, in opposition, with one rule beneath them for
+their true shape. Every row's last cell says what a question over it costs, in
+words. Schemas and the rows inside them rank by the measure being sorted, so
+`public.kaveon_events_enriched` — 504,000,000 of the lake's 504,685,780
+measured rows — is at the top rather than in the middle of the alphabet.
+
+Acceleration decays, so the list carries two times: **Changed** is when the
+source last moved, **Measured** is when the statistics were computed, and
+their disagreement is what stale means. A stale row keeps its figures, because
+they are the only measurement there is, and quietens them. On this surface the
+accent now carries one meaning and appears nowhere else — a table that answers
+from precomputed values; the filled button is ink, a link hover is an
+underline, the sort mark is grey. Band and list lost their cards and share
+both edges of the pane.
+
+**KaveonDB.** It is called KaveonDB wherever a person reads it — the Catalog
+rail, the Catalog panel, the SQL Lab picker and the SQL Lab tree — and the
+identifier a statement resolves is shown beside it in all three places, read
+from the catalog record the Engine published rather than written into Studio.
+When `CatalogManager::new("kaveon", "default")` is renamed, the display name
+and the identifier converge and nothing here needs changing. An administrator
+sees the `product` schema and all fourteen record families with their counts
+in both the Catalog page and SQL Lab; a non-Admin is not shown the catalog at
+all, because `GET /lab/engine/sources` returns an empty list to Viewer,
+Analyst and Editor — verified live. `GET /engine/console/system-catalog`
+returned 404 on the deployed API for the first part of this session and
+answers now, so the panel both lights up and degrades honestly.
+
+Operationally, every control was audited against the deployed API:
+
+- **Create dataset** is gone from a table's detail. `GET /lab/tables` answers
+  503 (“Legacy database passthrough is unavailable after PostgreSQL
+  retirement”), so `/datasets/new` cannot list an Engine table. It was a dead
+  end. **That page needs separate work** — it has no Engine-catalog path at
+  all.
+- **Register one** on an empty schema opens the register sheet in place, and
+  an empty schema can now be removed. `DELETE /engine/catalog/schemas/{id}`
+  already existed with `If-Match`, with no way to reach it (verified 204), so
+  a mistyped schema was permanent from the UI.
+- **Re-measure** reports how many schemas have landed rather than freezing a
+  button. Serial cost across five schemas on the deployed API: 3.3 s.
+- A stale or unmeasured table offers **Measure again**, which runs at the
+  depth already on record — `{}` for metadata, `{sketches:true}` for full —
+  so re-measuring a table that carries sketches cannot silently reduce it to a
+  footer read. A running ANALYZE counts its seconds.
+- The client no longer repeats the metadata ANALYZE `schema_inventory`
+  already runs for an unmeasured table.
+
+Three defects were found only by driving the page in Chrome against the live
+API: both time columns clipped their own values (the cells carry the span now,
+the prose keeps “ago”); a record family the Engine refuses lost its
+description to the refusal, and the footer total presented a short count as
+the whole control plane; and at a narrow pane the search field was squeezed to
+its own magnifier while “Counts and bounds” ellipsised.
+
+Claude-owned files only: `studio/app/catalog/{Inventory,CatalogShell,
+SystemCatalog,CatalogEditor}.tsx`, `studio/app/catalog/{lib.ts,
+catalog.module.css}`, `studio/components/lab/SystemCatalogList.tsx`, and one
+prop at the call site in `studio/app/lab/LabWorkbench.tsx`. No API or Engine
+change. Gates: `tsc --noEmit` and `next lint` clean on the touched files;
+`python -m pytest routers/test_engine_console.py -q` in `api` passes (12) as
+evidence for the endpoint this depends on.
+
+Two notes for whoever is next:
+
+- `OpenSource.ai_benchmarks.pricing` (27 rows) now carries sketches. I built
+  them while probing the deep-analysis path and a metadata ANALYZE does not
+  remove them; the row is truthful, it is simply a second accelerated table
+  that was not there before.
+- `GET /engine/catalog/schemas/{id}/inventory` intermittently answered 404
+  (`schema_not_found`) in ~50 ms and then 200 on an immediate retry, for
+  schemas that exist. It looks like a coordinator snapshot race on the
+  deployed API. The page survives it — the schema shows as unmeasured until
+  the next read — but it is worth a look.
+
+## REQUEST @Codex — a read path for a table's cube (still open, now load-bearing)
+
+The September request below is unanswered and the Catalog now depends on it to
+avoid an understatement. `kaveon_events_enriched` declares a shape and the
+Engine's own query records show `execution.mode = "context", detail = "cube at
+delta v1 (df4e8829b631)"`, so grouped totals over that shape are answered from
+cells — but no HTTP surface reports whether a cube exists, how many cells it
+holds, or whether it is current. The page therefore reports only what
+`/statistics` carries, and says “Sketches and cells” from the statistics depth
+alone. `GET /v1/catalog/tables/{table_id}/cube` would let it stop inferring.
+
 ## Claude update — A chat turn no longer loses its answer — October 9, 2026
 
 Reopening a recent chat came back holding the questions and none of the
