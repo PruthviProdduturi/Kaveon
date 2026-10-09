@@ -94,7 +94,10 @@ jobs:
       # does not, so these are installed for this step rather than added to
       # api/requirements.txt and shipped in the API image.
       - name: Install script test dependencies
-        run: pip install pyarrow numpy
+        # The operational lake tests import the same Delta reader/writer used
+        # by the build and append scripts. Keep these out of the API image,
+        # but install them explicitly for this test job.
+        run: pip install pyarrow numpy deltalake
 
       - name: Test operational scripts (pytest)
         working-directory: ${{ github.workspace }}
