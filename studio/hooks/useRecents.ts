@@ -60,17 +60,37 @@ export function useRecents() {
     if (loadedFromApi.current) return;
     loadedFromApi.current = true;
 
-    msalFetch("/api/v1/user/recents")
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
-        if (!data || !Array.isArray(data)) return;
-        const apiItems: RecentItem[] = data.map((d: any) => ({
+    // Two servers of record, not one. `/user/recents` holds the kinds the
+    // product store can reference — dataset, chart, dashboard — and refuses
+    // the rest. Conversations are their own records with their own clock:
+    // `updated_at` moves on every message, so the conversation list *is* the
+    // recency of conversations, and reading it here is what makes a chat the
+    // same on every machine instead of living in one browser.
+    Promise.all([
+      msalFetch("/api/v1/user/recents").then(r => r.ok ? r.json() : null).catch(() => null),
+      msalFetch("/api/v1/chat/history").then(r => r.ok ? r.json() : null).catch(() => null),
+    ])
+      .then(([data, sessions]) => {
+        const fromSessions: RecentItem[] = Array.isArray(sessions)
+          ? sessions.map((session: any) => ({
+              id: `chat-${session.id}`,
+              label: session.title || "New conversation",
+              href: `/home?session=${session.id}`,
+              type: "chat" as const,
+              timestamp: new Date(session.updated_at || session.created_at).getTime(),
+            })).filter((item) => Number.isFinite(item.timestamp))
+          : [];
+        if (!data || !Array.isArray(data)) {
+          if (fromSessions.length === 0) return;
+          data = [];
+        }
+        const apiItems: RecentItem[] = (data as any[]).map((d: any) => ({
           id: d.item_id,
           label: d.label,
           href: normalizeHref(d.href),
           type: d.type,
           timestamp: new Date(d.created_at).getTime(),
-        }));
+        })).concat(fromSessions);
         if (apiItems.length > 0) {
           // The server is the record for the kinds it can hold, and the local
           // cache carries the rest. Merging them appended every local-only
@@ -81,6 +101,10 @@ export function useRecents() {
           const ids = new Set(apiItems.map(i => i.id));
           const local = loadLocal();
           for (const l of local) {
+            // A conversation now comes from the conversation list. Letting a
+            // stale local copy back in would resurrect one that had been
+            // deleted, on that machine only.
+            if (l.type === "chat") continue;
             if (!ids.has(l.id)) {
               merged.push(l);
               // Sync local-only items to API
