@@ -364,7 +364,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
             <Anim dir="up" delay={0} style={{ gridColumn: "span 2" }}>
               <div className="about-card" style={{ padding: 40, borderRadius: 16, background: `linear-gradient(135deg, ${B}06 0%, transparent 100%)`, border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: B, textTransform: "uppercase", letterSpacing: "2px", marginBottom: 12 }}>Core</div>
-                <h3 style={{ fontSize: 24, fontWeight: 700, marginBottom: 12, lineHeight: 1.3 }}>Conversational Data Querying</h3>
+                <h3 style={{ fontSize: 24, fontWeight: 700, marginBottom: 12, lineHeight: 1.3 }}>Ask your data</h3>
                 <p style={{ fontSize: 15, color: "#777", lineHeight: 1.8, maxWidth: 500 }}>
                   Type questions in plain English. A template-based NL&#x2192;SQL engine parses your words, matches schema metadata, generates SQL, and renders the answer as an interactive chart.
                 </p>
@@ -372,14 +372,14 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
             </Anim>
             <Anim dir="up" delay={100}>
               <div className="about-card" style={{ padding: 36, borderRadius: 16, background: "linear-gradient(135deg, rgba(16,185,129,0.05) 0%, transparent 100%)", border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
-                <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>37 Chart Types</h3>
-                <p style={{ fontSize: 13.5, color: "#777", lineHeight: 1.8 }}>Bar, line, pie, heatmap, treemap, scatter, funnel, gauge, world map, 3D globe. All dark-mode aware.</p>
+                <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>See the signal</h3>
+                <p style={{ fontSize: 13.5, color: "#777", lineHeight: 1.8 }}>Turn governed answers into interactive charts, maps, and decision-ready views.</p>
               </div>
             </Anim>
             <Anim dir="up" delay={200}>
               <div className="about-card" style={{ padding: 36, borderRadius: 16, background: "linear-gradient(135deg, rgba(139,92,246,0.05) 0%, transparent 100%)", border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
-                <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>SQL Lab</h3>
-                <p style={{ fontSize: 13.5, color: "#777", lineHeight: 1.8 }}>Monaco editor with autocomplete, multi-tab, query history, and caching.</p>
+                <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>Query without friction</h3>
+                <p style={{ fontSize: 13.5, color: "#777", lineHeight: 1.8 }}>SQL Lab with autocomplete, multi-tab workspaces, history, and result caching.</p>
               </div>
             </Anim>
             <Anim dir="up" delay={300} style={{ gridColumn: "span 2" }}>
@@ -392,10 +392,10 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
               </div>
             </Anim>
             {[
-              { title: "Multi-Source", desc: "Register multiple supported sources; each query targets one selected source today.", color: "rgba(236,72,153,0.05)" },
-              { title: "Semantic Datasets", desc: "Define dimensions, metrics, and joins once. Reuse everywhere.", color: "rgba(6,182,212,0.05)" },
-              { title: "Governed Identity", desc: "Microsoft Entra ID, role-aware access, and customer-controlled data boundaries.", color: "rgba(99,102,241,0.05)" },
-              { title: "Deploy Your Way", desc: "Run locally with Docker today; deploy the Studio and Engine as separately qualified services when you need a private-cloud topology.", color: "rgba(245,158,11,0.05)" },
+              { title: "Connect your sources", desc: "Register supported sources in one governed workspace; each query uses its selected execution path.", color: "rgba(236,72,153,0.05)" },
+              { title: "Governed semantics", desc: "Define dimensions, metrics, and joins once, then reuse them across questions, charts, and dashboards.", color: "rgba(6,182,212,0.05)" },
+              { title: "Governed access", desc: "Microsoft Entra ID, role-aware access, and customer-controlled data boundaries.", color: "rgba(99,102,241,0.05)" },
+              { title: "Own your deployment", desc: "Run locally with Docker or deploy the Studio and Engine as separately qualified private-cloud services.", color: "rgba(245,158,11,0.05)" },
             ].map((f, idx) => (
               <Anim key={f.title} dir="up" delay={400 + idx * 100}>
                 <div className="about-card" style={{ padding: 36, borderRadius: 16, background: `linear-gradient(135deg, ${f.color} 0%, transparent 100%)`, border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
@@ -790,7 +790,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
                 {[
                   { title: "On Ask", desc: "Every question checks freshness. Stale context triggers a background rebuild while the live query answers.", icon: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" },
                   { title: "Proactive Sweep", desc: "A background loop checks all datasets every 30 minutes. Stale artifacts rebuild before anyone asks.", icon: "M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" },
-                  { title: "Pipeline Webhook", desc: "POST /dlm/notify-data-change after ETL completes. Instant DLM context invalidation and rebuild.", icon: "M13 2L3 14h9l-1 8 10-12h-9l1-8z" },
+                  { title: "Data-change webhook", desc: "POST /dlm/notify-data-change after a source update. The DLM context is invalidated and rebuilt asynchronously.", icon: "M13 2L3 14h9l-1 8 10-12h-9l1-8z" },
                 ].map(({ title, desc, icon }) => (
                   <div key={title} style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
                     <div style={{
@@ -819,7 +819,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
               Adaptive Context Routing
             </h3>
             <p style={{ fontSize: 15, color: "#777", lineHeight: 1.8, marginBottom: 24 }}>
-              Every question is routed through a per-element staleness scorer that reads database modification counters — not re-queries. Fresh data answers instantly from DLM context. Stale elements trigger targeted live queries and self-heal for next time.
+              Every question is routed through a per-element freshness scorer that reads source statistics and artifact metadata — not a full data rescan. Fresh context can answer directly from the DLM. Stale elements trigger targeted live queries and refresh the context for next time.
             </p>
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {[
