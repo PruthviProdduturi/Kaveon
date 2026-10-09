@@ -85,6 +85,11 @@
 .row { grid-template-columns: 15px minmax(0, 1fr); cursor: default }
 .nodeTop { color: var(--text-primary); font-weight: 600 }
 .node:hover { background: var(--bg-hover); color: var(--text-primary) }
+/* A row that states something rather than doing something: the rail's own
+   grid and indents, with the cursor, the hover and the press taken away, so a
+   reader learns the system catalog is read-only by finding nothing to press. */
+.nodeStatic { cursor: default; color: var(--text-secondary) }
+.nodeStatic:hover { background: transparent; color: var(--text-secondary) }
 .node[aria-current="page"] { background: rgba(var(--accent-rgb), .10); color: var(--text-primary); font-weight: 600 }
 .node:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px }
 .nodeLabel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
@@ -598,3 +603,82 @@ th.cFormat .sortBtn, th.cRows .sortBtn, th.cSize .sortBtn, th.cWhen .sortBtn { j
 .query { display: flex; flex-direction: column; min-width: 0 }
 .workbench { min-width: 0; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-sm); overflow: hidden }
 .workbench :global(.main-content) { height: calc(100vh - 120px) !important; min-height: 560px }
+
+/* ── System catalog ───────────────────────────────────────────────────────
+   KaveonDB sits under the data catalogs and has to read as a different kind
+   of thing without shouting about it. The whole marking is one shift of
+   ground: the panel takes the page's recessed surface instead of the raised
+   one every other list on this page is drawn on, and keeps the hairline and
+   the radius. Nothing is tinted, nothing is badged, and no control appears on
+   it — a surface with no actions on it is already the clearest statement that
+   nothing here is editable.
+
+   The type scale, the gutter and the row height are the page's own, so the
+   panel reads as the last section of this page rather than a second design.
+   Names are mono, because a reader copies them. ─────────────────────────── */
+.system {
+  container: sys / inline-size;
+  margin: 22px 0 0; padding: 20px 22px 18px;
+  background: var(--bg-primary); border: 1px solid var(--border); border-radius: 14px;
+}
+.systemHead { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px 32px; align-items: start }
+.systemIntro { min-width: 0; max-width: 62ch }
+.systemEyebrow {
+  margin: 0 0 6px; font: 600 var(--fs-micro)/1 Inter, sans-serif;
+  letter-spacing: .07em; text-transform: uppercase; color: var(--text-muted);
+}
+.systemTitle { margin: 0; font: 600 var(--fs-display)/26px Inter, sans-serif; letter-spacing: -.02em; color: var(--text-primary) }
+.systemBody { margin: 8px 0 0; font: var(--fs-row)/1.65 Inter, sans-serif; color: var(--text-secondary) }
+
+/* Three facts, read as a column so the longest value cannot push the others
+   out of line, and sized as labels rather than as readings: this panel has
+   nothing to measure, so it has no figures. */
+.systemFacts { display: grid; gap: 10px 0; margin: 0; justify-items: end; text-align: right }
+.systemFacts div { display: grid; gap: 2px }
+.systemFacts dt {
+  font: 600 var(--fs-micro)/1 Inter, sans-serif; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--text-muted);
+}
+.systemFacts dd { margin: 0; font: 500 var(--fs-label)/1.4 Inter, sans-serif; color: var(--text-secondary); white-space: nowrap }
+.systemMono { font-family: var(--mono); font-size: var(--fs-label); color: var(--text-primary) }
+
+.systemTableWrap {
+  margin-top: 18px; overflow: hidden;
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px;
+}
+.systemTable { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: var(--fs-row) }
+.systemTable thead th {
+  height: 34px; padding: 0 var(--gutter); text-align: left;
+  font: 600 var(--fs-micro)/1 Inter, sans-serif; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--text-muted); background: var(--bg-elevated); border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.systemTable tbody th, .systemTable tfoot th, .systemTable td {
+  padding: 10px var(--gutter); border-top: 1px solid var(--border); vertical-align: top; text-align: left; font-weight: 400;
+}
+.systemTable tbody tr:hover th, .systemTable tbody tr:hover td { background: var(--bg-hover) }
+.systemTable tfoot th, .systemTable tfoot td { background: var(--bg-elevated); color: var(--text-secondary) }
+.systemTable tfoot th { font: 600 var(--fs-label)/1.4 Inter, sans-serif; color: var(--text-primary) }
+
+/* The qualified name is one name, not a path a reader has to assemble: the
+   catalog and schema recede and the table leads, and the whole of it is the
+   identifier that resolves. */
+.systemName { display: block; font: 500 var(--fs-row)/1.4 var(--mono); color: var(--text-primary); overflow-wrap: anywhere }
+/* Muted, not faint: this half of the name is secondary, but it is still
+   part of an identifier a reader copies, so it has to stay legible on both
+   grounds. --text-faint is for marks nobody reads. */
+.systemPrefix { color: var(--text-muted) }
+.systemHolds { display: block; margin-top: 4px; font: var(--fs-micro)/1.55 Inter, sans-serif; color: var(--text-muted) }
+.systemCount {
+  width: 124px; text-align: right;
+  font-variant-numeric: tabular-nums lining-nums; color: var(--text-primary); white-space: nowrap;
+}
+.systemTable th.systemCount { text-align: right }
+.systemTable tfoot td.systemCount { font-weight: 600 }
+
+/* Narrow, the facts fall under the prose they qualify and read from the same
+   left edge as it, rather than staying pinned to a right edge that is no
+   longer there. */
+@container sys (max-width: 700px) {
+  .systemHead { grid-template-columns: minmax(0, 1fr) }
+  .systemFacts { justify-items: start; text-align: left; grid-template-columns: repeat(auto-fit, minmax(150px, auto)); gap: 12px 28px }
+}

@@ -258,3 +258,45 @@ def list_records_snapshot(kind: ProductKind, actor: str, role: str, *, max_recor
         if cursor is None: return records, snapshot_id
         if not isinstance(cursor, str) or not cursor:
             raise HTTPException(502, "KaveonDB returned an invalid product list cursor")
+
+
+# The Engine answers a product family as documents, so a cardinality is paid
+# for by reading them. The bound keeps an administrative reading of the
+# control plane from turning into an unbounded transfer; a family past it is
+# reported as counted-to-the-bound rather than guessed at or refused.
+COUNT_BOUND = 1000
+
+
+def count_records(kind: ProductKind, actor: str, role: str, *, bound: int = COUNT_BOUND) -> dict:
+    """How many records one product family holds, read from one pinned snapshot.
+
+    Returns ``{"records": int, "truncated": bool, "snapshotId": str}``.
+    ``truncated`` is true when the family holds more than ``bound`` records, in
+    which case ``records`` is exactly ``bound`` and the reading is a floor.
+    """
+    if kind not in _KINDS:
+        raise HTTPException(422, "Unsupported product record kind")
+    if not isinstance(bound, int) or bound < 1 or bound > COUNT_BOUND:
+        raise HTTPException(422, "Invalid product count bound")
+    counted, cursor, snapshot_id = 0, None, None
+    while True:
+        query = "?limit=100" + (("&cursor=" + quote(cursor, safe="")) if cursor else "")
+        page = engine_bridge._request("GET", f"/v1/products/{kind}{query}",
+            "KAVEON_ENGINE_BRIDGE_TOKEN", actor, role=_role(role))
+        if not isinstance(page, dict) or not isinstance(page.get("records"), list):
+            raise HTTPException(502, "KaveonDB returned an invalid product list")
+        current = page.get("snapshot_id")
+        if not isinstance(current, str) or not current:
+            raise HTTPException(502, "KaveonDB product list omitted its snapshot identity")
+        if snapshot_id is not None and current != snapshot_id:
+            raise HTTPException(409, "KaveonDB product list changed during pagination")
+        snapshot_id = current
+        counted += len(page["records"])
+        if counted >= bound:
+            return {"records": bound, "truncated": counted > bound or page.get("next_cursor") is not None,
+                    "snapshotId": snapshot_id}
+        cursor = page.get("next_cursor")
+        if cursor is None:
+            return {"records": counted, "truncated": False, "snapshotId": snapshot_id}
+        if not isinstance(cursor, str):
+            raise HTTPException(502, "KaveonDB returned an invalid product list cursor")

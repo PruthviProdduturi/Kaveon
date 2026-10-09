@@ -3,11 +3,18 @@
 import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { useRole } from "../../hooks/useRole";
+import {
+  SYSTEM_CATALOG_LABEL, SYSTEM_CATALOG_SCHEMA, SystemTable, catalogLabel, fetchSystemCatalog,
+  isSystemCatalog,
+} from "../../utils/systemCatalog";
 import s from "./catalog.module.css";
 import {
   CatalogError, EngineSource, enc, fetchDefinitions, fetchSchemaDefinitions,
   fetchSchemas, fetchSources, fetchTables,
 } from "./lib";
+
+export { catalogLabel };
 
 // The product speaks in catalogs. A "source" is the registry row behind a
 // catalog and never appears in a URL or a label; the shell resolves it.
@@ -33,12 +40,6 @@ export const useCatalogTree = () => {
 
 export const tableKey = (catalog: string, schema: string) => `${catalog} ${schema}`;
 
-// The Engine keeps `Kaveon` as its SQL-compatible internal name. Studio uses
-// the product-facing KaveonDB name while retaining the real name in URLs/API calls.
-export function catalogLabel(catalog: string): string {
-  return catalog === "Kaveon" || catalog === "KaveonDB" ? "KaveonDB" : catalog;
-}
-
 /**
  * The disclosure mark, in the same icon vocabulary as every other mark on the
  * page. One glyph that rotates, so open and closed are the same shape in two
@@ -52,8 +53,10 @@ function Twist({ open }: { open: boolean }) {
   );
 }
 
+// Data catalogs first, in their own order; the platform's own catalog last,
+// because it is the one nothing in the rail navigates into.
 function catalogOrder(source: EngineSource): number {
-  return source.catalog === "OpenSource" ? 0 : source.catalog === "Kaveon" || source.catalog === "KaveonDB" ? 1 : 2;
+  return isSystemCatalog(source.catalog) ? 2 : source.catalog === "OpenSource" ? 0 : 1;
 }
 
 export function CatalogShell({ children }: { children: React.ReactNode }) {
@@ -71,6 +74,12 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState<CatalogError | null>(null);
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [collapsed, setCollapsed] = useState(false);
+  const { isAdmin } = useRole();
+  // KaveonDB's record families. The Engine publishes no `product` schema into
+  // its query snapshot — the name is the facade its parser resolves to the
+  // record transactions — so the rail reads them from the platform, and only
+  // for an administrator, who is the only role the Engine answers for.
+  const [systemTables, setSystemTables] = useState<SystemTable[] | null>(null);
 
   const sourceFor = useCallback((catalog: string) => catalogs?.find(c => c.catalog === catalog) ?? null, [catalogs]);
   const fail = (e: unknown) => setError(e instanceof CatalogError ? e : new CatalogError(0, "The catalog could not be read."));
@@ -120,8 +129,25 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
     return () => { cancelled = true; };
   }, []);
 
-  // Catalogs are few and always worth seeing open; load their schema lists once known.
-  useEffect(() => { catalogs?.forEach(c => { loadSchemas(c.catalog); }); }, [catalogs, loadSchemas]);
+  // Catalogs are few and always worth seeing open; load their schema lists
+  // once known. The system catalog is not among them: its one Engine schema
+  // is the coordinator's empty session default, which is not what the node
+  // lists and not a place anything belongs.
+  useEffect(() => {
+    catalogs?.forEach(c => { if (!isSystemCatalog(c.catalog)) loadSchemas(c.catalog); });
+  }, [catalogs, loadSchemas]);
+
+  // The structure of the system catalog costs nothing to read, so the rail
+  // asks for it without counts. A refusal leaves the node listing no tables
+  // rather than putting an error over the whole tree.
+  useEffect(() => {
+    if (!isAdmin) { setSystemTables(null); return; }
+    let cancelled = false;
+    fetchSystemCatalog()
+      .then(reading => { if (!cancelled) setSystemTables(reading.tables); })
+      .catch(() => { if (!cancelled) setSystemTables([]); });
+    return () => { cancelled = true; };
+  }, [isAdmin]);
 
   // A deep link lands expanded along its own path.
   useEffect(() => {
@@ -161,9 +187,21 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
               <div className={s.treeBody}>
                 {!catalogs && !error && <div className={s.treeNote}>Loading catalogs…</div>}
                 {error && <div className={`${s.treeNote} ${s.treeErr}`}>{error.message}</div>}
-                {catalogs && catalogs.length === 0 && <div className={s.treeNote}>No KaveonDB catalogs are registered.</div>}
+                {catalogs && catalogs.length === 0 && <div className={s.treeNote}>No catalogs are registered.</div>}
                 {catalogs?.map(cat => {
                   const name = cat.catalog, isOpen = open.has(name), list = schemas[name];
+                  // The platform's own catalog is listed, not navigated. Its
+                  // record families are not Engine tables a page can open, so
+                  // the node states what it holds and goes no further; the
+                  // Catalog page reads it in full below the inventory.
+                  if (isSystemCatalog(name)) {
+                    return (
+                      <SystemNode
+                        key={name} open={isOpen} isAdmin={isAdmin} tables={systemTables}
+                        onToggle={() => toggle(name)}
+                      />
+                    );
+                  }
                   return (
                     <div key={name}>
                       <button type="button" className={`${s.node} ${s.nodeTop}`} aria-expanded={isOpen} onClick={() => toggle(name, () => loadSchemas(name))}>
@@ -225,5 +263,60 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
         <div className={s.pane} key={pathname}>{children}</div>
       </div>
     </TreeContext.Provider>
+  );
+}
+
+/**
+ * KaveonDB in the rail.
+ *
+ * Every other node here is a way into something: a catalog opens to schemas,
+ * a schema is a page, a table is a page. This one holds the platform's own
+ * records, which no catalog page can open and no statement can scan, so it
+ * opens to a listing and stops. Nothing in it is a link, a twist or a button,
+ * which is the marking: a reader finds out it is read-only by there being
+ * nothing to press, not by a badge saying so.
+ *
+ * The one word that distinguishes it sits where every other catalog row shows
+ * its schema count — the same slot, the same size, the same muted colour. A
+ * reader without the administrator role sees the catalog and one line saying
+ * why it lists nothing, rather than an empty node or no node at all.
+ */
+function SystemNode({ open, isAdmin, tables, onToggle }: {
+  open: boolean; isAdmin: boolean; tables: SystemTable[] | null; onToggle: () => void;
+}) {
+  return (
+    <div>
+      <button type="button" className={`${s.node} ${s.nodeTop}`} aria-expanded={open} onClick={onToggle}>
+        <Twist open={open} />
+        <span className={s.kind}><i className="fas fa-database" aria-hidden="true" /></span>
+        <span className={s.nodeLabel}>{SYSTEM_CATALOG_LABEL}</span>
+        <span className={s.nodeCount}>system</span>
+      </button>
+      {open && !isAdmin && (
+        <div className={`${s.treeNote} ${s.level1}`}>
+          The platform&rsquo;s own records. Browsing its tables requires the administrator role.
+        </div>
+      )}
+      {open && isAdmin && (
+        <>
+          <div className={`${s.node} ${s.level1} ${s.nodeStatic}`}>
+            <span className={s.chev} />
+            <span className={s.kind}><i className="fas fa-folder" aria-hidden="true" /></span>
+            <span className={s.nodeLabel}>{SYSTEM_CATALOG_SCHEMA}</span>
+            <span className={s.nodeCount}>{tables ? tables.length : ""}</span>
+          </div>
+          {(tables ?? []).map(table => (
+            <div key={table.table} className={`${s.node} ${s.level2} ${s.nodeStatic}`} title={table.identifier}>
+              <span className={s.chev} />
+              <span className={s.kind}><i className="fas fa-table" aria-hidden="true" /></span>
+              <span className={s.nodeLabel}>{table.table}</span>
+              <span className={s.nodeCount} />
+            </div>
+          ))}
+          {!tables && <div className={`${s.treeNote} ${s.level2}`}>Reading</div>}
+          {tables?.length === 0 && <div className={`${s.treeNote} ${s.level2}`}>No tables could be read.</div>}
+        </>
+      )}
+    </div>
   );
 }

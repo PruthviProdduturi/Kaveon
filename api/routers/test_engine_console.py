@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 
 from middleware.auth import UserContext
 from routers import engine_console
@@ -74,6 +74,78 @@ class EngineConsoleTests(unittest.TestCase):
             with self.assertRaises(HTTPException) as error:
                 engine_console.qualify_native_statistics(ctx)
         self.assertEqual(error.exception.status_code, 409)
+
+    def test_system_catalog_structure_costs_no_engine_read(self):
+        ctx = UserContext("admin@example.com", "Admin")
+        with patch.object(engine_bridge, "_request") as request:
+            reading = engine_console.system_catalog(Response(), False, False, ctx)
+        request.assert_not_called()
+        self.assertIs(reading["counted"], False)
+        self.assertEqual(reading["catalog"], {"identifier": "kaveon", "schema": "product"})
+        self.assertEqual(len(reading["tables"]), 14)
+        # Every row carries the identifier the Engine resolves, never the
+        # product name: a reader copying a name out of Studio must get one
+        # that parses.
+        self.assertEqual(reading["tables"][0]["identifier"], "kaveon.product.datasets")
+        for row in reading["tables"]:
+            self.assertTrue(row["identifier"].startswith("kaveon.product."))
+            self.assertIsNone(row["records"])
+            self.assertIsNone(row["error"])
+
+    def test_system_catalog_counts_are_bounded_and_snapshot_pinned(self):
+        ctx = UserContext("admin@example.com", "Admin")
+        engine_console._SYSTEM_CATALOG_CACHE.clear()
+        page = {"records": [{"id": "r1", "document": {}}], "snapshot_id": "snap-1", "next_cursor": None}
+        with patch.object(engine_bridge, "_request", return_value=page) as request:
+            reading = engine_console.system_catalog(Response(), True, False, ctx)
+        self.assertIs(reading["counted"], True)
+        self.assertEqual(reading["snapshot"], {"id": "snap-1", "consistent": True})
+        self.assertTrue(all(row["records"] == 1 for row in reading["tables"]))
+        # One listing per family, addressed by record kind, through the bridge.
+        self.assertEqual(request.call_count, 14)
+        self.assertEqual(request.call_args_list[0].args[1], "/v1/products/dataset?limit=100")
+        self.assertEqual(request.call_args_list[0].kwargs["role"], "admin")
+
+    def test_system_catalog_counts_are_held_briefly_and_refresh_rereads(self):
+        ctx = UserContext("admin@example.com", "Admin")
+        engine_console._SYSTEM_CATALOG_CACHE.clear()
+        page = {"records": [], "snapshot_id": "snap-1", "next_cursor": None}
+        with patch.object(engine_bridge, "_request", return_value=page) as request:
+            engine_console.system_catalog(Response(), True, False, ctx)
+            self.assertEqual(request.call_count, 14)
+            engine_console.system_catalog(Response(), True, False, ctx)
+            self.assertEqual(request.call_count, 14)
+            engine_console.system_catalog(Response(), True, True, ctx)
+            self.assertEqual(request.call_count, 28)
+        engine_console._SYSTEM_CATALOG_CACHE.clear()
+
+    def test_system_catalog_keeps_a_refused_family_as_one_row(self):
+        ctx = UserContext("admin@example.com", "Admin")
+        engine_console._SYSTEM_CATALOG_CACHE.clear()
+
+        def answer(method, path, *args, **kwargs):
+            if path.startswith("/v1/products/chart"):
+                raise HTTPException(502, "KaveonDB returned an invalid product list")
+            return {"records": [], "snapshot_id": "snap-1", "next_cursor": None}
+
+        with patch.object(engine_bridge, "_request", side_effect=answer):
+            reading = engine_console.system_catalog(Response(), True, False, ctx)
+        charts = next(row for row in reading["tables"] if row["table"] == "charts")
+        self.assertEqual(charts["error"], "KaveonDB returned an invalid product list")
+        self.assertIsNone(charts["records"])
+        self.assertEqual(next(row for row in reading["tables"] if row["table"] == "datasets")["records"], 0)
+        engine_console._SYSTEM_CATALOG_CACHE.clear()
+
+    def test_system_catalog_reports_a_commit_that_landed_mid_reading(self):
+        ctx = UserContext("admin@example.com", "Admin")
+        engine_console._SYSTEM_CATALOG_CACHE.clear()
+        snapshots = iter([f"snap-{index}" for index in range(14)])
+        with patch.object(engine_bridge, "_request",
+                          side_effect=lambda *a, **k: {"records": [], "snapshot_id": next(snapshots), "next_cursor": None}):
+            reading = engine_console.system_catalog(Response(), True, False, ctx)
+        self.assertIsNone(reading["snapshot"]["id"])
+        self.assertIs(reading["snapshot"]["consistent"], False)
+        engine_console._SYSTEM_CATALOG_CACHE.clear()
 
 
 if __name__ == "__main__":
