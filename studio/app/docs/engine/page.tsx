@@ -172,7 +172,7 @@ kaveon --server http://localhost:8080`}</Code>
             <code>SELECT</code> with projection and aliases · <code>WHERE</code> · <code>GROUP BY</code> ·{" "}
             <code>HAVING</code> · <code>SUM</code>/<code>COUNT</code>/<code>AVG</code>/<code>MIN</code>/<code>MAX</code> ·{" "}
             <code>COUNT/SUM/AVG(DISTINCT)</code> · <code>ORDER BY</code> with null placement ·{" "}
-            <code>LIMIT</code>/TopN · distributed equi-joins · local outer/cross joins · window functions · set operations ·{" "}
+            <code>LIMIT</code>/TopN · distributed equi-joins · distributed outer/cross qualification · window functions · set operations ·{" "}
             <code>CASE</code> · date/time functions · <code>CAST</code> · arithmetic ·{" "}
             <code>catalog.schema.table</code>
           </td>

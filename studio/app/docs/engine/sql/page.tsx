@@ -59,7 +59,8 @@ GROUP  BY c.region;`}</Code>
       <code>INNER</code>, <code>LEFT</code>, <code>RIGHT</code>, <code>FULL</code> and <code>CROSS</code>{" "}
       joins execute locally with qualified relation aliases. Distributed <code>INNER</code> equi-joins
       repartition both sides by hash; a broadcast build side is used when the planner selects it. Broader
-      distributed evidence for outer and cross joins remains an alpha gate. Join conditions must be
+      representative distributed evidence for outer and cross joins now passes; broader skew and failure
+      qualification remains an alpha gate. Join conditions must be
       equalities — general predicates are not yet supported as join conditions, though they work in{" "}
       <code>WHERE</code>.
     </p>
