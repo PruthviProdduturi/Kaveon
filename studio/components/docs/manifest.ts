@@ -20,6 +20,7 @@ export const DOCS_NAV: readonly DocsGroup[] = [
     pinned: true,
     items: [
       { title: "Introduction", href: "/docs", description: "What Kaveon is and where to begin.", keywords: ["overview"] },
+      { title: "Installation", href: "/docs/installation", description: "Run Kaveon with Docker, on a Linux VM, or on Kubernetes.", keywords: ["install", "docker", "helm", "kubernetes", "vm"] },
       { title: "Quickstart", href: "/docs/quickstart", description: "Connect data and build a first chart.", keywords: ["install", "start"] },
       { title: "Core concepts", href: "/docs/concepts", description: "Sources, datasets, charts, dashboards, and questions." },
     ],
