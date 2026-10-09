@@ -1151,7 +1151,21 @@ def resolve_value(dataset_id: str, term: str, limit: int = 5,
     """The no-LLM retrieval workhorse: map a term to the column + filter key it
     denotes. e.g. "anthropic" -> {column: provider, key_value: 'Anthropic'}.
     Exact-normalized match first; a prefix match is used as a fallback unless
-    *exact_only* (the entity-filter path sets this, so "in" can't match "India")."""
+    *exact_only* (the entity-filter path sets this, so "in" can't match "India").
+
+    *exact_only* bars the close match as well as the prefix one. It used not
+    to, and the consequence was severe rather than cosmetic: "chart" is one
+    deleted letter from "Chat", a surface of the events table, so almost any
+    request to draw something silently filtered the answer to `surface =
+    'Chat'`. "Show me a chart of that" and "can i get a world map chart" both
+    came back as "Charts Created - Chat is 0". Nothing warned anyone, because
+    a guessed filter looks exactly like an asked-for one.
+
+    Typo tolerance does not depend on this branch. A term that resolves to
+    nothing reaches `_near_values`, which offers the value as a clarification
+    ("users in north amerca" asks whether North America was meant) — which is
+    the right answer for an inexact match anyway: ask, rather than quietly
+    filter on a word the reader never typed."""
     if actor and _RETIREMENT_SERVING.get() is None:
         return _with_serving_identity(actor, role, lambda: resolve_value(
             dataset_id, term, limit, exact_only,
@@ -1170,7 +1184,7 @@ def resolve_value(dataset_id: str, term: str, limit: int = 5,
         if not rows and not exact_only and len(norm) >= 4:
             rows = sorted((row for row in values if str(row.get("value_norm") or "").startswith(norm)),
                           key=lambda row: row.get("freq", 0), reverse=True)
-        if not rows and len(norm) >= 4:
+        if not rows and not exact_only and len(norm) >= 4:
             rows = _fuzzy_value(str(dataset_id), norm)
         return [_value_hit(row) for row in rows[:limit]]
     exact = meta.query(
@@ -1188,8 +1202,9 @@ def resolve_value(dataset_id: str, term: str, limit: int = 5,
             [str(dataset_id), norm + "%"],
         )
         rows = pref.get("rows_objects", pref.get("rows", []))
-    # typo tolerance: fuzzy-match against this dataset's values (japn -> japan)
-    if not rows and len(norm) >= 4:
+    # typo tolerance: fuzzy-match against this dataset's values (japn -> japan).
+    # Never under exact_only -- see the note above about "chart" and "Chat".
+    if not rows and not exact_only and len(norm) >= 4:
         rows = _fuzzy_value(str(dataset_id), norm)
     return [_value_hit(r) for r in rows[:limit]]
 
@@ -5149,6 +5164,54 @@ def _extract_relative_time(question: str) -> Optional[str]:
     return None
 
 
+def _bulk_value_index(dataset_ids: List[str], *, serving: bool,
+                      per_col: int = 6) -> tuple[Dict[str, Dict[str, List[str]]], Dict[str, int]]:
+    """Sample values and indexed-value counts for many artifacts in one read.
+
+    Returns ``({dataset_id: {column: [value, ...]}}, {dataset_id: count})``.
+    Per artifact this is what ``_sample_values`` and ``_value_count`` answer;
+    gathered here so a banner covering every compiled dataset costs one read
+    rather than two per dataset. On the serving path the artifacts are already
+    in memory, so each is read from there.
+    """
+    unique = [did for did in dict.fromkeys(dataset_ids) if did]
+    samples: Dict[str, Dict[str, List[str]]] = {}
+    counts: Dict[str, int] = {}
+    if not unique:
+        return samples, counts
+
+    if serving:
+        for did in unique:
+            samples[did] = _sample_values(did, per_col)
+            counts[did] = _value_count(did)
+        return samples, counts
+
+    placeholders = ", ".join(f"@param{index}" for index in range(len(unique)))
+    try:
+        res = meta.query(
+            "SELECT dataset_id, element_key, value_text, freq FROM dlm_value_index "
+            f"WHERE dataset_id IN ({placeholders}) ORDER BY dataset_id, freq DESC",
+            list(unique),
+        )
+    except Exception:
+        logger.exception("Bulk value-index read failed for the context banner")
+        return samples, counts
+
+    for row in res.get("rows_objects", res.get("rows", [])):
+        if not isinstance(row, dict):
+            continue
+        did = str(row.get("dataset_id"))
+        counts[did] = counts.get(did, 0) + 1
+        column = (row.get("element_key") or "").split(".")[-1]
+        value = row.get("value_text")
+        if not column or value is None:
+            continue
+        bucket = samples.setdefault(did, {}).setdefault(column, [])
+        if len(bucket) < per_col and value not in bucket:
+            bucket.append(value)
+    return samples, counts
+
+
 def coverage(actor: Optional[str] = None, role: str = "Viewer") -> List[Dict[str, Any]]:
     """What context is available to test against — one row per compiled DLM, with
     the date range, row count, and value coverage. Drives the homepage banner."""
@@ -5162,23 +5225,34 @@ def coverage(actor: Optional[str] = None, role: str = "Viewer") -> List[Dict[str
             "SELECT dataset_id, manifest, stats_rollup, status, built_at FROM dlm_artifact "
             "ORDER BY built_at DESC", []
         )
+    rows = list(res.get("rows_objects", res.get("rows", [])))
+    # The value index for every artifact on the banner, in one read. Asked for
+    # one artifact at a time this was a sample read plus a count read per
+    # artifact, and the banner is the one caller — so the page paid two round
+    # trips per dataset to decorate a strip above the composer.
+    serving = _RETIREMENT_SERVING.get() is not None
+    bulk_samples, bulk_counts = _bulk_value_index(
+        [str(r.get("dataset_id")) for r in rows], serving=serving,
+    )
     out: List[Dict[str, Any]] = []
-    for r in res.get("rows_objects", res.get("rows", [])):
+    for r in rows:
         did = str(r.get("dataset_id"))
         manifest = _loads(r.get("manifest")) or {}
         stats = _loads(r.get("stats_rollup")) or {}
         row_counts = stats.get("row_counts") or {}
-        if (_RETIREMENT_SERVING.get() is None and
-                (not row_counts or stats.get("row_count_source") != "kaveon_engine_exact")):
-            backfilled_counts = _backfill_native_row_counts(did, stats)
-            if backfilled_counts:
-                row_counts = backfilled_counts
+        # An exact row count is reported when the artifact recorded one, and
+        # reported as absent when it did not. It is deliberately not computed
+        # here: measuring it means a dataset document read and a COUNT(*) per
+        # table through the Engine, and when a source cannot answer — an
+        # external database has no native catalog — nothing is written back, so
+        # the attempt repeated on every load of the page this banner sits on.
+        # Exact counts are established when the DLM is built or analysed.
         max_rows = max(row_counts.values()) if row_counts else None
         if max_rows is None:
             wm = stats.get("watermark") or {}
             max_rows = wm.get("row_count") or None
         cols = manifest.get("columns") or []
-        samples = _sample_values(did)
+        samples = bulk_samples.get(did, {})
         out.append({
             "dataset_id": did,
             "name": manifest.get("name"),
@@ -5186,7 +5260,7 @@ def coverage(actor: Optional[str] = None, role: str = "Viewer") -> List[Dict[str
             "date_range": stats.get("date_range"),
             "row_count": max_rows,
             "row_count_source": stats.get("row_count_source"),
-            "values_indexed": _value_count(did),
+            "values_indexed": bulk_counts.get(did, 0),
             "columns_count": len(cols),
             "dimensions": [
                 {"column": c.get("name"), "values": samples.get(c.get("name"), [])}
