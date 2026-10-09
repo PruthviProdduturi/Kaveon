@@ -146,12 +146,65 @@ EXCHANGE_TOKEN_VALUE="$(ensure KAVEON_EXCHANGE_TOKEN)"
 CATALOG_TOKEN_VALUE="$(ensure KAVEON_CATALOG_ADMIN_TOKEN)"
 
 # ── Environment file ─────────────────────────────────────────────────────────
-# Written whole, from values that were read back first, so the file stays the
-# single description of the deployment and a re-run is not a surprise.
+# Only the keys below are this script's to write. Everything else in the file
+# belongs to the operator and is carried through verbatim.
+#
+# This used to write the file whole, reading back just the six generated
+# secrets. That silently deleted every other key on a re-run — and the keys it
+# deleted were the ones docs/guides/self-hosting.md tells you to add by hand:
+# AUTH_MICROSOFT_ENTRA_ID_ID, AUTH_MICROSOFT_ENTRA_ID_SECRET and
+# AUTH_ADMIN_EMAILS. Losing the last of those leaves a deployment with no
+# administrator at all, and the same guide tells you to re-run this script to
+# restart ("Day two") and to upgrade. Provider keys, KAVEON_CREDENTIAL_KEYS,
+# AUTH_URL, WEB_URL and every Engine tuning value went the same way.
+MANAGED_KEYS="NODE_ENV KAVEON_SYSTEM_STORAGE KAVEON_PRODUCT_STORAGE_MODE
+KAVEON_PRODUCT_LOCAL_PATH KAVEON_PRODUCT_ADLS_ACCOUNT KAVEON_PRODUCT_ADLS_CONTAINER
+KAVEON_PRODUCT_ADLS_PREFIX KAVEON_DATA_PATH AUTH_SECRET KAVEON_PROXY_SECRET
+KAVEON_ENGINE_ADMIN_TOKEN KAVEON_ENGINE_BRIDGE_TOKEN KAVEON_EXCHANGE_TOKEN
+KAVEON_CATALOG_ADMIN_TOKEN"
+
+is_managed() {
+    local candidate="$1" key
+    for key in $MANAGED_KEYS; do
+        [ "$key" = "$candidate" ] && return 0
+    done
+    return 1
+}
+
+# A data path given on this run wins; one already in the file is kept. Without
+# this, re-running without --data dropped the mount and the workers came up
+# with nothing to read.
+if [ -z "$DATA_PATH" ]; then
+    DATA_PATH="$(read_existing KAVEON_DATA_PATH || true)"
+fi
+
+# Lines the operator owns, in the order they were written, comments between
+# them dropped only where they introduced a managed key. Read before the file
+# is touched.
+CARRIED=""
+if [ -f "$ENV_FILE" ]; then
+    CARRIED="$(awk -v managed="$MANAGED_KEYS" '
+        BEGIN { split(managed, list, /[ \n]+/); for (i in list) if (list[i] != "") own[list[i]] = 1 }
+        /^[ \t]*#/ { next }
+        /^[ \t]*$/ { next }
+        {
+            line = $0
+            eq = index(line, "=")
+            if (eq == 0) { print line; next }
+            key = substr(line, 1, eq - 1)
+            gsub(/^[ \t]+|[ \t]+$/, "", key)
+            if (!(key in own)) print line
+        }
+    ' "$ENV_FILE")"
+fi
+
 umask 077
+TEMP_ENV="${ENV_FILE}.kaveon-up.$$"
+trap 'rm -f "$TEMP_ENV"' EXIT
 {
-    echo "# Written by scripts/kaveon-up.sh on $(date -u +%Y-%m-%dT%H:%M:%SZ)."
-    echo "# Secrets here are generated once; re-running preserves them."
+    echo "# Managed block written by scripts/kaveon-up.sh on $(date -u +%Y-%m-%dT%H:%M:%SZ)."
+    echo "# Secrets here are generated once; re-running preserves them, and"
+    echo "# preserves every key below this block that the script does not own."
     echo
     echo "NODE_ENV=production"
     echo "KAVEON_SYSTEM_STORAGE=${STORAGE}"
@@ -169,14 +222,25 @@ umask 077
     echo "KAVEON_EXCHANGE_TOKEN=${EXCHANGE_TOKEN_VALUE}"
     echo "KAVEON_CATALOG_ADMIN_TOKEN=${CATALOG_TOKEN_VALUE}"
     echo
-    echo "# Sign-in. Without an OAuth provider the stack runs in local mode with"
-    echo "# a single development identity — fine on a laptop, not on a network."
-    echo "# Set these to require real sign-in; see docs/guides/self-hosting.md."
-    echo "# AUTH_MICROSOFT_ENTRA_ID_ID="
-    echo "# AUTH_MICROSOFT_ENTRA_ID_SECRET="
-    echo "# AUTH_ADMIN_EMAILS=you@example.com"
-} > "$ENV_FILE"
-note "wrote ${ENV_FILE} (mode 600)"
+    if [ -n "$CARRIED" ]; then
+        echo "# Yours. This script does not read or rewrite anything below here."
+        printf '%s\n' "$CARRIED"
+    else
+        echo "# Sign-in. Without an OAuth provider the stack runs in local mode with"
+        echo "# a single development identity — fine on a laptop, not on a network."
+        echo "# Set these to require real sign-in; see docs/guides/self-hosting.md."
+        echo "# AUTH_MICROSOFT_ENTRA_ID_ID="
+        echo "# AUTH_MICROSOFT_ENTRA_ID_SECRET="
+        echo "# AUTH_ADMIN_EMAILS=you@example.com"
+    fi
+} > "$TEMP_ENV"
+
+# Replaced in one step: an interrupted run leaves the old file, never half of
+# a new one. A deployment with half an environment file does not start.
+mv -f "$TEMP_ENV" "$ENV_FILE"
+trap - EXIT
+carried_count=$(printf '%s' "$CARRIED" | grep -c . || true)
+note "wrote ${ENV_FILE} (mode 600; ${carried_count} of your own keys kept)"
 
 # ── Images ───────────────────────────────────────────────────────────────────
 if [ "$PULL" = "1" ]; then
