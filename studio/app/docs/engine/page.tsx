@@ -175,7 +175,7 @@ kaveon --server http://localhost:8080`}</Code>
             <code>catalog.schema.table</code>
           </td>
           <td>
-            Scalar and correlated subqueries · non-equality join conditions · DDL and DML ·
+            Scalar and correlated subqueries · non-equality join conditions · data-changing DML · general table DDL ·
             comprehensive decimal and date/time edge cases
           </td>
         </tr>
