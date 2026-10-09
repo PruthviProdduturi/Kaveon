@@ -5,9 +5,9 @@ export const metadata = { title: "Architecture" };
 export default function ArchitectureDocs() {
   return (
     <div className="docs-prose">
-      <PageHeader eyebrow="Platform" title="Architecture" lead="Kaveon is one product with three pillars: Studio, the deterministic Data Language Model, and the Rust analytical Engine. All three are in the request path. Every chart, question and statement is planned and executed by the Engine against Delta tables in object storage." />
+      <PageHeader eyebrow="Platform" title="Architecture" lead="Kaveon is one product with three pillars: Studio, the deterministic Data Language Model, and the Rust analytical Engine. Studio and the API provide the product surface; the Engine provides the distributed analytical path for lake-backed statements." />
 
-      <Callout type="note"><strong>Status vocabulary:</strong> Current means it is in the request path people use. Target means approved architecture that is not yet implemented. The Engine is in that path for every chart, dashboard and question, so this page no longer calls it an alpha.</Callout>
+      <Callout type="note"><strong>Status vocabulary:</strong> Current means it is in the request path people use. Alpha means the path is implemented and qualified, but its SQL and cloud-format coverage is still expanding. Target means approved architecture that is not yet implemented.</Callout>
 
       <Diagram src="/docs/architecture/kaveon-platform-architecture.svg" alt="Kaveon platform architecture showing Studio, DLM, and Engine with current and target boundaries" caption="The product boundary includes all three pillars. Solid connections are current; explicitly labeled target connections are roadmap architecture. Open the diagram for a full-size view." />
 
@@ -17,7 +17,7 @@ export default function ArchitectureDocs() {
         <tbody>
           <tr><td><strong>Kaveon Studio</strong></td><td>Next.js 15 · React 19</td><td>Current</td><td>Ask, SQL Lab, semantic datasets, charts, dashboards, and administration.</td></tr>
           <tr><td><strong>Platform API + DLM</strong></td><td>FastAPI · Python</td><td>Current</td><td>Authenticated application services, deterministic question resolution, and the statements it hands the Engine.</td></tr>
-          <tr><td><strong>Kaveon Engine</strong></td><td>Rust · Arrow · Delta on ADLS Gen2</td><td>Current</td><td>Durable catalog, optimized plans, distributed vectorized stages, Arrow IPC exchange, cube and sketch answers, and the transactional store behind the platform&rsquo;s own records.</td></tr>
+          <tr><td><strong>Kaveon Engine</strong></td><td>Rust · Arrow · Delta on ADLS Gen2</td><td>Alpha · qualified path</td><td>Durable catalog, optimized plans, distributed vectorized stages, Arrow IPC exchange, cube and sketch answers, and KaveonDB transactional records.</td></tr>
         </tbody>
       </table>
 
@@ -25,7 +25,7 @@ export default function ArchitectureDocs() {
       <Code lang="text">{`Browser
   │ same-origin Auth.js session
   ▼
-Kaveon Studio (Vercel)
+Kaveon Studio (Vercel, AKS, or VM)
   │ /api/kaveon/* proxy · authenticated identity headers
   ▼
 Platform API + DLM (FastAPI)
@@ -33,7 +33,7 @@ Platform API + DLM (FastAPI)
   ├─ Kaveon Engine ──► Delta tables in ADLS Gen2
   │                    cube cells and sketches, or a distributed scan
   └─ KaveonDB (kaveon.product.*) ──► the platform's own records`}</Code>
-      <p>The browser does not send trusted identity headers directly. Studio derives identity from the server-side session and signs the proxy request with <code>KAVEON_PROXY_SECRET</code>. FastAPI can also validate configured provider-issued bearer tokens for direct API clients. Each current query runs against one selected source; cross-source federation is not implemented.</p>
+      <p>The browser does not send trusted identity headers directly. Studio derives identity from the server-side session and signs the proxy request with <code>KAVEON_PROXY_SECRET</code>. FastAPI can also validate configured provider-issued bearer tokens for direct API clients. Each query runs against one selected source; cross-source federation is not implemented.</p>
 
       <h2>How a statement executes</h2>
       <Code lang="text">{`Remote CLI or Engine HTTP client

@@ -15,9 +15,10 @@ export default function DeploymentDocs() {
       <Callout type="note">
         The current production-shaped cloud Engine is <code>kaveon-aks</code> in
         <code>kaveon-rg</code>, with a coordinator and autoscaled worker pool.
-        Vercel hosts Studio separately. The diagram below documents the VM
-        reference path; use <a href="/docs/installation">Installation</a> for
-        the AKS path and its operator runbook.
+        Vercel hosts the current Studio deployment separately. The qualified
+        Engine runs on AKS; the API and DLM remain on the VM reference path
+        until the API cutover is qualified. Use <a href="/docs/installation">Install &amp; deploy</a> for the
+        supported VM, Docker and AKS paths.
       </Callout>
       <Diagram
         src="/docs/architecture/kaveon-deployment-topology.svg"
@@ -37,7 +38,7 @@ export default function DeploymentDocs() {
                ├── opensource/snapshots/…     Delta tables — the rows
                └── product/kaveon/system/v2   KaveonDB — the platform's records`}</Code>
       <p>
-        The browser only talks to Vercel. The proxy forwards to the API with <code>X-User-*</code> headers stamped by{" "}
+        The browser only talks to Studio. The proxy forwards to the API with <code>X-User-*</code> headers stamped by{" "}
         <code>KAVEON_PROXY_SECRET</code>, which the API validates (see <a href="/docs/auth">Auth &amp; RBAC</a>). The
         Engine&rsquo;s own ports are bound to localhost on the VM and are never reachable from outside it.
       </p>
@@ -101,7 +102,7 @@ export default function DeploymentDocs() {
         Studio deploys to Vercel.
       </p>
       <p>
-        <strong>The API is not deployed by a workflow.</strong> It is updated on the VM by checking out the commit and
+        <strong>The API is not deployed by the current workflow.</strong> It is updated on the VM by checking out the commit and
         rebuilding its image there, which is a manual step today — nothing in CI reaches the host.{" "}
         <code>.github/workflows/deploy.yml</code> still describes an Azure Container Apps rollout and is{" "}
         <strong>manual-only</strong>: the container app it targeted was deleted once the VM became the deployment, and
