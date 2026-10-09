@@ -97,7 +97,6 @@ export function SystemCatalog() {
       <section className={s.system} aria-labelledby="system-catalog-title">
         <div className={s.systemHead}>
           <div className={s.systemIntro}>
-            <p className={s.systemEyebrow}>System catalog</p>
             <h2 className={s.systemTitle} id="system-catalog-title">{SYSTEM_CATALOG_LABEL}</h2>
             <p className={s.systemBody}>{SYSTEM_CATALOG_BODY}</p>
           </div>
@@ -127,24 +126,16 @@ export function SystemCatalog() {
     <section className={s.system} aria-labelledby="system-catalog-title">
       <div className={s.systemHead}>
         <div className={s.systemIntro}>
-          <p className={s.systemEyebrow}>System catalog</p>
           <h2 className={s.systemTitle} id="system-catalog-title">{SYSTEM_CATALOG_LABEL}</h2>
           <p className={s.systemBody}>{SYSTEM_CATALOG_BODY}</p>
         </div>
-        <dl className={s.systemFacts}>
-          <div>
-            <dt>Named in a statement</dt>
-            <dd className={s.systemMono}>{reading.catalog.identifier}.{reading.catalog.schema}</dd>
-          </div>
-          <div>
-            <dt>Writes</dt>
-            <dd>Transactional, one commit per change</dd>
-          </div>
-          <div>
-            <dt>This surface</dt>
-            <dd>Read-only, administrators</dd>
-          </div>
-        </dl>
+        {/* The three standing facts about this catalog, in one line and in
+            the same voice the lake's own facts are written in. */}
+        <p className={s.systemFacts}>
+          A statement names it <b className={s.systemMono}>{reading.catalog.identifier}.{reading.catalog.schema}</b>.
+          {" "}Writes are <b>transactional</b>, one commit per change.
+          {" "}Here it is <b>read-only</b>, and only to administrators.
+        </p>
       </div>
 
       <div className={s.systemTableWrap}>

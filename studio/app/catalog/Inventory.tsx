@@ -10,18 +10,37 @@
  * be answered without reading data — statistics answer counts, totals and
  * bounds; sketches and cube cells answer distincts, quantiles and grouped
  * totals; a table with neither is read in full every time it is asked
- * anything. That is the subject, so the page opens on it: how many rows
- * answer from precomputed values and how many are read.
+ * anything.
+ *
+ * Three things govern how it is drawn.
+ *
+ * The proportion is in the numerals themselves. The page opens on one run —
+ * answered over measured — rather than on two figures side by side with a
+ * rule under them, because when 504,000,027 of 504,685,780 rows answer
+ * without a scan the two numbers are nearly the same digits, and reading
+ * them as a fraction is the finding. A big number with a small caption is
+ * the default treatment of any statistic anywhere; a fraction is this one.
+ *
+ * Mass is structure. A row's share of the measure being ranked runs as a
+ * rule under its own name, so the table that is most of the lake is visibly
+ * most of the lake and a five-row table is visibly a tick. The scale is
+ * linear, because a curve drawn to make the small tables look substantial
+ * would hide the asymmetry that is the whole subject; a measured table keeps
+ * a visible minimum instead, so "almost none" and "none" stay apart. Address
+ * order would misreport mass, so schemas and the rows inside them are ranked
+ * by the measure being sorted.
+ *
+ * The exception speaks and the rule is silent. Most tables answer counts and
+ * bounds; that is what a table is unless something has been done to it, and
+ * writing it on every row buries the two that answer more. Only a table that
+ * is accelerated, stale, unmeasured or unreadable is given words, and the
+ * accent belongs to the first of those and to nothing else on the page.
  *
  * Acceleration decays, which is the reason this page exists rather than a
  * tree. A table's statistics describe the version they were computed over,
  * and the source moves on. So the list carries two times, not one — when the
  * source last changed and when it was last measured — and their disagreement
  * is staleness, stated in the row and explained in its detail.
- *
- * Mass is ranked. One table can be ninety-nine per cent of the lake, so
- * schemas and the rows inside them are ordered by the measure being sorted
- * rather than by name, and the largest thing is at the top where it belongs.
  *
  * Two reads compose one row. The Engine's table definitions arrive first and
  * are cheap — they draw every row and reserve the space the measured cells
@@ -51,27 +70,29 @@ interface Row { group: Group; table: EngineTable; measured: Measurement | undefi
 /**
  * What a question over this table costs, which is the only thing the catalog
  * is really for. `fast` is the product's claim; everything else is a reading
- * of the table, and the words say which.
+ * of the table, and the words say which. `baseline` marks the one reading
+ * that is the norm rather than news: it is drawn as a rule, not written out,
+ * because a word repeated down every row hides the two that are not it.
  */
 const ANSWERING = {
   fast: {
-    cell: "Sketches and cells", tone: s.ansFast, fast: true,
+    cell: "Sketches and cells", tone: s.ansFast, baseline: false,
     says: "Every column was read and its distinct-count and quantile sketches kept, so distinct counts, quantiles and the grouped totals of the declared shape are answered from precomputed values instead of from the rows.",
   },
   statistics: {
-    cell: "Counts and bounds", tone: s.ansBase, fast: false,
+    cell: "Counts and bounds", tone: s.ansBase, baseline: true,
     says: "The statistics on record describe the source as it stands, so counts, totals and column bounds are answered without reading the data. Anything else reads the table.",
   },
   stale: {
-    cell: "Statistics stale", tone: s.ansStale, fast: false,
+    cell: "Statistics stale", tone: s.ansStale, baseline: false,
     says: "The source changed after these statistics were computed, so the figures in this row describe an earlier version of the table and the counts, totals and bounds on record no longer answer for it. Measuring it again puts the current reading on record.",
   },
   unmeasured: {
-    cell: "Not measured", tone: s.ansNone, fast: false,
+    cell: "Not measured", tone: s.ansNone, baseline: false,
     says: "This table has never been analyzed, so every question about it is answered by reading it.",
   },
   unreadable: {
-    cell: "Unreadable", tone: s.ansBad, fast: false,
+    cell: "Unreadable", tone: s.ansBad, baseline: false,
     says: "The Engine could not read this location.",
   },
 } as const;
@@ -142,6 +163,14 @@ function shapeLine(shape: EngineTable["shape"] | null | undefined): string | nul
   if (time?.column && time.grain) parts.push(`${time.grain} grain on ${time.column}`);
   return parts.join(", ");
 }
+
+/**
+ * The measure a row's mass bar is drawn in. Whatever the list is ranked by is
+ * what the bar shows, so the bar and the ordering can never tell a reader two
+ * different stories; ranked by name or by a time, the bar falls back to what
+ * the lake physically is.
+ */
+const massKey = (sort: Sort): "rows" | "bytes" => (sort.key === "rows" ? "rows" : "bytes");
 
 export function Inventory({ catalogName, schemaName, action }: {
   catalogName?: string; schemaName?: string;
@@ -324,10 +353,13 @@ export function Inventory({ catalogName, schemaName, action }: {
     const built = (groups ?? []).map(group => {
       const sectionRows = visible.filter(row => row.group.schemaId === group.schemaId).sort(compare(sort));
       const seen = sectionRows.filter(row => row.measured?.state === "measured");
+      const sum = (pick: (row: Row) => number | null | undefined) =>
+        seen.reduce((total, row) => total + (pick(row) ?? 0), 0);
       return {
-        group, rows: sectionRows,
-        rowTotal: seen.reduce((sum, row) => sum + (row.measured?.rows ?? 0), 0),
-        byteTotal: seen.reduce((sum, row) => sum + (row.measured?.bytes ?? 0), 0),
+        group, rows: sectionRows, seen: seen.length,
+        rowTotal: sum(row => row.measured?.rows),
+        byteTotal: sum(row => row.measured?.bytes),
+        fileTotal: sum(row => row.measured?.files),
       };
     });
     if (sort.key !== "name") {
@@ -371,12 +403,22 @@ export function Inventory({ catalogName, schemaName, action }: {
 
   const reading = !groups || sections.some(section => section.group.tables === null);
   const measuringNow = progress !== null;
+  // The denominator every row's mass bar is drawn against: the whole of what
+  // the search left, in the measure the list is ranked by.
+  const mass = massKey(sort);
+  const massTotal = mass === "rows" ? totals.rows : totals.bytes;
 
   return (
     <>
       <header className={s.band}>
         <div className={s.bandTop}>
-          <h1 className={s.bandTitle}>{schemaName ?? "Catalog"}</h1>
+          {/* The rail beside this page already says Catalog, and a title set
+              smaller than the figures under it only flattens the page. A
+              schema is different: nothing else on screen names it, so there
+              it is written. The heading stays in the document either way,
+              because a page with no heading is a page a screen reader cannot
+              describe. */}
+          <h1 className={schemaName ? s.bandTitle : s.sr}>{schemaName ?? "Catalog"}</h1>
           <div className={s.bandActions}>
             <label className={s.search}>
               <i className="fas fa-magnifying-glass" aria-hidden="true" />
@@ -401,7 +443,7 @@ export function Inventory({ catalogName, schemaName, action }: {
           </div>
         </div>
 
-        <Position
+        <Lake
           fastRows={totals.fastRows} baseRows={totals.baseRows} staleRows={totals.staleRows}
           fastTables={totals.fast} baseTables={totals.baseTables} staleTables={totals.staleTables}
           tables={totals.tables} all={totals.all} narrowed={!!term}
@@ -433,26 +475,47 @@ export function Inventory({ catalogName, schemaName, action }: {
       {sections.length > 0 && (
         <div className={s.tableWrap}>
           <table className={s.inv}>
+            {/* Fixed layout reads its widths from the column elements, so the
+                two-row head can group columns without the group's width being
+                shared out equally among the columns under it. */}
+            <colgroup>
+              <col className={s.colName} />
+              <col className={s.colFormat} />
+              <col className={s.colRows} />
+              <col className={s.colSize} />
+              <col className={s.colFiles} />
+              <col className={s.colChanged} />
+              <col className={s.colMeasured} />
+              <col className={s.colAnswer} />
+            </colgroup>
+            {/* Eight columns are four readings: what the table is, what it
+                holds, when it was last touched, and what it can answer. The
+                head says so, which is what keeps the list from reading as a
+                comb of eight equal slots. */}
             <thead>
-              <tr>
-                <SortHeader label="Table" sortKey="name" sort={sort} onSort={resort} className={s.cName} />
-                <th className={s.cFormat}>Format</th>
-                <SortHeader label="Rows" sortKey="rows" sort={sort} onSort={resort} className={s.cRows} />
-                <SortHeader label="Size" sortKey="bytes" sort={sort} onSort={resort} className={s.cSize} />
-                <th className={s.cFiles}>Files</th>
-                <SortHeader label="Changed" sortKey="changed" sort={sort} onSort={resort} className={`${s.cWhen} ${s.cChanged}`} />
-                <SortHeader label="Measured" sortKey="measured" sort={sort} onSort={resort} className={s.cWhen} />
-                <th className={s.cAnswer}>Answers from</th>
+              <tr className={s.headGroup}>
+                <SortHeader label="Table" sortKey="name" sort={sort} onSort={resort} className={s.cName} rowSpan={2} />
+                <th className={s.cFormat} rowSpan={2}>Format</th>
+                <th className={s.gHead} colSpan={3} scope="colgroup">Holds</th>
+                <th className={s.gHead} colSpan={2} scope="colgroup">Last</th>
+                <th className={s.cAnswer} rowSpan={2}>Answers</th>
+              </tr>
+              <tr className={s.headSub}>
+                <SortHeader label="rows" sortKey="rows" sort={sort} onSort={resort} className={`${s.cRows} ${s.gStart}`} />
+                <SortHeader label="size" sortKey="bytes" sort={sort} onSort={resort} className={s.cSize} />
+                <th className={s.cFiles}>files</th>
+                <SortHeader label="changed" sortKey="changed" sort={sort} onSort={resort} className={`${s.cWhen} ${s.cChanged} ${s.gStart}`} />
+                <SortHeader label="measured" sortKey="measured" sort={sort} onSort={resort} className={s.cWhen} />
               </tr>
             </thead>
-            {sections.map(({ group, rows: sectionRows, rowTotal, byteTotal }) => (
+            {sections.map(({ group, rows: sectionRows, seen, rowTotal, byteTotal, fileTotal }) => (
               <tbody key={group.schemaId} className={s.schemaBody}>
                 {/* Scoped to one schema, the heading above already names it;
                     a band repeating it would be the third place it appears. */}
                 {!schemaName && (
                   <SchemaBand
-                    group={group} rows={sectionRows} narrowed={narrowed} isEditor={isEditor}
-                    rowTotal={rowTotal} byteTotal={byteTotal}
+                    group={group} rows={sectionRows} narrowed={narrowed} isEditor={isEditor} seen={seen}
+                    rowTotal={rowTotal} byteTotal={byteTotal} fileTotal={fileTotal}
                     onRegister={() => setRegisterIn(group)}
                     onRemove={() => setRemoveSchema({ group, busy: false, error: null })}
                   />
@@ -464,7 +527,7 @@ export function Inventory({ catalogName, schemaName, action }: {
                     pending={measuring[row.group.schemaId] === "loading" && !row.measured}
                     expanded={open === row.table.id}
                     onToggle={() => setOpen(current => current === row.table.id ? null : row.table.id)}
-                    isEditor={isEditor}
+                    isEditor={isEditor} mass={mass} massTotal={massTotal}
                     onMeasured={entry => setMeasured(current => ({
                       ...current,
                       [row.group.schemaId]: { ...(current[row.group.schemaId] ?? {}), [row.table.id]: entry },
@@ -495,13 +558,20 @@ export function Inventory({ catalogName, schemaName, action }: {
 }
 
 /**
- * The page's position: two measures of the same lake in opposition, and the
- * rule beneath them that gives their proportion its true shape. Four separate
- * counts would be four facts; these are one, which is the one the product is
- * actually about. The physical totals sit to the right, deliberately quiet —
- * they are the evidence, not the finding.
+ * What the lake can answer, as one fraction.
+ *
+ * Answered over measured, in one run of numerals: when 504,000,027 of
+ * 504,685,780 rows answer without a scan the two figures are nearly the same
+ * digits, and reading them against each other is the finding. Two figures
+ * set side by side under separate captions are two facts; a fraction is one,
+ * and it is the one the product is about.
+ *
+ * Under it, two quiet lines in the order a reader needs them: how many
+ * tables stand behind the fraction and what the rest cost, then what the
+ * lake physically is. The second is evidence, not finding, which is why it
+ * follows rather than standing in the opposite corner competing.
  */
-function Position({ fastRows, baseRows, staleRows, fastTables, baseTables, staleTables, tables, all, narrowed, schemas, bytes: stored, files, outstanding, reading, schemaName }: {
+function Lake({ fastRows, baseRows, staleRows, fastTables, baseTables, staleTables, tables, all, narrowed, schemas, bytes: stored, files, outstanding, reading, schemaName }: {
   fastRows: number; baseRows: number; staleRows: number;
   fastTables: number; baseTables: number; staleTables: number;
   tables: number; all: number; narrowed: boolean;
@@ -509,62 +579,46 @@ function Position({ fastRows, baseRows, staleRows, fastTables, baseTables, stale
   outstanding: number; reading: boolean; schemaName?: string;
 }) {
   const total = fastRows + baseRows + staleRows;
-  // A table whose measurement has not arrived yet is not an unmeasured table,
-  // and the note says which it is rather than reporting a wait as a finding.
-  const rest = reading ? "still reading" : outstanding > 0
-    ? `${count(outstanding)} not measured` : "";
-  const qualify = (count_: number, extra: string) =>
-    [`${count(count_)} ${plural(count_, "table", "tables")}`, extra].filter(Boolean).join(", ");
+  const scanned = baseRows + staleRows;
+  const scannedTables = baseTables + staleTables;
+  // Nothing has been measured yet and nothing is claimed: a fraction of
+  // zero over zero would read as a finding where there is only a wait.
+  const blank = total === 0;
   return (
-    <div className={s.position}>
-      <div className={s.readings}>
-        <Reading
-          value={count(fastRows)} fast
-          headline="rows answer from sketches and cube cells"
-          note={qualify(fastTables, total > 0 ? `${share(fastRows, total)} of what is measured` : "")}
-        />
-        <Reading
-          value={count(baseRows)}
-          headline="rows answer from counts and bounds"
-          note={qualify(baseTables, rest)}
-        />
-        <div
-          className={s.rule} role="img"
-          aria-label={`Of ${count(total)} measured rows, ${count(fastRows)} answer from sketches and cube cells, ${count(baseRows)} from counts and bounds, and ${count(staleRows)} carry statistics the source has moved past.`}
-        >
-          {fastRows > 0 && <span className={`${s.seg} ${s.segFast}`} style={{ flexGrow: fastRows }} />}
-          {baseRows > 0 && <span className={`${s.seg} ${s.segRead}`} style={{ flexGrow: baseRows }} />}
-          {staleRows > 0 && <span className={`${s.seg} ${s.segStale}`} style={{ flexGrow: staleRows }} title={`${count(staleRows)} rows in ${count(staleTables)} ${plural(staleTables, "table", "tables")} carry statistics the source has moved past.`} />}
-          {total === 0 && <span className={`${s.seg} ${s.segNone}`} style={{ flexGrow: 1 }} />}
-        </div>
-      </div>
-      <dl className={s.physical}>
-        <div>
-          <dt>{plural(tables, "table", "tables")}</dt>
-          <dd>{narrowed ? `${count(tables)} of ${count(all)}` : count(tables)}</dd>
-        </div>
-        {!schemaName && (
-          <div>
-            <dt>{plural(schemas, "schema", "schemas")}</dt>
-            <dd>{count(schemas)}</dd>
-          </div>
+    <div className={s.lake}>
+      <p className={s.headline}>
+        <span className={s.headFraction}>
+          <span className={s.headAnswered}>{blank ? "—" : count(fastRows)}</span>
+          <span className={s.headOver} aria-hidden="true">/</span>
+          <span className={s.sr}>of</span>
+          <span className={s.headMeasured}>{blank ? "—" : count(total)}</span>
+        </span>
+        <span className={s.headSays}>rows answer without a scan</span>
+      </p>
+      <p className={s.lakeStanding}>
+        {blank ? (
+          reading ? "Reading what has been measured." : "Nothing in view has been measured yet."
+        ) : (
+          <>
+            <b>{count(fastTables)}</b> of <b>{count(tables)}</b> {plural(tables, "table", "tables")} answer
+            this way, <b>{share(fastRows, total)}</b> of what is measured.
+            {scannedTables > 0 && (
+              <> The other <b>{count(scannedTables)}</b> hold <b>{count(scanned)}</b> rows that are read in full
+                {staleTables > 0 && <>, <b>{count(staleTables)}</b> of them carrying statistics the source has moved past</>}.
+              </>
+            )}
+          </>
         )}
-        <div><dt>stored</dt><dd>{bytes(stored)}</dd></div>
-        <div><dt>{plural(files, "file", "files")}</dt><dd>{count(files)}</dd></div>
-      </dl>
-    </div>
-  );
-}
-
-/** One measure, its sentence, and the fact that qualifies it. */
-function Reading({ value, headline, note, fast }: {
-  value: string; headline: string; note: string; fast?: boolean;
-}) {
-  return (
-    <div className={s.reading}>
-      <span className={`${s.readingValue} ${fast ? s.readingValueFast : ""}`}>{value}</span>
-      <span className={s.readingHeadline}>{headline}</span>
-      <span className={s.readingNote}>{note}</span>
+        {reading && !blank && " Still reading."}
+        {!reading && outstanding > 0 && ` ${count(outstanding)} ${plural(outstanding, "table has", "tables have")} no measurement on record.`}
+      </p>
+      <p className={s.lakeFacts}>
+        <b>{narrowed ? `${count(tables)} of ${count(all)}` : count(tables)}</b>
+        {` ${plural(narrowed ? all : tables, "table", "tables")}`}
+        {!schemaName && <> across <b>{count(schemas)}</b> {plural(schemas, "schema", "schemas")}</>}
+        {", "}
+        <b>{bytes(stored)}</b> in <b>{count(files)}</b> {plural(files, "file", "files")}.
+      </p>
     </div>
   );
 }
@@ -602,60 +656,67 @@ function Exception({ attention, only, onToggle }: {
 }
 
 /**
- * A schema is a band across the one table, not a grid of its own. It carries
- * what it holds, so the band is a reading rather than a divider, and an empty
- * schema offers the two things that can be done with it in the same place the
- * counts would have gone.
+ * A schema is a band across the one table, not a grid of its own, and its
+ * subtotals stand in the columns they total — the rows under rows, the bytes
+ * under size, the files under files. Reading down a column therefore gives a
+ * schema's share and a table's share in the same glance, which is the whole
+ * reason the sections exist. An empty schema offers the two things that can
+ * be done with it in the place the subtotals would have gone.
  */
-function SchemaBand({ group, rows, narrowed, isEditor, rowTotal, byteTotal, onRegister, onRemove }: {
-  group: Group; rows: Row[]; narrowed: boolean; isEditor: boolean;
-  rowTotal: number; byteTotal: number; onRegister: () => void; onRemove: () => void;
+function SchemaBand({ group, rows, narrowed, isEditor, seen, rowTotal, byteTotal, fileTotal, onRegister, onRemove }: {
+  group: Group; rows: Row[]; narrowed: boolean; isEditor: boolean; seen: number;
+  rowTotal: number; byteTotal: number; fileTotal: number;
+  onRegister: () => void; onRemove: () => void;
 }) {
-  const seen = rows.some(row => row.measured?.state === "measured");
   const empty = group.tables !== null && group.tables.length === 0;
+  const held = group.tables === null
+    ? "Reading"
+    : empty
+      ? "No tables registered"
+      : `${narrowed ? `${count(rows.length)} of ${count(group.tables.length)}` : count(rows.length)} ${plural(narrowed ? group.tables.length : rows.length, "table", "tables")}`;
   return (
     <tr className={s.groupRow}>
-      <th colSpan={8} scope="colgroup">
-        <div className={s.groupBand}>
+      <th colSpan={2} scope="colgroup">
+        <span className={s.groupBand}>
           <span className={s.groupName}>
-            <span className={s.groupCatalog}>{group.catalog}.</span>{group.schema}
+            <span className={s.groupCatalog}>{group.catalog}</span>
+            {group.schema}
           </span>
-          <span className={s.groupMeta}>
-            {empty ? (
-              <>
-                <span className={s.groupQuiet}>No tables registered</span>
-                {isEditor && (
-                  <>
-                    <button type="button" className={s.groupAction} onClick={onRegister}>Register a table</button>
-                    <button type="button" className={s.groupAction} onClick={onRemove}>Remove schema</button>
-                  </>
-                )}
-              </>
-            ) : group.tables === null ? (
-              <span className={s.groupQuiet}>Reading</span>
-            ) : (
-              <>
-                <span>
-                  {narrowed ? `${count(rows.length)} of ${count(group.tables.length)} ` : `${count(rows.length)} `}
-                  {plural(narrowed ? group.tables.length : rows.length, "table", "tables")}
-                </span>
-                {seen && <span className={s.groupNum}>{count(rowTotal)} rows</span>}
-                {seen && <span className={s.groupNum}>{bytes(byteTotal)}</span>}
-              </>
-            )}
-          </span>
-        </div>
+          <span className={s.groupHeld}>{held}</span>
+          {/* Narrowed, the columns these subtotals stand in are gone, so they
+              follow the schema's name the same way a row's figures follow
+              its own. Wide, the columns carry them and this is not drawn. */}
+          {seen > 0 && (
+            <span className={s.groupNarrow} aria-hidden="true">
+              <span>{count(rowTotal)} rows</span>
+              <span>{bytes(byteTotal)}</span>
+              <span>{count(fileTotal)} {plural(fileTotal, "file", "files")}</span>
+            </span>
+          )}
+        </span>
       </th>
+      <td className={`${s.cRows} ${s.gStart} ${s.groupNum}`}>{seen ? count(rowTotal) : ""}</td>
+      <td className={`${s.cSize} ${s.groupNum}`}>{seen ? bytes(byteTotal) : ""}</td>
+      <td className={`${s.cFiles} ${s.groupNum}`}>{seen ? count(fileTotal) : ""}</td>
+      <td colSpan={3} className={s.groupTail}>
+        {empty && isEditor && (
+          <span className={s.groupActions}>
+            <button type="button" className={s.groupAction} onClick={onRegister}>Register a table</button>
+            <button type="button" className={s.groupAction} onClick={onRemove}>Remove schema</button>
+          </span>
+        )}
+      </td>
     </tr>
   );
 }
 
-function SortHeader({ label, sortKey, sort, onSort, className }: {
+function SortHeader({ label, sortKey, sort, onSort, className, rowSpan }: {
   label: string; sortKey: SortKey; className: string; sort: Sort; onSort: (key: SortKey) => void;
+  rowSpan?: number;
 }) {
   const active = sort.key === sortKey;
   return (
-    <th className={className} aria-sort={active ? (sort.desc ? "descending" : "ascending") : "none"}>
+    <th className={className} rowSpan={rowSpan} aria-sort={active ? (sort.desc ? "descending" : "ascending") : "none"}>
       <button type="button" className={`${s.sortBtn} ${active ? s.sortOn : ""}`} onClick={() => onSort(sortKey)}>
         {label}
         <i className={`fas fa-caret-${active && sort.desc ? "down" : "up"}`} aria-hidden="true" />
@@ -687,19 +748,43 @@ function SkeletonRow() {
     <tr className={s.invRow} aria-hidden="true">
       <td className={s.cName}><span className={s.skel} style={{ width: 168 }} /></td>
       <td className={s.cFormat}><span className={s.skel} style={{ width: 62 }} /></td>
-      <td className={s.cRows}><span className={s.skel} style={{ width: 84 }} /></td>
+      <td className={`${s.cRows} ${s.gStart}`}><span className={s.skel} style={{ width: 84 }} /></td>
       <td className={s.cSize}><span className={s.skel} style={{ width: 56 }} /></td>
       <td className={s.cFiles}><span className={s.skel} style={{ width: 26 }} /></td>
-      <td className={`${s.cWhen} ${s.cChanged}`}><span className={s.skel} style={{ width: 48 }} /></td>
+      <td className={`${s.cWhen} ${s.cChanged} ${s.gStart}`}><span className={s.skel} style={{ width: 48 }} /></td>
       <td className={s.cWhen}><span className={s.skel} style={{ width: 48 }} /></td>
       <td className={s.cAnswer} />
     </tr>
   );
 }
 
-function TableRow({ row, pending, expanded, onToggle, isEditor, onMeasured }: {
+/**
+ * A table's mass, in the measure the list is ranked by, drawn as a rule
+ * under its own name — where the eye already is, and attached to the thing
+ * it describes rather than standing off in a column of its own.
+ *
+ * Linear, against the whole of what is listed. A curve would make a
+ * five-row table look like a share of a five-hundred-million-row one, and
+ * that asymmetry is the subject of the page, not something to soften. A
+ * measured table keeps a visible minimum instead, so "almost none of the
+ * lake" and "none of it" stay apart, and a table with no measurement draws
+ * nothing at all.
+ */
+function Mass({ part, whole, measure }: { part: number | null | undefined; whole: number; measure: "rows" | "bytes" }) {
+  if (typeof part !== "number" || whole <= 0) return null;
+  const pct = Math.max((part / whole) * 100, 0);
+  const reading = measure === "rows" ? `${count(part)} of ${count(whole)} rows` : `${bytes(part)} of ${bytes(whole)}`;
+  return (
+    <span className={s.massTrack} aria-hidden="true" title={`${share(part, whole)} of what is listed — ${reading}.`}>
+      <span className={s.massFill} style={{ width: `${pct}%` }} />
+    </span>
+  );
+}
+
+function TableRow({ row, pending, expanded, onToggle, isEditor, mass, massTotal, onMeasured }: {
   row: Row; pending: boolean; expanded: boolean; onToggle: () => void;
-  isEditor: boolean; onMeasured: (entry: Measurement) => void;
+  isEditor: boolean; mass: "rows" | "bytes"; massTotal: number;
+  onMeasured: (entry: Measurement) => void;
 }) {
   const { group, table, measured } = row;
   const answering = answeringOf(measured);
@@ -747,6 +832,9 @@ function TableRow({ row, pending, expanded, onToggle, isEditor, onMeasured }: {
               </span>
             )}
           </span>
+          {measured?.state === "measured" && (
+            <Mass part={mass === "rows" ? measured.rows : measured.bytes} whole={massTotal} measure={mass} />
+          )}
           <span className={s.narrowFacts} aria-hidden="true">
             <span>{[formatLabel(table.format), mark].filter(Boolean).join(" ")}</span>
             {measured?.state === "measured" && <span>{count(measured.rows)} rows</span>}
@@ -757,7 +845,7 @@ function TableRow({ row, pending, expanded, onToggle, isEditor, onMeasured }: {
           {formatLabel(table.format)}
           {mark && <span className={s.formatMark}>{mark}</span>}
         </td>
-        <td className={`${s.cRows} ${past ? s.cPast : ""}`} title={asAt}>
+        <td className={`${s.cRows} ${s.gStart} ${past ? s.cPast : ""}`} title={asAt}>
           {measured?.state === "measured" ? count(measured.rows) : waiting(84)}
         </td>
         <td className={`${s.cSize} ${past ? s.cPast : ""}`} title={asAt}>
@@ -766,14 +854,21 @@ function TableRow({ row, pending, expanded, onToggle, isEditor, onMeasured }: {
         <td className={`${s.cFiles} ${past ? s.cPast : ""}`} title={asAt}>
           {typeof files === "number" ? count(files) : pending ? <span className={s.skel} style={{ width: 26 }} /> : ""}
         </td>
-        <td className={`${s.cWhen} ${s.cChanged}`} title={exactTime(measured?.lastModifiedMs)}>
+        <td className={`${s.cWhen} ${s.cChanged} ${s.gStart}`} title={exactTime(measured?.lastModifiedMs)}>
           {typeof measured?.lastModifiedMs === "number" ? elapsed(measured.lastModifiedMs) : waiting(48)}
         </td>
         <td className={s.cWhen} title={exactTime(measured?.computedAtMs)}>
           {typeof measured?.computedAtMs === "number" ? elapsed(measured.computedAtMs) : waiting(48)}
         </td>
-        <td className={s.cAnswer}>
-          {state && <span className={`${s.answers} ${state.tone}`} title={state.says}>{state.cell}</span>}
+        {/* Counts and bounds is what a table answers unless something has
+            been done to it, so this column says nothing for it and keeps its
+            words for the exceptions. The reading is not lost: the cell
+            carries it for a pointer, the row's detail writes it out in full,
+            and a screen reader is given it here. */}
+        <td className={s.cAnswer} title={state?.says}>
+          {state && (state.baseline
+            ? <span className={s.sr}>{state.cell}</span>
+            : <span className={`${s.answers} ${state.tone}`}>{state.cell}</span>)}
         </td>
       </tr>
       {expanded && (
@@ -876,7 +971,10 @@ function Detail({ row, state, answering, current, shape, partitions, clustered, 
         </dd>
 
         <dt>Answers from</dt>
-        <dd className={answering === "unreadable" ? s.factBad : undefined}>{state?.says}</dd>
+        <dd className={answering === "unreadable" ? s.factBad : undefined}>
+          <span className={s.factLead}>{state?.cell}</span>
+          {state?.says}
+        </dd>
 
         {measured?.state === "unreadable" && (
           <>
