@@ -3058,11 +3058,18 @@ return;
               </div>
 
               <div id="resultsContainer" className={`results-container${showStreamLine ? " results-container--streaming" : ""}`}>
-                {/* A statement in flight looks the same whether its rows are
-                    still coming or have not started: a bar and a way out. */}
-                {(showLanePanel || showStreamLine) && (
+                {/* Two different moments, and they must not look the same.
+                    With nothing on screen yet the pane is empty and the
+                    loader can hold it — that is the same moment as a page
+                    opening. With rows already shown, anything that takes
+                    height here pushes the grid down and lets it jump back
+                    when the statement ends, which is the column glitch: the
+                    bar is painted over the pane's top edge instead, and the
+                    grid never moves. Cancel stays on the toolbar either way. */}
+                {showLanePanel && (
                   <QueryProgress progress={runningProgress} onCancel={cancelQuery} centered />
                 )}
+                {showStreamLine && <QueryProgress progress={runningProgress} overlay />}
 
                 {/* ── Multiple-statement results ── */}
                 {multiResults && !isExecuting && (

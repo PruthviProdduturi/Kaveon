@@ -5831,6 +5831,26 @@ main.main-wide {
 
 /* Holding the middle of the pane, so a running statement reads as the pane's
    own state rather than a strip stuck to its top edge. */
+/* A statement running while rows are already on screen.
+ *
+ * This takes no space in the flow at all: it is painted across the top edge
+ * of the results pane, which is `position: relative`. In the flow — which is
+ * what the centred loader does — the bar occupied height above the grid, so
+ * the columns rendered below it and then jumped up the moment the statement
+ * finished and the loader unmounted. Nothing reflows when this one goes. */
+.query-progress-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+.query-progress-overlay .query-progress__track {
+  height: 2px;
+  border-radius: 0;
+}
+
 .query-progress--centered {
   flex-direction: column;
   justify-content: center;
