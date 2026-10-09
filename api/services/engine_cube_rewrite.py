@@ -1,12 +1,21 @@
-"""Let the Engine's cube answer a sorted chart breakdown.
+"""Let the Engine's cube answer a chart's aggregate.
 
-The Engine answers a *cube-shaped* grouped aggregate from precomputed cells
-instead of scanning the table, but an ``ORDER BY`` or a ``LIMIT`` disqualifies
-that match (``cube_answer`` in ``engine/crates/server/src/api.rs``; the
-Engine's own coverage test lists ordering among the uncovered shapes), and
-every chart statement carries both.  A breakdown returns a handful of rows, so
-the statement can be issued without its ordering and its limit and both can be
-applied here instead.
+The Engine answers a *cube-shaped* aggregate from precomputed cells instead of
+scanning the table, and two things a chart statement routinely carries put it
+outside that match.
+
+An ``ORDER BY`` or a ``LIMIT`` disqualifies it outright (``cube_answer`` in
+``engine/crates/server/src/api.rs``; the Engine's own coverage test lists
+ordering among the uncovered shapes), and a breakdown statement carries both.
+A breakdown returns a handful of rows, so it can be issued without its
+ordering and its limit and both can be applied here instead.
+
+An ``AVG`` is not a cell the cube holds, so it scans whatever else the
+statement looks like; it is reissued as the sum and the count that *are* held.
+That is the whole reason a statement with neither clause may still be
+rewritten -- a KPI tile's ungrouped ``AVG(col)`` has no rows to order or to
+limit, and left alone it scanned 504M rows for a number the cube's grand-total
+cell already holds.
 
 This module decides whether one statement may be rewritten that way and
 reproduces the Engine's ordering over the rows that come back.  It never talks
@@ -359,9 +368,6 @@ def _plan(sql: str) -> EngineCubeRewrite | None:
     present = [clauses[name] for name in _CLAUSE_ORDER if name in clauses]
     if present != sorted(present):
         raise _Refused("clauses out of order")
-    if "order by" not in clauses and "limit" not in clauses:
-        raise _Refused("nothing to remove")
-
     bounds = _bounds(tokens, clauses)
     _require_single_table(tokens, *bounds["from"])
     for name in ("where", "group by", "order by"):
@@ -374,6 +380,15 @@ def _plan(sql: str) -> EngineCubeRewrite | None:
     ]
     if not projections:
         raise _Refused("empty select list")
+    averaged = any(projection.average for projection in projections)
+    # There are two reasons to issue a different statement, and either one on
+    # its own is enough.  A clause the cube match cannot carry has to come off,
+    # or an AVG has to become the sum and count the cube holds.  Requiring a
+    # clause to remove is what kept a bare ungrouped `AVG(col)` -- a KPI tile,
+    # which has no rows to order or limit -- scanning the whole table while the
+    # same average inside a sorted breakdown was answered from a cell.
+    if not averaged and "order by" not in clauses and "limit" not in clauses:
+        raise _Refused("nothing to rewrite")
     outputs, width = _outputs(projections)
 
     limit = _limit(tokens, bounds) if "limit" in bounds else None
@@ -393,9 +408,12 @@ def _plan(sql: str) -> EngineCubeRewrite | None:
         # do -- the clauses the statement carries are both no-ops over it.
         sort_keys, limit = (), None
 
-    cut_at = tokens[min(clauses[name] for name in ("order by", "limit")
-                        if name in clauses)].start
-    if any(projection.average for projection in projections):
+    removed = [clauses[name] for name in ("order by", "limit") if name in clauses]
+    # Where the kept statement ends: at the first clause being removed, or --
+    # when there is none and only the select list is being substituted -- past
+    # the statement's last token, which is already short of any semicolon.
+    cut_at = tokens[min(removed)].start if removed else tokens[-1].stop
+    if averaged:
         # Only the select list is rebuilt.  Everything the rewrite keeps --
         # the FROM, the predicate, the grouping -- is copied verbatim out of
         # the statement, so nothing this module does not model is rewritten.

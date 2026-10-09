@@ -8,29 +8,50 @@ from services import chat_history_store, query_history
 
 
 @patch.dict("os.environ", {"KAVEONDB_READ_AUTHORITY_FAMILIES": "query_history"}, clear=False)
-def test_query_history_create_and_retention_are_one_kaveondb_transaction():
-    old = {"revision": 3, "document": {
-        "id": "old", "user_email": "alice", "executed_at": "2026-01-01T00:00:00Z"}}
+def test_query_history_create_commits_one_mutation_and_lists_nothing():
+    """The write is the new record and nothing else.
+
+    Retention used to ride along in this transaction, which meant a write at
+    the bound first listed the owner's whole history — ten paged reads — and
+    then committed a hundred deletes as a hundred sequential statements. It
+    runs behind the response now, so the query that triggered it waits on one
+    mutation.
+    """
     mutations = []
     with patch.object(query_history.product_store, "list_records",
-                      return_value=[old] * query_history.MAX_HISTORY_PER_OWNER), \
+                      side_effect=AssertionError("the write path listed history")), \
          patch.object(query_history.product_store, "transact",
                       side_effect=lambda values, *_: mutations.extend(values) or {}), \
+         patch.object(query_history, "_schedule_retention") as scheduled, \
          patch.object(query_history, "_supports_engine_details",
                       side_effect=AssertionError("PostgreSQL schema reached")), \
          patch.object(query_history.db, "query", side_effect=AssertionError("PostgreSQL reached")):
         result = query_history.create_history(
             {"sql_text": "SELECT 1", "status": "success", "started_at": 1_789_000_000_000}, "alice")
     assert result["sql_text"] == "SELECT 1"
-    # One transaction still carries both the new record and the retention it
-    # forces. Retention removes a batch rather than the single oldest record,
-    # because finding the oldest costs a full listing and doing that per write
-    # was most of a statement's latency.
+    assert len(mutations) == 1
     assert mutations[0].operation == "create" and mutations[0].expected_revision is None
-    assert {item.operation for item in mutations[1:]} == {"delete"}
-    assert all(item.expected_revision == 3 for item in mutations[1:])
-    assert len(mutations) == 1 + query_history._RETENTION_TRIM_BATCH + 1
     assert mutations[0].document["user_email"] == "alice"
+    scheduled.assert_called_once_with("alice")
+
+
+@patch.dict("os.environ", {"KAVEONDB_READ_AUTHORITY_FAMILIES": "query_history"}, clear=False)
+def test_query_history_retention_sweep_deletes_a_batch_under_revision_checks():
+    old = {"revision": 3, "document": {
+        "id": "old", "user_email": "alice", "executed_at": "2026-01-01T00:00:00Z"}}
+    mutations = []
+    with patch.object(query_history.product_store, "list_records",
+                      return_value=[old] * query_history.MAX_HISTORY_PER_OWNER), \
+         patch.object(query_history.product_store, "transact",
+                      side_effect=lambda values, *_: mutations.extend(values) or {}):
+        assert query_history.run_retention_sweep("alice") == len(mutations)
+    # The sweep's transaction holds nothing but deletes, so it takes the whole
+    # hundred-mutation allowance and leaves the owner far enough below the
+    # bound that the writes that follow schedule nothing.
+    assert {item.operation for item in mutations} == {"delete"}
+    assert all(item.expected_revision == 3 for item in mutations)
+    assert len(mutations) == query_history._RETENTION_TRIM_BATCH
+    assert len(mutations) <= 100
 
 
 @patch.dict("os.environ", {"KAVEONDB_READ_AUTHORITY_FAMILIES": "query_history"}, clear=False)
