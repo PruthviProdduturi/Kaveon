@@ -1,7 +1,20 @@
 name: Deploy
+# Manual only since 2026-10-09.
+#
+# This deploys the API to the Azure Container App `kaveon-api`, which no
+# longer exists: the four container apps and their managed environment were
+# deleted with the architect's approval because the demo runs on `kaveon-vm`,
+# which builds the API from source. Every push therefore failed at
+# "The containerapp 'kaveon-api' does not exist", and a workflow that is
+# always red hides the one that matters.
+#
+# The `az acr build` step above the update still worked, and was building and
+# pushing an image on every push to dev that nothing consumed.
+#
+# Left intact rather than deleted: recreate the container app (infra/bicep)
+# and restore `on: push: branches: [dev]` to bring it back.
 on:
-  push:
-    branches: [dev]
+  workflow_dispatch:
 
 jobs:
   # Web deploys via Vercel CLI manually — not on every push.
