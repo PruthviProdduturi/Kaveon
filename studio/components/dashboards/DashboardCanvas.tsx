@@ -23,6 +23,7 @@ import { useDashboard } from './DashboardContext';
 import DashboardItem from './DashboardItem';
 import {
   DASHBOARD_GRID_COLS,
+  DASHBOARD_GRID_EDGE,
   GridPlacement,
   reflowPlacements,
   tilesPerRow,
@@ -35,7 +36,7 @@ const GRID_CONFIG = {
   cols: DASHBOARD_GRID_COLS,
   rowHeight: 30,
   margin: [20, 20] as [number, number],
-  containerPadding: [4, 4] as [number, number],
+  containerPadding: [DASHBOARD_GRID_EDGE, DASHBOARD_GRID_EDGE] as [number, number],
 };
 const DRAG_CANCEL = 'button, a, input, select, textarea, .chart-actions-overlay, .no-drag';
 const RESIZE_HANDLES = ['se', 'e', 's'];

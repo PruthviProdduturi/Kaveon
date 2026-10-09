@@ -1,0 +1,78 @@
+/**
+ * Dashboard view chrome.
+ *
+ * One vertical rhythm for the page: the header card, the applied-filters card
+ * and the tile grid are all laid out inside the same measured column, so they
+ * share a single left and right edge. The column is a container-query context
+ * — the toolbar's wrap point is decided by the width of the page column, never
+ * by the viewport, because the left navigation changes one without the other.
+ */
+
+.shell {
+  container-type: inline-size;
+  container-name: dashboardView;
+}
+
+.card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  min-width: 0;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  row-gap: 12px;
+  padding: 14px 18px;
+  margin-bottom: 12px;
+}
+
+.identity {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 1 1 300px;
+  min-width: 0;
+}
+
+.filters {
+  padding: 14px 18px;
+  margin-bottom: 12px;
+}
+
+/* ── Toolbar ──────────────────────────────────────────────────────────────── */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.toolbarDivider {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 22px;
+  background: var(--border);
+}
+
+/* Below this column width the toolbar cannot share the title's line without
+   crowding it, so it takes a row of its own — left-aligned on the same edge as
+   the title and the filter pills, and separated by a hairline so the two rows
+   read as deliberate rather than as an accidental wrap. */
+@container dashboardView (max-width: 780px) {
+  .toolbar {
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    row-gap: 8px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+}

@@ -13,6 +13,7 @@ import { msalFetch } from '../../utils/msalFetch';
 import { API_BASE } from '../../config';
 import { mmh3Hash64 } from '../../utils/mmh3';
 import type { DashboardFilter, FilterOperator } from '../../types/dashboard';
+import styles from './DashboardFilterBarReadOnly.module.css';
 
 const FILTER_OPERATORS: { value: FilterOperator; label: string }[] = [
   { value: '=', label: 'Equals' },
@@ -362,10 +363,8 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
 
   if (dashboardFilters.length === 0) {
     return (
-      <div className="chart-filter-card">
-        <div style={{ padding: '12px', textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>
-          No filters available
-        </div>
+      <div className={styles.bar}>
+        <div className={styles.empty}>No filters available</div>
       </div>
     );
   }
@@ -376,50 +375,56 @@ const DashboardFilterBarReadOnly: React.FC<DashboardFilterBarReadOnlyProps> = ({
   const isEditingLoading = editingFilter && loadingCol === editingFilter.column;
 
   return (
-    <div className="chart-filter-card" ref={filterBarRef}>
-      <div className="chart-filter-body">
-        <div className="chart-filter-list" style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center', justifyContent: 'flex-start' }}>
-          {dashboardFilters.map((filter) => {
-            const isEditing = editingFilterId === filter.id;
-            const isDisabled = !filter.enabled;
+    <div className={styles.bar} ref={filterBarRef}>
+      <div className={styles.head}>
+        <span className={styles.headLabel}>Filters</span>
+        {activeCount > 0 && (
+          <span className={styles.headCount}>
+            {activeCount} of {dashboardFilters.length} applied
+          </span>
+        )}
+        {activeCount > 0 && (
+          <button type="button" className={styles.clear} onClick={clearAll} title="Reset every filter to AllUp">
+            <i className="fas fa-rotate-left" style={{ fontSize: 10 }} />
+            Clear all
+          </button>
+        )}
+      </div>
 
-            return (
-              <div key={filter.id} className="chart-filter-list-item" style={{ opacity: isDisabled ? 0.5 : 1, width: 'auto', flex: '0 0 auto' }}>
-                <div className="chart-filter-list-main">
-                  <button
-                    className="chart-filter-chip-remove"
-                    onClick={() => handleToggleFilter(filter.id)}
-                    title={filter.enabled ? 'Disable filter' : 'Enable filter'}
-                    style={{ fontSize: '1rem' }}
-                  >
-                    <i
-                      className={filter.enabled ? 'fas fa-check-circle' : 'far fa-circle'}
-                      style={{ color: filter.enabled ? '#10b981' : '#9ca3af' }}
-                    />
-                  </button>
+      <div className={styles.grid}>
+        {dashboardFilters.map((filter) => {
+          const isEditing = editingFilterId === filter.id;
+          const isDisabled = !filter.enabled;
+          const label = getFilterLabel(filter);
 
-                  <button
-                    className="chart-filter-chip"
-                    onClick={(e) => !isEditing && handleFilterClick(filter, e)}
-                    disabled={isDisabled}
-                    style={{ cursor: isDisabled ? 'default' : 'pointer' }}
-                  >
-                    <span className="chart-filter-chip-label">{getFilterLabel(filter)}</span>
-                    {!isDisabled && <i className="fas fa-chevron-down" style={{ fontSize: 9, opacity: 0.5, marginLeft: 2 }} />}
-                  </button>
-                </div>
+          return (
+            <div key={filter.id} className={`${styles.item}${isDisabled ? ` ${styles.itemDisabled}` : ''}`}>
+              <button
+                type="button"
+                className={styles.toggle}
+                onClick={() => handleToggleFilter(filter.id)}
+                title={filter.enabled ? 'Disable filter' : 'Enable filter'}
+                aria-label={filter.enabled ? `Disable ${label}` : `Enable ${label}`}
+              >
+                <i
+                  className={filter.enabled ? 'fas fa-check-circle' : 'far fa-circle'}
+                  style={{ color: filter.enabled ? 'var(--success)' : 'var(--text-faint)' }}
+                />
+              </button>
 
-                {isEditing && <div className="chart-filter-chip-active-indicator" />}
-              </div>
-            );
-          })}
-          {activeCount > 0 && (
-            <button type="button" onClick={clearAll}
-              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, padding: '4px 8px', flexShrink: 0 }}>
-              <i className="fas fa-times" style={{ fontSize: 10 }} /> Clear
-            </button>
-          )}
-        </div>
+              <button
+                type="button"
+                className={`${styles.chip}${isEditing ? ` ${styles.chipOpen}` : ''}`}
+                onClick={(e) => !isEditing && handleFilterClick(filter, e)}
+                disabled={isDisabled}
+                title={label}
+              >
+                <span className={styles.chipLabel}>{label}</span>
+                {!isDisabled && <i className={`fas fa-chevron-down ${styles.chipCaret}`} />}
+              </button>
+            </div>
+          );
+        })}
       </div>
 
       {editingFilter && (

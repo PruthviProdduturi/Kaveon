@@ -2,7 +2,16 @@ import React, { useRef, useCallback, useEffect } from "react";
 import dynamic from "next/dynamic";
 import { useChartBuilder } from "./ChartBuilderContext";
 import { useTheme } from "../../contexts/ThemeContext";
-import { applyChartTheme } from "../../utils/echartsTheme";
+import { applyChartTheme, chartTones } from "../../utils/echartsTheme";
+import {
+  GLOBE_MAP_NAME,
+  GLOBE_SPHERE_REGION,
+  MapProjectionMode,
+  buildGlobeGeoJson,
+  createOrthographicProjection,
+  fitGeoLayout,
+  nextProjectionMode,
+} from "../../utils/mapProjection";
 import { getPlugin } from "./chartPluginRegistry";
 import { normaliseCountryName } from "../../utils/countryAliases";
 import { encodeThumbnail, surfaceColor } from "../../utils/thumbnail";
@@ -476,6 +485,40 @@ function computeAutoFit(features: any[], dataNames: Set<string>): { center: [num
   return { center, zoom };
 }
 
+// Padding kept between the tile edge and the map, and the column reserved for
+// the tier legend when the tile is wide enough to hold it beside the map.
+const MAP_PAD = 10;
+const MAP_LEGEND_WIDTH = 96;
+
+// A canvas cannot read CSS custom properties, so the map's own fills are
+// resolved per theme here — the same reason utils/echartsTheme exists, which
+// supplies the text, border and tooltip tones used alongside these.
+const MAP_TONES = {
+  light: { noData: "#eef2f7", ocean: "#e4ecf5", border: "#ffffff", globeBorder: "#c3cfdd", highlight: "#2d7dd2" },
+  dark: { noData: "#26262b", ocean: "#1a2130", border: "rgba(255,255,255,0.12)", globeBorder: "rgba(255,255,255,0.22)", highlight: "#7cc0f5" },
+} as const;
+
+// Bounding box of each region's raw geometry, cached per region. ECharts lays a
+// geo coordinate system out at this box's aspect, so it is also the input the
+// fit needs, and its centre is the map's default framing.
+const geoBoxCache: Record<string, number[]> = {};
+
+function regionBox(region: string, features: any[]): number[] {
+  const cached = geoBoxCache[region];
+  if (cached) return cached;
+  let box: number[] | null = null;
+  for (const f of features) {
+    const bb = featureBbox(f);
+    if (!bb) continue;
+    box = box
+      ? [Math.min(box[0], bb[0]), Math.min(box[1], bb[1]), Math.max(box[2], bb[2]), Math.max(box[3], bb[3])]
+      : [...bb];
+  }
+  if (!box) return [-180, -90, 180, 90];
+  geoBoxCache[region] = box;
+  return box;
+}
+
 const WorldMapRenderer: React.FC<{
   rows: (string | number | null)[][];
   columns: string[];
@@ -485,21 +528,51 @@ const WorldMapRenderer: React.FC<{
   const [ready, setReady] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const eRef = React.useRef<any>(null);
+  const hostRef = React.useRef<HTMLDivElement>(null);
   const { theme: mapTheme } = useTheme();
   const mapIsDark = mapTheme === "dark";
+  const tones = mapIsDark ? MAP_TONES.dark : MAP_TONES.light;
+  const chartTone = chartTones(mapIsDark);
 
   const ctOpts = advancedOptions?.chartTypeOptions || {};
-  // Live zoom level — drives how many region labels we auto-reveal as the user
-  // zooms the map in/out. Seeded from a saved zoom if present.
-  const [dynZoom, setDynZoom] = React.useState<number>(Number(ctOpts.mapZoom) || 1);
-  const [mapCenter, setMapCenter] = React.useState<[number, number] | null>(null);
-  const roamTimer = React.useRef<any>(null);
-  const fitSigRef = React.useRef<string>("");
   const region = ["usa", "nyc"].includes(ctOpts.mapRegion) ? ctOpts.mapRegion : "world";
   const REGION = MAP_REGIONS[region];
-  // Globe only makes sense for the world map.
+  // The author-selected 3-D globe (echarts-gl) only applies to the world map.
   const isGlobe = ctOpts.mapStyle === "globe" && region === "world";
 
+  // ── Container measurement ──────────────────────────────────────────────────
+  // Every size decision below is made from the chart's own box, never from the
+  // viewport: one dashboard renders this tile at a dozen different widths.
+  const [box, setBox] = React.useState<{ width: number; height: number }>({ width: 0, height: 0 });
+  React.useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const measure = () => {
+      const rect = host.getBoundingClientRect();
+      setBox((prev) =>
+        Math.abs(prev.width - rect.width) < 0.5 && Math.abs(prev.height - rect.height) < 0.5
+          ? prev
+          : { width: rect.width, height: rect.height },
+      );
+    };
+    const ro = new ResizeObserver(measure);
+    ro.observe(host);
+    measure();
+    return () => ro.disconnect();
+  }, []);
+
+  // ── Projection mode ────────────────────────────────────────────────────────
+  const canProject = region === "world" && !isGlobe;
+  const [mode, setMode] = React.useState<MapProjectionMode>("flat");
+  React.useEffect(() => {
+    if (!canProject) {
+      setMode("flat");
+      return;
+    }
+    setMode((prev) => nextProjectionMode(prev, box));
+  }, [canProject, box]);
+
+  // ── Geo source ─────────────────────────────────────────────────────────────
   React.useEffect(() => {
     setReady(false);
     const load = async () => {
@@ -553,10 +626,12 @@ const WorldMapRenderer: React.FC<{
     load();
   }, [isGlobe, region]);
 
-  // Auto-fit: once the geo + data are ready, frame the map to the regions that
-  // actually have data (US-only data zooms into the US). Re-fits whenever the
-  // data or region changes; keyed by a signature so interactive roam (which
-  // updates dynZoom/mapCenter below) isn't clobbered on every re-render.
+  // ── Data framing ───────────────────────────────────────────────────────────
+  // Frame the map on the regions that actually carry data: US-only data zooms
+  // the flat map into the US and turns the globe towards North America. Keyed
+  // by a signature so interactive roam isn't clobbered on every re-render.
+  const [dataFit, setDataFit] = React.useState<{ center: [number, number] | null; zoom: number } | null>(null);
+  const fitSigRef = React.useRef<string>("");
   React.useEffect(() => {
     if (isGlobe || !ready || !rows.length || columns.length < 2) return;
     const feats = geoCache[region]?.features || [];
@@ -569,13 +644,51 @@ const WorldMapRenderer: React.FC<{
     const sig = `${region}|${rows.length}|${[...dataNames].slice(0, 3).join(",")}`;
     if (fitSigRef.current === sig) return;   // already fitted this dataset
     fitSigRef.current = sig;
-    const { center, zoom } = computeAutoFit(feats, dataNames);
-    if (center) setMapCenter(center);
-    setDynZoom(zoom);
+    setDataFit(computeAutoFit(feats, dataNames));
   }, [ready, isGlobe, region, rows, columns, REGION]);
+
+  // Interactive pan/zoom, held per projection: the two projections express
+  // `center` in different spaces, so a change of projection starts from the fit.
+  const [roamView, setRoamView] = React.useState<{ zoom: number; center: number[] | null } | null>(null);
+  const roamTimer = React.useRef<any>(null);
+  React.useEffect(() => { setRoamView(null); }, [mode, dataFit]);
+
+  // ── Globe orientation ──────────────────────────────────────────────────────
+  // The hemisphere the globe faces, rounded to whole degrees so a small change
+  // in the data doesn't re-register the map, and kept off the poles — a polar
+  // view pushes the populated world out to the rim.
+  const orientation = React.useMemo(() => {
+    const centre = dataFit?.center;
+    const lng = centre ? Math.round(centre[0]) : 0;
+    const lat = centre ? Math.max(-55, Math.min(55, Math.round(centre[1]))) : 20;
+    return { lng, lat, key: `${lng}:${lat}` };
+  }, [dataFit]);
+
+  // The orientation that is actually registered: the option never names a map
+  // before that map exists.
+  const [globeOrientation, setGlobeOrientation] = React.useState<{ lng: number; lat: number } | null>(null);
+  React.useEffect(() => {
+    if (!canProject || !ready) return;
+    let cancelled = false;
+    (async () => {
+      const echarts = await import("echarts");
+      const world = geoCache["world"];
+      if (cancelled || !world) return;
+      echarts.registerMap(GLOBE_MAP_NAME, buildGlobeGeoJson(world, orientation.lng, orientation.lat));
+      setGlobeOrientation({ lng: orientation.lng, lat: orientation.lat });
+    })();
+    return () => { cancelled = true; };
+  }, [canProject, ready, orientation]);
+
+  const projection = React.useMemo(
+    () => (globeOrientation ? createOrthographicProjection(globeOrientation.lng, globeOrientation.lat) : null),
+    [globeOrientation],
+  );
+  const useProjection = mode === "globe" && canProject && !!projection;
 
   const option = React.useMemo(() => {
     if (!ready || !rows.length || columns.length < 2) return null;
+    if (!box.width || !box.height) return null;
 
     const colorScheme: string[] = advancedOptions?.color?.length ? advancedOptions.color : MAP_DEFAULT_COLORS;
     const showRoam: boolean = ctOpts.mapRoam !== false;
@@ -606,11 +719,6 @@ const WorldMapRenderer: React.FC<{
       .filter(d => d.name && !isNaN(d.value));
 
     const values = data.map(d => d.value);
-    const minV = Math.min(...values);
-    const maxV = Math.max(...values);
-    // Heavily-skewed data (e.g. US dwarfs everyone) makes a linear scale all one
-    // colour. Cap the colour range at the ~85th percentile so mid countries get
-    // vivid hues; countries above clamp to the hottest colour.
     // Build log-decade tiers (…, 100K–1M, 1M–10M, 10M+). A linear scale on this
     // hugely-skewed data paints almost everything one colour AND a percentile cap
     // over-paints the top tier — both mislead. Tiered log buckets are colourful
@@ -658,50 +766,88 @@ const WorldMapRenderer: React.FC<{
       };
     }).reverse(); // largest tier on top of the legend
 
+    const hasTitle = Boolean(advancedOptions?.title?.text);
+    const titleOpt = hasTitle
+      ? {
+          title: {
+            text: advancedOptions.title.text, left: "center", top: 5,
+            textStyle: {
+              fontSize: Number(advancedOptions.titleSize) || 20,
+              fontFamily: advancedOptions.titleFont || "Inter, -apple-system, sans-serif",
+              color: advancedOptions.titleColor || chartTone.text,
+            },
+          },
+        }
+      : {};
+
+    // ── Fit ──────────────────────────────────────────────────────────────────
+    // An explicit pixel size and centre taken from the measured box, so the map
+    // is as large as the tile allows and never larger. Under a projection
+    // ECharts pins aspectScale to 1, and the sphere ring makes the projected
+    // extent the unit square, so the globe is a disc exactly `layoutSize` wide.
+    const regionBounds = regionBox(region, geoCache[region]?.features || []);
+    const aspect = useProjection
+      ? 1
+      : ((regionBounds[2] - regionBounds[0]) / Math.max(1e-6, regionBounds[3] - regionBounds[1])) * 0.9;
+    const fit = fitGeoLayout({
+      width: box.width,
+      height: box.height,
+      aspect,
+      padTop: hasTitle ? 30 : MAP_PAD,
+      pad: MAP_PAD,
+      legendWidth: MAP_LEGEND_WIDTH,
+      legendHeight: nPieces * 15 + 10,
+    });
+
     // Data labels: base count (density slider) auto-expands as the user zooms in
     // — zoom 1 shows the top few; zooming reveals progressively more regions.
+    // The globe only ever shows one hemisphere, so it starts with fewer.
+    const zoom = roamView?.zoom ?? (useProjection ? 1 : dataFit?.zoom ?? (Number(ctOpts.mapZoom) || 1));
     const baseTopN = ctOpts.mapLabelTopN ?? 8;
-    const effTopN = Math.round(baseTopN * Math.min(6, Math.max(1, dynZoom)));
+    const effTopN = Math.round(
+      (useProjection ? Math.min(baseTopN, 5) : baseTopN) * Math.min(6, Math.max(1, zoom)),
+    );
     const labelThreshold = [...values].sort((a, b) => b - a)[Math.min(effTopN - 1, values.length - 1)] ?? Infinity;
+    // The sphere is a region of the globe's map, not a place — it must never
+    // label, tooltip or cross-filter.
+    const regionName = (p: any): string => (p.name === GLOBE_SPHERE_REGION ? "" : String(p.name ?? ""));
     // White text + dark outline (halo) so labels read on ANY region fill colour
     // — a choropleth has light and dark tiers, so a single fixed colour never works.
     const dataLabel = {
       show: true,
-      fontSize: 9,
+      fontSize: useProjection ? 10 : 9,
       color: "#ffffff",
       textBorderColor: "rgba(0,0,0,0.8)",
       textBorderWidth: 2.5,
       formatter: (p: any) => {
         const v = Number(p.value);
-        return !isNaN(v) && v >= labelThreshold ? `${p.name}\n${fmtVal(v)}` : "";
+        const name = regionName(p);
+        return name && !isNaN(v) && v >= labelThreshold ? `${name}\n${fmtVal(v)}` : "";
       },
     };
 
-    const titleOpt = advancedOptions?.title?.text
-      ? { title: { text: advancedOptions.title.text, left: "center", top: 5, textStyle: { fontSize: Number(advancedOptions.titleSize) || 20, fontFamily: advancedOptions.titleFont || "sans-serif", color: advancedOptions.titleColor || (mapIsDark ? "#e2e8f0" : "#1a1a2e") } } }
-      : {};
-
     // Piecewise (tiered) legend — accurate for skewed data and reads cleanly.
-    const visualMap = {
+    const legend = {
       type: "piecewise",
       pieces,
-      left: "left", bottom: 20,
-      itemWidth: 14, itemHeight: 12, itemGap: 4,
-      textStyle: { fontSize: 11, color: isGlobe ? "#94a3b8" : "#475569" },
+      itemWidth: 13, itemHeight: 11, itemGap: 4,
+      textStyle: { fontSize: 10.5, color: chartTone.muted, fontFamily: "Inter, -apple-system, sans-serif" },
     };
 
     const tooltipStyle = {
       trigger: "item",
       appendToBody: true,
-      backgroundColor: "rgba(255,255,255,0.97)",
-      borderColor: "#e2e8f0",
+      backgroundColor: chartTone.tooltipBg,
+      borderColor: chartTone.border,
       borderWidth: 1,
       padding: [10, 14],
-      textStyle: { color: "#1e293b", fontSize: 12, fontFamily: 'Inter, -apple-system, sans-serif' },
+      textStyle: { color: chartTone.text, fontSize: 12, fontFamily: "Inter, -apple-system, sans-serif" },
       extraCssText: "box-shadow: 0 8px 24px rgba(0,0,0,0.12); border-radius: 8px;",
       formatter: (p: any) => {
+        const name = regionName(p);
+        if (!name) return "";
         const v = Number(p.value);
-        return `<b>${p.name}</b><br/>${p.value != null && !isNaN(v) ? fmtVal(v) : "—"}`;
+        return `<b>${name}</b><br/>${p.value != null && !isNaN(v) ? fmtVal(v) : "—"}`;
       },
     };
 
@@ -710,7 +856,7 @@ const WorldMapRenderer: React.FC<{
         ...titleOpt,
         backgroundColor: "#0d1117",
         tooltip: tooltipStyle,
-        visualMap,
+        visualMap: { ...legend, left: "left", bottom: 20, itemWidth: 14, itemHeight: 12 },
         globe: {
           baseTexture: "#0c1e35",
           shading: "lambert",
@@ -742,7 +888,7 @@ const WorldMapRenderer: React.FC<{
           data,
           shading: "lambert",
           emphasis: {
-            label: { show: true, textStyle: { color: "#fff", fontSize: 11, fontFamily: 'Inter, sans-serif' } },
+            label: { show: true, textStyle: { color: "#fff", fontSize: 11, fontFamily: "Inter, sans-serif" } },
             itemStyle: { color: "#fbbf24" },
           },
           itemStyle: {
@@ -751,97 +897,133 @@ const WorldMapRenderer: React.FC<{
           },
           label: {
             show: showLabels,
-            textStyle: { color: "#fff", fontSize: 9, fontFamily: 'Inter, sans-serif' },
+            textStyle: { color: "#fff", fontSize: 9, fontFamily: "Inter, sans-serif" },
           },
         }],
       };
     }
 
-    // Flat map — layoutCenter/layoutSize make the map fill wide, short tiles
-    // instead of collapsing to a tiny centred thumbnail.
+    // One 2-D series whose every projection-dependent key is set explicitly:
+    // ECharts merges successive options, so a key left out of one projection
+    // would survive from the other.
+    const centre: number[] = roamView?.center
+      ?? (useProjection
+        ? [0, 0]
+        : dataFit?.center
+          ?? ctOpts.mapCenter
+          ?? [(regionBounds[0] + regionBounds[2]) / 2, (regionBounds[1] + regionBounds[3]) / 2]);
+
     return {
       ...titleOpt,
       tooltip: tooltipStyle,
-      visualMap: { ...visualMap, left: 8, bottom: 14, itemWidth: 11, itemHeight: 90 },
+      // Hidden when the tile has no room for it beside the map, rather than
+      // left to sit on top of the map or run off the bottom of the tile.
+      visualMap: { ...legend, show: fit.showLegend, left: MAP_PAD, top: "middle" },
       series: [{
         type: "map",
-        map: REGION.mapName,
+        map: useProjection ? GLOBE_MAP_NAME : REGION.mapName,
+        projection: useProjection ? projection : null,
+        aspectScale: useProjection ? 1 : 0.9,
         roam: showRoam,
-        zoom: dynZoom,                       // seeded by auto-fit; preserves roam across re-renders
-        ...(mapCenter ? { center: mapCenter } : ctOpts.mapCenter ? { center: ctOpts.mapCenter } : {}),
-        scaleLimit: { min: 1, max: 12 },
-        layoutCenter: ["50%", "52%"],
-        layoutSize: region === "usa" ? "148%" : region === "nyc" ? "132%" : "155%",
-        aspectScale: 0.9,
+        zoom,
+        center: centre,
+        scaleLimit: { min: 1, max: useProjection ? 8 : 12 },
+        layoutCenter: fit.layoutCenter,
+        layoutSize: fit.layoutSize,
         data,
-        select: { itemStyle: { areaColor: "#f59e0b" } },
-        emphasis: { label: { show: true, fontSize: 11, color: "#ffffff", textBorderColor: "rgba(0,0,0,0.85)", textBorderWidth: 3, fontWeight: "bold" }, itemStyle: { areaColor: "#fbbf24" } },
-        // No-data regions + borders (canvas can't read CSS vars, so pick per-theme).
-        itemStyle: { borderColor: mapIsDark ? "rgba(255,255,255,0.12)" : "#ffffff", borderWidth: 0.5, areaColor: mapIsDark ? "#26262b" : "#eef2f7" },
         labelLayout: { hideOverlap: true },
+        select: { itemStyle: { areaColor: "#f59e0b" } },
+        // On the globe the ocean is a region of the map, so a flood-fill
+        // highlight would wash the whole disc: outline the region instead.
+        emphasis: {
+          label: { show: true, fontSize: 11, color: "#ffffff", textBorderColor: "rgba(0,0,0,0.85)", textBorderWidth: 3, fontWeight: "bold", formatter: regionName },
+          itemStyle: useProjection
+            ? { areaColor: null, borderColor: tones.highlight, borderWidth: 1.6 }
+            : { areaColor: "#fbbf24", borderColor: tones.border, borderWidth: 0.5 },
+        },
+        // No-data regions + borders (a canvas can't read CSS vars, so these are
+        // resolved per theme). On the globe the sphere carries the same neutral
+        // tone as unvalued land, and the borders carry the coastlines.
+        itemStyle: useProjection
+          ? { areaColor: tones.ocean, borderColor: tones.globeBorder, borderWidth: 0.6 }
+          : { areaColor: tones.noData, borderColor: tones.border, borderWidth: 0.5 },
         label: showLabels
-          ? { show: true, fontSize: 10, color: "#ffffff", textBorderColor: "rgba(0,0,0,0.8)", textBorderWidth: 2.5 }
+          ? { show: true, fontSize: 10, color: "#ffffff", textBorderColor: "rgba(0,0,0,0.8)", textBorderWidth: 2.5, formatter: regionName }
           : dataLabel,
       }],
     };
-  }, [ready, rows, columns, advancedOptions, isGlobe, dynZoom, mapCenter, mapIsDark]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, rows, columns, advancedOptions, isGlobe, useProjection, projection, region, box, dataFit, roamView, mapIsDark]);
 
-  if (error) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#ef4444", fontSize: 13 }}>{error}</div>;
-  if (!ready) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#94a3b8", fontSize: 13 }}>Loading map…</div>;
+  // The host box stays mounted through every state so it can be measured before
+  // the chart that depends on that measurement exists. The parent
+  // (.chart-builder-preview-inner) centres its children, which would otherwise
+  // collapse a height:100% child to nothing.
+  const host = (child: React.ReactNode) => (
+    <div
+      ref={hostRef}
+      style={{ position: "relative", display: "flex", width: "100%", height: "100%", flex: 1, alignSelf: "stretch", minHeight: 160 }}
+    >
+      {child}
+    </div>
+  );
+  const notice = (text: string, color: string) => (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%", color, fontSize: 13 }}>{text}</div>
+  );
 
-  // Globe: delegate to the separate chunk that statically imports echarts-gl.
-  // Wrap in a positioned container so the globe's inset:0 has an anchor —
-  // the parent flex container (.chart-builder-preview-inner) uses
-  // align-items:center which breaks height:100% on direct children.
+  if (error) return host(notice(error, "#ef4444"));
+  // The globe's map has to be registered before an option can name it — hold the
+  // chart for that frame rather than flashing the flat map first.
+  if (!ready || (mode === "globe" && canProject && !projection)) return host(notice("Loading map…", chartTone.muted));
+
+  // Author-selected 3-D globe: delegate to the chunk that statically imports echarts-gl.
   if (isGlobe) {
-    return (
-      <div style={{ position: "relative", width: "100%", height: "100%", flex: 1, alignSelf: "stretch" }}>
-        <WorldMapGlobe
-          rows={rows}
-          columns={columns}
-          geoJson={geoCache["world"]}
-          advancedOptions={advancedOptions}
-        />
-      </div>
+    return host(
+      <WorldMapGlobe
+        rows={rows}
+        columns={columns}
+        geoJson={geoCache["world"]}
+        advancedOptions={advancedOptions}
+      />
     );
   }
 
-  if (!option) return null;
+  if (!option) return host(null);
 
-  // Wrap in a stretch container: the parent .chart-builder-preview-inner uses
-  // align-items:center, which otherwise collapses a height:100% ECharts child to
-  // near-zero (making the map a tiny thumbnail).
-  return (
-    <div style={{ position: "relative", width: "100%", height: "100%", flex: 1, alignSelf: "stretch", minHeight: 240 }}>
-      <ReactECharts
-        option={option}
-        style={{ width: "100%", height: "100%", cursor: onCrossFilter ? "pointer" : undefined }}
-        onChartReady={(instance: any) => { eRef.current = instance; }}
-        onEvents={{
-          ...(onCrossFilter ? {
-            click: (params: any) => {
-              const val = params?.name || (Array.isArray(params?.value) ? String(params.value[0]) : "");
-              if (val) onCrossFilter(String(val));
-            },
-          } : {}),
-          // Auto-reveal more labels as the user zooms in (debounced).
-          georoam: () => {
-            const inst = eRef.current;
-            if (!inst) return;
-            clearTimeout(roamTimer.current);
-            roamTimer.current = setTimeout(() => {
-              const s = inst.getOption()?.series?.[0];
-              const z = Number(s?.zoom) || 1;
-              // Preserve the user's manual pan/zoom in-session (don't fight it on
-              // the label-density re-render). Auto-fit still reapplies if the
-              // underlying data changes.
-              setDynZoom((prev: number) => (Math.abs(prev - z) > 0.05 ? z : prev));
-              if (Array.isArray(s?.center)) setMapCenter([Number(s.center[0]), Number(s.center[1])]);
-            }, 160);
+  return host(
+    <ReactECharts
+      option={option}
+      style={{ width: "100%", height: "100%", cursor: onCrossFilter ? "pointer" : undefined }}
+      onChartReady={(instance: any) => { eRef.current = instance; }}
+      onEvents={{
+        ...(onCrossFilter ? {
+          click: (params: any) => {
+            if (params?.name === GLOBE_SPHERE_REGION) return;   // the ocean is not a place
+            const val = params?.name || (Array.isArray(params?.value) ? String(params.value[0]) : "");
+            if (val) onCrossFilter(String(val));
           },
-        }}
-      />
-    </div>
+        } : {}),
+        // Auto-reveal more labels as the user zooms in (debounced).
+        georoam: () => {
+          const inst = eRef.current;
+          if (!inst) return;
+          clearTimeout(roamTimer.current);
+          roamTimer.current = setTimeout(() => {
+            const s = inst.getOption()?.series?.[0];
+            const z = Number(s?.zoom) || 1;
+            // Preserve the viewer's manual pan/zoom for the session — don't
+            // fight it on the label-density re-render. The data fit still
+            // reapplies when the underlying data changes.
+            setRoamView((prev) => {
+              const next = Array.isArray(s?.center) ? [Number(s.center[0]), Number(s.center[1])] : prev?.center ?? null;
+              if (prev && Math.abs(prev.zoom - z) < 0.05
+                && prev.center?.[0] === next?.[0] && prev.center?.[1] === next?.[1]) return prev;
+              return { zoom: z, center: next };
+            });
+          }, 160);
+        },
+      }}
+    />
   );
 };
 

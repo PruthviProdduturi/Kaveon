@@ -12,6 +12,8 @@ import { resetQuerySemaphore, isQueryIdle } from "../../../../utils/querySemapho
 import { API_BASE } from "../../../../config";
 import { toJpeg } from "html-to-image";
 import { useTheme } from "../../../../contexts/ThemeContext";
+import { DASHBOARD_GRID_EDGE } from "../../../../utils/dashboardGrid";
+import styles from "./dashboardView.module.css";
 
 export const dynamic = 'force-dynamic';
 export const dynamicParams = true;
@@ -185,16 +187,16 @@ const DashboardViewContent: React.FC<{
     color: 'var(--text-secondary)', transition: 'background 0.15s, border-color 0.15s, color 0.15s', whiteSpace: 'nowrap',
   };
 
+  // The tile grid carries its own edge padding, so the header and filter cards
+  // are inset by the same amount — one left/right edge down the whole page.
+  const edgeInset: React.CSSProperties = { marginLeft: DASHBOARD_GRID_EDGE, marginRight: DASHBOARD_GRID_EDGE };
+
   return (
-    <div className="page-shell page-shell-wide">
+    <div className={`page-shell page-shell-wide ${styles.shell}`}>
       {/* ── Elegant dashboard header (rounded card, matches the chart page) ── */}
-      <header style={{
-        background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 12,
-        padding: '12px 18px', display: 'flex', alignItems: 'center',
-        justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 16,
-      }}>
+      <header className={`${styles.card} ${styles.header}`} style={edgeInset}>
         {/* Left: back + title + badge */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
+        <div className={styles.identity}>
           <button
             type="button"
             onClick={onClose}
@@ -215,12 +217,20 @@ const DashboardViewContent: React.FC<{
             </svg>
           </button>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <h1 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 800, color: 'var(--text-primary)', lineHeight: 1.2, letterSpacing: '-0.3px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+            <h1
+              title={initialConfig?.name || undefined}
+              style={{
+                margin: 0, fontSize: '1.35rem', fontWeight: 800, color: 'var(--text-primary)',
+                lineHeight: 1.2, letterSpacing: '-0.3px',
+                minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}
+            >
               {initialConfig?.name || 'Dashboard'}
             </h1>
             <span style={{
               fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 20, lineHeight: 1.5,
+              flexShrink: 0, whiteSpace: 'nowrap',
               background: isPublished ? '#f0fdf4' : '#fef3c7',
               color: isPublished ? '#15803d' : '#92400e',
               border: `1px solid ${isPublished ? '#bbf7d0' : '#fde68a'}`,
@@ -229,7 +239,13 @@ const DashboardViewContent: React.FC<{
             </span>
           </div>
           {initialConfig?.description && (
-            <p style={{ margin: 0, fontSize: 12.5, color: 'var(--text-muted)', lineHeight: 1.4, marginTop: 1 }}>
+            <p
+              title={initialConfig.description}
+              style={{
+                margin: 0, fontSize: 12.5, color: 'var(--text-muted)', lineHeight: 1.4, marginTop: 1,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}
+            >
               {initialConfig.description}
             </p>
           )}
@@ -237,20 +253,21 @@ const DashboardViewContent: React.FC<{
         </div>
 
         {/* Right: action toolbar */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, flexWrap: 'wrap' }}>
+        <div className={styles.toolbar}>
 
           {/* Refresh group */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--bg-hover)', border: '1px solid var(--border)', borderRadius: 8, padding: '2px 4px' }}>
-            <button onClick={handleManualRefresh} title="Refresh all charts" style={{ ...btnBase, border: 'none', background: 'transparent', padding: '0 8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'var(--bg-hover)', border: '1px solid var(--border)', borderRadius: 8, padding: '2px 4px', flexShrink: 0 }}>
+            <button onClick={handleManualRefresh} title="Refresh all charts" aria-label="Refresh all charts" style={{ ...btnBase, border: 'none', background: 'transparent', padding: '0 8px' }}>
               <i className="fas fa-sync-alt" style={{ fontSize: 11 }} />
             </button>
             <select
               value={refreshInterval}
               onChange={(e) => setRefreshInterval(Number(e.target.value))}
+              aria-label="Auto-refresh interval"
               style={{
                 height: 28, padding: '0 6px', border: 'none', background: 'transparent',
-                fontSize: 12, color: refreshInterval > 0 ? '#15803d' : '#475569',
-                cursor: 'pointer', fontWeight: refreshInterval > 0 ? 600 : 400,
+                fontSize: 12, color: refreshInterval > 0 ? 'var(--success)' : 'var(--text-secondary)',
+                cursor: 'pointer', fontWeight: refreshInterval > 0 ? 600 : 400, fontFamily: 'inherit',
               }}
             >
               {REFRESH_INTERVALS.map((ri) => (
@@ -258,23 +275,26 @@ const DashboardViewContent: React.FC<{
               ))}
             </select>
             {lastRefreshed && (
-              <span style={{ fontSize: 11, color: '#94a3b8', paddingRight: 6, whiteSpace: 'nowrap' }}>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)', paddingRight: 6, whiteSpace: 'nowrap' }}>
                 {lastRefreshed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
               </span>
             )}
           </div>
 
-          {/* Divider */}
-          <div style={{ width: 1, height: 22, background: '#e2e8f0', margin: '0 2px' }} />
+          <div className={styles.toolbarDivider} />
 
           {/* Filters */}
           {hasFilters && (
-            <button onClick={() => setFiltersOpen((v) => !v)} style={{
-              ...btnBase,
-              background: filtersOpen ? 'rgba(var(--accent-rgb), 0.06)' : 'var(--bg-surface)',
-              borderColor: filtersOpen ? '#bfdbfe' : '#e2e8f0',
-              color: filtersOpen ? '#2563eb' : '#475569',
-            }}>
+            <button
+              onClick={() => setFiltersOpen((v) => !v)}
+              aria-pressed={filtersOpen}
+              style={{
+                ...btnBase, flexShrink: 0,
+                background: filtersOpen ? 'rgba(var(--accent-rgb), 0.08)' : 'var(--bg-surface)',
+                borderColor: filtersOpen ? 'var(--accent)' : 'var(--border)',
+                color: filtersOpen ? 'var(--accent)' : 'var(--text-secondary)',
+              }}
+            >
               <i className="fas fa-filter" style={{ fontSize: 11 }} />
               Filters
             </button>
@@ -282,26 +302,25 @@ const DashboardViewContent: React.FC<{
 
           {/* Favorite */}
           <button type="button" onClick={onFavoriteClick} title={isFavorite ? 'Remove from favorites' : 'Add to favorites'} style={{
-            ...btnBase, width: 34, padding: 0, justifyContent: 'center',
+            ...btnBase, width: 34, padding: 0, justifyContent: 'center', flexShrink: 0,
             background: isFavorite ? 'rgba(245, 158, 11, 0.08)' : 'var(--bg-surface)',
-            borderColor: isFavorite ? '#fde68a' : '#e2e8f0',
+            borderColor: isFavorite ? '#fde68a' : 'var(--border)',
             transform: isAnimating ? 'scale(0.88)' : 'scale(1)',
             transition: 'all 0.2s ease',
           }}>
             <i className={isFavorite ? 'fas fa-star' : 'far fa-star'} style={{
-              fontSize: 14, color: isFavorite ? '#f59e0b' : '#9ca3af',
+              fontSize: 14, color: isFavorite ? '#f59e0b' : 'var(--text-muted)',
               filter: isFavorite ? 'drop-shadow(0 1px 3px rgba(245,158,11,0.4))' : 'none',
             }} />
           </button>
 
-          {/* Divider */}
-          <div style={{ width: 1, height: 22, background: '#e2e8f0', margin: '0 2px' }} />
+          <div className={styles.toolbarDivider} />
 
           {/* Publish */}
           {!isPublished && (
             <button onClick={onPublish} disabled={publishing} style={{
-              ...btnBase, background: publishing ? '#f1f5f9' : '#f0fdf4',
-              borderColor: publishing ? '#e2e8f0' : '#86efac', color: publishing ? '#94a3b8' : '#15803d',
+              ...btnBase, flexShrink: 0, background: publishing ? 'var(--bg-hover)' : '#f0fdf4',
+              borderColor: publishing ? 'var(--border)' : '#86efac', color: publishing ? 'var(--text-muted)' : '#15803d',
               fontWeight: 600, cursor: publishing ? 'not-allowed' : 'pointer',
             }}>
               <i className={`fas ${publishing ? 'fa-spinner fa-spin' : 'fa-check-circle'}`} style={{ fontSize: 12 }} />
@@ -311,24 +330,20 @@ const DashboardViewContent: React.FC<{
 
           {/* Edit — icon-only */}
           <button onClick={onEdit} title="Edit dashboard" aria-label="Edit dashboard"
-            style={{ ...btnBase, width: 34, padding: 0, justifyContent: 'center', background: '#2563eb', borderColor: '#2563eb', color: 'white' }}
-            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#1d4ed8'; }}
-            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = '#2563eb'; }}
+            style={{ ...btnBase, width: 34, padding: 0, justifyContent: 'center', flexShrink: 0, background: 'var(--accent)', borderColor: 'var(--accent)', color: '#ffffff' }}
+            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent-dark)'; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent)'; }}
           >
             <i className="fas fa-edit" style={{ fontSize: 13 }} />
           </button>
         </div>
       </header>
 
-      {/* Inline filter bar — shown only when toggled open */}
+      {/* Inline filter bar — shown only when toggled open. Same card chrome and
+          same edge inset as the header, so the pills, the title and the tiles
+          below all start on one left edge. */}
       {hasFilters && filtersOpen && (
-        <div style={{
-          background: 'var(--bg-surface)',
-          border: '1px solid var(--border)',
-          borderRadius: 12,
-          padding: '12px 24px',
-          margin: '0 24px 8px',
-        }}>
+        <div className={`${styles.card} ${styles.filters}`} style={edgeInset}>
           <DashboardFilterBarReadOnly />
         </div>
       )}
