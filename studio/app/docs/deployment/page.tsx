@@ -8,10 +8,17 @@ export default function DeploymentDocs() {
       <PageHeader
         eyebrow="Deploy &amp; Operate"
         title="Deployment"
-        lead="Studio runs on Vercel. Everything else — the API, the Kaveon Engine and its workers — runs on one Azure VM and reads Delta tables from ADLS Gen2. The Engine is the query path, not a parallel experiment."
+        lead="Studio runs on Vercel. The API and Kaveon Engine can run on Docker on a Linux VM or on AKS, reading Delta and Parquet tables from ADLS Gen2. The qualified cloud Engine currently runs on AKS; the VM topology below is the small-host option."
       />
 
       <h2>Topology</h2>
+      <Callout type="note">
+        The current production-shaped cloud Engine is <code>kaveon-aks</code> in
+        <code>kaveon-rg</code>, with a coordinator and autoscaled worker pool.
+        Vercel hosts Studio separately. The diagram below documents the VM
+        reference path; use <a href="/docs/installation">Installation</a> for
+        the AKS path and its operator runbook.
+      </Callout>
       <Diagram
         src="/docs/architecture/kaveon-deployment-topology.svg"
         alt="Browser to Studio on Vercel, through a same-origin proxy to the API on kaveon-vm, into the Kaveon Engine coordinator and two workers, reading Delta tables in ADLS Gen2 while the platform's own records are written to a separate container"
