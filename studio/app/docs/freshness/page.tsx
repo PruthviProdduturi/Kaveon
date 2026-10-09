@@ -1,257 +1,178 @@
 import { PageHeader, Callout, Code, Pager } from "../../../components/docs/prose";
 
-export const metadata = { title: "Freshness Algorithm" };
+export const metadata = { title: "Freshness" };
 
 export default function FreshnessDocs() {
   return (
     <div className="docs-prose">
       <PageHeader
         eyebrow="Intelligence"
-        title="Freshness Algorithm"
-        lead="DLM context elements carry a validity score in [0, 1]. For PostgreSQL sources, Kaveon estimates drift from catalog statistics instead of rescanning analytical tables, then routes eligible requests to context, hybrid, or live-query paths."
+        title="Freshness"
+        lead="Kaveon answers a great deal without reading the data, which only works if it can tell when a precomputed answer has stopped being true. Deciding that is itself a metadata read, never a scan."
       />
 
-      <Callout type="note">
-        The freshness algorithm is <strong>per-element, not per-dataset</strong>. A single dataset can have some
-        elements fresh and others stale — the router can trust part of the context and refresh only the stale part
-        (the <em>hybrid</em> route). This is what makes Kaveon efficient on large datasets: it only recomputes what
-        changed.
-      </Callout>
-
-      <h2>The composite score</h2>
       <p>
-        The validity score is a multiplicative composite of two factors — either one going to zero invalidates the
-        element, and a third factor (usage) modulates the time factor&apos;s half-life:
-      </p>
-      <Code lang="text">{`score = time_factor(age, effective_half_life) × change_factor(Δrows, threshold)
-
-where effective_half_life = base_half_life / (1 + usage_gain × ln(1 + usage_count))`}</Code>
-      <p>
-        The score is computed on-demand from cheap metadata — never by re-querying the underlying data. Computing a
-        score costs one lightweight catalog query to read change counters from{" "}
-        <code>pg_stat_user_tables</code>.
-      </p>
-
-      <h2>Factor 1: Time decay</h2>
-      <p>
-        Exponential decay by elapsed time since the element was last refreshed. The half-life is the time at which
-        an unused, unchanged element&apos;s freshness has fallen to 0.5.
-      </p>
-      <Code lang="python">{`def _time_factor(age_seconds: float, half_life: float) -> float:
-    if age_seconds <= 0:
-        return 1.0
-    return math.exp(-math.log(2.0) * age_seconds / max(1.0, half_life))`}</Code>
-      <table>
-        <thead><tr><th>Age</th><th>Score (6h half-life)</th></tr></thead>
-        <tbody>
-          <tr><td>0 hours</td><td>1.000</td></tr>
-          <tr><td>1 hour</td><td>0.891</td></tr>
-          <tr><td>3 hours</td><td>0.707</td></tr>
-          <tr><td>6 hours</td><td>0.500</td></tr>
-          <tr><td>12 hours</td><td>0.250</td></tr>
-          <tr><td>24 hours</td><td>0.063</td></tr>
-        </tbody>
-      </table>
-      <p>
-        The base half-life is <strong>6 hours</strong> — after 6 hours with no changes and no usage weighting, the
-        time factor drops to 0.5. This means purely time-based staleness alone triggers a rebuild within half a day.
-      </p>
-
-      <h2>Factor 2: Change detection</h2>
-      <p>
-        This is the load-bearing trick: the algorithm detects data drift from a counter, not from a scan. PostgreSQL
-        maintains <code>n_mod_since_analyze</code> in <code>pg_stat_user_tables</code> — a running count of row
-        modifications (inserts, updates, deletes) since the last <code>ANALYZE</code>. The DLM records this counter
-        at compilation time; at scoring time, it reads the current value and computes the delta.
-      </p>
-      <Code lang="python">{`def _change_factor(rows_at_capture, mods_now, mods_at_capture,
-                   last_analyze_changed) -> float:
-    delta = max(0, mods_now - mods_at_capture)
-    if last_analyze_changed and delta == 0:
-        # analyze ran but counter reset — treat as at least the half fraction
-        delta = max(1, int(0.05 * max(1, rows_at_capture)))
-    frac = delta / float(max(1, rows_at_capture))
-    return math.exp(-math.log(2.0) * frac / 0.05)`}</Code>
-      <p>
-        The change sensitivity is set so that <strong>5% of rows modified = change factor of 0.5</strong> (half stale).
-        This means:
+        Two layers precompute, and they decide freshness differently. The Engine&rsquo;s statistics and cube cells are
+        tied to an exact version of a table and are discarded the moment it moves. The DLM&rsquo;s context artifact
+        carries a score, but what invalidates it is a measured change, not age.
       </p>
       <table>
-        <thead><tr><th>Rows modified</th><th>Change factor</th></tr></thead>
+        <thead><tr><th>Layer</th><th>What it precomputes</th><th>Freshness rule</th></tr></thead>
         <tbody>
-          <tr><td>0%</td><td>1.000</td></tr>
-          <tr><td>1%</td><td>0.871</td></tr>
-          <tr><td>5%</td><td>0.500</td></tr>
-          <tr><td>10%</td><td>0.250</td></tr>
-          <tr><td>20%</td><td>0.063</td></tr>
+          <tr>
+            <td>The Engine</td>
+            <td>Table statistics, cube cells, HyperLogLog sketches</td>
+            <td>Exact: the recorded source version either is the table&rsquo;s current one or it is not</td>
+          </tr>
+          <tr>
+            <td>The DLM</td>
+            <td>A dataset&rsquo;s context artifact — totals, per-dimension breakdowns, low-cardinality combinations</td>
+            <td>Scored, but only a detected change makes it stale</td>
+          </tr>
         </tbody>
       </table>
 
-      <Callout type="tip">
-        The <code>pg_stat_user_tables</code> counters are maintained by PostgreSQL for free as part of its autovacuum
-        infrastructure. Reading them is a single catalog query — no table scan, no I/O, no locks. This is what makes
-        the freshness algorithm &ldquo;zero-scan&rdquo; with respect to analytical tables: it uses a small catalog query rather than rescanning source rows.
-      </Callout>
-
-      <h3>Autovacuum edge case</h3>
+      <h2>The Engine: source version identity</h2>
       <p>
-        When PostgreSQL&apos;s autovacuum runs <code>ANALYZE</code>, the <code>n_mod_since_analyze</code> counter
-        resets to zero. The algorithm detects this by comparing the <code>last_analyze</code> timestamp: if it changed
-        but the counter is zero, the algorithm assumes at least the half-fraction of rows were modified. This prevents
-        a false &ldquo;fresh&rdquo; signal after autovacuum.
+        Every statistics record and every cube carries the <code>SourceVersion</code> it was computed over — a digest
+        of the table&rsquo;s location together with its version identity, which is the Delta log version, the Iceberg
+        snapshot id, or the file listing for a directory of Parquet.
       </p>
+      <Code lang="rust">{`pub struct SourceVersion {
+    /// Location plus the Delta version, Iceberg snapshot, object version
+    /// or listing digest, hashed together.
+    pub identity_sha256: String,
+    pub kind: SourceVersionKind,   // DeltaVersion | IcebergSnapshot | Listing
+}
 
-      <h2>Factor 3: Usage weighting</h2>
-      <p>
-        Hot elements — those frequently relied upon for answers — get a <strong>shorter effective half-life</strong>.
-        The answers your team relies on most are kept the freshest. Usage does not lengthen the half-life; it can only
-        shorten it.
-      </p>
-      <Code lang="python">{`def _effective_half_life(usage_count: int) -> float:
-    hl = BASE_HALF_LIFE_SECONDS / (1.0 + USAGE_GAIN * math.log1p(max(0, usage_count)))
-    return max(MIN_HALF_LIFE_SECONDS, hl)`}</Code>
-      <table>
-        <thead><tr><th>Usage count</th><th>Effective half-life</th></tr></thead>
-        <tbody>
-          <tr><td>0 (never used)</td><td>6h 0min (base)</td></tr>
-          <tr><td>10</td><td>3h 16min</td></tr>
-          <tr><td>100</td><td>2h 18min</td></tr>
-          <tr><td>1,000</td><td>1h 45min</td></tr>
-          <tr><td>10,000</td><td>1h 25min</td></tr>
-        </tbody>
-      </table>
-      <p>
-        A floor of <strong>10 minutes</strong> prevents a hyper-used element from demanding a refresh on literally
-        every request.
-      </p>
-
-      <h2>Tunables</h2>
-      <table>
-        <thead><tr><th>Constant</th><th>Value</th><th>Purpose</th></tr></thead>
-        <tbody>
-          <tr><td><code>BASE_HALF_LIFE_SECONDS</code></td><td>21,600 (6h)</td><td>Time until an unused, unchanged element is half-stale</td></tr>
-          <tr><td><code>CHANGE_HALF_FRACTION</code></td><td>0.05 (5%)</td><td>Row modification fraction at which change factor = 0.5</td></tr>
-          <tr><td><code>USAGE_GAIN</code></td><td>0.35</td><td>How aggressively usage shortens the half-life</td></tr>
-          <tr><td><code>MIN_HALF_LIFE_SECONDS</code></td><td>600 (10min)</td><td>Floor: even the most-used element cannot go below 10 minutes</td></tr>
-          <tr><td><code>DEFAULT_THRESHOLD</code></td><td>0.70</td><td>Score below which an element is considered stale</td></tr>
-        </tbody>
-      </table>
-
-      <h2>Route decision</h2>
-      <p>
-        Given the validity scores for all elements a question depends on, the router makes a per-element decision:
-      </p>
-      <Code lang="text">{`All elements ≥ threshold (0.70)
-  → Route: CONTEXT — answer entirely from precomputed DLM context. No query.
-
-Some elements below threshold
-  → Route: HYBRID — answer fresh elements from context, query only the stale ones.
-    This is the efficiency trick: a 504M-row dataset with one stale dimension
-    only refreshes that one dimension, not the entire artifact.
-
-All elements below threshold
-  → Route: QUERY — full live query against the warehouse.`}</Code>
-
-      <Callout type="note">
-        The routing is <strong>per-element</strong>, not per-dataset. A dataset with 10 dimension columns might have
-        9 fresh and 1 stale — the router queries only the stale one. This is what makes the DLM efficient on large
-        datasets with many dimensions.
-      </Callout>
-
-      <h2>Three rebuild triggers</h2>
-      <p>
-        Stale DLM context can be rebuilt through three independent paths, ensuring data never stays stale for long:
-      </p>
-
-      <h3>1. On-ask rebuild</h3>
-      <p>
-        Every question that routes through the DLM calls <code>maybe_auto_rebuild()</code> after serving the answer.
-        If the freshness score is below threshold, a <strong>background thread</strong> triggers a rebuild — the
-        user gets their answer immediately (from live query if needed), and the rebuilt context is ready for the
-        next question.
-      </p>
-      <Code lang="text">{`POST /dlm/ask
-  │
-  ├── Serve answer (context or live query)
-  │
-  └── maybe_auto_rebuild(dataset_id)
-        └── score < threshold?  →  background thread: generate_dlm(force=True)`}</Code>
-
-      <h3>2. Proactive sweep</h3>
-      <p>
-        A background daemon thread runs <code>freshness_sweep()</code> every <strong>30 minutes</strong>, checking
-        every dataset with a compiled DLM. Stale artifacts are rebuilt proactively — before any user asks.
-        This means even datasets that nobody is currently querying stay fresh.
-      </p>
-      <Code lang="text">{`Every 30 minutes (background thread):
-  for each dataset with a compiled DLM:
-    score = check_freshness(dataset_id)
-    if score < threshold:
-      generate_dlm(dataset_id, force=True)
-      log("rebuilt {dataset_name}: score was {score}")`}</Code>
-      <p>
-        The sweep starts automatically when the API boots (module-level <code>_start_sweep_loop()</code>). It can
-        also be triggered manually via <code>POST /dlm/sweep</code> (Admin only).
-      </p>
-
-      <h3>3. Pipeline webhook</h3>
-      <p>
-        Data pipelines can call <code>POST /dlm/notify-data-change?dataset_id=X</code> after loading new data. This
-        immediately invalidates the in-memory DLM context and triggers a background rebuild — no waiting for the next
-        sweep or user query.
-      </p>
-      <Code lang="text">{`ETL pipeline completes
-  │
-  └── POST /dlm/notify-data-change?dataset_id=144
-        ├── invalidate_caches(dataset_id)    — clear in-memory DLM answer context
-        └── _trigger_background_rebuild()    — recompile the DLM artifact`}</Code>
-
-      <h2>The zero-scan trick</h2>
-      <p>
-        The fundamental insight is that <strong>detecting whether data changed does not require reading the data</strong>.
-        PostgreSQL already tracks row modification counters for its own autovacuum decisions. The freshness algorithm
-        piggybacks on these counters:
-      </p>
-      <Code lang="sql">{`SELECT relname AS table_name,
-       n_live_tup,
-       n_mod_since_analyze,
-       GREATEST(COALESCE(last_analyze, 'epoch'),
-                COALESCE(last_autoanalyze, 'epoch')) AS last_analyze
-FROM pg_stat_user_tables
-WHERE schemaname = 'public'`}</Code>
-      <p>
-        This single catalog query returns change signals for every table in the schema — typically in under a
-        millisecond on the documented reference path. It avoids analytical table scans and application-level locks; catalog access still has normal database I/O and scheduling costs. The result estimates how much the data
-        has drifted since the DLM was last compiled.
-      </p>
-
-      <Callout type="tip">
-        This approach requires a PostgreSQL-compatible source that exposes the expected statistics semantics (including Azure Database for PostgreSQL, which Kaveon uses). The <code>pg_stat_user_tables</code> view is part of PostgreSQL&apos;s core statistics
-        collector and requires no extensions or configuration.
-      </Callout>
-
-      <h2>Observability</h2>
-      <p>
-        The freshness endpoint returns a full breakdown for debugging and monitoring:
-      </p>
-      <Code lang="json">{`GET /datasets/144/freshness
-{
-  "score": 0.72,
-  "recommendation": "use_context",
-  "factors": {
-    "time": 0.81,
-    "change": 0.89,
-    "age_seconds": 5420.3,
-    "effective_half_life_seconds": 17280.0,
-    "usage_count": 47,
-    "row_delta": 12840
-  },
-  "element_key": "public.kaveon_events_enriched",
-  "threshold": 0.70
+impl TableCube {
+    pub fn is_current_for(&self, identity_sha256: &str) -> bool {
+        self.source_version.identity_sha256 == identity_sha256
+    }
 }`}</Code>
       <p>
-        Every factor is exposed — time, change, usage count, effective half-life, row delta. This makes the
-        algorithm fully inspectable: you can see exactly why context is trusted or why a rebuild was triggered.
+        There is no score and no tolerance here. A cube built over version 41 is not used to answer a question about
+        version 42; the planner falls back to a distributed scan and the cube waits for the next{" "}
+        <code>ANALYZE</code>. A changed shape declaration rebuilds for the same reason. This is why a tile that used
+        to return in under a second can suddenly take much longer after a table is rewritten: the answer is still
+        correct, it is just no longer precomputed. See <a href="/docs/engine">Kaveon Engine</a> for what makes a
+        question cube-shaped in the first place.
+      </p>
+      <Callout type="note">
+        Checking this costs a metadata read, not a scan — the Delta log tail, the snapshot pointer, or a listing. That
+        is the whole idea: <strong>detecting that data changed never requires reading the data</strong>.
+      </Callout>
+
+      <h2>The DLM: a score, and what actually invalidates it</h2>
+      <p>
+        A dataset&rsquo;s context artifact gets a score from two factors, and the score is reported — but the decision
+        does not rest on it alone:
+      </p>
+      <Code lang="python">{`score = time_factor(age) * change_factor(rows_changed)
+
+fresh = (not data_modified) or score >= 0.5`}</Code>
+      <Callout type="warn">
+        <strong>Age alone never invalidates context.</strong> A table nobody has written to is answered from context
+        however old the artifact is. This is deliberate: rebuilding on a timer is a full scan for nothing, and on a
+        small host it is a full scan that may not finish. Expect to see a score of <code>0.0</code> alongside{" "}
+        <code>&quot;fresh&quot;: true</code> — that is an artifact built weeks ago over data that has not moved, and
+        it is the correct answer.
+      </Callout>
+      <p>
+        The change signal depends on where the dataset lives, and this is the part worth understanding:
+      </p>
+      <ul>
+        <li>
+          <strong>An Engine-backed dataset</strong> compares the source version its artifact recorded against the
+          table&rsquo;s current one. The digests match or they do not, so the change is a fact rather than an
+          estimate. A moved version is scored as at least the half fraction, which puts any artifact with age past
+          the threshold — in practice, <em>a version that moved means rebuild</em>.
+        </li>
+        <li>
+          <strong>A registered external database</strong> has no such identity, so drift is inferred from the
+          database&rsquo;s own modification counter. This path needs a source that exposes those counters and is not
+          available in a deployment without one.
+        </li>
+      </ul>
+      <Callout type="warn">
+        <strong>A dataset whose artifact carries no Engine binding detects no change at all.</strong> Its{" "}
+        <code>data_modified</code> stays false, so it reports <code>use_context</code> forever and is never rebuilt
+        automatically — even if the table underneath is replaced. An artifact compiled before its dataset was bound
+        to an Engine table is in exactly this position, and the only fix is to recompile it so the binding is
+        recorded. Check the <code>signal</code> field to tell which kind you have.
+      </Callout>
+
+      <h2>The numbers</h2>
+      <table>
+        <thead><tr><th>Constant</th><th>Value</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td><code>BASE_HALF_LIFE_SECONDS</code></td><td>6 hours</td><td>The time factor halves every 6 hours. It lowers confidence in the score; it does not by itself make context stale.</td></tr>
+          <tr><td><code>CHANGE_HALF_FRACTION</code></td><td>0.05</td><td>Five percent of rows changed halves the change factor.</td></tr>
+          <tr><td>Staleness threshold</td><td>0.5</td><td>With a detected change, the score must reach this to keep using context.</td></tr>
+        </tbody>
+      </table>
+      <p>
+        Usage weighting exists in the scorer — frequently relied-upon elements were meant to decay faster, shortening
+        the effective half-life — but dataset freshness does not pass a usage count, so it is not in effect on this
+        path. It is described here because the code is there, not because it changes an answer.
+      </p>
+
+      <h2>What rebuilds a stale artifact</h2>
+      <table>
+        <thead><tr><th>Trigger</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>On ask.</strong> A question that routes through the DLM checks freshness after serving, and starts a background rebuild if the artifact is stale. The asker gets their answer immediately; the next asker gets the rebuilt context.</td>
+            <td>Active</td>
+          </tr>
+          <tr>
+            <td><strong>Pipeline notification.</strong> <code>POST /dlm/notify-data-change?dataset_id=…</code> clears the in-memory context and starts a rebuild, so a load that has just finished does not wait to be noticed.</td>
+            <td>Active</td>
+          </tr>
+          <tr>
+            <td><strong>Manual sweep.</strong> <code>POST /dlm/sweep</code> checks every compiled artifact the caller can read and rebuilds the stale ones. Administrator only.</td>
+            <td>Active</td>
+          </tr>
+          <tr>
+            <td><strong>The automatic background sweep.</strong> A daemon thread was intended to run the same check every 30 minutes.</td>
+            <td><strong>Not running</strong></td>
+          </tr>
+        </tbody>
+      </table>
+      <Callout type="warn">
+        <strong>Nothing rebuilds a dataset nobody asks about.</strong> The periodic sweep does not start, because
+        reading compiled artifacts requires a caller identity and an unattended thread has none — it reports that
+        rather than silently checking nothing. So a dataset that is loaded but never queried keeps a stale artifact
+        until someone asks, a pipeline notifies, or an administrator sweeps. If your data arrives on a schedule, call
+        the notification endpoint from the pipeline; that is the supported path, not a timer.
+      </Callout>
+
+      <h2>Reading a freshness report</h2>
+      <Code lang="json">{`GET /datasets/24/freshness
+
+{
+  "fresh": true,
+  "score": 0.0,
+  "computed_at": "2026-09-12T08:35:02.373996",
+  "data_modified": false,
+  "recommendation": "use_context",
+  "signal": "engine_source_version",
+  "source_version":         { "identity_sha256": "…", "kind": "delta_version", "version": 41 },
+  "current_source_version": { "identity_sha256": "…", "kind": "delta_version", "version": 41 },
+  "observed_at_ms": 1760042435000
+}`}</Code>
+      <table>
+        <thead><tr><th>Field</th><th>How to read it</th></tr></thead>
+        <tbody>
+          <tr><td><code>recommendation</code></td><td><code>use_context</code>, <code>rebuild</code>, or <code>no_context</code> when there is no ready artifact. This is the decision; the score is evidence for it.</td></tr>
+          <tr><td><code>data_modified</code></td><td>Whether a change was actually detected. False with a low score means old but unchanged, which is fresh.</td></tr>
+          <tr><td><code>signal</code></td><td>Which change signal was used. <code>engine_source_version</code> is the exact one. Anything else means the artifact has no Engine binding — see the warning above.</td></tr>
+          <tr><td><code>source_version</code> vs <code>current_source_version</code></td><td>What the artifact was built over, and what the table is now. Equal digests are the reason a precomputed answer is allowed to stand.</td></tr>
+        </tbody>
+      </table>
+      <p>
+        Studio reports the same distinction per answer, so a reader never has to guess whether a number came from
+        precomputed context or from a query that has just run.
       </p>
 
       <Pager prev={{ href: "/docs/nl-to-sql", title: "DLM · NL→SQL" }} next={{ href: "/docs/engine", title: "Kaveon Engine" }} />

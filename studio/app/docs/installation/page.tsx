@@ -47,8 +47,8 @@ cd Kaveon
       <p>The Helm charts pin every image by immutable digest. The production-shaped Azure template creates <code>kaveon-aks</code> with one system node and a worker pool autoscaled from one to four nodes. It preserves the existing ADLS account and ACR; it does not change subscription policies.</p>
       <Code lang="powershell">{`az aks get-credentials --resource-group kaveon-rg --name kaveon-aks --overwrite-existing
 kubelogin convert-kubeconfig -l azurecli
-helm upgrade --install kaveon infra/helm/kaveon-test --namespace kaveon --create-namespace `
-  --set image.repository=kaveonacr.azurecr.io/kaveon-engine `
+helm upgrade --install kaveon infra/helm/kaveon-test --namespace kaveon --create-namespace \`
+  --set image.repository=kaveonacr.azurecr.io/kaveon-engine \`
   --set image.digest=sha256:<immutable-digest>`}</Code>
       <p>Use the Azure deployment guide for the Bicep workflow, workload identity, secrets, TLS and autoscaler verification. The chart is deliberately separate from infrastructure creation so credentials never enter source control.</p>
 
