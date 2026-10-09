@@ -2648,6 +2648,11 @@ mod tests {
         assert!(plain.scan_metrics.is_empty());
         assert_eq!(plain.operator.schema().field(0).name(), "total");
         assert_eq!(count(plain), 4);
+        let dashboard =
+            plan_sql("SELECT COUNT(*) AS total FROM test.default.items LIMIT 1").unwrap();
+        assert!(dashboard.scan_metrics.is_empty());
+        assert_eq!(dashboard.operator.schema().field(0).name(), "total");
+        assert_eq!(count(dashboard), 4);
         assert_eq!(
             count(plan_sql("SELECT COUNT(*) FROM counts.default.empty").unwrap()),
             0
