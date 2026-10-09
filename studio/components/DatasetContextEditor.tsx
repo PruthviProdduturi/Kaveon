@@ -2,13 +2,18 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { msalFetch } from "../utils/msalFetch";
+import type { DlmArtifactHandle } from "../hooks/useDlmArtifact";
 
 /**
- * Dataset-page "Curate context" editor — the human-editable side of the DLM's
+ * Dataset-page "Customize" editor — the human-editable side of the DLM's
  * per-dataset context spec. The DLM suggests defaults at generate time (aliases,
  * additivity, which breakdowns to precompute); here the user reviews and overrides
  * them. Alias / display / default / value-alias edits go live on save; breakdown or
  * depth changes prompt a regenerate (they change what is precomputed).
+ *
+ * The spec is read at mount, in parallel with everything else the page reads.
+ * Where the spec is still empty the defaults come from the page's single read
+ * of the compiled artifact, rather than from a second fetch of it here.
  */
 
 interface MetricSpec { display_name?: string; aliases?: string[]; additive?: boolean; default?: boolean; hidden?: boolean; }
@@ -16,20 +21,18 @@ interface DimSpec { display_name?: string; aliases?: string[]; precompute?: bool
 interface Spec { metrics?: Record<string, MetricSpec>; dimensions?: Record<string, DimSpec>; value_aliases?: Record<string, string>; default_metric?: string; }
 interface ContextResp { ok?: boolean; dataset_name?: string; effective?: Spec; }
 
-const card: React.CSSProperties = { flexShrink: 0, border: "1px solid var(--border)", borderRadius: 12, padding: "16px 20px" };
-const h3: React.CSSProperties = { fontSize: 13, fontWeight: 700, color: "var(--text-muted)", margin: 0, textTransform: "uppercase", letterSpacing: "0.05em", display: "flex", alignItems: "center", gap: 8 };
-const sub: React.CSSProperties = { fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", margin: "18px 0 8px" };
+const sub: React.CSSProperties = { fontSize: 11, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em", margin: "18px 0 8px" };
 const label: React.CSSProperties = { fontSize: 11, color: "var(--text-muted)", minWidth: 70 };
 const input: React.CSSProperties = { border: "1px solid var(--border)", borderRadius: 7, padding: "4px 8px", fontSize: 12.5, background: "var(--bg-surface)", color: "var(--text-primary)" };
 const rowCard: React.CSSProperties = { border: "1px solid var(--border)", borderRadius: 9, padding: "10px 12px", marginBottom: 8, display: "flex", flexDirection: "column", gap: 7 };
 
 function Toggle({ on, onClick, children }: { on?: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
-    <button type="button" onClick={onClick} className="card"
+    <button type="button" onClick={onClick}
       style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 9px", borderRadius: 999, cursor: "pointer",
         border: "1px solid var(--border)", fontSize: 11.5, fontWeight: 600,
         background: on ? "rgba(var(--accent-rgb),0.12)" : "transparent", color: on ? "var(--accent)" : "var(--text-muted)" }}>
-      <i className={`fas ${on ? "fa-check" : "fa-minus"}`} style={{ fontSize: 9 }} />{children}
+      <i className={`fas ${on ? "fa-check" : "fa-minus"}`} aria-hidden="true" style={{ fontSize: 9 }} />{children}
     </button>
   );
 }
@@ -41,18 +44,22 @@ function Aliases({ items, onChange }: { items: string[]; onChange: (v: string[])
     <div style={{ display: "flex", flexWrap: "wrap", gap: 5, alignItems: "center", flex: 1 }}>
       {items.map((a) => (
         <span key={a} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "2px 8px", borderRadius: 999, background: "rgba(var(--accent-rgb),0.08)", fontSize: 12, color: "var(--text-primary)" }}>
-          {a}<i className="fas fa-xmark" style={{ cursor: "pointer", opacity: 0.55, fontSize: 10 }} onClick={() => onChange(items.filter((x) => x !== a))} />
+          {a}<i className="fas fa-xmark" aria-hidden="true" style={{ cursor: "pointer", opacity: 0.55, fontSize: 10 }} onClick={() => onChange(items.filter((x) => x !== a))} />
         </span>
       ))}
       <input value={t} onChange={(e) => setT(e.target.value)}
         onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
-        placeholder="add alias…"
+        placeholder="add alias"
         style={{ border: "none", outline: "none", background: "transparent", fontSize: 12, minWidth: 90, color: "var(--text-primary)" }} />
     </div>
   );
 }
 
-export function DatasetContextEditor({ datasetId }: { datasetId?: string }) {
+export function DatasetContextEditor({ datasetId, dlm, className }: {
+  datasetId?: string;
+  dlm: DlmArtifactHandle;
+  className?: string;
+}) {
   const [name, setName] = useState<string>("");
   const [metrics, setMetrics] = useState<Record<string, MetricSpec>>({});
   const [dims, setDims] = useState<Record<string, DimSpec>>({});
@@ -67,51 +74,50 @@ export function DatasetContextEditor({ datasetId }: { datasetId?: string }) {
   const load = useCallback(async () => {
     if (!datasetId) return;
     try {
-      // Load context spec
       const r = await msalFetch(`/api/v1/datasets/${datasetId}/dlm/context`);
       if (!r.ok) { setReady(false); return; }
       const j: ContextResp = await r.json();
       const eff = j.effective || {};
       setName(j.dataset_name || "");
-
-      let mSpec = JSON.parse(JSON.stringify(eff.metrics || {})) as Record<string, MetricSpec>;
-      let dSpec = JSON.parse(JSON.stringify(eff.dimensions || {})) as Record<string, DimSpec>;
-
-      // If the spec is empty, pre-populate from the DLM manifest
-      if (Object.keys(mSpec).length === 0 || Object.keys(dSpec).length === 0) {
-        try {
-          const dlmR = await msalFetch(`/api/v1/datasets/${datasetId}/dlm`);
-          if (dlmR.ok) {
-            const dlm = await dlmR.json();
-            const manifest = dlm.manifest || {};
-            if (Object.keys(mSpec).length === 0 && manifest.metrics) {
-              for (const m of manifest.metrics) {
-                const n = m.name || m.metric_name;
-                const expr = ((m.expression || "") as string).toLowerCase();
-                // COUNT DISTINCT / AVG / MAX / MIN are not additive
-                const isAdditive = !/(count_distinct|count\s*\(\s*distinct|avg\(|max\(|min\(|active|unique|distinct)/i.test(expr + " " + (n || ""));
-                if (n) mSpec[n] = { display_name: n, aliases: [], additive: isAdditive, default: false, hidden: false };
-              }
-            }
-            if (Object.keys(dSpec).length === 0 && manifest.columns) {
-              for (const c of manifest.columns) {
-                if (c.is_dimension && c.name) {
-                  dSpec[c.name] = { display_name: c.name, aliases: [], precompute: true, top_n: 500, hidden: false };
-                }
-              }
-            }
-          }
-        } catch { /* DLM not available — show empty */ }
-      }
-
-      setMetrics(mSpec);
-      setDims(dSpec);
+      setMetrics({ ...(eff.metrics || {}) });
+      setDims({ ...(eff.dimensions || {}) });
       setValiases(Object.entries(eff.value_aliases || {}));
       setDflt(eff.default_metric || "");
       setReady(true);
     } catch { setReady(false); }
   }, [datasetId]);
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { void load(); }, [load]);
+
+  // Where the saved spec names no metrics or no dimensions, suggest them from
+  // the compiled artifact the page already read.
+  const artifact = dlm.artifact;
+  useEffect(() => {
+    if (!ready || !artifact) return;
+    const manifest = artifact.manifest || {};
+    setMetrics((current) => {
+      if (Object.keys(current).length > 0 || !manifest.metrics) return current;
+      const next: Record<string, MetricSpec> = {};
+      for (const m of manifest.metrics) {
+        const n = m.name || m.metric_name;
+        if (!n) continue;
+        const expr = (m.expression || "").toLowerCase();
+        // COUNT DISTINCT / AVG / MAX / MIN are not additive.
+        const isAdditive = !/(count_distinct|count\s*\(\s*distinct|avg\(|max\(|min\(|active|unique|distinct)/i.test(`${expr} ${n}`);
+        next[n] = { display_name: n, aliases: [], additive: isAdditive, default: false, hidden: false };
+      }
+      return Object.keys(next).length > 0 ? next : current;
+    });
+    setDims((current) => {
+      if (Object.keys(current).length > 0 || !manifest.columns) return current;
+      const next: Record<string, DimSpec> = {};
+      for (const c of manifest.columns) {
+        if (c.is_dimension && c.name) {
+          next[c.name] = { display_name: c.name, aliases: [], precompute: true, top_n: 500, hidden: false };
+        }
+      }
+      return Object.keys(next).length > 0 ? next : current;
+    });
+  }, [ready, artifact]);
 
   const patchMetric = (k: string, p: Partial<MetricSpec>) => setMetrics((m) => ({ ...m, [k]: { ...m[k], ...p } }));
   const patchDim = (k: string, p: Partial<DimSpec>) => setDims((d) => ({ ...d, [k]: { ...d[k], ...p } }));
@@ -129,7 +135,7 @@ export function DatasetContextEditor({ datasetId }: { datasetId?: string }) {
         method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
       });
       const j = await r.json();
-      if (r.ok) { setNeedsRegen(!!j.needs_regenerate); setMsg(j.needs_regenerate ? "Saved — regenerate to apply the breakdown/depth changes." : "Saved. Aliases, defaults and value-aliases are live now."); }
+      if (r.ok) { setNeedsRegen(!!j.needs_regenerate); setMsg(j.needs_regenerate ? "Saved — regenerate to apply the breakdown and depth changes." : "Saved. Aliases, defaults and value aliases are live now."); }
       else setMsg("Save failed.");
     } catch { setMsg("Save failed."); }
     setSaving(false);
@@ -137,32 +143,47 @@ export function DatasetContextEditor({ datasetId }: { datasetId?: string }) {
 
   const regenerate = useCallback(async () => {
     if (!datasetId) return;
-    setSaving(true); setMsg("Regenerating context…");
-    try { await msalFetch(`/api/v1/datasets/${datasetId}/dlm/generate?force=true`, { method: "POST" }); setMsg("Context regenerated."); setNeedsRegen(false); }
+    setSaving(true); setMsg("Regenerating context");
+    try {
+      await msalFetch(`/api/v1/datasets/${datasetId}/dlm/generate?force=true`, { method: "POST" });
+      setMsg("Context regenerated."); setNeedsRegen(false);
+      await dlm.reload();
+    }
     catch { setMsg("Regenerate failed."); }
     setSaving(false);
-  }, [datasetId]);
+  }, [datasetId, dlm]);
 
   if (!ready) return null;
 
   return (
-    <div className="card" style={card}>
-      <div style={{ display: "flex", alignItems: "center", cursor: "pointer" }} onClick={() => setOpen((o) => !o)}>
-        <i className="fas fa-sliders" style={{ fontSize: 12, color: "var(--accent)", marginRight: 8 }} />
-        <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Customize</span>
-        <span style={{ marginLeft: 10, fontSize: 12, color: "var(--text-muted)" }}>metric aliases, breakdowns, value mappings</span>
-        <i className={`fas fa-chevron-${open ? "up" : "down"}`} style={{ marginLeft: "auto", fontSize: 10, color: "var(--text-muted)" }} />
-      </div>
+    <section className={className}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 26, width: "100%", padding: 0, border: 0, background: "transparent", textAlign: "left", cursor: "pointer", color: "var(--text-primary)" }}
+      >
+        <i className="fas fa-sliders" aria-hidden="true" style={{ width: 13, textAlign: "center", fontSize: 12, color: "var(--accent)" }} />
+        <span style={{ fontSize: 13, fontWeight: 700, flexShrink: 0 }}>Customize</span>
+        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12, fontWeight: 400, color: "var(--text-muted)" }}>
+          metric aliases, breakdowns, value mappings
+        </span>
+        <i
+          className="fas fa-chevron-down"
+          aria-hidden="true"
+          style={{ marginLeft: "auto", flexShrink: 0, fontSize: 10, color: "var(--text-muted)", transition: "transform .18s ease", transform: open ? "rotate(180deg)" : undefined }}
+        />
+      </button>
 
       {open && (
         <>
-          <div style={{ fontSize: 12.5, color: "var(--text-muted)", marginTop: 10, marginBottom: 4 }}>
-            Teach the query engine how to interpret questions about <b>{name || "this dataset"}</b>.
+          <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 10, marginBottom: 4 }}>
+            Teach the query engine how to read questions about <b>{name || "this dataset"}</b>.
           </div>
 
-          {/* Metrics + Dimensions side by side */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginTop: 12 }}>
-          <div>
+          {/* Metrics and dimensions side by side */}
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 32, marginTop: 12 }}>
+          <div style={{ minWidth: 0 }}>
           <div style={sub}>Metrics ({Object.keys(metrics).length})</div>
           {Object.keys(metrics).map((k) => {
             const m = metrics[k];
@@ -182,7 +203,7 @@ export function DatasetContextEditor({ datasetId }: { datasetId?: string }) {
           })}
           </div>
 
-          <div>
+          <div style={{ minWidth: 0 }}>
           <div style={sub}>Dimensions ({Object.keys(dims).length})</div>
           {Object.keys(dims).map((k) => {
             const d = dims[k];
@@ -209,35 +230,35 @@ export function DatasetContextEditor({ datasetId }: { datasetId?: string }) {
           </div>
 
           {/* Value aliases */}
-          <div style={sub}>Value aliases <span style={{ textTransform: "none", fontWeight: 400 }}>— map a phrase to a real value (e.g. <code>smb → Team</code>)</span></div>
+          <div style={sub}>Value aliases <span style={{ textTransform: "none", fontWeight: 400 }}>— map a phrase to a real value (for example <code>smb</code> to <code>Team</code>)</span></div>
           {valiases.map(([kk, vv], i) => (
             <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
               <input style={{ ...input, width: 150 }} value={kk} placeholder="phrase" onChange={(e) => setValiases((a) => a.map((p, j) => j === i ? [e.target.value, p[1]] : p))} />
-              <i className="fas fa-arrow-right" style={{ fontSize: 10, color: "var(--text-muted)" }} />
+              <i className="fas fa-arrow-right" aria-hidden="true" style={{ fontSize: 10, color: "var(--text-muted)" }} />
               <input style={{ ...input, width: 150 }} value={vv} placeholder="actual value" onChange={(e) => setValiases((a) => a.map((p, j) => j === i ? [p[0], e.target.value] : p))} />
-              <i className="fas fa-xmark" style={{ cursor: "pointer", opacity: 0.55 }} onClick={() => setValiases((a) => a.filter((_, j) => j !== i))} />
+              <i className="fas fa-xmark" aria-hidden="true" style={{ cursor: "pointer", opacity: 0.55 }} onClick={() => setValiases((a) => a.filter((_, j) => j !== i))} />
             </div>
           ))}
           <button type="button" onClick={() => setValiases((a) => [...a, ["", ""]])} style={{ background: "none", border: "none", color: "var(--accent)", cursor: "pointer", fontSize: 12, fontWeight: 600, padding: 0, marginTop: 2 }}>
-            <i className="fas fa-plus" style={{ fontSize: 10, marginRight: 5 }} />add value alias
+            <i className="fas fa-plus" aria-hidden="true" style={{ fontSize: 10, marginRight: 5 }} />add value alias
           </button>
 
           {/* Actions */}
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 18 }}>
             <button type="button" onClick={save} disabled={saving}
-              style={{ padding: "7px 16px", background: "var(--accent)", color: "#fff", border: "none", borderRadius: 8, cursor: saving ? "default" : "pointer", fontSize: 12.5, fontWeight: 600, opacity: saving ? 0.7 : 1 }}>
-              <i className={`fas ${saving ? "fa-spinner fa-spin" : "fa-floppy-disk"}`} style={{ fontSize: 11, marginRight: 6 }} />Save context
+              style={{ padding: "7px 16px", background: "var(--accent)", color: "#fff", border: "none", borderRadius: 8, cursor: saving ? "default" : "pointer", fontSize: 13, fontWeight: 600, opacity: saving ? 0.7 : 1 }}>
+              <i className={`fas ${saving ? "fa-spinner fa-spin" : "fa-floppy-disk"}`} aria-hidden="true" style={{ fontSize: 11, marginRight: 6 }} />Save context
             </button>
             {needsRegen && (
               <button type="button" onClick={regenerate} disabled={saving}
-                style={{ padding: "7px 16px", background: "transparent", color: "var(--accent)", border: "1px solid var(--accent)", borderRadius: 8, cursor: "pointer", fontSize: 12.5, fontWeight: 600 }}>
-                <i className="fas fa-bolt" style={{ fontSize: 11, marginRight: 6 }} />Regenerate now
+                style={{ padding: "7px 16px", background: "transparent", color: "var(--accent)", border: "1px solid var(--accent)", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
+                <i className="fas fa-bolt" aria-hidden="true" style={{ fontSize: 11, marginRight: 6 }} />Regenerate now
               </button>
             )}
-            {msg && <span style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>{msg}</span>}
+            {msg && <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>{msg}</span>}
           </div>
         </>
       )}
-    </div>
+    </section>
   );
 }
