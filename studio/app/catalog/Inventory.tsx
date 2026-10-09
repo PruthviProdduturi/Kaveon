@@ -587,31 +587,40 @@ function Lake({ fastRows, baseRows, staleRows, fastTables, baseTables, staleTabl
   // Nothing has been measured yet and nothing is claimed: a fraction of
   // zero over zero would read as a finding where there is only a wait.
   const blank = total === 0;
+  // The share, as a number, for the bar. `share()` returns the label and
+  // clamps the extremes; the bar needs the raw proportion so a sliver stays
+  // a sliver and a near-whole stays near-whole.
+  const answeredPct = total === 0 ? 0 : Math.max(0, Math.min(100, (fastRows / total) * 100));
   return (
     <div className={s.lake}>
+      {/* One figure, legible at a glance. This opened on `10,120,034 /
+          648,245,086`: two nine-digit numbers across a stroke, which no eye
+          compares — while the one figure that answers the question, the
+          share, sat in small grey prose underneath. They have swapped
+          places. The counts are evidence and now read as evidence. */}
       <p className={s.headline}>
-        <span className={s.headFraction}>
-          <span className={s.headAnswered}>{blank ? "—" : count(fastRows)}</span>
-          <span className={s.headOver} aria-hidden="true">/</span>
-          <span className={s.sr}>of</span>
-          <span className={s.headMeasured}>{blank ? "—" : count(total)}</span>
-        </span>
-        <span className={s.headSays}>rows answer without a scan</span>
+        <span className={s.headShare}>{blank ? "—" : share(fastRows, total)}</span>
+        <span className={s.headSays}>of measured rows answer without a scan</span>
       </p>
+      {!blank && (
+        /* The same fact as a proportion, because a percentage tells you the
+           number and a bar tells you the shape of it. */
+        <div className={s.split} role="img"
+             aria-label={`${share(fastRows, total)} of measured rows answer from precomputed cells; the rest are read in full`}>
+          <span className={s.splitFast} style={{ width: `${answeredPct}%` }} />
+        </div>
+      )}
       <p className={s.lakeStanding}>
         {blank ? (
           reading ? "Reading what has been measured." : "Nothing in view has been measured yet."
         ) : (
           <>
-            <b>{count(fastTables)}</b> of <b>{count(tables)}</b> {plural(tables, "table", "tables")} answer
-            this way, <b>{share(fastRows, total)}</b> of what is measured.
-            {/* A figure and the noun it counts stay on one line: this read
-                "hold 685,753" and then wrapped before "rows that are read in
-                full", leaving a number dangling at the end of a line with
-                nothing saying what it counted. */}
+            <span className={s.nowrapPair}><b>{count(fastRows)}</b> rows</span> of{" "}
+            <span className={s.nowrapPair}><b>{count(total)}</b> measured</span>, across{" "}
+            <b>{count(fastTables)}</b> of <b>{count(tables)}</b> {plural(tables, "table", "tables")}.
             {scannedTables > 0 && (
-              <> The other <b>{count(scannedTables)}</b> hold <span className={s.nowrapPair}><b>{count(scanned)}</b> rows</span> that are read in full
-                {staleTables > 0 && <>, <b>{count(staleTables)}</b> of them carrying statistics the source has moved past</>}.
+              <> The other <b>{count(scannedTables)}</b> read <span className={s.nowrapPair}><b>{count(scanned)}</b> rows</span> in full
+                {staleTables > 0 && <>, <b>{count(staleTables)}</b> of them from statistics the source has moved past</>}.
               </>
             )}
           </>
@@ -859,7 +868,9 @@ function TableRow({ row, pending, expanded, onToggle, isEditor, mass, massTotal,
           {measured?.state === "measured" ? bytes(measured.bytes) : waiting(56)}
         </td>
         <td className={`${s.cFiles} ${past ? s.cPast : ""}`} title={asAt}>
-          {typeof files === "number" ? count(files) : pending ? <span className={s.skel} style={{ width: 26 }} /> : ""}
+          {typeof files === "number"
+            ? (files === 1 ? <span className={s.one} title="one file">1</span> : count(files))
+            : pending ? <span className={s.skel} style={{ width: 26 }} /> : ""}
         </td>
         <td className={`${s.cWhen} ${s.cChanged} ${s.gStart}`} title={exactTime(measured?.lastModifiedMs)}>
           {typeof measured?.lastModifiedMs === "number" ? elapsed(measured.lastModifiedMs) : waiting(48)}

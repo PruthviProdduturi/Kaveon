@@ -224,20 +224,32 @@
   display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 18px; margin: 0;
   font-variant-numeric: tabular-nums lining-nums;
 }
-.headFraction { display: inline-flex; align-items: baseline; gap: 11px; min-width: 0 }
-.headAnswered, .headMeasured {
-  font: 600 var(--fs-display)/1.05 Inter, sans-serif; letter-spacing: -.035em; white-space: nowrap;
+/* The one figure the page is about. A share, not a ratio of two nine-digit
+   numbers: a reader can hold "1.6%" and cannot hold "10,120,034 /
+   648,245,086". */
+.headShare {
+  font: 600 var(--fs-display)/1.05 Inter, sans-serif;
+  letter-spacing: -.035em; white-space: nowrap; color: var(--accent);
 }
-.headAnswered { color: var(--accent) }
-.headMeasured { color: var(--text-muted) }
-/* The stroke is the relation, not a figure: lighter than either side of it
-   so the two numbers read against each other across it. */
-.headOver { font: 300 38px/1.05 Inter, sans-serif; color: var(--text-faint) }
 .headSays { font: var(--fs-row)/1.45 Inter, sans-serif; color: var(--text-secondary); padding-bottom: 3px }
+
+/* The same fact as a proportion. The track is what is measured; the fill is
+   what answers without reading it. Nothing is labelled here — the sentence
+   under it already says what the two parts are, and a legend would be a
+   third telling of one fact. */
+.split {
+  margin: 16px 0 0; height: 6px; max-width: 66ch;
+  border-radius: 999px; overflow: hidden;
+  background: color-mix(in srgb, var(--accent) 10%, var(--border));
+}
+.splitFast {
+  display: block; height: 100%; min-width: 2px;
+  border-radius: inherit; background: var(--accent);
+}
 
 /* What stands behind the fraction. */
 .lakeStanding {
-  margin: 18px 0 0; max-width: 66ch;
+  margin: 14px 0 0; max-width: 66ch;
   font: var(--fs-row)/1.6 Inter, sans-serif; font-variant-numeric: tabular-nums lining-nums;
   color: var(--text-secondary);
 }
@@ -396,7 +408,7 @@
 .colAnswer { width: 14% }
 
 .cName { position: relative; min-width: 0; padding-left: 0 !important }
-.cFormat { text-align: right; color: var(--text-secondary) }
+.cFormat { text-align: right; color: var(--text-faint) }
 .cRows { text-align: right; font-variant-numeric: tabular-nums lining-nums; color: var(--text-primary) }
 .cSize { text-align: right; font-variant-numeric: tabular-nums lining-nums; color: var(--text-secondary) }
 .cFiles { text-align: right; font-variant-numeric: tabular-nums lining-nums; color: var(--text-muted) }
@@ -451,6 +463,11 @@ th.cFormat .sortBtn, th.cRows .sortBtn, th.cSize .sortBtn, th.cWhen .sortBtn { j
    one draws nothing, so "almost none of it" and "none at all" stay apart.
    Grey, never the accent: the accent means a table that answers without
    reading data, and mass is not that. */
+.one { color: var(--text-faint) }
+/* No rail. Drawing the track the share sits in put a full-width grey line
+   under all forty-four names at once, and forty-four rules read as
+   underlined text, not as a scale. The fill alone, against nothing, is the
+   quieter of the two wrongs. */
 .massTrack {
   position: absolute; left: 29px; right: var(--gutter); bottom: 7px; height: 3px;
   pointer-events: none;
@@ -573,15 +590,13 @@ td.cAnswer { cursor: help }
 /* The two readings hang at the two ends of the stratum while both ends are
    far enough apart to read as ends. Stacked, they both read from the left,
    and the trailing tick moves to the edge its figure now sits on. */
-/* The fraction wraps before it shrinks, and shrinks only once there is no
-   width left to wrap into. */
+/* The figure wraps away from its sentence before it shrinks, and shrinks
+   only once there is no width left to wrap into. */
 @container band (max-width: 640px) {
-  .headAnswered, .headMeasured { font-size: 34px }
-  .headOver { font-size: 28px }
+  .headShare { font-size: 34px }
 }
 @container band (max-width: 420px) {
-  .headAnswered, .headMeasured { font-size: 27px }
-  .headOver { font-size: 22px }
+  .headShare { font-size: 27px }
 }
 /* The toolbar is one line while it fits and two when it cannot: the title
    keeps its line and the controls keep theirs, as one group under it. */
