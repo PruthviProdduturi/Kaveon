@@ -11,12 +11,17 @@
      where a reader looks next: the lake's leading figure, the page's name,
      a panel beside the page, a schema, a row, a label, a mark. Every rule
      below names a step rather than a number, so a size cannot drift. */
-  --fs-display: 40px;   /* the fraction the page opens on */
-  --fs-page: 22px;      /* the page's name */
-  --fs-title: 18px;     /* a panel's heading, beneath the page's name */
+  /* Six steps, each a real interval. There were seven, and 15/13/12/11 sat
+     within a pixel or two of each other — which does not read as a ladder,
+     it reads as one size set slightly wrong, and that cluster was most of
+     why the page looked flat. The 12px step is gone: a mark or a label
+     beside a value is the 11px step's job, and weight and ink separate them
+     from the 13px rows. */
+  --fs-display: 44px;   /* the fraction the page opens on */
+  --fs-page: 24px;      /* a panel's heading */
+  --fs-title: 17px;     /* a heading beneath it */
   --fs-section: 15px;   /* a schema — the page's second level */
-  --fs-row: 13px;       /* rows, cells, controls */
-  --fs-label: 12px;     /* labels beside a value */
+  --fs-row: 13px;       /* rows, cells, controls, prose */
   --fs-micro: 11px;     /* column heads, counts, notes, marks */
 
   /* One vertical rhythm, and one gutter shared by the table's cells and the
@@ -131,7 +136,7 @@
 .level1 { --indent: 20px } .level2 { --indent: 34px }
 /* A note stands where the names it speaks for stand: one indent plus the
    twist and kind columns those names sit after. */
-.treeNote { padding: 7px 8px; font-size: var(--fs-label); line-height: 1.45; color: var(--text-muted) }
+.treeNote { padding: 7px 8px; font-size: var(--fs-micro); line-height: 1.45; color: var(--text-muted) }
 .treeNote.level1 { padding-left: 66px } .treeNote.level2 { padding-left: 80px }
 .treeErr { color: var(--error) }
 .rail { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: var(--rail-top) 0 0 }
@@ -161,7 +166,7 @@
 
 /* ── Right pane ───────────────────────────────────────────────────────────── */
 .pane { min-width: 0 }
-.crumbs { display: flex; align-items: center; gap: 6px; font: var(--fs-label) var(--mono); color: var(--text-muted); margin-bottom: 10px; flex-wrap: wrap }
+.crumbs { display: flex; align-items: center; gap: 6px; font: var(--fs-micro) var(--mono); color: var(--text-muted); margin-bottom: 10px; flex-wrap: wrap }
 .crumbs b { color: var(--text-secondary); font-weight: 500 }
 .crumbs i { font-style: normal; color: var(--text-faint) }
 /* ── Inventory ────────────────────────────────────────────────
@@ -190,7 +195,7 @@
    or keep one after the pane had run out. Both answer to their own width. */
 .band {
   container: band / inline-size;
-  margin: 0 0 4px; padding: 0 0 20px;
+  margin: 0 0 4px; padding: 0 0 30px;
   border-bottom: 1px solid var(--border);
 }
 /* Title and controls on one line, and they stay on one line: the search field
@@ -212,7 +217,7 @@
    is the whole of the colour on this page doing the whole of its one job.
    Beneath it, two quiet lines: what stands behind the fraction, then what
    the lake physically is. ──────────────────────────────────────────────── */
-.lake { margin-top: 26px }
+.lake { margin-top: 34px }
 .headline {
   display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 18px; margin: 0;
   font-variant-numeric: tabular-nums lining-nums;
@@ -225,12 +230,12 @@
 .headMeasured { color: var(--text-muted) }
 /* The stroke is the relation, not a figure: lighter than either side of it
    so the two numbers read against each other across it. */
-.headOver { font: 300 36px/1.05 Inter, sans-serif; color: var(--text-faint) }
+.headOver { font: 300 38px/1.05 Inter, sans-serif; color: var(--text-faint) }
 .headSays { font: var(--fs-row)/1.45 Inter, sans-serif; color: var(--text-secondary); padding-bottom: 3px }
 
 /* What stands behind the fraction. */
 .lakeStanding {
-  margin: 14px 0 0; max-width: 92ch;
+  margin: 18px 0 0; max-width: 66ch;
   font: var(--fs-row)/1.6 Inter, sans-serif; font-variant-numeric: tabular-nums lining-nums;
   color: var(--text-secondary);
 }
@@ -238,8 +243,8 @@
 /* What the lake physically is: evidence, not finding, so it follows rather
    than standing in the opposite corner competing for the same glance. */
 .lakeFacts {
-  margin: 5px 0 0;
-  font: var(--fs-label)/1.6 Inter, sans-serif; font-variant-numeric: tabular-nums lining-nums;
+  margin: 9px 0 0;
+  font: var(--fs-row)/1.6 Inter, sans-serif; font-variant-numeric: tabular-nums lining-nums;
   color: var(--text-muted);
 }
 .lakeFacts b { font-weight: 600; color: var(--text-secondary) }
@@ -254,13 +259,13 @@
 .exception > i { color: var(--warning); font-size: 12px; flex-shrink: 0 }
 .exceptionText {
   flex: 1 1 320px; min-width: 0; margin: 0;
-  font: var(--fs-label)/1.5 Inter, sans-serif; font-variant-numeric: tabular-nums lining-nums;
+  font: var(--fs-micro)/1.5 Inter, sans-serif; font-variant-numeric: tabular-nums lining-nums;
   color: var(--text-secondary);
 }
 
 .chip {
   display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 12px;
-  font: 500 var(--fs-label) Inter, sans-serif; font-variant-numeric: tabular-nums lining-nums;
+  font: 500 var(--fs-micro) Inter, sans-serif; font-variant-numeric: tabular-nums lining-nums;
   color: var(--text-primary); cursor: pointer; white-space: nowrap;
   background: var(--bg-surface); border: 1px solid var(--border); border-radius: 7px;
 }
@@ -331,13 +336,13 @@
   min-width: 0; font: 600 var(--fs-section)/1.3 Inter, sans-serif; letter-spacing: -.015em;
   color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.groupCatalog { font: 500 var(--fs-label) Inter, sans-serif; color: var(--text-muted) }
+.groupCatalog { font: 500 var(--fs-micro) Inter, sans-serif; color: var(--text-muted) }
 .groupCatalog::after { content: "."; }
 .groupHeld { font: 500 var(--fs-micro)/1.4 Inter, sans-serif; font-variant-numeric: tabular-nums lining-nums; color: var(--text-muted) }
 .groupNarrow { display: none }
 .groupRow .groupNum {
   padding-bottom: 10px;
-  font: 500 var(--fs-label)/1.4 Inter, sans-serif; font-variant-numeric: tabular-nums lining-nums;
+  font: 500 var(--fs-micro)/1.4 Inter, sans-serif; font-variant-numeric: tabular-nums lining-nums;
   color: var(--text-secondary);
 }
 .groupTail { padding: 0 0 9px var(--gutter) !important; text-align: right }
@@ -484,7 +489,7 @@ td.cAnswer { cursor: help }
 .detailActions { display: flex; gap: 8px; flex-wrap: wrap }
 
 .analyze { padding-top: 14px; border-top: 1px solid var(--border) }
-.analyzeTitle { margin: 0 0 10px; font-size: var(--fs-label); font-weight: 600; color: var(--text-primary) }
+.analyzeTitle { margin: 0 0 10px; font-size: var(--fs-micro); font-weight: 600; color: var(--text-primary) }
 /* The repair for a measurement the source has moved past, offered above the
    three forms because it is the one a reader of this row came for. */
 .analyzeLead { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin: 0 0 14px }
@@ -493,12 +498,12 @@ td.cAnswer { cursor: help }
 .formBtnLead:hover:enabled { color: var(--bg-surface); border-color: var(--text-primary); opacity: .88 }
 .forms { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px 20px }
 .forms li { display: grid; grid-template-columns: 1fr; gap: 5px; align-content: start }
-.formBtn { justify-self: start; height: 28px; padding: 0 12px; font: 600 var(--fs-label) Inter, sans-serif; color: var(--text-secondary); background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 7px; cursor: pointer }
+.formBtn { justify-self: start; height: 28px; padding: 0 12px; font: 600 var(--fs-micro) Inter, sans-serif; color: var(--text-secondary); background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 7px; cursor: pointer }
 .formBtn:hover:enabled { color: var(--text-primary); border-color: var(--border-hover) }
 .formBtn:disabled { color: var(--text-faint); cursor: not-allowed }
 .formBlurb { margin: 0; font-size: var(--fs-micro); line-height: 1.55; color: var(--text-muted) }
-.outcomeOk { margin: 12px 0 0; font: var(--fs-label)/1.55 var(--mono); color: var(--success); overflow-wrap: anywhere }
-.outcomeBad { margin: 12px 0 0; font: var(--fs-label)/1.55 var(--mono); color: var(--error); overflow-wrap: anywhere }
+.outcomeOk { margin: 12px 0 0; font: var(--fs-micro)/1.55 var(--mono); color: var(--success); overflow-wrap: anywhere }
+.outcomeBad { margin: 12px 0 0; font: var(--fs-micro)/1.55 var(--mono); color: var(--error); overflow-wrap: anywhere }
 
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap }
 
@@ -783,9 +788,9 @@ td.cAnswer { cursor: help }
 .systemIntro { min-width: 0; max-width: 62ch }
 .systemTitle { margin: 0; font: 600 var(--fs-title)/26px Inter, sans-serif; letter-spacing: -.02em; color: var(--text-primary) }
 .systemBody { margin: 8px 0 0; font: var(--fs-row)/1.65 Inter, sans-serif; color: var(--text-secondary) }
-.systemFacts { margin: 12px 0 0; font: var(--fs-label)/1.6 Inter, sans-serif; color: var(--text-muted); max-width: 86ch }
+.systemFacts { margin: 12px 0 0; font: var(--fs-micro)/1.6 Inter, sans-serif; color: var(--text-muted); max-width: 86ch }
 .systemFacts b { font-weight: 600; color: var(--text-secondary) }
-.systemMono { font-family: var(--mono); font-size: var(--fs-label); color: var(--text-primary) }
+.systemMono { font-family: var(--mono); font-size: var(--fs-micro); color: var(--text-primary) }
 
 .systemTableWrap { margin-top: 20px }
 .systemTable { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: var(--fs-row) }
@@ -799,7 +804,7 @@ td.cAnswer { cursor: help }
 }
 .systemTable tbody tr:hover th, .systemTable tbody tr:hover td { background: var(--bg-hover) }
 .systemTable tfoot th, .systemTable tfoot td { color: var(--text-secondary) }
-.systemTable tfoot th { font: 600 var(--fs-label)/1.4 Inter, sans-serif; color: var(--text-primary) }
+.systemTable tfoot th { font: 600 var(--fs-micro)/1.4 Inter, sans-serif; color: var(--text-primary) }
 
 /* The qualified name is one name, not a path a reader has to assemble: the
    catalog and schema recede and the table leads, and the whole of it is the
