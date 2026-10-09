@@ -64,6 +64,12 @@ export const DOCS_NAV: readonly DocsGroup[] = [
     ],
   },
   {
+    label: "CLI",
+    items: [
+      { title: "Kaveon CLI", href: "/docs/cli", description: "Install, authenticate, query, inspect and automate from a terminal.", keywords: ["cli", "shell", "terminal", "sql"], status: "Beta", lastVerified: "October 9, 2026" },
+    ],
+  },
+  {
     label: "Deploy & Operate",
     items: [
       { title: "Deployment", href: "/docs/deployment", description: "Deploy Studio, API, and the data layer.", keywords: ["vercel", "azure"] },
