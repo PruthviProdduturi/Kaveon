@@ -1,7 +1,7 @@
 # Kaveon platform Helm chart
 
-This chart is a test-AKS add-on for the existing Engine in the `kaveon`
-namespace. In normal mode it creates one Studio service (`kaveon-portal:3000`),
+This chart is the Kaveon private-cloud release for the existing Engine in the `kaveon`
+namespace. The directory name is retained for backwards compatibility. In normal mode it creates one Studio service (`kaveon-portal:3000`),
 one API service (`kaveon-api:8080`), and one PostgreSQL StatefulSet
 (`kaveon-postgres:5432`) with one `ReadWriteOnce` PVC. PostgreSQL and its init
 Job are omitted in verified restart-rehearsal or final-retirement mode. The
