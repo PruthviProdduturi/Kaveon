@@ -308,13 +308,36 @@ Two rules make that survive contact with the UI:
   is not a feature, so a mistyped country would be invisible on the map while
   still inflating every other breakdown — `validate_against_geojson` fails the
   build instead, and runs in the `plan` step. This is why the table says
-  `Czech Rep.`, `Korea`, `Lao PDR`, `Dem. Rep. Congo`. All 26 previous country
-  values are in the new domain, so nothing that referenced one broke.
+  `Czech Rep.`, `Korea`, `Lao PDR`, `Dem. Rep. Congo`.
 - **`region` is derived from the country, never drawn**, so the two columns
   cannot disagree. Regions follow the UN M49 continental grouping with the two
   simplifications the table already published: Central America and the
   Caribbean fold into North America, and Russia stays in Europe. Western Asia
   is therefore Asia and Egypt is Africa.
+
+### Exactly two values changed; everything else was added
+
+Diffed against the published domains before the switch, the rebuild drops two
+values and adds 159. Worth knowing because a chart, saved query or filter could
+have named one:
+
+- **`country`: `South Korea` → `Korea`.** `Korea` is the GeoJSON feature name,
+  and the choropleth already rendered the old value as `Korea` through the
+  alias map, so the map is unchanged — only the stored string is. The other 25
+  previous countries are unchanged.
+- **`industry`: `Finance` is gone.** It was never a value of the base table; it
+  came from the drifted appender below, which put 60,000 rows of a 13th
+  industry into a 12-value axis. `Financial Services` is the real value and is
+  unchanged.
+
+`surface`, `platform`, `license`, `segment`, `region`, `deployment`,
+`acquisition_channel` and `team_size` are value-for-value identical, and their
+shares match the published ones to a fraction of a percent.
+
+Nothing in the product named either changed value: none of the 33 charts on
+this dataset carries a dimension filter, and all ten of the Kaveon Events
+dashboard's filters are set to the `AllUp` sentinel. Checked by reading
+`GET /charts` and the dashboard record, not assumed.
 
 ### The appender can no longer drift
 
