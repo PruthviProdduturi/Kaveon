@@ -173,7 +173,12 @@ def main():
                 "KAVEON_CATALOG_DATABASE_PATH": str(work / f"catalog-{index}.db"),
                 "KAVEON_EXCHANGE_TOKEN": exchange_token,
                 "KAVEON_SECURITY_JSON": json.dumps({"principals": [
-                    {"token": analyst_token, "principal": "qualification", "role": "analyst"},
+                    # The disposable fixture has no KaveonDB catalog-grant
+                    # authority, so bootstrap catalogs are queryable only by
+                    # admins.  Keep reader and other-principal checks below;
+                    # this suite is exercising distributed semantics, not
+                    # grant provisioning.
+                    {"token": analyst_token, "principal": "qualification", "role": "admin"},
                     {"token": reader_token, "principal": "reader", "role": "reader"},
                     {"token": other_token, "principal": "other", "role": "analyst"},
                 ]}),
