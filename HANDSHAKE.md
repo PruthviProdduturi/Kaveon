@@ -55,6 +55,65 @@ cutover and PostgreSQL scale-down/deletion. Start with
 local commands recorded in the continuation brief.
 
 
+## Claude update — A chat turn no longer loses its answer — October 9, 2026
+
+Reopening a recent chat came back holding the questions and none of the
+answers. Measured against the deployed API, Pruthvi's nine real conversations
+held **15 user turns and 3 assistant turns**, and two of them held an answer
+with no question — so the loss ran in both directions.
+
+Root cause: appending a message also touches the conversation it belongs to, so
+`chat_history_store.add_message` is a read-modify-write on `chat_session` under
+its revision. The Studio fired both halves of a turn at once
+(`void saveMessage(user); void saveMessage(assistant)`), the two contended on
+that revision, and KaveonDB rejected whichever commit lost. It reports that as
+an upstream refusal — `ENGINE_ERROR - transaction rejected`, surfaced as 502 —
+not the 409 the retry loop was written for, so the loser's whole transaction
+rolled back and the client swallowed the error. Reproduced live: two concurrent
+appends to a throwaway session, one 201 and one 502, one message stored.
+Nothing was written for the rejected half, so turns already lost are gone.
+
+Two fixes, both needed. `add_message` now reloads the conversation and commits
+against the revision it actually holds, treats 409 and 502 alike as a possible
+rejection, confirms an append by reading it back rather than by the status (so
+a lost acknowledgement is not written twice), and surfaces a refusal that is
+not contention at once instead of looping. The Studio appends the question and
+then the answer in order, through one `saveTurn`.
+
+Second defect on the same path: the reload adapter projected the answer away.
+It rebuilt a stored chart with `xAxis: null, yAxis: null, title: ""`
+hardcoded, and restored `routeMeta` as `{ route }` alone — so a reopened
+answer lost its axes, its chart title, its lane badge and its whole evidence
+panel, and every refusal route (`error`, `clarify`, …) came back badged "Live
+query". An assistant turn now persists what it showed in `data.meta` — lane,
+approximation, dataset, question class, latency, evidence, headline, chart axes
+and title — and `restoreMessage` is its exact reverse. Verified against the
+deployed API: rows, frame and a nested evidence block round-trip
+byte-identically. Where a result is wide enough to pass KaveonDB's 1 MiB
+document bound, the API now drops `rows`/`columns` and marks `rows_omitted`
+rather than refusing the write — the stored statement reproduces them, and the
+text, SQL, route and evidence are always kept.
+
+Also fixed: the composer scrolled away with the page. The app shell's main
+column is an `overflow: auto` box whose height is its own content, which makes
+it a scroll container that never scrolls, so the window scrolled instead — and
+`position: sticky` inside it would have been inert for the same reason. The
+chat page now owns a `100dvh` box, the transcript is the scroller, and the
+composer rests on the page ground below it under a soft `pointer-events: none`
+fade over the scroller's foot. Verified in headless Chrome over CDP against a
+harness mirroring the shell's nesting: at 900px and 420px viewports, with long
+and single-exchange conversations, the document does not scroll, the composer
+does not move, it sits on the viewport foot, and the last message clears it —
+18 of 18 checks. Both composers were moved onto theme tokens; they were
+dark-only (`#f0f0f2` text, `rgba(255,255,255,…)` surfaces) and wrong in light.
+
+The API fix is not deployed — it ships with the next API image.
+
+Gates: `python -m pytest -q` 1091 passed; `tsc --noEmit` and `next lint` clean.
+Claude-owned files only — `api/services/chat_history_store.py`,
+`api/services/test_query_chat_kaveondb_mutations.py`,
+`studio/app/home/page.tsx`. No Engine change.
+
 ## Claude update — Library preview passes survive navigation — October 8, 2026
 
 Settings → Maintenance kept its capture run entirely in React state, so leaving
