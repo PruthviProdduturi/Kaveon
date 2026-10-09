@@ -195,8 +195,13 @@
    or keep one after the pane had run out. Both answer to their own width. */
 .band {
   container: band / inline-size;
-  margin: 0 0 4px; padding: 0 0 30px;
-  border-bottom: 1px solid var(--border);
+  margin: 0 0 22px; padding: 24px 26px 26px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, var(--accent));
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 88% 0%, rgba(var(--accent-rgb), .12), transparent 33%),
+    linear-gradient(135deg, color-mix(in srgb, var(--bg-surface) 94%, var(--accent)), var(--bg-surface));
+  box-shadow: 0 18px 45px rgba(0, 0, 0, .14), inset 0 1px 0 rgba(255, 255, 255, .035);
 }
 /* Title and controls on one line, and they stay on one line: the search field
    is the only thing here that can give up width, so no control is ever left
@@ -204,9 +209,13 @@
 /* With no title to hold the left edge, the field holds it: the search runs
    from the page's left margin and the three actions end on its right, so the
    line is anchored at both ends instead of drifting to one of them. */
-.bandTop { display: flex; align-items: center; gap: 18px; min-height: 34px }
-.bandTitle { flex: 0 0 auto; margin: 0; font: 600 var(--fs-page)/34px Inter, sans-serif; letter-spacing: -.022em; color: var(--text-primary) }
-.bandActions { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 8px }
+.bandTop { display: flex; align-items: flex-start; gap: 24px; min-height: 52px }
+.bandTitleBlock { min-width: 240px; flex: 1 1 auto }
+.eyebrow { display: flex; align-items: center; gap: 7px; margin: 0 0 5px; color: var(--accent); font: 600 10px/1 Inter, sans-serif; letter-spacing: .14em; text-transform: uppercase }
+.eyebrow i { font-size: 10px; letter-spacing: 0 }
+.bandTitle { margin: 0; font: 700 28px/1.08 Inter, sans-serif; letter-spacing: -.035em; color: var(--text-primary) }
+.bandLead { max-width: 560px; margin: 8px 0 0; color: var(--text-muted); font: 400 13px/1.5 Inter, sans-serif }
+.bandActions { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 9px; padding-top: 4px }
 .bandActions .search { margin-right: auto }
 .rotate { animation: spin .9s linear infinite }
 
@@ -217,13 +226,14 @@
    is the whole of the colour on this page doing the whole of its one job.
    Beneath it, two quiet lines: what stands behind the fraction, then what
    the lake physically is. ──────────────────────────────────────────────── */
-.lake { margin-top: 34px }
+.lake { margin-top: 28px; padding-top: 2px }
 /* A figure and its noun are one word for wrapping purposes. */
 .nowrapPair { white-space: nowrap }
 .headline {
   display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 18px; margin: 0;
   font-variant-numeric: tabular-nums lining-nums;
 }
+.headline::before { content: "Answer readiness"; display: block; flex-basis: 100%; margin-bottom: 8px; color: var(--text-muted); font: 600 10px/1 Inter, sans-serif; letter-spacing: .12em; text-transform: uppercase }
 /* The one figure the page is about. A share, not a ratio of two nine-digit
    numbers: a reader can hold "1.6%" and cannot hold "10,120,034 /
    648,245,086". */
@@ -304,7 +314,7 @@
    the pane, not a panel inside it — no border, no radius, no shadow — so the
    first column begins and the last ends on the same edges the band above
    them uses. The head stays while the list moves under it. */
-.tableWrap { container: inv / inline-size }
+.tableWrap { container: inv / inline-size; overflow-x: auto; border: 1px solid var(--border); border-radius: 16px; background: color-mix(in srgb, var(--bg-surface) 72%, transparent); box-shadow: 0 14px 35px rgba(0, 0, 0, .10) }
 .inv { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: var(--fs-row) }
 .inv thead th {
   position: sticky; z-index: 2;
@@ -330,7 +340,7 @@
    group the columns stay close. That unequal gutter is what makes the blocks
    legible without a single added rule in the body of the list. */
 .inv .gStart { padding-left: 26px }
-.inv td { padding: 0 var(--gutter); height: var(--row-h); border-top: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle }
+.inv td { padding: 0 var(--gutter); height: 44px; border-top: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle }
 .invRow:hover td { background: var(--bg-hover) }
 .invRowOpen td { background: var(--bg-hover) }
 

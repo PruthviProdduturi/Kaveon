@@ -421,7 +421,15 @@ export function Inventory({ catalogName, schemaName, action }: {
               it is written. The heading stays in the document either way,
               because a page with no heading is a page a screen reader cannot
               describe. */}
-          <h1 className={schemaName ? s.bandTitle : s.sr}>{schemaName ?? "Catalog"}</h1>
+          <div className={s.bandTitleBlock}>
+            <div className={s.eyebrow}><i className="fas fa-layer-group" aria-hidden="true" /> Data catalog</div>
+            <h1 className={s.bandTitle}>{schemaName ?? "Catalog"}</h1>
+            <p className={s.bandLead}>
+              {schemaName
+                ? "Tables, formats, freshness, and the measurements behind every answer."
+                : "Browse governed data sources and see which tables are ready for instant answers."}
+            </p>
+          </div>
           <div className={s.bandActions}>
             <label className={s.search}>
               <i className="fas fa-magnifying-glass" aria-hidden="true" />
