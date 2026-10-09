@@ -395,7 +395,7 @@ export default function Home() {
   // Sent with every question so a follow-up inherits what it does not restate.
   const lastFrame = useRef<Record<string, unknown> | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const { addRecent } = useRecents();
+  const { addRecent, touchRecent } = useRecents();
 
   // A chat question is interactive work. Leaving Chat or closing the tab
   // must release a live Engine statement rather than leaving it scanning for
@@ -496,7 +496,12 @@ export default function Home() {
     // and the answer is attempted whatever became of the question.
     await saveMessage(sessionId, "user", question);
     await saveMessage(sessionId, "assistant", answer, extra);
-  }, [saveMessage]);
+    // A turn is the conversation moving on, so it rises in Recents. Opening
+    // one to read it does not: that would push every old thread to the top
+    // the moment you looked at one. `addRecent` still registers a new
+    // conversation when it is created.
+    touchRecent(`chat-${sessionId}`);
+  }, [saveMessage, touchRecent]);
 
   // Load messages from a past session
   const loadSession = useCallback(async (sessionId: number) => {
