@@ -7,7 +7,7 @@ export default function ArchitectureDocs() {
     <div className="docs-prose">
       <PageHeader eyebrow="Platform" title="Architecture" lead="Kaveon is one product with three pillars: Studio, the deterministic Data Language Model, and the Rust analytical Engine. All three are in the request path. Every chart, question and statement is planned and executed by the Engine against Delta tables in object storage." />
 
-      <Callout type="note"><strong>Status vocabulary:</strong> Current means it is in the request path people use. Target means approved architecture that is not yet implemented. The Engine was an alpha outside that path until the PostgreSQL retirement moved execution onto it; this page no longer uses the word for it.</Callout>
+      <Callout type="note"><strong>Status vocabulary:</strong> Current means it is in the request path people use. Target means approved architecture that is not yet implemented. The Engine is in that path for every chart, dashboard and question, so this page no longer calls it an alpha.</Callout>
 
       <Diagram src="/docs/architecture/kaveon-platform-architecture.svg" alt="Kaveon platform architecture showing Studio, DLM, and Engine with current and target boundaries" caption="The product boundary includes all three pillars. Solid connections are current; explicitly labeled target connections are roadmap architecture. Open the diagram for a full-size view." />
 

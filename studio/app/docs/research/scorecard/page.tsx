@@ -25,7 +25,7 @@ const transactions: [string, number, string][] = [
   ["Query over records", 5, "Bounded typed reads through the Engine"],
   ["OLTP-shaped latency", 3, "A publication is an ADLS conditional write"],
   ["Ecosystem", 1, "No wire protocol or drivers"],
-  ["Operational maturity", 3, "Retained snapshots and a fail-closed migration; PostgreSQL remains authoritative"],
+  ["Operational maturity", 3, "Retained snapshots and a fail-closed migration; the Engine catalog is still host-local"],
 ];
 
 function Scores({ rows }: { rows: [string, number, string][] }) {
@@ -58,7 +58,7 @@ export default function KaveonDbScorecardDocs() {
     <ul>
       <li>26% more exact queries per second than Trino 483 on the declared corpus at matched resources — with the workload stated.</li>
       <li>An exact grouped aggregate over 504 million rows in about 20 seconds on three small workers — not &ldquo;interactive.&rdquo;</li>
-      <li>Not 1.9× Trino, not a category of one, not PostgreSQL-free — yet.</li>
+      <li>Not 1.9× Trino, and not a category of one.</li>
     </ul>
 
     <h2>Canonical paper</h2>

@@ -8,7 +8,7 @@ export default function Quickstart() {
       <PageHeader
         eyebrow="Getting Started"
         title="Quickstart"
-        lead="Bring up the full stack locally — Studio, the API, PostgreSQL, and a two-worker Engine cluster — then run your first query, ask your first question, and query a Parquet file with the Engine CLI."
+        lead="Bring up the full stack locally — Studio, the API, and a two-worker Engine cluster — then run your first query, ask your first question, and query a Parquet file with the Engine CLI."
       />
 
       <h2>Prerequisites</h2>
@@ -16,7 +16,7 @@ export default function Quickstart() {
         <thead><tr><th>Requirement</th><th>Why</th></tr></thead>
         <tbody>
           <tr><td>Docker with Compose v2</td><td>Runs the whole stack. <code>docker compose version</code> should print v2.x.</td></tr>
-          <tr><td>~4 GB free RAM</td><td>Six containers: Studio, API, PostgreSQL, one Engine coordinator, two Engine workers.</td></tr>
+          <tr><td>~4 GB free RAM</td><td>Five containers: Studio, the API, one Engine coordinator and two Engine workers. There is no database to install.</td></tr>
           <tr><td>Ports 3000, 8080, 8081, 5433</td><td>All bound to <code>127.0.0.1</code> only.</td></tr>
           <tr><td>Git</td><td>To clone the repository.</td></tr>
         </tbody>
@@ -36,7 +36,6 @@ docker compose up -d --build`}</Code>
       </p>
       <Code lang="bash">{`docker compose ps`}</Code>
       <Code lang="text">{`NAME                        STATUS
-kaveon-postgres             Up (healthy)
 kaveon-engine-coordinator   Up (healthy)
 kaveon-engine-worker-1      Up
 kaveon-engine-worker-2      Up
@@ -166,8 +165,14 @@ SELECT region, count(*) FROM orders GROUP BY region ORDER BY 2 DESC LIMIT 5;`}</
       </Callout>
 
       <h2>8 · Shut down</h2>
-      <Code lang="bash">{`docker compose down          # stop, keep data
-docker compose down -v       # stop and delete the PostgreSQL volume`}</Code>
+      <Code lang="bash">{`docker compose down          # stop, keep everything
+docker compose down -v       # stop and delete the volumes — see below`}</Code>
+      <Callout type="warn">
+        <code>-v</code> deletes the <code>catalog-data</code> volume, and that volume holds the Engine&rsquo;s catalog:
+        every catalog, schema and table definition you registered, the planner&rsquo;s statistics, and every cube.
+        Table data in your mounted directory is untouched, but the map to it is gone and the cubes have to be rebuilt,
+        which is not quick. Use plain <code>docker compose down</code> unless you mean to start over.
+      </Callout>
 
       <h2>Where to go next</h2>
       <table>
