@@ -18,6 +18,13 @@
 /** Columns in the authored grid. Constant at every canvas width. */
 export const DASHBOARD_GRID_COLS = 12;
 
+/**
+ * Padding the grid keeps between the canvas edge and the first/last tile.
+ * Page chrome above the canvas (the dashboard header, the applied-filters card)
+ * is inset by the same amount so every band shares one left and right edge.
+ */
+export const DASHBOARD_GRID_EDGE = 4;
+
 /** Canvas width (not viewport width) below which tiles pair up two per row. */
 export const DASHBOARD_PAIRED_WIDTH = 900;
 

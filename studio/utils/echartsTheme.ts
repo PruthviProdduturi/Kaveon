@@ -16,12 +16,34 @@ const LIGHT_BORDER = "#e2e8f0";
 const LIGHT_BG = "#ffffff";
 const LIGHT_TOOLTIP_BG = "#ffffff";
 
+export interface ChartTones {
+  text: string;
+  muted: string;
+  border: string;
+  bg: string;
+  tooltipBg: string;
+}
+
+/**
+ * The theme's chart tones.
+ *
+ * `applyChartTheme` cannot be applied to every option — a map option, for one,
+ * must not be handed a legend component, because ECharts would fill it with one
+ * entry per region. Builders in that position resolve their own colours and
+ * take the tones from here, so each tone still has a single definition.
+ */
+export function chartTones(isDark: boolean): ChartTones {
+  return {
+    text: isDark ? DARK_TEXT : LIGHT_TEXT,
+    muted: isDark ? DARK_MUTED : LIGHT_MUTED,
+    border: isDark ? DARK_BORDER : LIGHT_BORDER,
+    bg: isDark ? DARK_BG : LIGHT_BG,
+    tooltipBg: isDark ? DARK_TOOLTIP_BG : LIGHT_TOOLTIP_BG,
+  };
+}
+
 export function applyChartTheme(option: any, isDark: boolean): any {
-  const text = isDark ? DARK_TEXT : LIGHT_TEXT;
-  const muted = isDark ? DARK_MUTED : LIGHT_MUTED;
-  const border = isDark ? DARK_BORDER : LIGHT_BORDER;
-  const bg = isDark ? DARK_BG : LIGHT_BG;
-  const tooltipBg = isDark ? DARK_TOOLTIP_BG : LIGHT_TOOLTIP_BG;
+  const { text, muted, border, tooltipBg } = chartTones(isDark);
 
   // Chart-text colors are hardcoded (light-mode slate) in the option builders,
   // so they render dark-on-dark. Remap the known ones to theme tokens so labels,
