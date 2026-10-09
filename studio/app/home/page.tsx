@@ -190,9 +190,6 @@ function ThinkingBubble() {
   return (
     <div style={{ padding: "10px 14px", fontSize: 12.5 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-        <div style={{ width: 18, height: 18, borderRadius: 9, background: "linear-gradient(135deg, #4A9EE8, #8b5cf6)", display: "flex", alignItems: "center", justifyContent: "center", animation: "kaveon-breathe 2s ease-in-out infinite" }}>
-          <div style={{ width: 6, height: 6, borderRadius: 3, background: "#fff" }} />
-        </div>
         <span style={{ color: "var(--text-secondary)", fontWeight: 500, animation: "thinkFade 2.4s ease-in-out infinite" }}>
           {THINKING_PHASES[phase]}
         </span>
@@ -693,7 +690,12 @@ export default function Home() {
     columns: string[],
     parsed: { chartType: string; xAxis: string | null; yAxis: string | null; title: string },
     userQuery: string,
+    chartShown = false,
   ): string {
+    // A chart carries its own title and every value in it, so listing the
+    // rows above it says the same thing twice. Asked for a chart, answer
+    // with the chart.
+    if (chartShown) return "";
     // Match column by name — SQL may return aliased names (e.g. "avg" for AVG(...))
     const findCol = (name: string | null): number => {
       if (!name) return -1;
@@ -964,7 +966,7 @@ export default function Home() {
               const lane: RouteMeta["lane"] = evidence?.lane ?? (dlm.from_context ? "context" : "live");
               const route = lane === "context" ? "context" : "dlm";
               const parsedLike = { sql: dlm.sql, chartType: dlm.chartType, xAxis: dlm.xAxis, yAxis: dlm.yAxis, title: dlm.title, confidence: dlm.confidence ?? 0.5 };
-              const insight = generateInsight(rows, columns, parsedLike, question);
+              const insight = generateInsight(rows, columns, parsedLike, question, wantsChart);
               const summary = dlm.note ? `${dlm.note}\n\n${insight}` : insight;
               const answerMeta: RouteMeta = {
                 route, lane, evidence, headline: headlineOf(rows),
@@ -1075,7 +1077,7 @@ export default function Home() {
             const columns = execData.columns || execData.column_names || [];
 
             if (rows.length > 0) {
-              const summary = generateInsight(rows, columns, parsed, text.trim());
+              const summary = generateInsight(rows, columns, parsed, text.trim(), wantsChart);
               const directMeta: RouteMeta = {
                 route: "direct", durationMs: Math.round(performance.now() - t0),
                 headline: headlineOf(rows),
