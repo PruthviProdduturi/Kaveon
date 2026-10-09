@@ -1058,6 +1058,8 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
               { name: "Python", version: "3.12", color: "#ffd43b" },
               { name: "ECharts", version: "5.x", color: "#e43961" },
               { name: "KaveonDB", version: "Product authority", color: "#60a5fa" },
+              { name: "ADLS Gen2", version: "Governed lake storage", color: "#0078d4" },
+              { name: "Microsoft Entra ID", version: "Identity", color: "#5b5fc7" },
               { name: "Azure", version: "Container Apps", color: "#0078d4" },
               { name: "Vercel", version: "Edge", color: "#fff" },
               { name: "Docker", version: "Local stack", color: "#2496ed" },
