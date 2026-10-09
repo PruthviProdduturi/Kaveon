@@ -1114,11 +1114,19 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
   // each chart here with ?capture=1; this stores the preview once the chart has
   // actually rendered, then reports back so the job can advance. Without the
   // flag nothing below runs, so a normal edit session is untouched.
+  //
+  // The path is checked as well as the flag. A dashboard is captured at
+  // /dashboards/{id}/view?capture=1, and every chart it contains renders under
+  // that same URL — so a flag-only test had the dashboard pass quietly rewrite
+  // the preview of each chart on the dashboard from a dashboard-sized tile,
+  // which is neither the capture the chart pass makes nor work that pass
+  // accounted for.
   const backfilledRef = useRef(false);
   useEffect(() => {
     if (backfilledRef.current || !chartId) return;
     if (!previewOptions || sqlPreview.isRunning || !sqlPreview.dataRows?.length) return;
     if (new URLSearchParams(window.location.search).get("capture") !== "1") return;
+    if (window.location.pathname !== `/charts/${chartId}`) return;
     backfilledRef.current = true;
 
     const report = () => {
