@@ -872,3 +872,9 @@ worker) was also rejected: q35 completed exactly but regressed to **18.562 s**
 with 32 scan tasks, versus **14.278 s** on two workers. The extra workers
 increased task and exchange fan-in without reducing the local read bottleneck;
 they were removed after the control.
+
+## 2026-10-08 fused single-text COUNT path
+
+The columnar aggregate now has a narrow fused path for the exact shape `GROUP BY <one UTF-8 key>` with `COUNT(*)`. It interns the key, probes the typed slot index, and updates the count in one pass, avoiding the packed-key scratch buffer, second hash pass, and separate accumulator walk. `Utf8`, `LargeUtf8`, `Utf8View`, and nullable keys retain the existing equality and null semantics; all other aggregate shapes use the general path.
+
+The execution suite passed **203 tests (4 ignored)**. On the same rebuilt two-worker Docker profile with result cache and statistics disabled, the same-host control measured q35 at **16.16 s** and the fused build at **14.95 s** (exact ten-row results). A paired fused q33 run completed in **19.59 s** with ten exact rows; q33 does not enter this specialization. This is a measured single-query improvement, not ClickHouse parity: ClickHouse remains **6.316 s** for q35 and **4.552 s** for q33 on the same mounted file.
