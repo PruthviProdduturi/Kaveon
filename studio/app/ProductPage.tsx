@@ -356,17 +356,17 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
       <section id="features" ref={r4} style={{ padding: "100px 24px", background: "#0a0a0a", borderTop: HAIRLINE, scrollMarginTop: 72 }}>
         <div style={{ maxWidth: 1100, margin: "0 auto" }}>
           <div style={{ textAlign: "center", marginBottom: 56 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: B, marginBottom: 12 }}>Platform</div>
-            <h2 style={{ fontSize: "clamp(28px, 4vw, 40px)", fontWeight: 700, letterSpacing: "-1px" }}>Everything you need</h2>
-            <p style={{ fontSize: 16, color: "#718094", marginTop: 12 }}>One platform for governed data, deterministic reasoning, analytics, and reusable intelligence.</p>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: B, marginBottom: 12 }}>Capabilities</div>
+            <h2 style={{ fontSize: "clamp(28px, 4vw, 40px)", fontWeight: 700, letterSpacing: "-1px" }}>The work, in one system</h2>
+            <p style={{ fontSize: 16, color: "#718094", marginTop: 12 }}>Deterministic answers, distributed analytics, transactional product state, and governed ways to share the result.</p>
           </div>
           <div className="about-grid-3" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gridAutoRows: "auto", gap: 14 }}>
             <Anim dir="up" delay={0} style={{ gridColumn: "span 2" }}>
               <div className="about-card" style={{ padding: 40, borderRadius: 16, background: `linear-gradient(135deg, ${B}06 0%, transparent 100%)`, border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: B, textTransform: "uppercase", letterSpacing: "2px", marginBottom: 12 }}>Core</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: B, textTransform: "uppercase", letterSpacing: "2px", marginBottom: 12 }}>Deterministic intelligence</div>
                 <h3 style={{ fontSize: 24, fontWeight: 700, marginBottom: 12, lineHeight: 1.3 }}>Ask your data</h3>
                 <p style={{ fontSize: 15, color: "#777", lineHeight: 1.8, maxWidth: 500 }}>
-                  Type questions in plain English. A template-based NL&#x2192;SQL engine parses your words, matches schema metadata, generates SQL, and renders the answer as an interactive chart.
+                  Type questions in plain English. The Data Language Model resolves supported questions against compiled dataset context, generates auditable SQL, and renders the answer as an interactive chart — with no hosted model call.
                 </p>
               </div>
             </Anim>
@@ -392,8 +392,9 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
               </div>
             </Anim>
             {[
-              { title: "Connect your sources", desc: "Register supported sources in one governed workspace; each query uses its selected execution path.", color: "rgba(236,72,153,0.05)" },
+              { title: "Connect your sources", desc: "Register lake catalogs and supported SQL sources in one governed workspace; each query uses its selected execution path.", color: "rgba(236,72,153,0.05)" },
               { title: "Governed semantics", desc: "Define dimensions, metrics, and joins once, then reuse them across questions, charts, and dashboards.", color: "rgba(6,182,212,0.05)" },
+              { title: "Transactional product state", desc: "KaveonDB keeps datasets, charts, dashboards, saved queries, DLM artifacts, and audit records behind one transactional boundary.", color: "rgba(59,130,246,0.05)" },
               { title: "Governed access", desc: "Microsoft Entra ID, role-aware access, and customer-controlled data boundaries.", color: "rgba(99,102,241,0.05)" },
               { title: "Own your deployment", desc: "Run locally with Docker or deploy the Studio and Engine as separately qualified private-cloud services.", color: "rgba(245,158,11,0.05)" },
             ].map((f, idx) => (
