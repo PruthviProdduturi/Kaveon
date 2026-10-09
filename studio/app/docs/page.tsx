@@ -8,7 +8,7 @@ export default function DocsIntro() {
       <PageHeader
         eyebrow="Introduction"
         title="Kaveon documentation"
-        lead="Kaveon is a unified data intelligence platform: a columnar query engine, a deterministic Data Language Model, and a complete analytics studio — built as one system, over data that stays in storage you own."
+        lead="Kaveon is a unified data intelligence platform: KaveonDB transactional records, a distributed columnar query engine, a deterministic Data Language Model, and a complete analytics studio — built as one system over data that stays in storage you own."
       />
 
       <h2>The idea</h2>
