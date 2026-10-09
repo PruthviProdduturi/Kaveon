@@ -9,6 +9,7 @@ import "react-resizable/css/styles.css";
 import { SessionProvider } from "next-auth/react";
 import { AuthProvider } from "../auth/useAuth";
 import { ThemeProvider } from "../contexts/ThemeContext";
+import { NavigationGuardProvider } from "../contexts/NavigationGuardContext";
 import { ReactNode } from "react";
 
 export function Providers({ children }: { children: ReactNode }) {
@@ -16,7 +17,9 @@ export function Providers({ children }: { children: ReactNode }) {
     <SessionProvider>
       <AuthProvider>
         <ThemeProvider>
-          {children}
+          <NavigationGuardProvider>
+            {children}
+          </NavigationGuardProvider>
         </ThemeProvider>
       </AuthProvider>
     </SessionProvider>

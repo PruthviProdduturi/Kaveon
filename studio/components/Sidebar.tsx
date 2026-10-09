@@ -2,10 +2,11 @@
 
 import React, { useState, useEffect, useRef, useCallback, ReactNode } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { KaveonMark, KaveonWordmark } from "./KaveonMark";
 import { useAuth } from "../auth/useAuth";
 import { useTheme } from "../contexts/ThemeContext";
+import { useGuardedNavigate } from "../contexts/NavigationGuardContext";
 import { useRole } from "../hooks/useRole";
 import { useRecents, RecentItem } from "../hooks/useRecents";
 import { msalFetch } from "../utils/msalFetch";
@@ -156,7 +157,7 @@ function UserMenu({
   theme,
   toggleTheme,
   logout,
-  router,
+  navigate,
   isAdmin,
 }: {
   account: { name?: string; email?: string } | null;
@@ -164,7 +165,8 @@ function UserMenu({
   theme: string;
   toggleTheme: () => void;
   logout: () => Promise<void>;
-  router: ReturnType<typeof useRouter>;
+  /** Navigates, asking first when an editor holds unsaved work. */
+  navigate: (href: string) => void;
   isAdmin: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -247,17 +249,17 @@ function UserMenu({
           )}
 
           {/* Data Sources */}
-          {menuItem("Data Sources", () => router.push("/data-sources"),
+          {menuItem("Data Sources", () => navigate("/data-sources"),
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
           )}
 
           {/* Engine console (admin only) */}
-          {isAdmin && menuItem("KaveonDB", () => router.push("/engine"),
+          {isAdmin && menuItem("KaveonDB", () => navigate("/engine"),
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"/></svg>
           )}
 
           {/* Configurations (admin only) */}
-          {menuItem("Settings", () => router.push(isAdmin ? "/settings/connections" : "/settings/preferences"),
+          {menuItem("Settings", () => navigate(isAdmin ? "/settings/connections" : "/settings/preferences"),
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           )}
 
@@ -350,7 +352,9 @@ export function Sidebar({ children }: SidebarProps) {
   const [recentMenuOpen, setRecentMenuOpen] = useState(false);
   const [recentsCollapsed, setRecentsCollapsed] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  const router = useRouter();
+  // Every programmatic push from the sidebar goes through the navigation guard,
+  // so an editor with unsaved work gets a say before the page changes.
+  const navigate = useGuardedNavigate();
   const { isAdmin } = useRole();
   const pathname = usePathname();
 
@@ -667,7 +671,7 @@ export function Sidebar({ children }: SidebarProps) {
                     <button
                       key={item.id}
                       type="button"
-                      onClick={() => router.push(item.href)}
+                      onClick={() => navigate(item.href)}
                       style={{
                         display: "flex",
                         alignItems: "center",
@@ -728,7 +732,7 @@ export function Sidebar({ children }: SidebarProps) {
                               const newName = prompt("Rename:", item.label);
                               if (newName) { removeRecent(item.id); addRecent({ ...item, id: item.id, label: newName, href: item.href, type: item.type }); }
                             }}] : []),
-                            { label: item.type === "chat" ? "Delete" : "Close", svg: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>', action: () => { removeRecent(item.id); if (pathname === item.href) router.push("/home"); } },
+                            { label: item.type === "chat" ? "Delete" : "Close", svg: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>', action: () => { removeRecent(item.id); if (pathname === item.href) navigate("/home"); } },
                           ];
                           options.forEach(opt => {
                             const btn = document.createElement("button");
@@ -788,7 +792,7 @@ export function Sidebar({ children }: SidebarProps) {
           theme={theme}
           toggleTheme={toggleTheme}
           logout={logout}
-          router={router}
+          navigate={navigate}
           isAdmin={isAdmin}
         />
       </aside>
@@ -804,7 +808,7 @@ export function Sidebar({ children }: SidebarProps) {
         {children}
       </div>
 
-      {searchOpen && <SpotlightSearch recents={recents} onClose={() => setSearchOpen(false)} onNavigate={(href) => { setSearchOpen(false); router.push(href); }} />}
+      {searchOpen && <SpotlightSearch recents={recents} onClose={() => setSearchOpen(false)} onNavigate={(href) => { setSearchOpen(false); navigate(href); }} />}
     </div>
   );
 }
