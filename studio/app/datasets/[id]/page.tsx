@@ -1,15 +1,16 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { API_BASE } from "../../../config";
-import { LoadingOverlay } from "../../../components/LoadingOverlay";
 import { msalFetch } from "../../../utils/msalFetch";
 import { DatasetContextPanel } from "../../../components/DatasetContextPanel";
 import { DatasetContextEditor } from "../../../components/DatasetContextEditor";
 import { useAuth } from "../../../auth/useAuth";
 import { useRouter, useParams } from "next/navigation";
 import { useRecents } from "../../../hooks/useRecents";
+import { useDlmArtifact } from "../../../hooks/useDlmArtifact";
+import s from "./dataset.module.css";
 
 export const dynamic = 'force-dynamic';
 export const dynamicParams = true;
@@ -40,6 +41,8 @@ interface DatasetFilter {
   column: string;
   op: string;
   value: string | string[];
+  keyColumn?: string | null;
+  valueKey?: string | string[] | null;
 }
 
 interface DatasetDetail {
@@ -122,21 +125,19 @@ function buildDatasetPreviewSql(dataset: DatasetDetail, rowLimit: number = 100):
   const filters = dataset.filters || [];
   const whereClauses: string[] = [];
 
-  // OPTIMIZATION: Build WHERE clause using fact table keys when possible
+  // Filter on the fact table's own key where the dataset records one, so the
+  // predicate does not need the dimension join.
   for (const f of filters) {
     const column = (f.column || "").trim();
     if (!column) continue;
     const op = (f.op || "=").trim().toUpperCase();
     const val = f.value;
 
-    // Check if filter has optimized key column (tier 1/2 filtering)
-    const keyColumn = (f as any).keyColumn;
-    const valueKey = (f as any).valueKey;
+    const keyColumn = f.keyColumn;
+    const valueKey = f.valueKey;
 
     if (keyColumn && (valueKey !== undefined && valueKey !== null && valueKey !== '')) {
-      // Use optimized fact table key filter (no dimension JOIN needed)
       const keyColName = keyColumn.split('.').pop() || keyColumn;
-      console.log(`[Dataset Preview] Using optimized filter on fact key: ${keyColName}`);
 
       if (Array.isArray(valueKey)) {
         if (valueKey.length === 0) continue;
@@ -147,7 +148,7 @@ function buildDatasetPreviewSql(dataset: DatasetDetail, rowLimit: number = 100):
         whereClauses.push(`${quoteIdentifier(keyColName)} ${op} ${keyStr}`);
       }
     } else {
-      // Use standard filter on display column (may need dimension JOIN)
+      // Standard filter on the display column (may need the dimension join).
       if (Array.isArray(val)) {
         if (val.length === 0) continue;
         const safeVals = val.map((v) => `'${String(v).replace(/'/g, "''")}'`);
@@ -159,11 +160,10 @@ function buildDatasetPreviewSql(dataset: DatasetDetail, rowLimit: number = 100):
     }
   }
 
-  // For dataset preview, show ALL columns (dimensions + metrics + time)
-  // This gives users the full picture of what their dataset looks like
-  let modelColumns = (dataset.columns || []).slice();
+  // The preview shows every column the model declares — dimensions, metrics
+  // and the time column — so a reader sees the shape of the whole dataset.
+  const modelColumns = (dataset.columns || []).slice();
 
-  // Ensure time column is included
   if (dataset.date_column) {
     const hasTimeColumn = modelColumns.some(
       (c) =>
@@ -182,42 +182,28 @@ function buildDatasetPreviewSql(dataset: DatasetDetail, rowLimit: number = 100):
     }
   }
 
-  console.log(`[Dataset Preview] Showing all ${modelColumns.length} columns from schema`);
-
-  // Build set of dimension tables needed for these columns
-  // OPTIMIZATION: Only JOIN dimensions that have columns being displayed
+  // Join only the dimensions a displayed column actually comes from.
   const dimsToJoin = new Set<string>();
   modelColumns.forEach((c) => {
     if (c.is_dimension && c.table_name) {
-      console.log(`[Dataset Preview] Adding dimension to JOIN set: ${c.table_name} (for column ${c.column_name}, semantic: ${c.semantic_type || 'none'})`);
       dimsToJoin.add(c.table_name);
     }
   });
-
-  console.log(`[Dataset Preview] Total dimensions to join: ${dimsToJoin.size} out of ${(dataset.dimensions || []).length} available`);
 
   const joinClauses: string[] = [];
   const dims = dataset.dimensions || [];
   const usedAliases = new Set<string>();
   const dimAliases: Record<string, string> = {};
 
-  // Track dimensions by fact key for COALESCE detection
-  const dimensionsByFactKey: Record<string, Array<{dim: any, alias: string, tableName: string, semantic?: string, columnName?: string}>> = {};
+  // Dimensions grouped by the fact key they join on, so two dimension tables
+  // that share one key can be coalesced into a single displayed column.
+  const dimensionsByFactKey: Record<string, Array<{ alias: string; tableName: string; semantic?: string; columnName?: string }>> = {};
 
-  // Map semantic_type to alias for correct alias usage
+  // A semantic type resolves to the alias of the dimension that supplies it.
   const semanticToAlias: Record<string, string> = {};
 
-  let joinedCount = 0;
-  let skippedCount = 0;
-
   for (const dim of dims) {
-    // OPTIMIZATION: Only join dimensions needed for preview columns
-    if (!dimsToJoin.has(dim.dimension_table)) {
-      console.log(`[Dataset Preview] SKIPPING dimension: ${dim.dimension_table} (not needed for displayed columns)`);
-      skippedCount++;
-      continue;
-    }
-    console.log(`[Dataset Preview] JOINING dimension: ${dim.dimension_table}`);
+    if (!dimsToJoin.has(dim.dimension_table)) continue;
     const parsed = parseJoinCondition(dim.join_condition || "");
 
     const dimSchemaRaw = parsed.dimSchema || dim.dimension_table.split(".", 2)[0];
@@ -238,7 +224,6 @@ function buildDatasetPreviewSql(dataset: DatasetDetail, rowLimit: number = 100):
       alias = candidate;
       dimAliases[dim.dimension_table] = alias;
 
-      // Find the column and semantic type for this dimension
       const dimColumn = (dataset.columns || []).find(c =>
         c.table_name === dim.dimension_table &&
         c.is_dimension === true &&
@@ -247,7 +232,6 @@ function buildDatasetPreviewSql(dataset: DatasetDetail, rowLimit: number = 100):
 
       if (dimColumn?.semantic_type) {
         semanticToAlias[dimColumn.semantic_type.toLowerCase()] = alias;
-        console.log(`[Dataset Preview] Mapped semantic "${dimColumn.semantic_type}" → alias "${alias}"`);
       }
     }
 
@@ -256,15 +240,12 @@ function buildDatasetPreviewSql(dataset: DatasetDetail, rowLimit: number = 100):
       const aliasIdent = quoteIdentifier(alias);
       const onExpr = `${factRef}.${quoteIdentifier(parsed.factKey)} = ${aliasIdent}.${quoteIdentifier(parsed.dimKey)}`;
       joinClauses.push(`LEFT JOIN ${dimRef} AS ${aliasIdent} ON ${onExpr}`);
-      joinedCount++;
 
-      // Track this dimension by its fact key
       const factKey = parsed.factKey.toLowerCase();
       if (!dimensionsByFactKey[factKey]) {
         dimensionsByFactKey[factKey] = [];
       }
 
-      // Find the column info for this dimension (including semantic type and column name)
       const dimColumn = (dataset.columns || []).find(c =>
         c.table_name === dim.dimension_table &&
         c.is_dimension === true &&
@@ -272,7 +253,6 @@ function buildDatasetPreviewSql(dataset: DatasetDetail, rowLimit: number = 100):
       );
 
       dimensionsByFactKey[factKey].push({
-        dim,
         alias,
         tableName: dim.dimension_table,
         semantic: dimColumn?.semantic_type || undefined,
@@ -280,54 +260,27 @@ function buildDatasetPreviewSql(dataset: DatasetDetail, rowLimit: number = 100):
       });
     } else {
       joinClauses.push(`LEFT JOIN ${dimRef} ON ${dim.join_condition}`);
-      joinedCount++;
     }
   }
 
-  console.log(`[Dataset Preview] Using ${joinedCount} of ${dims.length} dimensions (skipped ${skippedCount})`);
-  if (skippedCount > 0) {
-    console.log(`[Dataset Preview] Performance: ${Math.round((skippedCount / dims.length) * 100)}% reduction in JOINs`);
-  }
-
-  // Log fact key groupings for debugging
-  console.log(`[Dataset Preview] Dimensions grouped by fact key:`,
-    Object.entries(dimensionsByFactKey).map(([factKey, dimGroup]) => ({
-      factKey,
-      count: dimGroup.length,
-      dimensions: dimGroup.map(d => ({ table: d.tableName, alias: d.alias }))
-    }))
-  );
-
-  // Build map of semantic types to their source expressions (for COALESCE)
-  // Format: { semantic: [{ alias, columnName }, ...] }
+  // Where one semantic type is supplied by more than one dimension on the same
+  // fact key, the displayed column is a COALESCE across those sources.
   const semanticToSources: Record<string, Array<{ alias: string; columnName: string }>> = {};
-  Object.entries(dimensionsByFactKey).forEach(([factKey, dimGroup]) => {
-    if (dimGroup.length > 1) {
-      // Multiple dimensions on same fact key - need COALESCE
-      console.log(`[Dataset Preview] Found ${dimGroup.length} dimensions sharing fact key "${factKey}" - checking for COALESCE candidates`);
-
-      dimGroup.forEach(dimInfo => {
-        if (dimInfo.semantic && dimInfo.columnName) {
-          const semantic = dimInfo.semantic.toLowerCase();
-          if (!semanticToSources[semantic]) {
-            semanticToSources[semantic] = [];
-          }
-          semanticToSources[semantic].push({
-            alias: dimInfo.alias,
-            columnName: dimInfo.columnName
-          });
-          console.log(`[Dataset Preview] Added source for semantic "${semantic}": alias="${dimInfo.alias}", column="${dimInfo.columnName}"`);
+  Object.values(dimensionsByFactKey).forEach((dimGroup) => {
+    if (dimGroup.length <= 1) return;
+    dimGroup.forEach(dimInfo => {
+      if (dimInfo.semantic && dimInfo.columnName) {
+        const semantic = dimInfo.semantic.toLowerCase();
+        if (!semanticToSources[semantic]) {
+          semanticToSources[semantic] = [];
         }
-      });
-    } else {
-      console.log(`[Dataset Preview] Fact key "${factKey}" has only 1 dimension - no COALESCE needed`);
-    }
+        semanticToSources[semantic].push({
+          alias: dimInfo.alias,
+          columnName: dimInfo.columnName
+        });
+      }
+    });
   });
-
-  console.log(`[Dataset Preview] Final COALESCE map:`, Object.entries(semanticToSources).map(([sem, sources]) => ({
-    semantic: sem,
-    sources: sources.map(s => `${s.alias}.${s.columnName}`)
-  })));
 
   const factRef = isPg ? `${schema}.${table}` : `${quoteIdentifier(schema)}.${quoteIdentifier(table)}`;
 
@@ -335,19 +288,13 @@ function buildDatasetPreviewSql(dataset: DatasetDetail, rowLimit: number = 100):
   if (modelColumns.length > 0) {
     const selectExprs: string[] = [];
 
-    // Helper to resolve the correct source alias/table for a column
     const getSourceForColumn = (col: DatasetColumn): string => {
-      // First, try to match by semantic type (for dimensions)
+      // A dimension column resolves by its semantic type first.
       if (col.semantic_type) {
-        const semantic = col.semantic_type.toLowerCase();
-        const alias = semanticToAlias[semantic];
-        if (alias) {
-          console.log(`[Dataset Preview] Column "${col.column_name}" (semantic: "${col.semantic_type}") → alias "${alias}"`);
-          return quoteIdentifier(alias);
-        }
+        const alias = semanticToAlias[col.semantic_type.toLowerCase()];
+        if (alias) return quoteIdentifier(alias);
       }
 
-      // Fall back to table name matching
       const tableName = col.table_name || `${schema}.${table}`;
       const [tblSchemaRaw, tblNameRaw] = tableName.split(".", 2);
       const tblSchema = tblSchemaRaw || schema;
@@ -368,9 +315,8 @@ function buildDatasetPreviewSql(dataset: DatasetDetail, rowLimit: number = 100):
       return `${quoteIdentifier(tblSchema)}.${quoteIdentifier(tblName)}`;
     };
 
-    // Build SELECT clause for all schema columns
     const usedDisplayNames = new Set<string>();
-    const processedSemantics = new Set<string>(); // Track semantics that have been processed for COALESCE
+    const processedSemantics = new Set<string>();
 
     for (const col of modelColumns) {
       let displayName =
@@ -380,36 +326,24 @@ function buildDatasetPreviewSql(dataset: DatasetDetail, rowLimit: number = 100):
 
       const semantic = (col.semantic_type || '').toLowerCase();
 
-      // Check if this column needs COALESCE (multiple dimensions on same fact key)
       if (semantic && semantic !== 'time' && semanticToSources[semantic]?.length > 1) {
-        // Skip if we've already processed this semantic type
-        if (processedSemantics.has(semantic)) {
-          console.log(`[Dataset Preview] ⏭ Skipping duplicate semantic "${semantic}" (already has COALESCE)`);
-          continue;
-        }
+        if (processedSemantics.has(semantic)) continue;
         processedSemantics.add(semantic);
 
-        // Build COALESCE expression using correct column name from each dimension
         const sources = semanticToSources[semantic];
-        const coalesceParts = sources.map(s => `${quoteIdentifier(s.alias)}.${quoteIdentifier(s.columnName)}`);
-        const coalesceExpr = `COALESCE(${coalesceParts.join(', ')}) AS ${quoteIdentifier(displayName)}`;
-        selectExprs.push(coalesceExpr);
-        console.log(`[Dataset Preview] ✓ COALESCE APPLIED for "${displayName}" (semantic: "${semantic}"):`, coalesceExpr);
+        const coalesceParts = sources.map(src => `${quoteIdentifier(src.alias)}.${quoteIdentifier(src.columnName)}`);
+        selectExprs.push(`COALESCE(${coalesceParts.join(', ')}) AS ${quoteIdentifier(displayName)}`);
         usedDisplayNames.add(displayName.toLowerCase());
       } else {
-        // Standard column reference
-        // If display name is already used, use the column_name instead to ensure uniqueness
+        // Fall back to the physical column name when the label is taken, so
+        // every projected column has a distinct name.
         if (usedDisplayNames.has(displayName.toLowerCase())) {
           displayName = col.column_name;
         }
         usedDisplayNames.add(displayName.toLowerCase());
 
         const source = getSourceForColumn(col);
-        const standardExpr = `${source}.${quoteIdentifier(col.column_name)} AS ${quoteIdentifier(displayName)}`;
-        selectExprs.push(standardExpr);
-        if (semantic && semantic !== 'time') {
-          console.log(`[Dataset Preview] ✗ No COALESCE for "${displayName}" (semantic: "${semantic}"): only ${semanticToSources[semantic]?.length || 1} dimension(s)`);
-        }
+        selectExprs.push(`${source}.${quoteIdentifier(col.column_name)} AS ${quoteIdentifier(displayName)}`);
       }
     }
 
@@ -430,8 +364,28 @@ function buildDatasetPreviewSql(dataset: DatasetDetail, rowLimit: number = 100):
   if (isPg) {
     base = `${base} LIMIT ${top}`;
   }
-  console.log(`[Dataset Preview] Final query built (${joinedCount} JOINs, ${Object.keys(semanticToSources).length} COALESCE groups)`);
   return base;
+}
+
+/** The grid's own frame and row rhythm, with a bar per column. */
+function PreviewSkeleton({ columns, rows }: { columns: number; rows: number }) {
+  const widths = [72, 54, 86, 44, 64, 50, 78];
+  return (
+    <div className={s.skelGrid} style={{ ["--cols" as string]: columns }} aria-hidden="true">
+      <div className={`${s.skelRow} ${s.skelHead}`}>
+        {Array.from({ length: columns }, (_, i) => (
+          <span key={i} className={s.skel} style={{ width: 56 + (i % 3) * 14 }} />
+        ))}
+      </div>
+      {Array.from({ length: rows }, (_, r) => (
+        <div key={r} className={s.skelRow}>
+          {Array.from({ length: columns }, (_, c) => (
+            <span key={c} className={s.skel} style={{ width: widths[(r + c) % widths.length] }} />
+          ))}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export default function DatasetDetailPage() {
@@ -441,34 +395,38 @@ export default function DatasetDetailPage() {
 
   const [dataset, setDataset] = useState<DatasetDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [isTogglingFavorite, setIsTogglingFavorite] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
   const [editNameValue, setEditNameValue] = useState("");
   const nameInputRef = useRef<HTMLInputElement>(null);
-  const [accessToken] = useState<string>("proxy");
   const { addRecent } = useRecents();
   const [previewColumns, setPreviewColumns] = useState<string[]>([]);
-  const [previewRows, setPreviewRows] = useState<any[][]>([]);
+  const [previewRows, setPreviewRows] = useState<unknown[][]>([]);
   const [previewOpen, setPreviewOpen] = useState(true);
-  const [isLoadingPreview, setIsLoadingPreview] = useState(false);
+  const [isLoadingPreview, setIsLoadingPreview] = useState(true);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewSortColumnIndex, setPreviewSortColumnIndex] = useState<number | null>(null);
   const [previewSortDirection, setPreviewSortDirection] = useState<"asc" | "desc">("asc");
-  const [rowCount, setRowCount] = useState<number | null>(null);
   const [previewSql, setPreviewSql] = useState<string>("");
   const [sqlCopied, setSqlCopied] = useState(false);
 
-  // For the Schema card we want to show ALL columns, even when
-  // multiple fact columns map to the same dimension table.
-  // Each column represents a distinct business concept and should be visible.
-  const schemaColumns: DatasetColumn[] = React.useMemo(() => {
-    if (!dataset?.columns) return [];
+  const datasetId = params?.id as string | undefined;
+  // The account object is rebuilt on every auth-provider render, so the
+  // effects below depend on the identity string rather than the object:
+  // a re-render must not re-run the preview statement.
+  const userEmail = account?.email || account?.username || null;
 
-    // Deduplicate by display label so that two dimension tables sharing the
-    // same fact key (e.g. IDEASProduct + IDEASThirdPartyApps both on ProductKey)
-    // only appear once under "Product". Columns with distinct labels
-    // (e.g. IsMSFTTenant vs IsStrategicCustomer) are kept separately.
+  // One read of the DLM artifact for the whole page: the row-count fact here,
+  // the Context card, and the context editor's defaults all read this.
+  const dlm = useDlmArtifact(datasetId, isAuthenticated);
+  const rowCount = dlm.rowCount;
+
+  // The Schema card shows every column, even when several fact columns map to
+  // the same dimension table: each one is a distinct business concept. Two
+  // dimension tables sharing one fact key do collapse to a single label.
+  const schemaColumns: DatasetColumn[] = useMemo(() => {
+    if (!dataset?.columns) return [];
     const seen = new Set<string>();
     return dataset.columns.filter((col) => {
       const label =
@@ -480,8 +438,6 @@ export default function DatasetDetailPage() {
       return true;
     });
   }, [dataset]);
-
-  const datasetId = params?.id as string | undefined;
 
   const startEditingName = () => {
     setEditNameValue(dataset?.name ?? "");
@@ -500,19 +456,16 @@ export default function DatasetDetailPage() {
         body: JSON.stringify({ name: trimmed }),
       });
       if (res.ok) setDataset(prev => prev ? { ...prev, name: trimmed } : prev);
-    } catch { /* silent — name reverts on next load */ }
+    } catch { /* silent — the name reverts on the next load */ }
   };
 
-  // Token no longer needed — NextAuth proxy handles auth via session cookie.
-
   useEffect(() => {
-    if (!isAuthenticated || !datasetId || !accessToken) return;
+    if (!isAuthenticated || !datasetId) return;
 
     const load = async () => {
       setIsLoading(true);
       setError(null);
       try {
-        const userEmail = account?.email || account?.username || null;
         const headers: Record<string, string> = {};
         if (userEmail) {
           headers['x-user-email'] = userEmail;
@@ -524,21 +477,11 @@ export default function DatasetDetailPage() {
         if (!res.ok) {
           throw new Error(`Failed to load dataset: ${res.status}`);
         }
-        const data: any = await res.json();
+        const data = await res.json() as DatasetDetail & { is_favorite?: boolean };
 
-        // Log to debug favorite field
-        console.log('[Dataset Detail] Loaded dataset:', {
-          id: data.id,
-          name: data.name,
-          favorite: data.favorite,
-          is_favorite: data.is_favorite,
-          isFavorite: data.isFavorite
-        });
-
-        // Map is_favorite to favorite if needed
         const mappedData: DatasetDetail = {
           ...data,
-          favorite: data.favorite ?? data.is_favorite ?? false
+          favorite: data.favorite ?? data.is_favorite ?? false,
         };
 
         setDataset(mappedData);
@@ -552,24 +495,7 @@ export default function DatasetDetailPage() {
     };
 
     void load();
-  }, [isAuthenticated, datasetId, accessToken, account]);
-
-  useEffect(() => {
-    if (!datasetId || !isAuthenticated) return;
-    (async () => {
-      try {
-        const res = await msalFetch(`/api/v1/datasets/${datasetId}/dlm`);
-        if (res.ok) {
-          const dlm = await res.json();
-          const counts = dlm?.stats_rollup?.row_counts;
-          if (counts) {
-            const max = Math.max(0, ...Object.values(counts).map(Number));
-            if (max > 0) setRowCount(max);
-          }
-        }
-      } catch { /* ignore */ }
-    })();
-  }, [datasetId, isAuthenticated]);
+  }, [isAuthenticated, datasetId, userEmail, addRecent]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -579,20 +505,6 @@ export default function DatasetDetailPage() {
       try {
         setIsLoadingPreview(true);
         setPreviewError(null);
-
-        const userEmail = account?.email || account?.username || null;
-
-        if (dataset.database_name) {
-          const resSwitch = await msalFetch(`${API_BASE}/api/v1/lab/switch-database`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ database_name: dataset.database_name }),
-          });
-          const dataSwitch = await resSwitch.json();
-          if (!resSwitch.ok || !dataSwitch.success) {
-            throw new Error(dataSwitch.error || "Failed to switch database for preview");
-          }
-        }
 
         const qualifiedTable = dataset.schema_name && dataset.schema_name !== "dbo" && dataset.schema_name !== "public"
           ? `${dataset.schema_name}.${dataset.table_name}`
@@ -615,7 +527,6 @@ export default function DatasetDetailPage() {
             : `SELECT * FROM ${qualifiedTable} LIMIT 100`;
         setPreviewSql(sql);
 
-        // Build list of tables used in this query for query history
         const tablesUsed = dataset.sql_text && !dataset.table_name
           ? []
           : [
@@ -623,6 +534,10 @@ export default function DatasetDetailPage() {
           ...(dataset.dimensions || []).map(d => d.dimension_table) // Dimension tables
         ];
 
+        // No `lab/switch-database` call precedes this. That route only echoes
+        // the name it is given — it selects nothing server-side — while the
+        // statement below already carries its catalog, so the request was a
+        // round trip the preview waited on for nothing.
         const res = await msalFetch(`${API_BASE}/api/v1/lab/query`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -642,7 +557,7 @@ export default function DatasetDetailPage() {
         }
 
         const apiColumns: string[] = Array.isArray(data.columns) ? data.columns : [];
-        const apiRows: any[][] = Array.isArray(data.rows) ? data.rows : [];
+        const apiRows: unknown[][] = Array.isArray(data.rows) ? data.rows : [];
 
         let finalColumns = apiColumns;
         let finalRows = apiRows;
@@ -654,11 +569,9 @@ export default function DatasetDetailPage() {
               : c.column_name,
           );
 
-          // Ensure we only keep unique preferred names so that when
-          // multiple dataset columns share the same semantic label
-          // (e.g. two Product columns from different dimension tables
-          // that are coalesced in the SQL), we only reference the
-          // resulting column once in the preview ordering.
+          // Keep the preferred names unique: when several dataset columns share
+          // one semantic label (two Product columns coalesced in the SQL) the
+          // resulting column is referenced once in the preview ordering.
           const preferred = Array.from(
             new Set(preferredNames.filter((name) => apiColumns.includes(name))),
           );
@@ -672,7 +585,7 @@ export default function DatasetDetailPage() {
           );
         }
 
-        // Ensure the date/time column appears as the first column in the preview
+        // The time column reads first.
         if (dataset.date_column && finalColumns.length > 0) {
           const timeDisplayName =
             dataset.columns?.find(
@@ -695,7 +608,6 @@ export default function DatasetDetailPage() {
             }
           }
         }
-        // Reset sort state whenever we load a fresh preview
         setPreviewSortColumnIndex(null);
         setPreviewSortDirection("asc");
         setPreviewColumns(finalColumns);
@@ -711,9 +623,9 @@ export default function DatasetDetailPage() {
     };
 
     void runPreview();
-  }, [isAuthenticated, dataset]);
+  }, [isAuthenticated, dataset, userEmail]);
 
-  const sortedPreviewRows = React.useMemo(() => {
+  const sortedPreviewRows = useMemo(() => {
     if (!previewRows || previewRows.length === 0) return previewRows;
     if (previewSortColumnIndex === null) return previewRows;
 
@@ -747,12 +659,11 @@ export default function DatasetDetailPage() {
   }, [previewRows, previewSortColumnIndex, previewSortDirection]);
 
   const handlePreviewSort = (columnIndex: number) => {
-    // 3-state sort cycle per column: unsorted -> asc -> desc -> unsorted
+    // Per column: unsorted -> ascending -> descending -> unsorted.
     if (previewSortColumnIndex === columnIndex) {
       if (previewSortDirection === "asc") {
         setPreviewSortDirection("desc");
       } else {
-        // was desc, clear sorting for this column
         setPreviewSortColumnIndex(null);
         setPreviewSortDirection("asc");
       }
@@ -767,12 +678,9 @@ export default function DatasetDetailPage() {
 
     const newFavoriteState = !dataset.favorite;
     setIsTogglingFavorite(true);
-
-    // Optimistically update UI
     setDataset(prev => prev ? { ...prev, favorite: newFavoriteState } : prev);
 
     try {
-      const userEmail = account?.email || account?.username || null;
       const headers: Record<string, string> = {};
       if (userEmail) {
         headers['x-user-email'] = userEmail;
@@ -780,29 +688,18 @@ export default function DatasetDetailPage() {
 
       const res = await msalFetch(
         `${API_BASE}/api/v1/datasets/${datasetId}/favorite?is_favorite=${newFavoriteState}`,
-        {
-          method: "PUT",
-          headers,
-        }
+        { method: "PUT", headers },
       );
 
       if (!res.ok) {
-        // Revert on failure
         setDataset(prev => prev ? { ...prev, favorite: !newFavoriteState } : prev);
-        throw new Error("Failed to update favorite status");
       }
-    } catch (e) {
-      console.error("Failed to toggle favorite:", e);
-      // Already reverted above
+    } catch {
+      setDataset(prev => prev ? { ...prev, favorite: !newFavoriteState } : prev);
     } finally {
       setIsTogglingFavorite(false);
     }
   };
-
-
-  if (isLoading) {
-    return <LoadingOverlay />;
-  }
 
   if (!isAuthenticated) {
     return (
@@ -815,260 +712,203 @@ export default function DatasetDetailPage() {
     );
   }
 
+  // The number of columns the skeleton draws: the dataset's own column count
+  // once it is known, so the grid does not change shape when the rows arrive.
+  const skeletonColumns = Math.max(3, Math.min(schemaColumns.length || 5, 7));
+
   return (
-    <div className="page-shell" style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 8px)", overflow: "hidden" }}>
-      {/* ── Header card — matches dashboard view style ── */}
-      <header style={{
-        background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 12,
-        padding: "12px 18px", display: "flex", alignItems: "center",
-        justifyContent: "space-between", gap: 16, flexWrap: "wrap", marginBottom: 16,
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 14, flex: 1, minWidth: 0 }}>
-          <button
-            type="button"
-            onClick={() => router.push("/workspace?tab=datasets")}
-            title="Back to datasets"
-            style={{
-              flexShrink: 0, width: 36, height: 36, borderRadius: 9,
-              display: "flex", alignItems: "center", justifyContent: "center",
-              border: "1px solid var(--border)", background: "var(--bg-surface)",
-              color: "var(--text-secondary)", cursor: "pointer",
-              transition: "background 0.15s, color 0.15s",
-            }}
-            onMouseEnter={e => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--text-primary)"; }}
-            onMouseLeave={e => { e.currentTarget.style.background = "var(--bg-surface)"; e.currentTarget.style.color = "var(--text-secondary)"; }}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="19" y1="12" x2="5" y2="12" /><polyline points="12 19 5 12 12 5" />
-            </svg>
-          </button>
-          <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
-            {!isEditingName ? (
-              <h1
-                style={{ margin: 0, fontSize: "1.25rem", fontWeight: 800, color: "var(--text-primary)", lineHeight: 1.2, letterSpacing: "-0.3px", cursor: "pointer", borderRadius: 6, padding: "2px 6px", border: "2px solid transparent", transition: "background 0.15s" }}
-                onClick={startEditingName}
-                onMouseOver={e => { e.currentTarget.style.background = "var(--bg-hover)"; }}
-                onMouseOut={e => { e.currentTarget.style.background = "transparent"; }}
-                title="Click to rename"
-              >
-                {dataset?.name ?? "Dataset"}
-              </h1>
-            ) : (
-              <input
-                ref={nameInputRef}
-                type="text"
-                value={editNameValue}
-                onChange={e => setEditNameValue(e.target.value)}
-                onBlur={commitRename}
-                onKeyDown={e => { if (e.key === "Enter") commitRename(); if (e.key === "Escape") setIsEditingName(false); }}
-                style={{
-                  fontSize: "1.25rem", fontWeight: 800, color: "var(--text-primary)",
-                  padding: "2px 6px", margin: 0,
-                  border: "2px solid var(--accent)", borderRadius: 6,
-                  outline: "none", background: "var(--bg-surface)",
-                  fontFamily: "inherit", minWidth: 0,
-                }}
-              />
-            )}
-            {dataset && (
-              <div style={{ display: "flex", gap: 10, marginTop: 4, marginLeft: 6, flexWrap: "wrap" }}>
-                {rowCount != null && (
-                  <span style={{ fontSize: 11.5, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
-                    <i className="fas fa-table-rows" style={{ fontSize: 10, opacity: 0.6 }} />
-                    {compactNum(rowCount)} rows
-                  </span>
-                )}
-                {schemaColumns.length > 0 && (
-                  <span style={{ fontSize: 11.5, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
-                    <i className="fas fa-columns" style={{ fontSize: 10, opacity: 0.6 }} />
-                    {schemaColumns.length} columns
-                  </span>
-                )}
-                {(dataset.dimensions?.length ?? 0) > 0 && (
-                  <span style={{ fontSize: 11.5, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
-                    <i className="fas fa-link" style={{ fontSize: 10, opacity: 0.6 }} />
-                    {dataset.dimensions!.length} joins
-                  </span>
-                )}
-                {(dataset.metrics?.length ?? 0) > 0 && (
-                  <span style={{ fontSize: 11.5, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
-                    <i className="fas fa-chart-line" style={{ fontSize: 10, opacity: 0.6 }} />
-                    {dataset.metrics!.length} metrics
-                  </span>
-                )}
-              </div>
-            )}
-            {dataset?.description && (
-              <p style={{ fontSize: 12.5, color: "var(--text-muted)", margin: "2px 0 0 6px", lineHeight: 1.4 }}>
-                {dataset.description}
-              </p>
-            )}
-          </div>
-        </div>
-          {dataset && (
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <button
-                type="button"
-                className="overview-primary-btn"
-                onClick={() => {
-                  window.location.href = `/charts?datasetId=${dataset.id}`;
-                }}
-                style={{ fontSize: 14, padding: "9px 16px", fontWeight: 500 }}
-              >
-                <i className="fas fa-chart-bar" style={{ marginRight: 8 }} />
-                Create chart
-              </button>
-              <button
-                type="button"
-                className="icon-button"
-                onClick={() => {
-                  window.location.href = `/datasets/new?datasetId=${dataset.id}`;
-                }}
-                title="Edit dataset"
-                style={{ width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center" }}
-              >
-                <i className="fas fa-edit" aria-hidden="true" style={{ fontSize: 14 }} />
-                <span className="sr-only">Edit dataset</span>
-              </button>
-              <button
-                type="button"
-                className="icon-button"
-                onClick={() => window.location.reload()}
-                title="Refresh"
-                style={{ width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center" }}
-              >
-                <i className="fas fa-arrows-rotate" aria-hidden="true" style={{ fontSize: 14 }} />
-              </button>
-              <button
-                type="button"
-                className="icon-button"
-                onClick={handleToggleFavorite}
-                disabled={isTogglingFavorite}
-                title={dataset.favorite ? "Remove from favorites" : "Add to favorites"}
-                style={{
-                  width: 36,
-                  height: 36,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  opacity: isTogglingFavorite ? 0.5 : 1,
-                  cursor: isTogglingFavorite ? "not-allowed" : "pointer",
-                  transition: "all 0.2s ease"
-                }}
-              >
-                <i
-                  className={dataset.favorite ? "fas fa-star" : "far fa-star"}
-                  aria-hidden="true"
-                  style={{
-                    fontSize: 16,
-                    color: dataset.favorite ? "#fbbf24" : "currentColor",
-                    transition: "color 0.2s ease"
-                  }}
-                />
-                <span className="sr-only">
-                  {dataset.favorite ? "Remove from favorites" : "Add to favorites"}
-                </span>
-              </button>
-            </div>
+    <div className={`page-shell ${s.page}`}>
+      <nav className={s.crumbs}>
+        <button type="button" className={s.crumb} onClick={() => router.push("/workspace?tab=datasets")}>
+          <i className="fas fa-chevron-left" aria-hidden="true" />
+          Datasets
+        </button>
+      </nav>
+
+      <header className={`${s.card} ${s.header}`}>
+        <div className={s.identity}>
+          {!isEditingName ? (
+            <h1
+              className={s.title}
+              tabIndex={dataset ? 0 : undefined}
+              onClick={() => { if (dataset) startEditingName(); }}
+              onKeyDown={(e) => {
+                if (!dataset) return;
+                if (e.key === "Enter" || e.key === " ") { e.preventDefault(); startEditingName(); }
+              }}
+              title={dataset ? "Click to rename" : undefined}
+            >
+              {dataset?.name ?? "Dataset"}
+            </h1>
+          ) : (
+            <input
+              ref={nameInputRef}
+              type="text"
+              className={s.titleInput}
+              value={editNameValue}
+              onChange={e => setEditNameValue(e.target.value)}
+              onBlur={commitRename}
+              onKeyDown={e => { if (e.key === "Enter") commitRename(); if (e.key === "Escape") setIsEditingName(false); }}
+            />
           )}
+
+          <div className={s.facts}>
+            {rowCount != null && (
+              <span className={s.fact}>
+                <i className="fas fa-table-list" aria-hidden="true" />
+                {compactNum(rowCount)} rows
+              </span>
+            )}
+            {schemaColumns.length > 0 && (
+              <span className={s.fact}>
+                <i className="fas fa-table-columns" aria-hidden="true" />
+                {schemaColumns.length} columns
+              </span>
+            )}
+            {(dataset?.dimensions?.length ?? 0) > 0 && (
+              <span className={s.fact}>
+                <i className="fas fa-link" aria-hidden="true" />
+                {dataset!.dimensions!.length} joins
+              </span>
+            )}
+            {(dataset?.metrics?.length ?? 0) > 0 && (
+              <span className={s.fact}>
+                <i className="fas fa-chart-line" aria-hidden="true" />
+                {dataset!.metrics!.length} metrics
+              </span>
+            )}
+            {isLoading && <span className={s.skel} style={{ width: 160 }} aria-hidden="true" />}
+          </div>
+
+          {dataset?.description && <p className={s.about}>{dataset.description}</p>}
+        </div>
+
+        {dataset && (
+          <div className={s.actions}>
+            <button
+              type="button"
+              className={s.primary}
+              onClick={() => router.push(`/charts?datasetId=${dataset.id}`)}
+            >
+              <i className="fas fa-chart-bar" aria-hidden="true" />
+              Create chart
+            </button>
+            <button
+              type="button"
+              className={s.iconBtn}
+              onClick={() => router.push(`/datasets/new?datasetId=${dataset.id}`)}
+              title="Edit dataset"
+            >
+              <i className="fas fa-pen" aria-hidden="true" />
+              <span className="sr-only">Edit dataset</span>
+            </button>
+            <button
+              type="button"
+              className={s.iconBtn}
+              onClick={() => window.location.reload()}
+              title="Reload"
+            >
+              <i className="fas fa-arrows-rotate" aria-hidden="true" />
+              <span className="sr-only">Reload</span>
+            </button>
+            <button
+              type="button"
+              className={`${s.iconBtn} ${dataset.favorite ? s.starOn : ""}`}
+              onClick={handleToggleFavorite}
+              disabled={isTogglingFavorite}
+              title={dataset.favorite ? "Remove from favorites" : "Add to favorites"}
+            >
+              <i className={dataset.favorite ? "fas fa-star" : "far fa-star"} aria-hidden="true" />
+              <span className="sr-only">
+                {dataset.favorite ? "Remove from favorites" : "Add to favorites"}
+              </span>
+            </button>
+          </div>
+        )}
       </header>
 
-      {isLoading && <LoadingOverlay />}
-      {error && !isLoading && (
-        <div className="card page-empty-card">
-          <p className="page-empty-title">Problem loading dataset</p>
-          <p className="page-empty-body">{error}</p>
+      {error && (
+        <div className={s.card}>
+          <div className={s.bar}>
+            <i className={`fas fa-circle-exclamation ${s.barIcon}`} aria-hidden="true" />
+            <span className={s.barName}>Problem loading dataset</span>
+          </div>
+          <p className={`${s.note} ${s.noteError}`}>{error}</p>
         </div>
       )}
 
-      {!isLoading && !error && dataset && (
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "auto", gap: 12, minHeight: 0 }}>
-        <style>{`
-          details.ds-section summary::-webkit-details-marker { display: none; }
-          details.ds-section[open] .ds-chevron { transform: rotate(180deg); }
-          details.ds-section summary:hover { background: var(--bg-hover); }
-          @media (max-width: 768px) {
-            .ds-detail-grid { grid-template-columns: 1fr !important; }
-          }
-        `}</style>
+      {!error && (
+        <>
+          {/* The Context card and its editor read the shared artifact, so they
+              render as soon as that one read lands rather than waiting for the
+              dataset document and then fetching it again themselves. */}
+          <DatasetContextPanel datasetId={datasetId} dlm={dlm} className={s.card} />
+          <DatasetContextEditor datasetId={datasetId} dlm={dlm} className={s.card} />
 
-        {/* ── Context — top ── */}
-        <DatasetContextPanel datasetId={datasetId} />
-        <DatasetContextEditor datasetId={datasetId} />
+          <section className={`${s.card} ${s.preview}`}>
+            <div className={s.bar}>
+              <button
+                type="button"
+                className={s.barToggle}
+                aria-expanded={previewOpen}
+                onClick={() => setPreviewOpen((open) => !open)}
+              >
+                <i className={`fas fa-table ${s.barIcon}`} aria-hidden="true" />
+                <span className={s.barName}>Data preview</span>
+                <span className={s.barNote}>top 100 rows</span>
+                <i className={`fas fa-chevron-down ${s.chev} ${previewOpen ? s.chevOpen : ""}`} aria-hidden="true" />
+              </button>
+              {previewSql && (
+                <div className={s.barTools}>
+                  <button
+                    type="button"
+                    className={`${s.ghost} ${sqlCopied ? s.ghostDone : ""}`}
+                    onClick={() => {
+                      void navigator.clipboard.writeText(previewSql);
+                      setSqlCopied(true);
+                      setTimeout(() => setSqlCopied(false), 2000);
+                    }}
+                  >
+                    <i className={sqlCopied ? "fas fa-check" : "fas fa-copy"} aria-hidden="true" />
+                    {sqlCopied ? "Copied" : "Copy SQL"}
+                  </button>
+                  <button
+                    type="button"
+                    className={s.ghost}
+                    onClick={() => {
+                      // `database_name` is the Engine catalog, and the Lab
+                      // picks its source from `catalog`. Sent as `db` it was
+                      // read as a schema, so the Lab stayed on its default
+                      // source while the statement named another catalog:
+                      // "Engine query references a catalog outside the
+                      // selected source".
+                      const parts = [`query=${encodeURIComponent(previewSql)}`];
+                      if (dataset?.database_name) parts.push(`catalog=${encodeURIComponent(dataset.database_name)}`);
+                      if (dataset?.schema_name) parts.push(`schema=${encodeURIComponent(dataset.schema_name)}`);
+                      router.push(`/lab?${parts.join("&")}`);
+                    }}
+                  >
+                    <i className="fas fa-terminal" aria-hidden="true" />
+                    Execute in Lab
+                  </button>
+                </div>
+              )}
+            </div>
 
-        {/* ── Data Preview ── */}
-        <div className="card" style={{ flex: previewOpen ? 1 : "0 0 auto", display: "flex", flexDirection: "column", overflow: "hidden", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 20px", minHeight: previewOpen ? 300 : 0, marginBottom: 12 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)", marginBottom: previewOpen ? 10 : 0, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <span
-              role="button"
-              tabIndex={0}
-              aria-expanded={previewOpen}
-              onClick={() => setPreviewOpen((open) => !open)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setPreviewOpen((open) => !open); }
-              }}
-              style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
-            >
-              <i className="fas fa-table" style={{ fontSize: 12, color: "var(--accent)", opacity: 0.7 }} />
-              Data Preview <span style={{ fontWeight: 400, color: "var(--text-muted)", fontSize: 12 }}>(top 100 rows)</span>
-              <i className={`fas fa-chevron-${previewOpen ? "up" : "down"}`} style={{ fontSize: 10, color: "var(--text-muted)" }} />
-            </span>
-            {previewSql && (
-              <div style={{ display: "flex", gap: 6 }}>
-                <button
-                  type="button"
-                  onClick={() => { navigator.clipboard.writeText(previewSql); setSqlCopied(true); setTimeout(() => setSqlCopied(false), 2000); }}
-                  style={{
-                    fontSize: 11.5, padding: "4px 10px", borderRadius: 6,
-                    border: "1px solid var(--border)", background: "var(--bg-surface)",
-                    color: sqlCopied ? "var(--success)" : "var(--text-secondary)",
-                    cursor: "pointer", display: "flex", alignItems: "center", gap: 5,
-                    transition: "all 0.15s",
-                  }}
-                >
-                  <i className={sqlCopied ? "fas fa-check" : "fas fa-copy"} style={{ fontSize: 10 }} />
-                  {sqlCopied ? "Copied" : "Copy SQL"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    // `database_name` is the Engine catalog, and the Lab
-                    // picks its source from `catalog`. Sent as `db` it was
-                    // read as a schema, so the Lab stayed on its default
-                    // source while the statement named another catalog:
-                    // "Engine query references a catalog outside the
-                    // selected source".
-                    const parts = [`query=${encodeURIComponent(previewSql)}`];
-                    if (dataset.database_name) parts.push(`catalog=${encodeURIComponent(dataset.database_name)}`);
-                    if (dataset.schema_name) parts.push(`schema=${encodeURIComponent(dataset.schema_name)}`);
-                    router.push(`/lab?${parts.join("&")}`);
-                  }}
-                  style={{
-                    fontSize: 11.5, padding: "4px 10px", borderRadius: 6,
-                    border: "1px solid var(--border)", background: "var(--bg-surface)",
-                    color: "var(--text-secondary)", cursor: "pointer",
-                    display: "flex", alignItems: "center", gap: 5,
-                    transition: "all 0.15s",
-                  }}
-                >
-                  <i className="fas fa-terminal" style={{ fontSize: 10 }} />
-                  Execute in Lab
-                </button>
-              </div>
+            {previewOpen && (isLoading || isLoadingPreview) && (
+              <PreviewSkeleton columns={skeletonColumns} rows={6} />
             )}
-          </div>
-            {previewOpen && isLoadingPreview && <p className="muted">Loading preview…</p>}
             {previewOpen && previewError && !isLoadingPreview && (
-              <p className="page-empty-body">{previewError}</p>
+              <p className={`${s.note} ${s.noteError}`}>{previewError}</p>
             )}
-            {previewOpen && !isLoadingPreview && !previewError && previewColumns.length === 0 && (
-              <p className="page-empty-body">No rows returned.</p>
+            {previewOpen && !isLoading && !isLoadingPreview && !previewError && previewColumns.length === 0 && (
+              <p className={s.note}>No rows returned.</p>
             )}
             {previewOpen && !isLoadingPreview && !previewError && previewColumns.length > 0 && (
-              <div style={{ flex: 1, overflow: "auto", minHeight: 0, border: "1px solid var(--border)", borderRadius: 8 }}>
-                <table className="results-table" style={{ width: "100%", fontSize: 12 }}>
-                  <thead style={{ position: "sticky", top: 0, zIndex: 2 }}>
-                    <tr style={{ background: "var(--bg-surface)" }}>
+              <div className={s.grid}>
+                <table className="results-table">
+                  <thead>
+                    <tr>
                       {previewColumns.map((col, colIndex) => {
                         const isSorted = previewSortColumnIndex === colIndex;
                         const sortIconClass = !isSorted
@@ -1083,10 +923,9 @@ export default function DatasetDetailPage() {
                             align="left"
                             onClick={() => handlePreviewSort(colIndex)}
                             className={isSorted ? "sorted" : undefined}
-                            style={{ cursor: "pointer" }}
                           >
                             <span className="column-header-label">{col}</span>
-                            <i className={sortIconClass} />
+                            <i className={sortIconClass} aria-hidden="true" />
                           </th>
                         );
                       })}
@@ -1104,141 +943,143 @@ export default function DatasetDetailPage() {
                 </table>
               </div>
             )}
-          </div>
+          </section>
 
-        {/* ── Detail panels below the data ── */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, flexShrink: 0, paddingBottom: 16 }}>
-
-        {/* Connection & Metrics */}
-        <details className="ds-section" style={{ border: "1px solid var(--border)", borderRadius: 12, background: "var(--bg-surface)" }}>
-          <summary style={{ padding: "12px 16px", cursor: "pointer", listStyle: "none", display: "flex", alignItems: "center", justifyContent: "space-between", fontWeight: 600, fontSize: 13, color: "var(--text-primary)", userSelect: "none", borderRadius: 12, transition: "background 0.15s" }}>
-            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <i className="fas fa-database" style={{ fontSize: 12, color: "var(--accent)", opacity: 0.7 }} />
-              Connection & Metrics
-              <span style={{ fontWeight: 400, color: "var(--text-muted)", fontSize: 12 }}>
-                {dataset.database_name || "default"} · {dataset.schema_name || "default"} · {dataset.table_name}{dataset.metrics?.length ? ` · ${dataset.metrics.length} metrics` : ""}
-              </span>
-            </span>
-            <i className="fas fa-chevron-down ds-chevron" style={{ fontSize: 10, color: "var(--text-muted)", transition: "transform 0.2s" }} />
-          </summary>
-          <div style={{ padding: "16px", borderTop: "1px solid var(--border)" }}>
-            <div className="ds-detail-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
-              <div>
-                <h4 style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", margin: "0 0 12px 0", textTransform: "uppercase", letterSpacing: "0.05em" }}>Connection</h4>
-                <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
-                  <tbody>
-                    {[
-                      { label: "Database", value: dataset.database_name || "(default)" },
-                      { label: "Schema", value: dataset.schema_name || "(default)" },
-                      { label: "Table", value: dataset.table_name || (dataset.sql_text ? "Virtual (SQL)" : "(none)") },
-                      { label: "Date column", value: dataset.date_column || "(none)" },
-                    ].map(({ label, value }, idx) => (
-                      <tr key={label} style={{ borderBottom: idx < 3 ? "1px solid var(--border)" : "none" }}>
-                        <td style={{ padding: "8px 12px 8px 0", fontWeight: 500, fontSize: 13, color: "var(--text-primary)" }}>{label}</td>
-                        <td style={{ padding: "8px 0", fontSize: 13, color: "var(--text-secondary)", fontFamily: "var(--font-mono, monospace)" }}>{value}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div>
-                <h4 style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", margin: "0 0 12px 0", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                  Metrics {dataset.metrics && dataset.metrics.length > 0 && `(${dataset.metrics.length})`}
-                </h4>
-                {dataset.metrics && dataset.metrics.length > 0 ? (
-                  <div style={{ overflowY: "auto", maxHeight: 280 }}>
-                    <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
+          {dataset && (
+            <>
+              <details className={s.fold}>
+                <summary className={s.foldSummary}>
+                  <i className={`fas fa-database ${s.barIcon}`} aria-hidden="true" />
+                  <span className={s.barName}>Connection &amp; metrics</span>
+                  <span className={s.barNote}>
+                    {dataset.database_name || "default"} · {dataset.schema_name || "default"} · {dataset.table_name}
+                    {dataset.metrics?.length ? ` · ${dataset.metrics.length} metrics` : ""}
+                  </span>
+                  <i className={`fas fa-chevron-down ${s.chev} ${s.push}`} aria-hidden="true" />
+                </summary>
+                <div className={s.foldBody}>
+                  <div className={s.col}>
+                    <h2 className={s.colHead}>Connection</h2>
+                    <table className={s.defs}>
                       <tbody>
-                        {dataset.metrics.map((m, idx) => (
-                          <tr key={`${m.name}-${idx}`} style={{ borderBottom: idx < dataset.metrics!.length - 1 ? "1px solid var(--border)" : "none" }}>
-                            <td style={{ padding: "8px 12px 8px 0", fontWeight: 500, fontSize: 13, color: "var(--text-primary)" }}>{m.name}</td>
-                            <td style={{ padding: "8px 8px 8px 0", fontSize: 11, color: "var(--success)", fontWeight: 600, textTransform: "uppercase" }}>{m.metric_type}</td>
-                            <td style={{ padding: "8px 0", fontFamily: "monospace", fontSize: 12, color: "var(--text-secondary)" }}>{m.expression}</td>
+                        {[
+                          { label: "Database", value: dataset.database_name || "(default)" },
+                          { label: "Schema", value: dataset.schema_name || "(default)" },
+                          { label: "Table", value: dataset.table_name || (dataset.sql_text ? "Virtual (SQL)" : "(none)") },
+                          { label: "Date column", value: dataset.date_column || "(none)" },
+                        ].map(({ label, value }) => (
+                          <tr key={label}>
+                            <td>{label}</td>
+                            <td><span className={s.mono}>{value}</span></td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
-                ) : (
-                  <p style={{ margin: 0, fontSize: 13, color: "var(--text-muted)" }}>No metrics defined</p>
-                )}
-              </div>
-            </div>
-          </div>
-        </details>
-
-        {/* Schema & Dimensions */}
-        <details className="ds-section" style={{ border: "1px solid var(--border)", borderRadius: 12, background: "var(--bg-surface)" }}>
-          <summary style={{ padding: "12px 16px", cursor: "pointer", listStyle: "none", display: "flex", alignItems: "center", justifyContent: "space-between", fontWeight: 600, fontSize: 13, color: "var(--text-primary)", userSelect: "none", borderRadius: 12, transition: "background 0.15s" }}>
-            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <i className="fas fa-columns" style={{ fontSize: 12, color: "var(--accent)", opacity: 0.7 }} />
-              Schema & Dimensions
-              <span style={{ fontWeight: 400, color: "var(--text-muted)", fontSize: 12 }}>({schemaColumns?.length || 0} columns, {dataset.dimensions?.length || 0} joins)</span>
-            </span>
-            <i className="fas fa-chevron-down ds-chevron" style={{ fontSize: 10, color: "var(--text-muted)", transition: "transform 0.2s" }} />
-          </summary>
-          <div style={{ padding: "16px", borderTop: "1px solid var(--border)" }}>
-            <div className="ds-detail-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
-              <div>
-                <h4 style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", margin: "0 0 10px 0", textTransform: "uppercase", letterSpacing: "0.05em" }}>Columns</h4>
-                {schemaColumns && schemaColumns.length > 0 ? (
-                  <div style={{ overflowY: "auto", maxHeight: 320 }}>
-                    <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
-                      <tbody>
-                        {schemaColumns.map((col, idx) => {
-                          let role = "";
-                          let roleColor = "var(--text-muted)";
-                          if (col.is_dimension) { role = "DIM"; roleColor = "var(--accent)"; }
-                          else if (col.is_metric) { role = "METRIC"; roleColor = "var(--success)"; }
-                          else if ((col.semantic_type || "").toLowerCase() === "time") { role = "TIME"; roleColor = "#8b5cf6"; }
-                          return (
-                            <tr key={`${col.column_name}-${idx}`} style={{ borderBottom: idx < schemaColumns.length - 1 ? "1px solid var(--border)" : "none" }}>
-                              <td style={{ padding: "8px 12px 8px 0", fontWeight: 500, fontSize: 13, color: "var(--text-primary)" }}>{col.column_name}</td>
-                              <td style={{ padding: "8px 8px 8px 0", fontSize: 12, color: "var(--text-secondary)" }}>{col.data_type}</td>
-                              <td style={{ padding: "8px 0", fontSize: 10, fontWeight: 700, color: roleColor, textTransform: "uppercase" }}>{role}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+                  <div className={s.col}>
+                    <h2 className={s.colHead}>
+                      Metrics{dataset.metrics && dataset.metrics.length > 0 ? ` (${dataset.metrics.length})` : ""}
+                    </h2>
+                    {dataset.metrics && dataset.metrics.length > 0 ? (
+                      <div className={s.scroll}>
+                        <table className={s.defs}>
+                          <tbody>
+                            {dataset.metrics.map((m, idx) => (
+                              <tr key={`${m.name}-${idx}`}>
+                                <td>{m.name}</td>
+                                <td>
+                                  <div className={s.cell}>
+                                    <span className={`${s.tag} ${s.tagMetric}`}>{m.metric_type}</span>
+                                    <span className={s.mono}>{m.expression}</span>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <p className={s.empty}>No metrics defined</p>
+                    )}
                   </div>
-                ) : (
-                  <p style={{ margin: 0, fontSize: 13, color: "var(--text-muted)" }}>No columns</p>
-                )}
-              </div>
-              <div>
-                <h4 style={{ fontSize: 11, fontWeight: 700, color: "var(--text-muted)", margin: "0 0 10px 0", textTransform: "uppercase", letterSpacing: "0.05em" }}>Joins</h4>
-                {dataset.dimensions && dataset.dimensions.length > 0 ? (
-                  <div style={{ overflowY: "auto", maxHeight: 320 }}>
-                    <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
-                      <tbody>
-                        {dataset.dimensions.map((dim, idx) => {
-                          const parsed = parseJoinCondition(dim.join_condition || "");
-                          const tableDisplay = parsed.dimTable ? (parsed.dimSchema ? `${parsed.dimSchema}.${parsed.dimTable}` : parsed.dimTable) : dim.dimension_table;
-                          let joinDisplay = dim.join_condition || "";
-                          if (parsed.factTable && parsed.factKey && parsed.dimTable && parsed.dimKey) {
-                            joinDisplay = `${parsed.factTable}.${parsed.factKey} = ${parsed.dimTable}.${parsed.dimKey}`;
-                          }
-                          return (
-                            <tr key={`${dim.dimension_table}-${idx}`} style={{ borderBottom: idx < (dataset.dimensions?.length ?? 0) - 1 ? "1px solid var(--border)" : "none" }}>
-                              <td style={{ padding: "8px 12px 8px 0", fontWeight: 500, fontSize: 13 }}>{tableDisplay}</td>
-                              <td style={{ padding: "8px 0", fontSize: 12, fontFamily: "monospace", color: "var(--text-muted)" }} title={dim.join_condition}>{joinDisplay}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <p style={{ margin: 0, fontSize: 13, color: "var(--text-muted)" }}>No dimension joins</p>
-                )}
-              </div>
-            </div>
-          </div>
-        </details>
+                </div>
+              </details>
 
-        </div>
-        </div>
+              <details className={s.fold}>
+                <summary className={s.foldSummary}>
+                  <i className={`fas fa-table-columns ${s.barIcon}`} aria-hidden="true" />
+                  <span className={s.barName}>Schema &amp; dimensions</span>
+                  <span className={s.barNote}>
+                    {schemaColumns.length} columns · {dataset.dimensions?.length || 0} joins
+                  </span>
+                  <i className={`fas fa-chevron-down ${s.chev} ${s.push}`} aria-hidden="true" />
+                </summary>
+                <div className={s.foldBody}>
+                  <div className={s.col}>
+                    <h2 className={s.colHead}>Columns</h2>
+                    {schemaColumns.length > 0 ? (
+                      <div className={s.scroll}>
+                        <table className={s.defs}>
+                          <tbody>
+                            {schemaColumns.map((col, idx) => {
+                              let role = "";
+                              let roleClass = "";
+                              if (col.is_dimension) { role = "Dimension"; roleClass = s.tagDim; }
+                              else if (col.is_metric) { role = "Metric"; roleClass = s.tagMetric; }
+                              else if ((col.semantic_type || "").toLowerCase() === "time") { role = "Time"; roleClass = s.tagTime; }
+                              return (
+                                <tr key={`${col.column_name}-${idx}`}>
+                                  <td>{col.column_name}</td>
+                                  <td>
+                                    <div className={s.cell}>
+                                      <span className={s.mono}>{col.data_type}</span>
+                                      {role && <span className={`${s.tag} ${roleClass}`}>{role}</span>}
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <p className={s.empty}>No columns</p>
+                    )}
+                  </div>
+                  <div className={s.col}>
+                    <h2 className={s.colHead}>Joins</h2>
+                    {dataset.dimensions && dataset.dimensions.length > 0 ? (
+                      <div className={s.scroll}>
+                        <table className={s.defs}>
+                          <tbody>
+                            {dataset.dimensions.map((dim, idx) => {
+                              const parsed = parseJoinCondition(dim.join_condition || "");
+                              const tableDisplay = parsed.dimTable
+                                ? (parsed.dimSchema ? `${parsed.dimSchema}.${parsed.dimTable}` : parsed.dimTable)
+                                : dim.dimension_table;
+                              let joinDisplay = dim.join_condition || "";
+                              if (parsed.factTable && parsed.factKey && parsed.dimTable && parsed.dimKey) {
+                                joinDisplay = `${parsed.factTable}.${parsed.factKey} = ${parsed.dimTable}.${parsed.dimKey}`;
+                              }
+                              return (
+                                <tr key={`${dim.dimension_table}-${idx}`}>
+                                  <td>{tableDisplay}</td>
+                                  <td title={dim.join_condition}><span className={s.mono}>{joinDisplay}</span></td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <p className={s.empty}>No dimension joins</p>
+                    )}
+                  </div>
+                </div>
+              </details>
+            </>
+          )}
+        </>
       )}
     </div>
   );

@@ -3,7 +3,7 @@
 import asyncio
 import json
 import threading
-from fastapi import APIRouter, Request, Response, HTTPException, Query, Depends
+from fastapi import APIRouter, BackgroundTasks, Request, Response, HTTPException, Query, Depends
 from middleware.auth import require_auth
 from middleware.permissions import require_min_role
 from middleware.rate_limit import sql_execute_limiter
@@ -430,6 +430,34 @@ def _record_view(record: dict) -> dict:
     return view
 
 
+def _write_history(row: dict, user: str, label: str) -> None:
+    """Record one statement in query history. A lost row never fails a read."""
+    try:
+        history_svc.create_history(row, user)
+    except Exception as error:
+        print(f"[History] Failed to record {label}: {error}")
+
+
+def _record_history_after_response(background: BackgroundTasks | None, row: dict,
+                                   user: str, label: str) -> None:
+    """Queue the history row to be written once the response has been sent.
+
+    A write to the metadata store costs on the order of half a second against
+    the deployed control plane, and inline it was charged to a result the
+    caller was already waiting on — the dataset page's preview of a fifteen-row
+    table paid for this insert before it could render a single row. The
+    streamed path already records from its completion callback; this is the
+    same placement for the non-streamed one.
+
+    With no task queue (a direct call rather than a request) the write happens
+    here, so the caller still gets the same ordering guarantee it had before.
+    """
+    if background is None:
+        _write_history(row, user, label)
+        return
+    background.add_task(_write_history, row, user, label)
+
+
 def _streamed_history(summary: dict, scoped_sql: str, catalog: str, dataset_id, started_at: int, user: str) -> None:
     """The history row for a streamed statement, from the final record."""
     state = str(summary.get("state") or "").upper()
@@ -518,7 +546,11 @@ async def cancel_lab_query(query_id: str, ctx=Depends(require_min_role("Analyst"
 
 @router.post("/lab/query")
 @statement_route("query")
-async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_min_role("Analyst"))):
+async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_min_role("Analyst")),
+                    # FastAPI injects the task queue from the bare annotation;
+                    # widening it to Optional would make it a body field. The
+                    # default stands in for a direct call outside a request.
+                    background: BackgroundTasks = None):
     user = ctx.email
     sql_execute_limiter.check(user)
     user_id = user
@@ -569,17 +601,14 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
         # its result cache. The Studio labels the result with it.
         details = result.get("query_details") if isinstance(result.get("query_details"), dict) else {}
         execution = details.get("execution") if isinstance(details.get("execution"), dict) else None
-        try:
-            history_svc.create_history({
-                "sql_text": scoped_sql, "duration_ms": duration_ms,
-                "database_name": "engine:" + source["engine_catalog"],
-                "row_count": len(rows), "status": "success",
-                "dataset_id": int(data.datasetId) if data.datasetId else None,
-                "trigger_source": "lab", "run_context": None, "tables_used": None,
-                "started_at": start_time,
-            }, user)
-        except Exception as error:
-            print(f"[History] Failed to record Engine lab query: {error}")
+        _record_history_after_response(background, {
+            "sql_text": scoped_sql, "duration_ms": duration_ms,
+            "database_name": "engine:" + source["engine_catalog"],
+            "row_count": len(rows), "status": "success",
+            "dataset_id": int(data.datasetId) if data.datasetId else None,
+            "trigger_source": "lab", "run_context": None, "tables_used": None,
+            "started_at": start_time,
+        }, user, "Engine lab query")
         return {
             "success": True,
             "columns": columns,

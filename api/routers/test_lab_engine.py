@@ -341,6 +341,43 @@ class EngineLabStreamTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(error.exception.detail, "SQL parse error: Expected: an expression")
         self.assertEqual(history, [])
 
+    async def test_history_is_queued_behind_the_response_not_written_in_it(self):
+        """The statement's result does not wait on the history insert.
+
+        A metadata write costs on the order of half a second against the
+        deployed control plane; charging it to the response made the dataset
+        page's preview of a fifteen-row table wait for it. The row is still
+        recorded — in the task queue the response drains afterwards."""
+        from fastapi import BackgroundTasks
+
+        background, written = BackgroundTasks(), []
+        body = LabQueryBody(query="SELECT 1", engineSourceId="source-1", engineSchema="silver")
+        with patch.object(lab, "_engine_source", return_value={"engine_catalog": "kavedb"}), \
+             patch.object(lab.sql_execute_limiter, "check"), \
+             patch("services.engine_bridge.execute", return_value={"columns": [{"name": "n"}], "data": [[1]]}), \
+             patch.object(lab.history_svc, "create_history", side_effect=lambda row, user: written.append((row, user))):
+            response = await lab.run_query(None, body, self.ctx, background)
+            self.assertEqual(response["rows"], [[1]])
+            self.assertEqual(written, [])        # nothing written inside the request
+            self.assertEqual(len(background.tasks), 1)
+            await background()                   # what the response does next
+        self.assertEqual(len(written), 1)
+        row, user = written[0]
+        self.assertEqual((row["status"], row["row_count"], row["database_name"]),
+                         ("success", 1, "engine:kavedb"))
+        self.assertEqual(user, "analyst@example.com")
+
+    async def test_history_is_written_inline_when_there_is_no_task_queue(self):
+        """A direct call keeps the ordering it had: no queue, no deferral."""
+        written = []
+        body = LabQueryBody(query="SELECT 1", engineSourceId="source-1", engineSchema="silver")
+        with patch.object(lab, "_engine_source", return_value={"engine_catalog": "kavedb"}), \
+             patch.object(lab.sql_execute_limiter, "check"), \
+             patch("services.engine_bridge.execute", return_value={"columns": [{"name": "n"}], "data": [[1]]}), \
+             patch.object(lab.history_svc, "create_history", side_effect=lambda row, user: written.append((row, user))):
+            await lab.run_query(None, body, self.ctx)
+        self.assertEqual(len(written), 1)
+
     async def test_inline_path_is_unchanged_without_stream(self):
         body = LabQueryBody(query="SELECT 1", engineSourceId="source-1", engineSchema="silver")
         self.assertFalse(body.stream)

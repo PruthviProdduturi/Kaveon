@@ -1,22 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { msalFetch } from "../utils/msalFetch";
-
-interface DLM {
-  status?: string;
-  built_at?: string;
-  values_indexed?: number;
-  manifest?: { columns?: { name?: string; is_dimension?: boolean; is_metric?: boolean }[]; metrics?: { name?: string }[] };
-  stats_rollup?: {
-    generation?: {
-      duration_ms?: number; built_at?: string; answers_precomputed?: number; values_indexed?: number; rows_scanned?: number; scans?: number;
-      skipped_breakdowns?: { dimension: string; reason: string }[];   // what the source could not deliver, and why
-    };
-    date_range?: { min?: string; max?: string };
-    row_counts?: Record<string, number>;
-  };
-}
+import type { DlmArtifactHandle } from "../hooks/useDlmArtifact";
 
 function fmtMs(ms?: number): string {
   if (ms == null) return "—";
@@ -41,94 +27,98 @@ function comboCount(d: number): number {
   return d * (d - 1) / 2;
 }
 
-export function DatasetContextPanel({ datasetId }: { datasetId?: string }) {
-  const [dlm, setDlm] = useState<DLM | null>(null);
-  const [state, setState] = useState<"loading" | "none" | "ready" | "generating">("loading");
+/**
+ * The Context card on the dataset page.
+ *
+ * The compiled artifact is read once for the whole page and handed in; this
+ * card no longer fetches it a second time of its own.
+ */
+export function DatasetContextPanel({ datasetId, dlm, className }: {
+  datasetId?: string;
+  dlm: DlmArtifactHandle;
+  className?: string;
+}) {
+  const [generating, setGenerating] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
 
-  const load = useCallback(async () => {
-    if (!datasetId) return;
-    try {
-      const res = await msalFetch(`/api/v1/datasets/${datasetId}/dlm`);
-      if (res.ok) { setDlm(await res.json()); setState("ready"); }
-      else { setDlm(null); setState("none"); }
-    } catch { setDlm(null); setState("none"); }
-  }, [datasetId]);
-
-  useEffect(() => { load(); }, [load]);
+  const artifact = dlm.artifact;
+  const state = generating ? "generating" : dlm.state;
 
   const generate = useCallback(async () => {
     if (!datasetId) return;
     setShowConfirm(false);
-    setState("generating");
+    setGenerating(true);
     try {
       await msalFetch(`/api/v1/datasets/${datasetId}/dlm/generate?force=true`, { method: "POST" });
-    } catch { /* ignore */ }
-    await load();
-  }, [datasetId, load]);
+    } finally {
+      await dlm.reload();
+      setGenerating(false);
+    }
+  }, [datasetId, dlm]);
 
-  const gen = dlm?.stats_rollup?.generation;
-  const cols = dlm?.manifest?.columns ?? [];
+  const gen = artifact?.stats_rollup?.generation;
+  const cols = artifact?.manifest?.columns ?? [];
   const dims = cols.filter((c) => c.is_dimension).map((c) => c.name).filter(Boolean) as string[];
-  const metrics = (dlm?.manifest?.metrics ?? []).map((m) => m.name).filter(Boolean) as string[];
-  const hasContext = state === "ready" || state === "generating";
+  const metrics = (artifact?.manifest?.metrics ?? []).map((m) => m.name).filter(Boolean) as string[];
+  const hasContext = (state === "ready" || state === "generating") && !!artifact;
 
-  const rowCounts = dlm?.stats_rollup?.row_counts || {};
+  const rowCounts = artifact?.stats_rollup?.row_counts || {};
   const maxRows = Math.max(0, ...Object.values(rowCounts));
-  const dateRange = dlm?.stats_rollup?.date_range;
+  const dateRange = artifact?.stats_rollup?.date_range;
   const estimatedAnswers = metrics.length * (1 + dims.length + comboCount(dims.length));
 
   const handleRegenClick = () => {
     if (hasContext) {
       setShowConfirm(true);
     } else {
-      generate();
+      void generate();
     }
   };
 
-  const chip: React.CSSProperties = { display: "inline-block", padding: "3px 10px", borderRadius: 6, marginRight: 6, marginBottom: 6, background: "rgba(var(--accent-rgb),0.08)", color: "var(--text-primary)", fontSize: 12, fontWeight: 500 };
+  const chip: React.CSSProperties = { display: "inline-block", padding: "3px 10px", borderRadius: 6, background: "rgba(var(--accent-rgb),0.08)", color: "var(--text-primary)", fontSize: 12, fontWeight: 500 };
   const statCell: React.CSSProperties = { display: "flex", flexDirection: "column", gap: 2, minWidth: 100 };
   const statLabel: React.CSSProperties = { fontSize: 11, color: "var(--text-muted)", fontWeight: 500, textTransform: "uppercase" as const, letterSpacing: "0.04em" };
-  const statValue: React.CSSProperties = { fontSize: 18, fontWeight: 700, color: "var(--text-primary)" };
+  const statValue: React.CSSProperties = { fontSize: 20, fontWeight: 700, color: "var(--text-primary)" };
 
   return (
     <>
-      <div className="card" style={{ flexShrink: 0, border: "1px solid var(--border)", borderRadius: 12, padding: "16px 20px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <i className="fas fa-bolt" style={{ fontSize: 12, color: "var(--accent)" }} />
-          <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>
+      <section className={className}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 26 }}>
+          <i className="fas fa-bolt" aria-hidden="true" style={{ width: 13, textAlign: "center", fontSize: 12, color: "var(--accent)" }} />
+          <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)", flexShrink: 0 }}>
             Context
           </span>
-          {hasContext && dlm && (
-            <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 400 }}>
-              Built {fmtBuilt(gen?.built_at || dlm.built_at)} · {compact(gen?.values_indexed ?? dlm.values_indexed)} values · {compact(gen?.answers_precomputed)} precomputed answers
+          {state === "loading" && (
+            <span
+              aria-hidden="true"
+              style={{ display: "block", width: 230, height: 9, borderRadius: 3, background: "var(--bg-hover)", border: "1px solid var(--border)" }}
+            />
+          )}
+          {state !== "loading" && (
+            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12, color: "var(--text-muted)" }}>
+              {hasContext
+                ? `Built ${fmtBuilt(gen?.built_at || artifact?.built_at)} · ${compact(gen?.values_indexed ?? artifact?.values_indexed)} values · ${compact(gen?.answers_precomputed)} precomputed answers`
+                : "Not built. Generate to answer questions from precomputed results, with no live database query."}
             </span>
           )}
           <button
+            type="button"
             onClick={handleRegenClick}
             disabled={state === "generating" || state === "loading"}
-            style={{ marginLeft: "auto", padding: "5px 12px", background: "var(--accent)", color: "#fff", border: "none", borderRadius: 7, cursor: state === "generating" ? "default" : "pointer", fontSize: 12, fontWeight: 600, opacity: state === "generating" ? 0.7 : 1, display: "flex", alignItems: "center", gap: 5 }}
+            style={{ marginLeft: "auto", flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 6, height: 26, padding: "0 12px", background: "var(--accent)", color: "#fff", border: "none", borderRadius: 7, cursor: state === "generating" || state === "loading" ? "default" : "pointer", fontSize: 12, fontWeight: 600, opacity: state === "generating" || state === "loading" ? 0.6 : 1 }}
           >
-            <i className={`fas ${state === "generating" ? "fa-spinner fa-spin" : "fa-bolt"}`} style={{ fontSize: 10 }} />
-            {state === "generating" ? "Generating…" : hasContext ? "Regenerate" : "Generate"}
+            <i className={`fas ${state === "generating" ? "fa-spinner fa-spin" : "fa-bolt"}`} aria-hidden="true" style={{ fontSize: 10 }} />
+            {state === "generating" ? "Generating" : hasContext ? "Regenerate" : "Generate"}
           </button>
         </div>
 
-        {state === "loading" && <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 10 }}>Loading…</div>}
-
-        {state === "none" && (
-          <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 10 }}>
-            No context yet. Generate to enable instant answers from precomputed results — no live database query needed.
-          </div>
-        )}
-
-        {hasContext && dlm && (dims.length > 0 || metrics.length > 0) && (
-          <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", gap: 4 }}>
+        {hasContext && (dims.length > 0 || metrics.length > 0) && (
+          <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", gap: 6 }}>
             {dims.map((d) => <span key={d} style={chip}>{d}</span>)}
             {metrics.map((m) => <span key={m} style={{ ...chip, background: "rgba(var(--success-rgb, 34,197,94),0.08)", color: "var(--success)" }}>{m}</span>)}
           </div>
         )}
-      </div>
+      </section>
 
       {showConfirm && (
         <div
@@ -136,17 +126,16 @@ export function DatasetContextPanel({ datasetId }: { datasetId?: string }) {
           onClick={() => setShowConfirm(false)}
         >
           <div
-            className="card"
-            style={{ width: 520, maxWidth: "92vw", borderRadius: 16, border: "1px solid var(--border)", background: "var(--bg-surface)", padding: "28px 32px", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}
+            style={{ width: 520, maxWidth: "92vw", borderRadius: 16, border: "1px solid var(--border)", background: "var(--bg-surface)", padding: "28px 32px", boxShadow: "var(--shadow-lg)" }}
             onClick={(e) => e.stopPropagation()}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
               <div style={{ width: 36, height: 36, borderRadius: 10, background: "rgba(var(--accent-rgb),0.12)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <i className="fas fa-bolt" style={{ fontSize: 16, color: "var(--accent)" }} />
+                <i className="fas fa-bolt" aria-hidden="true" style={{ fontSize: 16, color: "var(--accent)" }} />
               </div>
               <div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text-primary)" }}>Regenerate Context</div>
-                <div style={{ fontSize: 12, color: "var(--text-muted)" }}>This will recompute all precomputed answers from live data</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text-primary)" }}>Regenerate context</div>
+                <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Every precomputed answer is recomputed from live data</div>
               </div>
             </div>
 
@@ -168,8 +157,8 @@ export function DatasetContextPanel({ datasetId }: { datasetId?: string }) {
                 <span style={statValue}>{metrics.length}</span>
               </div>
               <div style={statCell}>
-                <span style={statLabel}>Values Indexed</span>
-                <span style={statValue}>{compact(gen?.values_indexed ?? dlm?.values_indexed)}</span>
+                <span style={statLabel}>Values indexed</span>
+                <span style={statValue}>{compact(gen?.values_indexed ?? artifact?.values_indexed)}</span>
               </div>
               <div style={statCell}>
                 <span style={statLabel}>Answers</span>
@@ -212,16 +201,18 @@ export function DatasetContextPanel({ datasetId }: { datasetId?: string }) {
 
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 }}>
               <button
+                type="button"
                 onClick={() => setShowConfirm(false)}
                 style={{ padding: "8px 20px", background: "transparent", color: "var(--text-secondary)", border: "1px solid var(--border)", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 600 }}
               >
                 Cancel
               </button>
               <button
+                type="button"
                 onClick={generate}
                 style={{ padding: "8px 20px", background: "var(--accent)", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}
               >
-                <i className="fas fa-bolt" style={{ fontSize: 11 }} />
+                <i className="fas fa-bolt" aria-hidden="true" style={{ fontSize: 11 }} />
                 Regenerate
               </button>
             </div>
