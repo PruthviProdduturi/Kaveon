@@ -846,3 +846,7 @@ are useful qualification controls, not ClickHouse parity: the same-host
 ClickHouse references remain q35 **6.316 s** and q33 **4.552 s**. The measured
 priority is now reducing the high-cardinality grouped-state exchange/final
 merge while keeping bounded-memory failure behavior exact.
+
+An eight-way exchange fan-out control was also rejected: q35 returned the exact
+rows but took **29.29 s** versus **13.79 s** with four exchange partitions.
+The four-way exchange remains the selected fan-in for the two-worker profile.
