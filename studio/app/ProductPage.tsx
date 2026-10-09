@@ -274,7 +274,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
             maxWidth: 640, margin: "0 auto 20px", fontWeight: 400,
             animation: "hero-sub-drop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 0.5s both",
           }}>
-            Connect your data. Ask questions. Build intelligence.<br />One governed platform for analytics, dashboards, and deterministic data reasoning.
+            Make every question decision-ready.<br />One governed platform for analytics, dashboards, and deterministic data intelligence.
           </p>
 
           {/* Subtle accent line */}
@@ -347,7 +347,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
               </Anim>
             ))}
           </div>
-          <div style={{ display: "flex", justifyContent: "center", gap: 18, flexWrap: "wrap", marginTop: 26, color: "#6f7d90", fontSize: 12 }}><span>Solid capabilities are available today</span><span>·</span><span>Alpha and target work is labeled explicitly</span></div>
+          <div style={{ display: "flex", justifyContent: "center", gap: 18, flexWrap: "wrap", marginTop: 26, color: "#6f7d90", fontSize: 12 }}><span>Solid capabilities are available today</span><span>·</span><span>Preview capabilities are labeled explicitly</span></div>
         </div>
       </section>
 
@@ -358,7 +358,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
           <div style={{ textAlign: "center", marginBottom: 56 }}>
             <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "4px", color: B, marginBottom: 12 }}>Platform</div>
             <h2 style={{ fontSize: "clamp(28px, 4vw, 40px)", fontWeight: 700, letterSpacing: "-1px" }}>Everything you need</h2>
-            <p style={{ fontSize: 16, color: "#718094", marginTop: 12 }}>One platform for governed data, deterministic reasoning, fast analytics, and reusable intelligence.</p>
+            <p style={{ fontSize: 16, color: "#718094", marginTop: 12 }}>One platform for governed data, deterministic reasoning, analytics, and reusable intelligence.</p>
           </div>
           <div className="about-grid-3" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gridAutoRows: "auto", gap: 14 }}>
             <Anim dir="up" delay={0} style={{ gridColumn: "span 2" }}>
