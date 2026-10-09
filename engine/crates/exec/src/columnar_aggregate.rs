@@ -2570,6 +2570,39 @@ mod tests {
     }
 
     #[test]
+    fn fixed_width_partial_frame_round_trips_without_row_reencoding() {
+        // The ClickBench high-cardinality path commonly uses two non-null
+        // primitive keys.  Keep this wire format contract explicit: the
+        // partial encoder must emit KF3 and the receiver must merge it back
+        // into the same logical groups and states.  This protects the
+        // fixed-width exchange fast path from silently falling back to the
+        // variable-width row decoder when its schema evolves.
+        let types = [DataType::Int64, DataType::Int32];
+        let mut source = ColumnarGroups::new(&types, &[AggregateState::Count(0)]).unwrap();
+        let left: ArrayRef = Arc::new(Int64Array::from(vec![1, 1, 2, 2]));
+        let right: ArrayRef = Arc::new(Int32Array::from(vec![10, 10, 20, 21]));
+        source.push_batch(&[left, right], &[None], 4).unwrap();
+
+        let (mut key_builder, mut state_builder) = source.encode().unwrap();
+        let keys = key_builder.finish();
+        let states = state_builder.finish();
+        assert_eq!(keys.len(), 3);
+        assert!(keys.value(0).starts_with(FIXED_KEY_MAGIC));
+        assert!(keys.value(1).starts_with(FIXED_KEY_MAGIC));
+
+        let mut receiver = ColumnarGroups::new(&types, &[AggregateState::Count(0)]).unwrap();
+        receiver
+            .merge_encoded_batch(&keys, &states, keys.len())
+            .unwrap();
+        assert_eq!(receiver.len(), 3);
+        let mut groups = receiver.into_groups();
+        groups.sort_by_key(|(keys, _)| format!("{keys:?}"));
+        assert_eq!(groups[0].1, vec![AggregateState::Count(2)]);
+        assert_eq!(groups[1].1, vec![AggregateState::Count(1)]);
+        assert_eq!(groups[2].1, vec![AggregateState::Count(1)]);
+    }
+
+    #[test]
     fn merges_partial_groups_by_value() {
         let mut groups =
             ColumnarGroups::new(&[DataType::Utf8, DataType::Int32], &template()).unwrap();
