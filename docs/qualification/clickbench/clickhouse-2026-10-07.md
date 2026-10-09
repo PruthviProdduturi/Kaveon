@@ -901,3 +901,6 @@ DESC` clause. The improvement is promising but not yet a ClickHouse parity
 result: the qualified ClickHouse references remain q33 **4.552 s** and q35
 **6.316 s**, and the option stays opt-in until repeated runs establish a stable
 CPU/I/O trade-off.
+A second LZ4 run on the same host measured q33 **22.752 s** and q35
+**18.568 s**, confirming that the first paired improvement is not yet
+reproducible enough to make compression the default.
