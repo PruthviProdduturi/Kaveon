@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timezone
 from typing import List, Optional
 import database.metadata as db
-from services import dashboard_backfill, product_outbox, product_shadow_read, product_store
+from services import dashboard_backfill, product_outbox, product_shadow_read, product_store, thumbnails
 
 VALID_VISIBILITY = {"private", "internal", "published"}
 
@@ -85,6 +85,8 @@ def _adapt(row: dict) -> dict:
         "theme": row.get("theme"),
         "thumbnail": row.get("thumbnail"),
         "thumbnail_dark": row.get("thumbnail_dark"),
+        "has_thumbnail": bool(row.get("thumbnail")),
+        "has_thumbnail_dark": bool(row.get("thumbnail_dark")),
         "layout": layout,
         "charts": row.get("charts") or "[]",
         "filters": row.get("filters") or "[]",
@@ -108,7 +110,10 @@ def _adapt_product(document: dict) -> dict:
             raise RuntimeError(f"KaveonDB dashboard {field} is invalid")
         result[field] = json.dumps(value)
     result.update({
-        "thumbnail": None, "thumbnail_dark": None,
+        "thumbnail": document.get("thumbnail"),
+        "thumbnail_dark": document.get("thumbnail_dark"),
+        "has_thumbnail": bool(document.get("thumbnail")),
+        "has_thumbnail_dark": bool(document.get("thumbnail_dark")),
         "owner": result.get("created_by"), "favorite": bool(result.get("favorite", False)),
     })
     return result
@@ -144,7 +149,18 @@ def _product_document(data: dict, dashboard_id: str, actor: str, prior: dict | N
     if visibility not in VALID_VISIBILITY:
         raise ValueError("Dashboard visibility is invalid")
     owner = str(prior.get("created_by") or actor)
+    # The Library previews are part of the record, so each has to survive an
+    # update that does not mention it. A dashboard is captured once per theme;
+    # whichever slot is absent simply carries no key.
+    previews = {
+        field: thumbnails.normalise(
+            data[field] if field in data else prior.get(field),
+            thumbnails.DASHBOARD_MAX_CHARS,
+        )
+        for field in ("thumbnail", "thumbnail_dark")
+    }
     return {
+        **{field: value for field, value in previews.items() if value},
         "id": dashboard_id,
         "name": data.get("name", prior.get("name")),
         "description": data.get("description", prior.get("description")),
@@ -163,6 +179,30 @@ def _product_document(data: dict, dashboard_id: str, actor: str, prior: dict | N
     }
 
 
+def _summary(dashboard: dict) -> dict:
+    """A list entry: everything except the preview images themselves.
+
+    Two inline data URIs per dashboard would make every Library load carry
+    megabytes of JSON the browser cannot cache, so the list says only which
+    previews exist and the card fetches one from /dashboards/{id}/thumbnail.
+    """
+    return {**dashboard, "thumbnail": None, "thumbnail_dark": None}
+
+
+def get_dashboard_thumbnail(dashboard_id: str, user_email: str, role: str, dark: bool) -> Optional[str]:
+    """Return one dashboard's stored preview for a theme, falling back to the
+    other theme so a dashboard captured only once still shows a preview."""
+    dashboard = get_dashboard_by_id(dashboard_id, user_email, role, include_thumbnails=True)
+    if dashboard is None:
+        return None
+    order = ("thumbnail_dark", "thumbnail") if dark else ("thumbnail", "thumbnail_dark")
+    for field in order:
+        value = dashboard.get(field)
+        if value:
+            return value
+    return None
+
+
 def _vis_clause(role_idx: int, email_idx: int, alias: str = "d") -> str:
     return (
         f"({alias}.visibility = 'published' "
@@ -175,7 +215,7 @@ def _vis_clause(role_idx: int, email_idx: int, alias: str = "d") -> str:
 def list_dashboards(user_email: str, role: str = "Viewer") -> List[dict]:
     from services import product_read_authority
     if product_read_authority.enabled("dashboards"):
-        return [_adapt_product(item) for item in
+        return [_summary(_adapt_product(item)) for item in
                 product_read_authority.list_documents("dashboards", user_email, role)]
     _ensure_thumbnail_dark_column()
     vis = _vis_clause(1, 0)
@@ -190,15 +230,22 @@ def list_dashboards(user_email: str, role: str = "Viewer") -> List[dict]:
         WHERE d.id IS NOT NULL AND {vis}
         ORDER BY d.modified_at DESC
     """, [user_email, role])
-    return [_adapt(r) for r in result["rows"]]
+    return [_summary(_adapt(r)) for r in result["rows"]]
 
 
 def get_dashboard_by_id(
     dashboard_id: str,
     user_email: Optional[str] = None,
     role: str = "Admin",
+    *,
+    include_thumbnails: bool = False,
 ) -> Optional[dict]:
-    """role defaults to 'Admin' for internal/rendering calls."""
+    """role defaults to 'Admin' for internal/rendering calls.
+
+    The preview images are withheld unless asked for: they are binary resources
+    the browser should fetch and cache on its own, not fields every caller has
+    to carry. get_dashboard_thumbnail is the one reader that wants them.
+    """
     from services import product_read_authority
     if product_read_authority.enabled("dashboards"):
         document = product_read_authority.read_document(
@@ -206,13 +253,15 @@ def get_dashboard_by_id(
         )
         if document is not None:
             document.setdefault("favorite", False)
-            return _adapt_product(document)
+            dashboard = _adapt_product(document)
+            return dashboard if include_thumbnails else _summary(dashboard)
         return None
+    _ensure_thumbnail_dark_column()
     if user_email:
         vis = _vis_clause(2, 1)
         row = db.query_one(f"""
             SELECT d.id, d.name, d.slug, d.description, d.layout, d.charts, d.filters,
-                   d.theme, d.tags, d.is_published, d.is_archived, d.visibility,
+                   d.theme, d.tags, d.thumbnail, d.thumbnail_dark, d.is_published, d.is_archived, d.visibility,
                    d.created_by, d.modified_by, d.created_at, d.modified_at
             FROM dbo.dashboards d
             WHERE d.id = @param0 AND d.id IS NOT NULL AND {vis}
@@ -220,7 +269,7 @@ def get_dashboard_by_id(
     else:
         row = db.query_one("""
             SELECT id, name, slug, description, layout, charts, filters,
-                   theme, tags, is_published, is_archived, visibility,
+                   theme, tags, thumbnail, thumbnail_dark, is_published, is_archived, visibility,
                    created_by, modified_by, created_at, modified_at
             FROM dbo.dashboards WHERE id = @param0 AND id IS NOT NULL
         """, [dashboard_id])
@@ -234,7 +283,9 @@ def get_dashboard_by_id(
         except Exception as error:
             import logging
             logging.getLogger(__name__).warning("dashboard_shadow_read_error type=%s", type(error).__name__)
-    return dashboard
+    if dashboard is None or include_thumbnails:
+        return dashboard
+    return _summary(dashboard)
 
 
 def create_dashboard(data: dict, user_id: str) -> dict:
@@ -290,7 +341,8 @@ def create_dashboard(data: dict, user_id: str) -> dict:
     return created
 
 
-def update_dashboard(dashboard_id: str, data: dict, actor: str | None = None) -> Optional[dict]:
+def update_dashboard(dashboard_id: str, data: dict, actor: str | None = None,
+                     role: str = "Analyst") -> Optional[dict]:
     from services import product_read_authority
     if product_read_authority.enabled("dashboards"):
         if not actor:
@@ -305,7 +357,7 @@ def update_dashboard(dashboard_id: str, data: dict, actor: str | None = None) ->
         updated = _product_document(data, dashboard_id, actor, document)
         product_store.transact([
             product_store.ProductMutation("update", "dashboard", dashboard_id, updated, revision)
-        ], actor, "Analyst")
+        ], product_store.writer(document.get("created_by"), actor, role), "Analyst")
         return get_dashboard_by_id(dashboard_id, actor, "Admin")
     if not get_dashboard_by_id(dashboard_id):
         return None
@@ -321,10 +373,12 @@ def update_dashboard(dashboard_id: str, data: dict, actor: str | None = None) ->
     if "theme" in data:
         updates.append(f"theme = @param{i}"); params.append(data["theme"]); i += 1
     if "thumbnail" in data:
-        updates.append(f"thumbnail = @param{i}"); params.append(data["thumbnail"]); i += 1
+        updates.append(f"thumbnail = @param{i}")
+        params.append(thumbnails.normalise(data["thumbnail"], thumbnails.DASHBOARD_MAX_CHARS)); i += 1
     if "thumbnail_dark" in data:
         _ensure_thumbnail_dark_column()
-        updates.append(f"thumbnail_dark = @param{i}"); params.append(data["thumbnail_dark"]); i += 1
+        updates.append(f"thumbnail_dark = @param{i}")
+        params.append(thumbnails.normalise(data["thumbnail_dark"], thumbnails.DASHBOARD_MAX_CHARS)); i += 1
 
     def _to_str(v):
         return v if isinstance(v, str) else json.dumps(v)
@@ -355,7 +409,8 @@ def update_dashboard(dashboard_id: str, data: dict, actor: str | None = None) ->
     return get_dashboard_by_id(dashboard_id)
 
 
-def delete_dashboard(dashboard_id: str, actor: str | None = None) -> bool:
+def delete_dashboard(dashboard_id: str, actor: str | None = None,
+                     role: str = "Analyst") -> bool:
     from services import product_read_authority
     if product_read_authority.enabled("dashboards"):
         if not actor:
@@ -364,12 +419,13 @@ def delete_dashboard(dashboard_id: str, actor: str | None = None) -> bool:
         if current is None:
             return False
         revision = current.get("revision")
-        if type(revision) is not int or revision < 1:
+        document = current.get("document")
+        if type(revision) is not int or revision < 1 or not isinstance(document, dict):
             raise RuntimeError("KaveonDB returned invalid dashboard revision state")
         product_store.transact([
             product_store.ProductMutation("delete", "dashboard", dashboard_id,
                                           expected_revision=revision)
-        ], actor, "Analyst")
+        ], product_store.writer(document.get("created_by"), actor, role), "Analyst")
         return True
     if not _outbox_enabled():
         return db.execute("DELETE FROM dashboards WHERE id = @param0", [dashboard_id]) > 0

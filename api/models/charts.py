@@ -1,7 +1,9 @@
 """Pydantic models — Charts."""
 
 from typing import Any, Literal, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from services import thumbnails
 
 
 class ChartCreate(BaseModel):
@@ -24,4 +26,11 @@ class ChartUpdate(BaseModel):
     viz_config: Optional[dict[str, Any]] = None
     description: Optional[str] = Field(default=None, max_length=1000)
     # A base64 data-URI preview captured client-side after the chart renders.
-    thumbnail: Optional[str] = None
+    # Bounded here as well as in services.thumbnails so an oversized capture is
+    # refused at the edge rather than carried into a product record.
+    thumbnail: Optional[str] = Field(default=None, max_length=thumbnails.CHART_MAX_CHARS)
+
+    @field_validator("thumbnail")
+    @classmethod
+    def _validate_thumbnail(cls, value: Optional[str]) -> Optional[str]:
+        return thumbnails.normalise(value, thumbnails.CHART_MAX_CHARS)
