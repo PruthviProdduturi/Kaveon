@@ -1229,30 +1229,6 @@ pub(crate) fn compile_final_aggregate_parallel(
     let schema =
         Arc::clone(apply_tail(Box::new(BatchInput::new(final_schema, Vec::new())), None)?.schema());
     let thread_tail = tail.clone();
-    // No thread emits before every thread has finished merging: a
-    // thread's output would otherwise compete for the budget with its
-    // siblings' growing tables.
-    let rendezvous = kaveon_exec::local_parallel::Rendezvous::new(parallelism);
-    let operator: kaveon_exec::local_parallel::ThreadOperator =
-        Arc::new(move |source, pool, context| {
-            let merged = hybrid_final_aggregate(
-                source,
-                group_by.clone(),
-                aggregates.clone(),
-                pool,
-                context.spill.clone(),
-                Some(rendezvous.ticket()),
-                Some((context.index, context.workers)),
-                context
-                    .pressure
-                    .as_ref()
-                    .map(|pressure| pressure.responder(context.index)),
-            )?;
-            match &thread_tail {
-                Some(tail) => tail(merged, Some(pool)),
-                None => Ok(merged),
-            }
-        });
     // Text keys are expensive to broadcast because every merge worker must
     // decode and hash the same wide encoded key batch. Partitioning the
     // source-thread batches once avoids that duplicate work. Integer keys
@@ -1273,6 +1249,37 @@ pub(crate) fn compile_final_aggregate_parallel(
         )
     });
     let partitioned = source_threaded && has_text_key && !has_unsigned_key;
+    // `broadcast_partitioned` already routes each grouped-state row to the
+    // final worker that owns its key. Applying the final merge's independent
+    // ThreadSelector after that routing would hash the encoded key a second
+    // time and silently discard rows that do not happen to map to the same
+    // worker. Keep selection for the broadcast path only; the partitioned
+    // path is already disjoint by construction.
+    let final_selection = (!partitioned).then_some(());
+    // No thread emits before every thread has finished merging: a
+    // thread's output would otherwise compete for the budget with its
+    // siblings' growing tables.
+    let rendezvous = kaveon_exec::local_parallel::Rendezvous::new(parallelism);
+    let operator: kaveon_exec::local_parallel::ThreadOperator =
+        Arc::new(move |source, pool, context| {
+            let merged = hybrid_final_aggregate(
+                source,
+                group_by.clone(),
+                aggregates.clone(),
+                pool,
+                context.spill.clone(),
+                Some(rendezvous.ticket()),
+                final_selection.map(|_| (context.index, context.workers)),
+                context
+                    .pressure
+                    .as_ref()
+                    .map(|pressure| pressure.responder(context.index)),
+            )?;
+            match &thread_tail {
+                Some(tail) => tail(merged, Some(pool)),
+                None => Ok(merged),
+            }
+        });
     let partials = if partitioned {
         kaveon_exec::local_parallel::ParallelPartials::broadcast_partitioned(
             sources,
@@ -1981,7 +1988,7 @@ mod tests {
     use std::fs::{self, File};
     use std::sync::Arc;
 
-    use arrow::array::{Array, Int64Array, UInt64Array};
+    use arrow::array::{Array, Int64Array, StringArray, UInt64Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use kaveon_core::{
         AggregateSpec, BinaryOp, EXECUTABLE_FRAGMENT_VERSION, ExchangeInput, ExchangeOutput,
@@ -2768,6 +2775,64 @@ mod tests {
         assert!(operator.next_batch().unwrap().is_none());
         assert_eq!(pool.snapshot().current_bytes, 0);
         assert_eq!(spill.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn parallel_final_partitioned_text_keys_are_not_selected_twice() {
+        // Text grouped-state inputs use the source-thread partitioned path.
+        // Each source row is already routed to its owning final worker; a
+        // second ThreadSelector would drop most rows when its hash differs.
+        let make_batch = |round: u64| {
+            let groups = ["Mobile", "Desktop", "Web"]
+                .into_iter()
+                .map(|key| GroupedAggregateState {
+                    group_keys: vec![AggregateValue::Utf8(key.into())],
+                    states: vec![AggregateState::Count(round + 1)],
+                })
+                .collect::<Vec<_>>();
+            grouped_aggregate_states_to_typed_batch(&groups, &[DataType::Utf8]).unwrap()
+        };
+        let batches = (0..8).map(make_batch).collect::<Vec<_>>();
+        let schema = batches[0].schema();
+        let sources = Sources::Threads {
+            schema: schema.clone(),
+            openers: batches
+                .chunks(2)
+                .map(|chunk| {
+                    let schema = schema.clone();
+                    let chunk = chunk.to_vec();
+                    Box::new(move || {
+                        Ok(Box::new(kaveon_exec::local_parallel::Unreserved(Box::new(
+                            BatchInput::new(schema, chunk),
+                        )))
+                            as Box<dyn kaveon_exec::local_parallel::ThreadSource>)
+                    }) as kaveon_exec::local_parallel::SourceOpener
+                })
+                .collect(),
+        };
+        let pool = QueryMemoryPool::new("partitioned-text-final", 128 * 1024 * 1024).unwrap();
+        let mut output = compile_final_aggregate_parallel(
+            sources,
+            vec!["key".into()],
+            vec![AggExpr::new(AggFunc::Count, "*")],
+            Some(&pool),
+            None,
+        )
+        .unwrap();
+        let mut rows = HashMap::new();
+        while let Some(batch) = output.next_batch().unwrap() {
+            let keys = batch.column(0).as_any().downcast_ref::<StringArray>().unwrap();
+            let counts = batch.column(1).as_any().downcast_ref::<UInt64Array>().unwrap();
+            for row in 0..batch.num_rows() {
+                rows.insert(keys.value(row).to_owned(), counts.value(row));
+            }
+        }
+        assert_eq!(rows, HashMap::from([
+            ("Mobile".to_owned(), 36),
+            ("Desktop".to_owned(), 36),
+            ("Web".to_owned(), 36),
+        ]));
+        assert_eq!(pool.snapshot().current_bytes, 0);
     }
 
     #[test]
