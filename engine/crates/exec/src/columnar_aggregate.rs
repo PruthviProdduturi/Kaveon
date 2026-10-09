@@ -54,7 +54,19 @@ enum KeyColumn {
         nulls: Vec<bool>,
         arena: Arena,
         large: bool,
+        /// Dictionary codes are local to an Arrow array.  Keep the translation
+        /// for the last dictionary values array so batches sharing a dictionary
+        /// can use the already assigned query-global arena ids without hashing
+        /// every distinct value again.  The values array is retained to make
+        /// pointer identity part of the cache key; a new dictionary domain is
+        /// rebuilt when a source supplies a different values array.
+        dictionary_cache: Option<DictionaryCodeCache>,
     },
+}
+
+struct DictionaryCodeCache {
+    values: ArrayRef,
+    by_code: Vec<Option<u32>>,
 }
 
 /// Distinct strings, each stored once, addressable by id.
@@ -885,7 +897,11 @@ fn key_words(
             }
             other => return Err(exec_err(format!("group key column type changed: {other}"))),
         },
-        KeyColumn::Text { arena, .. } => match array.data_type() {
+        KeyColumn::Text {
+            arena,
+            dictionary_cache,
+            ..
+        } => match array.data_type() {
             DataType::Utf8 | DataType::LargeUtf8 => {
                 let before = arena.bytes();
                 let mut intern =
@@ -931,10 +947,41 @@ fn key_words(
                     .as_any()
                     .downcast_ref::<Int32DictionaryArray>()
                     .expect("dictionary key type must match schema");
-                let before = arena.bytes();
-                // One arena lookup per dictionary value the batch uses.
                 let values = dictionary.values();
-                let mut by_code: Vec<Option<u64>> = vec![None; values.len()];
+                // Arrow dictionary codes are batch-local, while arena ids are
+                // query-global.  When adjacent batches share the same values
+                // array, reuse the established translation and avoid repeating
+                // the text hash/probe for every dictionary entry.
+                let reuse = dictionary_cache
+                    .as_ref()
+                    .is_some_and(|cache| Arc::ptr_eq(&cache.values, values));
+                if !reuse {
+                    let before = arena.bytes();
+                    let mut by_code = Vec::with_capacity(values.len());
+                    for code in 0..values.len() {
+                        let text = match values.data_type() {
+                            DataType::Utf8 => {
+                                let strings = values.as_string::<i32>();
+                                (!strings.is_null(code)).then(|| strings.value(code))
+                            }
+                            DataType::LargeUtf8 => {
+                                let strings = values.as_string::<i64>();
+                                (!strings.is_null(code)).then(|| strings.value(code))
+                            }
+                            _ => None,
+                        };
+                        by_code.push(text.map(|text| arena.intern(hasher, text).map(|(id, _)| id)).transpose()?);
+                    }
+                    *dictionary_cache = Some(DictionaryCodeCache {
+                        values: values.clone(),
+                        by_code,
+                    });
+                    *new_bytes += arena.bytes().saturating_sub(before);
+                }
+                let by_code = &dictionary_cache
+                    .as_ref()
+                    .expect("dictionary translation cache must be initialized")
+                    .by_code;
                 let keys = dictionary.keys();
                 for row in 0..rows {
                     if keys.is_null(row) {
@@ -942,36 +989,15 @@ fn key_words(
                         continue;
                     }
                     let code = keys.value(row) as usize;
-                    let word = match by_code[code] {
-                        Some(word) => word,
+                    let word = match by_code.get(code).copied().flatten() {
+                        Some(word) => word as u64,
                         None => {
-                            let text = match values.data_type() {
-                                DataType::Utf8 => {
-                                    let strings = values.as_string::<i32>();
-                                    (!strings.is_null(code)).then(|| strings.value(code))
-                                }
-                                DataType::LargeUtf8 => {
-                                    let strings = values.as_string::<i64>();
-                                    (!strings.is_null(code)).then(|| strings.value(code))
-                                }
-                                _ => None,
-                            };
-                            match text {
-                                Some(text) => {
-                                    let word = arena.intern(hasher, text)?.0 as u64;
-                                    by_code[code] = Some(word);
-                                    word
-                                }
-                                None => {
-                                    write(row, None);
-                                    continue;
-                                }
-                            }
+                            write(row, None);
+                            continue;
                         }
                     };
                     write(row, Some(word));
                 }
-                *new_bytes += arena.bytes().saturating_sub(before);
             }
             other => return Err(exec_err(format!("group key column type changed: {other}"))),
         },
@@ -1456,24 +1482,28 @@ impl ColumnarGroups {
                     nulls: Vec::new(),
                     arena: Arena::new(),
                     large: false,
+                    dictionary_cache: None,
                 },
                 DataType::LargeUtf8 => KeyColumn::Text {
                     words: Vec::new(),
                     nulls: Vec::new(),
                     arena: Arena::new(),
                     large: true,
+                    dictionary_cache: None,
                 },
                 DataType::Utf8View => KeyColumn::Text {
                     words: Vec::new(),
                     nulls: Vec::new(),
                     arena: Arena::new(),
                     large: false,
+                    dictionary_cache: None,
                 },
                 DataType::Dictionary(_, values) if supports_key(data_type) => KeyColumn::Text {
                     words: Vec::new(),
                     nulls: Vec::new(),
                     arena: Arena::new(),
                     large: values.as_ref() == &DataType::LargeUtf8,
+                    dictionary_cache: None,
                 },
                 _ => return None,
             });
@@ -1513,11 +1543,13 @@ impl ColumnarGroups {
                     words,
                     nulls,
                     arena,
+                    dictionary_cache,
                     ..
                 } => {
                     words.clear();
                     nulls.clear();
                     arena.clear();
+                    *dictionary_cache = None;
                 }
             }
         }
@@ -2262,6 +2294,7 @@ fn key_array(key: &KeyColumn, slots: std::ops::Range<usize>) -> ArrayRef {
             nulls,
             arena,
             large,
+            ..
         } => {
             let iter = words[slots.clone()]
                 .iter()
