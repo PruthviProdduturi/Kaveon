@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { API_BASE } from "../../../config";
 import { msalFetch } from "../../../utils/msalFetch";
 import {
-	CaptureStep, PassId, PassRun, REFRESH_INTERVALS, RunScope,
+	CaptureStep, PassId, PassRun, REFRESH_INTERVALS, RunScope, RunStatus,
 	isDue, isRunningElsewhere, parseTimestamp, readInterval, readRun,
 	startPass, stopPass, subscribe, writeInterval,
 } from "../../../utils/previewRefresh";
@@ -149,7 +149,13 @@ function usePass(pass: PassId, blocked: boolean) {
 	const autoRef = useRef(false);
 	const mountedRef = useRef(true);
 
-	useEffect(() => () => { mountedRef.current = false; }, []);
+	// Set on the way in as well as cleared on the way out: React remounts an
+	// effect in development, and a ref that is only ever cleared would leave
+	// every later state update discarded.
+	useEffect(() => {
+		mountedRef.current = true;
+		return () => { mountedRef.current = false; };
+	}, []);
 
 	const sync = useCallback((next: PassRun | null) => {
 		runRef.current = next;
@@ -163,6 +169,17 @@ function usePass(pass: PassId, blocked: boolean) {
 		setIntervalDays(readInterval(pass));
 		return subscribe(pass, sync);
 	}, [pass, sync]);
+
+	// A run driven by another tab publishes no events here, and a tab that dies
+	// publishes nothing at all. So while the record says a run is live and it is
+	// not this tab's, re-read it: that both follows the other tab's progress and
+	// lets the heartbeat go cold, which is what turns an abandoned run into an
+	// interrupted one instead of leaving the page waiting on a tab that is gone.
+	useEffect(() => {
+		if (!elsewhere) return;
+		const timer = window.setInterval(() => sync(readRun(pass)), 4000);
+		return () => window.clearInterval(timer);
+	}, [elsewhere, pass, sync]);
 
 	const reload = useCallback(async () => {
 		try {
@@ -179,12 +196,21 @@ function usePass(pass: PassId, blocked: boolean) {
 
 	useEffect(() => { void reload(); }, [reload]);
 
-	const begin = useCallback(async (scope: RunScope): Promise<boolean> => {
-		const started = await startPass(pass, scope, async () =>
-			planSteps(pass, await loadRecords(pass), scope, baselineOf(runRef.current)));
-		if (started) await reload();
-		return started;
-	}, [pass, reload]);
+	const begin = useCallback((scope: RunScope): Promise<boolean> => startPass(
+		pass, scope, async () =>
+			planSteps(pass, await loadRecords(pass), scope, baselineOf(runRef.current)),
+	), [pass]);
+
+	// Coverage is re-read when a run ends rather than when the call that started
+	// it resolves: a run survives leaving the page, so the instance that pressed
+	// the button is often no longer the one on screen when it finishes.
+	const statusRef = useRef<RunStatus | null | undefined>(undefined);
+	const status = run?.status ?? null;
+	useEffect(() => {
+		const previous = statusRef.current;
+		statusRef.current = status;
+		if (previous === "running" && status !== "running") void reload();
+	}, [status, reload]);
 
 	const baseline = baselineOf(run);
 	const pending = useMemo(
@@ -255,7 +281,11 @@ function ChartIcon() {
 function statusLine(pass: Pass): string | null {
 	const { run, live, elsewhere, scheduled, pending, ready } = pass;
 	const copy = COPY[pass.pass];
-	if (elsewhere) return "A refresh of these previews is already running in another browser tab.";
+	if (elsewhere) {
+		const progress = run?.total ? ` · ${run.done} of ${run.total}` : "";
+		return `A refresh of these previews is already in progress${progress}.`
+			+ " It is being driven by another tab; if that tab has gone, this clears within a minute.";
+	}
 	if (live && run) {
 		const progress = run.total ? ` · ${run.done} of ${run.total}` : "";
 		const prefix = scheduled ? "Scheduled refresh — " : "";
@@ -270,7 +300,7 @@ function statusLine(pass: Pass): string | null {
 		return `The last run was stopped after ${run.done} of ${run.total}.`
 			+ (pending ? " Resume to capture what is left." : "");
 	}
-	if (!ready) return null;
+	if (!ready) return "Reading the Library…";
 	if (!pass.total) return `There are no ${copy.plural} to preview.`;
 	if (!pending) return "Every preview is current.";
 	return `${pending} ${pending === 1 ? "capture is" : "captures are"} outstanding.`;
@@ -281,7 +311,9 @@ const PassCard: React.FC<{ pass: Pass; icon: React.ReactNode }> = ({ pass, icon 
 	const { run, live, elsewhere, blocked, pending, intervalDays } = pass;
 	const resumable = run?.status === "interrupted" || run?.status === "stopped";
 	const unavailable = elsewhere || blocked || !pass.ready;
-	const percent = live && run?.total ? Math.round((run.done / run.total) * 100) : 0;
+	// The bar follows any live run, including one another tab is driving.
+	const active = run?.status === "running";
+	const percent = active && run?.total ? Math.round((run.done / run.total) * 100) : 0;
 	const status = statusLine(pass);
 
 	return (
@@ -341,7 +373,7 @@ const PassCard: React.FC<{ pass: Pass; icon: React.ReactNode }> = ({ pass, icon 
 				</div>
 			</div>
 
-			{live && run?.total ? (
+			{active && run?.total ? (
 				<div
 					className={s.progress}
 					role="progressbar"
