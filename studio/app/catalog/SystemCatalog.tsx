@@ -30,6 +30,13 @@ import {
   fetchSystemCatalog, recordCount,
 } from "../../utils/systemCatalog";
 
+/** What the catalog is, which is true whether or not the reading arrives. */
+const SYSTEM_CATALOG_BODY =
+  "The platform's own records — every dataset, chart, dashboard, saved statement and audit entry — "
+  + "kept in the Engine's built-in catalog, written only through its transaction boundary and read back "
+  + "from a committed snapshot. Studio, the API and the CLI are the only writers; the tables themselves "
+  + "are read-only, and the records inside them belong to the people who created them.";
+
 export function SystemCatalog() {
   const { isAdmin } = useRole();
   const [reading, setReading] = useState<SystemCatalogReading | null>(null);
@@ -72,7 +79,29 @@ export function SystemCatalog() {
   // A reader without the administrator role is told so by the rail, which
   // lists the catalog either way. Repeating the refusal as a panel would be
   // the second place on one page to say the same thing.
-  if (error || !reading) return null;
+  if (!isAdmin) return null;
+  // An administrator is shown the panel either way. What this surface can
+  // always say is true without any reading at all — what the catalog holds,
+  // who writes it, and that nobody edits it from here — and a server that
+  // does not publish the reading is a fact about the server, not a reason to
+  // leave an administrator looking at nothing.
+  if (error || !reading) {
+    return (
+      <section className={s.system} aria-labelledby="system-catalog-title">
+        <div className={s.systemHead}>
+          <div className={s.systemIntro}>
+            <p className={s.systemEyebrow}>System catalog</p>
+            <h2 className={s.systemTitle} id="system-catalog-title">{SYSTEM_CATALOG_LABEL}</h2>
+            <p className={s.systemBody}>{SYSTEM_CATALOG_BODY}</p>
+          </div>
+        </div>
+        <p className={s.systemAbsent}>
+          {error ?? `${SYSTEM_CATALOG_LABEL} could not be read.`}
+          {" "}Its record families are not listed here until this server answers for them.
+        </p>
+      </section>
+    );
+  }
 
   const prefix = `${reading.catalog.identifier}.${reading.catalog.schema}.`;
   const total = reading.tables.reduce((sum, table) => sum + (table.records ?? 0), 0);
@@ -84,13 +113,7 @@ export function SystemCatalog() {
         <div className={s.systemIntro}>
           <p className={s.systemEyebrow}>System catalog</p>
           <h2 className={s.systemTitle} id="system-catalog-title">{SYSTEM_CATALOG_LABEL}</h2>
-          <p className={s.systemBody}>
-            The platform&rsquo;s own records — every dataset, chart, dashboard, saved statement
-            and audit entry — kept in the Engine&rsquo;s built-in catalog, written only through its
-            transaction boundary and read back from a committed snapshot. Studio, the API and the
-            CLI are the only writers; the tables themselves are read-only, and the records inside
-            them belong to the people who created them.
-          </p>
+          <p className={s.systemBody}>{SYSTEM_CATALOG_BODY}</p>
         </div>
         <dl className={s.systemFacts}>
           <div>

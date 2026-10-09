@@ -481,7 +481,7 @@ th.cFormat .sortBtn, th.cRows .sortBtn, th.cSize .sortBtn, th.cWhen .sortBtn { j
 .noteErr { border-color: rgba(239, 68, 68, .35); color: var(--error) }
 
 .empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 56px 24px; color: var(--text-muted); background: var(--bg-surface); border: 1px dashed var(--border); border-radius: 14px }
-.emptyTitle { margin: 0; font: 600 var(--fs-display)/1.3 Inter, sans-serif; letter-spacing: -.02em; color: var(--text-primary) }
+.emptyTitle { margin: 0; font: 600 var(--fs-title)/1.3 Inter, sans-serif; letter-spacing: -.02em; color: var(--text-primary) }
 .emptyBody { margin: 0; font-size: var(--fs-row); max-width: 520px; line-height: 1.6 }
 .emptyActions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; justify-content: center }
 
