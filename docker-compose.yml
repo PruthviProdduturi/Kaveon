@@ -94,6 +94,10 @@ services:
       KAVEON_HASH_SPILL_ROOT: ${KAVEON_HASH_SPILL_ROOT:-/tmp/kaveon-spill}
       KAVEON_HASH_SPILL_PARTITIONS: ${KAVEON_HASH_SPILL_PARTITIONS:-16}
       KAVEON_HASH_SPILL_MODE: ${KAVEON_HASH_SPILL_MODE:-disk}
+      # Optional LZ4 compression for Arrow IPC spill runs.  Leave unset by
+      # default: it trades CPU for less local spill I/O and is qualified per
+      # workload rather than assumed to be faster everywhere.
+      KAVEON_SPILL_COMPRESSION: ${KAVEON_SPILL_COMPRESSION:-}
       # Eight local lanes match the default 2-worker ClickBench profile and
       # improve both scan/aggregate workloads without increasing the query
       # memory budget.
@@ -148,6 +152,7 @@ services:
       KAVEON_HASH_SPILL_ROOT: ${KAVEON_HASH_SPILL_ROOT:-/tmp/kaveon-spill}
       KAVEON_HASH_SPILL_PARTITIONS: ${KAVEON_HASH_SPILL_PARTITIONS:-16}
       KAVEON_HASH_SPILL_MODE: ${KAVEON_HASH_SPILL_MODE:-disk}
+      KAVEON_SPILL_COMPRESSION: ${KAVEON_SPILL_COMPRESSION:-}
       KAVEON_LOCAL_PARALLELISM: ${KAVEON_LOCAL_PARALLELISM:-8}
       KAVEON_SCAN_PARTITIONS_PER_WORKER: ${KAVEON_SCAN_PARTITIONS_PER_WORKER:-4}
       KAVEON_EXCHANGE_PARTITIONS: ${KAVEON_EXCHANGE_PARTITIONS:-4}
