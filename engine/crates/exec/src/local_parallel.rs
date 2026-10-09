@@ -624,13 +624,30 @@ impl ParallelPartials {
                 context,
             )
         });
-        Self::over(
-            Sources::Here(source),
-            schema,
+        // Partial states are merged by the final stage, so local lanes do
+        // not need disjoint keys.  For the high-cardinality multi-key shape,
+        // optional round-robin slices avoid hashing and taking every input
+        // column before the partial aggregate sees it.
+        let dispatch = if groups.len() >= 2
+            && matches!(
+                std::env::var("KAVEON_PARTIAL_ROUND_ROBIN").as_deref(),
+                Ok("1") | Ok("true") | Ok("on")
+            )
+        {
+            Dispatch::Keyed {
+                keys: Vec::new(),
+                fold_low_cardinality: false,
+            }
+        } else {
             Dispatch::Keyed {
                 keys: groups,
                 fold_low_cardinality: true,
-            },
+            }
+        };
+        Self::over(
+            Sources::Here(source),
+            schema,
+            dispatch,
             operator,
             pool,
             workers,
