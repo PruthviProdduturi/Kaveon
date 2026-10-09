@@ -817,3 +817,16 @@ wire format, ownership, spill behavior, and results. The execution suite passed
 q33 **28.01 s** and q35 **15.13 s**, within normal run variance and without a
 measurable latency improvement. It is retained as a low-risk CPU reduction;
 the next meaningful work is a typed exchange and spill/final-merge redesign.
+
+## 2026-10-08 — opt-in LZ4 exchange control
+
+Arrow IPC exchange compression is now available behind
+`KAVEON_EXCHANGE_COMPRESSION=lz4` (the default remains uncompressed). On the
+same two-worker, 2 GiB-per-query profile, two uncached q35 controls completed
+in **27.01 s** and **27.48 s**, while q33 completed in **29.67 s** and
+**30.24 s**. Both returned the exact ten-row result shape. The matching
+uncompressed controls on the rebuilt runtime were q35 **34.37 s** and q33
+**35.98 s**, so compression reduced this host's exchange-heavy wall time by
+about 20–24%. The runs are still slower than the qualified ClickHouse controls
+(q35 **6.316 s**, q33 **4.552 s**); compression is a measured improvement, not
+parity.
