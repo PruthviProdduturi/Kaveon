@@ -67,6 +67,10 @@ export const DOCS_NAV: readonly DocsGroup[] = [
     label: "CLI",
     items: [
       { title: "Kaveon CLI", href: "/docs/cli", description: "Install, authenticate, query, inspect and automate from a terminal.", keywords: ["cli", "shell", "terminal", "sql"], status: "Beta", lastVerified: "October 9, 2026" },
+      { title: "Install & connect", href: "/docs/cli/install", description: "Install the client and connect locally, remotely, or to AKS.", keywords: ["install", "aks", "auth"] },
+      { title: "Interactive commands", href: "/docs/cli/commands", description: "Use the shell, inspect sessions, browse metadata, and cancel work.", keywords: ["commands", "shell", "cancel"] },
+      { title: "SQL & catalog administration", href: "/docs/cli/sql", description: "Run SQL and manage catalogs, schemas, tables, statistics, and layouts.", keywords: ["sql", "catalog", "schema", "analyze"] },
+      { title: "Automation & output", href: "/docs/cli/automation", description: "Run batches, choose deterministic formats, and integrate the CLI into CI.", keywords: ["scripts", "csv", "jsonl", "automation"] },
     ],
   },
   {
