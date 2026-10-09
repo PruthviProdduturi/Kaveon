@@ -1262,6 +1262,19 @@ function SpotlightSearch({ recents, onClose, onNavigate }: {
           </div>
         )}
 
+        {/* Categories change under the arrow keys while focus stays in the
+            field, so the move is announced and not only drawn. */}
+        <span
+          role="status"
+          aria-live="polite"
+          style={{
+            position: "absolute", width: 1, height: 1, margin: -1, padding: 0,
+            overflow: "hidden", clipPath: "inset(50%)", whiteSpace: "nowrap", border: 0,
+          }}
+        >
+          {tabs.length > 0 ? `${activeTabLabel}, ${visible.length} ${visible.length === 1 ? "result" : "results"}` : ""}
+        </span>
+
         {/* Results */}
         <div
           ref={panelRef}
