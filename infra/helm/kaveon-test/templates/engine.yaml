@@ -145,8 +145,17 @@ spec:
           env:
             - name: POD_NAME
               valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - name: POD_UID
+              valueFrom: {fieldRef: {fieldPath: metadata.uid}}
             - name: KAVEON_NODE_ID
+              {{- if $isCoordinator }}
               value: "$(POD_NAME)"
+              {{- else }}
+              # StatefulSet pod names are reused after a forced loss. Include
+              # the pod incarnation so the coordinator cannot merge a new
+              # process with the dead worker's in-flight tasks.
+              value: "$(POD_NAME)-$(POD_UID)"
+              {{- end }}
             - name: KAVEON_BIND_HOST
               value: "0.0.0.0"
             - name: KAVEON_COORDINATOR

@@ -8818,9 +8818,9 @@ async fn send_task_request(
             } else {
                 format!("worker '{}' is unavailable: {error}", worker.node_id)
             },
-            // A task that ran out of time would run out of time again, and
-            // the first attempt is still running until the query is finished.
-            retryable: !error.is_timeout(),
+            // The loss classifier below decides whether a timeout came from
+            // a replaced worker and can safely be retried.
+            retryable: true,
             rows_delivered: 0,
             connection_lost: !error.is_timeout(),
         })?;
@@ -9229,7 +9229,19 @@ async fn worker_is_lost(
         .send()
         .await
     {
-        Ok(_) => false,
+        Ok(response) if !response.status().is_success() => false,
+        Ok(response) => {
+            // AKS worker identities include a UUID-backed pod incarnation;
+            // local test workers intentionally use stable names.
+            let incarnation_aware = worker.node_id.matches('-').count() >= 5;
+            if !incarnation_aware {
+                return false;
+            }
+            match response.json::<NodeInfo>().await {
+                Ok(current) => current.node_id != worker.node_id,
+                Err(_) => false,
+            }
+        }
         Err(error) if error.is_timeout() => {
             state.cluster.read().await.heartbeat_lapsed(&worker.node_id)
         }
@@ -9623,10 +9635,6 @@ async fn execute_distributed_fragments(
                         orchestrator.cancel();
                         return Some(Err(format!("{}{ROWS_DELIVERED_NO_RETRY}", failure.message)));
                     }
-                    if !failure.retryable {
-                        orchestrator.cancel();
-                        return Some(Err(failure.message));
-                    }
                     // A worker this task depended on may be gone: the loss
                     // rule decides, not the task's error. A lost worker's
                     // tasks and spools move; a stage whose output was on
@@ -9641,6 +9649,7 @@ async fn execute_distributed_fragments(
                             lost.push(candidate.node_id);
                         }
                     }
+                    let worker_loss_detected = !lost.is_empty();
                     for node_id in lost {
                         match orchestrator.lose_worker(&node_id) {
                             Ok(recovery) if recovery.is_empty() => {}
@@ -9658,6 +9667,15 @@ async fn execute_distributed_fragments(
                                 return Some(Err(format!("{}; {error}", failure.message)));
                             }
                         }
+                    }
+                    // A remote timeout is normally non-retryable on its own,
+                    // but it can be the symptom of a worker process that was
+                    // replaced while the request was in flight. We probe the
+                    // worker above before deciding; only a confirmed loss may
+                    // turn this timeout into a stage retry.
+                    if !failure.retryable && !worker_loss_detected {
+                        orchestrator.cancel();
+                        return Some(Err(failure.message));
                     }
                     if !orchestrator.is_current_attempt(task_id) {
                         // The loss superseded this attempt with the next.

@@ -253,6 +253,8 @@ class Engine:
             stages = history.get("stages") or []
             tasks = [task for stage in stages for task in stage.get("tasks", [])]
             record["catalog_snapshot_id"] = (history.get("context") or {}).get("catalog_snapshot_id")
+            if history.get("recovery"):
+                record["recovery"] = history["recovery"]
             record["stage_count"] = len(stages)
             record["task_count"] = len(tasks)
             record["worker_ids"] = sorted({task.get("node_id") for task in tasks if task.get("node_id")})
@@ -440,9 +442,13 @@ def main() -> int:
                     )
                 ]
                 fault_case = {
-                    "name": "orders_customer_join_fault",
+                    "name": "orders_self_join_fault",
                     "schema": schema_name,
-                    "sql": "SELECT COUNT(*), SUM(o.amount_cents) FROM orders o JOIN customers c ON o.customer_id = c.customer_id",
+                    # The small medallion fixture's normal dimension join is
+                    # too short to place a forced worker loss inside a task.
+                    # This deterministic bounded self-join keeps the same
+                    # source data while creating a real distributed barrier.
+                    "sql": "SELECT COUNT(*) FROM orders a JOIN orders b ON a.status = b.status",
                 }
                 pressure_case = {
                     "name": "orders_group_pressure",
@@ -510,30 +516,35 @@ def main() -> int:
                 fault_baseline["tasks"], key=lambda task: task.get("elapsed_us") or 0
             )
             target = longest_baseline_task["node_id"]
-            if target not in workers:
+            target_pod = next((name for name in workers if target == name or target.startswith(name + "-")), None)
+            if target_pod is None:
                 raise AssertionError("Fault baseline did not identify a StatefulSet worker task")
             with ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(engine.submit, fault_case)
                 query_id, live_record = wait_for_query(engine, prior_ids, fault_case["sql"])
-                # Baseline stage timing identifies a roughly 30-second join
-                # task. Waiting five seconds puts the repeated query inside
-                # that stage before the force deletion.
-                time.sleep(5)
+                # Put the repeated query inside its longest stage before the
+                # force deletion. The medallion qualification join is shorter
+                # than the legacy NYC workload, so use a one-second barrier
+                # there and retain the five-second NYC timing.
+                time.sleep(1 if args.profile == "medallion" else 5)
                 live_record = engine.get("/v1/query/" + query_id)
                 if live_record.get("state") != "RUNNING":
                     raise AssertionError("Fault query left RUNNING before the worker-loss barrier")
-                old_uid = before_pods[target]["uid"]
-                kube.delete_worker(target)
+                old_uid = before_pods[target_pod]["uid"]
+                kube.delete_worker(target_pod)
                 fault_result = future.result(timeout=240)
-            replacement, recovered_cluster = wait_for_recovery(kube, engine, target, old_uid, catalog_id)
+            replacement, recovered_cluster = wait_for_recovery(kube, engine, target_pod, old_uid, catalog_id)
             attempts = []
             for task_id in fault_result.get("task_ids", []):
                 match = re.search(r"\.(\d+)$", task_id or "")
                 if match:
                     attempts.append(int(match.group(1)))
-            retry_observed = any(attempt > 0 for attempt in attempts)
+            retry_observed = bool(
+                (fault_result.get("recovery") or {}).get("stage_retries")
+            ) or any(attempt > 0 for attempt in attempts)
             report["worker_loss"] = {
                 "target": target,
+                "target_pod": target_pod,
                 "old_uid": old_uid,
                 "replacement_uid": replacement["metadata"]["uid"],
                 "query_observed_running": live_record.get("state") == "RUNNING",
