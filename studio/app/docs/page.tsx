@@ -41,7 +41,7 @@ export default function DocsIntro() {
             <td>Shipping</td>
           </tr>
           <tr>
-            <td><strong>Kaveon Studio</strong></td>
+            <td><strong><a href="/docs/studio">Kaveon Studio</a></strong></td>
             <td>SQL Lab, semantic datasets, 37 chart types, dashboards with cross-filtering, and administration.</td>
             <td>Shipping</td>
           </tr>
@@ -64,8 +64,8 @@ export default function DocsIntro() {
       </p>
       <p>
         <strong>Your data stays where it is.</strong> The direction is the Live Lake Path — Engine reads
-        Parquet and Delta in your storage without a mandatory import step. Today that means local
-        filesystem; ADLS Gen2, S3, and Iceberg are target work, tracked honestly in{" "}
+        Parquet and Delta in your storage without a mandatory import step. Today that means the local filesystem
+        and ADLS Gen2; S3 and broader Iceberg qualification remain target work, tracked honestly in{" "}
         <a href="/docs/engine/storage">Storage &amp; Catalogs</a>.
       </p>
 
@@ -85,9 +85,9 @@ export default function DocsIntro() {
           query your registered SQL sources directly.
         </li>
         <li>
-          <strong>Engine is alpha and not yet wired into Studio.</strong> It runs standalone through its CLI
-          and HTTP API. Studio queries do not route through it yet. It has no auth or TLS of its own, so keep
-          it on a trusted network.
+          <strong>Engine is alpha and its distributed path is qualified through the CLI, HTTP API, and KaveonDB
+          product path.</strong> Broader SQL, cloud-format, and direct end-user authentication coverage is still
+          staged. Keep the Engine behind the platform trust boundary.
         </li>
       </ul>
 
