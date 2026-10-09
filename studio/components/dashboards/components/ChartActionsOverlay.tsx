@@ -499,8 +499,8 @@ const ChartActionsOverlay: React.FC<ChartActionsOverlayProps> = ({
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 20 }}>
-              <button onClick={() => setConfirmRemove(false)} style={{ padding: '8px 18px', background: '#f8fafc', border: '1px solid var(--border)', borderRadius: 7, cursor: 'pointer', fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)' }}>Cancel</button>
-              <button onClick={() => { setConfirmRemove(false); onRemove?.(); }} style={{ padding: '8px 18px', background: '#ef4444', border: 'none', borderRadius: 7, cursor: 'pointer', fontSize: 13, fontWeight: 600, color: '#fff' }}>Remove</button>
+              <button onClick={() => setConfirmRemove(false)} style={{ padding: '8px 18px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 7, cursor: 'pointer', fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)' }}>Cancel</button>
+              <button onClick={() => { setConfirmRemove(false); onRemove?.(); }} style={{ padding: '8px 18px', background: 'var(--error)', border: 'none', borderRadius: 7, cursor: 'pointer', fontSize: 13, fontWeight: 600, color: '#fff' }}>Remove</button>
             </div>
           </div>
         </div>,

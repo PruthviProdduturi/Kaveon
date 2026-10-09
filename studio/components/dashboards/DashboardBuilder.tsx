@@ -33,6 +33,33 @@ interface DashboardBuilderProps {
   dashboardId?: string;
 }
 
+/** Shared field styling for the builder's dialogs, driven by the theme tokens. */
+const dialogFieldStyle: React.CSSProperties = {
+  width: "100%",
+  padding: "10px 14px",
+  fontSize: 14,
+  boxSizing: "border-box",
+  border: "1px solid var(--border)",
+  borderRadius: 8,
+  outline: "none",
+  background: "var(--bg-primary)",
+  color: "var(--text-primary)",
+  fontFamily: "inherit",
+  transition: "border-color 0.15s ease, box-shadow 0.15s ease",
+};
+
+type DialogFieldEvent = React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>;
+
+const applyDialogFieldFocus = (e: DialogFieldEvent) => {
+  e.currentTarget.style.borderColor = "var(--accent)";
+  e.currentTarget.style.boxShadow = "0 0 0 3px rgba(var(--accent-rgb), 0.18)";
+};
+
+const clearDialogFieldFocus = (e: DialogFieldEvent) => {
+  e.currentTarget.style.borderColor = "var(--border)";
+  e.currentTarget.style.boxShadow = "none";
+};
+
 const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
   const router = useRouter();
   const { account } = useAuth();
@@ -1344,32 +1371,34 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
-              width: "100%", maxWidth: 420, background: "#ffffff", borderRadius: 14,
-              boxShadow: "0 24px 48px rgba(0,0,0,0.25)", padding: 24,
+              width: "100%", maxWidth: 420, background: "var(--bg-surface)", borderRadius: 14,
+              border: "1px solid var(--border)",
+              boxShadow: "var(--shadow-lg)", padding: 24,
             }}
           >
-            <h3 style={{ margin: "0 0 4px", fontSize: 17, fontWeight: 700, color: "#0f172a" }}>Save as new dashboard</h3>
-            <p style={{ margin: "0 0 16px", fontSize: 13, color: "#64748b" }}>
+            <h3 style={{ margin: "0 0 4px", fontSize: 17, fontWeight: 700, color: "var(--text-primary)" }}>Save as new dashboard</h3>
+            <p style={{ margin: "0 0 16px", fontSize: 13, color: "var(--text-muted)" }}>
               Creates an independent copy. The original stays unchanged.
             </p>
-            <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#475569", marginBottom: 6 }}>Name</label>
+            <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 }}>Name</label>
             <input
               autoFocus
               value={saveAsName}
               onChange={(e) => setSaveAsName(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") handleConfirmSaveAs(); }}
-              style={{
-                width: "100%", padding: "10px 12px", fontSize: 14, boxSizing: "border-box",
-                border: "1px solid #e2e8f0", borderRadius: 8, outline: "none", color: "#0f172a",
-              }}
+              style={{ ...dialogFieldStyle }}
+              onFocus={applyDialogFieldFocus}
+              onBlur={clearDialogFieldFocus}
             />
-            {validationError && <div style={{ marginTop: 10, fontSize: 13, color: "#dc2626" }}>{validationError}</div>}
+            {validationError && <div style={{ marginTop: 10, fontSize: 13, color: "var(--error)" }}>{validationError}</div>}
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 }}>
               <button
                 type="button"
                 onClick={() => setShowSaveAsModal(false)}
                 disabled={savingAs}
-                style={{ padding: "9px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer", border: "1px solid #e2e8f0", borderRadius: 8, background: "#fff", color: "#475569" }}
+                style={{ padding: "9px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer", border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg-elevated)", color: "var(--text-secondary)" }}
+                onMouseOver={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+                onMouseOut={(e) => { e.currentTarget.style.background = "var(--bg-elevated)"; }}
               >
                 Cancel
               </button>
@@ -1377,7 +1406,9 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                 type="button"
                 onClick={handleConfirmSaveAs}
                 disabled={savingAs}
-                style={{ padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", border: "none", borderRadius: 8, background: "#2563eb", color: "#fff", display: "flex", alignItems: "center", gap: 8, minWidth: 96, justifyContent: "center" }}
+                style={{ padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", border: "none", borderRadius: 8, background: "var(--accent)", color: "#fff", display: "flex", alignItems: "center", gap: 8, minWidth: 96, justifyContent: "center" }}
+                onMouseOver={(e) => { e.currentTarget.style.background = "var(--accent-dark)"; }}
+                onMouseOut={(e) => { e.currentTarget.style.background = "var(--accent)"; }}
               >
                 {savingAs ? <i className="fas fa-spinner fa-spin" /> : "Create copy"}
               </button>
@@ -1394,7 +1425,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
             left: 0,
             right: 0,
             bottom: 0,
-            background: "rgba(0, 0, 0, 0.5)",
+            background: "rgba(15, 23, 42, 0.5)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -1404,25 +1435,26 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
         >
           <div
             style={{
-              background: "#ffffff",
+              background: "var(--bg-surface)",
+              border: "1px solid var(--border)",
               borderRadius: 12,
               padding: "32px",
               minWidth: 480,
               maxWidth: 600,
-              boxShadow: "0 20px 50px rgba(0, 0, 0, 0.3)",
+              boxShadow: "var(--shadow-lg)",
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 style={{ fontSize: 20, fontWeight: 600, color: "#1e293b", marginBottom: 8 }}>
+            <h2 style={{ fontSize: 20, fontWeight: 600, color: "var(--text-primary)", marginBottom: 8 }}>
               Save Dashboard
             </h2>
-            <p style={{ fontSize: 14, color: "#64748b", marginBottom: 24 }}>
+            <p style={{ fontSize: 14, color: "var(--text-muted)", marginBottom: 24 }}>
               Confirm dashboard details before saving.
             </p>
 
             <div style={{ marginBottom: 20 }}>
-              <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#475569", marginBottom: 8 }}>
-                Dashboard Name <span style={{ color: "#ef4444" }}>*</span>
+              <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 }}>
+                Dashboard Name <span style={{ color: "var(--error)" }}>*</span>
               </label>
               <input
                 type="text"
@@ -1435,25 +1467,18 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                 }}
                 placeholder="Enter dashboard name"
                 style={{
-                  width: "100%",
-                  padding: "10px 14px",
-                  border: validationError && !tempName.trim() ? "1px solid #ef4444" : "1px solid #cbd5e1",
-                  borderRadius: 8,
-                  fontSize: 14,
-                  outline: "none",
-                  transition: "border-color 0.15s ease",
+                  ...dialogFieldStyle,
+                  borderColor: validationError && !tempName.trim() ? "var(--error)" : "var(--border)",
                 }}
-                onFocus={(e) => {
-                  e.target.style.borderColor = "#2563eb";
-                }}
+                onFocus={applyDialogFieldFocus}
                 onBlur={(e) => {
-                  if (!validationError || tempName.trim()) {
-                    e.target.style.borderColor = "#cbd5e1";
-                  }
+                  e.currentTarget.style.boxShadow = "none";
+                  e.currentTarget.style.borderColor =
+                    validationError && !tempName.trim() ? "var(--error)" : "var(--border)";
                 }}
               />
               {validationError && !tempName.trim() && (
-                <span style={{ fontSize: 12, color: "#ef4444", marginTop: 6, display: "block" }}>
+                <span style={{ fontSize: 12, color: "var(--error)", marginTop: 6, display: "block" }}>
                   <i className="fas fa-exclamation-circle" style={{ marginRight: 4 }} />
                   {validationError}
                 </span>
@@ -1461,7 +1486,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
             </div>
 
             <div style={{ marginBottom: 28 }}>
-              <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#475569", marginBottom: 8 }}>
+              <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 }}>
                 Description (Optional)
               </label>
               <textarea
@@ -1469,23 +1494,9 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                 onChange={(e) => setTempDescription(e.target.value)}
                 placeholder="Add a description for this dashboard"
                 rows={4}
-                style={{
-                  width: "100%",
-                  padding: "10px 14px",
-                  border: "1px solid #cbd5e1",
-                  borderRadius: 8,
-                  fontSize: 14,
-                  resize: "vertical",
-                  outline: "none",
-                  fontFamily: "inherit",
-                  transition: "border-color 0.15s ease",
-                }}
-                onFocus={(e) => {
-                  e.target.style.borderColor = "#2563eb";
-                }}
-                onBlur={(e) => {
-                  e.target.style.borderColor = "#cbd5e1";
-                }}
+                style={{ ...dialogFieldStyle, resize: "vertical" }}
+                onFocus={applyDialogFieldFocus}
+                onBlur={clearDialogFieldFocus}
               />
             </div>
 
@@ -1496,20 +1507,20 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                   padding: "10px 20px",
                   fontSize: 14,
                   fontWeight: 500,
-                  background: "#ffffff",
-                  color: "#64748b",
-                  border: "1px solid #cbd5e1",
+                  background: "var(--bg-elevated)",
+                  color: "var(--text-secondary)",
+                  border: "1px solid var(--border)",
                   borderRadius: 8,
                   cursor: "pointer",
                   transition: "all 0.15s ease",
                 }}
                 onMouseOver={(e) => {
-                  e.currentTarget.style.background = "#f8fafc";
-                  e.currentTarget.style.borderColor = "#94a3b8";
+                  e.currentTarget.style.background = "var(--bg-hover)";
+                  e.currentTarget.style.borderColor = "var(--border-hover)";
                 }}
                 onMouseOut={(e) => {
-                  e.currentTarget.style.background = "#ffffff";
-                  e.currentTarget.style.borderColor = "#cbd5e1";
+                  e.currentTarget.style.background = "var(--bg-elevated)";
+                  e.currentTarget.style.borderColor = "var(--border)";
                 }}
               >
                 Cancel
@@ -1520,7 +1531,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                   padding: "10px 24px",
                   fontSize: 14,
                   fontWeight: 600,
-                  background: "#2563eb",
+                  background: "var(--accent)",
                   color: "#ffffff",
                   border: "none",
                   borderRadius: 8,
@@ -1528,10 +1539,10 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                   transition: "all 0.15s ease",
                 }}
                 onMouseOver={(e) => {
-                  e.currentTarget.style.background = "#1d4ed8";
+                  e.currentTarget.style.background = "var(--accent-dark)";
                 }}
                 onMouseOut={(e) => {
-                  e.currentTarget.style.background = "#2563eb";
+                  e.currentTarget.style.background = "var(--accent)";
                 }}
               >
                 <i className="fas fa-check" style={{ marginRight: 8 }} />
