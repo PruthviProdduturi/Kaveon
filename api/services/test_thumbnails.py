@@ -89,7 +89,7 @@ class ChartThumbnailTests(unittest.TestCase):
         adapted = charts._adapt_product({
             "id": "chart-1", "created_by": "owner@example.test",
             "query_config": {}, "viz_config": {}, "thumbnail": JPEG,
-        })
+        }, {})
         self.assertEqual(adapted["thumbnail"], JPEG)
         self.assertTrue(adapted["has_thumbnail"])
 

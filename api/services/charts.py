@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 
 VALID_VISIBILITY = {"private", "internal", "published"}
 _SCHEMA_CACHE_TTL_SECONDS = 60.0
+# How stale a dataset-name index a single chart read will accept before reading
+# a current one. A list read never accepts a stale index.
+_DATASET_NAME_MAX_AGE_SECONDS = 30.0
 _schema_cache: tuple[float, str] | None = None
 _schema_lock = threading.Lock()
 
@@ -126,14 +129,30 @@ def _adapt(row: dict, layout: str) -> dict:
     }
 
 
-def _adapt_product(document: dict) -> dict:
+def _dataset_names(documents: list[dict], actor: str | None,
+                   *, max_age_seconds: float = 0.0) -> dict[str, str]:
+    """Resolve the dataset names a batch of chart records needs in one read.
+
+    A chart record names its dataset by identity only, and the Library groups
+    seventy charts by dataset name, so the names are resolved for the whole
+    batch in a single bounded index read rather than one read per chart. A
+    point read reuses a recent index instead of paying a round trip of its own.
+    """
+    from services import datasets
+    if not any(document.get("dataset_id") for document in documents):
+        return {}
+    return datasets.dataset_name_index(actor or "kaveon-system",
+                                       max_age_seconds=max_age_seconds)
+
+
+def _adapt_product(document: dict, dataset_names: dict[str, str]) -> dict:
     query_config = document.get("query_config") or {}
     viz_config = document.get("viz_config") or {}
     if not isinstance(query_config, dict) or not isinstance(viz_config, dict):
         raise RuntimeError("KaveonDB chart configuration is invalid")
     return {
         **document, "config": {**query_config, **viz_config}, "sql_text": None,
-        "dataset_name": None,
+        "dataset_name": dataset_names.get(str(document.get("dataset_id") or "")),
         "thumbnail": document.get("thumbnail"),
         "has_thumbnail": bool(document.get("thumbnail")),
         "owner": document.get("created_by"), "favorite": bool(document.get("favorite", False)),
@@ -209,8 +228,9 @@ def _vis_clause(role_idx: int, email_idx: int, alias: str = "c") -> str:
 def list_charts(user_email: str, role: str = "Viewer") -> List[dict]:
     from services import product_read_authority
     if product_read_authority.enabled("charts"):
-        return [_summary(_adapt_product(item)) for item in
-                product_read_authority.list_documents("charts", user_email, role)]
+        documents = product_read_authority.list_documents("charts", user_email, role)
+        names = _dataset_names(documents, user_email)
+        return [_summary(_adapt_product(item, names)) for item in documents]
     layout = _chart_schema()
     if layout == "legacy":
         return [_summary(chart) for chart in _legacy_list_charts(user_email, role)]
@@ -252,7 +272,9 @@ def get_chart_by_id(
         )
         if document is not None:
             document.setdefault("favorite", False)
-            chart = _adapt_product(document)
+            names = _dataset_names([document], user_email,
+                                   max_age_seconds=_DATASET_NAME_MAX_AGE_SECONDS)
+            chart = _adapt_product(document, names)
             return chart if include_thumbnail else _summary(chart)
         return None
     layout = _chart_schema()
