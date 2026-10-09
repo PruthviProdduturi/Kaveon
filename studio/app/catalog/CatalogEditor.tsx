@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { isSystemCatalog } from "../../utils/systemCatalog";
 import { useCatalogTree } from "./CatalogShell";
 import s from "./catalog.module.css";
 import {
@@ -57,7 +58,13 @@ export function RegisterSheet({ kind: initialKind, catalog: initialCatalog, sche
   const [touched, setTouched] = useState(false);
   const [state, setState] = useState<Phase>({ phase: "idle" });
 
-  const catalogNames = useMemo(() => (catalogs ?? []).map(c => c.catalog), [catalogs]);
+  // KaveonDB is never a destination for a registration: it holds the
+  // platform's own records and the Engine refuses a schema or a table under
+  // its control plane. It is left out of the choice rather than offered and
+  // then refused.
+  const catalogNames = useMemo(
+    () => (catalogs ?? []).map(c => c.catalog).filter(name => !isSystemCatalog(name)),
+    [catalogs]);
   useEffect(() => { if (!catalog && catalogNames.length) setCatalog(catalogNames[0]); }, [catalog, catalogNames]);
 
   useEffect(() => {

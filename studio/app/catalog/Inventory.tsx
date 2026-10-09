@@ -37,6 +37,7 @@ import {
   fetchSchemaDefinitions, fetchTableDefinitions, formatKind, formatLabel, labHref, since, versionDigest,
   versionLabel,
 } from "./lib";
+import { SYSTEM_CATALOG_LABEL, isSystemCatalog } from "../../utils/systemCatalog";
 
 type SortKey = "name" | "rows" | "bytes" | "changed";
 type Sort = { key: SortKey; desc: boolean };
@@ -149,7 +150,13 @@ export function Inventory({ catalogName, schemaName, action }: {
   /** Definitions first, then the measurements that fill the cells they drew. */
   const load = useCallback(async (refresh: boolean) => {
     try {
-      const definitions = await fetchDefinitions();
+      // This list is the lake: the catalogs a reader registers tables into
+      // and measures. KaveonDB is neither — it holds the platform's own
+      // records, nobody registers into it, and its one empty Engine schema
+      // would otherwise appear here under a header offering to add tables to
+      // it. It is read beside this list instead, by SystemCatalog.
+      const definitions = (await fetchDefinitions()).filter(
+        definition => !isSystemCatalog(definition.name));
       if (!live.current) return;
       setCatalogs(definitions);
       setError(null);
@@ -290,10 +297,12 @@ export function Inventory({ catalogName, schemaName, action }: {
   if (catalogs && catalogs.length === 0) {
     return (
       <div className={s.empty}>
-        <h1 className={s.emptyTitle}>{isAdmin ? "No catalogs registered" : "No catalogs available to you"}</h1>
+        {/* KaveonDB is always present and is not one of these, so the
+            heading says which kind of catalog is missing. */}
+        <h1 className={s.emptyTitle}>{isAdmin ? "No data catalogs registered" : "No data catalogs available to you"}</h1>
         <p className={s.emptyBody}>
           {isAdmin
-            ? "A catalog is a storage location Kaveon reads in place — a container in ADLS Gen2, a bucket in S3, or a directory on the coordinator. Register one and the schemas and tables under it appear here and in SQL Lab."
+            ? `A catalog is a storage location Kaveon reads in place — a container in ADLS Gen2, a bucket in S3, or a directory on the coordinator. Register one and the schemas and tables under it appear here and in SQL Lab. ${SYSTEM_CATALOG_LABEL}, below, holds the platform's own records and is read-only.`
             : "Catalogs are registered and granted by an administrator. Ask for access to one and its tables appear here and in SQL Lab."}
         </p>
         {isAdmin && (

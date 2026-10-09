@@ -4,9 +4,12 @@ import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 
 export interface CatalogOption {
   id: string;
+  /** The name to show. For KaveonDB this is the product name, not the identifier. */
   catalog: string;
   /** Schemas the catalog holds, when the Lab has already counted them. */
   schemas?: number | null;
+  /** True for the platform's own catalog, which holds no queryable tables. */
+  system?: boolean;
 }
 
 export interface CatalogPickerProps {
@@ -154,7 +157,12 @@ export function CatalogPicker({ options, value, disabled = false, onSelect, meta
                 onClick={() => commit(index)}
               >
                 <span className="catalog-picker__option-name">{option.catalog}</span>
-                {typeof option.schemas === "number" && (
+                {/* The platform's own catalog says what it is instead of how
+                    many schemas it has: its schema count is not the fact a
+                    reader needs when choosing what to query. */}
+                {option.system ? (
+                  <span className="catalog-picker__option-note">system</span>
+                ) : typeof option.schemas === "number" && (
                   <span className="catalog-picker__option-note">
                     {option.schemas} {option.schemas === 1 ? "schema" : "schemas"}
                   </span>

@@ -5884,3 +5884,48 @@ main.main-wide {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
 }
+
+/* KaveonDB in the SQL Lab sidebar. The platform's own record families, shown
+   where the table tree would be while that catalog is the one selected.
+   Nothing here is a control: no cursor, no hover, no insert button. A row
+   that cannot start a statement must not look like one that can, and the
+   absence of every affordance is the marking — there is no badge. */
+.system-catalog { padding: 0.75rem 1rem 1rem; }
+.system-catalog__note {
+  margin: 0 0 0.85rem;
+  font-size: 0.76rem;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+.system-catalog__schema {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.system-catalog__schema i { font-size: 0.78rem; color: var(--text-muted); }
+.system-catalog__count { margin-left: auto; font-size: 0.72rem; font-weight: 500; color: var(--text-muted); }
+.system-catalog__tables { list-style: none; margin: 0; padding: 0.25rem 0 0; }
+.system-catalog__tables li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  padding: 0.3rem 0 0.3rem 0.25rem;
+  min-width: 0;
+}
+.system-catalog__tables i { font-size: 0.7rem; color: var(--text-muted); flex-shrink: 0; }
+.system-catalog__name {
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.74rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+/* Muted, not faint: still part of an identifier, so still legible. */
+.system-catalog__prefix { color: var(--text-muted); }

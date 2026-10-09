@@ -145,6 +145,37 @@ class ProductStoreTests(unittest.TestCase):
         }), self.assertRaisesRegex(HTTPException, "invalid product list record"):
             product_store.list_records("dataset", "alice@example.com", "Admin")
 
+    def test_count_records_pages_one_family_from_one_snapshot(self):
+        pages = [
+            {"snapshot_id": "one", "records": [{"document": {}} for _ in range(100)], "next_cursor": "c1"},
+            {"snapshot_id": "one", "records": [{"document": {}} for _ in range(7)], "next_cursor": None},
+        ]
+        with patch.object(product_store.engine_bridge, "_request", side_effect=pages) as request:
+            counted = product_store.count_records("chart", "alice@example.com", "Admin")
+        self.assertEqual(counted, {"records": 107, "truncated": False, "snapshotId": "one"})
+        self.assertEqual([item.args[1] for item in request.call_args_list],
+                         ["/v1/products/chart?limit=100", "/v1/products/chart?limit=100&cursor=c1"])
+
+    def test_count_records_reports_a_family_past_its_bound_as_a_floor(self):
+        page = {"snapshot_id": "one", "records": [{"document": {}} for _ in range(100)], "next_cursor": "more"}
+        with patch.object(product_store.engine_bridge, "_request", return_value=page) as request:
+            counted = product_store.count_records("query_history", "alice@example.com", "Admin")
+        self.assertEqual(counted, {"records": product_store.COUNT_BOUND, "truncated": True, "snapshotId": "one"})
+        # The bound is a stop, not a suggestion: the read never runs past it.
+        self.assertEqual(request.call_count, product_store.COUNT_BOUND // 100)
+
+    def test_count_records_fails_closed_on_drift_and_unknown_kinds(self):
+        drift = [
+            {"snapshot_id": "one", "records": [{"document": {}}], "next_cursor": "c1"},
+            {"snapshot_id": "two", "records": [{"document": {}}], "next_cursor": None},
+        ]
+        with patch.object(product_store.engine_bridge, "_request", side_effect=drift),              self.assertRaisesRegex(HTTPException, "changed during pagination"):
+            product_store.count_records("dataset", "alice@example.com", "Admin")
+        with patch.object(product_store.engine_bridge, "_request") as request:
+            with self.assertRaises(HTTPException):
+                product_store.count_records("not_a_kind", "alice@example.com", "Admin")
+        request.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -17,6 +17,9 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { KaveonHalo, QueryProgress, reportedProgress, SUBMITTED } from "../../components/lab/QueryLanes";
 import { KaveonMark } from "../../components/KaveonMark";
 import { CatalogPicker } from "../../components/lab/CatalogPicker";
+import { SystemCatalogList } from "../../components/lab/SystemCatalogList";
+import { useRole } from "../../hooks/useRole";
+import { catalogLabel, isSystemCatalog } from "../../utils/systemCatalog";
 // using same-origin relative API calls
 const PRIMARY_DB_NAME = process.env.NEXT_PUBLIC_PRIMARY_DATABASE_NAME || "";
 
@@ -307,6 +310,7 @@ export interface LabWorkbenchProps {
 
 export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceId = null, schema: embeddedSchema = null }: LabWorkbenchProps) {
   const { isAuthenticated, account } = useAuth();
+  const { isAdmin } = useRole();
   const { theme } = useTheme();
   const isDark = theme === "dark";
   const router = useRouter();
@@ -432,6 +436,11 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
   );
   const usingEngine = currentEngineSourceId !== null;
   const currentEngineSource = usingEngine ? selectedEngineSource : null;
+  // KaveonDB's own catalog. Its record families are served by the platform's
+  // record API rather than the query planner, so the panel lists them and
+  // offers nothing: a SELECT against them is refused by the Engine's
+  // analyzer, and the Lab must not hand a reader a statement that cannot run.
+  const onSystemCatalog = usingEngine && isSystemCatalog(currentEngineSource?.catalog);
 
   const [expandedSchemas, setExpandedSchemas] = useState<Record<string, boolean>>({});
 
@@ -2250,12 +2259,15 @@ return;
               <CatalogPicker
                 options={engineSources.map((source) => ({
                   id: source.id,
-                  catalog: source.catalog,
+                  catalog: catalogLabel(source.catalog),
                   schemas: source.id === currentEngineSourceId ? engineSchemas.length : null,
+                  system: isSystemCatalog(source.catalog),
                 }))}
                 value={currentEngineSourceId}
                 disabled={isLoadingEngineSources || isLoadingTables}
-                meta={isLoadingTables ? "Loading…" : `${filteredTables.length} tables`}
+                meta={onSystemCatalog
+                  ? "Read-only"
+                  : isLoadingTables ? "Loading…" : `${filteredTables.length} tables`}
                 onSelect={async (id) => {
                   setCurrentEngineSourceId(id);
                   lastEngineSourceIdRef.current = id;
@@ -2357,18 +2369,22 @@ return;
             </div>
 
             <div className="tables-list" id="tablesList">
-              {isLoadingTables && (
+              {/* The platform's own catalog replaces the tree rather than
+                  joining it, so the panel never mixes rows a statement can
+                  be started from with rows it cannot. */}
+              {onSystemCatalog && <SystemCatalogList isAdmin={isAdmin} />}
+              {!onSystemCatalog && isLoadingTables && (
                 <div className="loading-tables">
                   <i className="fas fa-spinner fa-spin" />
                   <span>Loading tables...</span>
                 </div>
               )}
-              {!isLoadingTables && schemaGroups.length === 0 && (
+              {!onSystemCatalog && !isLoadingTables && schemaGroups.length === 0 && (
                 <div className="loading-tables">
                   <span>No tables found.</span>
                 </div>
               )}
-              {!isLoadingTables &&
+              {!onSystemCatalog && !isLoadingTables &&
                 schemaGroups.map(([schema, items]) => (
                   <div key={schema} className="schema-group">
                     <div
