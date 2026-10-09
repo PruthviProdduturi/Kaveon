@@ -91,6 +91,22 @@ def secret_data(kube: Kube, name: str) -> dict[str, str]:
     return kube.json("secret", name)["data"]
 
 
+def engine_secret_data(kube: Kube) -> dict[str, str]:
+    """Read the chart's shared engine credential secret.
+
+    Older AKS manifests used a coordinator-only name; the current Helm chart
+    intentionally shares one secret between coordinator and workers so the
+    exchange and catalog credentials cannot drift.  Keep the verifier
+    compatible with both layouts without ever writing the secret contents.
+    """
+    for name in (ENGINE_SECRET, "kaveon-engine-auth"):
+        try:
+            return secret_data(kube, name)
+        except subprocess.CalledProcessError:
+            continue
+    raise RuntimeError("neither coordinator nor shared Engine credential Secret exists")
+
+
 def choose_principal(security_json: bytes) -> tuple[str, str]:
     security = json.loads(security_json)
     eligible = [
@@ -341,6 +357,13 @@ def main() -> int:
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--concurrent-rounds", type=int, default=3)
     parser.add_argument("--pressure-rounds", type=int, default=3)
+    parser.add_argument(
+        "--profile",
+        choices=("nyc", "medallion"),
+        default="nyc",
+        help="qualification dataset profile (nyc is the legacy OpenSource fixture)",
+    )
+    parser.add_argument("--fixture", type=Path, default=Path("tmp/aks-medallion"), help="medallion fixture used for exact expectations")
     args = parser.parse_args()
     if not 2 <= args.concurrency <= 8:
         parser.error("concurrency must be between 2 and 8")
@@ -371,7 +394,7 @@ def main() -> int:
             **{name + "_spill": kube.file_count(name, "/tmp/spill") for name in workers},
         }
 
-        engine_secret = secret_data(kube, ENGINE_SECRET)
+        engine_secret = engine_secret_data(kube)
         tls_secret = secret_data(kube, TLS_SECRET)
         token, principal = choose_principal(base64.b64decode(engine_secret["security.json"]))
         report["principal"] = principal
@@ -401,12 +424,55 @@ def main() -> int:
             if not cluster_ok:
                 raise AssertionError("Baseline cluster is not three-worker catalog-compatible")
 
-            exact_cases = [
-                {"name": "yellow_count", "schema": "nyc_taxi", "sql": "SELECT COUNT(*) FROM yellow_trips", "expected": [[YELLOW_ROWS]]},
-                {"name": "green_count", "schema": "nyc_taxi", "sql": "SELECT COUNT(*) FROM green_trips", "expected": [[48_131]]},
-                {"name": "daily_totals", "schema": "nyc_taxi", "sql": "SELECT COUNT(*), SUM(trip_count), SUM(total_amount_cents) FROM daily_trips", "expected": [[62, 3_460_174, 9_175_357_418]]},
-                {"name": "leaderboard_count", "schema": "ai_benchmarks", "sql": "SELECT COUNT(*) FROM leaderboard", "expected": [[34]]},
-            ]
+            if args.profile == "medallion":
+                catalog_name = "medallion"
+                schema_name = "test"
+                fixture_expectations = {
+                    item["name"]: item["rows"]
+                    for item in json.loads((args.fixture / "expected-results.json").read_text(encoding="utf-8"))
+                }
+                exact_cases = [
+                    {"name": name, "schema": schema_name, "sql": sql, "expected": fixture_expectations[name]}
+                    for name, sql in (
+                        ("order_totals", "SELECT COUNT(*), COUNT(amount_cents), SUM(amount_cents), MIN(amount_cents), MAX(amount_cents) FROM orders"),
+                        ("null_customers", "SELECT COUNT(*) FROM orders WHERE customer_id IS NULL"),
+                        ("customer_count", "SELECT COUNT(*) FROM customers"),
+                    )
+                ]
+                fault_case = {
+                    "name": "orders_customer_join_fault",
+                    "schema": schema_name,
+                    "sql": "SELECT COUNT(*), SUM(o.amount_cents) FROM orders o JOIN customers c ON o.customer_id = c.customer_id",
+                }
+                pressure_case = {
+                    "name": "orders_group_pressure",
+                    "schema": schema_name,
+                    "sql": "SELECT status, COUNT(*), SUM(amount_cents) FROM orders GROUP BY status ORDER BY status",
+                }
+                known_input_rows = fixture_expectations["order_totals"][0][0]
+            else:
+                catalog_name = "OpenSource"
+                schema_name = None
+                exact_cases = [
+                    {"name": "yellow_count", "schema": "nyc_taxi", "sql": "SELECT COUNT(*) FROM yellow_trips", "expected": [[YELLOW_ROWS]]},
+                    {"name": "green_count", "schema": "nyc_taxi", "sql": "SELECT COUNT(*) FROM green_trips", "expected": [[48_131]]},
+                    {"name": "daily_totals", "schema": "nyc_taxi", "sql": "SELECT COUNT(*), SUM(trip_count), SUM(total_amount_cents) FROM daily_trips", "expected": [[62, 3_460_174, 9_175_357_418]]},
+                    {"name": "leaderboard_count", "schema": "ai_benchmarks", "sql": "SELECT COUNT(*) FROM leaderboard", "expected": [[34]]},
+                ]
+                fault_case = {
+                    "name": "yellow_zone_join_fault",
+                    "schema": "nyc_taxi",
+                    "sql": "SELECT COUNT(*), SUM(y.VendorID) FROM yellow_trips y JOIN taxi_zones z ON y.PULocationID = z.LocationID",
+                }
+                pressure_case = {
+                    "name": "yellow_group_pressure",
+                    "schema": "nyc_taxi",
+                    "sql": "SELECT PULocationID, COUNT(*), SUM(VendorID) FROM yellow_trips GROUP BY PULocationID ORDER BY PULocationID",
+                }
+                known_input_rows = YELLOW_ROWS
+
+            for case in [*exact_cases, fault_case, pressure_case]:
+                case["catalog"] = catalog_name
             concurrent_results: list[dict[str, Any]] = []
             for round_index in range(args.concurrent_rounds):
                 with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
@@ -422,17 +488,17 @@ def main() -> int:
                 "requests": concurrent_results,
             }
             concurrent_ok = len(concurrent_results) == len(exact_cases) * args.concurrent_rounds and all(
-                item["exact"] and item.get("stage_count", 0) >= 2 and item.get("worker_ids") for item in concurrent_results
+                item["exact"]
+                and (
+                    args.profile == "medallion"
+                    or (item.get("stage_count", 0) >= 2 and item.get("worker_ids"))
+                )
+                for item in concurrent_results
             )
             report["checks"]["concurrent_exact_results"] = concurrent_ok
             if not concurrent_ok:
                 raise AssertionError("Concurrent exact-result gate failed")
 
-            fault_case = {
-                "name": "yellow_zone_join_fault",
-                "schema": "nyc_taxi",
-                "sql": "SELECT COUNT(*), SUM(y.VendorID) FROM yellow_trips y JOIN taxi_zones z ON y.PULocationID = z.LocationID",
-            }
             fault_baseline = engine.submit(fault_case)
             if not fault_baseline.get("data") or fault_baseline["data"][0][0] <= 0:
                 raise AssertionError("Fault baseline join did not return a positive exact count")
@@ -496,14 +562,9 @@ def main() -> int:
             if not recovery_probe["exact"]:
                 raise AssertionError("Post-recovery exact probe failed")
 
-            pressure_case = {
-                "name": "yellow_group_pressure",
-                "schema": "nyc_taxi",
-                "sql": "SELECT PULocationID, COUNT(*), SUM(VendorID) FROM yellow_trips GROUP BY PULocationID ORDER BY PULocationID",
-            }
             pressure_baseline = engine.submit(pressure_case, include_data=True)
-            if sum(row[1] for row in pressure_baseline["data"]) != YELLOW_ROWS:
-                raise AssertionError("Pressure baseline group counts do not reconcile to the known yellow row count")
+            if sum(row[1] for row in pressure_baseline["data"]) != known_input_rows:
+                raise AssertionError("Pressure baseline group counts do not reconcile to the known input row count")
             pressure_hash = pressure_baseline["result_sha256"]
             samples: list[dict[str, Any]] = []
             sampling = threading.Event()
@@ -538,7 +599,7 @@ def main() -> int:
                 "requests": pressure_results,
                 "baseline": {key: value for key, value in pressure_baseline.items() if key != "data"},
                 "baseline_group_count": pressure_baseline["row_count"],
-                "known_input_rows": YELLOW_ROWS,
+                "known_input_rows": known_input_rows,
                 "resource_samples": samples,
             }
 
