@@ -140,6 +140,33 @@ access or replaces the authenticated identity. `--source` (default
 `kaveon-cli`) and `--client-tags a,b` are recorded the same way and show up in
 the Engine UI and `GET /v1/query`.
 
+### Command-line option reference
+
+| Option | Purpose |
+|---|---|
+| `URL`, `--server URL` | Coordinator endpoint. A URL may include `/catalog/schema`; credentials and query strings are refused. |
+| `--catalog NAME`, `--schema NAME` | Initial SQL and completion context. `.use` can change it later. |
+| `--auth auto\|azure-cli\|microsoft\|none` | Select token acquisition. `none` is loopback development only. |
+| `--access-token TOKEN`, `KAVEON_ACCESS_TOKEN` | Supply a bearer token; the environment variable avoids shell history. |
+| `--ca-cert PATH`, `KAVEON_CA_CERT` | Trust a private coordinator CA bundle. |
+| `--user NAME`, `--source NAME`, `--client-tags a,b` | Query metadata for ownership, tracing and source attribution; these do not grant access. |
+| `-e SQL`, `-f FILE`, stdin | Run one statement, a UTF-8 batch file, or piped SQL. `--ignore-errors` continues a batch and returns a failing exit code. |
+| `--paged` | Request streamed result pages for large non-interactive results. |
+| `--output-format FORMAT` | Script output: `ALIGNED`, `VERTICAL`, `AUTO`, `MARKDOWN`, `CSV`, `CSV_HEADER`, `TSV`, `TSV_HEADER`, `JSON`, `NULL` (lowercase legacy names also work). |
+| `--output-format-interactive FORMAT` | Set the interactive renderer without changing script output. |
+| `--row-limit N\|off` | Limit interactive results only; scripts are never truncated by this option. |
+| `--timeout 30s\|2m\|SECONDS` | Request timeout; defaults to 24 hours. It does not cancel a server query when the client process exits. |
+| `--pager PROGRAM` | Pipe human-readable output through a pager; `--pager ''` disables it. |
+| `--theme dark\|light\|mono`, `--width N`, `--no-header` | Presentation controls for terminals and CI logs. |
+| `--history-file PATH`, `--no-history`, `--editing-mode emacs\|vi` | Local history and editor behavior. |
+| `--api URL` | Platform API used by `.ask`; the DLM is not hosted inside the Engine coordinator. |
+| `--local`, `--data-dir PATH`, `--config PATH` | Embedded local mode. These options cannot be combined with remote catalog administration. |
+
+Every option accepts `--option=value` as well as `--option value`. Run
+`kaveon --help` for the generated synopsis and `kaveon catalog --help`,
+`kaveon schema --help` or `kaveon table --help` for the administration
+subcommands.
+
 For a qualification AKS port-forward that uses the cluster's private CA:
 
 ```powershell
@@ -529,6 +556,90 @@ a coordinator statement; everything else is SQL for `POST /v1/statement`.
 | `.help`, `.h`, `help` | The command reference, grouped, one screen |
 | `.clear`, `clear` | Clear the screen |
 | `.quit`, `.exit`, `.q`, `exit`, `quit` | Leave |
+
+## SQL keywords and query patterns
+
+The CLI sends SQL statements to the Engine; it does not silently translate
+unsupported syntax. The following is the practical keyword map for the
+current Engine. A keyword can be entered in upper or lower case, and quoted
+identifiers use double quotes (string literals use single quotes).
+
+| Area | Supported keywords and forms | Example |
+|---|---|---|
+| Query shape | `WITH` (non-recursive CTE), `SELECT`, `DISTINCT`, `FROM`, aliases, `UNION`, `UNION ALL`, `INTERSECT`, `EXCEPT` | `WITH recent AS (SELECT * FROM events WHERE day >= DATE '2026-01-01') SELECT * FROM recent;` |
+| Joins | `JOIN`/`INNER JOIN`, `LEFT [OUTER] JOIN`, `RIGHT [OUTER] JOIN`, `FULL [OUTER] JOIN`, `CROSS JOIN`, `ON`, `USING` | `SELECT o.id, u.region FROM orders o LEFT JOIN users u ON u.id = o.user_id;` |
+| Filtering | `WHERE`, `AND`, `OR`, `NOT`, `IS [NOT] NULL`, `=`, `<>`, `<`, `<=`, `>`, `>=`, `BETWEEN`, `IN`, `LIKE`, `ILIKE`, `EXISTS` | `SELECT * FROM orders WHERE status IN ('paid','pending') AND amount BETWEEN 10 AND 100;` |
+| Grouping | `GROUP BY`, positional group keys, `HAVING`, `COUNT`, `COUNT(DISTINCT ...)`, `SUM`, `AVG`, `MIN`, `MAX` | `SELECT region, COUNT(*) AS n FROM users GROUP BY region HAVING COUNT(*) > 10;` |
+| Ordering and paging | `ORDER BY`, `ASC`, `DESC`, `NULLS FIRST`, `NULLS LAST`, `LIMIT`, `OFFSET` | `SELECT * FROM events ORDER BY event_time DESC NULLS LAST LIMIT 100 OFFSET 20;` |
+| Windows | `OVER`, `PARTITION BY`, window `ORDER BY`, `ROWS`, `RANGE`, `GROUPS`, `ROW_NUMBER`, `RANK`, `DENSE_RANK`, `LAG`, `LEAD` | `SELECT user_id, ROW_NUMBER() OVER (PARTITION BY region ORDER BY score DESC) AS rank FROM users;` |
+| Expressions | `CASE`, `WHEN`, `THEN`, `ELSE`, `END`, `CAST`, `COALESCE`, arithmetic, concatenation `||` | `SELECT CASE WHEN amount >= 100 THEN 'large' ELSE 'small' END AS band FROM orders;` |
+| Date and time | `DATE`, `TIMESTAMP`, `INTERVAL`, `EXTRACT`, `DATE_TRUNC`, `DATE_PART`, `TO_CHAR`, `NOW`, `CURRENT_DATE`, `CURRENT_TIMESTAMP` | `SELECT DATE_TRUNC('month', event_time) AS month, COUNT(*) FROM events GROUP BY 1;` |
+| Strings | `UPPER`, `LOWER`, `LENGTH`, `TRIM`, `SUBSTR`, `REPEAT`, `REPLACE`, `LPAD`, `RPAD`, `REGEXP_REPLACE` | `SELECT LOWER(TRIM(email)) AS email FROM users;` |
+| Approximation | `APPROX_COUNT_DISTINCT`/`APPROX_DISTINCT`, `APPROX_PERCENTILE`, `APPROX_COUNT_DISTINCT_STATE`, `COLUMN_STATISTICS` | `SELECT APPROX_COUNT_DISTINCT(user_id) FROM events;` |
+
+Use `EXPLAIN` or `EXPLAIN ANALYZE` before a large statement to see whether
+projection, row-group pruning, distributed aggregation, broadcast/repartition
+joins, cache, spill and worker execution were selected. Use `SET SESSION` or
+`.settings` to tune only that session:
+
+```sql
+SET SESSION result_cache = true;
+SET SESSION query_memory_limit_bytes = 1073741824;
+SET SESSION local_parallelism = 8;
+SELECT region, COUNT(*) FROM events GROUP BY region;
+```
+
+The Engine deliberately refuses syntax it cannot execute safely: recursive
+CTEs, `GROUPING SETS`/`ROLLUP`/`CUBE`, non-equality join residuals, complex
+array/map/JSON data types, general `CREATE TABLE AS`, `INSERT`, `UPDATE`,
+`DELETE`, and arbitrary user-table transactions. See the full
+[SQL compatibility matrix](../reference/engine-sql-compatibility.md) for the
+exact boundary and the bounded product transaction API.
+
+## Catalog, schema and table lifecycle
+
+The CLI supports the complete metadata lifecycle for existing lake tables:
+
+1. **Create a catalog** that points at ADLS Gen2, S3 or a local directory.
+2. **Create a schema** inside that catalog.
+3. **Register an existing Parquet, Delta or Iceberg table** by relative location.
+4. **Probe and activate** it only after the coordinator verifies its metadata.
+5. **Analyze** it to persist exact counts, bounds and optional sketches.
+6. **Declare a layout** with clustering, Bloom filters and an optional cube shape.
+7. **Optimize Parquet** files, then inspect statistics and file details.
+8. **Relocate, alter or drop** the catalog definition with revision checks.
+
+```sql
+CREATE CATALOG IF NOT EXISTS Analytics WITH (
+  storage = 'adls', account = 'kaveonlake', container = 'opensource',
+  root = 'snapshots/2026-09-09-v1',
+  credential = 'workload-identity:kaveon-reader'
+);
+CREATE SCHEMA IF NOT EXISTS Analytics.sales;
+CREATE TABLE IF NOT EXISTS Analytics.sales.orders WITH (
+  location = 'sales/orders', format = 'parquet',
+  partitioned_by = ARRAY['order_date'],
+  clustered_by = ARRAY['customer_id'],
+  bloom = ARRAY['order_id']
+);
+ALTER TABLE Analytics.sales.orders SET CLUSTERED BY (customer_id, order_date);
+ALTER TABLE Analytics.sales.orders SET SHAPE (
+  dimensions = ARRAY['customer_id:100000', 'order_date:day'],
+  measures = ARRAY['amount:sum,count'],
+  time = 'order_date:day'
+);
+ANALYZE Analytics.sales.orders WITH (sketches = true, cube = true);
+OPTIMIZE Analytics.sales.orders WITH (row_group_bytes = 134217728);
+DESCRIBE DETAIL Analytics.sales.orders;
+SHOW CREATE TABLE Analytics.sales.orders;
+```
+
+`CREATE TABLE` registers metadata; it does not copy rows. `OPTIMIZE` rewrites
+Parquet only. Delta and Iceberg tables are read from their transaction or
+metadata logs and are not rewritten by the Engine's Parquet optimizer. `DROP`
+removes catalog metadata and never deletes lake objects unless an explicit
+storage lifecycle outside the Engine does so. All mutations require the
+appropriate role and are recorded with an optimistic revision and audit event.
 
 `.settings` keeps a `settings` object that is sent with every statement. The
 keys and the server settings they set (see
