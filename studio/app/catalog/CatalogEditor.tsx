@@ -278,6 +278,38 @@ export function RegisterSheet({ kind: initialKind, catalog: initialCatalog, sche
   return typeof document === "undefined" ? null : createPortal(body, document.body);
 }
 
+/**
+ * Removing an empty schema. The Engine refuses a schema that still holds
+ * tables, so the only schema this is ever offered for is one holding none —
+ * which makes it the undo for a schema added by mistake, and nothing else.
+ */
+export function RemoveSchemaDialog({ fullName, busy, error, onCancel, onConfirm }: RemoveProps) {
+  const titleId = useId();
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onCancel(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel, busy]);
+  if (typeof document === "undefined") return null;
+  return createPortal(
+    <div className={s.confirmBackdrop} onMouseDown={e => { if (e.target === e.currentTarget && !busy) onCancel(); }}>
+      <div className={s.confirm} role="alertdialog" aria-modal="true" aria-labelledby={titleId}>
+        <h2 className={s.confirmTitle} id={titleId}>Remove this schema from the catalog?</h2>
+        <p className={s.confirmBody}>
+          <code>{fullName}</code> holds no tables. Removing it takes the name out of the catalog and out of
+          SQL Lab; no storage is touched, and the schema can be added again.
+        </p>
+        {error && <div className={s.fieldErr} style={{ marginTop: 10 }} role="alert">{error}</div>}
+        <div className={s.confirmActions}>
+          <button type="button" className={s.ghost} onClick={onCancel} disabled={busy}>Cancel</button>
+          <button type="button" className={`${s.ghost} ${s.dangerSolid}`} onClick={onConfirm} disabled={busy}>{busy ? "Removing…" : "Remove schema"}</button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 interface RemoveProps {
   fullName: string;
   busy: boolean;

@@ -5,7 +5,7 @@ import { useAuth } from "../../auth/useAuth";
 import { useSetup } from "../../components/ClientLayout";
 import { msalFetch } from "../../utils/msalFetch";
 import { KaveonMark } from "../../components/KaveonMark";
-import { KaveonLoading } from "../../components/KaveonLoading";
+import { TranscriptSkeleton } from "../../components/TranscriptSkeleton";
 import { ContextBanner } from "../../components/ContextBanner";
 import { nlToSql, DatasetSchema } from "../../utils/nlToSql";
 import { InlineChart } from "../../components/chat/InlineChart";
@@ -683,7 +683,10 @@ export default function Home() {
   // needs nothing from the browser's catalogue; only the fallback parser
   // below does, and sendMessage awaits the catalogue if it ever gets there
   // first. Blocking every keystroke on the fallback's data was backwards.
-  const canSend = !sending && !isEmpty;
+  // A conversation still being read is about to replace whatever is on screen,
+  // so a question asked into it would be appended to a transcript that is
+  // discarded a moment later.
+  const canSend = !sending && !isEmpty && !loadingSession;
 
   function generateInsight(
     rows: (string | number | null)[][],
@@ -1279,10 +1282,12 @@ export default function Home() {
           </div>
         )}
 
-        {/* Conversation view — appears after first message */}
-        {loadingSession && <KaveonLoading message="Loading conversation" />}
-
-        {inConversation && !loadingSession && (
+        {/* Conversation view — appears after the first message, and stands in
+            for itself while a conversation reopened from Recents is read.
+            Resuming a chat is a section change, not a page load: the shell,
+            the banner and the composer hold their places and only the
+            transcript waits, as the rest of the product already does. */}
+        {(inConversation || loadingSession) && (
           <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
 
             {/* The transcript scrolls under a soft fade; the composer below it
@@ -1293,7 +1298,8 @@ export default function Home() {
                 the transcript under it. */}
             <div style={{ position: "relative", flex: 1, minHeight: 0, display: "flex" }}>
               <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "32px 24px", display: "flex", flexDirection: "column", gap: 16 }}>
-                {messages.map((m, i) => (
+                {loadingSession && <TranscriptSkeleton />}
+                {!loadingSession && messages.map((m, i) => (
                   <div key={i} style={{ display: "flex", flexDirection: m.role === "user" ? "row-reverse" : "row", gap: 10, alignItems: "flex-start" }}>
                     {/* Avatar */}
                     <div style={{

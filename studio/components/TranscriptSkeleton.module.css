@@ -1,0 +1,70 @@
+/* ── Conversation skeleton ────────────────────────────────────────────────
+   Reopening a conversation stands in for the transcript, so the wait is the
+   shape of what arrives: the same row rhythm, the same avatar, the same
+   bubble geometry, one bar per line of text. Never a reserved empty
+   rectangle, and never a full-screen takeover — the app shell stays put and
+   only this region changes. */
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.user {
+  flex-direction: row-reverse;
+}
+
+.avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+}
+
+.bubble {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 4px 14px 14px 14px;
+}
+
+.user .bubble {
+  border-radius: 14px 4px 14px 14px;
+}
+
+.bar {
+  display: block;
+  height: 9px;
+  border-radius: 3px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .bar,
+  .avatar {
+    animation: transcriptPulse 1.3s ease-in-out infinite;
+  }
+}
+
+@keyframes transcriptPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}

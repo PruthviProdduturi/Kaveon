@@ -335,6 +335,18 @@ export const createSchema = async (catalogId: string, name: string) => {
   return schema;
 };
 
+/**
+ * Take an empty schema back out of the catalog. The Engine refuses a schema
+ * that still holds tables, and the revision travels as `If-Match` so a schema
+ * somebody else has changed is refused rather than removed.
+ */
+export const deleteSchema = async (schemaId: string, revision: number) => {
+  await send<null>(`/engine/catalog/schemas/${enc(schemaId)}`, {
+    method: "DELETE", headers: { "If-Match": String(revision) },
+  });
+  invalidateDefinitionCache();
+};
+
 export const createTable = async (input: {
   schemaId: string; name: string; location: string; format: TableFormat; columns: ColumnInput[];
 }) => send<{ table: EngineTable; probe: Probe | null }>("/engine/catalog/tables", json("POST", {
