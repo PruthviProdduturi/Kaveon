@@ -1,5 +1,13 @@
 # Two more Engine workers, for hosts with the cores to use them.
 #
+# ** BUILD-TIME ONLY until the merge fault is fixed. ** A four-worker cluster
+# returns wrong answers: a grouped aggregate with any predicate comes back
+# with every group twice, each carrying about half its true sum, while the
+# same question without a predicate is correct because the cube answers it
+# and never reaches the exchange. Two workers are correct. Raised with
+# @Codex in HANDSHAKE.md. Bring these up to build a cube, then take them
+# down again — do not serve from this topology.
+#
 # The statistics and cube pass gives each worker **one task over all of its
 # files**, and a task has a hard ceiling — REMOTE_TASK_TIMEOUT, 600s, a source
 # constant in the server crate. Splitting the table into more files does not
