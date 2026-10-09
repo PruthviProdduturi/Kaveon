@@ -190,6 +190,54 @@ engine_bridge.analyze_table("OpenSource", "public", "kaveon_events_enriched",
 *cancelled* the statement when it passed, so every attempt threw away its whole
 pass rather than leaving it to finish.
 
+## What has to come off a statement before the cube will answer it
+
+A cube-shaped aggregate is answered from precomputed cells, but two things a
+chart statement routinely carries put it outside that match, and both are
+removed in the API by `services/engine_cube_rewrite.py` rather than worked
+around in the chart.
+
+- **`ORDER BY` or `LIMIT` disqualifies the match outright.** A breakdown
+  carries both, so the statement is issued without them and the ordering and
+  the bound are applied over the handful of rows that come back.
+- **`AVG` is not a cell the cube holds.** It is reissued as `SUM` and `COUNT`,
+  which are, and the quotient is formed in the API. The identity is exact:
+  SQL's `AVG` ignores NULLs and `COUNT(col)` counts exactly the non-NULL
+  values, so both sides divide the same sum by the same population.
+
+The second reason stands on its own, and missing that cost a KPI tile 23
+seconds. `SELECT AVG(latency_p75_ms) AS "ms" FROM public.kaveon_events_enriched`
+is what a `big_number` chart with no `groupby` generates — no `ORDER BY`, no
+`LIMIT`, because it returns one row. The rewrite required a clause to remove,
+so the AVG was never substituted and the statement scanned 504M rows:
+
+    SELECT AVG(latency_p75_ms) …                      12,747 ms  distributed
+    SELECT SUM(latency_p75_ms) …, COUNT(latency_p75_ms) …  182 ms  context · cube
+
+Both return `818.6926933214427`. The tile went from 23,047 ms to 906 ms, and
+the Kaveon Events dashboard from 115 s to 15.1 s of sequential tile time.
+
+### What a tile's remaining time is, and is not
+
+At 906 ms a tile is no longer waiting on the query. Measured on `kaveon-vm`:
+
+| | |
+|---|---|
+| transport + auth (a 404 round trip) | 62 ms |
+| the Engine's own `elapsed_ms` | 182–196 ms |
+| the rest — the API's control plane | ~660 ms |
+
+Only one Engine statement is issued per request, so the remainder is not query
+work. A KaveonDB control-plane read costs about 125 ms above transport
+(`GET /datasets/144` at 188 ms against a 63 ms 404), and a chart request makes
+several of them to resolve a dataset to a catalog, check permission and record
+the run. **So what is left is transactional, not distributed** — worth
+remembering before reaching for the cluster when a dashboard feels slow.
+
+The same statement also varies from 906 ms to 3,328 ms run to run, which is
+the burstable host rather than anything in the path; a single reading over
+roughly a second says nothing on this host.
+
 ## Reading an Engine query's lane
 
 `GET /api/v1/engine/console/queries` is the fastest way to see what actually
