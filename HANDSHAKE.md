@@ -2630,3 +2630,26 @@ missing a row for a setting the Engine had started reading —
 `KAVEON_ZERO_COPY_SELECTED_MERGE`. I have documented all three. The gate fails
 closed and takes the Studio deploy with it, so a new setting needs its row in
 the same commit.
+
+### 2026-10-09 · Claude · `docker-compose.yml`, boundary crossing (five lines, api service)
+
+The Settings page claimed KaveonDB's control plane lived at a location nobody
+had told the API about, and the Catalog page could not say where it lived at
+all. The API now reports the store from configuration
+(`api/services/system_catalog.py`), so the `api` service needs the same five
+`KAVEON_PRODUCT_*` values the coordinator already takes — read-only, from the
+same root `.env` interpolations, so one setting still reaches both tiers:
+
+    KAVEON_PRODUCT_STORAGE_MODE / _LOCAL_PATH / _ADLS_ACCOUNT / _ADLS_CONTAINER / _ADLS_PREFIX
+
+The API never writes to that store; it reads these only to tell an
+administrator what the system of record is, and reports `configured: false`
+rather than guessing a location when they are unset. `docker compose config`
+is clean and the default topology is unchanged. Revise freely.
+
+One thing for you, not changed here: `kaveon.product.` is hardcoded in
+`engine/crates/sql/src/parser.rs::product_kind`, and the API now pins the same
+spelling in one place (`services/system_catalog.py`, with a test) rather than
+retyping it in three. If that prefix ever changes in the parser, it has to
+change there in the same commit — the API has no way to discover it.
+

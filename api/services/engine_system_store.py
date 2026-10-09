@@ -14,7 +14,12 @@ from urllib.parse import quote
 
 from fastapi import HTTPException
 
-from services import engine_bridge
+from services import engine_bridge, system_catalog
+
+# The typed-row facade, spelled once. `typed_rows` is the only product
+# target that is not a family of its own: the Engine's parser maps it to the
+# `typed_row` kind, so replay can carry any committed row shape.
+_TYPED_ROWS = system_catalog.qualified("typed_rows")
 
 
 _TABLE = r"^[A-Za-z][A-Za-z0-9_]{0,62}$"
@@ -142,7 +147,7 @@ def create_row(
         "owner_principal": owner,
     }
     sql = (
-        "INSERT INTO kaveon.product.typed_rows (id, document_json) VALUES ("
+        "INSERT INTO " + _TYPED_ROWS + " (id, document_json) VALUES ("
         + _sql_literal(row_id) + ", " + _sql_literal(json.dumps(document, sort_keys=True, separators=(",", ":"))) + ")"
     )
     begun = engine_bridge._request(
@@ -201,7 +206,7 @@ def create_rows(
         _validate_columns(columns)
         document = {"table": table, "primary_key": row_id, "revision": 1,
                     "columns": columns, "owner_principal": owner}
-        statements.append("INSERT INTO kaveon.product.typed_rows (id, document_json) VALUES (" +
+        statements.append("INSERT INTO " + _TYPED_ROWS + " (id, document_json) VALUES (" +
                           _sql_literal(row_id) + ", " +
                           _sql_literal(json.dumps(document, sort_keys=True, separators=(",", ":"))) + ")")
     begun = engine_bridge._request(
@@ -287,10 +292,10 @@ def _validate_columns(columns: Mapping[str, Mapping[str, Any]]) -> None:
 def _typed_row_mutation(operation: str, row_id: str, document: Optional[dict], actor: str,
                         role: str, expected_revision: int, *, table: Optional[str] = None) -> dict:
     if operation == "DELETE":
-        sql = f"DELETE FROM kaveon.product.typed_rows WHERE id = {_sql_literal(row_id)} AND revision = {expected_revision}"
+        sql = f"DELETE FROM {_TYPED_ROWS} WHERE id = {_sql_literal(row_id)} AND revision = {expected_revision}"
     else:
         payload = json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-        sql = ("UPDATE kaveon.product.typed_rows SET document_json = " + _sql_literal(payload) +
+        sql = ("UPDATE " + _TYPED_ROWS + " SET document_json = " + _sql_literal(payload) +
                f" WHERE id = {_sql_literal(row_id)} AND revision = {expected_revision}")
     begun = engine_bridge._request("POST", "/v1/transaction/sql", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
                                    payload={"sql": "BEGIN"}, role=_role(role))

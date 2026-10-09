@@ -1,3 +1,4 @@
+import os
 import unittest
 from unittest.mock import patch
 
@@ -91,6 +92,58 @@ class EngineConsoleTests(unittest.TestCase):
             self.assertTrue(row["identifier"].startswith("kaveon.product."))
             self.assertIsNone(row["records"])
             self.assertIsNone(row["error"])
+
+    def test_system_catalog_identity_is_the_parser_contract(self):
+        """The identifier is pinned, not configurable, and every caller in the
+        API spells it the same way. `kaveon.product.` is what the Engine's
+        parser accepts (product_kind in engine/crates/sql/src/parser.rs); a
+        name Studio displayed but the Engine refused would be worse than a
+        name nobody could change. Deliberately not driven by the environment:
+        a deployment that renamed it would break its own writes."""
+        from services import product_store, system_catalog as system_store
+        self.assertEqual(system_store.qualified("datasets"), "kaveon.product.datasets")
+        statement = product_store._statement(product_store.ProductMutation(
+            operation="create", kind="dataset", record_id="d1", document={"a": 1}))
+        self.assertTrue(statement.startswith("INSERT INTO kaveon.product.datasets "),
+                        statement)
+        # No environment variable reaches the identifier. If one ever does,
+        # the facade and the statements can disagree, which is the failure
+        # this pins shut.
+        with patch.dict(os.environ, {"KAVEON_SYSTEM_CATALOG": "Control",
+                                     "KAVEON_SYSTEM_SCHEMA": "meta"}):
+            self.assertEqual(system_store.qualified("charts"), "kaveon.product.charts")
+
+    def test_system_store_is_reported_or_declared_unconfigured(self):
+        """Where the control plane lives is read from the deployment. An unset
+        mode is reported as unconfigured, never guessed: a confident wrong
+        location for the system of record is worse than none."""
+        ctx = UserContext("admin@example.com", "Admin")
+        adls = {"KAVEON_PRODUCT_STORAGE_MODE": "adls",
+                "KAVEON_PRODUCT_ADLS_ACCOUNT": "kaveonlake",
+                "KAVEON_PRODUCT_ADLS_CONTAINER": "system",
+                "KAVEON_PRODUCT_ADLS_PREFIX": "kaveon/system/v2"}
+        with patch.dict(os.environ, adls):
+            store = engine_console.system_catalog(Response(), False, False, ctx)["storage"]
+        self.assertTrue(store["configured"])
+        self.assertTrue(store["durable"])
+        self.assertEqual(store["mode"], "adls")
+        self.assertEqual(store["location"], "system/kaveon/system/v2")
+
+        local = {"KAVEON_PRODUCT_STORAGE_MODE": "local",
+                 "KAVEON_PRODUCT_LOCAL_PATH": "/var/lib/kaveon/product-transactions"}
+        with patch.dict(os.environ, local):
+            store = engine_console.system_catalog(Response(), False, False, ctx)["storage"]
+        self.assertTrue(store["configured"])
+        # A host directory does not survive the container that writes it, and
+        # Studio warns on exactly this flag.
+        self.assertIs(store["durable"], False)
+        self.assertEqual(store["location"], "/var/lib/kaveon/product-transactions")
+
+        with patch.dict(os.environ, {}, clear=True):
+            store = engine_console.system_catalog(Response(), False, False, ctx)["storage"]
+        self.assertIs(store["configured"], False)
+        self.assertIsNone(store["mode"])
+        self.assertIsNone(store["location"])
 
     def test_system_catalog_counts_are_bounded_and_snapshot_pinned(self):
         ctx = UserContext("admin@example.com", "Admin")

@@ -14,7 +14,7 @@ from urllib.parse import quote
 
 from fastapi import HTTPException
 
-from services import engine_bridge
+from services import engine_bridge, system_catalog
 
 
 ProductKind = Literal["dataset", "chart", "dashboard", "saved_query", "user_theme", "dlm_definition", "dlm_run", "favorite", "source", "user_recent", "query_history", "activity", "chat_session", "chat_message"]
@@ -114,13 +114,15 @@ def _statement(mutation: ProductMutation) -> str:
     if mutation.kind not in _KINDS:
         raise HTTPException(422, "Unsupported product record kind")
     record_id = _identifier(mutation.record_id, "record ID")
-    table = _PRODUCT_TABLES[mutation.kind]
+    # One spelling of the product facade for the whole API: the Engine's
+    # parser accepts exactly `kaveon.product.<table>` and nothing else.
+    target = system_catalog.qualified(_PRODUCT_TABLES[mutation.kind])
     if mutation.operation == "create":
         if mutation.document is None or mutation.expected_revision is not None:
             raise HTTPException(422, "Create requires a document and no expected revision")
         document = json.dumps(mutation.document, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         return (
-            f"INSERT INTO kaveon.product.{table} (id, document_json) VALUES "
+            f"INSERT INTO {target} (id, document_json) VALUES "
             f"({_sql_literal(record_id)}, {_sql_literal(document)})"
         )
     if mutation.operation == "update":
@@ -128,14 +130,14 @@ def _statement(mutation: ProductMutation) -> str:
             raise HTTPException(422, "Update requires a document and positive expected revision")
         document = json.dumps(mutation.document, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         return (
-            f"UPDATE kaveon.product.{table} SET document_json = {_sql_literal(document)} "
+            f"UPDATE {target} SET document_json = {_sql_literal(document)} "
             f"WHERE id = {_sql_literal(record_id)} AND revision = {mutation.expected_revision}"
         )
     if mutation.operation == "delete":
         if mutation.document is not None or not mutation.expected_revision or mutation.expected_revision < 1:
             raise HTTPException(422, "Delete requires a positive expected revision and no document")
         return (
-            f"DELETE FROM kaveon.product.{table} WHERE id = {_sql_literal(record_id)} "
+            f"DELETE FROM {target} WHERE id = {_sql_literal(record_id)} "
             f"AND revision = {mutation.expected_revision}"
         )
     raise HTTPException(422, "Unsupported product mutation")

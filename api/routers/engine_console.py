@@ -14,6 +14,9 @@ from middleware.auth import UserContext
 from middleware.permissions import require_min_role
 from routers import lab
 from services import engine_bridge, product_store
+# Aliased: the route below is also called system_catalog, and the module name
+# would be shadowed by it at module scope.
+from services import system_catalog as system_store
 
 router = APIRouter(tags=["engine-console"])
 
@@ -86,14 +89,17 @@ def qualify_native_statistics(ctx: UserContext = Depends(require_min_role("Admin
 
 # ── KaveonDB's own catalog ───────────────────────────────────────────────────
 # The Engine registers one built-in catalog for the platform's own records.
-# Its SQL identifier is `kaveon` and its control-plane schema is `product`;
-# "KaveonDB" is the product's name for it and appears only in Studio, never in
-# a statement. Every record under it is written through the Engine's
-# transaction boundary (services.product_store.transact) and read back from a
-# pinned durable snapshot, so a reading of it is a reading of one committed
-# generation rather than a scan.
-SYSTEM_CATALOG = "kaveon"
-SYSTEM_SCHEMA = "product"
+# Its control-plane schema is `product`; "KaveonDB" is the product's name for
+# the whole of it and is what Studio says. Every record under it is written
+# through the Engine's transaction boundary (services.product_store.transact)
+# and read back from a pinned durable snapshot, so a reading of it is a reading
+# of one committed generation rather than a scan.
+#
+# The identifier and the store both come from services.system_catalog: the
+# identifier because `kaveon.product.` is a contract with the Engine's parser
+# and must have exactly one spelling in the API, the store because where a
+# deployment keeps its control plane is a setting and used to be unreportable
+# without reading an environment file.
 
 # The control plane's own families, in reading order: the content a reader
 # came for, then the semantic layer, then the ledgers that record use. Each
@@ -148,6 +154,10 @@ def system_catalog(response: Response, counts: bool = False, refresh: bool = Fal
     that a family is empty. `truncated` marks a family counted only as far as
     the bound, and a family the Engine refuses individually carries its
     message and leaves the rest of the reading intact.
+
+    `storage` reports where the deployment has told KaveonDB to keep all of
+    this, so an administrator can see the system of record without reading an
+    environment file — and sees that it is unconfigured when it is.
     """
     response.headers.update(lab.NO_CACHE)
     if not counts:
@@ -170,7 +180,9 @@ def _system_catalog_document(tables: list, *, counted: bool) -> dict:
     read = {table["snapshotId"] for table in tables if table.get("snapshotId")}
     return {
         "success": True,
-        "catalog": {"identifier": SYSTEM_CATALOG, "schema": SYSTEM_SCHEMA},
+        "catalog": {"identifier": system_store.CATALOG,
+                    "schema": system_store.SCHEMA},
+        "storage": system_store.storage(),
         "counted": counted,
         # One snapshot identity only when every family was read from the same
         # committed generation. A commit landing mid-read is reported, not
@@ -184,7 +196,7 @@ def _system_catalog_document(tables: list, *, counted: bool) -> dict:
 def _system_row(entry: tuple[str, str]) -> dict:
     kind, table = entry
     return {"kind": kind, "table": table,
-            "identifier": f"{SYSTEM_CATALOG}.{SYSTEM_SCHEMA}.{table}",
+            "identifier": system_store.qualified(table),
             "records": None, "truncated": False, "snapshotId": None, "error": None}
 
 

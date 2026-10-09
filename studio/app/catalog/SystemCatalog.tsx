@@ -28,6 +28,7 @@ import { useCatalogTree } from "./CatalogShell";
 import s from "./catalog.module.css";
 import {
   SYSTEM_CATALOG_LABEL, SYSTEM_TABLE_HOLDS, SystemCatalogError, SystemCatalogReading,
+  SystemStore,
   fetchSystemCatalog, isSystemCatalog, recordCount,
 } from "../../utils/systemCatalog";
 
@@ -37,6 +38,28 @@ const SYSTEM_CATALOG_BODY =
   + "kept in the Engine's built-in catalog, written only through its transaction boundary and read back "
   + "from a committed snapshot. Studio, the API and the CLI are the only writers; the tables themselves "
   + "are read-only, and the records inside them belong to the people who created them.";
+
+/**
+ * Where the deployment keeps the control plane. Read from the server, which
+ * reads it from the same configuration the Engine is given — so this reports
+ * the deployment's own setting, and reports its absence as an absence rather
+ * than naming a plausible location.
+ */
+function SystemStoreFact({ store }: { store: SystemStore | undefined }) {
+  if (!store) return null;
+  if (!store.configured) {
+    return <>This server has not been told where it is kept.</>;
+  }
+  if (store.mode === "adls") {
+    return <>It is kept in <b className={s.systemMono}>{store.account}</b> at{" "}
+      <b className={s.systemMono}>{store.location}</b>.</>;
+  }
+  // A host directory is the laptop default and is right there. It is also the
+  // one case where the store does not outlive the container, and an
+  // administrator reading this page is exactly who needs to know that.
+  return <>It is kept on this host at <b className={s.systemMono}>{store.location}</b>,
+    which does not survive the container that writes it.</>;
+}
 
 export function SystemCatalog() {
   const { isAdmin } = useRole();
@@ -129,12 +152,14 @@ export function SystemCatalog() {
           <h2 className={s.systemTitle} id="system-catalog-title">{SYSTEM_CATALOG_LABEL}</h2>
           <p className={s.systemBody}>{SYSTEM_CATALOG_BODY}</p>
         </div>
-        {/* The three standing facts about this catalog, in one line and in
-            the same voice the lake's own facts are written in. */}
+        {/* The standing facts about this catalog, in one line and in the same
+            voice the lake's own facts are written in. The store comes last
+            because it is the one that changes between deployments. */}
         <p className={s.systemFacts}>
           A statement names it <b className={s.systemMono}>{reading.catalog.identifier}.{reading.catalog.schema}</b>.
           {" "}Writes are <b>transactional</b>, one commit per change.
           {" "}Here it is <b>read-only</b>, and only to administrators.
+          {" "}<SystemStoreFact store={reading.storage} />
         </p>
       </div>
 

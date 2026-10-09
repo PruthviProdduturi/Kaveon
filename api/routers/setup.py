@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from models.setup import SetupConnectionBody
 import database.pool as pool
 from middleware.permissions import require_min_role
-from services import postgresql_retirement_runtime
+from services import postgresql_retirement_runtime, system_catalog
 
 router = APIRouter()
 
@@ -327,13 +327,22 @@ def _is_reset_allowed() -> bool:
 def admin_get_metadata(ctx=Depends(require_min_role("Admin"))):
     """Return current metadata server config (admin only). Never exposes credentials."""
     if postgresql_retirement_runtime.requested():
+        # There is no separate metadata database any more: KaveonDB is both the
+        # query runtime and the system of record, so this reports one system
+        # rather than describing a second one. `database` and `schema` are the
+        # product facade the Engine's parser accepts, named in one place
+        # (services.system_catalog) rather than retyped here; host, port and
+        # endpoint are empty because the Engine is reached over the bridge,
+        # not a DSN. `storage` is where the deployment keeps it.
         return {
             "db_type": "kaveondb",
             "label": "KaveonDB",
             "endpoint": "",
             "host": "",
             "port": "",
-            "database": "kaveon",
+            "database": system_catalog.CATALOG,
+            "schema": system_catalog.SCHEMA,
+            "storage": system_catalog.storage(),
             "ui_configured": True,
             "authority": "kaveondb",
         }
