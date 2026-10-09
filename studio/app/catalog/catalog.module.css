@@ -36,7 +36,7 @@
 
   /* The rail's column carries its own 32px inset, so it is wider than the
      rail's content by exactly the page padding it bleeds into. */
-  display: grid; grid-template-columns: 268px minmax(0, 1fr); gap: 28px;
+  display: grid; grid-template-columns: 236px minmax(0, 1fr); gap: 28px;
   min-height: calc(100vh - 56px);
   align-items: start;
 }
@@ -218,6 +218,8 @@
    Beneath it, two quiet lines: what stands behind the fraction, then what
    the lake physically is. ──────────────────────────────────────────────── */
 .lake { margin-top: 34px }
+/* A figure and its noun are one word for wrapping purposes. */
+.nowrapPair { white-space: nowrap }
 .headline {
   display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 18px; margin: 0;
   font-variant-numeric: tabular-nums lining-nums;
@@ -371,14 +373,21 @@
    what a fixed layout gives a column element — so each is its longest
    reading plus the gutters on either side of it, and a figure never arrives
    as an ellipsis. */
-.colName { width: auto }
-.colFormat { width: 84px }
-.colRows { width: 132px }
-.colSize { width: 90px }
-.colFiles { width: 62px }
-.colChanged { width: 94px }
-.colMeasured { width: 82px }
-.colAnswer { width: 146px }
+/* Proportional, and summing to 100%. These were one `auto` name column and
+   seven fixed pixel widths, which with `table-layout: fixed; width: 100%`
+   means the name column absorbs every spare pixel: on a 1550px content area
+   that made it ~990px wide, so a table's name sat a clear 900px from its own
+   Format value with nothing in between. The row stopped reading as a row.
+   Percentages keep the cluster of figures together at every width, and the
+   container queries below still collapse individual columns to zero. */
+.colName { width: 28% }
+.colFormat { width: 8% }
+.colRows { width: 12% }
+.colSize { width: 9% }
+.colFiles { width: 7% }
+.colChanged { width: 9% }
+.colMeasured { width: 9% }
+.colAnswer { width: 18% }
 
 .cName { position: relative; min-width: 0; padding-left: 0 !important }
 .cFormat { text-align: right; color: var(--text-secondary) }

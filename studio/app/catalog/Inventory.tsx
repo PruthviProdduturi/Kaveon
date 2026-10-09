@@ -602,8 +602,12 @@ function Lake({ fastRows, baseRows, staleRows, fastTables, baseTables, staleTabl
           <>
             <b>{count(fastTables)}</b> of <b>{count(tables)}</b> {plural(tables, "table", "tables")} answer
             this way, <b>{share(fastRows, total)}</b> of what is measured.
+            {/* A figure and the noun it counts stay on one line: this read
+                "hold 685,753" and then wrapped before "rows that are read in
+                full", leaving a number dangling at the end of a line with
+                nothing saying what it counted. */}
             {scannedTables > 0 && (
-              <> The other <b>{count(scannedTables)}</b> hold <b>{count(scanned)}</b> rows that are read in full
+              <> The other <b>{count(scannedTables)}</b> hold <span className={s.nowrapPair}><b>{count(scanned)}</b> rows</span> that are read in full
                 {staleTables > 0 && <>, <b>{count(staleTables)}</b> of them carrying statistics the source has moved past</>}.
               </>
             )}
