@@ -304,7 +304,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
               transition: "all 0.2s",
               letterSpacing: "-0.01em",
             }}>
-              Try Kaveon <span style={{ fontSize: 20 }}>&rarr;</span>
+              Open Kaveon <span style={{ fontSize: 20 }}>&rarr;</span>
             </Link>
             <a href="https://github.com/PruthviProdduturi/Kaveon" target="_blank" rel="noopener noreferrer" style={{
               display: "inline-flex", alignItems: "center", gap: 10,
@@ -335,7 +335,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
             {[
               { name: "Kaveon Studio", status: "Available", color: B, body: "Questions, SQL Lab, governed dashboards, chart building, and operational exploration." },
               { name: "Data Language Model", status: "Available", color: "#8b5cf6", body: "Compiled dataset semantics and deterministic NL→SQL for supported question classes." },
-              { name: "Kaveon Engine", status: "Alpha", color: "#f59e0b", body: "Distributed Arrow execution over Parquet, Delta and Iceberg tables on ADLS Gen2 and local storage, with exact memory accounting. Qualified on a cluster, not yet a general release." },
+              { name: "Kaveon Engine", status: "Alpha", color: "#f59e0b", body: "Distributed Arrow execution over Parquet and Delta tables on local storage, with exact memory accounting. Qualified on a cluster; broader cloud and format qualification remains staged." },
             ].map((pillar, index) => (
               <Anim key={pillar.name} dir="up" delay={index * 120} style={{ padding: "30px 28px", borderRadius: 16, background: "rgba(255,255,255,0.022)", border: "1px solid rgba(255,255,255,0.07)", minHeight: 220 }} className="about-card">
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 28 }}>
@@ -395,7 +395,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
               { title: "Multi-Source", desc: "Register multiple supported sources; each query targets one selected source today.", color: "rgba(236,72,153,0.05)" },
               { title: "Semantic Datasets", desc: "Define dimensions, metrics, and joins once. Reuse everywhere.", color: "rgba(6,182,212,0.05)" },
               { title: "Governed Identity", desc: "Microsoft Entra ID, role-aware access, and customer-controlled data boundaries.", color: "rgba(99,102,241,0.05)" },
-              { title: "Deploy Your Way", desc: "Run locally with Docker today; private-cloud and distributed topologies remain explicitly staged.", color: "rgba(245,158,11,0.05)" },
+              { title: "Deploy Your Way", desc: "Run locally with Docker today; deploy the Studio and Engine as separately qualified services when you need a private-cloud topology.", color: "rgba(245,158,11,0.05)" },
             ].map((f, idx) => (
               <Anim key={f.title} dir="up" delay={400 + idx * 100}>
                 <div className="about-card" style={{ padding: 36, borderRadius: 16, background: `linear-gradient(135deg, ${f.color} 0%, transparent 100%)`, border: "1px solid rgba(255,255,255,0.05)", transition: "all 0.3s", height: "100%" }}>
@@ -823,10 +823,10 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
             </p>
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {[
-                "Per-element validity scoring from DBMS statistics",
+                "Per-element validity scoring from source statistics",
                 "Zero-query answers from precomputed DLM context",
                 "Self-healing feedback loop after each live query",
-                "No LLM, no API keys, no latency",
+                "No model call or model API latency",
               ].map(t => (
                 <div key={t} style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <div style={{ width: 18, height: 18, borderRadius: 5, background: `${B}14`, border: `1px solid ${B}25`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
@@ -1057,7 +1057,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
               { name: "FastAPI", version: "0.115", color: "#009688" },
               { name: "Python", version: "3.12", color: "#ffd43b" },
               { name: "ECharts", version: "5.x", color: "#e43961" },
-              { name: "PostgreSQL", version: "16", color: "#336791" },
+              { name: "KaveonDB", version: "Product authority", color: "#60a5fa" },
               { name: "Azure", version: "Container Apps", color: "#0078d4" },
               { name: "Vercel", version: "Edge", color: "#fff" },
               { name: "Docker", version: "Local stack", color: "#2496ed" },
@@ -1087,7 +1087,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
             </h2>
             <p style={{ fontSize: 15, color: "#666", marginBottom: 36 }}>Open source &middot; Self-hosted &middot; MIT License</p>
             <Link href="/home" className="about-btn" style={{ display: "inline-block", padding: "16px 44px", borderRadius: 12, background: B, color: "#fff", fontSize: 16, fontWeight: 600, textDecoration: "none", boxShadow: `0 4px 24px ${B}30`, transition: "all 0.2s" }}>
-              Try Kaveon
+              Open Kaveon
             </Link>
           </div>
         </Anim>
@@ -1102,7 +1102,7 @@ export default function ProductPage({ benchmarks = null }: { benchmarks?: Benchm
         <div style={{ display: "flex", gap: 24 }}>
           <Link href="/docs" className="about-link" style={{ fontSize: 12, color: "#e2e8f0", textDecoration: "none", transition: "color 0.2s" }}>Documentation</Link>
           <a href="https://github.com/PruthviProdduturi/Kaveon" target="_blank" rel="noopener noreferrer" className="about-link" style={{ fontSize: 12, color: "#e2e8f0", textDecoration: "none", transition: "color 0.2s" }}>GitHub</a>
-          <Link href="/home" className="about-link" style={{ fontSize: 12, color: "#e2e8f0", textDecoration: "none", transition: "color 0.2s" }}>Launch App</Link>
+          <Link href="/home" className="about-link" style={{ fontSize: 12, color: "#e2e8f0", textDecoration: "none", transition: "color 0.2s" }}>Open Kaveon</Link>
         </div>
       </footer>
     </div>

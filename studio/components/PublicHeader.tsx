@@ -30,7 +30,7 @@ export function PublicHeader({ active, onBrandClick }: PublicHeaderProps) {
         )}
         <Link href="/docs" className={`${styles.link} ${active === "docs" ? styles.active : ""}`} aria-current={active === "docs" ? "page" : undefined}>Docs</Link>
         <a href="https://github.com/PruthviProdduturi/Kaveon" target="_blank" rel="noopener noreferrer" className={`${styles.link} ${styles.github}`}>GitHub</a>
-        <Link href="/home" className={styles.launch}>Launch App</Link>
+        <Link href="/home" className={styles.launch}>Open Kaveon</Link>
       </nav>
     </header>
   );
