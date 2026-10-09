@@ -466,6 +466,35 @@ class ProductUsersUnresolvedTests(unittest.TestCase):
         self.assertIn("No dimension of Product users matches the requested breakdown",
                       result["clarification"]["prompt"])
 
+    def test_a_superlative_groups_by_a_dimension_a_metric_also_names(self):
+        """"which country has the most users" asks which country, so it has to
+        group by one.
+
+        The ranking path excludes words that appear in a metric's name, so the
+        measure in "top 5 countries by users" is not read as the dimension.
+        But a dimension can be named by a metric too: "model" is the
+        model_name dimension and also a word of "Models Tracked"
+        (COUNT(model_name)). Excluding it left "which model has the highest
+        arena elo" with nothing to group by, and the answer was MAX(arena_elo)
+        — 1402.0, the number, when the question asked which model.
+        """
+        colliding = {**PRODUCT_USERS,
+                     "metrics": PRODUCT_USERS["metrics"] + [
+                         {"name": "Countries Tracked",
+                          "expression": "COUNT(DISTINCT country)",
+                          "metric_type": "count_distinct"}]}
+        with ProductUsersHarness(),              patch.object(engine.datasets_svc, "get_dataset_by_id",
+                          lambda i, *a, **k: colliding if str(i) == "2" else None):
+            result = engine.ask("which country has the most users")
+        self.assertEqual(result["frame"]["group_col"], "country")
+
+    def test_a_ranking_still_prefers_the_dimension_over_the_measure(self):
+        """The exclusion still earns its place: "users" is the measure here,
+        not a dimension to group by."""
+        with ProductUsersHarness():
+            result = engine.ask("top 5 countries by users")
+        self.assertEqual(result["frame"]["group_col"], "country")
+
     def test_near_values_rank_stem_then_edit_then_prefix(self):
         with ProductUsersHarness():
             self.assertEqual([h["value"] for h in engine._near_values("2", "finance")], ["Financial Services"])

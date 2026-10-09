@@ -2257,6 +2257,19 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
     if top_n:
         if not group_col:
             group_col = _match_any_dim(question, dims, d_alias, exclude=metric_words)
+            if not group_col:
+                # The dimension a question names can also be a word of some
+                # metric's name. "model" is the model_name dimension and also
+                # a word of "Models Tracked" (COUNT(model_name)), so excluding
+                # it left "which model has the highest arena elo" with nothing
+                # to group by and the answer was MAX(arena_elo) — 1402.0, the
+                # number, when the question asked which model.
+                #
+                # The exclusion earns its place on "top 5 countries by users",
+                # where it stops the measure being read as the dimension, and
+                # it still runs first. This only reaches for a dimension where
+                # it left none at all, so a ranking that found one keeps it.
+                group_col = _match_any_dim(question, dims, d_alias)
     # If "by <metric>" was parsed but didn't match a dimension, also try
     # matching a dimension anywhere in the question (e.g. "top models by ELO")
     wanted_groupby = bool(re.search(r"\b(?:by|per|across|for each)\b", question, re.I))
