@@ -1,0 +1,83 @@
+# Two more Engine workers, for hosts with the cores to use them.
+#
+# The statistics and cube pass gives each worker **one task over all of its
+# files**, and a task has a hard ceiling — REMOTE_TASK_TIMEOUT, 600s, a source
+# constant in the server crate. Splitting the table into more files does not
+# help that stage: the files are divided among the workers, so the only way to
+# shorten a task is to have fewer files in it.
+#
+# `public.kaveon_events_enriched` is 126 files. Over two workers that is 63
+# each, which built in 20.1 min — about 600s a task, already at the edge. The
+# table then gained a day-grain time axis and 184 countries where it had 26,
+# and the pass began failing with "worker did not finish the task within
+# 600s". Four workers put ~32 files in each task instead.
+#
+# Local parallelism is halved to match: four workers at four lanes is the same
+# sixteen lanes the two-worker profile ran, so the host is no more
+# oversubscribed than before.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.workers.yml \
+#     up -d engine-worker-3 engine-worker-4
+#
+# This file is additive and carries no base-file changes, so the default
+# two-worker topology is still what `docker compose up` gives you.
+
+services:
+  engine-worker-1:
+    environment:
+      KAVEON_LOCAL_PARALLELISM: ${KAVEON_LOCAL_PARALLELISM:-4}
+
+  engine-worker-2:
+    environment:
+      KAVEON_LOCAL_PARALLELISM: ${KAVEON_LOCAL_PARALLELISM:-4}
+
+  engine-worker-3: &extra-worker
+    build:
+      context: ./engine
+    container_name: kaveon-engine-worker-3
+    depends_on:
+      engine-coordinator:
+        condition: service_healthy
+    environment: &extra-worker-environment
+      KAVEON_NODE_ID: worker-3
+      KAVEON_ENVIRONMENT: docker
+      KAVEON_COORDINATOR: "false"
+      KAVEON_HTTP_PORT: "8080"
+      KAVEON_BIND_HOST: "0.0.0.0"
+      KAVEON_INSECURE_DEVELOPMENT: "true"
+      KAVEON_DISCOVERY_URI: http://engine-coordinator:8080
+      KAVEON_ADVERTISED_URI: http://engine-worker-3:8080
+      KAVEON_DATA_DIR: /data
+      KAVEON_EXCHANGE_TOKEN: ${KAVEON_EXCHANGE_TOKEN:-kaveon-local-exchange}
+      KAVEON_QUERY_MEMORY_LIMIT_BYTES: ${KAVEON_QUERY_MEMORY_LIMIT_BYTES:-536870912}
+      KAVEON_MEMORY_ADMISSION_LIMIT_BYTES: ${KAVEON_MEMORY_ADMISSION_LIMIT_BYTES:-2147483648}
+      KAVEON_HASH_SPILL_ROOT: ${KAVEON_HASH_SPILL_ROOT:-/tmp/kaveon-spill}
+      KAVEON_HASH_SPILL_PARTITIONS: ${KAVEON_HASH_SPILL_PARTITIONS:-16}
+      KAVEON_HASH_SPILL_MODE: ${KAVEON_HASH_SPILL_MODE:-disk}
+      KAVEON_SPILL_COMPRESSION: ${KAVEON_SPILL_COMPRESSION:-}
+      KAVEON_LOCAL_PARALLELISM: ${KAVEON_LOCAL_PARALLELISM:-4}
+      KAVEON_SCAN_PARTITIONS_PER_WORKER: ${KAVEON_SCAN_PARTITIONS_PER_WORKER:-4}
+      KAVEON_EXCHANGE_PARTITIONS: ${KAVEON_EXCHANGE_PARTITIONS:-4}
+      KAVEON_EXCHANGE_COMPRESSION: ${KAVEON_EXCHANGE_COMPRESSION:-}
+      KAVEON_USE_UTF8_VIEW: ${KAVEON_USE_UTF8_VIEW:-}
+      KAVEON_DIRECT_GROUPED_EXCHANGE: ${KAVEON_DIRECT_GROUPED_EXCHANGE:-}
+      KAVEON_ZERO_COPY_SELECTED_MERGE: ${KAVEON_ZERO_COPY_SELECTED_MERGE:-}
+      KAVEON_COALESCE_PARTIAL_ROWS: ${KAVEON_COALESCE_PARTIAL_ROWS:-}
+      KAVEON_PARTIAL_ROUND_ROBIN: ${KAVEON_PARTIAL_ROUND_ROBIN:-}
+      KAVEON_FINAL_SERIAL_EXCHANGE: ${KAVEON_FINAL_SERIAL_EXCHANGE:-}
+    volumes: &extra-worker-volumes
+      - ./engine/etc/worker.toml:/etc/kaveon/config.toml:ro
+      - type: bind
+        source: ${KAVEON_DATA_PATH:-./data/adls-mirror/opensource}
+        target: /data
+        read_only: true
+    restart: unless-stopped
+
+  engine-worker-4:
+    <<: *extra-worker
+    container_name: kaveon-engine-worker-4
+    environment:
+      <<: *extra-worker-environment
+      KAVEON_NODE_ID: worker-4
+      KAVEON_ADVERTISED_URI: http://engine-worker-4:8080
+    volumes: *extra-worker-volumes
