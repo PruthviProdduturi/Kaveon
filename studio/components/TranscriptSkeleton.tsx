@@ -13,12 +13,17 @@ import s from "./TranscriptSkeleton.module.css";
  * at the widths real messages have.
  */
 
-/** Bar widths per row, as a share of the bubble — question short, answer long. */
-const ROWS: { role: "user" | "assistant"; lines: number[] }[] = [
-  { role: "user", lines: [62] },
-  { role: "assistant", lines: [94, 88, 54] },
-  { role: "user", lines: [46] },
-  { role: "assistant", lines: [90, 71] },
+/**
+ * The rhythm being stood in for: a short question, a long answer, twice over.
+ * `bubble` is the bubble's share of the transcript's width and `lines` each
+ * text line's share of that bubble, so the block has a real transcript's
+ * proportions rather than a uniform block's.
+ */
+const ROWS: { role: "user" | "assistant"; bubble: number; lines: number[] }[] = [
+  { role: "user", bubble: 26, lines: [84] },
+  { role: "assistant", bubble: 62, lines: [96, 89, 54] },
+  { role: "user", bubble: 19, lines: [72] },
+  { role: "assistant", bubble: 57, lines: [93, 68] },
 ];
 
 export function TranscriptSkeleton() {
@@ -31,10 +36,7 @@ export function TranscriptSkeleton() {
           aria-hidden="true"
         >
           <span className={s.avatar} />
-          <span
-            className={s.bubble}
-            style={{ width: `${row.role === "user" ? 42 : 68}%`, maxWidth: row.role === "user" ? "75%" : "90%" }}
-          >
+          <span className={s.bubble} style={{ width: `${row.bubble}%` }}>
             {row.lines.map((width, line) => (
               <span key={line} className={s.bar} style={{ width: `${width}%` }} />
             ))}
