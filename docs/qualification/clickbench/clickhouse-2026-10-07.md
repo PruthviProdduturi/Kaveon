@@ -990,3 +990,16 @@ uncoalesced path and completed in **18.1--18.8 s** across two exact runs.
 The setting remains opt-in until the wider aggregate suite is rerun; it is a
 batch-boundary optimization, not ClickHouse parity. ClickHouse remains q33
 **4.552 s** and q35 **6.316 s**.
+
+## 2026-10-09 local partial round-robin
+
+The multi-key partial aggregate has an opt-in `KAVEON_PARTIAL_ROUND_ROBIN`
+path. It sends source slices to local partial lanes instead of hashing and
+taking every input column; duplicate partial keys remain exact because the
+final aggregate merges their states. With batch coalescing at 524,288 rows,
+q33 completed in **17.69 s** with the same ten-row result shape. The full
+execution library suite passed **204 tests (4 ignored)**. One-key q35 is not
+changed by this setting. This is the final safe local-dispatch optimization
+qualified in this round; Kaveon still trails ClickHouse q33 **4.552 s** and
+q35 **6.316 s**. Closing that gap requires a direct grouped-state exchange or
+equivalent vectorized final-merge redesign, not further knob tuning.

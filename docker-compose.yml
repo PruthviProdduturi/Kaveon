@@ -116,6 +116,7 @@ services:
       KAVEON_DIRECT_GROUPED_EXCHANGE: ${KAVEON_DIRECT_GROUPED_EXCHANGE:-}
       KAVEON_ZERO_COPY_SELECTED_MERGE: ${KAVEON_ZERO_COPY_SELECTED_MERGE:-}
       KAVEON_COALESCE_PARTIAL_ROWS: ${KAVEON_COALESCE_PARTIAL_ROWS:-}
+      KAVEON_PARTIAL_ROUND_ROBIN: ${KAVEON_PARTIAL_ROUND_ROBIN:-}
     volumes:
       - ./engine/etc/coordinator.toml:/etc/kaveon/config.toml:ro
       - catalog-data:/var/lib/kaveon
@@ -164,6 +165,7 @@ services:
       KAVEON_DIRECT_GROUPED_EXCHANGE: ${KAVEON_DIRECT_GROUPED_EXCHANGE:-}
       KAVEON_ZERO_COPY_SELECTED_MERGE: ${KAVEON_ZERO_COPY_SELECTED_MERGE:-}
       KAVEON_COALESCE_PARTIAL_ROWS: ${KAVEON_COALESCE_PARTIAL_ROWS:-}
+      KAVEON_PARTIAL_ROUND_ROBIN: ${KAVEON_PARTIAL_ROUND_ROBIN:-}
     volumes: &engine-worker-volumes
       - ./engine/etc/worker.toml:/etc/kaveon/config.toml:ro
       - type: bind
