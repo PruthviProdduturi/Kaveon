@@ -93,7 +93,7 @@ export default function DocsIntro() {
 
       <Callout type="tip">
         Want it running locally? The <a href="/docs/quickstart">Quickstart</a> brings up the whole stack —
-        Studio, API, PostgreSQL, and a two-worker Engine cluster — with one command.
+        Studio, the API, and a two-worker Engine cluster — with one command, and no database to install.
       </Callout>
 
       <h2>Choose your path</h2>

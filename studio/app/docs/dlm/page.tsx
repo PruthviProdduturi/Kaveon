@@ -84,7 +84,7 @@ export default function DlmDocs() {
       </p>
 
       <h3>5. HLL sketches</h3>
-      <Callout type="note">HLL precomputation currently depends on PostgreSQL capabilities. Other connector types may compile a reduced context and use live queries for unsupported distinct-count shapes.</Callout>
+      <Callout type="note">Sketches are computed by the Engine as part of a table&rsquo;s cube pass, so a lake table carries them per cell. A registered external database does not: the DLM compiles a reduced context for it and answers unsupported distinct-count shapes with a live query.</Callout>
       <p>
         For non-additive metrics like <code>COUNT(DISTINCT user_id)</code>, simple precomputed totals cannot be
         combined across dimensions (you can&apos;t sum distinct counts). The DLM uses{" "}
