@@ -859,3 +859,10 @@ rows. This profile avoids the q33 memory-admission failure seen with
 memory-only spill at 2 GiB, while keeping q35 near its fastest measured result.
 It remains behind ClickHouse's **6.316 s / 4.552 s** references; no parity claim
 is made.
+
+A 4 GiB memory-only control removed q33 spill entirely and completed q33 in
+**15.575 s** (exact ten rows), with a 3.60 GiB final-task peak. The same
+profile made q35 slower at **18.721 s** than the 2 GiB disk-spill profile's
+**14.278 s**. This confirms a workload-sensitive memory trade-off rather than
+a universal setting; the reproducible balanced qualification profile remains
+2 GiB plus bounded disk spill.
