@@ -72,7 +72,11 @@ export function useRecents() {
           timestamp: new Date(d.created_at).getTime(),
         }));
         if (apiItems.length > 0) {
-          // Merge: API items take priority, local items fill gaps
+          // The server is the record for the kinds it can hold, and the local
+          // cache carries the rest. Merging them appended every local-only
+          // item after every server one, so a chat opened a minute ago sat
+          // below a dashboard from last week. Both sides carry a time; the
+          // merged list is ordered by it.
           const merged = [...apiItems];
           const ids = new Set(apiItems.map(i => i.id));
           const local = loadLocal();
@@ -89,6 +93,7 @@ export function useRecents() {
               }
             }
           }
+          merged.sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
           const final = merged.slice(0, MAX_RECENTS);
           saveLocal(final);
           setRecents(final);
@@ -123,6 +128,33 @@ export function useRecents() {
     }
   }, []);
 
+  /**
+   * Mark new activity on something already in the list.
+   *
+   * Opening a conversation to read it is not activity — it would push every
+   * old thread to the top the moment you looked at one. Sending into it is,
+   * so a thread holds its place until it actually moves on. The label is the
+   * one it was given; only its time changes.
+   */
+  const touchRecent = useCallback((id: string) => {
+    const current = loadLocal();
+    const existing = current.find((r) => r.id === id);
+    if (!existing) return;
+    const next = [{ ...existing, timestamp: Date.now() },
+                  ...current.filter((r) => r.id !== id)].slice(0, MAX_RECENTS);
+    saveLocal(next);
+    if (isPersisted(existing)) {
+      // The server stamps its own time on an upsert, so re-sending the same
+      // item is how its recency is recorded there too.
+      msalFetch("/api/v1/user/recents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ item_id: existing.id, label: existing.label,
+                               href: existing.href, type: existing.type }),
+      }).catch(() => {});
+    }
+  }, []);
+
   const removeRecent = useCallback((id: string) => {
     const current = loadLocal();
     const next = current.filter((r) => r.id !== id);
@@ -143,5 +175,5 @@ export function useRecents() {
     msalFetch(`/api/v1/user/recents${qs}`, { method: "DELETE" }).catch(() => {});
   }, []);
 
-  return { recents, addRecent, removeRecent, clearRecents };
+  return { recents, addRecent, touchRecent, removeRecent, clearRecents };
 }
