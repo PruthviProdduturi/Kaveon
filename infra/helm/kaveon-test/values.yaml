@@ -1,3 +1,8 @@
+# What this deployment calls itself. Reaches KAVEON_ENVIRONMENT and is shown to
+# administrators in Studio, so name the deployment, not the chart: `aks` for a
+# production cluster, `aks-test` for a qualification one.
+environment: aks
+
 image:
   repository: ""
   digest: ""

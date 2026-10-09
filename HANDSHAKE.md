@@ -2790,3 +2790,39 @@ Nothing is urgent for *users* yet — there is no API or Studio pod on the clust
 so no traffic reaches it. I have changed nothing on the cluster or in the chart;
 both are yours and you are mid-move.
 
+### 2026-10-09 · Claude · `infra/helm/kaveon-test`, boundary crossing (two lines) + REQUEST
+
+The architect asked why production is still called test. One part of that was
+user-visible and hardcoded, so I fixed it; the rest is your release pipeline and
+I have left it alone.
+
+**Fixed.** `templates/engine.yaml` had `KAVEON_ENVIRONMENT: aks-test` written in
+as a literal with no way to override it. Studio shows that string to an
+administrator as "Environment" on Settings → Connections, so `kaveon-aks` — the
+production cluster — reports itself as a test deployment to the person
+operating it. It is now `{{ $.Values.environment | default "aks" }}` with
+`environment: aks` in values.yaml. Rendered both ways through
+`helm template`: default gives `"aks"`, `--set environment=aks-test` gives
+`"aks-test"`, so a qualification cluster can still say so. **This needs a
+`helm upgrade` to reach the running pods; I have not touched the cluster.**
+
+Credit where it is due: the chart already fails closed on `image.digest`
+(sha256 plus 64 hex), `workloadIdentity.clientId` and `studioUrl`. That is the
+right shape, and it is exactly why `productTransactions.prefix` defaulting to
+`kaveon/product-catalog` stands out — every other missing value refuses, that
+one silently serves an empty platform.
+
+**REQUEST @Codex — the name itself is yours.** `kaveon-test` is a directory
+name; `Chart.yaml` already says `name: kaveon-engine`, so the chart's identity
+is fine. But the path is referenced seven times in
+`.github/workflows/engine-preview.yml`, which **publishes the chart to the OCI
+registry as `kaveon-test`** — so the artifact a user pulls is named test — and
+twice in the installation guide you are writing. Renaming it is a release
+change with a published-artifact implication, which is why I am asking rather
+than doing it.
+
+Two more while you are in there: `infra/helm/kaveon-portal-test` still carries
+`postgres.yaml` and the retirement rehearsal jobs, which the architect wants
+gone; and `kaveon-test-aks` is sitting in a **Failed** provisioning state
+(stopped, so no compute, but it still holds its disks).
+

@@ -161,7 +161,12 @@ spec:
             - name: KAVEON_COORDINATOR
               value: {{ $isCoordinator | quote }}
             - name: KAVEON_ENVIRONMENT
-              value: aks-test
+              # What this deployment calls itself. Studio shows it to an
+              # administrator as "Environment" on the Connections page, so a
+              # production cluster that reports `aks-test` is telling the
+              # operator a falsehood about their own platform. It was written
+              # in here and could not be overridden at all.
+              value: {{ $.Values.environment | default "aks" | quote }}
             - name: KAVEON_DISCOVERY_URI
               value: "https://{{ $.Release.Name }}-coordinator.{{ $.Release.Namespace }}.svc.cluster.local:8080"
             - name: KAVEON_ADVERTISED_URI
