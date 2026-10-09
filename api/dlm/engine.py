@@ -2114,7 +2114,7 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
         date_column = time_spec["column"]
 
     question = _fuzzy_question(question, _dataset_vocabulary(metrics, dims, m_alias, d_alias))
-    qset = set(_tokenize(_strip_time_phrases(question)))
+    qset = set(_tokenize(_strip_presentation_phrases(_strip_time_phrases(question))))
 
     # 1) entity filters from the value index (e.g. "india" -> country='India').
     #    A value that lives in more than one column is a question, not a guess.
@@ -2156,7 +2156,8 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
         vocabulary |= set(_tokenize(c.get("column_name") or c.get("name") or ""))
     pinned_phrase = str(choices.get("value_phrase") or "").lower()
     pinned_value = str(choices.get("value") or "")
-    for term in _unresolved_terms(_strip_time_phrases(question), consumed, vocabulary,
+    for term in _unresolved_terms(
+            _strip_presentation_phrases(_strip_time_phrases(question)), consumed, vocabulary,
                                   metric_name_tokens, grammar=classes.GRAMMAR_WORDS):
         if term.lower() == pinned_phrase and pinned_value:
             if pinned_value == "skip":
@@ -5040,6 +5041,61 @@ def _strip_time_phrases(question: str) -> str:
     out = question
     for rx in _TIME_PHRASE_RES:
         out = rx.sub(" ", out)
+    return out
+
+
+# How a reader asks for a rendering rather than for a measure: "as a bar
+# chart", "show me a chart of", "can i get a world map". These say how to draw
+# the answer, never what to count, so they are taken out of the question before
+# anything matches against it — the same reason time expressions are.
+#
+# The bare words are not enough on their own: a dataset can legitimately
+# measure "Charts Created", and "how many charts were created" must still
+# reach it. So only these phrasings count, each one a request to draw.
+_PRESENTATION_RE = re.compile(
+    r"""
+      \b(?:as|in|into|using)\s+(?:a|an|the)?\s*
+        (?:world\s+)?(?:bar|line|pie|area|donut|scatter|column|map|world\smap|table)?\s*
+        (?:chart|graph|plot|map|table|visuali[sz]ation|diagram)\b
+    | \b(?:show|give|get|draw|plot|chart|graph|map|render|display|visuali[sz]e)\s+
+        (?:me\s+)?(?:a|an|the)?\s*
+        (?:world\s+)?(?:bar|line|pie|area|donut|scatter|column|map)?\s*
+        (?:chart|graph|plot|map|visuali[sz]ation|diagram)?\s*
+        (?:of|for)?\b
+    | \b(?:can|could|would)\s+(?:i|you|we)\s+(?:get|have|see|make)\b
+    | \b(?:world\s+map|bar\schart|line\schart|pie\schart|map\schart)\b
+    # A bare rendering noun behind an article — what is left of "can i get a
+    # world map chart" once the phrases above have gone. The article is what
+    # keeps this off a measure: "how many charts were created" has none.
+    | \b(?:a|an|the)\s+(?:chart|graph|plot|map|table|visuali[sz]ation|diagram)\b
+    """,
+    re.I | re.X,
+)
+
+
+def _strip_presentation_phrases(question: str) -> str:
+    """The question without its rendering request.
+
+    "chart" overlaps the metric "Charts Created", so "Show me a chart of that"
+    and "can i get a world map chart" both answered "Charts Created" — the
+    reader asked how to draw something and was told how many charts exist.
+    A rendering request names no measure, so it is removed before the question
+    is matched, exactly as a time expression is.
+
+    Only the phrasings that are requests to draw are removed. "how many charts
+    were created" names a measure and keeps its words.
+
+    Applied until it settles, because one pass is not enough: removing "world
+    map" from "can i get a world map chart" leaves "a ... chart", a phrase the
+    scanner has already passed. Bounded, so a pattern that somehow kept
+    matching could not spin.
+    """
+    out = question
+    for _ in range(3):
+        stripped = _PRESENTATION_RE.sub(" ", out)
+        if stripped == out:
+            break
+        out = stripped
     return out
 
 

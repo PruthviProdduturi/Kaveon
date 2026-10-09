@@ -91,5 +91,46 @@ class EntityFilterTests(unittest.TestCase):
         self.assertEqual([(f["column"], f["value"]) for f in filters], [("surface", "Chat")])
 
 
+class PresentationPhraseTests(unittest.TestCase):
+    """A request to draw names no measure, so it is taken out of the question.
+
+    The same two questions that invented a filter also picked a metric off the
+    word "chart", which overlaps "Charts Created" — so the reader asked how to
+    draw something and was told how many charts exist.
+    """
+
+    def _stripped(self, question):
+        return " ".join(engine._strip_presentation_phrases(question).split())
+
+    def test_a_request_to_draw_leaves_no_measure_behind(self):
+        for question, remainder in (
+            ("Show me a chart of that", "that"),
+            ("can i get a world map chart", ""),
+            ("show me sessions as a bar chart", "sessions"),
+            ("plot revenue over time", "revenue over time"),
+        ):
+            with self.subTest(question=question):
+                self.assertEqual(self._stripped(question), remainder)
+
+    def test_a_question_that_measures_charts_keeps_its_words(self):
+        """A dataset can legitimately measure charts created. Only phrasings
+        that are requests to draw are removed — the article in "a chart" is
+        what separates them from "how many charts"."""
+        for question in ("how many charts were created",
+                         "charts created by surface",
+                         "total charts created",
+                         "which model has the highest arena elo",
+                         "total actions by country"):
+            with self.subTest(question=question):
+                self.assertEqual(self._stripped(question), question)
+
+    def test_stripping_settles_rather_than_needing_a_second_call(self):
+        """Removing "world map" from the middle leaves "a ... chart", which a
+        single left-to-right pass has already scanned past."""
+        once = engine._PRESENTATION_RE.sub(" ", "can i get a world map chart")
+        self.assertIn("chart", once)
+        self.assertEqual(self._stripped("can i get a world map chart"), "")
+
+
 if __name__ == "__main__":
     unittest.main()
