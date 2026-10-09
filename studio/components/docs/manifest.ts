@@ -20,7 +20,6 @@ export const DOCS_NAV: readonly DocsGroup[] = [
     pinned: true,
     items: [
       { title: "Introduction", href: "/docs", description: "What Kaveon is and where to begin.", keywords: ["overview"] },
-      { title: "Installation", href: "/docs/installation", description: "Run Kaveon with Docker, on a Linux VM, or on Kubernetes.", keywords: ["install", "docker", "helm", "kubernetes", "vm"] },
       { title: "Quickstart", href: "/docs/quickstart", description: "Connect data and build a first chart.", keywords: ["install", "start"] },
       { title: "Core concepts", href: "/docs/concepts", description: "Sources, datasets, charts, dashboards, and questions." },
     ],
@@ -72,7 +71,8 @@ export const DOCS_NAV: readonly DocsGroup[] = [
   {
     label: "Deploy & Operate",
     items: [
-      { title: "Deployment", href: "/docs/deployment", description: "Deploy Studio, API, and the data layer.", keywords: ["vercel", "azure"] },
+      { title: "Install & deploy", href: "/docs/installation", description: "Choose Docker, VM, AKS, or optional Vercel hosting and install the platform.", keywords: ["install", "docker", "helm", "kubernetes", "vm", "vercel"] },
+      { title: "Deployment topology", href: "/docs/deployment", description: "Understand runtime placement, networking, storage, and cutover boundaries.", keywords: ["topology", "azure", "aks"] },
       { title: "Auth & RBAC", href: "/docs/auth", description: "Configure identity, roles, and visibility.", keywords: ["security"] },
       { title: "Operations", href: "/docs/operations", description: "Operate, verify, and troubleshoot Kaveon.", keywords: ["health", "ready", "backup"] },
       { title: "Troubleshooting", href: "/docs/troubleshooting", description: "Diagnose authentication, database, and Engine issues.", keywords: ["cors", "proxy", "logs"] },

@@ -7,8 +7,8 @@ export default function DeploymentDocs() {
     <div className="docs-prose">
       <PageHeader
         eyebrow="Deploy &amp; Operate"
-        title="Deployment"
-        lead="Studio runs on Vercel. The API and Kaveon Engine can run on Docker on a Linux VM or on AKS, reading Delta and Parquet tables from ADLS Gen2. The qualified cloud Engine currently runs on AKS; the VM topology below is the small-host option."
+        title="Deployment topology"
+        lead="Understand where Studio, the API, DLM and Engine run after installation, how requests cross the trust boundary, and what must pass before a hosting cutover."
       />
 
       <h2>Topology</h2>
