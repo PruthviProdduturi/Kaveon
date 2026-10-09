@@ -296,7 +296,7 @@ export function CatalogSources() {
                             {cs.credential_kind === "secret_store" ? "Key Vault" : cs.credential_kind.replace(/_/g, " ")}
                           </span>
                         ) : (
-                          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>None</span>
+                          <span style={{ fontSize: 12, color: "var(--text-muted)" }} title="No credential is configured on this source, so the Engine authenticates with the host's own identity — on Azure, the VM's managed identity through the default credential chain.">Host identity</span>
                         )}
                       </td>
                       <td><Badge meta={lcMeta} /></td>
@@ -581,6 +581,13 @@ function CatalogSourceModal({ source, onClose, onSuccess }: ModalProps) {
                 </div>
               </div>
               <div>
+                {/* Who says which tables exist. Native means Kaveon's own
+                    catalog over the storage below; the rest defer to an
+                    external metastore. Only native can be synchronized today
+                    — engine_bridge refuses the others with "Only native
+                    catalog adapters can currently be synchronized" — so they
+                    are shown as unavailable rather than offered and then
+                    rejected after the form is filled in. */}
                 <label style={labelStyle}>Catalog Adapter</label>
                 <select
                   value={adapterType}
@@ -588,7 +595,9 @@ function CatalogSourceModal({ source, onClose, onSuccess }: ModalProps) {
                   style={{ ...inputStyle, cursor: "pointer" }}
                 >
                   {Object.entries(ADAPTER_META).map(([key, meta]) => (
-                    <option key={key} value={key}>{meta.label}</option>
+                    <option key={key} value={key} disabled={key !== "native"}>
+                      {key === "native" ? meta.label : `${meta.label} — not yet supported`}
+                    </option>
                   ))}
                 </select>
               </div>
@@ -610,8 +619,14 @@ function CatalogSourceModal({ source, onClose, onSuccess }: ModalProps) {
             <div style={fieldStyle}>
               <label style={labelStyle}>Credential</label>
               <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: credentialKind ? "0.75rem" : 0 }}>
+                {/* Not "None": object storage is never read anonymously. Leaving
+                    this unset means the Engine authenticates as whatever the host
+                    already is — on Azure, the VM's managed identity, picked up
+                    through the default credential chain with nothing configured
+                    here. Naming it "None" invited the reader to believe the
+                    storage was open. */}
                 <button type="button" style={chipStyle(!credentialKind, "#6b7280")} onClick={() => { setCredentialKind(""); setCredentialRef(""); }}>
-                  None
+                  Host identity
                 </button>
                 <button type="button" style={chipStyle(credentialKind === "managed_identity", "#065f46")} onClick={() => setCredentialKind("managed_identity")}>
                   Managed Identity
