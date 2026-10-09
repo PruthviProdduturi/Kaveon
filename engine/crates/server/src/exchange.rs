@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock};
 
 use arrow::datatypes::SchemaRef;
 use arrow::ipc::reader::StreamReader;
-use arrow::ipc::writer::StreamWriter;
+use arrow::ipc::writer::{IpcWriteOptions, StreamWriter};
 use arrow::record_batch::RecordBatch;
 use axum::Router;
 use axum::body::Bytes;
@@ -22,6 +22,7 @@ const CHECKSUM_OFFSET: usize = 54;
 const FNV_OFFSET_BASIS: u64 = 14_695_981_039_346_656_037;
 const FNV_PRIME: u64 = 1_099_511_628_211;
 const BEARER_PREFIX: &str = "Bearer ";
+const EXCHANGE_COMPRESSION_ENV: &str = "KAVEON_EXCHANGE_COMPRESSION";
 // One exchange partition's payload: 1 GiB in 4 MiB chunks. A partial
 // aggregate over tens of millions of groups needs the room; the producer
 // encodes and uploads one partition at a time.
@@ -658,6 +659,26 @@ pub struct StreamingOutput {
 #[derive(Default)]
 struct ChunkBuffer(Vec<u8>);
 
+/// Exchange compression is deliberately opt-in while it is being qualified:
+/// on a same-host deployment LZ4 can cost more CPU than it saves in transport
+/// and spill I/O.  Readers accept the normal Arrow IPC compressed buffers.
+fn exchange_writer_options() -> ExchangeResult<IpcWriteOptions> {
+    let compression = match std::env::var(EXCHANGE_COMPRESSION_ENV)
+        .ok()
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("lz4") | Some("lz4_frame") | Some("true") | Some("1") => {
+            Some(arrow::ipc::CompressionType::LZ4_FRAME)
+        }
+        _ => None,
+    };
+    IpcWriteOptions::default()
+        .try_with_compression(compression)
+        .map_err(|error| ExchangeError::Arrow(error.to_string()))
+}
+
 impl std::io::Write for ChunkBuffer {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         self.0.extend_from_slice(bytes);
@@ -677,7 +698,11 @@ impl StreamingOutput {
     ) -> ExchangeResult<Self> {
         limits.validate()?;
         identity.validate()?;
-        let writer = arrow::ipc::writer::StreamWriter::try_new(ChunkBuffer::default(), schema)
+        let writer = StreamWriter::try_new_with_options(
+            ChunkBuffer::default(),
+            schema,
+            exchange_writer_options()?,
+        )
             .map_err(|error| ExchangeError::Arrow(error.to_string()))?;
         Ok(Self {
             identity,
@@ -803,7 +828,7 @@ pub fn encode_batches(
     identity.validate()?;
     let mut payload = crate::transport::BoundedBuffer::new(limits.max_payload_bytes);
     {
-        let mut writer = StreamWriter::try_new(&mut payload, schema)
+        let mut writer = StreamWriter::try_new_with_options(&mut payload, schema, exchange_writer_options()?)
             .map_err(|error| ExchangeError::Arrow(error.to_string()))?;
         for batch in batches {
             writer
