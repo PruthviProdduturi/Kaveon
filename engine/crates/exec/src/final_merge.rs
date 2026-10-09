@@ -598,6 +598,27 @@ impl HybridFinalMerge {
         for (partition, writer) in writers.into_iter().enumerate() {
             if let Some(writer) = writer {
                 self.runs[partition].push(writer.finish()?);
+                // Final-merge spills used to retain one IPC run per table and
+                // partition.  At a small query budget this creates hundreds
+                // of tiny readers and makes the final pass dominated by file
+                // open/decode overhead.  Reuse the bounded size-tiered
+                // compactor used by partitioned execution.  A memory refusal
+                // is deliberately propagated only when it leaves the input
+                // runs intact; callers can still fail closed with the same
+                // exact data rather than silently dropping a run.
+                match crate::partitioned::compact_spill_runs(
+                    &mut self.runs[partition],
+                    &self.schema,
+                    &self.memory,
+                    &spill,
+                ) {
+                    Ok(()) | Err(KaveonError::MemoryLimit(_)) => {
+                        // Compaction is an optimization.  If the query is
+                        // already at its memory ceiling, retain the original
+                        // runs and let the bounded final reader process them.
+                    }
+                    Err(error) => return Err(error),
+                }
             }
         }
         self.spilled.tables += 1;
