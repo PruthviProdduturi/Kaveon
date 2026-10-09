@@ -427,14 +427,19 @@ export function Inventory({ catalogName, schemaName, action }: {
   );
 }
 
-/** One measured figure: the number, what it counts, and the fact that qualifies it. */
+/**
+ * One measured figure: what it counts, the number, and the fact that
+ * qualifies it. The label leads so that four figures of wildly different
+ * magnitudes still present three lines in the same three places, which puts
+ * the numbers themselves on one baseline across the band.
+ */
 function Figure({ value, label, note, strong }: {
   value: string; label: string; note: string; strong?: boolean;
 }) {
   return (
     <div className={s.figure}>
-      <span className={`${s.figureValue} ${strong ? s.figureValueOn : ""}`}>{value}</span>
       <span className={s.figureLabel}>{label}</span>
+      <span className={`${s.figureValue} ${strong ? s.figureValueOn : ""}`}>{value}</span>
       <span className={s.figureNote}>{note}</span>
     </div>
   );
@@ -594,12 +599,12 @@ function SkeletonRow() {
   return (
     <tr className={s.invRow} aria-hidden="true">
       <td className={s.cDisclose} />
-      <td className={s.cName}><span className={s.skel} style={{ width: 132 }} /></td>
-      <td className={s.cFormat}><span className={s.skel} style={{ width: 52 }} /></td>
-      <td className={s.cRows}><span className={s.skel} style={{ width: 62 }} /></td>
-      <td className={s.cSize}><span className={s.skel} style={{ width: 44 }} /></td>
-      <td className={s.cFiles}><span className={s.skel} style={{ width: 20 }} /></td>
-      <td className={s.cWhen}><span className={s.skel} style={{ width: 54 }} /></td>
+      <td className={s.cName}><span className={s.skel} style={{ width: 168 }} /></td>
+      <td className={s.cFormat}><span className={s.skel} style={{ width: 62 }} /></td>
+      <td className={s.cRows}><span className={s.skel} style={{ width: 84 }} /></td>
+      <td className={s.cSize}><span className={s.skel} style={{ width: 56 }} /></td>
+      <td className={s.cFiles}><span className={s.skel} style={{ width: 26 }} /></td>
+      <td className={s.cWhen}><span className={s.skel} style={{ width: 64 }} /></td>
       <td className={s.cStand} />
     </tr>
   );
@@ -636,7 +641,9 @@ function TableRow({ row, pending, expanded, onToggle, isEditor, isAnalyst, onMea
             aria-expanded={expanded} aria-controls={`d-${table.id}`}
             aria-label={`Details for ${table.name}`}
           >
-            <i className={`fas fa-chevron-${expanded ? "down" : "right"}`} aria-hidden="true" />
+            <span className={`${s.chev} ${expanded ? s.chevOpen : ""}`} aria-hidden="true">
+              <i className="fas fa-chevron-right" />
+            </span>
           </button>
         </td>
         <td className={s.cName}>
@@ -661,11 +668,11 @@ function TableRow({ row, pending, expanded, onToggle, isEditor, isAnalyst, onMea
           {formatLabel(table.format)}
           {mark && <span className={s.formatMark}>{mark}</span>}
         </td>
-        <td className={s.cRows}>{measured?.state === "measured" ? count(measured.rows) : waiting(62)}</td>
-        <td className={s.cSize}>{measured?.state === "measured" ? bytes(measured.bytes) : waiting(44)}</td>
-        <td className={s.cFiles}>{typeof files === "number" ? count(files) : pending ? <span className={s.skel} style={{ width: 20 }} /> : ""}</td>
+        <td className={s.cRows}>{measured?.state === "measured" ? count(measured.rows) : waiting(84)}</td>
+        <td className={s.cSize}>{measured?.state === "measured" ? bytes(measured.bytes) : waiting(56)}</td>
+        <td className={s.cFiles}>{typeof files === "number" ? count(files) : pending ? <span className={s.skel} style={{ width: 26 }} /> : ""}</td>
         <td className={s.cWhen} title={exactTime(measured?.lastModifiedMs)}>
-          {typeof measured?.lastModifiedMs === "number" ? since(measured.lastModifiedMs) : waiting(54)}
+          {typeof measured?.lastModifiedMs === "number" ? since(measured.lastModifiedMs) : waiting(64)}
         </td>
         <td className={s.cStand}>
           {state?.word && (

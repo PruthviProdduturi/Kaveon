@@ -39,6 +39,19 @@ export function catalogLabel(catalog: string): string {
   return catalog === "Kaveon" || catalog === "KaveonDB" ? "KaveonDB" : catalog;
 }
 
+/**
+ * The disclosure mark, in the same icon vocabulary as every other mark on the
+ * page. One glyph that rotates, so open and closed are the same shape in two
+ * positions rather than two shapes a reader has to tell apart.
+ */
+function Twist({ open }: { open: boolean }) {
+  return (
+    <span className={`${s.chev} ${open ? s.chevOpen : ""}`} aria-hidden="true">
+      <i className="fas fa-chevron-right" />
+    </span>
+  );
+}
+
 function catalogOrder(source: EngineSource): number {
   return source.catalog === "OpenSource" ? 0 : source.catalog === "Kaveon" || source.catalog === "KaveonDB" ? 1 : 2;
 }
@@ -135,7 +148,7 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
         <aside className={s.tree} aria-label="Catalogs">
           {collapsed ? (
             <div className={s.rail}>
-              <button type="button" className={s.collapse} onClick={() => setCollapsed(false)} aria-label="Expand catalog tree"><i className="fas fa-angles-right" /></button>
+              <button type="button" className={s.collapse} onClick={() => setCollapsed(false)} aria-label="Expand catalog tree"><i className="fas fa-angles-right" aria-hidden="true" /></button>
             </div>
           ) : (
             <>
@@ -143,7 +156,7 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
                 {/* The rail's one job is named once. A label above the label
                     would say "Data catalog" to a reader already inside it. */}
                 <h2 className={s.treeTitle}>Catalogs{catalogs && <span>{catalogs.length}</span>}</h2>
-                <button type="button" className={s.collapse} onClick={() => setCollapsed(true)} aria-label="Collapse catalog tree"><i className="fas fa-angles-left" /></button>
+                <button type="button" className={s.collapse} onClick={() => setCollapsed(true)} aria-label="Collapse catalog tree"><i className="fas fa-angles-left" aria-hidden="true" /></button>
               </div>
               <div className={s.treeBody}>
                 {!catalogs && !error && <div className={s.treeNote}>Loading catalogs…</div>}
@@ -153,11 +166,11 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
                   const name = cat.catalog, isOpen = open.has(name), list = schemas[name];
                   return (
                     <div key={name}>
-                      <button type="button" className={s.node} aria-expanded={isOpen} onClick={() => toggle(name, () => loadSchemas(name))}>
-                        <span className={`${s.chev} ${isOpen ? s.chevOpen : ""}`}>▶</span>
-                        <span className={s.kind}><i className="fas fa-database" /></span>
+                      <button type="button" className={`${s.node} ${s.nodeTop}`} aria-expanded={isOpen} onClick={() => toggle(name, () => loadSchemas(name))}>
+                        <Twist open={isOpen} />
+                        <span className={s.kind}><i className="fas fa-database" aria-hidden="true" /></span>
                         <span className={s.nodeLabel}>{catalogLabel(name)}</span>
-                        {list && <span className={s.nodeCount}>{list.length}</span>}
+                        <span className={s.nodeCount}>{list ? list.length : ""}</span>
                       </button>
                       {isOpen && (list ?? []).map(schema => {
                         const k = tableKey(name, schema), sOpen = open.has(k), tlist = tables[k];
@@ -168,17 +181,17 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
                                 twist opens and closes the schema where it stands, the
                                 name navigates to it. A schema that opened on arrival
                                 closes again from the same place it opened. */}
-                            <div className={`${s.row} ${schemaActive ? s.rowActive : ""}`}>
+                            <div className={`${s.row} ${s.level1} ${schemaActive ? s.rowActive : ""}`}>
                               <button type="button" className={s.twist} aria-expanded={sOpen}
                                 aria-label={`${sOpen ? "Collapse" : "Expand"} ${schema}`}
                                 onClick={() => toggle(k, () => loadTables(name, schema))}>
-                                <span className={`${s.chev} ${sOpen ? s.chevOpen : ""}`}>▶</span>
+                                <Twist open={sOpen} />
                               </button>
                               <Link href={`/catalog/${enc(name)}/${enc(schema)}`} className={s.rowLink} aria-current={schemaActive ? "page" : undefined}
                                 onClick={() => { setOpen(prev => new Set(prev).add(k)); loadTables(name, schema); }}>
-                                <span className={s.kind}><i className="fas fa-folder" /></span>
+                                <span className={s.kind}><i className="fas fa-folder" aria-hidden="true" /></span>
                                 <span className={s.nodeLabel}>{schema}</span>
-                                {tlist && <span className={s.nodeCount}>{tlist.length}</span>}
+                                <span className={s.nodeCount}>{tlist ? tlist.length : ""}</span>
                               </Link>
                             </div>
                             {sOpen && (tlist ?? []).map(table => {
@@ -186,7 +199,7 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
                               return (
                                 <Link key={table} href={`/catalog/${enc(name)}/${enc(schema)}/${enc(table)}`} className={`${s.node} ${s.level2}`} aria-current={active ? "page" : undefined}>
                                   <span className={s.chev} />
-                                  <span className={s.kind}><i className="fas fa-table" /></span>
+                                  <span className={s.kind}><i className="fas fa-table" aria-hidden="true" /></span>
                                   <span className={s.nodeLabel}>{table}</span>
                                 </Link>
                               );
@@ -200,8 +213,11 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
                   );
                 })}
               </div>
+              {/* The rail's one standing action follows the last row it lists
+                  rather than the floor of the viewport, so the tree and the
+                  thing a reader does with it stay one block. */}
               <div className={s.treeFoot}>
-                <Link href={current.catalog ? `/lab?catalog=${enc(current.catalog)}${current.schema ? `&schema=${enc(current.schema)}` : ""}` : "/lab"} className={s.ghost} aria-current={pathname.startsWith("/catalog/query") ? "page" : undefined}><i className="fas fa-code" aria-hidden="true" /> SQL Lab</Link>
+                <Link href={current.catalog ? `/lab?catalog=${enc(current.catalog)}${current.schema ? `&schema=${enc(current.schema)}` : ""}` : "/lab"} className={`${s.ghost} ${s.treeAction}`} aria-current={pathname.startsWith("/catalog/query") ? "page" : undefined}><i className="fas fa-code" aria-hidden="true" /> SQL Lab</Link>
               </div>
             </>
           )}
