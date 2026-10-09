@@ -19,18 +19,25 @@ No subscription-level policy was changed.
   verifier now accepts both the current shared Secret and the older coordinator
   Secret name without recording credentials.
 
-## Gate still open
+## Fault and pressure gate
 
-The full fault-pressure run was not marked passed. Its old NYC profile was
-pointing at an `OpenSource.nyc_taxi` dataset absent from this fresh medallion
-cluster; the verifier now has a medallion profile. A 10,000-row medallion join
-completed before the forced-loss barrier, so it cannot prove retry under loss.
-An attempt to replace the registered Parquet object with a 1M-row file also
-correctly exposed a stale source-version/ETag precondition (HTTP 412); the
-catalog must be re-registered at a new immutable object version before using
-that larger workload. This is intentionally recorded as an open qualification
-item rather than a product pass.
+The fixture-aware verifier passed with the coordinator-backed exchange spool:
 
-The local distributed evidence remains valid: exchange-loss exact retry at one
-million rows, 37/37 semantic smoke cases, and the 60-second operational soak
-are recorded in the adjacent qualification reports.
+- three catalog-compatible workers before execution;
+- 12 concurrent exact-result requests (four-way concurrency, three rounds);
+- forced StatefulSet worker loss during a distributed self-join;
+- exact retry and replacement recovery, with three compatible workers restored;
+- 12 bounded pressure requests with no unexpected restart or retained-file
+  growth; and
+- an exact post-recovery probe.
+
+The run is recorded at
+`tmp/aks-fault-pressure-personal/medallion-central-spool.json` (private,
+untracked). The local distributed evidence remains valid: exchange-loss exact
+retry at one million rows, 37/37 semantic smoke cases, and the 60-second
+operational soak are recorded in the adjacent qualification reports.
+
+The 1M-row object replacement attempt correctly returned an HTTP 412 stale
+source-version/ETag error. That is the expected protection for immutable
+registered objects; a larger benchmark must be registered at a new object
+version rather than overwriting a path in place.
