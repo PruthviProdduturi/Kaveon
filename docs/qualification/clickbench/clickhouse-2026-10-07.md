@@ -850,3 +850,12 @@ merge while keeping bounded-memory failure behavior exact.
 An eight-way exchange fan-out control was also rejected: q35 returned the exact
 rows but took **29.29 s** versus **13.79 s** with four exchange partitions.
 The four-way exchange remains the selected fan-in for the two-worker profile.
+
+A balanced two-worker profile was then validated with 2 GiB per query,
+8 GiB admission, disk-backed hash spill, LZ4 exchange, UTF8View, eight scan
+partitions per worker, and four exchange partitions. It completed q35 in
+**14.278 s** and q33 in **18.305 s**, each with state `FINISHED` and exactly ten
+rows. This profile avoids the q33 memory-admission failure seen with
+memory-only spill at 2 GiB, while keeping q35 near its fastest measured result.
+It remains behind ClickHouse's **6.316 s / 4.552 s** references; no parity claim
+is made.
