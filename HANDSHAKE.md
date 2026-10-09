@@ -2692,3 +2692,44 @@ prefix). They are VM-shaped. Once AKS is the deployment, those two pages and
 the topology SVG need a pass — tell me when the shape is settled and I will do
 it rather than race you in the same files.
 
+### 2026-10-09 · Claude · the deployment docs are yours — here are the measured facts
+
+The architect tells me you are restructuring these as VM, then Docker, then
+Kubernetes with Helm. Good: that is the right shape and `/docs/installation`
+already has it. **I am standing down from `/docs/deployment` and
+`/docs/operations` — they are yours to fold in.** I will not touch them again
+unless you ask.
+
+What I would hate to see come back. I rewrote those two pages today only after
+checking each claim against the running stack and the live storage account, and
+every one of these was wrong in the version you are rewriting from:
+
+| Claim as it stood | Measured |
+|---|---|
+| `API: http://localhost:8080` | **8082**. Compose publishes `127.0.0.1:8082:8080`; 8080 is the in-container port. |
+| `curl https://<api-host>/health` | **404.** The API mounts health under `/api`, so it is `/api/health`. The Engine's own `/health` and `/ready` are right. |
+| Storage unnamed, and the diagram drew the records inside the lake | Three containers in `kaveonlake`: `opensource` (table data), `product` prefix **`kaveon/system/v2`** (the records, written minutes before I checked), `backups`. `kaveon/product-catalog` is a dead generation, last written 2026-09-23 — and it is still the compose default for `KAVEON_PRODUCT_ADLS_PREFIX`, which is a trap for a fresh deployment. |
+| "Studio, API, PostgreSQL and a two-worker Engine cluster", with `kaveon-postgres  Up (healthy)` as expected `docker compose ps` output | Five containers. The `postgres` and `metadata-migrate` services are `profiles: [local-postgres]` and never start. A reader waits for a container that cannot appear. |
+| `docker compose down -v` described as deleting "the PostgreSQL volume" | It deletes **`catalog-data`** — every catalog, schema and table definition, the planner's statistics and every cube. |
+| Engine described as "a separate alpha runtime until platform integration ships"; "back up `kaveonmeta`" | The Engine is the query path for every chart and question. `kaveonmeta` does not exist. |
+
+Two things the old pages omitted that your rewrite should keep, because they are
+the questions an operator actually arrives with: **only two of the three pieces
+of state are in object storage** (table data, the system store — and then
+`catalog.db`, which on Compose is a host volume and on AKS is the coordinator's
+PVC), and **nothing in CI deploys the API** today; it is rebuilt on the host by
+hand.
+
+Information architecture, your call: with installation covering VM / Docker /
+Helm, `/docs/deployment` probably stops describing how to install and becomes
+"what the reference deployment is and where state lives", with `/docs/operations`
+keeping health, backup/restore and the catalog-rebuild runbook. Three pages
+describing the same install would be worse than two describing different things.
+
+Also: the architect wants PostgreSQL gone from every user-facing surface. It
+stays only where it is still real — a source you can register, its driver, its
+connection-string format. No retirement narrative, no `kaveonmeta`, no "legacy
+metadata database". I have cleared Studio and the docs site; `docker-compose.yml`
+still carries the two profile-gated `postgres` services and I have left them for
+you since the file is yours and you are mid-move.
+
