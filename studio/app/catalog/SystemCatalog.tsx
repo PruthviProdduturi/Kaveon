@@ -24,10 +24,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRole } from "../../hooks/useRole";
+import { useCatalogTree } from "./CatalogShell";
 import s from "./catalog.module.css";
 import {
   SYSTEM_CATALOG_LABEL, SYSTEM_TABLE_HOLDS, SystemCatalogError, SystemCatalogReading,
-  fetchSystemCatalog, recordCount,
+  fetchSystemCatalog, isSystemCatalog, recordCount,
 } from "../../utils/systemCatalog";
 
 /** What the catalog is, which is true whether or not the reading arrives. */
@@ -39,6 +40,12 @@ const SYSTEM_CATALOG_BODY =
 
 export function SystemCatalog() {
   const { isAdmin } = useRole();
+  // The identifier comes from the catalog record the Engine published, not
+  // from a string written here: KaveonDB is what a person reads, and whatever
+  // the Engine calls the catalog is what a statement has to say. A rename on
+  // the Engine arrives without a change in Studio.
+  const { catalogs } = useCatalogTree();
+  const identifier = catalogs?.find(entry => isSystemCatalog(entry.catalog))?.catalog ?? null;
   const [reading, setReading] = useState<SystemCatalogReading | null>(null);
   const [error, setError] = useState<string | null>(null);
   // The counts follow the structure, so the cells they will fill are drawn as
@@ -95,6 +102,12 @@ export function SystemCatalog() {
             <p className={s.systemBody}>{SYSTEM_CATALOG_BODY}</p>
           </div>
         </div>
+        {identifier && (
+          <p className={s.systemAbsent}>
+            A statement names it <code className={s.systemMono}>{identifier}</code>; KaveonDB is
+            what the product calls it.
+          </p>
+        )}
         <p className={s.systemAbsent}>
           {error ?? `${SYSTEM_CATALOG_LABEL} could not be read.`}
           {" "}Its record families are not listed here until this server answers for them.
@@ -106,6 +119,9 @@ export function SystemCatalog() {
   const prefix = `${reading.catalog.identifier}.${reading.catalog.schema}.`;
   const total = reading.tables.reduce((sum, table) => sum + (table.records ?? 0), 0);
   const bounded = reading.tables.some(table => table.truncated);
+  // Families the Engine refused are not in the total, and the total says so
+  // rather than presenting a short count as the whole control plane.
+  const refused = reading.tables.filter(table => table.error).length;
 
   return (
     <section className={s.system} aria-labelledby="system-catalog-title">
@@ -117,7 +133,7 @@ export function SystemCatalog() {
         </div>
         <dl className={s.systemFacts}>
           <div>
-            <dt>Identifier</dt>
+            <dt>Named in a statement</dt>
             <dd className={s.systemMono}>{reading.catalog.identifier}.{reading.catalog.schema}</dd>
           </div>
           <div>
@@ -150,8 +166,14 @@ export function SystemCatalog() {
                     <span className={s.systemPrefix}>{prefix}</span>{table.table}
                   </span>
                   <span className={s.systemHolds}>
-                    {table.error ?? SYSTEM_TABLE_HOLDS[table.table] ?? ""}
+                    {SYSTEM_TABLE_HOLDS[table.table] ?? ""}
                   </span>
+                  {/* A family the Engine refused keeps its description and
+                      adds the refusal: what it holds is still true, and the
+                      reason the count is missing is the new fact. */}
+                  {table.error && (
+                    <span className={`${s.systemHolds} ${s.factBad}`}>{table.error}</span>
+                  )}
                 </th>
                 <td className={s.systemCount}>
                   {table.error
@@ -173,12 +195,13 @@ export function SystemCatalog() {
                   <span className={s.systemHolds}>
                     Read from one committed snapshot
                     {reading.snapshot.consistent ? "" : " per family — a commit landed while this was read"}.
+                    {refused > 0 && ` ${refused} ${refused === 1 ? "family" : "families"} did not answer, so the total is short by whatever they hold.`}
                   </span>
                 )}
               </th>
               <td className={s.systemCount}>
                 {reading.counted
-                  ? `${total.toLocaleString()}${bounded ? "+" : ""}`
+                  ? `${total.toLocaleString()}${bounded || refused > 0 ? "+" : ""}`
                   : counting ? <span className={s.skel} style={{ width: 54 }} /> : <span className={s.dash}>—</span>}
               </td>
             </tr>

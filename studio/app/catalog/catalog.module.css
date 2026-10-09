@@ -101,6 +101,10 @@
 /* A schema row carries two controls side by side — the twist that opens it and
    the name that navigates to it — so the row, not the link, holds the hover
    and the current-page tint. */
+/* The identifier a statement resolves, in the slot a schema count would use.
+   Monospaced because it is a name to be typed, not a figure to be read. */
+.nodeIdent { font-family: var(--mono); font-size: 10px; letter-spacing: -.01em; color: var(--text-faint) }
+
 .row:hover { background: var(--bg-hover) }
 .row:hover .rowLink { color: var(--text-primary) }
 .rowActive { background: rgba(var(--accent-rgb), .10) }
@@ -223,6 +227,10 @@
 .seg { min-width: 6px; border-radius: 3px }
 .segFast { background: var(--accent) }
 .segRead { background: var(--text-faint) }
+/* Rows whose statistics the source has moved past: measured, and no longer
+   describing anything. They are their own share of the lake, not part of
+   either reading above. */
+.segStale { background: var(--warning) }
 .segNone { background: var(--bg-hover); box-shadow: inset 0 0 0 1px var(--border) }
 
 /* The physical facts of the lake, deliberately quiet and deliberately aligned

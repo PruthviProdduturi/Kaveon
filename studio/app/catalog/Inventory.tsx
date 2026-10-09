@@ -37,9 +37,9 @@ import { RegisterSheet, RemoveSchemaDialog } from "./CatalogEditor";
 import s from "./catalog.module.css";
 import {
   AnalyzeDepth, CatalogDefinition, CatalogError, EngineTable, Measurement, SchemaDefinition,
-  SourceVersion, analyzeTable, bytes, count, deleteSchema, enc, exactTime, fetchDefinitions,
-  fetchInventory, fetchSchemaDefinitions, fetchTableDefinitions, formatLabel, labHref, since,
-  versionDigest, versionLabel,
+  SourceVersion, analyzeTable, bytes, count, deleteSchema, elapsed, enc, exactTime,
+  fetchDefinitions, fetchInventory, fetchSchemaDefinitions, fetchTableDefinitions, formatLabel,
+  labHref, since, versionDigest, versionLabel,
 } from "./lib";
 import { isSystemCatalog } from "../../utils/systemCatalog";
 
@@ -63,8 +63,8 @@ const ANSWERING = {
     says: "The statistics on record describe the source as it stands, so counts, totals and column bounds are answered without reading the data. Anything else reads the table.",
   },
   stale: {
-    cell: "Reads the table", tone: s.ansStale, fast: false,
-    says: "The source changed after these statistics were computed, so they no longer describe it and every question about this table is answered by reading it.",
+    cell: "Statistics stale", tone: s.ansStale, fast: false,
+    says: "The source changed after these statistics were computed, so the figures in this row describe an earlier version of the table and the counts, totals and bounds on record no longer answer for it. Measuring it again puts the current reading on record.",
   },
   unmeasured: {
     cell: "Not measured", tone: s.ansNone, fast: false,
@@ -113,6 +113,7 @@ const ANALYZE_FORMS: { label: string; depth: AnalyzeDepth; needsShape?: boolean;
 function share(part: number, whole: number): string {
   if (!whole) return "—";
   if (part === whole) return "100%";
+  if (part === 0) return "0%";
   const pct = (part / whole) * 100;
   if (pct > 0 && pct < 0.1) return "<0.1%";
   if (pct > 99.9) return ">99.9%";
@@ -287,7 +288,7 @@ export function Inventory({ catalogName, schemaName, action }: {
       // the schemas the search actually reached.
       schemas: term ? new Set(matching.map(row => row.group.schemaId)).size : (groups ?? []).length,
       rows: 0, bytes: 0, files: 0,
-      fast: 0, fastRows: 0, readTables: 0, readRows: 0,
+      fast: 0, fastRows: 0, baseTables: 0, baseRows: 0, staleTables: 0, staleRows: 0,
       attention: [] as Row[],
     };
     for (const row of matching) {
@@ -299,7 +300,8 @@ export function Inventory({ catalogName, schemaName, action }: {
       t.bytes += row.measured.bytes ?? 0;
       t.files += row.measured.files ?? 0;
       if (answering === "fast") { t.fast += 1; t.fastRows += row.measured.rows ?? 0; }
-      else { t.readTables += 1; t.readRows += row.measured.rows ?? 0; }
+      else if (answering === "stale") { t.staleTables += 1; t.staleRows += row.measured.rows ?? 0; }
+      else { t.baseTables += 1; t.baseRows += row.measured.rows ?? 0; }
     }
     t.attention.sort((a, b) => (b.measured?.rows ?? 0) - (a.measured?.rows ?? 0));
     return t;
@@ -400,11 +402,11 @@ export function Inventory({ catalogName, schemaName, action }: {
         </div>
 
         <Position
-          fastRows={totals.fastRows} readRows={totals.readRows}
-          fastTables={totals.fast} readTables={totals.readTables}
+          fastRows={totals.fastRows} baseRows={totals.baseRows} staleRows={totals.staleRows}
+          fastTables={totals.fast} baseTables={totals.baseTables} staleTables={totals.staleTables}
           tables={totals.tables} all={totals.all} narrowed={!!term}
           schemas={totals.schemas} bytes={totals.bytes} files={totals.files}
-          unmeasured={totals.tables - totals.measured} schemaName={schemaName}
+          outstanding={totals.tables - totals.measured} reading={reading} schemaName={schemaName}
         />
 
         <Exception
@@ -499,31 +501,40 @@ export function Inventory({ catalogName, schemaName, action }: {
  * actually about. The physical totals sit to the right, deliberately quiet —
  * they are the evidence, not the finding.
  */
-function Position({ fastRows, readRows, fastTables, readTables, tables, all, narrowed, schemas, bytes: stored, files, unmeasured, schemaName }: {
-  fastRows: number; readRows: number; fastTables: number; readTables: number;
+function Position({ fastRows, baseRows, staleRows, fastTables, baseTables, staleTables, tables, all, narrowed, schemas, bytes: stored, files, outstanding, reading, schemaName }: {
+  fastRows: number; baseRows: number; staleRows: number;
+  fastTables: number; baseTables: number; staleTables: number;
   tables: number; all: number; narrowed: boolean;
-  schemas: number; bytes: number; files: number; unmeasured: number; schemaName?: string;
+  schemas: number; bytes: number; files: number;
+  outstanding: number; reading: boolean; schemaName?: string;
 }) {
-  const total = fastRows + readRows;
+  const total = fastRows + baseRows + staleRows;
+  // A table whose measurement has not arrived yet is not an unmeasured table,
+  // and the note says which it is rather than reporting a wait as a finding.
+  const rest = reading ? "still reading" : outstanding > 0
+    ? `${count(outstanding)} not measured` : "";
+  const qualify = (count_: number, extra: string) =>
+    [`${count(count_)} ${plural(count_, "table", "tables")}`, extra].filter(Boolean).join(", ");
   return (
     <div className={s.position}>
       <div className={s.readings}>
         <Reading
           value={count(fastRows)} fast
           headline="rows answer from sketches and cube cells"
-          note={total ? `${count(fastTables)} of ${count(tables)} ${plural(tables, "table", "tables")}, ${share(fastRows, total)} of measured rows` : `${count(fastTables)} ${plural(fastTables, "table", "tables")}`}
+          note={qualify(fastTables, total > 0 ? `${share(fastRows, total)} of what is measured` : "")}
         />
         <Reading
-          value={count(readRows)}
-          headline="rows are read to answer"
-          note={`${count(readTables)} ${plural(readTables, "table", "tables")}${unmeasured > 0 ? `, and ${count(unmeasured)} not yet measured` : ""}`}
+          value={count(baseRows)}
+          headline="rows answer from counts and bounds"
+          note={qualify(baseTables, rest)}
         />
         <div
           className={s.rule} role="img"
-          aria-label={`Of ${count(total)} measured rows, ${count(fastRows)} answer from sketches and cube cells and ${count(readRows)} are read.`}
+          aria-label={`Of ${count(total)} measured rows, ${count(fastRows)} answer from sketches and cube cells, ${count(baseRows)} from counts and bounds, and ${count(staleRows)} carry statistics the source has moved past.`}
         >
           {fastRows > 0 && <span className={`${s.seg} ${s.segFast}`} style={{ flexGrow: fastRows }} />}
-          {readRows > 0 && <span className={`${s.seg} ${s.segRead}`} style={{ flexGrow: readRows }} />}
+          {baseRows > 0 && <span className={`${s.seg} ${s.segRead}`} style={{ flexGrow: baseRows }} />}
+          {staleRows > 0 && <span className={`${s.seg} ${s.segStale}`} style={{ flexGrow: staleRows }} title={`${count(staleRows)} rows in ${count(staleTables)} ${plural(staleTables, "table", "tables")} carry statistics the source has moved past.`} />}
           {total === 0 && <span className={`${s.seg} ${s.segNone}`} style={{ flexGrow: 1 }} />}
         </div>
       </div>
@@ -679,8 +690,8 @@ function SkeletonRow() {
       <td className={s.cRows}><span className={s.skel} style={{ width: 84 }} /></td>
       <td className={s.cSize}><span className={s.skel} style={{ width: 56 }} /></td>
       <td className={s.cFiles}><span className={s.skel} style={{ width: 26 }} /></td>
-      <td className={`${s.cWhen} ${s.cChanged}`}><span className={s.skel} style={{ width: 54 }} /></td>
-      <td className={s.cWhen}><span className={s.skel} style={{ width: 54 }} /></td>
+      <td className={`${s.cWhen} ${s.cChanged}`}><span className={s.skel} style={{ width: 48 }} /></td>
+      <td className={s.cWhen}><span className={s.skel} style={{ width: 48 }} /></td>
       <td className={s.cAnswer} />
     </tr>
   );
@@ -756,10 +767,10 @@ function TableRow({ row, pending, expanded, onToggle, isEditor, onMeasured }: {
           {typeof files === "number" ? count(files) : pending ? <span className={s.skel} style={{ width: 26 }} /> : ""}
         </td>
         <td className={`${s.cWhen} ${s.cChanged}`} title={exactTime(measured?.lastModifiedMs)}>
-          {typeof measured?.lastModifiedMs === "number" ? since(measured.lastModifiedMs) : waiting(54)}
+          {typeof measured?.lastModifiedMs === "number" ? elapsed(measured.lastModifiedMs) : waiting(48)}
         </td>
         <td className={s.cWhen} title={exactTime(measured?.computedAtMs)}>
-          {typeof measured?.computedAtMs === "number" ? since(measured.computedAtMs) : waiting(54)}
+          {typeof measured?.computedAtMs === "number" ? elapsed(measured.computedAtMs) : waiting(48)}
         </td>
         <td className={s.cAnswer}>
           {state && <span className={`${s.answers} ${state.tone}`} title={state.says}>{state.cell}</span>}
