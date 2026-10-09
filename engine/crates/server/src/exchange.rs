@@ -729,8 +729,20 @@ impl StreamingOutput {
         let buffer = &mut writer.get_mut().0;
         let size = self.limits.max_chunk_bytes;
         while buffer.len() >= size || (all && !buffer.is_empty()) {
-            let take = buffer.len().min(size);
-            let payload: Vec<u8> = buffer.drain(..take).collect();
+            let payload = if buffer.len() <= size {
+                // The final (or exact-size) chunk can take ownership of the
+                // accumulated bytes without copying or shifting the tail.
+                std::mem::take(buffer)
+            } else {
+                // `drain(..take).collect()` copies the prefix and then moves
+                // every remaining byte toward the front.  Large IPC batches
+                // can cross the chunk boundary repeatedly, making that
+                // quadratic in the amount of buffered output.  Split the
+                // vector at the boundary and swap the tail into the writer;
+                // both chunks remain contiguous and no existing byte moves.
+                let tail = buffer.split_off(size);
+                std::mem::replace(buffer, tail)
+            };
             let last = all && buffer.is_empty();
             let chunk = ExchangeChunk {
                 identity: self.identity.clone(),
