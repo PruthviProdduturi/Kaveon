@@ -11,23 +11,27 @@ export default function ConceptsDocs() {
         lead="Six ideas explain how Kaveon fits together. Once these click, the rest of the documentation is detail."
       />
 
-      <h2>1 · Two planes: metadata and analytical data</h2>
+      <h2>1 · One authority, two data planes</h2>
       <p>
-        Kaveon keeps its own state separate from the data it queries. This split is why you can point Kaveon
-        at a warehouse without it needing to own or copy anything in it.
+        Kaveon separates durable product state from customer lake data while keeping both under one governed
+        platform. KaveonDB is the transactional authority for datasets, charts, dashboards, saved queries,
+        DLM definitions, audit records and other product metadata. The analytical plane reads Parquet, Delta
+        and supported Iceberg snapshots in place; it does not require copying the source into a proprietary
+        warehouse.
       </p>
       <table>
-        <thead><tr><th></th><th>Metadata database</th><th>Data sources</th></tr></thead>
+        <thead><tr><th></th><th>KaveonDB transactional plane</th><th>Distributed analytical plane</th></tr></thead>
         <tbody>
-          <tr><td><strong>Holds</strong></td><td>Datasets, charts, dashboards, query history, DLM context, roles, themes</td><td>Your analytical data — the tables you actually query</td></tr>
-          <tr><td><strong>Configured via</strong></td><td>Setup wizard, or <code>Settings → Metadata Server</code></td><td>The <a href="/docs/data-sources">Data Sources</a> page</td></tr>
-          <tr><td><strong>How many</strong></td><td>Exactly one</td><td>As many as you register</td></tr>
+          <tr><td><strong>Holds</strong></td><td>Versioned product records, ownership, revisions, audit and transaction state</td><td>Customer tables and immutable source snapshots in object storage</td></tr>
+          <tr><td><strong>Execution</strong></td><td>Validate → revision check → commit → audit → recover</td><td>Plan → split → execute on workers → Arrow exchange → merge result</td></tr>
+          <tr><td><strong>Storage</strong></td><td>Durable KaveonDB product store, local or ADLS-backed</td><td>ADLS Gen2/local Parquet and Delta; registered catalog definitions</td></tr>
+          <tr><td><strong>Consistency</strong></td><td>Immutable revisions, compare-and-set heads and owner-scoped reads</td><td>Version-pinned snapshots, exact statistics and fail-closed pruning</td></tr>
         </tbody>
       </table>
       <p>
-        In the reference deployment these are two databases on one server: <code>kaveonmeta</code> for the
-        control plane and context, and <code>kaveon</code> as a warehouse. Separating them keeps context
-        lookups fast while large scans run elsewhere.
+        This is why a dashboard update and a billion-row aggregate do not compete for the same execution path:
+        transactional writes stay bounded and revisioned, while analytical work fans out across workers and
+        returns columnar results.
       </p>
 
       <h2>2 · The content chain</h2>
@@ -67,24 +71,25 @@ ORDER  BY "Revenue" DESC`}</Code>
         when you want raw control — the two paths coexist, and SQL Lab results can be saved back as datasets.
       </Callout>
 
-      <h2>4 · Two execution paths</h2>
+      <h2>4 · Transactional and distributed execution</h2>
       <p>
-        Kaveon has two ways to execute analytical work, and they are currently separate systems. Knowing
-        which one you are using explains most of what you will see.
+        Kaveon has two cooperating execution paths. The transactional path protects product state; the
+        distributed path executes analytical SQL. The deterministic DLM can answer a third way — from a
+        compiled context artifact — when the requested shape is already materialized.
       </p>
       <table>
-        <thead><tr><th></th><th>Platform path</th><th>Engine path</th></tr></thead>
+        <thead><tr><th></th><th>Transactional path</th><th>Distributed analytical path</th><th>Context path</th></tr></thead>
         <tbody>
-          <tr><td><strong>Runs</strong></td><td>Studio and the FastAPI service</td><td>The Rust Engine, standalone</td></tr>
-          <tr><td><strong>Reads</strong></td><td>Registered SQL sources — PostgreSQL, Fabric SQL, Azure SQL, MySQL, StarRocks</td><td>Parquet and Delta in storage, through catalogs</td></tr>
-          <tr><td><strong>Speaks</strong></td><td>Each source&rsquo;s own SQL dialect</td><td>Kaveon Engine SQL</td></tr>
-          <tr><td><strong>Entry point</strong></td><td>Studio, or the platform API</td><td><code>kaveon</code> CLI, or the Engine HTTP API</td></tr>
-          <tr><td><strong>Maturity</strong></td><td>Shipping</td><td>Alpha</td></tr>
+          <tr><td><strong>Runs</strong></td><td>KaveonDB coordinator and transaction API</td><td>Rust coordinator plus distributed workers</td><td>DLM context service and compiled artifacts</td></tr>
+          <tr><td><strong>Work</strong></td><td>Product records, permissions, revisions and audit</td><td>Scans, joins, aggregates, windows, sorting and exchange</td><td>Precomputed totals, dimensions, pairs and sketches</td></tr>
+          <tr><td><strong>Storage</strong></td><td>KaveonDB product records</td><td>Cataloged Parquet, Delta and supported Iceberg</td><td>Versioned context in governed product storage</td></tr>
+          <tr><td><strong>Entry point</strong></td><td>Studio/API product operations</td><td>Studio SQL Lab, <code>kaveon</code> CLI, or Engine HTTP API</td><td>Studio Chat, DLM API, or CLI <code>.ask</code></td></tr>
         </tbody>
       </table>
       <Callout type="warn">
-        Studio does not route queries through the Engine yet. Everything you do in the UI today goes through
-        the platform path. The Engine is used directly, on its own.
+        These paths are complementary, not interchangeable. KaveonDB is the authority for product transactions;
+        the distributed Engine is optimized for analytical reads; DLM context is used only when its version and
+        semantic shape are fresh enough to answer safely.
       </Callout>
 
       <h2>5 · Catalogs — how the Engine sees storage</h2>
@@ -102,8 +107,9 @@ USE warehouse.default;
 SELECT count(*) FROM orders;`}</Code>
       <p>
         The direction here is the <strong>Live Lake Path</strong>: read data where it already lives, with no
-        mandatory import. Local filesystem works today; ADLS Gen2, S3, and Iceberg are target work, tracked
-        in <a href="/docs/engine/storage">Storage &amp; Catalogs</a>.
+        mandatory import. Local filesystem and ADLS Gen2 are qualified paths; supported Iceberg snapshots are
+        available through the Engine catalog, while S3 remains a staged connector target. Details live in
+        <a href="/docs/engine/storage">Storage &amp; Catalogs</a>.
       </p>
 
       <h2>6 · Ask, don&rsquo;t query</h2>
