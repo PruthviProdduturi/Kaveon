@@ -27,7 +27,16 @@ after it, never half of it.
 
     python scripts/append-events.py --plan
     python scripts/append-events.py --apply
-    python scripts/append-events.py --apply --date 2026-07-05 --users 250000
+    python scripts/append-events.py --apply --date 2026-08-01 --users 250000
+
+**The schema, the value domains and every metric distribution come from
+`build_kaveon_events_table`, not from this file.** An appended day that invented
+a region or a licence would widen a cube axis and change what the dashboards
+report, and an earlier version of this script held its own copies of the lists
+and had already drifted — it introduced an `industry` value ("Finance") the base
+table does not use, and narrowed `country` from 26 values to 12. Importing the
+domains is what makes that class of drift impossible rather than merely
+discouraged.
 
 Requires `deltalake`, `pyarrow`, `numpy`, and an `az login` with write access to
 the lake.
@@ -44,54 +53,18 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from deltalake import DeltaTable, write_deltalake
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from build_kaveon_events_table import (  # noqa: E402
+    DAYS, FIRST_DAY, SCHEMA, SURFACES, SURFACE_PROFILES, USER_DIMENSIONS,
+    build_user_attributes, chunk_rng, day_volume, surface_metrics)
+
 # The table's own copy on disk. Delta needs the existing log to append to it,
 # and building the commit locally means only the new objects are uploaded.
 TABLE = Path(__file__).resolve().parents[1] / "data" / "adls-mirror" / "opensource" / \
-    "kaveon" / "kaveon_product" / "kaveon_events_enriched_split"
+    "kaveon" / "kaveon_product" / "kaveon_events_enriched_typed"
 ACCOUNT = "kaveonlake"
 CONTAINER = "opensource"
 REMOTE = "snapshots/2026-09-09-v1/public/kaveon_events_enriched"
-
-# The value domains the existing 504,000,000 rows use. An appended day that
-# invented a new region or licence would widen a cube axis and change what the
-# dashboards report, so these are fixed to what the table already contains.
-SURFACES = ["Chat", "Dashboard", "Chart Builder", "SQL Lab", "API", "Export"]
-PLATFORMS = ["Web", "Desktop", "Mobile"]
-LICENSES = ["Free", "Standard", "Professional", "Enterprise"]
-SEGMENTS = ["Startup", "SMB", "Mid-Market", "Enterprise"]
-INDUSTRIES = ["Technology", "Finance", "Healthcare", "Retail", "Manufacturing",
-              "Education", "Energy", "Professional Services", "Real Estate", "Media"]
-REGIONS = ["North America", "Europe", "Asia", "South America", "Africa", "Oceania"]
-COUNTRIES = ["United States", "United Kingdom", "Germany", "Netherlands", "France",
-             "Canada", "Brazil", "Chile", "India", "Japan", "Australia", "South Africa"]
-DEPLOYMENTS = ["Cloud", "Hybrid", "On-Premise"]
-CHANNELS = ["Direct", "Organic", "Paid", "Referral", "Partner"]
-TEAM_SIZES = ["Solo", "Small", "Medium", "Large", "Enterprise"]
-
-# Per-surface ranges, matching the shape of the original generator: each
-# surface behaves differently, so a breakdown by surface stays meaningful.
-SURFACE_RANGES = {
-    "Chat":          ((3, 15), (1, 4), (60, 1800), (0, 3), (0, 0), (0, 1), (0, 1000), (0, 2), (100, 500)),
-    "Dashboard":     ((5, 25), (1, 5), (120, 3600), (2, 10), (0, 1), (0, 2), (1000, 100000), (2, 8), (200, 1500)),
-    "Chart Builder": ((3, 12), (1, 3), (180, 2400), (3, 15), (1, 5), (0, 2), (5000, 500000), (1, 5), (300, 2000)),
-    "SQL Lab":       ((5, 20), (1, 4), (300, 3600), (5, 25), (0, 1), (0, 3), (10000, 1000000), (0, 3), (500, 3000)),
-    "API":           ((10, 50), (1, 2), (30, 600), (1, 5), (0, 0), (0, 1), (100, 50000), (3, 10), (50, 500)),
-    "Export":        ((1, 5), (1, 2), (30, 300), (1, 3), (0, 0), (0, 1), (50000, 1000000), (0, 2), (200, 1000)),
-}
-
-SCHEMA = pa.schema([
-    pa.field("event_date", pa.string()), pa.field("user_id", pa.int64()),
-    pa.field("surface", pa.string()), pa.field("actions", pa.int64()),
-    pa.field("sessions", pa.int64()), pa.field("duration_sec", pa.int64()),
-    pa.field("queries_run", pa.int64()), pa.field("charts_created", pa.int64()),
-    pa.field("errors", pa.int64()), pa.field("rows_scanned", pa.int64()),
-    pa.field("cache_hits", pa.int64()), pa.field("latency_p75_ms", pa.int64()),
-    pa.field("platform", pa.string()), pa.field("license", pa.string()),
-    pa.field("segment", pa.string()), pa.field("industry", pa.string()),
-    pa.field("region", pa.string()), pa.field("country", pa.string()),
-    pa.field("deployment", pa.string()), pa.field("acquisition_channel", pa.string()),
-    pa.field("team_size", pa.string()),
-])
 
 AZ = shutil.which("az") or shutil.which("az.cmd") or "az.cmd"
 
@@ -102,53 +75,39 @@ def az(*args, timeout=3600):
     return result.returncode, (result.stdout or "").strip(), (result.stderr or "").strip()
 
 
-def _spread(values, users, seed):
-    """Assign each user a value deterministically, so a user keeps their
-    attributes from day to day the way a real dimension join would."""
-    index = (users * seed) % len(values)
-    lookup = np.array(values, dtype=object)
-    return pa.array(lookup[index], type=pa.string())
+def build_day(day: date, users: int) -> pa.Table:
+    """One day of events, drawn exactly as the base table's days are drawn.
 
+    The day's own offset from the table's first day carries into the weekday
+    and trend factors, so an appended Saturday is as quiet as a built one and
+    the series does not step at the join.
+    """
+    attributes = build_user_attributes(users)
+    offset = (day - FIRST_DAY).days
+    scale = day_volume(day, offset, DAYS)
+    volume = attributes["intensity"] * scale
+    latency_factor = attributes["latency_factor"]
+    user_ids = pa.array(np.arange(1, users + 1, dtype=np.int64))
+    event_date = pa.array(
+        np.full(users, (day - date(1970, 1, 1)).days, dtype=np.int32)).cast(pa.date32())
+    # `build_user_attributes` draws from a fixed-seed stream per attribute, so
+    # the first `users` draws are the first `users` draws of the full table: a
+    # user keeps the country and licence the built days gave them.
+    dimensions = {}
+    for name in USER_DIMENSIONS:
+        values, indices = attributes[name]
+        dimensions[name] = pa.DictionaryArray.from_arrays(
+            pa.array(indices), pa.array(values, type=pa.string())).dictionary_decode()
 
-def _between(users, low, high, seed):
-    if high <= low:
-        return pa.array(np.full(len(users), low, dtype=np.int64), type=pa.int64())
-    return pa.array(low + np.abs((users * seed) % (high - low + 1)), type=pa.int64())
-
-
-def build_day(day: str, users: int) -> pa.Table:
-    """One day of events: every user active on every surface, as the existing
-    rows are shaped."""
-    uids = np.arange(1, users + 1, dtype=np.int64)
-    salt = int(day.replace("-", "")) % 100_003
     blocks = []
-    for position, surface in enumerate(SURFACES):
-        actions, sessions, duration, queries, charts, errors, scanned, cache, latency = \
-            SURFACE_RANGES[surface]
-        step = 1 + position
-        blocks.append(pa.table({
-            "event_date": pa.array([day] * users, type=pa.string()),
-            "user_id": pa.array(uids, type=pa.int64()),
-            "surface": pa.array([surface] * users, type=pa.string()),
-            "actions": _between(uids, *actions, 486187 + salt * step),
-            "sessions": _between(uids, *sessions, 999331 + salt * step),
-            "duration_sec": _between(uids, *duration, 1300813 + salt * step),
-            "queries_run": _between(uids, *queries, 735391 + salt * step),
-            "charts_created": _between(uids, *charts, 571373 + salt * step),
-            "errors": _between(uids, *errors, 412619 + salt * step),
-            "rows_scanned": _between(uids, *scanned, 2654435761 + salt * step),
-            "cache_hits": _between(uids, *cache, 297179 + salt * step),
-            "latency_p75_ms": _between(uids, *latency, 193939 + salt * step),
-            "platform": _spread(PLATFORMS, uids, 7919),
-            "license": _spread(LICENSES, uids, 6151),
-            "segment": _spread(SEGMENTS, uids, 5281),
-            "industry": _spread(INDUSTRIES, uids, 4409),
-            "region": _spread(REGIONS, uids, 3571),
-            "country": _spread(COUNTRIES, uids, 2693),
-            "deployment": _spread(DEPLOYMENTS, uids, 1861),
-            "acquisition_channel": _spread(CHANNELS, uids, 1013),
-            "team_size": _spread(TEAM_SIZES, uids, 577),
-        }).cast(SCHEMA))
+    for surface_index, surface in enumerate(SURFACES):
+        metrics = surface_metrics(chunk_rng(offset, 0, surface_index),
+                                  SURFACE_PROFILES[surface], volume, latency_factor)
+        columns = {"event_date": event_date, "user_id": user_ids,
+                   "surface": pa.array([surface] * users, type=pa.string())}
+        columns.update({name: pa.array(values) for name, values in metrics.items()})
+        columns.update(dimensions)
+        blocks.append(pa.table(columns, schema=SCHEMA))
     return pa.concat_tables(blocks)
 
 
@@ -165,14 +124,28 @@ def _day_range(action: dict):
     return action.get("min.event_date"), action.get("max.event_date")
 
 
-def already_present(table: DeltaTable, day: str) -> bool:
+def _as_day(value) -> date | None:
+    """`event_date` is a real date now, so Delta's per-file statistics come
+    back as `date` objects rather than strings."""
+    if value is None:
+        return None
+    return value if isinstance(value, date) else date.fromisoformat(str(value)[:10])
+
+
+def already_present(table: DeltaTable, day: date) -> bool:
     """A day that is already in the table must not be appended twice: the cube
     folds additions in, so a duplicate day would silently double its cells."""
     for action in _add_actions(table):
-        low, high = _day_range(action)
+        low, high = (_as_day(value) for value in _day_range(action))
         if low is not None and low <= day <= (high or low):
             return True
     return False
+
+
+def last_day(table: DeltaTable) -> date | None:
+    days = [_as_day(_day_range(action)[1]) for action in _add_actions(table)]
+    present = [value for value in days if value is not None]
+    return max(present) if present else None
 
 
 def main():
@@ -189,10 +162,11 @@ def main():
     table = DeltaTable(str(TABLE))
     before = table.version()
 
-    day = args.date
-    if day is None:
-        last = max((_day_range(action)[1] or "") for action in _add_actions(table))
-        day = str(date.fromisoformat(last) + timedelta(days=1)) if last else "2026-07-05"
+    if args.date:
+        day = date.fromisoformat(args.date)
+    else:
+        latest = last_day(table)
+        day = (latest + timedelta(days=1)) if latest else FIRST_DAY + timedelta(days=DAYS)
 
     rows = args.users * len(SURFACES)
     print(f"table is at Delta version {before}")
@@ -207,9 +181,9 @@ def main():
     if batch.schema != SCHEMA:
         sys.exit("generated batch does not match the table's schema")
     before_files = {path.name for path in TABLE.glob("*.parquet")}
-    # No schema_mode: the batch is cast to the table's schema above and any
-    # drift should fail the append rather than quietly widen the table, which
-    # is what a merge mode would do.
+    # No schema_mode: the batch is built against the table's schema above and
+    # any drift should fail the append rather than quietly widen the table,
+    # which is what a merge mode would do.
     write_deltalake(str(TABLE), batch, mode="append")
 
     table = DeltaTable(str(TABLE))

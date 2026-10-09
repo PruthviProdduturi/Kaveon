@@ -1,8 +1,8 @@
 # The lake: Delta conversion, declared shapes, and the cube
 
 How the `OpenSource` catalog's tables are stored and made fast, and the traps
-found doing it on 2026-10-07. Everything here is implemented and deployed
-unless it says otherwise.
+found doing it on 2026-10-07 and in the events-table rebuild of 2026-10-09.
+Everything here is implemented and deployed unless it says otherwise.
 
 ## State
 
@@ -75,26 +75,69 @@ Parquet file. The consequences were not subtle:
 The file carried 168 row groups, so the parallelism was present in the data and
 unreachable by the planner, which splits on files.
 
-It is now 126 files of ~3.9M rows each, written by streaming
-`ParquetFile.iter_batches` into a `ParquetWriter` per output file with a
-1,000,000-row row-group size, so memory stays bounded over a 6 GB source.
-Always verify the rewrite holds the same number of rows as the source before
-publishing it.
+It was first relaid out as 126 files of ~3.9M rows each by streaming the single
+file through `ParquetFile.iter_batches`. The table has since been **rebuilt**
+rather than relaid out (below), and the layout is now **126 files of
+3,600,000 or 4,500,000 rows, each holding exactly one `event_date`**. Always
+verify a rewrite holds the same number of rows as the source before publishing
+it.
 
 ### Publishing a relaid-out table without a broken window
 
 Upload in this order so readers never see a half-published table:
 
-1. the new part files, while the existing `_delta_log` still names only the old
-   object — every reader keeps seeing the old table;
+1. the new part files, under names the published `_delta_log` does not mention
+   — every reader keeps seeing the old table through the whole upload;
 2. list the parts back and confirm each landed at its full byte size;
-3. overwrite `_delta_log/00000000000000000000.json`. It is one object, so that
+3. hold the table's latest version by padding the new log — see the trap below;
+4. overwrite `_delta_log/00000000000000000000.json`. It is one object, so that
    write *is* the switch.
 
-Leave the superseded object in place. Nothing references it once the new log
-lands, so it costs storage and nothing else, and keeping it means the switch can
-be reverted by restoring the previous log alone. Delete it only after the new
-layout has been exercised.
+Leave the superseded objects in place. Nothing references them once the new log
+lands, so they cost storage and nothing else, and keeping them means the switch
+can be reverted by restoring the previous log alone. Delete them only after the
+new layout has been exercised.
+
+**New part files must take new names.** Overwriting `part-00000.parquet` in
+place changes the bytes under an object the published log still names and
+sizes, so readers break mid-upload. The rebuild names its files
+`events-<date>-<block>.parquet` for that reason, which also leaves the previous
+layout intact as the revert target.
+
+### Trap: the latest Delta version must never go backwards
+
+This one cost an outage, so it is worth stating plainly. The published log had
+**two** commits — the conversion at version 0 and an `append-events.py` day at
+version 1 — and the rebuilt log has **one**. Deleting the version-1 object
+looked right: it added a file written with the old text `event_date`, which is
+not readable under a schema that now says `date`, so it had to go before the
+switch rather than after.
+
+It took the table down for scans:
+
+    DISTRIBUTED_EXECUTION_ERROR - worker 'worker-1' failed task with 500:
+    {"error":"storage: requested Delta version is not available"}
+
+**The coordinator pins a Delta version per statement and each worker resolves
+that version from the log itself.** The coordinator had version 1 cached, so
+every task asked its worker for a version that no longer existed and every task
+failed. `COUNT(*)` kept answering — from statistics recorded at the old version
+— so the table looked alive while nothing that read a file worked. Both
+`source_version` and `current_source_version` reported version 1, which is the
+tell: the coordinator had not noticed the log change at all, and would not,
+because it was looking for a version number that had gone down.
+
+The fix, and now what the tool does: **pad the new log instead of truncating
+it.** Every published version above 0 is overwritten with a commit carrying
+only `commitInfo` — a legal Delta commit that applies no action, so the version
+exists and resolves to exactly what version 0 holds. The padding goes up
+*before* the switch, where over the still-published version 0 it simply drops
+what those commits had added, leaving a consistent readable table; then version
+0 is overwritten and that is the switch. Same two writes, no deletion, no
+window in which a version is missing.
+
+Both log objects are copied to `backups/kaveon_events_enriched/_delta_log-<stamp>/`
+before anything changes, so the revert is still one restore.
 
 ## Declared shape and the cube
 
@@ -131,17 +174,215 @@ Two decisions in that declaration worth keeping:
 
 ### Trap: a date column stored as text takes no time axis
 
-Declaring `time = 'event_date:day'` is refused:
+Declaring `time = 'event_date:day'` was refused:
 
     time 'event_date' (Utf8) cannot be bucketed at day grain; a date column
     takes day grain, a microsecond timestamp day or month
 
-`event_date` is stored as text on this table. The refusal is correct — the row
-path has no way to truncate a string either, and the cube answers nothing the
-row path cannot compute. The table therefore has no time axis, and anything
-date-ranged over it is weaker than it should be. **Open:** retyping that column
-is a data change that 33 charts read, so it belongs in its own change rather
-than riding along inside a layout rewrite.
+The refusal was correct — the row path has no way to truncate a string either,
+and the cube answers nothing the row path cannot compute. The cost was measured
+against the live Engine on 2026-10-08, with the cube built and the column still
+text:
+
+| statement over 504M rows | |
+|---|---|
+| a breakdown with no date filter (the cube answers it) | 906 ms |
+| the same filtered to one day | 1,422 ms |
+| the same filtered to a month | 61,250 ms — HTTP 504 |
+| `GROUP BY event_date` | 48,750 ms |
+
+Every date-ranged question fell off the cube and scanned the whole table.
+**Fixed by rebuilding the table with `event_date` as `date32`** (below), which
+is what makes `time = 'event_date:day'` declarable. The declaration and the
+cube rebuild it needs have not been done yet.
+
+The rule this leaves behind is general, and it is now a standing requirement
+for every generator in this repo: **a date is stored as a date.** Not text, not
+an integer year, not `yyyymmdd`. A date-shaped column stored as anything else
+cannot be bucketed, cannot carry a time axis, and silently pushes every
+time-ranged query onto a full scan. An audit on 2026-10-08 found the defect in
+most of the lake-era curators — `curate-nyc-taxi.py`, `curate-who-covid.py`,
+`curate-demo-extras.py`, `curate-kaveon-product.py`,
+`consolidate-kaveon-product.py` and the old
+`build-kaveon-events-parquet.py` all share one helper shape that maps integer →
+`Int64`, float → `Float64` and *everything else* → string, which is how the
+timestamps and dates became text — while every PostgreSQL-era loader under
+`demo/` and `data/kaveon-usage/` got it right. `data/climate-energy/` is a
+separate case: `year` and `month` are `SMALLINT`, and
+`data/climate-energy/create_datasets.py` registers the `year` smallint as the
+dataset's `date_column`, so the DLM's time-grain logic is pointed at an
+integer. None of that is fixed here; it is recorded so it can be.
+
+## Rebuilding the events table — 2026-10-09
+
+`public.kaveon_events_enriched` was regenerated rather than relaid out, because
+the three things wrong with it were in the data, not the layout. The tool is
+`scripts/build_kaveon_events_table.py` with its geography in
+`scripts/kaveon_events_geography.py`; both supersede
+`scripts/build-kaveon-events-parquet.py` and `scripts/build_504m.py`, which are
+kept only as the record of how the table was first assembled.
+
+| | before | after |
+|---|---|---|
+| rows | 504,600,000 | 504,000,000 |
+| files | 126 parts + 1 appended day | 126 |
+| size | 6.7 GB (snappy) | 6.00 GB (zstd) |
+| `event_date` | `Utf8` | **`date32`** |
+| countries | 26 | **185** |
+| industries | 13 (incl. a stray `Finance`) | 12 |
+| metric values | `low + abs((user_id * seed) % range)` | drawn per metric |
+
+Every other column keeps its type and every other dimension keeps its value
+domain and, to within a fraction of a percent, its share — so the existing
+breakdowns keep their shape.
+
+### What `date32` changes
+
+`event_date` is the one column whose type moved. Everything that reads it keeps
+working: the Engine coerces a string literal against a date column, verified
+against a `Date32` column on a registered Delta table, so
+`WHERE event_date = '2026-07-20'` and `BETWEEN '2026-07-10' AND '2026-07-12'`
+still parse and still match. `scripts/differential-cases.py` and the chart SQL
+therefore need no rewrite. The dataset record already declared
+`event_date` as `date` with `date_column: event_date`, so the retype makes the
+physical column agree with what the catalogue always claimed;
+`scripts/register-kaveon-events-dataset.py` said `varchar` and now says `date`.
+
+### Values that read as telemetry
+
+The previous generator's `low + abs((user_id * seed) % (high - low + 1))` is a
+sawtooth over the primary key: uniform inside a hard range, with the range
+bounds — 100, 500, 1000, 3000 — heavily hit. Each metric is now drawn from a
+distribution chosen for it, per surface: lognormal for latency, scan volume and
+session length, where a long right tail is the real shape; Poisson for counts,
+so zero carries real mass; a per-user lognormal intensity factor, so power
+users exist; a weekday/weekend factor and a mild trend across the window, so a
+time axis has something true to show. Latency follows the user's *country*
+rather than their intensity, scaled from connectivity, because latency is a
+property of the path to the nearest region.
+
+Determinism comes from seeding, not from arithmetic on the key: every chunk
+takes `default_rng([SEED, day, block, surface])`, so any single file rebuilds
+byte-for-byte without rebuilding the ones before it, and the whole table
+reproduces exactly. Measured over four sampled files (16.2M rows):
+
+| | min | median | p99 | p99.99 | max | on a multiple of 100 |
+|---|---|---|---|---|---|---|
+| `latency_p75_ms` | 30 | 487 | 3,555 | 10,095 | 36,804 | 1.01% |
+| `rows_scanned` | 0 | 27,182 | 4,197,025 | 50,406,991 | 1,141,230,628 | 1.09% |
+| `actions` | 1 | 7 | 114 | 587 | 2,393 | 0.03% |
+
+1% on a multiple of 100 is what any smooth distribution gives, which is the
+point: there is no clustering left to see. `errors` is zero on 87.7% of rows.
+
+### The geography and its weighting
+
+A country's share of the 3,000,000 users is proportional to its **addressable
+technical audience**:
+
+    weight = population x internet_penetration x adoption_index
+
+Population alone puts Ethiopia above the Netherlands, which no software
+product's telemetry looks like; population times penetration gives the online
+population, which is the real upper bound on who could use the product; the
+`adoption_index` (0.06–3.00, world average 1.0) is the per-online-person
+propensity to use a self-hosted open-source data platform, standing in for
+developer density, cloud spend per capita, ecosystem reach and income band.
+The shares are then mixed 98/2 with a uniform floor, which guarantees every
+country carries users — about 325 at the smallest — while moving the large
+markets by under 2% of their share. Without the floor the smallest states round
+to zero and the choropleth shows gaps that read as "no data" where the honest
+answer is "a little".
+
+Result: United States 17.5%, India 16.1%, China 11.3%, Japan 3.5%, Germany
+3.2%, United Kingdom 3.1%, Brazil 2.9%, France 2.2%, Russia 1.9%; by region
+Asia 45.0%, North America 21.9%, Europe 21.0%, South America 5.4%, Africa 5.2%,
+Oceania 1.5%. 185 countries across all six regions, none under 10 countries —
+North America 19, South America 12, Europe 40, Asia 46, Africa 54, Oceania 14.
+
+Two rules make that survive contact with the UI:
+
+- **Country names are the exact `properties.name` of the bundled Natural Earth
+  GeoJSON** (`studio/public/geo/world.json`), so the choropleth matches on the
+  stored value with no alias lookup. `WorldMapGlobe` *drops* a row whose name
+  is not a feature, so a mistyped country would be invisible on the map while
+  still inflating every other breakdown — `validate_against_geojson` fails the
+  build instead, and runs in the `plan` step. This is why the table says
+  `Czech Rep.`, `Korea`, `Lao PDR`, `Dem. Rep. Congo`. All 26 previous country
+  values are in the new domain, so nothing that referenced one broke.
+- **`region` is derived from the country, never drawn**, so the two columns
+  cannot disagree. Regions follow the UN M49 continental grouping with the two
+  simplifications the table already published: Central America and the
+  Caribbean fold into North America, and Russia stays in Europe. Western Asia
+  is therefore Asia and Egypt is Africa.
+
+### The appender can no longer drift
+
+`scripts/append-events.py` held its own copies of the value domains, and they
+had already drifted from the table: it listed 12 countries where the table had
+26, and its `industry` list said `Finance` where the table says
+`Financial Services` — so the appended day of 2026-08-01 put 60,000 rows of a
+13th industry value into a 12-value cube axis. It now imports the schema, the
+domains, the surface profiles and the drawing functions from
+`build_kaveon_events_table`, which makes that class of drift impossible rather
+than merely discouraged. Its local table path moved with the rebuild, to
+`data/adls-mirror/opensource/kaveon/kaveon_product/kaveon_events_enriched_typed`.
+
+The rebuild does not carry the appended day forward, so the published table is
+28 days again and `append-events.py` will offer 2026-08-01 as the next append —
+this time drawn from the same domains as the rest of the table.
+
+### Pre-flight: prove the reader before publishing 6 GB
+
+The rebuild changes three things an Engine reader has to cope with at once — a
+`date32` column, `DELTA_BINARY_PACKED` integer columns and Parquet v2 data
+pages (the encodings are what keep a table of *drawn* values smaller than the
+patterned one it replaces; dictionary pages are useless on irregular values and
+plain `INT64` would have roughly doubled the table). So one real part file was
+published to a scratch path, registered as a throwaway Delta table with
+`verify: true`, and queried: the register returned `event_date: Date32` read
+from the Delta log, and `COUNT(*)`, `GROUP BY event_date`, a date equality, a
+date range, grouped `AVG`/`MAX` and `COUNT(DISTINCT country)` all answered
+correctly. Then the table definition and the blobs were deleted. Worth doing
+again for any change to how these files are written.
+
+### What the published table reports
+
+Read back through the live API after the switch, with the statistics and the
+cube still stale, so every breakdown here is a full scan and none of these
+timings is a benchmark claim:
+
+| | |
+|---|---|
+| `SELECT * … LIMIT 3` | `Date32, Int64, Utf8, Int64, Utf8, Utf8` — latencies 282, 191, 235; countries `Dominican Rep.`, `India`, `United States` |
+| `MIN`/`MAX`/`COUNT(DISTINCT event_date)` | `2026-07-04`, `2026-07-31`, 28 |
+| `WHERE event_date = '2026-07-20'` | 18,000,000 rows (3,000,000 users x 6 surfaces), **1,344 ms** — the day's files prune, which is new |
+| `WHERE event_date BETWEEN '2026-07-01' AND '2026-07-31'` | 504,000,000 — the whole table, confirming the published row count |
+| `COUNT(DISTINCT country)` | 185 |
+| `GROUP BY country, region` for one day | 185 rows — one region per country, largest 63.1M actions (United States), smallest 38,551 (Micronesia) |
+
+Every one of those 185 values is a feature of the registered map, checked
+against `studio/public/geo/world.json`: **0 dropped**. 30 of the bundle's
+features carry no usage, and all of them are micro-territories, small islands,
+uninhabited or disputed areas, plus `Dem. Rep. Korea` — which has no public
+internet and is absent on purpose. No large landmass is empty. Taiwan is not a
+feature of the bundle at all, so it cannot be covered from the data side.
+
+And `GROUP BY event_date`, which the table could not do at all before, shows
+the weekly rhythm the generator models — Saturday 154.2M actions, Sunday
+135.0M, Monday 341.9M, Tuesday 356.6M, Wednesday 364.8M, Thursday 356.0M,
+Friday 320.4M, then 158.4M and 138.5M the following weekend.
+
+One thing the pre-flight exposes: **registering or deleting a table changes
+the catalog snapshot, and every distributed statement fails until the workers
+pick the new one up** —
+
+    DISTRIBUTED_EXECUTION_ERROR - NO_COMPATIBLE_WORKER:
+    no active worker has catalog snapshot sha256:…
+
+It cleared on its own in well under a minute, but it is a real (brief) outage
+for anything mid-flight, so catalog DDL against the live deployment is not
+free.
 
 ## The host has to be able to do the work
 
@@ -262,5 +503,34 @@ the per-task ceiling.
 - `REMOTE_TASK_TIMEOUT` is a source constant, so a single large file is
   permanently un-cubeable. Worth making a setting, or worth splitting a large
   file's work by row group. Also raised with @Codex.
-- `event_date` retyping, above.
-- The superseded `combined-v1.parquet` is still in the lake, unreferenced.
+- **The cube and the statistics over `public.kaveon_events_enriched` have to be
+  rebuilt.** The rebuild changed every file, so both are stale, and stale
+  statistics are *served*: `SELECT COUNT(*)` still answers `504,600,000` from
+  `statistics at delta v1` while the table holds 504,000,000, and every
+  breakdown has fallen back to a full scan (a single `GROUP BY` is ~60 s
+  again). Rebuilding needs the host resized (`Standard_D8as_v5`, then back) and
+  is a cost decision, so the rebuild tool deliberately stops at the switch.
+  Re-declare the shape with `time = 'event_date:day'` at the same time — that
+  is the whole point of the retype, and it was never declarable before.
+- The dataset's DLM artifact is stale after the switch: its manifest still says
+  `event_date: varchar` and its value index holds 75 values against roughly 233
+  in the new domain. The source hash changes with the switch, so freshness
+  reports the dataset as changed and the ask path rebuilds it; no action unless
+  it does not.
+- The date-as-text defect is still present in the other lake curators, listed
+  under the trap above, and `data/climate-energy/` still registers a `SMALLINT`
+  year as a dataset's `date_column`.
+- Until the cube is rebuilt, a single-dimension breakdown over the whole table
+  is back on the client's 60s bound — `SELECT country, SUM(actions) … GROUP BY
+  country` returned `Engine statement exceeded the client bound (60s)`, and a
+  burst of concurrent full scans made the API answer 502 with an empty body for
+  a minute while the cluster itself stayed healthy (coordinator uptime
+  unbroken, both workers on the current catalog snapshot). The same breakdown
+  filtered to one day answers in 14.4s, because the day's files prune. This is
+  the pre-cube state the earlier layout work described, not a new defect.
+- The superseded objects left in the lake, all unreferenced: the single-file
+  `combined-v1.parquet`, the 126 `part-000NN.parquet` of the relaid-out layout,
+  and the `part-00000-afd04987-….snappy.parquet` appended day. Delete them only
+  once the rebuilt table has been exercised; until then they are the revert
+  target, together with the log objects backed up under
+  `backups/kaveon_events_enriched/_delta_log-<stamp>/`.
