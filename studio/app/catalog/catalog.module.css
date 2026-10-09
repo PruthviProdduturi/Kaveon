@@ -7,13 +7,14 @@
   color: var(--text-primary);
   --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 
-  /* One type scale for the whole surface. Five steps and nothing between
-     them. The display size belongs to the page's two readings rather than to
-     its title: what the lake can answer outranks the word Catalog, and the
-     scale is where that is decided. Every rule below names a step rather
-     than a number, so a size cannot drift. */
-  --fs-display: 30px;   /* the two readings the page opens on */
-  --fs-title: 18px;     /* the page's one title */
+  /* One type scale for the whole surface, and seven steps that each say
+     where a reader looks next: the lake's leading figure, the page's name,
+     a panel beside the page, a schema, a row, a label, a mark. Every rule
+     below names a step rather than a number, so a size cannot drift. */
+  --fs-display: 40px;   /* the fraction the page opens on */
+  --fs-page: 22px;      /* the page's name */
+  --fs-title: 18px;     /* a panel's heading, beneath the page's name */
+  --fs-section: 15px;   /* a schema — the page's second level */
   --fs-row: 13px;       /* rows, cells, controls */
   --fs-label: 12px;     /* labels beside a value */
   --fs-micro: 11px;     /* column heads, counts, notes, marks */
@@ -165,10 +166,12 @@
 .crumbs i { font-style: normal; color: var(--text-faint) }
 /* ── Inventory ────────────────────────────────────────────────
    The page is a measurement record, so it opens on what the measurements
-   establish: how many rows answer from precomputed values and how many are
-   read. Two figures in opposition and one rule that gives their proportion
-   its true shape — not four unrelated counts, which would be four facts where
-   the product has one.
+   establish — drawn, not asserted. One stratum the width of the pane,
+   divided exactly where the lake divides, with each figure hung above the
+   segment it names and tied to it by a tick. A table that is 99.9% of the
+   lake takes 99.9% of the bar and leaves the rest a sliver, which is the
+   finding; printing two numerals side by side and leaving the division to
+   the reader is not.
 
    Nothing here is a card. The band and the list sit directly on the pane,
    divided by hairlines, and they share both edges: the disclosure mark lives
@@ -177,9 +180,9 @@
 
    Colour carries exactly one meaning on this surface. The accent means a
    table that answers from sketches and cube cells, and appears nowhere else
-   — not on a link, not on a filled button, not on a sort mark. Amber means a
-   measurement the source has moved past; red means a location that did not
-   answer. ────────────────────────────────────────────────────── */
+   — not on a link, not on a filled button, not on a sort mark, not on the
+   mass bars. Amber means a measurement the source has moved past; red means
+   a location that did not answer. ─────────────────────────────── */
 
 /* What the band and the list have to fit is the pane's width, not the
    window's: the rail takes 300 of the window and the shell another 64, so a
@@ -193,63 +196,60 @@
 /* Title and controls on one line, and they stay on one line: the search field
    is the only thing here that can give up width, so no control is ever left
    stranded on a row of its own. */
+/* With no title to hold the left edge, the field holds it: the search runs
+   from the page's left margin and the three actions end on its right, so the
+   line is anchored at both ends instead of drifting to one of them. */
 .bandTop { display: flex; align-items: center; gap: 18px; min-height: 34px }
-.bandTitle { flex: 0 0 auto; margin: 0; font: 600 var(--fs-title)/28px Inter, sans-serif; letter-spacing: -.02em; color: var(--text-primary) }
+.bandTitle { flex: 0 0 auto; margin: 0; font: 600 var(--fs-page)/34px Inter, sans-serif; letter-spacing: -.022em; color: var(--text-primary) }
 .bandActions { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 8px }
+.bandActions .search { margin-right: auto }
 .rotate { animation: spin .9s linear infinite }
 
-/* The finding on the left, the evidence on the right. The readings take the
-   width; the physical totals take only what their longest number needs, and
-   end on the pane's right edge, where the list's last column also ends. */
-.position {
-  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px 40px;
-  align-items: start; margin-top: 24px;
-}
-.readings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 36px }
-.reading { display: grid; grid-template-rows: auto auto auto; gap: 8px; min-width: 0 }
-.readingValue {
-  font: 600 var(--fs-display)/1 Inter, sans-serif; letter-spacing: -.025em;
+/* ── What the lake can answer ───────────────────────────────────────────────
+   One fraction, answered over measured, set as a single run of numerals so
+   the proportion is read off the digits themselves. The answered figure
+   carries the accent and the measured total recedes to the muted ink, which
+   is the whole of the colour on this page doing the whole of its one job.
+   Beneath it, two quiet lines: what stands behind the fraction, then what
+   the lake physically is. ──────────────────────────────────────────────── */
+.lake { margin-top: 26px }
+.headline {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 18px; margin: 0;
   font-variant-numeric: tabular-nums lining-nums;
-  color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-/* The one figure the accent belongs to. */
-.readingValueFast { color: var(--accent) }
-.readingHeadline { font: var(--fs-row)/1.45 Inter, sans-serif; color: var(--text-secondary); max-width: 30ch }
-.readingNote {
-  font: 500 var(--fs-micro)/1.45 Inter, sans-serif; font-variant-numeric: tabular-nums lining-nums;
+.headFraction { display: inline-flex; align-items: baseline; gap: 11px; min-width: 0 }
+.headAnswered, .headMeasured {
+  font: 600 var(--fs-display)/1.05 Inter, sans-serif; letter-spacing: -.035em; white-space: nowrap;
+}
+.headAnswered { color: var(--accent) }
+.headMeasured { color: var(--text-muted) }
+/* The stroke is the relation, not a figure: lighter than either side of it
+   so the two numbers read against each other across it. */
+.headOver { font: 300 36px/1.05 Inter, sans-serif; color: var(--text-faint) }
+.headSays { font: var(--fs-row)/1.45 Inter, sans-serif; color: var(--text-secondary); padding-bottom: 3px }
+
+/* What stands behind the fraction. */
+.lakeStanding {
+  margin: 14px 0 0; max-width: 92ch;
+  font: var(--fs-row)/1.6 Inter, sans-serif; font-variant-numeric: tabular-nums lining-nums;
+  color: var(--text-secondary);
+}
+.lakeStanding b { font-weight: 600; color: var(--text-primary) }
+/* What the lake physically is: evidence, not finding, so it follows rather
+   than standing in the opposite corner competing for the same glance. */
+.lakeFacts {
+  margin: 5px 0 0;
+  font: var(--fs-label)/1.6 Inter, sans-serif; font-variant-numeric: tabular-nums lining-nums;
   color: var(--text-muted);
 }
-
-/* The rule belongs to the two readings above it and spans only them: it is
-   the shape of their proportion, not a decoration under the whole band. A
-   tenth of a per cent is drawn at a legible minimum; the figures are exact. */
-.rule { grid-column: 1 / -1; display: flex; gap: 2px; height: 5px; margin-top: 2px }
-.seg { min-width: 6px; border-radius: 3px }
-.segFast { background: var(--accent) }
-.segRead { background: var(--text-faint) }
-/* Rows whose statistics the source has moved past: measured, and no longer
-   describing anything. They are their own share of the lake, not part of
-   either reading above. */
-.segStale { background: var(--warning) }
-.segNone { background: var(--bg-hover); box-shadow: inset 0 0 0 1px var(--border) }
-
-/* The physical facts of the lake, deliberately quiet and deliberately aligned
-   on their right edge: a column of numbers that can be read down. */
-.physical { display: grid; gap: 7px; margin: 0; justify-items: end }
-.physical div { display: flex; align-items: baseline; justify-content: flex-end; gap: 14px }
-.physical dt { font: var(--fs-micro) Inter, sans-serif; color: var(--text-muted) }
-.physical dd {
-  margin: 0; min-width: 72px; text-align: right;
-  font: 500 var(--fs-label) Inter, sans-serif; font-variant-numeric: tabular-nums lining-nums;
-  color: var(--text-secondary); white-space: nowrap;
-}
+.lakeFacts b { font-weight: 600; color: var(--text-secondary) }
 
 /* What is not current, named once, with the one control that narrows the list
    to it. Absent entirely while there is nothing to say. */
 .exception {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-  margin-top: 20px; padding: 11px 13px;
-  background: rgba(245, 158, 11, .09); border-left: 2px solid var(--warning); border-radius: 0 8px 8px 0;
+  margin-top: 20px; padding: 11px 0 0;
+  border-top: 1px solid var(--border);
 }
 .exception > i { color: var(--warning); font-size: 12px; flex-shrink: 0 }
 .exceptionText {
@@ -288,42 +288,66 @@
 .tableWrap { container: inv / inline-size }
 .inv { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: var(--fs-row) }
 .inv thead th {
-  position: sticky; top: 0; z-index: 2;
-  height: 36px; padding: 0 var(--gutter); text-align: left;
+  position: sticky; z-index: 2;
+  padding: 0 var(--gutter); text-align: left;
   font: 500 var(--fs-micro)/1 Inter, sans-serif;
-  color: var(--text-muted); background: var(--bg-primary); border-bottom: 1px solid var(--border); white-space: nowrap;
+  color: var(--text-muted); background: var(--bg-primary); white-space: nowrap;
 }
+/* Eight columns are four readings, and the head says which: a group name
+   over the columns it covers, with its own rule, so the eye takes the row as
+   four blocks instead of eight equal slots. The columns that belong to
+   nothing but themselves span both lines. */
+.headGroup th { top: 0; height: 22px; vertical-align: bottom; padding-bottom: 5px }
+.headSub th { top: 22px; height: 26px; vertical-align: middle; border-bottom: 1px solid var(--border) }
+.inv .headGroup th[rowspan] { border-bottom: 1px solid var(--border); vertical-align: middle; padding-bottom: 0 }
+.inv thead th.gHead {
+  text-align: right; color: var(--text-secondary); font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+/* The first column of a group stands away from the group before it; inside a
+   group the columns stay close. That unequal gutter is what makes the blocks
+   legible without a single added rule in the body of the list. */
+.inv .gStart { padding-left: 26px }
 .inv td { padding: 0 var(--gutter); height: var(--row-h); border-top: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle }
 .invRow:hover td { background: var(--bg-hover) }
 .invRowOpen td { background: var(--bg-hover) }
 
-/* The band carries what its schema holds, so it reads rather than divides.
-   An empty schema says so in the slot the counts would have filled, which
-   leaves the row grid below it a row grid. */
-.groupRow th {
-  padding: 0; text-align: left; border-top: 1px solid var(--border); background: var(--bg-primary);
+/* A schema is the page's second level and is set as one: its name in the
+   section step, its catalog receding before it, and — the part that earns
+   the band — its subtotals standing in the very columns they total. Reading
+   down the rows column gives a table's share and its schema's share in one
+   movement, which is the only reason to section the list at all. */
+.groupRow th, .groupRow td {
+  padding: 0; height: 52px; vertical-align: bottom;
+  border-top: 1px solid var(--border); background: var(--bg-primary);
 }
-.schemaBody:first-of-type .groupRow th { border-top: 0 }
+.groupRow th { text-align: left }
+.schemaBody:first-of-type .groupRow th, .schemaBody:first-of-type .groupRow td { border-top: 0 }
 /* Scoped to one schema there is no band, so the first row would draw its own
    rule directly under the head's and thicken it. */
 .schemaBody:first-of-type tr:first-child td { border-top: 0 }
-/* The band uses the same gutters as the cells it crosses, so its name starts
-   on the column of names and its figures end on the column of figures. */
-.groupBand { display: flex; align-items: center; gap: 6px 20px; min-height: 36px; padding: 0 var(--gutter); flex-wrap: wrap }
-.groupName { min-width: 0; font: 600 var(--fs-label)/1.4 Inter, sans-serif; letter-spacing: -.005em; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
-.groupCatalog { font-weight: 500; color: var(--text-muted) }
-.groupMeta {
-  margin-left: auto; display: inline-flex; align-items: center; gap: 18px; flex-shrink: 0;
-  font: 500 var(--fs-micro)/1.4 Inter, sans-serif; font-variant-numeric: tabular-nums lining-nums; color: var(--text-muted);
+.groupBand { display: flex; align-items: baseline; gap: 6px 14px; padding: 0 var(--gutter) 9px 0; flex-wrap: wrap; min-width: 0 }
+.groupName {
+  min-width: 0; font: 600 var(--fs-section)/1.3 Inter, sans-serif; letter-spacing: -.015em;
+  color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.groupNum { font-variant-numeric: tabular-nums lining-nums }
-.groupQuiet { color: var(--text-faint) }
-/* The two things that can be done with an empty schema, offered where its
-   counts would have been: register the first table into it, or take it back
-   out. A schema that holds tables offers neither, because the Engine refuses
-   to remove it and the list below it is already the way into it. */
+.groupCatalog { font: 500 var(--fs-label) Inter, sans-serif; color: var(--text-muted) }
+.groupCatalog::after { content: "."; }
+.groupHeld { font: 500 var(--fs-micro)/1.4 Inter, sans-serif; font-variant-numeric: tabular-nums lining-nums; color: var(--text-muted) }
+.groupNarrow { display: none }
+.groupRow .groupNum {
+  padding-bottom: 10px;
+  font: 500 var(--fs-label)/1.4 Inter, sans-serif; font-variant-numeric: tabular-nums lining-nums;
+  color: var(--text-secondary);
+}
+.groupTail { padding: 0 0 9px var(--gutter) !important; text-align: right }
+/* The two things that can be done with an empty schema, offered in the place
+   its subtotals would have been: register the first table into it, or take it
+   back out. A schema that holds tables offers neither, because the Engine
+   refuses to remove it and the list below it is already the way into it. */
+.groupActions { display: inline-flex; align-items: baseline; gap: 16px; flex-wrap: wrap; justify-content: flex-end }
 .groupAction {
-  padding: 0; border: 0; background: none; cursor: pointer;
+  padding: 0; border: 0; background: none; cursor: pointer; white-space: nowrap;
   font: 600 var(--fs-micro)/1.4 Inter, sans-serif; color: var(--text-secondary); text-decoration: underline;
   text-underline-offset: 3px; text-decoration-color: var(--border-hover);
 }
@@ -332,22 +356,42 @@
 
 /* Names hold the left edge; everything measured holds the right one. Nothing
    is stacked: a second line inside a cell reads as cramped, not as dense.
-   Every measured column is sized to the widest reading it can hold — a count
-   of hundreds of millions, a size in TiB — and the name column takes all the
-   width that is left, because the name is what a reader came to read. */
-.cName { width: auto; min-width: 0; padding-left: 0 !important }
-.cFormat { width: 118px; text-align: right; color: var(--text-secondary) }
-.cRows { width: 124px; text-align: right; font-variant-numeric: tabular-nums lining-nums; color: var(--text-primary) }
-.cSize { width: 92px; text-align: right; font-variant-numeric: tabular-nums lining-nums; color: var(--text-secondary) }
-.cFiles { width: 58px; text-align: right; font-variant-numeric: tabular-nums lining-nums; color: var(--text-muted) }
+   Widths live on the column elements, because a two-line head with grouped
+   columns would otherwise have the group's width shared out equally among
+   the columns under it. Every measured column is sized to the widest reading
+   it can hold — a count of hundreds of millions, a size in TiB — and the
+   name column takes all the width that is left, because the name is what a
+   reader came to read and the slack after it is where its mass is drawn. */
+/* A column width here is the whole cell, gutters included, because that is
+   what a fixed layout gives a column element — so each is its longest
+   reading plus the gutters on either side of it, and a figure never arrives
+   as an ellipsis. */
+.colName { width: auto }
+.colFormat { width: 84px }
+.colRows { width: 132px }
+.colSize { width: 90px }
+.colFiles { width: 62px }
+.colChanged { width: 94px }
+.colMeasured { width: 82px }
+.colAnswer { width: 146px }
+
+.cName { position: relative; min-width: 0; padding-left: 0 !important }
+.cFormat { text-align: right; color: var(--text-secondary) }
+.cRows { text-align: right; font-variant-numeric: tabular-nums lining-nums; color: var(--text-primary) }
+.cSize { text-align: right; font-variant-numeric: tabular-nums lining-nums; color: var(--text-secondary) }
+.cFiles { text-align: right; font-variant-numeric: tabular-nums lining-nums; color: var(--text-muted) }
 /* Two times, not one. When the source last changed and when it was last
-   measured are different facts, and their disagreement is what stale means. */
-.cWhen { width: 86px; text-align: right; font-variant-numeric: tabular-nums lining-nums; color: var(--text-muted) }
-.cAnswer { width: 150px; text-align: right; padding-right: 0 !important }
+   measured are different facts, and their disagreement is what stale means,
+   so the head keeps them under one name rather than setting them out as two
+   unrelated columns that happen to hold times. */
+.cWhen { text-align: right; font-variant-numeric: tabular-nums lining-nums; color: var(--text-muted) }
+.cAnswer { text-align: right; padding-right: 0 !important }
 /* A figure the source has moved past is kept, because it is the only
    measurement there is, and quietened, so nobody reads it as current. */
 .cPast { color: var(--text-faint) }
-th.cFormat, th.cRows, th.cSize, th.cFiles, th.cWhen, th.cAnswer { text-align: right }
+/* Every head sits over the edge its figures sit on. */
+.inv thead th.cFormat, .inv thead th.cRows, .inv thead th.cSize,
+.inv thead th.cFiles, .inv thead th.cWhen, .inv thead th.cAnswer { text-align: right }
 th.cFormat .sortBtn, th.cRows .sortBtn, th.cSize .sortBtn, th.cWhen .sortBtn { justify-content: flex-end; width: 100% }
 .formatMark { margin-left: 7px; font-size: var(--fs-micro); color: var(--text-muted) }
 
@@ -372,6 +416,29 @@ th.cFormat .sortBtn, th.cRows .sortBtn, th.cSize .sortBtn, th.cWhen .sortBtn { j
 
 .nameLine { display: flex; align-items: center; gap: 7px; min-width: 0 }
 .tableName { font-weight: 500; color: var(--text-primary); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+
+/* Mass, as a rule under the name it belongs to.
+   A catalog whose largest table is five orders of magnitude bigger than its
+   smallest reports that nowhere if every row is drawn at the same weight, so
+   a row's share of what is being ranked runs under its own name — where the
+   eye already is, starting on the same left edge for every row, so the
+   column can be scanned down. It is the one bar on the page: nothing else
+   here gets a bar, a sketch of a trend or a tint.
+
+   Linear, against the whole of what is listed, because a curve drawn to make
+   the small tables look substantial would hide the asymmetry the page exists
+   to report. A measured table keeps a visible minimum instead; an unmeasured
+   one draws nothing, so "almost none of it" and "none at all" stay apart.
+   Grey, never the accent: the accent means a table that answers without
+   reading data, and mass is not that. */
+.massTrack {
+  position: absolute; left: 29px; right: var(--gutter); bottom: 7px; height: 3px;
+  pointer-events: none;
+}
+/* The minimum is a floor, not a reading: it says "measured, and almost none
+   of the lake", and the exact figure is in the same row two columns over. */
+.massFill { display: block; min-width: 10px; height: 3px; border-radius: 2px; background: var(--text-faint) }
+.invRow:hover .massFill { background: var(--text-muted) }
 /* An underline, not the accent: on this page the accent is reserved for a
    table that answers from precomputed values, and a hover is not that. */
 .tableName:hover { text-decoration: underline; text-underline-offset: 3px }
@@ -384,13 +451,21 @@ th.cFormat .sortBtn, th.cRows .sortBtn, th.cSize .sortBtn, th.cWhen .sortBtn { j
 /* The last cell says what a question over this table costs, in words rather
    than in a pill: a badge would read as a tag on the row, and this is the
    row's conclusion. Colour repeats what the words already say, so nothing
-   here depends on seeing it. */
+   here depends on seeing it.
+
+   Only an exception gets words. Most tables answer counts and bounds, and a
+   column that writes that out on every row buries the one or two that answer
+   more — so the ordinary reading is drawn as what it is, a baseline: a short
+   rule, named for a pointer and for a screen reader, and set out in full in
+   the row's own detail. */
 .answers { cursor: help; white-space: nowrap; font: 500 var(--fs-row)/1 Inter, sans-serif }
 .ansFast { color: var(--accent); font-weight: 600 }
 .ansBase { color: var(--text-muted) }
 .ansStale { color: var(--warning) }
 .ansNone { color: var(--text-faint) }
 .ansBad { color: var(--error) }
+/* The cell carries the reading for a pointer even when it shows no words. */
+td.cAnswer { cursor: help }
 
 /* The detail opens inside the row it belongs to, so the address a reader
    just read stays directly above what it describes. */
@@ -400,6 +475,9 @@ th.cFormat .sortBtn, th.cRows .sortBtn, th.cSize .sortBtn, th.cWhen .sortBtn { j
 .facts { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 7px 18px; margin: 0; font-size: var(--fs-row); line-height: 1.6 }
 .facts dt { color: var(--text-muted) }
 .facts dd { margin: 0; color: var(--text-secondary); overflow-wrap: anywhere }
+/* The reading the row's last cell drew as a rule, written out here in the one
+   place that has room for it, ahead of the sentence that explains it. */
+.factLead { color: var(--text-primary); font-weight: 600; margin-right: 7px }
 .factBad { color: var(--error) !important }
 .digest { margin-left: 8px; font: var(--fs-micro) var(--mono); color: var(--text-faint) }
 .aside { display: block; font-size: var(--fs-micro); line-height: 1.55; color: var(--text-muted) }
@@ -437,37 +515,53 @@ th.cFormat .sortBtn, th.cRows .sortBtn, th.cSize .sortBtn, th.cWhen .sortBtn { j
    Of the two times, "measured" survives the longest. It is the provenance of
    every figure in the row; "changed" only qualifies it, and once "changed" is
    gone the last cell already says the measurement is behind the source. */
+@container inv (max-width: 1120px) {
+  .inv .gStart { padding-left: 20px }
+}
 @container inv (max-width: 1000px) {
-  .inv .cFiles { width: 0; padding: 0; overflow: hidden; opacity: 0 }
+  .inv .colFiles { width: 0 }
+  .inv .cFiles { padding: 0; overflow: hidden; opacity: 0 }
 }
 @container inv (max-width: 940px) {
-  .inv .cChanged { width: 0; padding: 0; overflow: hidden; opacity: 0 }
+  .inv .colChanged { width: 0 }
+  .inv .cChanged { padding: 0; overflow: hidden; opacity: 0 }
+  .inv .gStart { padding-left: 16px }
 }
 @container inv (max-width: 870px) {
-  .inv .cFormat { width: 0; padding: 0; overflow: hidden; opacity: 0 }
+  .inv .colFormat { width: 0 }
+  .inv .cFormat { padding: 0; overflow: hidden; opacity: 0 }
+  .massTrack { display: none }
 }
 /* Once the measured columns go, the facts they carried reappear under the
    name — not before, or the row would state them twice. */
 @container inv (max-width: 700px) {
-  .inv .cRows, .inv .cSize { width: 0; padding: 0; overflow: hidden; opacity: 0 }
+  .inv .colRows, .inv .colSize { width: 0 }
+  .inv .cRows, .inv .cSize { padding: 0; overflow: hidden; opacity: 0 }
   .inv td { height: auto; padding-top: 9px; padding-bottom: 9px }
   /* The cell that says what a question costs keeps its full wording: it is
      the one cell a reader came for, and an ellipsis in it says nothing. */
-  .inv .cAnswer { width: 146px; padding-left: 10px }
+  .inv .colAnswer { width: 146px }
+  .inv .cAnswer { padding-left: 10px }
+  .groupRow .groupNum { padding-bottom: 0 }
+  .groupNarrow {
+    display: flex; flex-wrap: wrap; gap: 2px 12px; flex-basis: 100%;
+    font: 500 var(--fs-micro)/1.5 Inter, sans-serif; font-variant-numeric: tabular-nums lining-nums;
+    color: var(--text-muted);
+  }
   .narrowFacts { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; margin-left: 29px; font: 500 var(--fs-micro) Inter, sans-serif; font-variant-numeric: tabular-nums lining-nums; color: var(--text-muted) }
 }
-/* The band's two readings sit side by side while both can hold their
-   longest number, and stack when they cannot. The physical totals drop under
-   them rather than squeezing the readings out of their own column. */
-@container band (max-width: 880px) {
-  .position { grid-template-columns: minmax(0, 1fr); gap: 20px }
-  .physical { justify-items: start }
-  .physical div { justify-content: flex-start }
-  .physical dd { min-width: 0; text-align: left }
+/* The two readings hang at the two ends of the stratum while both ends are
+   far enough apart to read as ends. Stacked, they both read from the left,
+   and the trailing tick moves to the edge its figure now sits on. */
+/* The fraction wraps before it shrinks, and shrinks only once there is no
+   width left to wrap into. */
+@container band (max-width: 640px) {
+  .headAnswered, .headMeasured { font-size: 34px }
+  .headOver { font-size: 28px }
 }
-@container band (max-width: 560px) {
-  .readings { grid-template-columns: minmax(0, 1fr) }
-  .readingValue { font-size: 26px }
+@container band (max-width: 420px) {
+  .headAnswered, .headMeasured { font-size: 27px }
+  .headOver { font-size: 22px }
 }
 /* The toolbar is one line while it fits and two when it cannot: the title
    keeps its line and the controls keep theirs, as one group under it. */
@@ -680,22 +774,20 @@ th.cFormat .sortBtn, th.cRows .sortBtn, th.cSize .sortBtn, th.cWhen .sortBtn { j
   margin: 40px 0 0; padding: 26px 0 0;
   border-top: 1px solid var(--border);
 }
-.systemHead { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px 32px; align-items: start }
+/* The heading names the thing; a label above it saying "system catalog"
+   would be the page telling a reader what the next line is about to tell
+   them. The three standing facts follow the prose as one line, in the same
+   voice the lake's own facts are written in, so the page has one way of
+   stating a fact rather than two. */
+.systemHead { min-width: 0 }
 .systemIntro { min-width: 0; max-width: 62ch }
-.systemEyebrow { margin: 0 0 4px; font: 500 var(--fs-micro)/1 Inter, sans-serif; color: var(--text-muted) }
 .systemTitle { margin: 0; font: 600 var(--fs-title)/26px Inter, sans-serif; letter-spacing: -.02em; color: var(--text-primary) }
 .systemBody { margin: 8px 0 0; font: var(--fs-row)/1.65 Inter, sans-serif; color: var(--text-secondary) }
-
-/* Three facts, read as a column so the longest value cannot push the others
-   out of line, and sized as labels rather than as readings: this panel has
-   nothing to measure, so it has no figures. */
-.systemFacts { display: grid; gap: 10px 0; margin: 0; justify-items: end; text-align: right }
-.systemFacts div { display: grid; gap: 2px }
-.systemFacts dt { font: var(--fs-micro)/1 Inter, sans-serif; color: var(--text-muted) }
-.systemFacts dd { margin: 0; font: 500 var(--fs-label)/1.4 Inter, sans-serif; color: var(--text-secondary); white-space: nowrap }
+.systemFacts { margin: 12px 0 0; font: var(--fs-label)/1.6 Inter, sans-serif; color: var(--text-muted); max-width: 86ch }
+.systemFacts b { font-weight: 600; color: var(--text-secondary) }
 .systemMono { font-family: var(--mono); font-size: var(--fs-label); color: var(--text-primary) }
 
-.systemTableWrap { margin-top: 18px }
+.systemTableWrap { margin-top: 20px }
 .systemTable { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: var(--fs-row) }
 .systemTable thead th {
   height: 36px; padding: 0 var(--gutter) 0 0; text-align: left;
@@ -703,7 +795,7 @@ th.cFormat .sortBtn, th.cRows .sortBtn, th.cSize .sortBtn, th.cWhen .sortBtn { j
   color: var(--text-muted); background: transparent; border-bottom: 1px solid var(--border); white-space: nowrap;
 }
 .systemTable tbody th, .systemTable tfoot th, .systemTable td {
-  padding: 10px var(--gutter) 10px 0; border-top: 1px solid var(--border); vertical-align: top; text-align: left; font-weight: 400;
+  padding: 8px var(--gutter) 8px 0; border-top: 1px solid var(--border); vertical-align: top; text-align: left; font-weight: 400;
 }
 .systemTable tbody tr:hover th, .systemTable tbody tr:hover td { background: var(--bg-hover) }
 .systemTable tfoot th, .systemTable tfoot td { color: var(--text-secondary) }
@@ -722,7 +814,9 @@ th.cFormat .sortBtn, th.cRows .sortBtn, th.cSize .sortBtn, th.cWhen .sortBtn { j
   width: 124px; text-align: right; padding-right: 0 !important;
   font-variant-numeric: tabular-nums lining-nums; color: var(--text-primary); white-space: nowrap;
 }
-.systemTable th.systemCount { text-align: right }
+/* Stated at this specificity because the shared cell rule above sets every
+   body cell left, and a count read down a column has to end on one edge. */
+.systemTable th.systemCount, .systemTable td.systemCount { text-align: right }
 .systemTable tfoot td.systemCount { font-weight: 600 }
 
 /* Narrow, the facts fall under the prose they qualify and read from the same
@@ -731,6 +825,5 @@ th.cFormat .sortBtn, th.cRows .sortBtn, th.cSize .sortBtn, th.cWhen .sortBtn { j
 .systemAbsent { margin: 16px 0 0; font: var(--fs-row)/1.6 Inter, sans-serif; color: var(--text-muted); max-width: 72ch }
 
 @container sys (max-width: 700px) {
-  .systemHead { grid-template-columns: minmax(0, 1fr) }
-  .systemFacts { justify-items: start; text-align: left; grid-template-columns: repeat(auto-fit, minmax(150px, auto)); gap: 12px 28px }
+  .systemCount { width: 92px }
 }
