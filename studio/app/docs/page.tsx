@@ -118,6 +118,7 @@ export default function DocsIntro() {
         <li><strong>Studio</strong> — SQL Lab, charts, dashboards, semantic datasets, and data sources.</li>
         <li><strong>Intelligence</strong> — the Data Language Model, NL→SQL, and freshness-based routing.</li>
         <li><strong>Engine</strong> — the Rust engine manual: architecture, SQL, distributed runtime, storage, and memory.</li>
+        <li><strong>CLI</strong> — installation, authenticated connections, interactive commands, catalog administration, and automation.</li>
         <li><strong>Deploy &amp; Operate</strong> — deployment, auth and RBAC, operations, troubleshooting, upgrades, and releases.</li>
         <li><strong>Research</strong> — technical papers, the patent disclosure, and comparisons with other engines.</li>
       </ul>
