@@ -939,3 +939,12 @@ ClickHouse parity goal remains open until the direct worker-local grouped-state
 exchange is implemented and measured. Current qualified references remain
 ClickHouse q33 **4.552 s** / q35 **6.316 s** versus Kaveon's approximately
 q33 **19--21 s** / q35 **13--16 s** on this two-worker host.
+
+The first direct-routing prototype is now available behind
+`KAVEON_DIRECT_GROUPED_EXCHANGE=1`. It routes the canonical binary group-key
+frame once at the source instead of running Arrow row conversion and a second
+selection pass in each merge lane. The route test passes and q35 remains exact;
+initial end-to-end controls were q33 **22.3 s** and q35 **18.0 s**, so the gate
+stays disabled by default. It is a qualified experiment for the next step,
+not a ClickHouse win; avoiding the Arrow `take` copies in this route is still
+required before enabling it.

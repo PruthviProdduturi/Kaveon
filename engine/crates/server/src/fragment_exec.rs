@@ -1249,13 +1249,24 @@ pub(crate) fn compile_final_aggregate_parallel(
         )
     });
     let partitioned = source_threaded && has_text_key && !has_unsigned_key;
+    // Grouped partials expose one canonical Binary `group_keys` frame. Route
+    // that frame directly when possible: the final merge's equality parser
+    // consumes the same bytes, so Arrow row conversion and the later
+    // ThreadSelector hash are both avoided. Keep the established text path
+    // as the fallback for non grouped-state callers.
+    let encoded_partitioned = source_threaded
+        && std::env::var("KAVEON_DIRECT_GROUPED_EXCHANGE").as_deref() == Ok("1")
+        && sources
+            .schema()
+            .field_with_name("group_keys")
+            .is_ok_and(|field| matches!(field.data_type(), DataType::Binary));
     // `broadcast_partitioned` already routes each grouped-state row to the
     // final worker that owns its key. Applying the final merge's independent
     // ThreadSelector after that routing would hash the encoded key a second
     // time and silently discard rows that do not happen to map to the same
     // worker. Keep selection for the broadcast path only; the partitioned
     // path is already disjoint by construction.
-    let final_selection = (!partitioned).then_some(());
+    let final_selection = (!partitioned && !encoded_partitioned).then_some(());
     // No thread emits before every thread has finished merging: a
     // thread's output would otherwise compete for the budget with its
     // siblings' growing tables.
@@ -1280,7 +1291,16 @@ pub(crate) fn compile_final_aggregate_parallel(
                 None => Ok(merged),
             }
         });
-    let partials = if partitioned {
+    let partials = if encoded_partitioned {
+        kaveon_exec::local_parallel::ParallelPartials::broadcast_partitioned_encoded(
+            sources,
+            schema,
+            "group_keys".to_string(),
+            operator,
+            pool.clone(),
+            parallelism,
+        )?
+    } else if partitioned {
         kaveon_exec::local_parallel::ParallelPartials::broadcast_partitioned(
             sources,
             schema,

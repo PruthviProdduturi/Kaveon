@@ -24,6 +24,8 @@ use crate::{
     spill::SpillManager,
 };
 use arrow::{
+    array::{Array, BinaryArray, UInt32Builder},
+    compute::take,
     datatypes::{DataType, SchemaRef},
     record_batch::RecordBatch,
 };
@@ -447,6 +449,7 @@ impl BatchOperator for ChainedSources {
 /// the thread its encoded key hashes to. Independent of the exchange's
 /// partitioning of the same keys (another hash) and of any spill
 /// partitioning nested inside (another salt).
+#[derive(Clone)]
 pub struct ThreadSelector {
     hasher: ahash::RandomState,
     workers: usize,
@@ -497,7 +500,7 @@ pub struct ParallelPartials {
     pumps: Vec<JoinHandle<()>>,
     /// One input channel per thread; empty once the source is drained.
     senders: Vec<SyncSender<QueuedBatch>>,
-    partitioner: Option<HashPartitioner>,
+    partitioner: Option<SourcePartitioner>,
     input_queue: Option<Arc<QueueBudget>>,
     round_robin: usize,
     /// Parts of the current source batch not yet handed to their thread.
@@ -533,6 +536,54 @@ enum Dispatch {
     /// it enters the merge workers. This is used only where the encoded key
     /// hash is cheaper than broadcasting a wide text-key partial batch.
     BroadcastPartitioned { keys: Vec<String> },
+    /// Grouped aggregate exchange rows already carry their canonical key in
+    /// `group_keys`. Route that byte frame directly; rebuilding an Arrow row
+    /// representation just to hash it duplicates the final merge's work.
+    BroadcastPartitionedEncoded { key: String },
+}
+
+enum SourcePartitioner {
+    Arrow(HashPartitioner),
+    Encoded { column: usize, selector: ThreadSelector },
+}
+
+impl SourcePartitioner {
+    fn partition(&self, batch: &RecordBatch) -> Result<Vec<RecordBatch>> {
+        match self {
+            Self::Arrow(partitioner) => partitioner.partition(batch),
+            Self::Encoded { column, selector } => {
+                let values = batch
+                    .column(*column)
+                    .as_any()
+                    .downcast_ref::<BinaryArray>()
+                    .ok_or_else(|| error("encoded grouped key must be Binary"))?;
+                let mut indices = (0..selector.workers)
+                    .map(|_| UInt32Builder::new())
+                    .collect::<Vec<_>>();
+                for row in 0..batch.num_rows() {
+                    if values.is_null(row) {
+                        return Err(error("encoded grouped key cannot be null"));
+                    }
+                    let worker = selector.thread_of(values.value(row));
+                    indices[worker].append_value(u32::try_from(row).map_err(|_| {
+                        error("record batch exceeds Arrow UInt32 row capacity")
+                    })?);
+                }
+                indices
+                    .into_iter()
+                    .map(|mut indices| {
+                        let indices = indices.finish();
+                        let columns = batch
+                            .columns()
+                            .iter()
+                            .map(|column| take(column.as_ref(), &indices, None))
+                            .collect::<std::result::Result<Vec<_>, _>>()?;
+                        Ok(RecordBatch::try_new(batch.schema(), columns)?)
+                    })
+                    .collect()
+            }
+        }
+    }
 }
 
 impl ParallelPartials {
@@ -709,6 +760,31 @@ impl ParallelPartials {
         )
     }
 
+    /// Like `broadcast_partitioned`, but route the canonical grouped-state
+    /// key bytes directly. The state key is already the equality frame used by
+    /// the final merge, so this avoids Arrow row conversion and a second key
+    /// materialisation before the merge workers receive their disjoint rows.
+    pub fn broadcast_partitioned_encoded(
+        sources: Sources,
+        schema: SchemaRef,
+        key: String,
+        operator: ThreadOperator,
+        pool: QueryMemoryPool,
+        workers: usize,
+    ) -> Result<Self> {
+        if key.is_empty() {
+            return Err(error("encoded partition key cannot be empty"));
+        }
+        Self::over(
+            sources,
+            schema,
+            Dispatch::BroadcastPartitionedEncoded { key },
+            operator,
+            pool,
+            workers,
+        )
+    }
+
     fn over(
         sources: Sources,
         schema: SchemaRef,
@@ -835,15 +911,22 @@ impl ParallelPartials {
                 if keys.is_empty() || self.workers == 1 || low_cardinality_keys {
                     None
                 } else {
-                    Some(HashPartitioner::try_new_salted(
+                    Some(SourcePartitioner::Arrow(HashPartitioner::try_new_salted(
                         &self.source_schema,
                         keys,
                         self.workers,
                         crate::exchange::THREAD_PARTITION_SALT,
-                    )?)
+                    )?))
                 }
             }
             Dispatch::Broadcast | Dispatch::BroadcastPartitioned { .. } => None,
+            Dispatch::BroadcastPartitionedEncoded { key } => {
+                let column = crate::expr_eval::resolve_column_index(&self.source_schema, key)?;
+                Some(SourcePartitioner::Encoded {
+                    column,
+                    selector: ThreadSelector::new(self.workers),
+                })
+            }
         };
         // Sources of their own threads: each reads its source and hands
         // every batch to every thread; the threads see the end of input
@@ -868,12 +951,19 @@ impl ParallelPartials {
                         let result = catch_worker_failure(|| {
                             let source_partitioner = match &dispatch {
                                 Dispatch::BroadcastPartitioned { keys } => {
-                                    Some(HashPartitioner::try_new_salted(
+                                    Some(SourcePartitioner::Arrow(HashPartitioner::try_new_salted(
                                         &schema,
                                         keys,
                                         senders.len(),
                                         crate::exchange::THREAD_PARTITION_SALT,
-                                    )?)
+                                    )?))
+                                }
+                                Dispatch::BroadcastPartitionedEncoded { key } => {
+                                    let column = crate::expr_eval::resolve_column_index(&schema, key)?;
+                                    Some(SourcePartitioner::Encoded {
+                                        column,
+                                        selector: ThreadSelector::new(senders.len()),
+                                    })
                                 }
                                 _ => None,
                             };
@@ -948,7 +1038,11 @@ impl ParallelPartials {
                         ));
                     }
                 }
-                (Dispatch::BroadcastPartitioned { .. }, _) => {
+                (
+                    Dispatch::BroadcastPartitioned { .. }
+                        | Dispatch::BroadcastPartitionedEncoded { .. },
+                    _,
+                ) => {
                     return Err(error("partitioned source dispatch reached local source"));
                 }
                 (Dispatch::Keyed { .. }, Some(partitioner)) => {
@@ -1208,7 +1302,7 @@ fn run_pump(
     pool: &QueryMemoryPool,
     stopped: &AtomicBool,
     pressure: &Pressure,
-    partitioner: Option<&HashPartitioner>,
+    partitioner: Option<&SourcePartitioner>,
 ) -> Result<()> {
     let mut source = opener()?;
     if source.schema() != schema {
@@ -2479,6 +2573,46 @@ mod tests {
         );
         drop(parallel);
         assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn encoded_source_partitioner_routes_each_state_key_once() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("group_keys", DataType::Binary, false),
+            arrow::datatypes::Field::new("payload", DataType::Int64, false),
+        ]));
+        let keys = (0..256)
+            .map(|value| format!("fixed-key-{value}").into_bytes())
+            .collect::<Vec<_>>();
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(arrow::array::BinaryArray::from_iter_values(keys.iter())),
+                Arc::new(Int64Array::from_iter_values(0..256)),
+            ],
+        )
+        .unwrap();
+        let selector = ThreadSelector::new(4);
+        let partitioner = SourcePartitioner::Encoded {
+            column: 0,
+            selector: ThreadSelector::new(4),
+        };
+        let parts = partitioner.partition(&batch).unwrap();
+        assert_eq!(parts.len(), 4);
+        let mut seen = std::collections::HashMap::new();
+        for (worker, part) in parts.iter().enumerate() {
+            let values = part
+                .column(0)
+                .as_any()
+                .downcast_ref::<arrow::array::BinaryArray>()
+                .unwrap();
+            for row in 0..values.len() {
+                let key = values.value(row).to_vec();
+                assert_eq!(selector.thread_of(&key), worker);
+                assert!(seen.insert(key, worker).is_none());
+            }
+        }
+        assert_eq!(seen.len(), keys.len());
     }
 
     /// A request raised on a thread of its own, `since` read as a source
