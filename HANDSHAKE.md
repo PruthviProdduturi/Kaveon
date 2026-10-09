@@ -55,6 +55,66 @@ cutover and PostgreSQL scale-down/deletion. Start with
 local commands recorded in the continuation brief.
 
 
+## Claude update — "Loading data context" is one read, not seventeen — October 8, 2026
+
+The chat workbench disabled its composer behind a placeholder reading "Loading
+your data context" for seconds at a time. Measured against the deployed API,
+medians over seven runs: the page issued fourteen requests in two stages — four
+in parallel (of which `/metadata/summary` cost 1109 ms and 121 KiB to supply one
+scalar the dataset list already carries), then a fan-out of one
+`GET /datasets/{id}` per dataset plus a duplicate, nine datasets today. Time to
+the composer accepting a keystroke: **2359 ms** direct from a fast host, and in
+the browser every one of those fourteen also pays the `/api/kaveon` proxy's
+~188 ms Vercel leg, ten of them queued at once — which is the ten seconds as
+reported.
+
+The data the fan-out gathered feeds `findBestSchema`, the *fallback* in-browser
+parser. The primary path, `POST /dlm/ask`, routes server-side and needs none of
+it. The page blocked its primary path on data only its fallback wanted.
+
+Now: `GET /datasets/schemas` (Viewer) answers every visible dataset's askable
+shape — qualified table, column names and types, metric names and expressions —
+in one read, and the composer no longer waits on it at all (a send that reaches
+the fallback first awaits the one in-flight read). Three parallel requests on
+mount, **531 ms** wall, 9.3 KiB in place of 26.3 KiB. Parity verified against all
+nine live dataset documents: identical tables, columns, types and metrics.
+
+Two more on the same pages:
+
+- `GET /dlm/coverage`, the "available context" strip, was **2813–3110 ms** across
+  eight consecutive calls: `engine.coverage` ran a sample read and a count read
+  per artifact — seventeen control-plane reads for eight artifacts. One bulk
+  value-index read now serves them all. The same loop also attempted an exact
+  row count per artifact — a dataset-document read plus a COUNT(*) per table
+  through the Engine, written back — and when a source cannot answer (an
+  external database has no native catalog) nothing is written, so the attempt
+  repeated on every load for ever. A banner read no longer measures or writes;
+  exact counts are established at DLM build/ANALYZE, and the banner reports
+  what the artifact recorded or reports it absent. Every artifact on the
+  deployment already carries `kaveon_engine_exact`, so nothing is lost today.
+  **This landed in commit `7a937675`**, which swept up the uncommitted
+  `api/dlm/engine.py` change under another message; its tests are in
+  `api/dlm/test_context_banner.py`.
+- The chart editor was a three-deep serial chain, **1610 ms**, whose first leg
+  was the whole chart library with thumbnails (1000 ms, 72 KiB) read only to
+  recover one boolean. It is three parallel reads now — the chart, `/favorites`
+  (375 ms, 0.5 KiB), and the visibility-scoped dataset list that decides whether
+  this caller may see the chart's dataset — **532 ms**. The access check is
+  unchanged; `dataset_name` on the chart is deliberately not visibility-scoped
+  and was not substituted for it. Five `console.log` calls and an emoji in them
+  are gone.
+
+Claude-owned files only: `api/routers/datasets.py`, `api/services/datasets.py`,
+`api/dlm/engine.py`, `studio/app/home/page.tsx`,
+`studio/app/charts/[id]/page.tsx`, `studio/components/ContextBanner.tsx`,
+`studio/hooks/useDatasetSchemas.ts`, plus two new test files. No Engine crate
+touched. Nothing is cached: `/datasets/schemas` is a per-request projection of
+the dataset documents and carries the no-store headers, so no freshness
+contract is involved.
+
+Gates: `python -m pytest -q` in `api` (1078 passed, 170 subtests),
+`npx tsc --noEmit`, `npx next lint` on the touched files — all clean.
+
 ## Claude update — Catalog is now a table inventory — September 22, 2026
 
 `/catalog` was a tree, a header card and a per-catalog card that between them

@@ -301,78 +301,69 @@ const ChartDetailPage: React.FC = () => {
   }, [isAuthenticated]);
 
   useEffect(() => {
-    console.log('[ChartPage] Fetch effect triggered:', {
-      isAuthenticated,
-      chartId,
-      refValue: fetchedChartIdRef.current,
-    });
-
     if (!isAuthenticated || !chartId) return;
-
-    // Prevent duplicate fetches - use a flag that persists across React Strict Mode double-mounting
-    if (fetchedChartIdRef.current === chartId) {
-      console.log('[ChartPage] ⛔ Skipping duplicate fetch - already fetched chartId:', chartId);
-      return;
-    }
-
-    console.log('[ChartPage] ✓ Proceeding with fetch for chartId:', chartId);
-
-    // Set the flag IMMEDIATELY before any async operations to prevent race conditions
+    // One load per chart id, held across a Strict Mode double mount.
+    if (fetchedChartIdRef.current === chartId) return;
     fetchedChartIdRef.current = chartId;
-    console.log('[ChartPage] Set ref to:', fetchedChartIdRef.current);
 
     setIsLoading(true);
     setError(null);
 
     const userEmail = account?.email || account?.username || null;
+    const identity = userEmail ? { 'x-user-email': userEmail } : undefined;
 
-    // Step 1: Fetch chart summary to get dataset_id and favorite status
-    msalFetch(`${API_BASE}/api/v1/charts/summary`, {
-      headers: userEmail ? { 'x-user-email': userEmail } : undefined,
-    })
-      .then(res => res.ok ? res.json() : Promise.reject("Failed to load charts"))
-      .then((data) => {
-        const found = (data.recent || []).find((c: any) => String(c.id) === String(chartId));
-        if (!found) throw new Error("Chart not found");
-        setIsFavorite(!!found.favorite);
-        // Step 2: Fetch full chart details
-        return msalFetch(`${API_BASE}/api/v1/charts/${chartId}`)
-          .then(res => res.ok ? res.json() : Promise.reject("Failed to load chart details"))
-          .then((chartDetail) => {
-            setChart(chartDetail);
-            // Record in recents (id prefixed by type, matching delete cleanup).
-            if (chartDetail?.name) {
-              addRecent({ id: `chart-${chartId}`, label: chartDetail.name, href: `/charts/${chartId}`, type: "chart" });
-            }
-            // Step 3: Fetch dataset details if dataset_id exists
-            if (chartDetail.dataset_id) {
-              // Fetch all summaries and filter for the correct one
-              return msalFetch(`${API_BASE}/api/v1/datasets/summary`)
-                .then(res => res.ok ? res.json() : Promise.reject("Failed to load dataset details"))
-                .then((data) => {
-                  const found = (data.recent || []).find((d: any) => d.id === chartDetail.dataset_id);
-                  if (found) {
-                    setDataset({
-                      id: found.id,
-                      name: found.dataset_name,
-                      description: found.description || null
-                    });
-                  } else {
-                    // Dataset not found - show error instead of blank screen
-                    throw new Error(`Dataset (ID: ${chartDetail.dataset_id}) not found or you don't have access to it.`);
-                  }
-                });
-            } else {
-              // Chart has no dataset - set error
-              throw new Error("This chart has no associated dataset.");
-            }
-          });
-      })
-      .catch((e) => {
-        setError(e.message || "Failed to load chart");
-      })
-      .finally(() => setIsLoading(false));
-  }, [isAuthenticated, chartId, account?.email]);
+    // Three independent reads. The chart itself, the caller's favourites, and
+    // the dataset list that decides whether this caller may see the chart's
+    // dataset — none of them needs an answer from another, so none of them
+    // waits for one. This used to be a three-deep chain whose first leg was
+    // the whole chart library, thumbnails included, read only to recover one
+    // boolean the favourites list answers in a fraction of the payload.
+    const load = async () => {
+      try {
+        const [chartRes, favRes, datasetRes] = await Promise.all([
+          msalFetch(`${API_BASE}/api/v1/charts/${chartId}`),
+          msalFetch(`${API_BASE}/api/v1/favorites`, { headers: identity }),
+          msalFetch(`${API_BASE}/api/v1/datasets/summary`),
+        ]);
+
+        // A chart this caller may not read is indistinguishable from one that
+        // does not exist, and the API answers both the same way.
+        if (chartRes.status === 404) throw new Error("Chart not found");
+        if (!chartRes.ok) throw new Error("Failed to load chart details");
+        const chartDetail = (await chartRes.json()) as ChartDetail;
+        setChart(chartDetail);
+        if (chartDetail?.name) {
+          // Recents id is prefixed by type, matching delete cleanup.
+          addRecent({ id: `chart-${chartId}`, label: chartDetail.name, href: `/charts/${chartId}`, type: "chart" });
+        }
+
+        if (favRes.ok) {
+          const favorites = (await favRes.json()) as { kind?: string; id?: string | number }[];
+          setIsFavorite(
+            Array.isArray(favorites)
+            && favorites.some(f => f.kind === "chart" && String(f.id) === String(chartId)),
+          );
+        }
+
+        if (!chartDetail.dataset_id) throw new Error("This chart has no associated dataset.");
+        if (!datasetRes.ok) throw new Error("Failed to load dataset details");
+        const datasetList = (await datasetRes.json()) as { recent?: any[] };
+        // The dataset list is visibility-scoped, so its silence is an answer:
+        // this caller may not read the dataset the chart is built on.
+        const found = (datasetList.recent || []).find((d: any) => String(d.id) === String(chartDetail.dataset_id));
+        if (!found) {
+          throw new Error(`Dataset (ID: ${chartDetail.dataset_id}) not found or you don't have access to it.`);
+        }
+        setDataset({ id: found.id, name: found.dataset_name, description: found.description || null });
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to load chart");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    void load();
+  }, [isAuthenticated, chartId, account?.email, account?.username, addRecent]);
 
   // Favorite toggle handler
   const handleToggleFavorite = async () => {
@@ -396,14 +387,9 @@ const ChartDetailPage: React.FC = () => {
         }
       );
 
-      if (!res.ok) {
-        // Revert on error
-        setIsFavorite(!newFavoriteState);
-        throw new Error("Failed to update favorite status");
-      }
-    } catch (error) {
-      console.error("Error toggling favorite:", error);
-      // Revert on error
+      // The star reverts to what the server still holds if the write did not land.
+      if (!res.ok) setIsFavorite(!newFavoriteState);
+    } catch {
       setIsFavorite(!newFavoriteState);
     }
   };
