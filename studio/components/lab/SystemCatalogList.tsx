@@ -21,7 +21,11 @@ import {
   SYSTEM_CATALOG_LABEL, SystemCatalogError, SystemCatalogReading, fetchSystemCatalog,
 } from "../../utils/systemCatalog";
 
-export function SystemCatalogList({ isAdmin }: { isAdmin: boolean }) {
+export function SystemCatalogList({ isAdmin, identifier }: {
+  isAdmin: boolean;
+  /** What a statement calls this catalog, from the Engine's own source record. */
+  identifier: string;
+}) {
   const [reading, setReading] = useState<SystemCatalogReading | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -53,7 +57,15 @@ export function SystemCatalogList({ isAdmin }: { isAdmin: boolean }) {
   if (error) {
     return (
       <div className="system-catalog">
-        <p className="system-catalog__note" role="alert">{error}</p>
+        <p className="system-catalog__note">
+          The platform&rsquo;s own records, written only through {SYSTEM_CATALOG_LABEL}&rsquo;s
+          transaction boundary. A statement names this catalog{" "}
+          <code className="system-catalog__prefix">{identifier}</code>; KaveonDB is what the
+          product calls it.
+        </p>
+        <p className="system-catalog__note" role="alert">
+          {error} Its record families are not listed here until this server answers for them.
+        </p>
       </div>
     );
   }
@@ -67,7 +79,8 @@ export function SystemCatalogList({ isAdmin }: { isAdmin: boolean }) {
       <p className="system-catalog__note">
         The platform&rsquo;s own records, written only through {SYSTEM_CATALOG_LABEL}&rsquo;s
         transaction boundary. These tables are served by its record API, not by the
-        query planner, so they cannot be selected from here.
+        query planner, so they cannot be selected from here. A statement names the
+        catalog <code className="system-catalog__prefix">{identifier}</code>.
       </p>
       {!reading && <p className="system-catalog__note">Reading…</p>}
       {reading && (

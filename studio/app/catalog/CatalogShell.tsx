@@ -205,8 +205,8 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
                   if (isSystemCatalog(name)) {
                     return (
                       <SystemNode
-                        key={name} open={isOpen} isAdmin={isAdmin} tables={systemTables}
-                        failure={systemError} onToggle={() => toggle(name)}
+                        key={name} identifier={name} open={isOpen} isAdmin={isAdmin}
+                        tables={systemTables} failure={systemError} onToggle={() => toggle(name)}
                       />
                     );
                   }
@@ -284,22 +284,26 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
  * which is the marking: a reader finds out it is read-only by there being
  * nothing to press, not by a badge saying so.
  *
- * The one word that distinguishes it sits where every other catalog row shows
- * its schema count — the same slot, the same size, the same muted colour. A
- * reader without the administrator role sees the catalog and one line saying
- * why it lists nothing, rather than an empty node or no node at all.
+ * The name the product uses and the name a statement uses are not the same
+ * word, so the node carries both: KaveonDB leads, and the identifier the
+ * Engine resolves sits in the slot every other catalog uses for its schema
+ * count. It is read from the catalog record rather than written here, so a
+ * rename on the Engine arrives without a change in Studio. A reader without
+ * the administrator role sees the catalog and one line saying why it lists
+ * nothing, rather than an empty node or no node at all.
  */
-function SystemNode({ open, isAdmin, tables, failure, onToggle }: {
-  open: boolean; isAdmin: boolean; tables: SystemTable[] | null;
+function SystemNode({ identifier, open, isAdmin, tables, failure, onToggle }: {
+  identifier: string; open: boolean; isAdmin: boolean; tables: SystemTable[] | null;
   failure: string | null; onToggle: () => void;
 }) {
   return (
     <div>
-      <button type="button" className={`${s.node} ${s.nodeTop}`} aria-expanded={open} onClick={onToggle}>
+      <button type="button" className={`${s.node} ${s.nodeTop}`} aria-expanded={open} onClick={onToggle}
+        title={`${SYSTEM_CATALOG_LABEL} resolves as ${identifier} in a statement.`}>
         <Twist open={open} />
         <span className={s.kind}><i className="fas fa-database" aria-hidden="true" /></span>
         <span className={s.nodeLabel}>{SYSTEM_CATALOG_LABEL}</span>
-        <span className={s.nodeCount}>system</span>
+        <span className={`${s.nodeCount} ${s.nodeIdent}`}>{identifier}</span>
       </button>
       {open && !isAdmin && (
         <div className={`${s.treeNote} ${s.level1}`}>

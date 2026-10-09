@@ -2372,7 +2372,12 @@ return;
               {/* The platform's own catalog replaces the tree rather than
                   joining it, so the panel never mixes rows a statement can
                   be started from with rows it cannot. */}
-              {onSystemCatalog && <SystemCatalogList isAdmin={isAdmin} />}
+              {onSystemCatalog && (
+                <SystemCatalogList
+                  isAdmin={isAdmin}
+                  identifier={currentEngineSource?.catalog ?? ""}
+                />
+              )}
               {!onSystemCatalog && isLoadingTables && (
                 <div className="loading-tables">
                   <i className="fas fa-spinner fa-spin" />

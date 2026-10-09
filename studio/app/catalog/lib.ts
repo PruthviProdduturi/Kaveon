@@ -124,19 +124,30 @@ export function bytes(value: number | null | undefined): string {
   return `${size >= 100 ? Math.round(size) : size.toFixed(size >= 10 ? 1 : 2)} ${units[unit]}`;
 }
 
-/** How long ago, in the coarsest unit that still says something: 4 min, 6 h, 12 d. */
-export function since(ms: number | null | undefined): string {
+/**
+ * How long ago, in the coarsest unit that still says something: 4 min, 6 h,
+ * 12 d. Bare, for a column whose heading already says the figures are times —
+ * "ago" in every cell is a word repeated down the page and the width it takes
+ * is width the elapsed figure needs.
+ */
+export function elapsed(ms: number | null | undefined): string {
   if (typeof ms !== "number" || !Number.isFinite(ms)) return "—";
   const seconds = Math.max(0, Math.round((Date.now() - ms) / 1000));
   if (seconds < 90) return "just now";
   const minutes = Math.round(seconds / 60);
-  if (minutes < 90) return `${minutes} min ago`;
+  if (minutes < 90) return `${minutes} min`;
   const hours = Math.round(minutes / 60);
-  if (hours < 36) return `${hours} h ago`;
+  if (hours < 36) return `${hours} h`;
   const days = Math.round(hours / 24);
-  if (days < 45) return `${days} d ago`;
+  if (days < 45) return `${days} d`;
   const months = Math.round(days / 30);
-  return months < 24 ? `${months} mo ago` : `${Math.round(months / 12)} y ago`;
+  return months < 24 ? `${months} mo` : `${Math.round(months / 12)} y`;
+}
+
+/** The same reading in prose, where the sentence needs the preposition. */
+export function since(ms: number | null | undefined): string {
+  const span = elapsed(ms);
+  return span === "—" || span === "just now" ? span : `${span} ago`;
 }
 
 export const exactTime = (ms: number | null | undefined) =>
