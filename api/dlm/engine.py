@@ -48,6 +48,7 @@ import services.datasets as datasets_svc
 import dlm.hll as hll
 import dlm.curation as auto_curation
 import dlm.classes as classes
+from services import engine_cube_rewrite
 
 logger = logging.getLogger(__name__)
 
@@ -2822,6 +2823,10 @@ def _live_title(metric_name: str, time_group: Optional[str], group_cols: List[st
 # Interactive; a question over a large lake table that misses the cube is a
 # scan, and the bound keeps a client that gave up from leaving it running.
 _ASK_TIMEOUT_SECONDS = 120
+# The widest grouped answer the cube substitution will reduce in the API. An
+# answer broader than this is past what the ask path renders anyway, so the
+# statement as written is run instead of a wide result being reduced here.
+_ASK_REWRITE_ROW_CAP = 5_000
 # The Engine settings that force a live read: no answer from the statistics
 # or the cube, no cached result. What an answer's `reproduce` block carries.
 REPRODUCE_SETTINGS = {"use_statistics": False, "result_cache": False}
@@ -2959,6 +2964,22 @@ def _answer_on_engine(dataset_id: str, ds: dict, binding: dict, spec: dict, metr
                   and all(c in declared for c in group_cols))
     sql = statement(dialects.ENGINE, ranked=ranked)
     settings = _engine_settings(spec, metric, metric_name)
+    # Dropping ORDER BY and LIMIT above is only half of what the cube needs.
+    # An AVG is not a cell it holds, so a question like "which surface has the
+    # highest average latency" was cube-shaped in every respect except its
+    # aggregate and scanned the whole table for it. The same substitution the
+    # chart path uses — SUM and COUNT, which the cube does hold, divided here
+    # — applies to this statement unchanged.
+    #
+    # Only where the statement is already cube-shaped, though. A ranking over
+    # an axis the shape does not declare cannot be answered from cells at all,
+    # and taking its ORDER BY and LIMIT off would ask the Engine for every
+    # group so the API could sort them — strictly worse than letting its own
+    # TopN do it. An ungrouped aggregate qualifies whatever `ranked` says: it
+    # returns one row, so its ordering and limit are no-ops over it.
+    cube_shaped = (not ranked) or not (group_cols or time_group)
+    rewrite = engine_cube_rewrite.plan(sql) if cube_shaped else None
+    issued = rewrite.statement if rewrite is not None else sql
     run_as, run_role = _engine_principal(principal, role)
     dataset_name = ds.get("dataset_name") or ds.get("name")
     chart_type = "line" if time_group else ("bar" if group_cols else "kpi")
@@ -2966,7 +2987,7 @@ def _answer_on_engine(dataset_id: str, ds: dict, binding: dict, spec: dict, metr
     title = _live_title(metric_name, time_group, group_cols, filters, year, month, relative_time,
                         question, year_shifted)
     try:
-        result = execute(sql, binding["catalog"], run_as, run_role, binding["schema"] or None,
+        result = execute(issued, binding["catalog"], run_as, run_role, binding["schema"] or None,
                          timeout=_ASK_TIMEOUT_SECONDS, settings=settings)
     except HTTPException as error:
         detail = error.detail if isinstance(error.detail, dict) else {"message": str(error.detail)}
@@ -2981,6 +3002,23 @@ def _answer_on_engine(dataset_id: str, ds: dict, binding: dict, spec: dict, metr
     record = result.get("query_details") if isinstance(result.get("query_details"), dict) else None
     lane = _engine_lane(record)
     out_columns, rows = _engine_rows(result)
+    if rewrite is not None:
+        # The substituted columns are the rewrite's own and must never reach
+        # the answer: this reduces them back to the columns the question
+        # asked for. A result too wide to reduce here, or one that does not
+        # match the shape the rewrite planned, falls back to the statement as
+        # written rather than being reported wrongly.
+        finished = (engine_cube_rewrite.finish_rows(out_columns, rows, rewrite)
+                    if len(rows) <= _ASK_REWRITE_ROW_CAP else None)
+        if finished is None:
+            result = execute(sql, binding["catalog"], run_as, run_role, binding["schema"] or None,
+                             timeout=_ASK_TIMEOUT_SECONDS, settings=settings)
+            record = (result.get("query_details")
+                      if isinstance(result.get("query_details"), dict) else None)
+            lane = _engine_lane(record)
+            out_columns, rows = _engine_rows(result)
+        else:
+            out_columns, rows = finished
     if not ranked:
         sign = 1 if sort_asc else -1
         rows = sorted(rows, key=lambda r: (r[-1] is None, sign * _num(r[-1]) if r[-1] is not None else 0))
