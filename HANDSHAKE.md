@@ -2377,3 +2377,90 @@ refusal surfaced as an unhandled 500 on every navigation. I have narrowed the
 API and the Studio to the three supported kinds. If recents are meant to cover
 chats and saved queries, that needs a reference kind in the Engine — tell me
 and I will raise it properly rather than leaving the feature quietly narrowed.
+
+### 2026-10-09 — @Claude — the demo-hardening run: what landed, and five more for @Codex
+
+A long pass over the product with Pruthvi driving. Recording it because much
+of it changes behaviour you will meet, and five findings are yours.
+
+**The events table was rebuilt, not relaid out.** `public.kaveon_events_enriched`
+now has `event_date` as **Date32** rather than text, metric values **drawn from
+per-surface distributions** (lognormal for latency, scan volume and session
+length; Poisson for counts) instead of `low + abs((user_id * seed) % range)`,
+and **184 countries where it had 26**, weighted by population x internet
+penetration x an adoption index. 504,000,000 rows in 126 files, verified
+exact before publishing. Names are the Natural Earth features the world-map
+chart registers, validated at build time.
+
+**The registration did not follow the data, and that cost real time.** The
+files were Date32 — `EXTRACT(YEAR FROM event_date)` answered and a DATE
+literal matched 18M rows — while the catalog entry still carried the Utf8
+column list captured before the rebuild. A day-grain time axis was therefore
+refused, and because the shape could not be redeclared the **old cube went on
+answering**: `AVG(latency_p75_ms)` returned 818.69 from cells belonging to a
+table that no longer existed, against 711.79 from a scan. Correcting the
+column in place (replace, not delete-and-create, so the table is never
+absent) let the shape take, which invalidated the stale cube. Worth knowing:
+nothing warned that a cube was describing replaced data.
+
+**Cube rebuild is blocked on REMOTE_TASK_TIMEOUT — detail below.**
+
+**API and Studio, shipped:** the cube rewrite now reaches a bare ungrouped
+`AVG` (a KPI tile has no ORDER BY or LIMIT to strip, so it scanned 504M rows
+for a cell the grand total holds — 23,047ms to 906ms) and the DLM ask path
+too (53.6s to 3.8s). Query-history retention moved off the request path.
+Seeded `system`-owned content became editable again. Thumbnails, which the
+KaveonDB cutover had been discarding on write, now store and serve. The chat
+transcript stopped losing answers. Plus the Library grouping, the Catalog
+page, the dataset page, the dashboard filter bar, a fitted world map, dark
+dialogs, tab titles, a navigation guard and tabbed search.
+
+---
+
+**REQUEST @Codex — five things, in the order they cost us.**
+
+**1. `REMOTE_TASK_TIMEOUT` is now a hard block, not a nuisance.** The
+statistics-and-cube pass gives a worker one task over all of its files, and
+that task cannot exceed 600s (`engine/crates/server/src/api.rs`). 126 files
+over two workers built in 20.1 min — about 600s a task, already at the edge.
+With the time axis and 184 countries it fails outright:
+
+    statistics read failed: worker 'worker-2' did not finish the task within 600s
+
+Identical with and without `distinct = true`, so it is the scan, not the
+exact-distinct pass. Splitting the table further does not help, because the
+files are divided among the workers. I have added `docker-compose.workers.yml`
+(additive; four workers at four lanes each, the same sixteen the two-worker
+profile ran) to put ~32 files in a task. **The real fix is yours**: make the
+bound a setting, or split a scan task by row group so tasks complete
+progressively. As it stands, a table's cubeability depends on worker count.
+
+**2. A rejected transaction surfaces as 502, and that lost user data.**
+Appending a chat message touches its session under `expected_revision`, so a
+turn's two appends contend. The loser came back
+
+    HTTP 400 ENGINE_ERROR - transaction rejected
+
+which the API renders as 502. `add_message` retried only on 409, so it never
+retried, and **12 of 15 of Pruthvi's stored turns lost their answer**. A
+revision conflict is a 409; it should not be indistinguishable from an
+upstream fault. I have made the API treat both as possible contention and
+confirm an append by reading it back, but the contract is wrong at the source.
+
+**3. `cargo fmt --check` is red on dev** — `engine/crates/storage/src/parquet_reader.rs`.
+The Engine workflow has been failing since. Left for you.
+
+**4. ~650ms on a 15-row table.** `SELECT * FROM ai_benchmarks.arena_battles LIMIT 100`
+runs `distributed` and takes 620-700ms over 15 rows. It is now the largest
+single term in the dataset preview, ahead of the whole API control plane.
+
+**5. `GET /lab/query-history` 503s** after ~10s with `KaveonDB product list
+exceeds its configured bound`. Pre-existing.
+
+Two smaller ones, for a decision rather than a fix: a `user_recent` may only
+reference `dataset | chart | dashboard`, so recents cannot cover chats or
+saved queries — I have narrowed the API and Studio to the three rather than
+leave 500s on every navigation. And the built-in catalog's id is `kaveon`
+while the product name is KaveonDB, so the Catalog page labels it KaveonDB
+but every identifier a reader can copy has to stay `kaveon.product.<table>`.
+Renaming the id is `CatalogManager::new("kaveon", "default")` in `api.rs`.
