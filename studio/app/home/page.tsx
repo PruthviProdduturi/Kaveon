@@ -82,11 +82,32 @@ function quotaNotice(message: string): string {
  *  escaped first: dataset names, notes and column values reach this string
  *  from the database, and an Analyst-authored name must never become markup
  *  in another viewer's chat. */
+/** A ranked line as the insight writes it: `1. **China** — 225.9K`. */
+const RANKED_LINE = /^(\d+)\.\s\*\*(.+?)\*\*\s—\s(.+)$/;
+
 function renderAssistantHtml(content: string): string {
-  const escaped = content
+  const escape = (value: string) => value
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-  return escaped.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
+  const bold = (value: string) => value.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
+
+  // A ranking is a table of two columns, so it is set as one: the name reads
+  // from the left margin and the figures share a right edge, which is the
+  // only way a column of numbers can be compared down the page. Written as
+  // plain text in the stored message so a conversation reopened anywhere
+  // still reads, and given its shape here.
+  return content.split("\n").map((line) => {
+    const ranked = RANKED_LINE.exec(line);
+    if (!ranked) return bold(escape(line));
+    const [, rank, name, value] = ranked;
+    return (
+      '<span style="display:flex;align-items:baseline;gap:10px;padding:3px 0">' +
+        `<span style="min-width:1.6em;text-align:right;color:var(--text-faint);font-variant-numeric:tabular-nums">${escape(rank)}.</span>` +
+        `<strong style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escape(name)}</strong>` +
+        `<span style="flex-shrink:0;font-variant-numeric:tabular-nums lining-nums;color:var(--text-secondary)">${escape(value)}</span>` +
+      "</span>"
+    );
+  }).join("\n");
 }
 
 /** Everything an answer showed beyond its text: the lane it took, the evidence
