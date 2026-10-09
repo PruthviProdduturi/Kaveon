@@ -948,3 +948,45 @@ initial end-to-end controls were q33 **22.3 s** and q35 **18.0 s**, so the gate
 stays disabled by default. It is a qualified experiment for the next step,
 not a ClickHouse win; avoiding the Arrow `take` copies in this route is still
 required before enabling it.
+
+## 2026-10-09 exchange controls and correctness boundary
+
+The balanced two-worker profile was rechecked after the previous experiments:
+2 GiB query memory, bounded disk spill, LZ4 exchange, `Utf8View`, eight scan
+partitions per worker, and four exchange partitions. Fresh exact-result controls
+were q33 **19.7 s** and q35 **17.2 s**; both returned `FINISHED` with ten rows.
+
+Two additional candidates were rejected. Disabling LZ4 exchange raised q33 to
+**27.0 s**, so the extra IPC bytes outweigh decompression cost on this host.
+An opt-in reader that preserved Parquet UTF-8 dictionaries reduced one q35
+measurement to **14.5 s**, but returned different top-ten counts from the plain
+reader (the batch-local dictionary domains were not preserved correctly through
+the aggregate path). The reader and its compose switch were removed; no
+dictionary result is accepted without an exact differential test. A 4 GiB
+query-memory control removed q33 spill but made q35 **24.4 s**, confirming the
+memory trade-off is workload-specific. The balanced 2 GiB profile remains the
+only qualified default.
+
+The ClickHouse references remain q33 **4.552 s** and q35 **6.316 s**. These
+controls narrow the safe search space but do not close the parity gap. The next
+implementation target remains a direct grouped-state exchange path that avoids
+Arrow binary-batch materialization while preserving checksums, retries, memory
+accounting, cancellation, and an exact fallback.
+
+## 2026-10-09 pass-through batch coalescing
+
+The multi-key high-cardinality pass-through path now has an opt-in
+`KAVEON_COALESCE_PARTIAL_ROWS` control. It concatenates several exact
+pass-through batches before they enter the exchange; no rows or aggregate
+states are dropped, and one-key pass-throughs deliberately do not use it
+because q35 regressed when its arrays were copied into larger batches.
+
+With the control set to **524,288 rows** on the same balanced two-worker
+profile, q33 completed in **18.69--19.22 s** across three exact runs (mean
+**18.93 s**) versus the recent **20.3 s** control. Final-stage decoded batches
+fell from approximately **37,000** to **1,896** while the decoded bytes and
+returned ten rows remained exact. q35, which is one-key, remained on the
+uncoalesced path and completed in **18.1--18.8 s** across two exact runs.
+The setting remains opt-in until the wider aggregate suite is rerun; it is a
+batch-boundary optimization, not ClickHouse parity. ClickHouse remains q33
+**4.552 s** and q35 **6.316 s**.
