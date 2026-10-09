@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback, ReactNode } from "react";
+import React, { useState, useEffect, useId, useMemo, useRef, useCallback, ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { KaveonMark, KaveonWordmark } from "./KaveonMark";
@@ -23,6 +23,15 @@ interface NavItem {
   exact?: boolean;
   badge?: ReactNode;
   adminOnly?: boolean;
+  /**
+   * Other route prefixes this section owns.
+   *
+   * A section is not always the only path under it. The Library lists
+   * dashboards, charts and datasets, but each opens at its own top-level
+   * route, so matching on `/workspace` alone left nothing in the sidebar
+   * selected the moment you opened one of the things the Library is for.
+   */
+  owns?: string[];
 }
 
 function ChatIcon() {
@@ -407,6 +416,7 @@ export function Sidebar({ children }: SidebarProps) {
       label: "Library",
       href: "/workspace",
       icon: <WorkspaceIcon />,
+      owns: ["/dashboards", "/charts", "/datasets"],
     },
     {
       label: "Catalog",
@@ -422,7 +432,13 @@ export function Sidebar({ children }: SidebarProps) {
 
   function isActive(item: NavItem): boolean {
     if (item.exact) return pathname === item.href;
-    return pathname?.startsWith(item.href) ?? false;
+    const here = pathname ?? "";
+    if (here.startsWith(item.href)) return true;
+    // A route the section owns counts as being in it, so opening a dashboard
+    // keeps the Library selected rather than clearing the sidebar entirely.
+    // Matched on a segment boundary so `/chartsomething` is not `/charts`.
+    return (item.owns ?? []).some(
+      (prefix) => here === prefix || here.startsWith(prefix + "/"));
   }
 
   const sidebarStyle: React.CSSProperties = isMobile ? {
@@ -815,34 +831,123 @@ export function Sidebar({ children }: SidebarProps) {
 
 /* ─── Spotlight Search (Cmd+K) ─────────────────────────────────────────────── */
 
+/** The kinds of match the search produces. */
+type ResultKind = "recent" | "dashboard" | "chart" | "dataset" | "page";
+
+/** A category, or the ranked union of every category. */
+type TabId = ResultKind | "all";
+
+/** Result kinds plus the two recent kinds that have no category of their own. */
+type GlyphName = ResultKind | "query" | "chat";
+
 interface SearchResult {
   id: string;
   label: string;
   href: string;
-  type: "dashboard" | "chart" | "dataset" | "query" | "recent" | "page";
-  icon: string;
+  type: ResultKind;
+  glyph: GlyphName;
 }
 
+interface SearchTab {
+  id: TabId;
+  label: string;
+  count: number;
+}
+
+/**
+ * Kind order is the cross-category ranking: what the reader opened last, then
+ * the content they own, then where they can go. The flat list ranked this way
+ * before the categories became tabs, and the All tab, the order of the tab
+ * strip and the order within every tab all still follow it.
+ */
+const KIND_ORDER: ResultKind[] = ["recent", "dashboard", "chart", "dataset", "page"];
+
+const KIND_LABELS: Record<ResultKind, string> = {
+  recent: "Recent",
+  dashboard: "Dashboards",
+  chart: "Charts",
+  dataset: "Datasets",
+  page: "Navigation",
+};
+
+/** A recent keeps its own glyph, so the Recent tab still shows what each row is. */
+const RECENT_GLYPHS: Record<RecentItem["type"], GlyphName> = {
+  dashboard: "dashboard",
+  chart: "chart",
+  dataset: "dataset",
+  query: "query",
+  chat: "chat",
+};
+
 const PAGES: SearchResult[] = [
-  { id: "p-chat",    label: "New Chat",     href: "/home",              type: "page", icon: "fa-plus" },
-  { id: "p-library", label: "Library",      href: "/workspace",         type: "page", icon: "fa-grid-2" },
-  { id: "p-catalog", label: "Catalog",      href: "/catalog",           type: "page", icon: "fa-database" },
-  { id: "p-sql",     label: "SQL Lab",      href: "/lab",               type: "page", icon: "fa-code" },
-  { id: "p-lineage", label: "Lineage",      href: "/workspace?tab=lineage", type: "page", icon: "fa-project-diagram" },
-  { id: "p-ds",      label: "Data Sources", href: "/data-sources",      type: "page", icon: "fa-database" },
-  { id: "p-engine",  label: "KaveonDB",     href: "/engine",            type: "page", icon: "fa-bolt" },
-  { id: "p-settings",label: "Settings",     href: "/settings/connections", type: "page", icon: "fa-sliders" },
-  { id: "p-about",   label: "About Kaveon", href: "/",                  type: "page", icon: "fa-info-circle" },
+  { id: "p-chat",     label: "New Chat",      href: "/home",                 type: "page", glyph: "chat" },
+  { id: "p-library",  label: "Library",       href: "/workspace",            type: "page", glyph: "dashboard" },
+  { id: "p-catalog",  label: "Catalog",       href: "/catalog",              type: "page", glyph: "dataset" },
+  { id: "p-sql",      label: "SQL Lab",       href: "/lab",                  type: "page", glyph: "query" },
+  { id: "p-lineage",  label: "Lineage",       href: "/workspace?tab=lineage", type: "page", glyph: "chart" },
+  { id: "p-ds",       label: "Data Sources",  href: "/data-sources",         type: "page", glyph: "dataset" },
+  { id: "p-engine",   label: "KaveonDB",      href: "/engine",               type: "page", glyph: "page" },
+  { id: "p-settings", label: "Settings",      href: "/settings/connections", type: "page", glyph: "page" },
+  { id: "p-about",    label: "About Kaveon",  href: "/",                     type: "page", glyph: "page" },
 ];
 
-const TYPE_ICONS: Record<string, string> = {
-  dashboard: "fa-grid-2",
-  chart: "fa-chart-bar",
-  dataset: "fa-table",
-  query: "fa-terminal",
-  recent: "fa-clock-rotate-left",
-  page: "fa-arrow-right",
+const GLYPH_PATHS: Record<GlyphName, ReactNode> = {
+  recent: <><circle cx="12" cy="12" r="9" /><polyline points="12 7 12 12 16 14" /></>,
+  dashboard: <><rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="14" y="14" width="7" height="7" /><rect x="3" y="14" width="7" height="7" /></>,
+  chart: <><line x1="5" y1="20" x2="19" y2="20" /><line x1="8" y1="20" x2="8" y2="12" /><line x1="12" y1="20" x2="12" y2="5" /><line x1="16" y1="20" x2="16" y2="15" /></>,
+  dataset: <><rect x="3" y="4" width="18" height="16" rx="2" /><line x1="3" y1="10" x2="21" y2="10" /><line x1="9" y1="10" x2="9" y2="20" /></>,
+  query: <><polyline points="5 8 9 12 5 16" /><line x1="12" y1="16" x2="19" y2="16" /></>,
+  chat: <path d="M21 14a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z" />,
+  page: <><line x1="4" y1="12" x2="19" y2="12" /><polyline points="13 6 19 12 13 18" /></>,
 };
+
+function ResultGlyph({ glyph }: { glyph: GlyphName }) {
+  return (
+    <svg
+      width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"
+      style={{ flexShrink: 0, opacity: 0.6 }}
+    >
+      {GLYPH_PATHS[glyph]}
+    </svg>
+  );
+}
+
+function SearchProgress() {
+  return (
+    <svg
+      width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)"
+      strokeWidth="2" strokeLinecap="round" aria-hidden="true"
+      style={{ animation: "spin 0.8s linear infinite", flexShrink: 0 }}
+    >
+      <path d="M21 12a9 9 0 1 1-6.22-8.56" />
+    </svg>
+  );
+}
+
+/**
+ * Which tab to open for the term that was typed. When every match sits in one
+ * category the reader is already where they wanted to be, so open there;
+ * otherwise open the ranked union, where the spread across categories — and
+ * the ranking between them — is what the reader needs to see first.
+ */
+function defaultTab(items: SearchResult[]): TabId {
+  const kinds = KIND_ORDER.filter((kind) => items.some((item) => item.type === kind));
+  return kinds.length === 1 ? kinds[0] : "all";
+}
+
+/**
+ * A category with no matches is left out of the strip. The strip exists to say
+ * where the matches are; a row of zeroes says nothing, and each one would be
+ * another keyboard stop onto an empty panel.
+ */
+function buildTabs(items: SearchResult[]): SearchTab[] {
+  const present: SearchTab[] = KIND_ORDER
+    .map((kind) => ({ id: kind as TabId, label: KIND_LABELS[kind], count: items.filter((item) => item.type === kind).length }))
+    .filter((entry) => entry.count > 0);
+  if (present.length < 2) return present;
+  return [{ id: "all", label: "All results", count: items.length }, ...present];
+}
 
 function SpotlightSearch({ recents, onClose, onNavigate }: {
   recents: RecentItem[];
@@ -851,23 +956,47 @@ function SpotlightSearch({ recents, onClose, onNavigate }: {
 }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
+  const [tab, setTab] = useState<TabId>("all");
   const [selected, setSelected] = useState(0);
   const [loading, setLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const stripRef = useRef<HTMLDivElement>(null);
+  const restoreFocusRef = useRef(true);
+  const pinnedTabRef = useRef<TabId | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const domId = useId();
 
-  useEffect(() => { inputRef.current?.focus(); }, []);
+  // The field takes focus on open, and whatever opened the overlay takes it
+  // back when the overlay closes without going anywhere.
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    inputRef.current?.focus();
+    return () => { if (restoreFocusRef.current) opener?.focus?.(); };
+  }, []);
+
+  // A tab the reader picked themselves survives the next result set, as long as
+  // that set still holds something for it. Otherwise the default tab applies.
+  const applyResults = useCallback((items: SearchResult[]) => {
+    const pinned = pinnedTabRef.current;
+    const pinnedHolds = pinned === null
+      ? false
+      : pinned === "all" ? items.length > 0 : items.some((item) => item.type === pinned);
+    setResults(items);
+    setTab(pinned !== null && pinnedHolds ? pinned : defaultTab(items));
+    setSelected(0);
+  }, []);
 
   // Search API + recents + pages
   useEffect(() => {
+    pinnedTabRef.current = null;
     const q = query.trim().toLowerCase();
     if (!q) {
       // Show recents + pages when empty
       const recentResults: SearchResult[] = recents.slice(0, 5).map(r => ({
-        id: `r-${r.id}`, label: r.label, href: r.href, type: "recent", icon: TYPE_ICONS[r.type] || "fa-clock",
+        id: `r-${r.id}`, label: r.label, href: r.href, type: "recent", glyph: RECENT_GLYPHS[r.type] ?? "recent",
       }));
-      setResults([...recentResults, ...PAGES]);
-      setSelected(0);
+      applyResults([...recentResults, ...PAGES]);
       return;
     }
 
@@ -878,7 +1007,7 @@ function SpotlightSearch({ recents, onClose, onNavigate }: {
     const recentMatches: SearchResult[] = recents
       .filter(r => r.label.toLowerCase().includes(q))
       .slice(0, 3)
-      .map(r => ({ id: `r-${r.id}`, label: r.label, href: r.href, type: "recent", icon: TYPE_ICONS[r.type] || "fa-clock" }));
+      .map(r => ({ id: `r-${r.id}`, label: r.label, href: r.href, type: "recent", glyph: RECENT_GLYPHS[r.type] ?? "recent" }));
 
     // Debounced API search
     clearTimeout(debounceRef.current);
@@ -896,121 +1025,308 @@ function SpotlightSearch({ recents, onClose, onNavigate }: {
         const dashboards: SearchResult[] = toArr(dashRes)
           .filter((d: any) => (d.name || "").toLowerCase().includes(q))
           .slice(0, 5)
-          .map((d: any) => ({ id: `d-${d.id}`, label: d.name, href: `/dashboards/${d.id}/view`, type: "dashboard" as const, icon: "fa-grid-2" }));
+          .map((d: any) => ({ id: `d-${d.id}`, label: d.name, href: `/dashboards/${d.id}/view`, type: "dashboard" as const, glyph: "dashboard" as const }));
 
         const charts: SearchResult[] = toArr(chartRes)
           .filter((c: any) => (c.name || "").toLowerCase().includes(q))
           .slice(0, 5)
-          .map((c: any) => ({ id: `c-${c.id}`, label: c.name, href: `/charts/${c.id}`, type: "chart" as const, icon: "fa-chart-bar" }));
+          .map((c: any) => ({ id: `c-${c.id}`, label: c.name, href: `/charts/${c.id}`, type: "chart" as const, glyph: "chart" as const }));
 
         const datasets: SearchResult[] = toArr(dsRes)
           .filter((d: any) => (d.name || "").toLowerCase().includes(q))
           .slice(0, 3)
-          .map((d: any) => ({ id: `ds-${d.id}`, label: d.name, href: `/datasets/${d.id}`, type: "dataset" as const, icon: "fa-table" }));
+          .map((d: any) => ({ id: `ds-${d.id}`, label: d.name, href: `/datasets/${d.id}`, type: "dataset" as const, glyph: "dataset" as const }));
 
         // Deduplicate against recents
         const seen = new Set(recentMatches.map(r => r.href));
         const apiResults = [...dashboards, ...charts, ...datasets].filter(r => !seen.has(r.href));
 
-        setResults([...recentMatches, ...apiResults, ...pageMatches]);
-        setSelected(0);
+        applyResults([...recentMatches, ...apiResults, ...pageMatches]);
       } catch { /* ignore */ }
       setLoading(false);
     }, 200);
 
     // Show immediate local results
-    setResults([...recentMatches, ...pageMatches]);
-    setSelected(0);
+    applyResults([...recentMatches, ...pageMatches]);
 
     return () => clearTimeout(debounceRef.current);
-  }, [query, recents]);
+  }, [query, recents, applyResults]);
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "ArrowDown") { e.preventDefault(); setSelected(s => Math.min(s + 1, results.length - 1)); }
-    if (e.key === "ArrowUp") { e.preventDefault(); setSelected(s => Math.max(s - 1, 0)); }
-    if (e.key === "Enter" && results[selected]) { onNavigate(results[selected].href); }
-    if (e.key === "Escape") onClose();
+  const tabs = useMemo(() => buildTabs(results), [results]);
+
+  // The All tab keeps the headed groups the flat list had; a category tab is
+  // one unheaded run, because the tab is already the heading.
+  const groups = useMemo<{ kind: ResultKind | null; items: SearchResult[] }[]>(() => {
+    if (tab !== "all") return [{ kind: null, items: results.filter((r) => r.type === tab) }];
+    return KIND_ORDER
+      .map((kind) => ({ kind: kind as ResultKind | null, items: results.filter((r) => r.type === kind) }))
+      .filter((group) => group.items.length > 0);
+  }, [results, tab]);
+
+  const visible = useMemo(() => groups.flatMap((group) => group.items), [groups]);
+  const groupOffsets = useMemo(() => {
+    let running = 0;
+    return groups.map((group) => {
+      const start = running;
+      running += group.items.length;
+      return start;
+    });
+  }, [groups]);
+
+  const activeIndex = visible.length === 0 ? -1 : Math.min(selected, visible.length - 1);
+  const activeResult = activeIndex < 0 ? null : visible[activeIndex];
+  const activeTabLabel = tabs.find((entry) => entry.id === tab)?.label ?? "Results";
+
+  const selectTab = useCallback((id: TabId) => {
+    pinnedTabRef.current = id;
+    setTab(id);
+    setSelected(0);
+  }, []);
+
+  const navigate = useCallback((href: string) => {
+    restoreFocusRef.current = false;
+    onNavigate(href);
+  }, [onNavigate]);
+
+  // Keep the chosen row and the chosen tab in sight when the keyboard, rather
+  // than the pointer, is what moved them.
+  useEffect(() => {
+    panelRef.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, tab]);
+
+  useEffect(() => {
+    stripRef.current?.querySelector('[data-current="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [tab]);
+
+  // Left and Right belong to the query field while the caret still has text to
+  // cross, so correcting a term mid-word keeps working. At either edge of the
+  // text — and on an empty field — they step between categories instead.
+  const caretCanMove = (step: -1 | 1) => {
+    const input = inputRef.current;
+    if (!input || document.activeElement !== input) return false;
+    const { selectionStart, selectionEnd, value } = input;
+    if (selectionStart === null || selectionEnd === null) return false;
+    if (selectionStart !== selectionEnd) return true;
+    return step < 0 ? selectionStart > 0 : selectionStart < value.length;
   };
 
-  const typeLabel = (t: string) => t === "recent" ? "Recent" : t === "page" ? "Navigation" : t.charAt(0).toUpperCase() + t.slice(1);
+  const stepTab = (step: -1 | 1) => {
+    if (tabs.length < 2) return false;
+    const at = tabs.findIndex((entry) => entry.id === tab);
+    const next = tabs[((at < 0 ? 0 : at) + step + tabs.length) % tabs.length];
+    selectTab(next.id);
+    return true;
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        if (visible.length > 0) setSelected(Math.min(activeIndex + 1, visible.length - 1));
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        if (visible.length > 0) setSelected(Math.max(activeIndex - 1, 0));
+        break;
+      case "Home":
+        if (visible.length > 0) { e.preventDefault(); setSelected(0); }
+        break;
+      case "End":
+        if (visible.length > 0) { e.preventDefault(); setSelected(visible.length - 1); }
+        break;
+      case "ArrowLeft":
+      case "ArrowRight": {
+        const step: -1 | 1 = e.key === "ArrowLeft" ? -1 : 1;
+        if (caretCanMove(step)) break;
+        if (stepTab(step)) e.preventDefault();
+        break;
+      }
+      case "Enter":
+        if (activeResult) { e.preventDefault(); navigate(activeResult.href); }
+        break;
+      case "Escape":
+        e.preventDefault();
+        onClose();
+        break;
+      case "Tab":
+        restoreFocusRef.current = false;
+        onClose();
+        break;
+      default:
+        break;
+    }
+  };
+
+  const hint = (keys: string, label: string) => (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+      <kbd style={{ padding: "1px 4px", borderRadius: 3, border: "1px solid var(--border)", fontSize: 9, fontFamily: "inherit" }}>{keys}</kbd>
+      {label}
+    </span>
+  );
 
   return (
     <>
       <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", backdropFilter: "blur(4px)", zIndex: 10000 }} onClick={onClose} />
-      <div style={{
-        position: "fixed", top: "18%", left: "50%", transform: "translateX(-50%)",
-        width: "90%", maxWidth: 560,
-        background: "var(--bg-surface)", border: "1px solid var(--border)",
-        borderRadius: 16, boxShadow: "0 24px 80px rgba(0,0,0,0.4)",
-        zIndex: 10001, overflow: "hidden",
-      }}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Search Kaveon"
+        onKeyDown={handleKeyDown}
+        style={{
+          position: "fixed", top: "18%", left: "50%", transform: "translateX(-50%)",
+          width: "90%", maxWidth: 560,
+          background: "var(--bg-surface)", border: "1px solid var(--border)",
+          borderRadius: 16, boxShadow: "0 24px 80px rgba(0,0,0,0.4)",
+          zIndex: 10001, overflow: "hidden",
+        }}
+      >
         {/* Search input */}
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px", borderBottom: "1px solid var(--border)" }}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           <input
             ref={inputRef}
             type="text"
+            role="combobox"
+            aria-expanded={visible.length > 0}
+            aria-controls={`${domId}-listbox`}
+            aria-activedescendant={activeResult ? `${domId}-option-${activeIndex}` : undefined}
+            aria-autocomplete="list"
             placeholder="Search dashboards, charts, datasets..."
             value={query}
             onChange={e => setQuery(e.target.value)}
-            onKeyDown={handleKeyDown}
             style={{
               flex: 1, border: "none", outline: "none", background: "transparent",
               fontSize: 15, color: "var(--text-primary)", fontFamily: "inherit",
             }}
           />
-          {loading && <i className="fas fa-spinner fa-spin" style={{ fontSize: 12, color: "var(--text-muted)" }} />}
-          <kbd style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, border: "1px solid var(--border)", color: "var(--text-faint)", background: "var(--bg-primary)" }}>ESC</kbd>
+          {loading && <SearchProgress />}
+          <kbd style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, border: "1px solid var(--border)", color: "var(--text-muted)", background: "var(--bg-primary)", fontFamily: "inherit" }}>ESC</kbd>
         </div>
 
+        {/* Categories */}
+        {tabs.length > 0 && (
+          <div
+            ref={stripRef}
+            role="tablist"
+            aria-label="Result categories"
+            aria-orientation="horizontal"
+            style={{
+              display: "flex", gap: 2, padding: "0 12px",
+              borderBottom: "1px solid var(--border)",
+              overflowX: "auto", scrollbarWidth: "none",
+            }}
+          >
+            {tabs.map((entry) => {
+              const current = entry.id === tab;
+              return (
+                <button
+                  key={entry.id}
+                  type="button"
+                  role="tab"
+                  id={`${domId}-tab-${entry.id}`}
+                  data-current={current}
+                  aria-selected={current}
+                  aria-controls={`${domId}-panel`}
+                  aria-label={`${entry.label}, ${entry.count} ${entry.count === 1 ? "result" : "results"}`}
+                  tabIndex={-1}
+                  onMouseDown={e => e.preventDefault()}
+                  onClick={() => { selectTab(entry.id); inputRef.current?.focus(); }}
+                  onMouseEnter={e => { if (!current) e.currentTarget.style.color = "var(--text-secondary)"; }}
+                  onMouseLeave={e => { if (!current) e.currentTarget.style.color = "var(--text-muted)"; }}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 6, flexShrink: 0,
+                    height: 36, padding: "0 10px", marginBottom: -1,
+                    background: "transparent", border: "none",
+                    borderBottom: `2px solid ${current ? "var(--accent)" : "transparent"}`,
+                    color: current ? "var(--text-primary)" : "var(--text-muted)",
+                    fontFamily: "inherit", fontSize: 12.5, fontWeight: 500,
+                    whiteSpace: "nowrap", cursor: "pointer",
+                    transition: "color 0.15s, border-color 0.15s",
+                  }}
+                >
+                  <span>{entry.label}</span>
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      fontSize: 10.5, fontWeight: 600, fontVariantNumeric: "tabular-nums",
+                      padding: "1px 5px", borderRadius: 999, minWidth: 16, textAlign: "center",
+                      color: current ? "var(--accent)" : "var(--text-muted)",
+                      background: current ? "rgba(var(--accent-rgb), 0.12)" : "var(--bg-hover)",
+                    }}
+                  >
+                    {entry.count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {/* Results */}
-        <div style={{ maxHeight: 380, overflowY: "auto", padding: "6px" }}>
-          {results.length === 0 && query && (
+        <div
+          ref={panelRef}
+          id={`${domId}-panel`}
+          role={tabs.length > 0 ? "tabpanel" : undefined}
+          aria-labelledby={tabs.length > 0 ? `${domId}-tab-${tab}` : undefined}
+          tabIndex={-1}
+          style={{ maxHeight: 380, overflowY: "auto", padding: 6, outline: "none" }}
+        >
+          {visible.length === 0 && query && (
             <div style={{ padding: "24px 16px", textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>
               No results for &ldquo;{query}&rdquo;
             </div>
           )}
-          {results.map((r, i) => {
-            const isSelected = i === selected;
-            const showLabel = i === 0 || results[i - 1].type !== r.type;
-            return (
-              <React.Fragment key={r.id}>
-                {showLabel && (
-                  <div style={{ fontSize: 10, fontWeight: 600, color: "var(--text-faint)", padding: "8px 12px 4px", letterSpacing: "0.04em" }}>
-                    {typeLabel(r.type)}
+          <div id={`${domId}-listbox`} role="listbox" aria-label={activeTabLabel}>
+            {groups.map((group, groupIndex) => {
+              const rows = group.items.map((r, itemIndex) => {
+                const index = groupOffsets[groupIndex] + itemIndex;
+                const isActive = index === activeIndex;
+                return (
+                  <button
+                    key={r.id}
+                    type="button"
+                    role="option"
+                    id={`${domId}-option-${index}`}
+                    data-active={isActive}
+                    aria-selected={isActive}
+                    onClick={() => navigate(r.href)}
+                    onMouseEnter={() => setSelected(index)}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 10,
+                      width: "100%", padding: "9px 12px", border: "none", borderRadius: 8,
+                      background: isActive ? "var(--bg-hover)" : "transparent",
+                      color: isActive ? "var(--text-primary)" : "var(--text-secondary)",
+                      fontSize: 13.5, cursor: "pointer", textAlign: "left",
+                      fontFamily: "inherit", transition: "background 0.1s",
+                    }}
+                  >
+                    <ResultGlyph glyph={r.glyph} />
+                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.label}</span>
+                    {isActive && (
+                      <kbd style={{ padding: "1px 4px", borderRadius: 3, border: "1px solid var(--border)", fontSize: 9, color: "var(--text-muted)", fontFamily: "inherit" }}>&#x23CE;</kbd>
+                    )}
+                  </button>
+                );
+              });
+              if (!group.kind) return <React.Fragment key="results">{rows}</React.Fragment>;
+              return (
+                <div key={group.kind} role="group" aria-label={KIND_LABELS[group.kind]}>
+                  <div style={{ fontSize: 10, fontWeight: 600, color: "var(--text-muted)", padding: "8px 12px 4px", letterSpacing: "0.04em" }}>
+                    {KIND_LABELS[group.kind]}
                   </div>
-                )}
-                <button
-                  type="button"
-                  onClick={() => onNavigate(r.href)}
-                  onMouseEnter={() => setSelected(i)}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 10,
-                    width: "100%", padding: "9px 12px", border: "none", borderRadius: 8,
-                    background: isSelected ? "var(--bg-hover)" : "transparent",
-                    color: isSelected ? "var(--text-primary)" : "var(--text-secondary)",
-                    fontSize: 13.5, cursor: "pointer", textAlign: "left",
-                    fontFamily: "inherit", transition: "background 0.1s",
-                  }}
-                >
-                  <i className={`fas ${r.icon}`} style={{ fontSize: 12, opacity: 0.5, width: 16, textAlign: "center" }} />
-                  <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.label}</span>
-                  {isSelected && (
-                    <span style={{ fontSize: 10, color: "var(--text-faint)" }}>
-                      <kbd style={{ padding: "1px 4px", borderRadius: 3, border: "1px solid var(--border)", fontSize: 9 }}>&#x23CE;</kbd>
-                    </span>
-                  )}
-                </button>
-              </React.Fragment>
-            );
-          })}
+                  {rows}
+                </div>
+              );
+            })}
+          </div>
         </div>
 
         {/* Footer */}
-        <div style={{ padding: "8px 16px", borderTop: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 16, fontSize: 10, color: "var(--text-faint)" }}>
-          <span><kbd style={{ padding: "1px 4px", borderRadius: 3, border: "1px solid var(--border)", fontSize: 9 }}>&uarr;&darr;</kbd> navigate</span>
-          <span><kbd style={{ padding: "1px 4px", borderRadius: 3, border: "1px solid var(--border)", fontSize: 9 }}>&#x23CE;</kbd> open</span>
-          <span><kbd style={{ padding: "1px 4px", borderRadius: 3, border: "1px solid var(--border)", fontSize: 9 }}>esc</kbd> close</span>
+        <div style={{ padding: "8px 16px", borderTop: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 16, fontSize: 10, color: "var(--text-muted)" }}>
+          {hint("↑↓", "results")}
+          {tabs.length > 1 && hint("←→", "categories")}
+          {hint("⏎", "open")}
+          {hint("esc", "close")}
         </div>
       </div>
     </>
