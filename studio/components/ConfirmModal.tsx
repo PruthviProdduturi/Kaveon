@@ -45,9 +45,10 @@ export function ConfirmModal({
     >
       <div
         style={{
-          background: '#fff',
+          background: 'var(--bg-surface)',
+          border: '1px solid var(--border)',
           borderRadius: 12,
-          boxShadow: '0 20px 60px rgba(0,0,0,0.18)',
+          boxShadow: 'var(--shadow-lg)',
           padding: '28px 28px 24px',
           width: 380,
           maxWidth: 'calc(100vw - 32px)',
@@ -56,19 +57,21 @@ export function ConfirmModal({
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, marginBottom: 12 }}>
           <div style={{
             width: 38, height: 38, borderRadius: 10, flexShrink: 0,
-            background: danger ? '#fef2f2' : '#eff6ff',
+            background: danger
+              ? 'color-mix(in srgb, var(--error) 14%, transparent)'
+              : 'color-mix(in srgb, var(--accent) 14%, transparent)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}>
             <i
               className={danger ? 'fas fa-trash-alt' : 'fas fa-question-circle'}
-              style={{ fontSize: 16, color: danger ? '#ef4444' : '#2563eb' }}
+              style={{ fontSize: 16, color: danger ? 'var(--error)' : 'var(--accent)' }}
             />
           </div>
           <div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: '#0f172a', lineHeight: 1.3 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.3 }}>
               {title}
             </div>
-            <div style={{ fontSize: 13, color: '#64748b', marginTop: 4, lineHeight: 1.5 }}>
+            <div style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.5 }}>
               {message}
             </div>
           </div>
@@ -79,16 +82,16 @@ export function ConfirmModal({
             onClick={onCancel}
             style={{
               padding: '8px 18px',
-              background: '#f8fafc',
-              border: '1px solid #e2e8f0',
+              background: 'var(--bg-elevated)',
+              border: '1px solid var(--border)',
               borderRadius: 7,
               cursor: 'pointer',
               fontSize: 13,
               fontWeight: 500,
-              color: '#475569',
+              color: 'var(--text-secondary)',
             }}
-            onMouseOver={(e) => { e.currentTarget.style.background = '#f1f5f9'; }}
-            onMouseOut={(e) => { e.currentTarget.style.background = '#f8fafc'; }}
+            onMouseOver={(e) => { e.currentTarget.style.background = 'var(--bg-hover)'; }}
+            onMouseOut={(e) => { e.currentTarget.style.background = 'var(--bg-elevated)'; }}
           >
             {cancelLabel}
           </button>
@@ -96,7 +99,7 @@ export function ConfirmModal({
             onClick={onConfirm}
             style={{
               padding: '8px 18px',
-              background: danger ? '#ef4444' : '#2563eb',
+              background: danger ? 'var(--error)' : 'var(--accent)',
               border: 'none',
               borderRadius: 7,
               cursor: 'pointer',
@@ -104,8 +107,12 @@ export function ConfirmModal({
               fontWeight: 600,
               color: '#fff',
             }}
-            onMouseOver={(e) => { e.currentTarget.style.background = danger ? '#dc2626' : '#1d4ed8'; }}
-            onMouseOut={(e) => { e.currentTarget.style.background = danger ? '#ef4444' : '#2563eb'; }}
+            onMouseOver={(e) => {
+              e.currentTarget.style.background = danger
+                ? 'color-mix(in srgb, var(--error) 86%, black)'
+                : 'var(--accent-dark)';
+            }}
+            onMouseOut={(e) => { e.currentTarget.style.background = danger ? 'var(--error)' : 'var(--accent)'; }}
           >
             {confirmLabel}
           </button>

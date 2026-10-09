@@ -295,16 +295,16 @@ function UserMenu({
             width: 30,
             height: 30,
             borderRadius: "50%",
-            background: "linear-gradient(135deg, #6db3ed 0%, #4A9EE8 50%, #2d7dd2 100%)",
-            color: "white",
+            background: "color-mix(in srgb, var(--text-primary) 10%, var(--bg-surface))",
+            border: "1px solid var(--border)",
+            color: "var(--text-primary)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             fontSize: 13,
-            fontWeight: 700,
+            fontWeight: 600,
             letterSpacing: "0.5px",
             flexShrink: 0,
-            boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
           }}
         >
           {getInitials(account?.name)}
