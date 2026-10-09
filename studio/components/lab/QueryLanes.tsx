@@ -111,6 +111,12 @@ export interface QueryProgressProps {
   onCancel?: () => void;
   /** Hold the middle of the pane rather than sitting along its top edge. */
   centered?: boolean;
+  /**
+   * Draw only the bar, pinned over the top edge of the pane and taking no
+   * space in the layout. For a statement whose rows have already started
+   * landing: the grid is on screen and must not move when the bar goes.
+   */
+  overlay?: boolean;
 }
 
 /**
@@ -126,8 +132,25 @@ export interface QueryProgressProps {
  * The bar fills to whatever the coordinator reports and otherwise travels,
  * and it holds still for anyone who asked for less motion.
  */
-export function QueryProgress({ progress, onCancel, centered = false }: QueryProgressProps) {
+export function QueryProgress({ progress, onCancel, centered = false, overlay = false }: QueryProgressProps) {
   const determinate = progress != null && progress > 0;
+  // Rows are already on screen. Anything that occupies height here pushes the
+  // grid down and then lets it jump back when the statement finishes, so this
+  // takes none: it is painted over the pane's top edge and nothing reflows
+  // when it goes. Cancelling is still on the toolbar, where it always is.
+  if (overlay) {
+    return (
+      <div className="query-progress-overlay" role="status" aria-live="polite">
+        <div className={`query-progress__track${determinate ? "" : " query-progress__track--roving"}`}>
+          <span
+            className="query-progress__fill"
+            style={determinate ? { width: `${Math.min(100, Math.round(progress * 100))}%` } : undefined}
+          />
+        </div>
+        <span className="sr-only">Rows are still arriving.</span>
+      </div>
+    );
+  }
   // Holding the pane is the same moment as opening a dashboard or a page, so
   // it is the same component rather than a second thing that merely resembles
   // it — the breathing mark, the uppercase line and the travelling bar. The
