@@ -395,7 +395,7 @@
    Format value with nothing in between. The row stopped reading as a row.
    Percentages keep the cluster of figures together at every width, and the
    container queries below still collapse individual columns to zero. */
-.colName { width: 30% }
+.colName { width: 28% }
 .colFormat { width: 10% }
 .colRows { width: 12% }
 .colSize { width: 9% }
@@ -403,9 +403,10 @@
 .colChanged { width: 9% }
 .colMeasured { width: 9% }
 /* Answers is empty on every row but the few that carry sketches, so it had
-   18% of the table holding nothing. The width it gives back goes to the name
-   and to Format, which was narrow enough to clip its own mark. */
-.colAnswer { width: 14% }
+   18% of the table holding nothing. 14% took back too much: "Counts and
+   bounds" clipped at every width. The cell that says what a question costs
+   is the one a reader came here for, and an ellipsis in it says nothing. */
+.colAnswer { width: 16% }
 
 .cName { position: relative; min-width: 0; padding-left: 0 !important }
 .cFormat { text-align: right; color: var(--text-faint) }
