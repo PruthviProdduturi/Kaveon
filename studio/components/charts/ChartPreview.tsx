@@ -178,14 +178,16 @@ const BigNumberKpiCard: React.FC<BigNumberKpiCardProps> = ({ options, rows, colu
   const hasSpark = showTrend && sparkValues.length >= 2;
 
   return (
-    <div style={{ position: "relative", height: "100%", width: "100%", overflow: "hidden", display: "flex", flexDirection: "column" }}>
-      {/* Number + label — own zone, never overlapping the trend. Uses clamp()
-          so the value scales with the card and fills the available space. */}
+    <div style={{ position: "relative", height: "100%", width: "100%", overflow: "hidden", display: "flex", flexDirection: "column", containerType: "inline-size" }}>
+      {/* Number + label — own zone, never overlapping the trend. The value is
+          sized against this card, not the viewport: `vw` made a wide window
+          grow the number past a narrow tile, and with nowrap it was clipped
+          mid-digit — "901.2M" lost its M. `cqw` is the card's own width. */}
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, padding: hasSpark ? "10px 20px 2px" : "12px 20px" }}>
         {options?.title?.text && (
           <div style={{ fontSize: 13, color: "var(--text-muted, #6b7280)", fontWeight: 500, textAlign: "center" }}>{options.title.text}</div>
         )}
-        <div style={{ fontSize: hasSpark ? "clamp(28px, 3.9vw, 46px)" : "clamp(32px, 4.6vw, 56px)", fontWeight: 700, color: "var(--text-primary, #0f172a)", lineHeight: 1.05, letterSpacing: "-1px", whiteSpace: "nowrap", maxWidth: "100%", fontVariantNumeric: "tabular-nums" }}>{formatted}</div>
+        <div style={{ fontSize: hasSpark ? "clamp(22px, 15cqw, 46px)" : "clamp(24px, 17cqw, 56px)", fontWeight: 700, color: "var(--text-primary, #0f172a)", lineHeight: 1.05, letterSpacing: "-1px", whiteSpace: "nowrap", maxWidth: "100%", fontVariantNumeric: "tabular-nums" }}>{formatted}</div>
         {displayLabel && <div style={{ fontSize: 11.5, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>{displayLabel}</div>}
         {trend !== null && (
           <div style={{ fontSize: 13, color: trendColor, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>

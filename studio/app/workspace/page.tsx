@@ -640,7 +640,11 @@ export default function WorkspacePage() {
 
       {/* Header: tabs + search + New in one row (no redundant page title) */}
       <div style={{ display: "flex", alignItems: "center", marginBottom: 8, gap: 16, flexWrap: "wrap" }}>
-        <div style={{ display: "flex", alignItems: "center", flex: 1, minWidth: 0 }}>
+        {/* The strip scrolls rather than shrinking. Its buttons have no give,
+            so a narrow header used to run them underneath the controls to the
+            right — "Saved Queries" sat beneath the scope toggle. */}
+        <div style={{ display: "flex", alignItems: "center", flex: 1, minWidth: 0,
+                      overflowX: "auto", scrollbarWidth: "none" }}>
         {TABS.map((t) => {
           const active = activeTab === t.key;
           return (
@@ -650,6 +654,7 @@ export default function WorkspacePage() {
               background: "none", border: "none", cursor: "pointer",
               borderBottom: active ? "2px solid var(--accent)" : "2px solid transparent",
               marginBottom: -1, transition: "all 0.15s", display: "flex", alignItems: "center", gap: 8,
+              flexShrink: 0, whiteSpace: "nowrap",
             }}>
               <t.Icon size={15} color={active ? "var(--accent)" : "var(--text-muted)"} />
               {t.label}
@@ -663,7 +668,7 @@ export default function WorkspacePage() {
 
         {activeTab !== "lineage" && (<>
         {/* Scope toggle */}
-        <div style={{ display: "flex", gap: 0, background: "rgba(255,255,255,0.04)", borderRadius: 8, border: "1px solid var(--border)", overflow: "hidden" }}>
+        <div style={{ display: "flex", gap: 0, background: "rgba(255,255,255,0.04)", borderRadius: 8, border: "1px solid var(--border)", overflow: "hidden", flexShrink: 0 }}>
           {(["mine", "all"] as const).map((s) => (
             <button key={s} type="button" onClick={() => setScope(s)} style={{
               padding: "6px 16px", fontSize: 12, fontWeight: scope === s ? 600 : 400,
