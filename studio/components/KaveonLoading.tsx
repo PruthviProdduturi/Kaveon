@@ -6,9 +6,19 @@ import { KaveonMark } from "./KaveonMark";
 interface KaveonLoadingProps {
   message?: string;
   fullScreen?: boolean;
+  /**
+   * Something the reader can do while they wait — a running statement's
+   * Cancel, say. Sits under the bar so the wait and the way out of it read
+   * as one thing.
+   */
+  action?: React.ReactNode;
 }
 
-export function KaveonLoading({ message = "Loading", fullScreen = true }: KaveonLoadingProps) {
+export function KaveonLoading({
+  message = "Loading",
+  fullScreen = true,
+  action,
+}: KaveonLoadingProps) {
   const [dots, setDots] = useState("");
 
   useEffect(() => {
@@ -75,6 +85,8 @@ export function KaveonLoading({ message = "Loading", fullScreen = true }: Kaveon
             }}
           />
         </div>
+
+        {action}
       </div>
 
       <style>{`

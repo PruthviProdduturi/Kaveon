@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { KaveonLoading } from "../KaveonLoading";
 
 /**
  * What the Studio shows while a statement is in flight.
@@ -127,6 +128,23 @@ export interface QueryProgressProps {
  */
 export function QueryProgress({ progress, onCancel, centered = false }: QueryProgressProps) {
   const determinate = progress != null && progress > 0;
+  // Holding the pane is the same moment as opening a dashboard or a page, so
+  // it is the same component rather than a second thing that merely resembles
+  // it — the breathing mark, the uppercase line and the travelling bar. The
+  // slim inline bar below stays for the cases that sit along an edge.
+  if (centered) {
+    return (
+      <KaveonLoading
+        message="Running query"
+        fullScreen={false}
+        action={onCancel ? (
+          <button type="button" className="query-progress__cancel" onClick={onCancel}>
+            Cancel
+          </button>
+        ) : undefined}
+      />
+    );
+  }
   return (
     <div
       className={`query-progress${centered ? " query-progress--centered" : ""}`}
