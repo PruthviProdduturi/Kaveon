@@ -577,7 +577,8 @@ fn partition_input_by(
     // conservative preflight reservations keeps this buffer query-bounded.
     let flush_bytes = flush_bytes.max(1);
     while let Some(batch) = input.next_batch()? {
-        if batch.num_rows() == 0 {
+        let row_count = batch.num_rows();
+        if row_count == 0 {
             continue;
         }
         // Conservatively cover input, copied partitions, row encoding, indices,
@@ -599,9 +600,14 @@ fn partition_input_by(
         } else {
             batch.get_array_memory_size() as u64
         };
+        // The partitioner keeps the input batch, its split arrays, and the
+        // encoded run buffers live together. Three times the sliced input is
+        // the bounded reservation used by both already-accounted and raw
+        // inputs; the previous four-times estimate rejected spillable batches
+        // that fit once the failed build reservation had been released.
         let bytes = input_bytes
-            .checked_mul(if input_reserved { 3 } else { 4 })
-            .and_then(|n| n.checked_add((batch.num_rows() as u64).saturating_mul(32)))
+            .checked_mul(3)
+            .and_then(|n| n.checked_add((row_count as u64).saturating_mul(32)))
             .and_then(|n| {
                 n.checked_add(
                     (count as u64)
@@ -612,27 +618,72 @@ fn partition_input_by(
             .ok_or_else(|| {
                 KaveonError::Execution("spill partition memory estimate overflow".into())
             })?;
-        let reservation = memory.reserve(bytes)?;
-        let batches = split(&batch)?;
-        drop(batch);
-        for (index, batch) in batches.into_iter().enumerate() {
-            if batch.num_rows() == 0 {
+        // A reader may hand us one batch larger than the remaining query
+        // budget. Slice it before partitioning instead of rejecting a query
+        // that can be processed in bounded pieces. The proportional estimate
+        // keeps each chunk's reservation below half of the currently free
+        // budget while the output buffers are flushed independently.
+        let free = memory
+            .query()
+            .snapshot()
+            .limit_bytes
+            .saturating_sub(memory.query().snapshot().current_bytes);
+        let target = (free / 2).max(1);
+        let chunk_count = if bytes > target {
+            usize::try_from(bytes.div_ceil(target)).unwrap_or(usize::MAX)
+        } else {
+            1
+        }
+        .min(row_count);
+        for chunk_index in 0..chunk_count {
+            let offset = row_count.saturating_mul(chunk_index) / chunk_count;
+            let end = row_count.saturating_mul(chunk_index + 1) / chunk_count;
+            let chunk_rows = end.saturating_sub(offset);
+            if chunk_rows == 0 {
                 continue;
             }
-            buffered[index].push(batch);
-        }
-        buffered_bytes = buffered_bytes.saturating_add(reservation.bytes());
-        buffered_memory.push(reservation);
-        if buffered_bytes >= flush_bytes {
-            flush_partition_buffers(
-                &mut buffered,
-                &mut buffered_memory,
-                &mut buffered_bytes,
-                &mut partitions,
-                &schema,
-                memory,
-                spill,
-            )?;
+            let chunk = if chunk_count == 1 {
+                batch.clone()
+            } else {
+                batch.slice(offset, chunk_rows)
+            };
+            let chunk_input_bytes = input_bytes
+                .saturating_mul(chunk_rows as u64)
+                .div_ceil(row_count as u64);
+            let chunk_bytes = chunk_input_bytes
+                .checked_mul(3)
+                .and_then(|n| n.checked_add((chunk_rows as u64).saturating_mul(32)))
+                .and_then(|n| {
+                    n.checked_add(
+                        (count as u64)
+                            .saturating_mul(schema.fields().len() as u64)
+                            .saturating_mul(256),
+                    )
+                })
+                .ok_or_else(|| {
+                    KaveonError::Execution("spill partition memory estimate overflow".into())
+                })?;
+            let reservation = memory.reserve(chunk_bytes)?;
+            let batches = split(&chunk)?;
+            for (index, batch) in batches.into_iter().enumerate() {
+                if batch.num_rows() == 0 {
+                    continue;
+                }
+                buffered[index].push(batch);
+            }
+            buffered_bytes = buffered_bytes.saturating_add(reservation.bytes());
+            buffered_memory.push(reservation);
+            if buffered_bytes >= flush_bytes {
+                flush_partition_buffers(
+                    &mut buffered,
+                    &mut buffered_memory,
+                    &mut buffered_bytes,
+                    &mut partitions,
+                    &schema,
+                    memory,
+                    spill,
+                )?;
+            }
         }
     }
     flush_partition_buffers(
@@ -1500,11 +1551,22 @@ struct Refusal {
 impl Refusal {
     /// The collected batches and their rest as one source again.
     fn replay(self, schema: SchemaRef) -> Box<dyn BatchOperator> {
+        // The collected batches are about to be repartitioned. Their guards
+        // accounted for the failed in-memory build and must be released before
+        // partition writers reserve their own bounded buffers; retaining them
+        // makes a spill path fail on its stale build reservation.
+        let Refusal {
+            batches,
+            tail,
+            guards,
+            ..
+        } = self;
+        drop(guards);
         Box::new(ReplayInput {
             schema,
-            batches: self.batches.into(),
-            tail: self.tail,
-            guards: self.guards.into(),
+            batches: batches.into(),
+            tail,
+            guards: VecDeque::new(),
             active_guard: None,
         })
     }
