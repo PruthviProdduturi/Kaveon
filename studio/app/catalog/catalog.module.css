@@ -308,7 +308,10 @@
 .headSub th { top: 22px; height: 26px; vertical-align: middle; border-bottom: 1px solid var(--border) }
 .inv .headGroup th[rowspan] { border-bottom: 1px solid var(--border); vertical-align: middle; padding-bottom: 0 }
 .inv thead th.gHead {
-  text-align: right; color: var(--text-secondary); font-weight: 600;
+  /* Centred over the span it names. Right-aligned, "Holds" sat directly above
+     `files` and "Last" above `measured`, so each read as a label for one
+     column rather than for the three and the two they cover. */
+  text-align: center; color: var(--text-secondary); font-weight: 600;
   border-bottom: 1px solid var(--border);
 }
 /* The first column of a group stands away from the group before it; inside a
@@ -380,14 +383,17 @@
    Format value with nothing in between. The row stopped reading as a row.
    Percentages keep the cluster of figures together at every width, and the
    container queries below still collapse individual columns to zero. */
-.colName { width: 28% }
-.colFormat { width: 8% }
+.colName { width: 30% }
+.colFormat { width: 10% }
 .colRows { width: 12% }
 .colSize { width: 9% }
 .colFiles { width: 7% }
 .colChanged { width: 9% }
 .colMeasured { width: 9% }
-.colAnswer { width: 18% }
+/* Answers is empty on every row but the few that carry sketches, so it had
+   18% of the table holding nothing. The width it gives back goes to the name
+   and to Format, which was narrow enough to clip its own mark. */
+.colAnswer { width: 14% }
 
 .cName { position: relative; min-width: 0; padding-left: 0 !important }
 .cFormat { text-align: right; color: var(--text-secondary) }
