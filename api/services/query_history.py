@@ -119,13 +119,19 @@ def list_history(user_id: Optional[str], limit: int = 50) -> List[dict]:
 # listed for an owner assumes the bound is in reach and lists once.
 _HISTORY_COUNTS: dict[str, int] = {}
 _HISTORY_COUNT_LOCK = threading.Lock()
-# Far enough below the bound that an uncounted write cannot carry an owner
-# past it before the next listing.
+# Far enough below the bound that the writes arriving while a sweep is still
+# running cannot carry an owner meaningfully past it.
 _RETENTION_CHECK_MARGIN = 50
-# Records removed beyond the one the bound requires, so the listing that
-# found them is amortised over the writes that follow. A transaction
-# carries at most a hundred mutations and one of them is the new record.
-_RETENTION_TRIM_BATCH = 79
+# Records removed per sweep. A transaction carries at most a hundred
+# mutations, and the sweep's transaction holds nothing else, so it takes the
+# whole allowance — which leaves the owner far enough below the bound that the
+# writes that follow schedule nothing.
+_RETENTION_TRIM_BATCH = MAX_DELETE_FANOUT
+
+# Owners with a sweep already in flight. Dashboards write a dozen rows at once
+# and every one of them would otherwise see the same over-bound count and
+# start its own sweep, which would then race for the same records' revisions.
+_RETENTION_SWEEPS: set[str] = set()
 
 
 def _at_retention_bound(owner: str) -> bool:
@@ -139,13 +145,93 @@ def _remember_history_count(owner: str, count: int) -> None:
         _HISTORY_COUNTS[owner] = count
 
 
-def _count_one_more(owner: str, *, trimmed: bool) -> None:
-    """One record added, and one removed when retention trimmed."""
+def _count_one_more(owner: str) -> None:
+    """One record added. An owner never counted stays uncounted, so the sweep
+    that establishes the count is the one that sets it."""
     with _HISTORY_COUNT_LOCK:
         known = _HISTORY_COUNTS.get(owner)
-        if known is None:
-            return
-        _HISTORY_COUNTS[owner] = known if trimmed else known + 1
+        if known is not None:
+            _HISTORY_COUNTS[owner] = known + 1
+
+
+def _claim_retention_sweep(owner: str) -> bool:
+    with _HISTORY_COUNT_LOCK:
+        if owner in _RETENTION_SWEEPS:
+            return False
+        _RETENTION_SWEEPS.add(owner)
+        return True
+
+
+def _release_retention_sweep(owner: str) -> None:
+    with _HISTORY_COUNT_LOCK:
+        _RETENTION_SWEEPS.discard(owner)
+
+
+def run_retention_sweep(owner: str) -> int:
+    """Bring *owner* back under the retention bound, and report what it took.
+
+    Listing an owner's history is paged a hundred records at a time, so at the
+    bound it is ten round trips, and the trim that follows is a further hundred
+    statements inside one transaction. None of that belongs in front of a
+    query's response: the bound is a bound, so an owner sitting a few records
+    over it until this finishes is correct, while a reader waiting eight
+    seconds for it is not.
+    """
+    records = product_store.list_records(
+        "query_history", owner, "Viewer", max_records=MAX_HISTORY_PER_OWNER)
+    _remember_history_count(owner, len(records))
+    over = len(records) - MAX_HISTORY_PER_OWNER
+    if over < 0:
+        return 0
+
+    def ordering(record):
+        item = record.get("document") or {}
+        return (str(item.get("executed_at") or ""), str(item.get("id") or ""))
+
+    # Enough to clear the overage plus the headroom that keeps the writes which
+    # follow from scheduling another sweep, and never more than one transaction
+    # carries.
+    take = min(over + _RETENTION_TRIM_BATCH, MAX_DELETE_FANOUT)
+    mutations = []
+    for oldest in sorted(records, key=ordering)[:take]:
+        revision = oldest.get("revision")
+        item = oldest.get("document")
+        if type(revision) is not int or revision < 1 or not isinstance(item, dict) \
+                or item.get("user_email") != owner:
+            raise RuntimeError("KaveonDB query history retention state is invalid")
+        mutations.append(product_store.ProductMutation(
+            "delete", "query_history", str(item["id"]), expected_revision=revision))
+    if not mutations:
+        return 0
+    product_store.transact(mutations, owner, "Analyst")
+    _remember_history_count(owner, len(records) - len(mutations))
+    return len(mutations)
+
+
+def _sweep_retention_quietly(owner: str) -> None:
+    try:
+        run_retention_sweep(owner)
+    except Exception as error:
+        # The owner stays over the bound and the next write schedules another
+        # sweep. A failure here must never reach the query that triggered it,
+        # which has already been answered.
+        logging.getLogger(__name__).warning(
+            "query_history_retention_sweep_failed type=%s", type(error).__name__)
+    finally:
+        _release_retention_sweep(owner)
+
+
+def _schedule_retention(owner: str) -> None:
+    """Start a sweep for *owner* if one is warranted and none is running."""
+    if not _at_retention_bound(owner) or not _claim_retention_sweep(owner):
+        return
+    try:
+        threading.Thread(target=_sweep_retention_quietly, args=(owner,),
+                         name="query-history-retention", daemon=True).start()
+    except RuntimeError:
+        # Threads unavailable during interpreter shutdown: do it here rather
+        # than leave the claim held and retention never running again.
+        _sweep_retention_quietly(owner)
 
 
 def create_history(data: dict, user_id: str) -> dict:
@@ -172,45 +258,16 @@ def create_history(data: dict, user_id: str) -> dict:
             "dataset_id": data.get("dataset_id"), "tables_used": data.get("tables_used"),
         }
         document = migration_document(result)
-        # Retention needs the owner's oldest record only once they are at the
-        # bound, and the listing that finds it is paged a hundred at a time —
-        # so doing it before every write made each query wait on up to ten
-        # round trips to append one row. That was most of the time a statement
-        # took: the Engine answered a cube breakdown in ~200ms while the write
-        # behind it spent seconds. The count is remembered per owner and the
-        # listing happens only when it says the bound is in reach.
-        records: list = []
-        if _at_retention_bound(user_id):
-            records = product_store.list_records(
-                "query_history", user_id, "Viewer", max_records=MAX_HISTORY_PER_OWNER)
-            _remember_history_count(user_id, len(records))
-        mutations = [product_store.ProductMutation(
-            "create", "query_history", new_id, document)]
-        trimmed = 0
-        over = len(records) + 1 - MAX_HISTORY_PER_OWNER
-        if over > 0:
-            def ordering(record):
-                item = record.get("document") or {}
-                return (str(item.get("executed_at") or ""), str(item.get("id") or ""))
-            # Trim a batch, not the single oldest record. Finding the oldest
-            # costs a full listing, and at the bound that listing ran on every
-            # write — ten paged reads to delete one row, which was most of
-            # what a statement took. Taking a batch leaves the owner below the
-            # bound, so the writes that follow skip the listing and pay only
-            # the commit.
-            for oldest in sorted(records, key=ordering)[:over + _RETENTION_TRIM_BATCH]:
-                revision = oldest.get("revision")
-                item = oldest.get("document")
-                if type(revision) is not int or revision < 1 or not isinstance(item, dict)                         or item.get("user_email") != user_id:
-                    raise RuntimeError("KaveonDB query history retention state is invalid")
-                mutations.append(product_store.ProductMutation(
-                    "delete", "query_history", str(item["id"]), expected_revision=revision))
-                trimmed += 1
-        product_store.transact(mutations, user_id, "Analyst")
-        if records:
-            _remember_history_count(user_id, len(records) + 1 - trimmed)
-        else:
-            _count_one_more(user_id, trimmed=False)
+        # The write is one mutation and nothing else. Retention used to ride
+        # along in this transaction: at the bound it listed the owner's whole
+        # history — ten paged reads — and then committed a hundred deletes as a
+        # hundred sequential statements, so one write in thirty cost about
+        # eight seconds while the Engine behind it had answered in ~200ms.
+        # It runs behind the response now instead.
+        product_store.transact([product_store.ProductMutation(
+            "create", "query_history", new_id, document)], user_id, "Analyst")
+        _count_one_more(user_id)
+        _schedule_retention(user_id)
         return {**result, "engine_query_id": engine_query_id,
                 "engine_details": json.loads(engine_details) if engine_details else None}
     supports_details=_supports_engine_details()

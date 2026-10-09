@@ -135,6 +135,48 @@ class AverageSubstitutionTests(unittest.TestCase):
         self.assertEqual(plan.columns,
                          (rewrite._Output(source=0, divisor=1, name="ms"),))
 
+    def test_a_global_average_is_substituted_with_no_clause_to_remove(self):
+        """A KPI tile's average carries no ORDER BY and no LIMIT — it returns
+        one row — and that is exactly the statement that scanned 504M rows for
+        a number the cube's grand-total cell holds."""
+        plan = rewrite.plan('SELECT AVG(latency_p75_ms) AS "ms" '
+                            'FROM public.kaveon_events_enriched')
+        self.assertEqual(
+            plan.statement,
+            'SELECT SUM(latency_p75_ms) AS "__kaveon_avg_sum_0", '
+            'COUNT(latency_p75_ms) AS "__kaveon_avg_count_0" '
+            'FROM public.kaveon_events_enriched',
+        )
+        self.assertEqual(plan.columns,
+                         (rewrite._Output(source=0, divisor=1, name="ms"),))
+        self.assertEqual((plan.grouped, plan.sort_keys, plan.limit),
+                         (False, (), None))
+
+    def test_a_clauseless_average_keeps_its_predicate_and_grouping(self):
+        plan = rewrite.plan('SELECT surface, AVG(latency_p75_ms) AS "ms" FROM t '
+                            "WHERE region = 'Europe' GROUP BY surface")
+        self.assertEqual(
+            plan.statement,
+            'SELECT surface, SUM(latency_p75_ms) AS "__kaveon_avg_sum_1", '
+            'COUNT(latency_p75_ms) AS "__kaveon_avg_count_1" '
+            "FROM t WHERE region = 'Europe' GROUP BY surface",
+        )
+
+    def test_a_clauseless_average_ending_in_a_semicolon_is_cut_at_the_statement(self):
+        plan = rewrite.plan('SELECT AVG(x) AS "m" FROM t ;')
+        self.assertEqual(plan.statement,
+                         'SELECT SUM(x) AS "__kaveon_avg_sum_0", '
+                         'COUNT(x) AS "__kaveon_avg_count_0" FROM t')
+
+    def test_an_aggregate_that_is_not_an_average_needs_a_clause_to_remove(self):
+        """Without an AVG to substitute there is nothing to gain: the statement
+        is already the shape the cube matches, so it is left exactly alone."""
+        for sql in ('SELECT COUNT(*) AS "n" FROM t',
+                    'SELECT SUM(a) AS "s" FROM t',
+                    'SELECT surface, SUM(a) AS "s" FROM t GROUP BY surface'):
+            with self.subTest(sql=sql):
+                self.assertIsNone(rewrite.plan(sql))
+
     def test_an_average_beside_other_aggregates_keeps_every_position(self):
         plan = rewrite.plan(
             "SELECT region, SUM(a) AS s, AVG(b) AS m, COUNT(DISTINCT c) AS d "

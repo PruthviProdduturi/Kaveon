@@ -247,13 +247,14 @@ def _engine_approximate(result: dict) -> bool:
 
 
 # ── Cube-shaped chart statements ────────────────────────────────────────────
-# The Engine answers a cube-shaped grouped aggregate from precomputed cells
-# instead of scanning the table, but an ORDER BY or a LIMIT disqualifies that
-# match while every chart statement carries both.  So a statement that can be
-# ordered and limited here is issued without those clauses and finished here
-# over the handful of rows a breakdown returns.  An AVG projection is also
-# substituted, because the cube holds a column's sum and its count but not its
-# mean.  services.engine_cube_rewrite owns the rule for which statements
+# The Engine answers a cube-shaped aggregate from precomputed cells instead of
+# scanning the table, and a chart statement routinely falls outside that match
+# for one of two reasons.  An ORDER BY or a LIMIT disqualifies it, and a
+# breakdown carries both — so the statement is issued without those clauses and
+# finished here over the handful of rows a breakdown returns.  An AVG is not a
+# cell the cube holds, so it is reissued as the sum and count that are, which
+# is why a KPI tile's ungrouped average qualifies although it has no clause to
+# remove.  services.engine_cube_rewrite owns the rule for which statements
 # qualify, and reduces the rows that come back to the ones the caller asked
 # for.
 
