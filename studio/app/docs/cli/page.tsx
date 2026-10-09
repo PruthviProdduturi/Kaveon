@@ -26,6 +26,24 @@ kaveon --version`}</Code>
 kaveon --server https://engine.example.com --catalog OpenSource --schema nyc_taxi`}</Code>
       <p>Connection defaults can live in <code>~/.kaveon_config</code>. Command-line flags override them. The client records <code>--user</code>, <code>--source</code> and <code>--client-tags</code> as query metadata; they never grant access.</p>
 
+      <h2>Connect to the qualified AKS Engine</h2>
+      <p>The production-shaped Engine runs in <code>kaveon-aks</code> in <code>kaveon-rg</code>. Port-forwarding keeps the coordinator private while you use the CLI. Studio on Vercel is a separate deployment.</p>
+      <Code lang="powershell">{`az login
+az account set --subscription 4ed07f02-b111-4eea-98ce-1c177d573a51
+az aks get-credentials --resource-group kaveon-rg --name kaveon-aks --overwrite-existing
+kubelogin convert-kubeconfig -l azurecli
+
+# Keep this terminal open.
+kubectl --context kaveon-aks -n kaveon port-forward \\
+  service/kaveon 18443:8080 --address 127.0.0.1`}</Code>
+      <Code lang="powershell">{`$bundle = "tmp/kaveon-production-private-205"
+$tokens = Get-Content "$bundle/tokens.json" -Raw | ConvertFrom-Json
+$env:KAVEON_ACCESS_TOKEN = $tokens.principal
+$ca = (Resolve-Path "$bundle/ca.crt").Path
+$env:NO_PROXY = "localhost,127.0.0.1,::1"
+kaveon --server https://localhost:18443 --ca-cert $ca --catalog OpenSource --schema nyc_taxi`}</Code>
+      <p>These are operator commands for the private qualification bundle; never commit the token or CA bundle. Restore the catalog definitions after creating a new cluster before running the example. Public users need the configured Entra access token and public HTTPS hostname after an API/Ingress cutover.</p>
+
       <h2>Authentication</h2>
       <p><code>auto</code> uses an access token when supplied, then Azure CLI, then Microsoft device sign-in when the coordinator advertises Entra. <code>azure-cli</code> requires the current Azure login, <code>microsoft</code> starts device sign-in explicitly, and <code>none</code> is for loopback development only. Tokens remain in process memory.</p>
 
