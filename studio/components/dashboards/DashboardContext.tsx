@@ -50,6 +50,28 @@ function collectChartIds(items: DashboardLayoutItem[]): ChartId[] {
 }
 
 /**
+ * The canonical change-tracking snapshot of a dashboard.
+ *
+ * Every writer of `initialSnapshotRef` and the change-tracking effect build the
+ * snapshot here so the two can never disagree. They did: the saved snapshot
+ * carried the colour theme and the tracked one did not, so the comparison was
+ * never equal again after a save and the Unsaved badge re-lit immediately.
+ */
+function buildChangeSnapshot(config: Partial<DashboardConfig>): string {
+  const layout = Array.isArray(config.layout) ? config.layout : [];
+  return JSON.stringify({
+    id: config.id ?? null,
+    name: config.name ?? '',
+    description: config.description ?? '',
+    theme: config.theme || 'default',
+    layout,
+    filters: config.filters ?? [],
+    filterLogic: config.filterLogic ?? 'AND',
+    chartIds: collectChartIds(layout),
+  });
+}
+
+/**
  * Dashboard context state interface
  */
 interface DashboardContextState {
@@ -86,6 +108,11 @@ interface DashboardContextState {
 
   // Actions - Layout management
   setLayout: (layout: DashboardLayoutItem[]) => void;
+  /**
+   * Accept coordinates the grid normalised on its own (compaction, defaulted
+   * widths) without counting them as an edit the user has to save.
+   */
+  adoptLayout: (layout: DashboardLayoutItem[]) => void;
   addLayoutItem: (type: ComponentType, config?: Partial<DashboardLayoutItem>) => void;
   updateLayoutItem: (itemId: string, updates: Partial<DashboardLayoutItem>) => void;
   removeLayoutItem: (itemId: string) => void;
@@ -140,7 +167,8 @@ interface DashboardContextState {
   setIsDragging: (isDragging: boolean) => void;
 
   // Save/load operations
-  saveDashboard: (overrides?: Partial<DashboardConfig>) => Promise<void>;
+  /** Persists the dashboard. Resolves true only when it was stored. */
+  saveDashboard: (overrides?: Partial<DashboardConfig>) => Promise<boolean>;
   /** Save the current dashboard as a NEW copy; resolves to the new dashboard id (or null). */
   saveDashboardAs: (newName: string) => Promise<string | number | null>;
   loadDashboard: (config: DashboardConfig) => void;
@@ -255,6 +283,23 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
   // Change tracking
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
   const initialSnapshotRef = useRef<string>('');
+  if (!initialSnapshotRef.current) {
+    // Baseline for change tracking, mirroring the state initialisers above so
+    // the tracker further down compares against the dashboard as it was handed
+    // to the provider. Set on the first render rather than in an effect because
+    // the grid emits its normalised coordinates from a child effect, which runs
+    // before any effect here. Without a baseline the tracker never ran at all
+    // and "unsaved" was a one-way flag: undoing every edit left the badge lit.
+    initialSnapshotRef.current = buildChangeSnapshot({
+      id: initialConfig?.id,
+      name: initialConfig?.name ?? '',
+      description: initialConfig?.description ?? '',
+      theme: initialConfig?.theme ?? 'default',
+      layout: Array.isArray(initialConfig?.layout) ? initialConfig.layout : [],
+      filters: initialConfig?.filters ?? [],
+      filterLogic: initialConfig?.filterLogic ?? 'AND',
+    });
+  }
 
   /**
    * Generate a unique ID for layout items
@@ -879,10 +924,10 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
    * Save the current dashboard state
    * Calls the onSave callback with the complete dashboard configuration
    */
-  const saveDashboard = useCallback(async (overrides?: Partial<DashboardConfig>) => {
+  const saveDashboard = useCallback(async (overrides?: Partial<DashboardConfig>): Promise<boolean> => {
     if (!onSave) {
       console.warn('No onSave callback provided to DashboardProvider');
-      return;
+      return false;
     }
 
     setIsSaving(true);
@@ -913,11 +958,13 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
       if (overrides?.description !== undefined) setDescription(overrides.description);
 
       // Update the initial snapshot after successful save
-      initialSnapshotRef.current = JSON.stringify(config);
+      initialSnapshotRef.current = buildChangeSnapshot(config);
       setHasUnsavedChanges(false);
+      return true;
     } catch (error) {
       console.error('Error saving dashboard:', error);
       setSaveError(error instanceof Error ? error.message : 'Failed to save dashboard');
+      return false;
     } finally {
       setIsSaving(false);
     }
@@ -969,7 +1016,7 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
     setHasUnsavedChanges(false);
 
     // Store initial snapshot
-    initialSnapshotRef.current = JSON.stringify(config);
+    initialSnapshotRef.current = buildChangeSnapshot(config);
   }, []);
 
   /**
@@ -984,26 +1031,53 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
     setFilterLogic('AND');
     setSelectedItemId(null);
     setHasUnsavedChanges(false);
-    initialSnapshotRef.current = '';
-  }, []);
+    // Baseline the empty dashboard the reset just produced; an empty string
+    // would switch change tracking off entirely.
+    initialSnapshotRef.current = buildChangeSnapshot({ theme });
+  }, [theme]);
 
   /**
    * Register the current state as the initial snapshot
    * Used to detect unsaved changes
    */
   const registerInitialSnapshot = useCallback(() => {
-    const config: DashboardConfig = {
+    initialSnapshotRef.current = buildChangeSnapshot({
       id: dashboardId || undefined,
       name,
       description,
+      theme,
       layout,
       filters: dashboardFilters,
       filterLogic,
-      chartIds: collectChartIds(layout),
-    };
-    initialSnapshotRef.current = JSON.stringify(config);
+    });
     setHasUnsavedChanges(false);
-  }, [dashboardId, name, description, layout, dashboardFilters, filterLogic]);
+  }, [dashboardId, name, description, theme, layout, dashboardFilters, filterLogic]);
+
+  /**
+   * Accept coordinates the grid worked out for itself.
+   *
+   * react-grid-layout normalises the authored layout on mount — vertical
+   * compaction, defaulted widths — and reports the result. Those coordinates do
+   * belong in state, but they are not an edit the user made, and writing them
+   * through setLayout lit the Unsaved badge on dashboards nobody had touched.
+   * The baseline moves with them, so the badge and the leave-prompt stay quiet;
+   * it only moves while there is nothing else pending, so a normalisation
+   * arriving mid-edit can never swallow a real change.
+   */
+  const adoptLayout = useCallback((newLayout: DashboardLayoutItem[]) => {
+    setLayout(newLayout);
+    if (!hasUnsavedChanges) {
+      initialSnapshotRef.current = buildChangeSnapshot({
+        id: dashboardId || undefined,
+        name,
+        description,
+        theme,
+        layout: newLayout,
+        filters: dashboardFilters,
+        filterLogic,
+      });
+    }
+  }, [hasUnsavedChanges, dashboardId, name, description, theme, dashboardFilters, filterLogic]);
 
   /**
    * Pre-fetch all chart configurations in parallel
@@ -1081,23 +1155,21 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
   useEffect(() => {
     if (!initialSnapshotRef.current) return;
 
-    const currentConfig: DashboardConfig = {
+    const currentSnapshot = buildChangeSnapshot({
       id: dashboardId || undefined,
       name,
       description,
+      theme,
       layout,
       filters: dashboardFilters,
       filterLogic,
-      chartIds: collectChartIds(layout),
-    };
-
-    const currentSnapshot = JSON.stringify(currentConfig);
+    });
     const hasChanges = currentSnapshot !== initialSnapshotRef.current;
 
     if (hasChanges !== hasUnsavedChanges) {
       setHasUnsavedChanges(hasChanges);
     }
-  }, [dashboardId, name, description, layout, dashboardFilters, filterLogic, hasUnsavedChanges]);
+  }, [dashboardId, name, description, theme, layout, dashboardFilters, filterLogic, hasUnsavedChanges]);
 
   /**
    * Context value with all state and actions
@@ -1136,6 +1208,7 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
 
     // Actions - Layout management
     setLayout: (newLayout: DashboardLayoutItem[]) => { setLayout(newLayout); setHasUnsavedChanges(true); },
+    adoptLayout,
     addLayoutItem,
     updateLayoutItem,
     removeLayoutItem,

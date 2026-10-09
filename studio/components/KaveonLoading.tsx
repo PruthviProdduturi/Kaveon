@@ -50,7 +50,11 @@ export function KaveonLoading({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: fullScreen ? "var(--bg-primary)" : "var(--bg-elevated)",
+        // Full screen, this covers the app and needs its own ground. Inline,
+        // it sits inside a pane that already has one, and painting a second
+        // drew a rectangle a shade off its host — visible as a dark block in
+        // the Lab's results pane while a statement ran.
+        background: fullScreen ? "var(--bg-primary)" : "transparent",
       }}
     >
       <div

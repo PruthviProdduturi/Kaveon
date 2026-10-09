@@ -46,9 +46,14 @@ interface DashboardCanvasProps {
 }
 
 const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => {
-  const { layout, setLayout, isEditMode, addLayoutItem } = useDashboard();
+  const { layout, setLayout, adoptLayout, isEditMode, addLayoutItem } = useDashboard();
   // Measure before the first paint so tiles never land on a stale width.
   const { width, mounted, containerRef } = useContainerWidth({ measureBeforeMount: true });
+  // react-grid-layout reports its own normalisation of the authored layout
+  // (vertical compaction, defaulted widths) as soon as it mounts. That is not
+  // an edit, so it must not light the Unsaved badge; only coordinates that
+  // follow a drag or a resize are the user's.
+  const userMovedTilesRef = React.useRef(false);
 
   const rootItems = layout.filter((item) => !item.parentId);
   const hasContainers = rootItems.some((i) => i.type === 'row' || i.type === 'column');
@@ -112,8 +117,12 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
       if (it.x !== l.x || it.y !== l.y || it.w !== l.w || it.h !== l.h) changed = true;
       return { ...it, x: l.x, y: l.y, w: l.w, h: l.h };
     });
-    if (changed) setLayout(next);
+    if (!changed) return;
+    if (userMovedTilesRef.current) setLayout(next);
+    else adoptLayout(next);
   };
+
+  const markUserMove = () => { userMovedTilesRef.current = true; };
 
   return (
     <div ref={containerRef} className={`dashboard-canvas ${className}`} style={{ paddingBottom: 32 }}>
@@ -125,6 +134,8 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
           dragConfig={{ enabled: isEditMode, cancel: DRAG_CANCEL }}
           resizeConfig={{ enabled: isEditMode, handles: RESIZE_HANDLES }}
           onLayoutChange={handleLayoutChange}
+          onDragStart={markUserMove}
+          onResizeStart={markUserMove}
         >
           {rootItems.map((item) => (
             <div key={item.i} style={{ height: '100%', overflow: 'hidden' }}>

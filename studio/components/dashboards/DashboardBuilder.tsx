@@ -17,6 +17,7 @@ import { msalFetch } from "../../utils/msalFetch";
 import { API_BASE } from "../../config";
 import { DASHBOARD_THEMES } from "../../types/dashboard";
 import { useAuth } from "../../auth/useAuth";
+import { useUnsavedWorkGuard } from "../../contexts/NavigationGuardContext";
 import type { ComponentType } from "../../types/dashboard";
 
 interface Chart {
@@ -244,6 +245,36 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
   };
 
   /**
+   * Unsaved-change guard.
+   *
+   * The header's Unsaved badge and this guard read the same `hasUnsavedChanges`
+   * from the dashboard context, so the prompt can never disagree with what the
+   * badge shows. Registering it arms every exit from the builder: in-app links,
+   * the browser's Back button, and closing or reloading the tab.
+   */
+  const saveInPlace = useCallback(() => saveDashboard(), [saveDashboard]);
+
+  const unsavedWorkGuard = React.useMemo(
+    () => ({
+      isDirty: hasUnsavedChanges,
+      // An unnamed dashboard has nowhere to save to without asking for a name
+      // first, so there the prompt offers discard or stay.
+      save: name.trim() ? saveInPlace : null,
+      leavePrompt: {
+        title: "Unsaved changes",
+        message:
+          "This dashboard has edits that have not been saved. Leaving the builder discards them.",
+        saveLabel: "Save and leave",
+        discardLabel: "Discard and leave",
+        stayLabel: "Keep editing",
+      },
+    }),
+    [hasUnsavedChanges, name, saveInPlace],
+  );
+
+  const requestExit = useUnsavedWorkGuard(unsavedWorkGuard);
+
+  /**
    * Open save modal
    */
   const handleSave = () => {
@@ -271,8 +302,8 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
 
     // …but pass the just-typed values straight into the save so it never races
     // the setState above (that race silently dropped description edits).
-    await saveDashboard({ name: tempName, description: tempDescription });
-    if (!saveError) {
+    const saved = await saveDashboard({ name: tempName, description: tempDescription });
+    if (saved) {
       if (dashboardId) {
         router.push(`/dashboards/${dashboardId}/view`);
       } else {
@@ -354,7 +385,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
   /**
    * Handle publish dashboard
    */
-  const handlePublish = async () => {
+  const publishDashboard = async () => {
     if (!dashboardId) return;
 
     setIsPublishing(true);
@@ -381,7 +412,21 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
     }
   };
 
-  const chartTypeInfo = (type?: string): { icon: string; color: string; bg: string; label: string } => {
+  /**
+   * Publishing sends readers to the stored dashboard and then leaves the
+   * builder, so unsaved edits would be published as the previous version and
+   * then lost. Ask first.
+   */
+  const handlePublish = () => {
+    requestExit(() => { void publishDashboard(); }, {
+      message:
+        "This dashboard has edits that have not been saved. Publishing now publishes the last saved version and discards them.",
+      saveLabel: "Save and publish",
+      discardLabel: "Discard and publish",
+    });
+  };
+
+  const chartTypeInfo =(type?: string): { icon: string; color: string; bg: string; label: string } => {
     if (!type) return { icon: "fas fa-chart-bar", color: "#6366f1", bg: "#eef2ff", label: "Chart" };
     const t = type.toLowerCase();
     const label = type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -671,7 +716,12 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
           </button>
           {dashboardId && (
             <button
-              onClick={() => router.push(`/dashboards/${dashboardId}/view`)}
+              onClick={() => requestExit(() => router.push(`/dashboards/${dashboardId}/view`), {
+                message:
+                  "This dashboard has edits that have not been saved. Opening the viewer discards them.",
+                saveLabel: "Save and view",
+                discardLabel: "Discard and view",
+              })}
               style={{
                 padding: "8px 16px",
                 fontWeight: 600,
