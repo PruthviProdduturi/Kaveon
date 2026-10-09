@@ -1,26 +1,106 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="700" viewBox="0 0 1200 700" role="img" aria-labelledby="deploy-title deploy-desc">
   <title id="deploy-title">Kaveon deployment topology</title>
-  <desc id="deploy-desc">The shipping browser, Studio, API, and registered-source path is separate from the alpha Engine. Engine workers currently register by heartbeat; API integration, fragment scheduling, cloud storage, retry, and distributed cancellation are targets.</desc>
-  <defs><marker id="deploy-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 8 4 0 8Z" fill="#4A9EE8"/></marker><style>.eyebrow{font:600 11px Inter,Segoe UI,sans-serif;letter-spacing:2px;fill:#718096}.title{font:600 25px Inter,Segoe UI,sans-serif;fill:#f8fafc}.heading{font:600 18px Inter,Segoe UI,sans-serif;fill:#f8fafc}.body{font:400 12px Inter,Segoe UI,sans-serif;fill:#9aa7b8}.note{font:500 11px Inter,Segoe UI,sans-serif;fill:#718096}.box{fill:#101620;stroke:#263244;stroke-width:1}.accent{stroke:#4A9EE8}.rule{stroke:#263244}.flow{fill:none;stroke:#4A9EE8;stroke-width:2;marker-end:url(#deploy-arrow)}.target{stroke-dasharray:7 8;animation:deploy-flow 3s linear infinite}@keyframes deploy-flow{to{stroke-dashoffset:-30}}@media(prefers-reduced-motion:reduce){.target{animation:none}}</style></defs>
+  <desc id="deploy-desc">The browser reaches Studio on Vercel, whose same-origin proxy forwards to the API on kaveon-vm behind Caddy. The API plans through the Kaveon Engine coordinator, which schedules fragments across two workers reading Delta tables in ADLS Gen2. The platform's own records live in KaveonDB, the Engine's built-in transactional catalog. There is no PostgreSQL in the request path.</desc>
+  <defs><marker id="deploy-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 8 4 0 8Z" fill="#4A9EE8"/></marker><style>.eyebrow{font:600 11px Inter,Segoe UI,sans-serif;letter-spacing:2px;fill:#718096}.title{font:600 25px Inter,Segoe UI,sans-serif;fill:#f8fafc}.heading{font:600 18px Inter,Segoe UI,sans-serif;fill:#f8fafc}.body{font:400 12px Inter,Segoe UI,sans-serif;fill:#9aa7b8}.note{font:500 11px Inter,Segoe UI,sans-serif;fill:#718096}.box{fill:#101620;stroke:#263244;stroke-width:1}.accent{stroke:#4A9EE8}.rule{stroke:#263244}.flow{fill:none;stroke:#4A9EE8;stroke-width:2;marker-end:url(#deploy-arrow)}</style></defs>
   <rect width="1200" height="700" rx="20" fill="#0b0f15"/>
-  <g transform="translate(502.125 20) scale(.15)" fill="#f8fafc"><rect x="90" y="70" width="20" height="165"/><polygon points="108.73,161.2 215.73,86.39 204.27,70 97.27,144.8"/><polygon points="97.51,161.36 209.51,235 220.49,218.29 108.49,144.64"/><path d="M260 235 330 70h20l70 165h-23l-57-131-57 131Z"/><path d="M465 70h23l57 131 57-131h23l-70 165h-20Z"/><rect x="675" y="70" width="20" height="165"/><rect x="675" y="70" width="130" height="20"/><rect x="675" y="142.5" width="108" height="20"/><rect x="675" y="215" width="130" height="20"/><rect x="1060" y="70" width="20" height="165"/><rect x="1195" y="70" width="20" height="165"/><polygon points="1062.53,83.3 1197.53,235 1212.47,221.7 1077.47,70"/><path d="M966.25 215.29A72.5 72.5 0 1 0 893.75 215.29" fill="none" stroke="#4A9EE8" stroke-width="20"/></g>
-  <text x="600" y="76" text-anchor="middle" class="note">Talk to your data.</text><text x="600" y="112" text-anchor="middle" class="title">Deployment topology</text><line x1="56" y1="140" x2="1144" y2="140" class="rule"/>
 
-  <text x="56" y="180" class="eyebrow">SHIPPING PLATFORM PATH</text>
-  <g transform="translate(56 204)"><rect width="190" height="96" rx="14" class="box"/><text x="24" y="40" class="heading">Browser</text><text x="24" y="68" class="body">NextAuth session</text></g><path d="M246 252h42" class="flow"/>
-  <g transform="translate(296 204)"><rect width="220" height="96" rx="14" class="box"/><text x="24" y="40" class="heading">Studio</text><text x="24" y="68" class="body">Vercel · same-origin proxy</text></g><path d="M516 252h42" class="flow"/>
-  <g transform="translate(566 204)"><rect width="240" height="96" rx="14" class="box"/><text x="24" y="40" class="heading">API + DLM</text><text x="24" y="68" class="body">Azure Container Apps</text></g><path d="M806 252h42" class="flow"/>
-  <g transform="translate(856 204)"><rect width="288" height="96" rx="14" class="box"/><text x="24" y="40" class="heading">Metadata + SQL sources</text><text x="24" y="68" class="body">PostgreSQL · registered systems</text></g>
+  <g transform="translate(56,52)">
+    <text class="eyebrow">KAVEON</text>
+    <text class="title" y="30">Deployment topology</text>
+    <text class="body" y="54">Every request a person makes goes through this path. The Engine is the query path, not a parallel experiment.</text>
+  </g>
 
-  <line x1="56" y1="338" x2="1144" y2="338" class="rule"/><text x="56" y="374" class="eyebrow">ENGINE ALPHA · NODE-LOCAL EXECUTION</text>
-  <g transform="translate(56 398)"><rect width="330" height="112" rx="14" class="box accent"/><text x="24" y="40" class="heading">Coordinator</text><text x="24" y="68" class="body">Catalog · planning · statement API</text><text x="24" y="91" class="note">EXECUTES STATEMENTS ON THIS NODE</text></g>
-  <path d="M386 454h78" class="flow"/>
-  <g transform="translate(472 398)"><rect width="240" height="112" rx="14" class="box"/><text x="24" y="40" class="heading">Worker registry</text><text x="24" y="68" class="body">Discovery · heartbeats</text><text x="24" y="91" class="note">NO FRAGMENT SCHEDULING YET</text></g>
-  <path d="M712 454h78" fill="none" stroke="#263244" stroke-width="1"/>
-  <g transform="translate(798 398)"><rect width="346" height="112" rx="14" class="box"/><text x="24" y="40" class="heading">Node-mounted data</text><text x="24" y="68" class="body">Local Parquet volume</text><text x="24" y="91" class="note">NOT A DISTRIBUTED STORAGE LAYER</text></g>
+  <!-- Request path -->
+  <g transform="translate(56,142)">
+    <text class="eyebrow">REQUEST PATH</text>
+    <line class="rule" x1="0" y1="12" x2="1088" y2="12"/>
+  </g>
 
-  <path d="M686 300v76c0 14-12 22-26 22" class="flow target"/><text x="706" y="358" class="note">TARGET API → ENGINE</text>
-  <text x="56" y="566" class="eyebrow">DISTRIBUTED TARGET</text>
-  <g transform="translate(56 590)"><rect width="1088" height="70" rx="14" class="box"/><text x="24" y="30" class="body">Coordinator schedules fragments → workers exchange Arrow batches → retry and cancellation span the query</text><text x="24" y="52" class="body">Workers share logical access to ADLS Gen2 / S3; Engine authentication and TLS terminate at a trusted gateway</text></g>
-  <text x="56" y="682" class="note">SOLID · SHIPPING</text><text x="180" y="682" class="note">DASHED · TARGET</text><text x="1144" y="682" text-anchor="end" class="note">DISCOVERY IS NOT DISTRIBUTED QUERY EXECUTION</text>
+  <g transform="translate(56,172)">
+    <rect class="box" width="200" height="74" rx="10"/>
+    <text class="heading" x="18" y="32">Browser</text>
+    <text class="body" x="18" y="54">Auth.js session</text>
+  </g>
+  <path class="flow" d="M264 209 H 322"/>
+
+  <g transform="translate(330,172)">
+    <rect class="box" width="236" height="74" rx="10"/>
+    <text class="heading" x="18" y="32">Studio</text>
+    <text class="body" x="18" y="54">Vercel · same-origin proxy</text>
+  </g>
+  <path class="flow" d="M574 209 H 632"/>
+  <text class="note" x="576" y="200">X-User-* + secret</text>
+
+  <g transform="translate(640,172)">
+    <rect class="box" width="236" height="74" rx="10"/>
+    <text class="heading" x="18" y="32">Caddy</text>
+    <text class="body" x="18" y="54">kaveon-vm · TLS</text>
+  </g>
+  <path class="flow" d="M884 209 H 942"/>
+
+  <g transform="translate(950,172)">
+    <rect class="box" width="194" height="74" rx="10"/>
+    <text class="heading" x="18" y="32">API + DLM</text>
+    <text class="body" x="18" y="54">FastAPI</text>
+  </g>
+
+  <!-- Engine -->
+  <g transform="translate(56,298)">
+    <text class="eyebrow">KAVEON ENGINE · ON THE SAME HOST</text>
+    <line class="rule" x1="0" y1="12" x2="1088" y2="12"/>
+  </g>
+
+  <path class="flow" d="M1047 252 V 338"/>
+
+  <g transform="translate(950,330)">
+    <rect class="box accent" width="194" height="86" rx="10"/>
+    <text class="heading" x="18" y="32">Coordinator</text>
+    <text class="body" x="18" y="54">Catalog · planning</text>
+    <text class="body" x="18" y="72">Cube and statistics</text>
+  </g>
+
+  <path class="flow" d="M948 373 H 846"/>
+
+  <g transform="translate(640,330)">
+    <rect class="box" width="196" height="86" rx="10"/>
+    <text class="heading" x="18" y="32">Worker 1</text>
+    <text class="body" x="18" y="54">Fragment execution</text>
+    <text class="body" x="18" y="72">Arrow exchange</text>
+  </g>
+
+  <g transform="translate(416,330)">
+    <rect class="box" width="196" height="86" rx="10"/>
+    <text class="heading" x="18" y="32">Worker 2</text>
+    <text class="body" x="18" y="54">Fragment execution</text>
+    <text class="body" x="18" y="72">Arrow exchange</text>
+  </g>
+
+  <text class="note" x="416" y="440">Scan, filter, grouped aggregate, sort, join — scheduled, retried and cancellable.</text>
+
+  <!-- Storage -->
+  <g transform="translate(56,486)">
+    <text class="eyebrow">STORAGE</text>
+    <line class="rule" x1="0" y1="12" x2="1088" y2="12"/>
+  </g>
+
+  <path class="flow" d="M514 424 V 528"/>
+  <path class="flow" d="M738 424 V 528"/>
+
+  <g transform="translate(416,520)">
+    <rect class="box" width="420" height="86" rx="10"/>
+    <text class="heading" x="18" y="32">Delta tables</text>
+    <text class="body" x="18" y="54">ADLS Gen2 · kaveonlake / opensource</text>
+    <text class="body" x="18" y="72">Parquet data plus a transaction log</text>
+  </g>
+
+  <path class="flow" d="M1047 416 V 528"/>
+
+  <g transform="translate(884,520)">
+    <rect class="box accent" width="260" height="86" rx="10"/>
+    <text class="heading" x="18" y="32">KaveonDB</text>
+    <text class="body" x="18" y="54">kaveon.product.*</text>
+    <text class="body" x="18" y="72">Datasets, charts, dashboards</text>
+  </g>
+
+  <text class="note" x="56" y="646">The platform&#8217;s own records are transactional rows in the Engine&#8217;s built-in catalog. There is no PostgreSQL in the request path.</text>
 </svg>
