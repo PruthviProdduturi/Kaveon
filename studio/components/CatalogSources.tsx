@@ -566,7 +566,12 @@ function CatalogSourceModal({ source, onClose, onSuccess }: ModalProps) {
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1rem" }}>
               <div>
-                <label style={labelStyle}>Data Format *</label>
+                {/* A catalog does not have a format; its tables do, and they
+                    can differ. This is the format a newly registered table is
+                    assumed to be, which is why it is named for what it does
+                    rather than described as a property of the source. The
+                    Catalog page reports each table's real format. */}
+                <label style={labelStyle}>Default format for new tables *</label>
                 <div style={{ display: "flex", gap: "0.5rem" }}>
                   {Object.entries(FORMAT_META).map(([key, meta]) => (
                     <button key={key} type="button" style={chipStyle(dataFormat === key, meta.color)} onClick={() => setDataFormat(key)}>
