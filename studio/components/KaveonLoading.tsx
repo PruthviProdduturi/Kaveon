@@ -41,11 +41,16 @@ export function KaveonLoading({
       style={{
         ...(fullScreen
           ? { position: "fixed", inset: 0, zIndex: 9999 }
-          : { width: "100%", minHeight: 320 }),
+          : {
+              width: "100%",
+              minHeight: 240,
+              borderRadius: 8,
+              border: "1px solid var(--border)",
+            }),
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: "var(--bg-primary)",
+        background: fullScreen ? "var(--bg-primary)" : "var(--bg-elevated)",
       }}
     >
       <div

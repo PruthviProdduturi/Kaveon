@@ -8,7 +8,64 @@ use sqlparser::parser::Parser;
 
 pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
     let dialect = GenericDialect {};
-    Parser::parse_sql(&dialect, sql).map_err(|e| KaveonError::Sql(e.to_string()))
+    // Studio's completion inserts SQL Server-style bracketed identifiers
+    // (`[year]`). sqlparser's generic dialect treats those brackets as an
+    // array expression, which later reaches the executor as the unsupported
+    // scalar function ARRAY. Quote identifier-shaped brackets before parsing;
+    // leave numeric/list brackets untouched so ARRAY[...] remains available
+    // for the syntax that explicitly supports it.
+    let normalized = normalize_bracket_identifiers(sql);
+    Parser::parse_sql(&dialect, &normalized).map_err(|e| KaveonError::Sql(e.to_string()))
+}
+
+fn normalize_bracket_identifiers(sql: &str) -> String {
+    let bytes = sql.as_bytes();
+    let mut out = String::with_capacity(sql.len());
+    let mut i = 0;
+    let mut quote: Option<u8> = None;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(q) = quote {
+            out.push(b as char);
+            if b == q {
+                if i + 1 < bytes.len() && bytes[i + 1] == q {
+                    out.push(q as char);
+                    i += 2;
+                    continue;
+                }
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if matches!(b, b'\'' | b'"' | b'`') {
+            quote = Some(b);
+            out.push(b as char);
+            i += 1;
+            continue;
+        }
+        if b == b'[' {
+            if let Some(end_rel) = bytes[i + 1..].iter().position(|c| *c == b']') {
+                let end = i + 1 + end_rel;
+                let inner = &sql[i + 1..end];
+                let mut chars = inner.chars();
+                let identifier = chars
+                    .next()
+                    .is_some_and(|c| c == '_' || c.is_ascii_alphabetic())
+                    && chars.all(|c| c == '_' || c == '$' || c.is_ascii_alphanumeric());
+                if identifier {
+                    out.push('"');
+                    out.push_str(inner);
+                    out.push('"');
+                    i = end + 1;
+                    continue;
+                }
+            }
+        }
+        out.push(b as char);
+        i += 1;
+    }
+    out
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -421,6 +478,15 @@ mod tests {
                 assert_eq!(dml.table, table);
             }
         }
+    }
+
+    #[test]
+    fn bracketed_identifiers_are_not_parsed_as_arrays() {
+        let statements = parse_sql("SELECT DISTINCT [year] FROM climate_energy.energy_annual")
+            .expect("bracketed identifier should parse");
+        let rendered = statements[0].to_string();
+        assert!(rendered.contains("\"year\""));
+        assert!(!rendered.contains("ARRAY"));
     }
 
     #[test]

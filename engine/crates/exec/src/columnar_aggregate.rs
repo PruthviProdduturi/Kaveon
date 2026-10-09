@@ -2029,6 +2029,52 @@ impl ColumnarGroups {
         }
         Ok((created, new_bytes))
     }
+
+    /// Merge an explicit row selection from a grouped-state batch. The
+    /// selected rows are read directly from the source BinaryArray; callers
+    /// use this when a thread owns a hash selection and must avoid allocating
+    /// a filtered Arrow batch before the columnar merge.
+    pub fn merge_encoded_selected_batch(
+        &mut self,
+        keys: &BinaryArray,
+        states: &BinaryArray,
+        selected: &[u32],
+    ) -> Result<(usize, u64)> {
+        let rows = selected.len();
+        let stride = self.stride();
+        let mut new_bytes = 0u64;
+        self.packed.clear();
+        self.packed.resize(rows * stride, 0);
+        for (output_row, &input_row) in selected.iter().enumerate() {
+            let row = usize::try_from(input_row)
+                .map_err(|_| exec_err("selected aggregate row index overflow"))?;
+            if row >= keys.len() || row >= states.len() {
+                return Err(exec_err("selected aggregate row index is out of bounds"));
+            }
+            if keys.is_null(row) || states.is_null(row) {
+                return Err(exec_err("grouped aggregate state row cannot contain nulls"));
+            }
+            let words = &mut self.packed[output_row * stride..(output_row + 1) * stride];
+            new_bytes += parse_key_words(&mut self.keys, &self.hasher, keys.value(row), words)?;
+        }
+        let created = self.resolve_slots(rows)?;
+        for (output_row, &input_row) in selected.iter().enumerate() {
+            let slot = self.slots[output_row] as usize;
+            let input_row = usize::try_from(input_row)
+                .map_err(|_| exec_err("selected aggregate row index overflow"))?;
+            let mut input = compact_state::begin(states.value(input_row))?;
+            if input.count != self.accumulators.len() {
+                return Err(exec_err(
+                    "partial group does not match the aggregate layout",
+                ));
+            }
+            for accumulator in &mut self.accumulators {
+                accumulator.merge_bytes(slot, &mut input.bytes)?;
+            }
+            input.finish()?;
+        }
+        Ok((created, new_bytes))
+    }
     /// The group at `slot` as the row representation.
     pub(crate) fn group(&self, slot: usize) -> (Vec<GroupKey>, Vec<AggregateState>) {
         let keys = self
