@@ -57,9 +57,11 @@ JOIN   customers c ON o.customer_id = c.id
 GROUP  BY c.region;`}</Code>
     <p>
       <code>INNER</code>, <code>LEFT</code>, <code>RIGHT</code>, <code>FULL</code> and <code>CROSS</code>{" "}
-      joins execute with qualified relation aliases. Distributed equi-joins repartition both sides by hash;
-      cross joins broadcast the build side. Join conditions must be equalities — general predicates are not
-      yet supported as join conditions, though they work in <code>WHERE</code>.
+      joins execute locally with qualified relation aliases. Distributed <code>INNER</code> equi-joins
+      repartition both sides by hash; a broadcast build side is used when the planner selects it. Broader
+      distributed evidence for outer and cross joins remains an alpha gate. Join conditions must be
+      equalities — general predicates are not yet supported as join conditions, though they work in{" "}
+      <code>WHERE</code>.
     </p>
 
     <h2>Window functions</h2>
@@ -103,11 +105,11 @@ SELECT region FROM orders EXCEPT    SELECT region FROM excluded;`}</Code>
 FROM   orders
 WHERE  ordered >= current_date - 90;`}</Code>
 
-    <h2>Not executable yet</h2>
+    <h2>Not generally executable yet</h2>
     <ul>
-      <li>Scalar and correlated subqueries.</li>
+      <li>Arbitrary scalar and correlated subqueries; supported decorrelated forms are limited to the tested binder paths.</li>
       <li>Non-equality join conditions.</li>
-      <li>DDL and DML — the Engine reads; it does not create or mutate tables.</li>
+      <li>Data-changing DML such as <code>INSERT</code>, <code>UPDATE</code>, <code>DELETE</code>, and <code>MERGE</code>. Catalog DDL is supported through the Engine catalog surface.</li>
       <li>Comprehensive decimal and date/time edge-case behavior.</li>
     </ul>
     <Callout type="warn">
