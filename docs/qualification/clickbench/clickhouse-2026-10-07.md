@@ -830,3 +830,19 @@ uncompressed controls on the rebuilt runtime were q35 **34.37 s** and q33
 about 20–24%. The runs are still slower than the qualified ClickHouse controls
 (q35 **6.316 s**, q33 **4.552 s**); compression is a measured improvement, not
 parity.
+
+## 2026-10-08 — scan fan-out and admission controls
+
+The local qualification stack was rebuilt with Arrow IPC LZ4 exchange,
+`KAVEON_USE_UTF8_VIEW=1`, memory-only hash spill, an 8 GiB admission ceiling,
+and eight scan partitions per worker (16 scan tasks across two workers). The
+q35 control returned the exact ten rows in **13.79 s**; q33 returned the exact
+ten rows in **21.71 s**. Increasing scan fan-out again to 16 partitions per
+worker regressed q35 to **23.43 s** because exchange and final-stage fan-in
+became the bottleneck. With eight partitions, q33 still needs the larger 8 GiB
+query budget: at 2 GiB it failed closed on final aggregation memory admission,
+so the profile is not a safe default for constrained deployments. These runs
+are useful qualification controls, not ClickHouse parity: the same-host
+ClickHouse references remain q35 **6.316 s** and q33 **4.552 s**. The measured
+priority is now reducing the high-cardinality grouped-state exchange/final
+merge while keeping bounded-memory failure behavior exact.
