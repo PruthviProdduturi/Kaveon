@@ -18,6 +18,10 @@
 /studio/node_modules/
 /studio/.next/
 /tmp-*.json
+tmp-*
+**/tmp-*
+*.py
+**/*.py
 **/node_modules/
 **/.next/
 /packages/
