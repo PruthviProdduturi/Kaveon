@@ -185,3 +185,5 @@ cargo test --workspace --manifest-path engine/Cargo.toml
 ```
 
 Set `KAVEON_DATA_PATH` to that machine's local data directory before Docker validation. Local drive letters are deployment configuration and must never be embedded in Engine plans, catalog contracts, or tests.
+
+- 2026-10-08: Added and qualified a narrow fused columnar aggregate path for one UTF-8 group key plus `COUNT(*)`; it preserves the general path for mixed keys and aggregates, passes the execution suite, and improves the paired q35 control by about 7% (16.16 s → 14.95 s). q33 remains dominated by high-cardinality exchange and spill, so this does not change the ClickHouse parity assessment.

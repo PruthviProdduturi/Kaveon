@@ -970,7 +970,10 @@ fn key_words(
                             }
                             _ => None,
                         };
-                        by_code.push(text.map(|text| arena.intern(hasher, text).map(|(id, _)| id)).transpose()?);
+                        by_code.push(
+                            text.map(|text| arena.intern(hasher, text).map(|(id, _)| id))
+                                .transpose()?,
+                        );
                     }
                     *dictionary_cache = Some(DictionaryCodeCache {
                         values: values.clone(),
@@ -1252,8 +1255,20 @@ fn parse_key_words(
         // (Int64, Int32). Decode that fixed frame without constructing the
         // generic key-type/width metadata on every exchanged row.
         if key_count == 2
-            && matches!(keys[0], KeyColumn::Integer { data_type: DataType::Int64, .. })
-            && matches!(keys[1], KeyColumn::Integer { data_type: DataType::Int32 | DataType::Date32, .. })
+            && matches!(
+                keys[0],
+                KeyColumn::Integer {
+                    data_type: DataType::Int64,
+                    ..
+                }
+            )
+            && matches!(
+                keys[1],
+                KeyColumn::Integer {
+                    data_type: DataType::Int32 | DataType::Date32,
+                    ..
+                }
+            )
             && input.0.len() == 12
         {
             words[0] = u64::from_le_bytes(input.take(8)?.try_into().unwrap());
@@ -1261,24 +1276,55 @@ fn parse_key_words(
             words[key_count] = 0;
             return Ok(0);
         }
-        let untagged_bytes = keys.iter().map(|column| match column {
-            KeyColumn::Integer { data_type: DataType::Int32 | DataType::Date32, .. } => 4,
-            KeyColumn::Integer { data_type: DataType::Boolean, .. } => 1,
-            KeyColumn::Integer { .. } => 8,
-            _ => 0,
-        }).sum::<usize>();
+        let untagged_bytes = keys
+            .iter()
+            .map(|column| match column {
+                KeyColumn::Integer {
+                    data_type: DataType::Int32 | DataType::Date32,
+                    ..
+                } => 4,
+                KeyColumn::Integer {
+                    data_type: DataType::Boolean,
+                    ..
+                } => 1,
+                KeyColumn::Integer { .. } => 8,
+                _ => 0,
+            })
+            .sum::<usize>();
         let tagged = input.0.len() != untagged_bytes;
-        let tags = if tagged { Some((0..key_count).map(|_| input.byte()).collect::<Result<Vec<_>>>()?) } else { None };
+        let tags = if tagged {
+            Some(
+                (0..key_count)
+                    .map(|_| input.byte())
+                    .collect::<Result<Vec<_>>>()?,
+            )
+        } else {
+            None
+        };
         for (position, column) in keys.iter().enumerate() {
             let tag = tags.as_ref().map(|tags| tags[position]);
             words[position] = match (column, tag) {
-                (KeyColumn::Integer { data_type: DataType::Int64, .. }, None | Some(COMPACT_KEY_INT64)) => {
-                    i64::from_le_bytes(input.take(8)?.try_into().unwrap()) as u64
-                }
-                (KeyColumn::Integer { data_type: DataType::Int32 | DataType::Date32, .. }, None | Some(COMPACT_KEY_INT32)) => {
-                    i32::from_le_bytes(input.take(4)?.try_into().unwrap()) as i64 as u64
-                }
-                (KeyColumn::Integer { data_type: DataType::Boolean, .. }, None | Some(COMPACT_KEY_BOOL)) => match input.byte()? {
+                (
+                    KeyColumn::Integer {
+                        data_type: DataType::Int64,
+                        ..
+                    },
+                    None | Some(COMPACT_KEY_INT64),
+                ) => i64::from_le_bytes(input.take(8)?.try_into().unwrap()) as u64,
+                (
+                    KeyColumn::Integer {
+                        data_type: DataType::Int32 | DataType::Date32,
+                        ..
+                    },
+                    None | Some(COMPACT_KEY_INT32),
+                ) => i32::from_le_bytes(input.take(4)?.try_into().unwrap()) as i64 as u64,
+                (
+                    KeyColumn::Integer {
+                        data_type: DataType::Boolean,
+                        ..
+                    },
+                    None | Some(COMPACT_KEY_BOOL),
+                ) => match input.byte()? {
                     0 => 0,
                     1 => 1,
                     _ => return Err(exec_err("invalid fixed boolean group key")),
@@ -1683,6 +1729,22 @@ impl ColumnarGroups {
         value_columns: &[Option<&ArrayRef>],
         rows: usize,
     ) -> Result<(usize, u64)> {
+        // ClickBench's q35 shape is the hottest grouped form in practice:
+        // one UTF-8 key and COUNT(*).  The general columnar path first writes
+        // an interleaved packed-key scratch buffer, hashes it into a second
+        // array, resolves all slots, and then walks the slots again to update
+        // COUNT.  That is unnecessary for one count column.  Keep the same
+        // arena/index/equality semantics, but do the intern, probe and count
+        // update in one pass.  This is deliberately narrow so mixed and
+        // nullable aggregate semantics continue through the general path.
+        if key_columns.len() == 1
+            && value_columns.len() == 1
+            && value_columns[0].is_none()
+            && matches!(self.accumulators.first(), Some(AccColumn::Count(_)))
+            && matches!(self.keys.first(), Some(KeyColumn::Text { .. }))
+        {
+            return self.push_single_text_count(&key_columns[0], rows);
+        }
         let mut new_bytes = 0u64;
         let stride = self.stride();
         self.packed.clear();
@@ -1704,6 +1766,91 @@ impl ColumnarGroups {
             accumulator.update(*column, &self.slots)?;
         }
         Ok((created, new_bytes))
+    }
+
+    /// Fused one-text-key COUNT(*) update.  See the call site for why this is
+    /// separate from the fully general packed batch path.
+    fn push_single_text_count(&mut self, array: &ArrayRef, rows: usize) -> Result<(usize, u64)> {
+        let before = match self.keys.first() {
+            Some(KeyColumn::Text { arena, .. }) => arena.bytes(),
+            _ => return Err(exec_err("text count fast path requires a text key")),
+        };
+        let mut created = 0usize;
+        for row in 0..rows {
+            let (word, null) = {
+                let key = self
+                    .keys
+                    .first_mut()
+                    .ok_or_else(|| exec_err("text count fast path has no key"))?;
+                let KeyColumn::Text { arena, .. } = key else {
+                    return Err(exec_err("text count fast path requires a text key"));
+                };
+                if array.is_null(row) {
+                    (u64::MAX, true)
+                } else {
+                    let text = match array.data_type() {
+                        DataType::Utf8 => array.as_string::<i32>().value(row),
+                        DataType::LargeUtf8 => array.as_string::<i64>().value(row),
+                        DataType::Utf8View => array
+                            .as_any()
+                            .downcast_ref::<StringViewArray>()
+                            .ok_or_else(|| exec_err("invalid UTF-8 view key array"))?
+                            .value(row),
+                        other => {
+                            return Err(exec_err(format!(
+                                "text count fast path received key type {other}"
+                            )));
+                        }
+                    };
+                    (arena.intern(&self.hasher, text)?.0 as u64, false)
+                }
+            };
+            let packed = [word, u64::from(null)];
+            let hash = packed_hash(&packed);
+            if self.index.is_full() {
+                let keys = &self.keys;
+                self.index.grow(self.uses_large_integer_growth(), |slot| {
+                    slot_hash(keys, slot as usize)
+                });
+            }
+            if let Some(&ahead) = self.hashes.get(row + PREFETCH_DISTANCE) {
+                self.index.prefetch(ahead);
+            }
+            let keys = &self.keys;
+            let (slot, is_new) = match self
+                .index
+                .probe(hash, |slot| key_matches(keys, slot as usize, &packed))
+            {
+                Probe::Found(slot) => (slot, false),
+                Probe::Vacant(bucket) => {
+                    let slot = u32::try_from(self.len)
+                        .map_err(|_| exec_err("too many groups for one task"))?;
+                    if let Some(KeyColumn::Text { words, nulls, .. }) = self.keys.first_mut() {
+                        words.push(word as u32);
+                        nulls.push(null);
+                    }
+                    if let Some(AccColumn::Count(counts)) = self.accumulators.first_mut() {
+                        counts.push(1);
+                    }
+                    self.index.occupy(bucket, hash, slot);
+                    self.len += 1;
+                    created += 1;
+                    (slot, true)
+                }
+            };
+            if !is_new {
+                if let Some(AccColumn::Count(counts)) = self.accumulators.first_mut() {
+                    counts[slot as usize] += 1;
+                }
+            }
+        }
+        Ok((
+            created,
+            match self.keys.first() {
+                Some(KeyColumn::Text { arena, .. }) => arena.bytes().saturating_sub(before),
+                _ => 0,
+            },
+        ))
     }
 
     /// Hash every packed row, then find or create its group: `slots` holds
@@ -1942,29 +2089,65 @@ impl ColumnarGroups {
     /// Schema-known integer widths need no per-row type or length words; only
     /// non-final text keys carry a length because the row boundary is known.
     fn encode_keys_into(&self, slot: usize, out: &mut Vec<u8>) {
-        let fixed = self.keys.iter().all(|key| {
-            matches!(key, KeyColumn::Integer { nulls, .. } if !nulls[slot])
-        });
+        let fixed = self
+            .keys
+            .iter()
+            .all(|key| matches!(key, KeyColumn::Integer { nulls, .. } if !nulls[slot]));
         if fixed {
             out.extend_from_slice(FIXED_KEY_MAGIC);
             out.push(self.keys.len() as u8);
-            let first_type = self.keys.first().and_then(|key| match key { KeyColumn::Integer { data_type, .. } => Some(data_type), _ => None });
-            let homogeneous = first_type.is_some() && self.keys.iter().all(|key| match (first_type, key) {
-                (Some(DataType::Int64), KeyColumn::Integer { data_type: DataType::Int64, .. })
-                | (Some(DataType::Int32), KeyColumn::Integer { data_type: DataType::Int32, .. })
-                | (Some(DataType::Date32), KeyColumn::Integer { data_type: DataType::Date32, .. })
-                | (Some(DataType::Boolean), KeyColumn::Integer { data_type: DataType::Boolean, .. }) => true,
-                _ => false,
+            let first_type = self.keys.first().and_then(|key| match key {
+                KeyColumn::Integer { data_type, .. } => Some(data_type),
+                _ => None,
             });
+            let homogeneous = first_type.is_some()
+                && self.keys.iter().all(|key| match (first_type, key) {
+                    (
+                        Some(DataType::Int64),
+                        KeyColumn::Integer {
+                            data_type: DataType::Int64,
+                            ..
+                        },
+                    )
+                    | (
+                        Some(DataType::Int32),
+                        KeyColumn::Integer {
+                            data_type: DataType::Int32,
+                            ..
+                        },
+                    )
+                    | (
+                        Some(DataType::Date32),
+                        KeyColumn::Integer {
+                            data_type: DataType::Date32,
+                            ..
+                        },
+                    )
+                    | (
+                        Some(DataType::Boolean),
+                        KeyColumn::Integer {
+                            data_type: DataType::Boolean,
+                            ..
+                        },
+                    ) => true,
+                    _ => false,
+                });
             if !homogeneous {
                 for key in &self.keys {
                     if let KeyColumn::Integer { data_type, .. } = key {
-                        out.push(match data_type { DataType::Int32 | DataType::Date32 => COMPACT_KEY_INT32, DataType::Boolean => COMPACT_KEY_BOOL, _ => COMPACT_KEY_INT64 });
+                        out.push(match data_type {
+                            DataType::Int32 | DataType::Date32 => COMPACT_KEY_INT32,
+                            DataType::Boolean => COMPACT_KEY_BOOL,
+                            _ => COMPACT_KEY_INT64,
+                        });
                     }
                 }
             }
             for key in &self.keys {
-                if let KeyColumn::Integer { values, data_type, .. } = key {
+                if let KeyColumn::Integer {
+                    values, data_type, ..
+                } = key
+                {
                     match data_type {
                         DataType::Int32 | DataType::Date32 => {
                             out.extend_from_slice(&(values[slot] as i32).to_le_bytes())
