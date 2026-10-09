@@ -113,6 +113,7 @@ services:
       # same-host workloads can trade CPU for little network benefit.
       KAVEON_EXCHANGE_COMPRESSION: ${KAVEON_EXCHANGE_COMPRESSION:-}
       KAVEON_USE_UTF8_VIEW: ${KAVEON_USE_UTF8_VIEW:-}
+      KAVEON_DIRECT_GROUPED_EXCHANGE: ${KAVEON_DIRECT_GROUPED_EXCHANGE:-}
     volumes:
       - ./engine/etc/coordinator.toml:/etc/kaveon/config.toml:ro
       - catalog-data:/var/lib/kaveon
@@ -158,6 +159,7 @@ services:
       KAVEON_EXCHANGE_PARTITIONS: ${KAVEON_EXCHANGE_PARTITIONS:-4}
       KAVEON_EXCHANGE_COMPRESSION: ${KAVEON_EXCHANGE_COMPRESSION:-}
       KAVEON_USE_UTF8_VIEW: ${KAVEON_USE_UTF8_VIEW:-}
+      KAVEON_DIRECT_GROUPED_EXCHANGE: ${KAVEON_DIRECT_GROUPED_EXCHANGE:-}
     volumes: &engine-worker-volumes
       - ./engine/etc/worker.toml:/etc/kaveon/config.toml:ro
       - type: bind
