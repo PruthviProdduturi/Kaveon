@@ -1,8 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="700" viewBox="0 0 1200 700" role="img" aria-labelledby="deploy-title deploy-desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="deploy-title deploy-desc">
   <title id="deploy-title">Kaveon deployment topology</title>
-  <desc id="deploy-desc">The browser reaches Studio on Vercel, whose same-origin proxy forwards to the API on kaveon-vm behind Caddy. The API plans through the Kaveon Engine coordinator, which schedules fragments across two workers reading Delta tables in ADLS Gen2. The platform's own records live in KaveonDB, the Engine's built-in transactional catalog. There is no PostgreSQL in the request path.</desc>
-  <defs><marker id="deploy-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 8 4 0 8Z" fill="#4A9EE8"/></marker><style>.eyebrow{font:600 11px Inter,Segoe UI,sans-serif;letter-spacing:2px;fill:#718096}.title{font:600 25px Inter,Segoe UI,sans-serif;fill:#f8fafc}.heading{font:600 18px Inter,Segoe UI,sans-serif;fill:#f8fafc}.body{font:400 12px Inter,Segoe UI,sans-serif;fill:#9aa7b8}.note{font:500 11px Inter,Segoe UI,sans-serif;fill:#718096}.box{fill:#101620;stroke:#263244;stroke-width:1}.accent{stroke:#4A9EE8}.rule{stroke:#263244}.flow{fill:none;stroke:#4A9EE8;stroke-width:2;marker-end:url(#deploy-arrow)}</style></defs>
-  <rect width="1200" height="700" rx="20" fill="#0b0f15"/>
+  <desc id="deploy-desc">The browser reaches Studio on Vercel, whose same-origin proxy forwards to the API on kaveon-vm behind Caddy. The API plans through the Kaveon Engine coordinator, which schedules fragments across two workers. Table data is read from the opensource container of the kaveonlake storage account; the platform's own records are written transactionally to the product container at kaveon/system/v2. The Engine's own catalog — definitions, statistics and cubes — is a SQLite file on the coordinator and is the one piece of state not held in object storage.</desc>
+  <defs><marker id="deploy-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 8 4 0 8Z" fill="#4A9EE8"/></marker><style>.eyebrow{font:600 11px Inter,Segoe UI,sans-serif;letter-spacing:2px;fill:#718096}.title{font:600 25px Inter,Segoe UI,sans-serif;fill:#f8fafc}.heading{font:600 18px Inter,Segoe UI,sans-serif;fill:#f8fafc}.body{font:400 12px Inter,Segoe UI,sans-serif;fill:#9aa7b8}.mono{font:400 11.5px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;fill:#9aa7b8}.note{font:500 11px Inter,Segoe UI,sans-serif;fill:#718096}.box{fill:#101620;stroke:#263244;stroke-width:1}.accent{stroke:#4A9EE8}.warn{stroke:#8a6d3b;stroke-dasharray:4 3}.rule{stroke:#263244}.flow{fill:none;stroke:#4A9EE8;stroke-width:2;marker-end:url(#deploy-arrow)}</style></defs>
+  <rect width="1200" height="760" rx="20" fill="#0b0f15"/>
 
   <g transform="translate(56,52)">
     <text class="eyebrow">KAVEON</text>
@@ -79,7 +79,7 @@
 
   <!-- Storage -->
   <g transform="translate(56,486)">
-    <text class="eyebrow">STORAGE</text>
+    <text class="eyebrow">STORAGE · ADLS GEN2 · KAVEONLAKE</text>
     <line class="rule" x1="0" y1="12" x2="1088" y2="12"/>
   </g>
 
@@ -87,20 +87,31 @@
   <path class="flow" d="M738 424 V 528"/>
 
   <g transform="translate(416,520)">
-    <rect class="box" width="420" height="86" rx="10"/>
+    <rect class="box" width="420" height="96" rx="10"/>
     <text class="heading" x="18" y="32">Delta tables</text>
-    <text class="body" x="18" y="54">ADLS Gen2 · kaveonlake / opensource</text>
-    <text class="body" x="18" y="72">Parquet data plus a transaction log</text>
+    <text class="mono" x="18" y="56">opensource / snapshots/…</text>
+    <text class="body" x="18" y="78">Parquet data plus a transaction log. Read in place.</text>
   </g>
 
   <path class="flow" d="M1047 416 V 528"/>
 
   <g transform="translate(884,520)">
-    <rect class="box accent" width="260" height="86" rx="10"/>
+    <rect class="box accent" width="260" height="96" rx="10"/>
     <text class="heading" x="18" y="32">KaveonDB</text>
-    <text class="body" x="18" y="54">kaveon.product.*</text>
-    <text class="body" x="18" y="72">Datasets, charts, dashboards</text>
+    <text class="mono" x="18" y="56">product / kaveon/system/v2</text>
+    <text class="body" x="18" y="78">Datasets, charts, dashboards</text>
   </g>
 
-  <text class="note" x="56" y="646">The platform&#8217;s own records are transactional rows in the Engine&#8217;s built-in catalog. There is no PostgreSQL in the request path.</text>
+  <!-- The one place that is not object storage -->
+  <g transform="translate(56,520)">
+    <rect class="box warn" width="330" height="96" rx="10"/>
+    <text class="heading" x="18" y="32">Engine catalog</text>
+    <text class="mono" x="18" y="56">catalog.db · on the coordinator</text>
+    <text class="body" x="18" y="78">Definitions, statistics, cubes</text>
+  </g>
+
+  <text class="note" x="56" y="662">The platform&#8217;s own records are transactional rows in the Engine&#8217;s built-in catalog, committed one change at a time.</text>
+  <text class="note" x="56" y="684">Table data and those records are separate containers in one account, so a catalog can point anywhere the host can reach.</text>
+  <text class="note" x="56" y="706">The Engine&#8217;s own catalog is the exception: a file on the host, not in object storage, so it is backed up separately and</text>
+  <text class="note" x="56" y="722">does not come back with a replaced machine. Folding it into the system store is a design in progress.</text>
 </svg>
