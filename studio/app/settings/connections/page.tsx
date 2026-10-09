@@ -18,7 +18,7 @@ interface SystemStore {
   location: string | null;
 }
 interface MetadataConfig {
-  db_type: "fabric_sql" | "azure_sql" | "postgresql" | "mysql" | "kaveondb";
+  db_type: "fabric_sql" | "azure_sql" | "mysql" | "kaveondb";
   label: string; endpoint: string; host: string; port: string; database: string;
   ui_configured: boolean; schema?: string; storage?: SystemStore;
 }
@@ -140,9 +140,8 @@ export default function ConnectionsPage() {
   if (unified || meta === undefined) return <div className={s.stack}>{engineCard}</div>;
 
   // A deployment still served by an external metadata database: two systems,
-  // two cards, and the PostgreSQL case says plainly that it is on its way out.
+  // so two cards.
   const metaIcon = meta ? SETUP_DB_ICONS[meta.db_type] : null;
-  const legacy = meta?.db_type === "postgresql";
 
   return (
     <div className={s.stack}>
@@ -151,18 +150,16 @@ export default function ConnectionsPage() {
           <div className={s.cardId}>
             <div className={s.mark} style={metaIcon ? { background: metaIcon.bg, borderColor: metaIcon.border } : undefined}>{metaIcon?.icon ?? <i className="fas fa-database" />}</div>
             <div style={{ minWidth: 0 }}>
-              <h2 id="meta-title" className={s.cardTitle}>{legacy ? "Legacy metadata database" : "Metadata database"}</h2>
+              <h2 id="meta-title" className={s.cardTitle}>Metadata database</h2>
               <p className={s.cardSub}>
                 {meta?.ui_configured
-                  ? legacy
-                    ? <>Control-plane metadata is still served by <code>PostgreSQL</code>; KaveonDB is the query runtime. Retirement is pending its final migration gates.</>
-                    : <>Datasets, charts, dashboards and history live here · <code>{meta.label}</code></>
+                  ? <>Datasets, charts, dashboards and history live here · <code>{meta.label}</code></>
                   : "Where Kaveon keeps datasets, charts, dashboards and history."}
               </p>
             </div>
           </div>
-          <Status on={legacy ? false : meta === null ? null : !!meta?.ui_configured}>
-            {legacy ? "Retirement pending" : meta?.ui_configured ? "Connected" : "Not configured"}
+          <Status on={meta === null ? null : !!meta?.ui_configured}>
+            {meta?.ui_configured ? "Connected" : "Not configured"}
           </Status>
         </div>
         {meta?.ui_configured ? (
@@ -170,11 +167,6 @@ export default function ConnectionsPage() {
         ) : meta === null ? (
           <p className={s.note} style={{ marginTop: 12 }}>Run the setup wizard to connect a metadata database. Nothing can be saved until it exists.</p>
         ) : null}
-        {legacy && (
-          <p className={s.note} style={{ marginTop: 12, color: "var(--warning, #f59e0b)" }}>
-            PostgreSQL remains the active control-plane authority in this deployment. Do not delete it until the 16-family replay, shadow parity, write fence, restart, and backup/restore gates pass.
-          </p>
-        )}
       </section>
       {engineCard}
     </div>
