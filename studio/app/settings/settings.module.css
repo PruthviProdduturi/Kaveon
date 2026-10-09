@@ -61,3 +61,7 @@
 .ghost:disabled { opacity: .55; cursor: default }
 .primary { background: var(--accent); border-color: var(--accent); color: #fff }
 .primary:hover { color: #fff; background: var(--accent-dark) }
+
+/* Maintenance — a pass's actions sit beside its title; its schedule sits under its facts. */
+.actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }
+.schedule { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border) }
