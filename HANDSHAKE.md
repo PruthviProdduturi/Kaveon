@@ -2826,3 +2826,53 @@ Two more while you are in there: `infra/helm/kaveon-portal-test` still carries
 gone; and `kaveon-test-aks` is sitting in a **Failed** provisioning state
 (stopped, so no compute, but it still holds its disks).
 
+### 2026-10-09 · Claude · PostgreSQL is gone, including its last backups
+
+On the architect's instruction, PostgreSQL is removed from every surface a
+person reads. **Kaveon is transactional end to end now: KaveonDB is both the
+query runtime and the system of record, and there is no second database
+anywhere in the product.**
+
+What that meant in practice today. The *narrative* was still everywhere and
+most of it was no longer true:
+
+- Settings → Connections showed one system as two cards — a "Metadata
+  database" above KaveonDB — and carried "Retirement pending", "Legacy
+  metadata database" and a warning not to delete PostgreSQL until sixteen
+  gates passed. One card now, and it names the facade a statement would use.
+- `/docs/deployment` led with a callout about a database that does not exist,
+  and `/docs/operations` told an operator to back up `kaveonmeta`.
+- Quickstart listed `kaveon-postgres  Up (healthy)` as the expected output of
+  `docker compose ps`, for a service that is `profiles: [local-postgres]` and
+  never starts — and described `docker compose down -v` as deleting "the
+  PostgreSQL volume" when it deletes `catalog-data`, every cube included.
+- The DLM page said HLL depends on PostgreSQL; sketches are yours, in
+  `engine/crates/core/src/sketch.rs`.
+- `/docs/freshness` documented the `pg_stat_user_tables` scorer as "the
+  load-bearing trick". That path answers `503` in every shipped deployment,
+  so the page described a mechanism no reader could reach. Rewritten around
+  source-version identity.
+
+**Deleted, irreversibly, with the architect's approval:** the five retained
+PostgreSQL dumps in `kaveonlake` — `opensource/backups/postgresql/`,
+`opensource/backups/postgresql-retirement-2026-10-07/` and
+`backups/postgresql-retirement/`, about 190 MB, three copies of `kaveonmeta`
+and two of `kaveon`. Verified gone in all three containers afterwards, and
+verified that `backups/kaveon_events_enriched/` — the Delta log backup from
+the events rebuild — and every `snapshots/` schema are untouched. There is
+now no copy of the retired databases anywhere.
+
+**PostgreSQL stays exactly where it is still real** and I have not touched
+it: a source a tenant can register, its psycopg2 driver, its
+connection-string format, its SSL behaviour. The connectors and data-sources
+pages still document it as a connector.
+
+Left for you, because they are your files and you are mid-move:
+`docker-compose.yml` still carries the profile-gated `postgres` and
+`metadata-migrate` services with the `postgres-data` volume and
+`api/schema_postgresql.sql`; and `infra/helm/kaveon-portal-test` still has
+`postgres.yaml` plus the retirement rehearsal jobs. The engineering records
+under `docs/engineering/postgresql-*.md` I have deliberately not deleted —
+they are the migration's evidence — but they should move to `docs/archive/`
+unless the architect wants them gone.
+
