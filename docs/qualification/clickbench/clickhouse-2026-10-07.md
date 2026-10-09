@@ -882,3 +882,7 @@ The execution suite passed **203 tests (4 ignored)**. On the same rebuilt two-wo
 ## 2026-10-08 streamed exchange chunk ownership
 
 `StreamingOutput` now hands off a complete final chunk and splits oversized buffers without `drain(..).collect()`. This removes a prefix copy and tail shift for large streamed Arrow payloads while preserving chunk ordering, checksums, retry identity, and limits. All **43 exchange/server tests** pass. A rebuilt paired control remained exact (q35 **15.61 s**, q33 **21.31 s**); this is a low-risk allocation reduction, not a material ClickHouse latency improvement, so the high-cardinality exchange redesign remains open.
+
+## 2026-10-08 high-cardinality exchange redesign boundary
+
+The q33 review confirms the remaining gap is below the Arrow operator layer: grouped keys and aggregate states are already compact-encoded inside Arrow binary columns, but the stage still emits **8.73 GB** of exchange output, copies **10.66 GB**, and spills **8.81 GB** in the final stage. Encoding took **4.68 s**; final-stage decode took **2.78 s**, while spill and merge dominated the stage. A compact envelope alone would not address that cost. The next structural optimization is a direct grouped-state exchange stream whose producer and consumer merge compact states without materializing Arrow `RecordBatch` objects; it must be designed as a full media path with retry, checksum, memory accounting, and exact fallback semantics. No speculative wire-format change was shipped.
