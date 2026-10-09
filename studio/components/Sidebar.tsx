@@ -837,15 +837,51 @@ type ResultKind = "recent" | "dashboard" | "chart" | "dataset" | "page";
 /** A category, or the ranked union of every category. */
 type TabId = ResultKind | "all";
 
-/** Result kinds plus the two recent kinds that have no category of their own. */
-type GlyphName = ResultKind | "query" | "chat";
+/** Result kinds, the two recent kinds with no category, and the page glyphs. */
+type GlyphName =
+  | ResultKind | "query" | "chat" | "star" | "source" | "engine" | "docs" | "settings";
 
-interface SearchResult {
+/** A run of characters the typed term accounts for, marked in the row. */
+interface MatchRun {
+  start: number;
+  end: number;
+}
+
+/**
+ * Something the palette can open, before any term has been scored against it.
+ *
+ * `aliases` is text that makes an entry findable without being worth showing —
+ * a dashboard's description, a dataset's table, the words a reader is likely to
+ * reach for when they want a page. `boost` lifts what the reader has already
+ * shown an interest in.
+ */
+interface Candidate {
   id: string;
   label: string;
+  detail: string;
   href: string;
   type: ResultKind;
   glyph: GlyphName;
+  aliases: string[];
+  boost: number;
+  /** Dataset columns, which stand in for the detail line when one is the match. */
+  columns?: string[];
+  /** Offered with nothing typed: the destinations worth naming unprompted. */
+  primary?: boolean;
+  adminOnly?: boolean;
+}
+
+/** A candidate that matched, with its score and the characters to mark. */
+interface SearchResult {
+  id: string;
+  label: string;
+  detail: string;
+  href: string;
+  type: ResultKind;
+  glyph: GlyphName;
+  score: number;
+  labelRuns: MatchRun[];
+  detailRuns: MatchRun[];
 }
 
 interface SearchTab {
@@ -855,10 +891,10 @@ interface SearchTab {
 }
 
 /**
- * Kind order is the cross-category ranking: what the reader opened last, then
- * the content they own, then where they can go. The flat list ranked this way
- * before the categories became tabs, and the All tab, the order of the tab
- * strip and the order within every tab all still follow it.
+ * Kind order is the resting order of the tab strip: what the reader opened
+ * last, then the content they own, then where they can go. The strip never
+ * reorders under the arrow keys, so ←/→ always lands where the reader expects;
+ * inside the All tab the groups follow the ranking instead.
  */
 const KIND_ORDER: ResultKind[] = ["recent", "dashboard", "chart", "dataset", "page"];
 
@@ -870,6 +906,15 @@ const KIND_LABELS: Record<ResultKind, string> = {
   page: "Navigation",
 };
 
+/** What a recent is, for the line under its title. */
+const RECENT_NOUNS: Record<RecentItem["type"], string> = {
+  dashboard: "Dashboard",
+  chart: "Chart",
+  dataset: "Dataset",
+  query: "Saved query",
+  chat: "Conversation",
+};
+
 /** A recent keeps its own glyph, so the Recent tab still shows what each row is. */
 const RECENT_GLYPHS: Record<RecentItem["type"], GlyphName> = {
   dashboard: "dashboard",
@@ -879,16 +924,107 @@ const RECENT_GLYPHS: Record<RecentItem["type"], GlyphName> = {
   chat: "chat",
 };
 
-const PAGES: SearchResult[] = [
-  { id: "p-chat",     label: "New Chat",      href: "/home",                 type: "page", glyph: "chat" },
-  { id: "p-library",  label: "Library",       href: "/workspace",            type: "page", glyph: "dashboard" },
-  { id: "p-catalog",  label: "Catalog",       href: "/catalog",              type: "page", glyph: "dataset" },
-  { id: "p-sql",      label: "SQL Lab",       href: "/lab",                  type: "page", glyph: "query" },
-  { id: "p-lineage",  label: "Lineage",       href: "/workspace?tab=lineage", type: "page", glyph: "chart" },
-  { id: "p-ds",       label: "Data Sources",  href: "/data-sources",         type: "page", glyph: "dataset" },
-  { id: "p-engine",   label: "KaveonDB",      href: "/engine",               type: "page", glyph: "page" },
-  { id: "p-settings", label: "Settings",      href: "/settings/connections", type: "page", glyph: "page" },
-  { id: "p-about",    label: "About Kaveon",  href: "/",                     type: "page", glyph: "page" },
+/**
+ * Every destination in Studio, each with the one line that says what it is for
+ * and the words a reader might type instead of its name. The aliases are why
+ * "connection" reaches Data Sources and "dark mode" reaches Preferences.
+ */
+const PAGES: Candidate[] = [
+  {
+    id: "p-chat", label: "New Chat", href: "/home", type: "page", glyph: "chat", boost: 0, primary: true,
+    detail: "Ask a question of your data in plain language",
+    aliases: ["ask question prompt natural language conversation dlm nl to sql"],
+  },
+  {
+    id: "p-library", label: "Library", href: "/workspace", type: "page", glyph: "dashboard", boost: 0, primary: true,
+    detail: "Everything saved here — dashboards, charts and datasets",
+    aliases: ["workspace saved browse mine all content"],
+  },
+  {
+    id: "p-favorites", label: "Favorites", href: "/favorites", type: "page", glyph: "star", boost: 0,
+    detail: "The dashboards and charts you starred",
+    aliases: ["starred pinned bookmarks favourites"],
+  },
+  {
+    id: "p-catalog", label: "Catalog", href: "/catalog", type: "page", glyph: "dataset", boost: 0, primary: true,
+    detail: "Browse catalogs, schemas and tables in the warehouse",
+    aliases: ["tables schemas metadata warehouse browse columns"],
+  },
+  {
+    id: "p-lab", label: "SQL Lab", href: "/lab", type: "page", glyph: "query", boost: 0, primary: true,
+    detail: "Write and run SQL against any connected source",
+    aliases: ["query editor statement run sql console"],
+  },
+  {
+    id: "p-queries", label: "Query Activity", href: "/lab/queries", type: "page", glyph: "query", boost: 0,
+    detail: "Statements run in the Lab, and the ones you saved",
+    aliases: ["saved queries history statements sql log"],
+  },
+  {
+    id: "p-sources", label: "Data Sources", href: "/data-sources", type: "page", glyph: "source", boost: 0, primary: true,
+    detail: "Register and manage connections to your databases",
+    aliases: ["connection connect database postgres mysql fabric starrocks register driver"],
+  },
+  {
+    id: "p-engine", label: "KaveonDB", href: "/engine", type: "page", glyph: "engine", boost: 0,
+    detail: "Engine activity, query history and execution detail",
+    aliases: ["engine performance plans latency history execution"],
+  },
+  {
+    id: "p-activity", label: "Workspace Activity", href: "/workspace-activity", type: "page", glyph: "recent", boost: 0,
+    detail: "Who changed what, across every dashboard and chart",
+    aliases: ["audit history changes log timeline edits"],
+  },
+  {
+    id: "p-lineage", label: "Lineage", href: "/workspace?tab=lineage", type: "page", glyph: "chart", boost: 0,
+    detail: "How datasets, charts and dashboards depend on each other",
+    aliases: ["dependencies graph upstream downstream impact"],
+  },
+  {
+    id: "p-docs", label: "Documentation", href: "/docs", type: "page", glyph: "docs", boost: 0,
+    detail: "Guides, SQL reference and architecture notes",
+    aliases: ["help guide reference manual quickstart api"],
+  },
+  {
+    id: "p-connections", label: "Connections", href: "/settings/connections", type: "page", glyph: "settings",
+    boost: 0, adminOnly: true,
+    detail: "Add and edit the database connections Studio reads from",
+    aliases: ["connection connect credentials database source settings"],
+  },
+  {
+    id: "p-storage", label: "Storage", href: "/settings/storage", type: "page", glyph: "settings",
+    boost: 0, adminOnly: true,
+    detail: "Where the warehouse keeps data, and for how long",
+    aliases: ["retention lake parquet disk settings"],
+  },
+  {
+    id: "p-maintenance", label: "Maintenance", href: "/settings/maintenance", type: "page", glyph: "settings",
+    boost: 0, adminOnly: true,
+    detail: "Housekeeping jobs, rebuilds and context regeneration",
+    aliases: ["jobs rebuild cleanup vacuum regenerate settings"],
+  },
+  {
+    id: "p-governance", label: "Governance", href: "/settings/governance", type: "page", glyph: "settings",
+    boost: 0, adminOnly: true,
+    detail: "Visibility rules and who may publish",
+    aliases: ["policy roles permissions visibility published internal settings"],
+  },
+  {
+    id: "p-catalog-access", label: "Catalog access", href: "/settings/catalog-access", type: "page", glyph: "settings",
+    boost: 0, adminOnly: true,
+    detail: "Which catalogs and schemas each role can reach",
+    aliases: ["permissions grants access roles schemas settings"],
+  },
+  {
+    id: "p-preferences", label: "Preferences", href: "/settings/preferences", type: "page", glyph: "settings", boost: 0,
+    detail: "Your own theme and query defaults",
+    aliases: ["theme dark mode light appearance profile defaults settings options"],
+  },
+  {
+    id: "p-about", label: "About Kaveon", href: "/", type: "page", glyph: "page", boost: 0,
+    detail: "What Kaveon is, and how the engine, the DLM and Studio fit together",
+    aliases: ["home landing overview product pillars"],
+  },
 ];
 
 const GLYPH_PATHS: Record<GlyphName, ReactNode> = {
@@ -898,15 +1034,20 @@ const GLYPH_PATHS: Record<GlyphName, ReactNode> = {
   dataset: <><rect x="3" y="4" width="18" height="16" rx="2" /><line x1="3" y1="10" x2="21" y2="10" /><line x1="9" y1="10" x2="9" y2="20" /></>,
   query: <><polyline points="5 8 9 12 5 16" /><line x1="12" y1="16" x2="19" y2="16" /></>,
   chat: <path d="M21 14a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z" />,
+  star: <polygon points="12 3.5 14.7 9.2 21 10 16.5 14.4 17.6 20.6 12 17.6 6.4 20.6 7.5 14.4 3 10 9.3 9.2" />,
+  source: <><ellipse cx="12" cy="6" rx="8" ry="3" /><path d="M4 6v6c0 1.66 3.58 3 8 3s8-1.34 8-3V6" /><path d="M4 12v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6" /></>,
+  engine: <><rect x="6" y="6" width="12" height="12" rx="2" /><path d="M10 3v3M14 3v3M10 18v3M14 18v3M3 10h3M3 14h3M18 10h3M18 14h3" /></>,
+  docs: <><path d="M4 19V5a2 2 0 0 1 2-2h13v18H6a2 2 0 0 1-2-2z" /><line x1="8" y1="7.5" x2="15" y2="7.5" /><line x1="8" y1="11.5" x2="15" y2="11.5" /></>,
+  settings: <><line x1="3.5" y1="8" x2="20.5" y2="8" /><circle cx="9" cy="8" r="2.4" /><line x1="3.5" y1="16" x2="20.5" y2="16" /><circle cx="15" cy="16" r="2.4" /></>,
   page: <><line x1="4" y1="12" x2="19" y2="12" /><polyline points="13 6 19 12 13 18" /></>,
 };
 
 function ResultGlyph({ glyph }: { glyph: GlyphName }) {
   return (
     <svg
-      width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"
-      style={{ flexShrink: 0, opacity: 0.6 }}
+      width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"
+      style={{ flexShrink: 0, opacity: 0.65 }}
     >
       {GLYPH_PATHS[glyph]}
     </svg>
@@ -918,11 +1059,372 @@ function SearchProgress() {
     <svg
       width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)"
       strokeWidth="2" strokeLinecap="round" aria-hidden="true"
-      style={{ animation: "spin 0.8s linear infinite", flexShrink: 0 }}
+      style={{ animation: "spin 0.8s linear infinite" }}
     >
       <path d="M21 12a9 9 0 1 1-6.22-8.56" />
     </svg>
   );
+}
+
+/* ── Matching ─────────────────────────────────────────────────────────────── */
+
+const WORD_BREAK = /[\s_\-./:,()[\]&%]/;
+
+/** Whether `at` begins a word, counting punctuation breaks and camel humps. */
+function startsWord(text: string, at: number): boolean {
+  if (at <= 0) return true;
+  const before = text[at - 1];
+  if (WORD_BREAK.test(before)) return true;
+  return before !== before.toUpperCase()
+    && before === before.toLowerCase()
+    && text[at] !== text[at].toLowerCase();
+}
+
+interface FieldMatch {
+  score: number;
+  runs: MatchRun[];
+}
+
+/** Collapse matched character positions into the fewest contiguous runs. */
+function toRuns(indices: number[]): MatchRun[] {
+  const runs: MatchRun[] = [];
+  for (const at of indices) {
+    const last = runs[runs.length - 1];
+    if (last && last.end === at) last.end = at + 1;
+    else runs.push({ start: at, end: at + 1 });
+  }
+  return runs;
+}
+
+/**
+ * The term read as initials: every character has to land on the start of a
+ * word, in order. This is how a reader types a title they already know — "ubr"
+ * for Users by Region — so it scores just under a literal prefix.
+ */
+function matchInitials(text: string, hay: string, term: string): FieldMatch | null {
+  if (term.length < 2) return null;
+  const indices: number[] = [];
+  let at = 0;
+  for (const want of term) {
+    while (at < hay.length && !(hay[at] === want && startsWord(text, at))) at += 1;
+    if (at >= hay.length) return null;
+    indices.push(at);
+    at += 1;
+  }
+  return { score: 840, runs: toRuns(indices) };
+}
+
+/**
+ * The term read loosely: its characters in order, gaps allowed. Scored well
+ * below any literal match, lifted by how much of it landed on the start of a
+ * word and cut by how far it had to stretch to find the rest.
+ */
+function matchLoose(text: string, hay: string, term: string): FieldMatch | null {
+  if (term.length < 3) return null;
+  const indices: number[] = [];
+  let at = 0;
+  for (const want of term) {
+    const found = hay.indexOf(want, at);
+    if (found < 0) return null;
+    indices.push(found);
+    at = found + 1;
+  }
+  const span = indices[indices.length - 1] - indices[0] + 1;
+  const anchored = indices.filter((index) => startsWord(text, index)).length;
+  const score = 300 + anchored * 14 - Math.min(90, (span - term.length) * 3);
+  return { score: Math.max(150, score), runs: toRuns(indices) };
+}
+
+/**
+ * How well `term` matches `text`, and where. The bands are far enough apart
+ * that a weaker kind of match can never outrank a stronger one: the whole
+ * string, then a prefix, then initials, then the start of a word inside it,
+ * then any substring, and last the characters in order with gaps.
+ */
+function matchField(text: string, term: string): FieldMatch | null {
+  if (!text) return null;
+  const hay = text.toLowerCase();
+  const at = hay.indexOf(term);
+  if (at === 0) {
+    return {
+      score: hay.length === term.length ? 1000 : 900,
+      runs: [{ start: 0, end: term.length }],
+    };
+  }
+  if (at > 0) {
+    return {
+      score: startsWord(text, at) ? 700 : 520,
+      runs: [{ start: at, end: at + term.length }],
+    };
+  }
+  return matchInitials(text, hay, term) ?? matchLoose(text, hay, term);
+}
+
+/** The title carries full weight; what a row merely mentions carries less. */
+const DETAIL_WEIGHT = 0.62;
+const ALIAS_WEIGHT = 0.42;
+const COLUMN_PREFIX = "Column ";
+
+/**
+ * Score one candidate against the term and resolve what its row should mark.
+ *
+ * The strongest field wins outright, so a title match always beats the same
+ * term found in a description. A short title then scores a little above a long
+ * one for the same kind of match, which is what settles "conn" on Connections
+ * rather than on Catalog access.
+ */
+function rank(candidate: Candidate, term: string): SearchResult | null {
+  const label = matchField(candidate.label, term);
+  let detailText = candidate.detail;
+  let detail = matchField(detailText, term);
+
+  // A dataset is reached by its columns as often as by its name. When a column
+  // is the better match, the row names that column instead of repeating a table
+  // the reader never typed.
+  if (candidate.columns) {
+    let best: FieldMatch | null = null;
+    let bestName = "";
+    for (const name of candidate.columns) {
+      const match = matchField(name, term);
+      if (match && (!best || match.score > best.score)) { best = match; bestName = name; }
+    }
+    if (best && best.score > (label?.score ?? 0) && best.score > (detail?.score ?? 0)) {
+      detailText = `${COLUMN_PREFIX}${bestName}`;
+      detail = {
+        score: best.score,
+        runs: best.runs.map((run) => ({
+          start: run.start + COLUMN_PREFIX.length,
+          end: run.end + COLUMN_PREFIX.length,
+        })),
+      };
+    }
+  }
+
+  let aliasScore = 0;
+  for (const alias of candidate.aliases) {
+    const match = matchField(alias, term);
+    if (match && match.score > aliasScore) aliasScore = match.score;
+  }
+
+  const best = Math.max(
+    label?.score ?? 0,
+    (detail?.score ?? 0) * DETAIL_WEIGHT,
+    aliasScore * ALIAS_WEIGHT,
+  );
+  if (best <= 0) return null;
+
+  const brevity = 36 * (1 - Math.min(candidate.label.length, 48) / 48);
+  return {
+    id: candidate.id,
+    label: candidate.label,
+    detail: detailText,
+    href: candidate.href,
+    type: candidate.type,
+    glyph: candidate.glyph,
+    score: best + brevity + candidate.boost,
+    labelRuns: label?.runs ?? [],
+    detailRuns: detail?.runs ?? [],
+  };
+}
+
+/** Mark the characters the term accounts for, so a row says why it is here. */
+function Marked({ text, runs, strong }: { text: string; runs: MatchRun[]; strong: string }) {
+  if (runs.length === 0) return <>{text}</>;
+  const parts: ReactNode[] = [];
+  let at = 0;
+  runs.forEach((run, index) => {
+    if (run.start > at) parts.push(text.slice(at, run.start));
+    parts.push(
+      <mark
+        key={index}
+        style={{ background: "transparent", color: strong, fontWeight: 600 }}
+      >
+        {text.slice(run.start, run.end)}
+      </mark>,
+    );
+    at = run.end;
+  });
+  if (at < text.length) parts.push(text.slice(at));
+  return <>{parts}</>;
+}
+
+/* ── The searchable corpus ────────────────────────────────────────────────── */
+
+/** The API answers some lists bare and others inside an envelope. */
+function listOf(payload: unknown): Record<string, unknown>[] {
+  if (Array.isArray(payload)) return payload as Record<string, unknown>[];
+  if (payload && typeof payload === "object") {
+    const record = payload as Record<string, unknown>;
+    for (const key of ["recent", "result", "items", "datasets", "dashboards", "charts"]) {
+      if (Array.isArray(record[key])) return record[key] as Record<string, unknown>[];
+    }
+  }
+  return [];
+}
+
+function str(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+const CHART_TYPE_LABELS: Record<string, string> = {
+  bar: "Bar chart",
+  stacked_bar: "Stacked bar chart",
+  line: "Line chart",
+  area: "Area chart",
+  pie: "Pie chart",
+  scatter: "Scatter chart",
+  table: "Table",
+  world_map: "Map",
+  heatmap: "Heatmap",
+  funnel: "Funnel chart",
+  big_number: "Metric",
+  big_number_trend: "Metric with trend",
+};
+
+/** A description reads as a single line in a result row, cut at a word. */
+function oneLine(value: string, limit = 92): string {
+  const flat = value.replace(/\s+/g, " ").trim();
+  if (flat.length <= limit) return flat;
+  const cut = flat.slice(0, limit);
+  const at = cut.lastIndexOf(" ");
+  const kept = at > limit * 0.6 ? cut.slice(0, at) : cut;
+  return `${kept.replace(/[,;:.—-]+$/, "")}…`;
+}
+
+function dashboardCandidates(payload: unknown): Candidate[] {
+  const out: Candidate[] = [];
+  for (const row of listOf(payload)) {
+    const id = str(row.id);
+    const label = str(row.name);
+    if (!id || !label) continue;
+    const description = str(row.description);
+    let charts = 0;
+    if (Array.isArray(row.charts)) charts = row.charts.length;
+    else if (typeof row.charts === "string") {
+      try {
+        const parsed: unknown = JSON.parse(row.charts);
+        if (Array.isArray(parsed)) charts = parsed.length;
+      } catch { charts = 0; }
+    }
+    const count = `${charts} ${charts === 1 ? "chart" : "charts"}`;
+    out.push({
+      id: `d-${id}`,
+      label,
+      detail: description ? oneLine(description) : count,
+      href: `/dashboards/${id}/view`,
+      type: "dashboard",
+      glyph: "dashboard",
+      aliases: [description, count, "dashboard"],
+      boost: row.favorite === true ? 50 : 0,
+    });
+  }
+  return out;
+}
+
+function chartCandidates(payload: unknown): Candidate[] {
+  const out: Candidate[] = [];
+  for (const row of listOf(payload)) {
+    const id = str(row.id);
+    const label = str(row.name);
+    if (!id || !label) continue;
+    const typeLabel = CHART_TYPE_LABELS[str(row.chart_type)] ?? "Chart";
+    const dataset = str(row.dataset_name);
+    out.push({
+      id: `c-${id}`,
+      label,
+      detail: dataset ? `${typeLabel} in ${dataset}` : typeLabel,
+      href: `/charts/${id}`,
+      type: "chart",
+      glyph: "chart",
+      aliases: [str(row.description), typeLabel, dataset, "chart"],
+      boost: row.favorite === true ? 50 : 0,
+    });
+  }
+  return out;
+}
+
+function datasetCandidates(payload: unknown): Candidate[] {
+  const out: Candidate[] = [];
+  for (const row of listOf(payload)) {
+    const id = str(row.id);
+    const label = str(row.name);
+    if (!id || !label) continue;
+    const table = str(row.table_name);
+    const schema = str(row.schema_name);
+    const description = str(row.description);
+    const columns = Array.isArray(row.columns)
+      ? row.columns
+        .map((column) => str((column as Record<string, unknown>)?.column_name)
+          || str((column as Record<string, unknown>)?.name))
+        .filter(Boolean)
+      : [];
+    let detail = description ? oneLine(description) : "Dataset";
+    if (table) detail = schema ? `${table} in ${schema}` : table;
+    out.push({
+      id: `ds-${id}`,
+      label,
+      detail,
+      href: `/datasets/${id}`,
+      type: "dataset",
+      glyph: "dataset",
+      aliases: [description, str(row.database_name), schema, table, "dataset table"],
+      columns,
+      boost: row.favorite === true ? 50 : 0,
+    });
+  }
+  return out;
+}
+
+/**
+ * The corpus is fetched once per palette session and matched in the browser,
+ * so every keystroke after the first is answered without a request. It is held
+ * past close for a couple of minutes, which is what makes reopening instant;
+ * a stale copy is still shown at once and replaced when the refresh lands.
+ */
+const CORPUS_TTL_MS = 120_000;
+/** How long a fetch may run before the reader is told one is running. */
+const PROGRESS_AFTER_MS = 400;
+
+let corpusItems: Candidate[] | null = null;
+let corpusFetchedAt = 0;
+let corpusInFlight: Promise<Candidate[]> | null = null;
+
+function fetchCorpus(): Promise<Candidate[]> {
+  if (corpusInFlight) return corpusInFlight;
+  const json = (path: string) => msalFetch(path)
+    .then((response) => (response.ok ? response.json() : null))
+    .catch(() => null);
+  corpusInFlight = Promise.all([
+    json("/api/v1/dashboards"),
+    json("/api/v1/charts"),
+    json("/api/v1/datasets/summary"),
+  ]).then(([dashboards, charts, datasets]) => {
+    const items = [
+      ...dashboardCandidates(dashboards),
+      ...chartCandidates(charts),
+      ...datasetCandidates(datasets),
+    ];
+    corpusItems = items;
+    corpusFetchedAt = Date.now();
+    return items;
+  }).finally(() => { corpusInFlight = null; });
+  return corpusInFlight;
+}
+
+/** The time since a recent was opened, as the row's one disambiguating fact. */
+const RELATIVE_STEPS: [Intl.RelativeTimeFormatUnit, number][] = [
+  ["second", 60], ["minute", 60], ["hour", 24], ["day", 7], ["week", 4.345], ["month", 12],
+];
+
+const RELATIVE_FORMAT = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+
+function openedAgo(timestamp: number): string {
+  let amount = (timestamp - Date.now()) / 1000;
+  for (const [unit, span] of RELATIVE_STEPS) {
+    if (Math.abs(amount) < span) return RELATIVE_FORMAT.format(Math.round(amount), unit);
+    amount /= span;
+  }
+  return RELATIVE_FORMAT.format(Math.round(amount), "year");
 }
 
 /**
@@ -949,22 +1451,36 @@ function buildTabs(items: SearchResult[]): SearchTab[] {
   return [{ id: "all", label: "All results", count: items.length }, ...present];
 }
 
+/** How many of a category the All tab previews before its own tab is needed. */
+const ALL_PREVIEW = 5;
+
+/**
+ * How far below the best match a result may score and still be worth listing.
+ *
+ * Reading the characters in order with gaps finds a great many weak matches —
+ * "conn" is in "Avg Carbon Intensity" if you let it stretch far enough. Those
+ * are real matches and worth having when nothing better exists, but alongside
+ * a title that starts with the term they are only noise, and they would inflate
+ * every count in the tab strip. So the bar rises with the quality of the best
+ * answer rather than sitting at a fixed score.
+ */
+const RELEVANCE_FLOOR = 0.45;
+
 function SpotlightSearch({ recents, onClose, onNavigate }: {
   recents: RecentItem[];
   onClose: () => void;
   onNavigate: (href: string) => void;
 }) {
+  const { isAdmin } = useRole();
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<SearchResult[]>([]);
-  const [tab, setTab] = useState<TabId>("all");
-  const [selected, setSelected] = useState(0);
+  const [corpus, setCorpus] = useState<Candidate[]>(() => corpusItems ?? []);
   const [loading, setLoading] = useState(false);
+  const [pinnedTab, setPinnedTab] = useState<TabId | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const stripRef = useRef<HTMLDivElement>(null);
   const restoreFocusRef = useRef(true);
-  const pinnedTabRef = useRef<TabId | null>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const domId = useId();
 
   // The field takes focus on open, and whatever opened the overlay takes it
@@ -975,92 +1491,113 @@ function SpotlightSearch({ recents, onClose, onNavigate }: {
     return () => { if (restoreFocusRef.current) opener?.focus?.(); };
   }, []);
 
-  // A tab the reader picked themselves survives the next result set, as long as
-  // that set still holds something for it. Otherwise the default tab applies.
-  const applyResults = useCallback((items: SearchResult[]) => {
-    const pinned = pinnedTabRef.current;
-    const pinnedHolds = pinned === null
-      ? false
-      : pinned === "all" ? items.length > 0 : items.some((item) => item.type === pinned);
-    setResults(items);
-    setTab(pinned !== null && pinnedHolds ? pinned : defaultTab(items));
-    setSelected(0);
+  // A fresh corpus is already in hand, so the first keystroke is answered
+  // without a request. A stale one is shown immediately and refreshed behind
+  // the reader; only an empty one is ever worth reporting as progress.
+  useEffect(() => {
+    if (corpusItems && Date.now() - corpusFetchedAt < CORPUS_TTL_MS) return;
+    let live = true;
+    const reveal: ReturnType<typeof setTimeout> | undefined = corpusItems
+      ? undefined
+      : setTimeout(() => { if (live) setLoading(true); }, PROGRESS_AFTER_MS);
+    fetchCorpus().then((items) => { if (live) setCorpus(items); })
+      .finally(() => { if (live) { clearTimeout(reveal); setLoading(false); } });
+    return () => { live = false; clearTimeout(reveal); };
   }, []);
 
-  // Search API + recents + pages
-  useEffect(() => {
-    pinnedTabRef.current = null;
-    const q = query.trim().toLowerCase();
-    if (!q) {
-      // Show recents + pages when empty
-      const recentResults: SearchResult[] = recents.slice(0, 5).map(r => ({
-        id: `r-${r.id}`, label: r.label, href: r.href, type: "recent", glyph: RECENT_GLYPHS[r.type] ?? "recent",
+  const pages = useMemo(
+    () => (isAdmin ? PAGES : PAGES.filter((page) => !page.adminOnly)),
+    [isAdmin],
+  );
+
+  /**
+   * Recents are their own category rather than a boost alone, because where the
+   * reader just was is the single most likely place they want to go back to.
+   * The same item still appears under its own category; the copy there carries
+   * the recency lift so it ranks above everything the reader has not touched.
+   */
+  const recentHrefs = useMemo(() => new Set(recents.map((item) => item.href)), [recents]);
+
+  const results = useMemo<SearchResult[]>(() => {
+    const term = query.trim().toLowerCase();
+    const recentCandidates: Candidate[] = recents.map((item) => ({
+      id: `r-${item.type}-${item.id}`,
+      label: item.label,
+      detail: `${RECENT_NOUNS[item.type] ?? "Item"} opened ${openedAgo(item.timestamp)}`,
+      href: item.href,
+      type: "recent",
+      glyph: RECENT_GLYPHS[item.type] ?? "recent",
+      aliases: [RECENT_NOUNS[item.type] ?? ""],
+      boost: 0,
+    }));
+
+    if (!term) {
+      // Nothing typed: where the reader was, then where they can go. Both are
+      // offered unranked, in the order they are useful in.
+      const resting = (items: Candidate[]) => items.map((candidate) => ({
+        ...candidate,
+        score: 0,
+        labelRuns: [] as MatchRun[],
+        detailRuns: [] as MatchRun[],
       }));
-      applyResults([...recentResults, ...PAGES]);
-      return;
+      return [
+        ...resting(recentCandidates.slice(0, 7)),
+        ...resting(pages.filter((page) => page.primary)),
+      ];
     }
 
-    // Filter pages
-    const pageMatches = PAGES.filter(p => p.label.toLowerCase().includes(q));
-
-    // Filter recents
-    const recentMatches: SearchResult[] = recents
-      .filter(r => r.label.toLowerCase().includes(q))
-      .slice(0, 3)
-      .map(r => ({ id: `r-${r.id}`, label: r.label, href: r.href, type: "recent", glyph: RECENT_GLYPHS[r.type] ?? "recent" }));
-
-    // Debounced API search
-    clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(async () => {
-      setLoading(true);
-      try {
-        const [dashRes, chartRes, dsRes] = await Promise.all([
-          msalFetch("/api/v1/dashboards").then(r => r.ok ? r.json() : []).catch(() => []),
-          msalFetch("/api/v1/charts").then(r => r.ok ? r.json() : []).catch(() => []),
-          msalFetch("/api/v1/datasets/summary").then(r => r.ok ? r.json() : []).catch(() => []),
-        ]);
-
-        const toArr = (d: any) => Array.isArray(d) ? d : d?.result || d?.items || [];
-
-        const dashboards: SearchResult[] = toArr(dashRes)
-          .filter((d: any) => (d.name || "").toLowerCase().includes(q))
-          .slice(0, 5)
-          .map((d: any) => ({ id: `d-${d.id}`, label: d.name, href: `/dashboards/${d.id}/view`, type: "dashboard" as const, glyph: "dashboard" as const }));
-
-        const charts: SearchResult[] = toArr(chartRes)
-          .filter((c: any) => (c.name || "").toLowerCase().includes(q))
-          .slice(0, 5)
-          .map((c: any) => ({ id: `c-${c.id}`, label: c.name, href: `/charts/${c.id}`, type: "chart" as const, glyph: "chart" as const }));
-
-        const datasets: SearchResult[] = toArr(dsRes)
-          .filter((d: any) => (d.name || "").toLowerCase().includes(q))
-          .slice(0, 3)
-          .map((d: any) => ({ id: `ds-${d.id}`, label: d.name, href: `/datasets/${d.id}`, type: "dataset" as const, glyph: "dataset" as const }));
-
-        // Deduplicate against recents
-        const seen = new Set(recentMatches.map(r => r.href));
-        const apiResults = [...dashboards, ...charts, ...datasets].filter(r => !seen.has(r.href));
-
-        applyResults([...recentMatches, ...apiResults, ...pageMatches]);
-      } catch { /* ignore */ }
-      setLoading(false);
-    }, 200);
-
-    // Show immediate local results
-    applyResults([...recentMatches, ...pageMatches]);
-
-    return () => clearTimeout(debounceRef.current);
-  }, [query, recents, applyResults]);
+    const scored: SearchResult[] = [];
+    const push = (candidates: Candidate[]) => {
+      for (const candidate of candidates) {
+        const result = rank(candidate, term);
+        if (result) scored.push(result);
+      }
+    };
+    push(recentCandidates);
+    push(corpus.map((candidate) => (recentHrefs.has(candidate.href)
+      ? { ...candidate, boost: candidate.boost + 110 }
+      : candidate)));
+    push(pages);
+    scored.sort((a, b) => b.score - a.score
+      || KIND_ORDER.indexOf(a.type) - KIND_ORDER.indexOf(b.type)
+      || a.label.localeCompare(b.label));
+    const floor = (scored[0]?.score ?? 0) * RELEVANCE_FLOOR;
+    return scored.filter((result) => result.score >= floor);
+  }, [query, recents, corpus, pages, recentHrefs]);
 
   const tabs = useMemo(() => buildTabs(results), [results]);
 
-  // The All tab keeps the headed groups the flat list had; a category tab is
-  // one unheaded run, because the tab is already the heading.
-  const groups = useMemo<{ kind: ResultKind | null; items: SearchResult[] }[]>(() => {
-    if (tab !== "all") return [{ kind: null, items: results.filter((r) => r.type === tab) }];
-    return KIND_ORDER
-      .map((kind) => ({ kind: kind as ResultKind | null, items: results.filter((r) => r.type === kind) }))
+  const tab = useMemo<TabId>(() => {
+    if (pinnedTab !== null && tabs.some((entry) => entry.id === pinnedTab)) return pinnedTab;
+    return defaultTab(results);
+  }, [pinnedTab, tabs, results]);
+
+  /**
+   * The All tab keeps the headed groups the flat list had, ordered by how well
+   * each category matched rather than by a fixed hierarchy, and shows the top
+   * few of each. A category tab is one unheaded run of every match it holds,
+   * because the tab is already the heading.
+   */
+  const groups = useMemo<{ kind: ResultKind | null; items: SearchResult[]; total: number }[]>(() => {
+    if (tab !== "all") {
+      const items = results.filter((result) => result.type === tab);
+      return [{ kind: null, items, total: items.length }];
+    }
+    const byKind = KIND_ORDER
+      .map((kind) => ({ kind: kind as ResultKind | null, items: results.filter((result) => result.type === kind) }))
       .filter((group) => group.items.length > 0);
+    const best = (items: SearchResult[]) => items.reduce((top, item) => Math.max(top, item.score), 0);
+    byKind.sort((a, b) => {
+      if (a.kind === "recent") return -1;
+      if (b.kind === "recent") return 1;
+      return best(b.items) - best(a.items)
+        || KIND_ORDER.indexOf(a.kind as ResultKind) - KIND_ORDER.indexOf(b.kind as ResultKind);
+    });
+    return byKind.map((group) => ({
+      kind: group.kind,
+      items: group.items.slice(0, ALL_PREVIEW),
+      total: group.items.length,
+    }));
   }, [results, tab]);
 
   const visible = useMemo(() => groups.flatMap((group) => group.items), [groups]);
@@ -1073,14 +1610,20 @@ function SpotlightSearch({ recents, onClose, onNavigate }: {
     });
   }, [groups]);
 
-  const activeIndex = visible.length === 0 ? -1 : Math.min(selected, visible.length - 1);
+  // The cursor is held by identity, not by position, so a corpus landing
+  // mid-type never slides a different row under the reader's finger. A new
+  // term has no previous row to keep, and falls back to the top of the list.
+  const activeIndex = useMemo(() => {
+    if (visible.length === 0) return -1;
+    const at = selectedId === null ? -1 : visible.findIndex((result) => result.id === selectedId);
+    return at < 0 ? 0 : at;
+  }, [visible, selectedId]);
   const activeResult = activeIndex < 0 ? null : visible[activeIndex];
   const activeTabLabel = tabs.find((entry) => entry.id === tab)?.label ?? "Results";
 
   const selectTab = useCallback((id: TabId) => {
-    pinnedTabRef.current = id;
-    setTab(id);
-    setSelected(0);
+    setPinnedTab(id);
+    setSelectedId(null);
   }, []);
 
   const navigate = useCallback((href: string) => {
@@ -1118,21 +1661,26 @@ function SpotlightSearch({ recents, onClose, onNavigate }: {
     return true;
   };
 
+  const stepRow = (to: number) => {
+    if (visible.length === 0) return;
+    setSelectedId(visible[Math.max(0, Math.min(to, visible.length - 1))].id);
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     switch (e.key) {
       case "ArrowDown":
         e.preventDefault();
-        if (visible.length > 0) setSelected(Math.min(activeIndex + 1, visible.length - 1));
+        stepRow(activeIndex + 1);
         break;
       case "ArrowUp":
         e.preventDefault();
-        if (visible.length > 0) setSelected(Math.max(activeIndex - 1, 0));
+        stepRow(activeIndex - 1);
         break;
       case "Home":
-        if (visible.length > 0) { e.preventDefault(); setSelected(0); }
+        if (visible.length > 0) { e.preventDefault(); stepRow(0); }
         break;
       case "End":
-        if (visible.length > 0) { e.preventDefault(); setSelected(visible.length - 1); }
+        if (visible.length > 0) { e.preventDefault(); stepRow(visible.length - 1); }
         break;
       case "ArrowLeft":
       case "ArrowRight": {
@@ -1173,8 +1721,8 @@ function SpotlightSearch({ recents, onClose, onNavigate }: {
         aria-label="Search Kaveon"
         onKeyDown={handleKeyDown}
         style={{
-          position: "fixed", top: "18%", left: "50%", transform: "translateX(-50%)",
-          width: "90%", maxWidth: 560,
+          position: "fixed", top: "max(44px, 12vh)", left: "50%", transform: "translateX(-50%)",
+          width: "90%", maxWidth: 580,
           background: "var(--bg-surface)", border: "1px solid var(--border)",
           borderRadius: 16, boxShadow: "0 24px 80px rgba(0,0,0,0.4)",
           zIndex: 10001, overflow: "hidden",
@@ -1191,15 +1739,19 @@ function SpotlightSearch({ recents, onClose, onNavigate }: {
             aria-controls={`${domId}-listbox`}
             aria-activedescendant={activeResult ? `${domId}-option-${activeIndex}` : undefined}
             aria-autocomplete="list"
-            placeholder="Search dashboards, charts, datasets..."
+            placeholder="Search dashboards, charts, datasets and pages"
             value={query}
-            onChange={e => setQuery(e.target.value)}
+            onChange={(e) => { setQuery(e.target.value); setPinnedTab(null); setSelectedId(null); }}
             style={{
-              flex: 1, border: "none", outline: "none", background: "transparent",
+              flex: 1, minWidth: 0, border: "none", outline: "none", background: "transparent",
               fontSize: 15, color: "var(--text-primary)", fontFamily: "inherit",
             }}
           />
-          {loading && <SearchProgress />}
+          {/* The slot is held open whether or not a fetch is running, so nothing
+              in the field moves when one starts or finishes. */}
+          <span style={{ width: 14, height: 14, flexShrink: 0, display: "flex" }}>
+            {loading && <SearchProgress />}
+          </span>
           <kbd style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, border: "1px solid var(--border)", color: "var(--text-muted)", background: "var(--bg-primary)", fontFamily: "inherit" }}>ESC</kbd>
         </div>
 
@@ -1229,10 +1781,10 @@ function SpotlightSearch({ recents, onClose, onNavigate }: {
                   aria-controls={`${domId}-panel`}
                   aria-label={`${entry.label}, ${entry.count} ${entry.count === 1 ? "result" : "results"}`}
                   tabIndex={-1}
-                  onMouseDown={e => e.preventDefault()}
+                  onMouseDown={(e) => e.preventDefault()}
                   onClick={() => { selectTab(entry.id); inputRef.current?.focus(); }}
-                  onMouseEnter={e => { if (!current) e.currentTarget.style.color = "var(--text-secondary)"; }}
-                  onMouseLeave={e => { if (!current) e.currentTarget.style.color = "var(--text-muted)"; }}
+                  onMouseEnter={(e) => { if (!current) e.currentTarget.style.color = "var(--text-secondary)"; }}
+                  onMouseLeave={(e) => { if (!current) e.currentTarget.style.color = "var(--text-muted)"; }}
                   style={{
                     display: "flex", alignItems: "center", gap: 6, flexShrink: 0,
                     height: 36, padding: "0 10px", marginBottom: -1,
@@ -1282,11 +1834,11 @@ function SpotlightSearch({ recents, onClose, onNavigate }: {
           role={tabs.length > 0 ? "tabpanel" : undefined}
           aria-labelledby={tabs.length > 0 ? `${domId}-tab-${tab}` : undefined}
           tabIndex={-1}
-          style={{ maxHeight: 380, overflowY: "auto", padding: 6, outline: "none" }}
+          style={{ maxHeight: "min(424px, 52vh)", overflowY: "auto", padding: 6, outline: "none" }}
         >
-          {visible.length === 0 && query && (
-            <div style={{ padding: "24px 16px", textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>
-              No results for &ldquo;{query}&rdquo;
+          {visible.length === 0 && query.trim() && (
+            <div style={{ padding: "14px 12px", color: "var(--text-muted)", fontSize: 12.5 }}>
+              Nothing here matches &ldquo;{query.trim()}&rdquo;.
             </div>
           )}
           <div id={`${domId}-listbox`} role="listbox" aria-label={activeTabLabel}>
@@ -1302,19 +1854,28 @@ function SpotlightSearch({ recents, onClose, onNavigate }: {
                     id={`${domId}-option-${index}`}
                     data-active={isActive}
                     aria-selected={isActive}
+                    aria-label={`${r.label}. ${r.detail}`}
                     onClick={() => navigate(r.href)}
-                    onMouseEnter={() => setSelected(index)}
+                    onMouseEnter={() => setSelectedId(r.id)}
                     style={{
-                      display: "flex", alignItems: "center", gap: 10,
-                      width: "100%", padding: "9px 12px", border: "none", borderRadius: 8,
-                      background: isActive ? "var(--bg-hover)" : "transparent",
-                      color: isActive ? "var(--text-primary)" : "var(--text-secondary)",
-                      fontSize: 13.5, cursor: "pointer", textAlign: "left",
-                      fontFamily: "inherit", transition: "background 0.1s",
+                      display: "flex", alignItems: "center", gap: 11,
+                      width: "100%", minHeight: 48, padding: "7px 12px",
+                      border: "none", borderRadius: 8,
+                      background: isActive ? "color-mix(in srgb, var(--accent) 9%, transparent)" : "transparent",
+                      color: "var(--text-secondary)",
+                      cursor: "pointer", textAlign: "left", fontFamily: "inherit",
+                      transition: "background 0.1s",
                     }}
                   >
                     <ResultGlyph glyph={r.glyph} />
-                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.label}</span>
+                    <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
+                      <span style={{ fontSize: 13.5, lineHeight: "18px", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        <Marked text={r.label} runs={r.labelRuns} strong="var(--text-primary)" />
+                      </span>
+                      <span style={{ fontSize: 11.5, lineHeight: "15px", color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        <Marked text={r.detail} runs={r.detailRuns} strong="var(--text-secondary)" />
+                      </span>
+                    </span>
                     {isActive && (
                       <kbd style={{ padding: "1px 4px", borderRadius: 3, border: "1px solid var(--border)", fontSize: 9, color: "var(--text-muted)", fontFamily: "inherit" }}>&#x23CE;</kbd>
                     )}
@@ -1324,8 +1885,17 @@ function SpotlightSearch({ recents, onClose, onNavigate }: {
               if (!group.kind) return <React.Fragment key="results">{rows}</React.Fragment>;
               return (
                 <div key={group.kind} role="group" aria-label={KIND_LABELS[group.kind]}>
-                  <div style={{ fontSize: 10, fontWeight: 600, color: "var(--text-muted)", padding: "8px 12px 4px", letterSpacing: "0.04em" }}>
-                    {KIND_LABELS[group.kind]}
+                  <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, padding: "8px 12px 4px" }}>
+                    <span style={{ fontSize: 10, fontWeight: 600, color: "var(--text-muted)", letterSpacing: "0.04em" }}>
+                      {KIND_LABELS[group.kind]}
+                    </span>
+                    {/* Said only when the preview is hiding something, so the
+                        reader knows the category's own tab holds more. */}
+                    {group.total > group.items.length && (
+                      <span style={{ fontSize: 10, color: "var(--text-muted)", fontVariantNumeric: "tabular-nums" }}>
+                        {group.total} matches
+                      </span>
+                    )}
                   </div>
                   {rows}
                 </div>
