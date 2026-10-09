@@ -16,11 +16,11 @@ export default function DlmDocs() {
         parser (<a href="/docs/nl-to-sql">NL→SQL</a>) is the fallback for shapes not yet precomputed.
       </Callout>
 
-      <Diagram src="/docs/architecture/kaveon-dlm-flow.svg" alt="Data Language Model compilation and request-resolution paths" caption="Generate or refresh compiles a dataset context artifact. At request time, supported fresh context can answer directly; otherwise Kaveon produces an inspectable live-query path against the selected source. Engine execution is a target integration." />
+      <Diagram src="/docs/architecture/kaveon-dlm-flow.svg" alt="Data Language Model compilation and request-resolution paths" caption="Generate or refresh compiles a dataset context artifact. At request time, supported fresh context can answer directly; otherwise Kaveon produces an inspectable live-query path through the configured analytical execution path." />
 
       <h2>What is a DLM?</h2>
       <p>
-        A DLM is a per-dataset <strong>compiled context artifact</strong> stored in the <code>kaveonmeta</code> database.
+        A DLM is a per-dataset <strong>compiled context artifact</strong> stored in KaveonDB&rsquo;s durable product store.
         It is not a machine learning model — it is a deterministic index of your schema&apos;s metrics, dimensions, column
         values, and precomputed answers. When a user asks a question, the DLM resolves it to a specific metric, optional
         grouping dimension, and optional entity filters — then either serves the answer from precomputed context
