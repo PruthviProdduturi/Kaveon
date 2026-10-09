@@ -8,6 +8,7 @@ import uuid
 import json
 import threading
 import time
+from fastapi import HTTPException
 from datetime import datetime, timezone
 from typing import List, Optional
 import database.metadata as db
@@ -132,6 +133,10 @@ _RETENTION_TRIM_BATCH = MAX_DELETE_FANOUT
 # and every one of them would otherwise see the same over-bound count and
 # start its own sweep, which would then race for the same records' revisions.
 _RETENTION_SWEEPS: set[str] = set()
+# How many times a sweep re-reads a listing that lost its snapshot to a
+# concurrent write, and how long it waits between attempts.
+_RETENTION_LIST_ATTEMPTS = 4
+_RETENTION_LIST_BACKOFF_SECONDS = 0.75
 
 
 def _at_retention_bound(owner: str) -> bool:
@@ -167,6 +172,32 @@ def _release_retention_sweep(owner: str) -> None:
         _RETENTION_SWEEPS.discard(owner)
 
 
+def _history_records(owner: str) -> list:
+    """The owner's history, read as one consistent snapshot.
+
+    The listing is paged a hundred at a time and refuses to span a snapshot
+    that moved underneath it. On the request path that never happened, because
+    the write that triggered it held the turn. Off it, a dashboard opening
+    twelve tiles at once writes twelve records while the sweep is still
+    paging, and every attempt lost the snapshot — so retention stopped
+    happening at all and a history would have grown until the listing hit its
+    own ceiling.
+
+    A burst is short and a sweep is not urgent, so it is simply re-read. The
+    attempts are bounded: if writes never pause, the sweep gives up and the
+    next one tries again, which is the same outcome as waiting.
+    """
+    for attempt in range(_RETENTION_LIST_ATTEMPTS):
+        try:
+            return product_store.list_records(
+                "query_history", owner, "Viewer", max_records=MAX_HISTORY_PER_OWNER)
+        except HTTPException as error:
+            if error.status_code != 409 or attempt == _RETENTION_LIST_ATTEMPTS - 1:
+                raise
+            time.sleep(_RETENTION_LIST_BACKOFF_SECONDS * (attempt + 1))
+    raise RuntimeError("unreachable")
+
+
 def run_retention_sweep(owner: str) -> int:
     """Bring *owner* back under the retention bound, and report what it took.
 
@@ -177,8 +208,7 @@ def run_retention_sweep(owner: str) -> int:
     over it until this finishes is correct, while a reader waiting eight
     seconds for it is not.
     """
-    records = product_store.list_records(
-        "query_history", owner, "Viewer", max_records=MAX_HISTORY_PER_OWNER)
+    records = _history_records(owner)
     _remember_history_count(owner, len(records))
     over = len(records) - MAX_HISTORY_PER_OWNER
     if over < 0:
@@ -216,7 +246,8 @@ def _sweep_retention_quietly(owner: str) -> None:
         # sweep. A failure here must never reach the query that triggered it,
         # which has already been answered.
         logging.getLogger(__name__).warning(
-            "query_history_retention_sweep_failed type=%s", type(error).__name__)
+            "query_history_retention_sweep_failed type=%s status=%s",
+            type(error).__name__, getattr(error, "status_code", None))
     finally:
         _release_retention_sweep(owner)
 

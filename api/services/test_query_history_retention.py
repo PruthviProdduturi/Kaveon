@@ -10,6 +10,7 @@ than an invariant, so it is reasserted behind the response instead.
 import sys
 from datetime import datetime, timedelta, timezone
 import unittest
+from fastapi import HTTPException
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -178,6 +179,40 @@ class SweepTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "retention state is invalid"):
                 history.run_retention_sweep(owner)
         transact.assert_not_called()
+
+    def test_a_listing_that_loses_its_snapshot_is_re_read(self):
+        """Moving the listing off the request path put it in a race it never
+        had before: a dashboard opening twelve tiles writes twelve history
+        records while the sweep is still paging, the listing refuses to span a
+        snapshot that moved, and every sweep failed. A burst is short, so the
+        listing is simply re-read."""
+        owner = "owner@example.test"
+        moved = HTTPException(409, "KaveonDB product list changed during pagination")
+        with patch.object(history.product_store, "list_records",
+                          side_effect=[moved, moved, _records(owner, 400)]) as listed, \
+             patch.object(history.time, "sleep"), \
+             patch.object(history.product_store, "transact"):
+            self.assertEqual(history.run_retention_sweep(owner), 0)
+        self.assertEqual(listed.call_count, 3)
+        self.assertEqual(history._HISTORY_COUNTS[owner], 400)
+
+    def test_a_listing_that_never_settles_gives_up_rather_than_spinning(self):
+        owner = "owner@example.test"
+        moved = HTTPException(409, "KaveonDB product list changed during pagination")
+        with patch.object(history.product_store, "list_records",
+                          side_effect=moved) as listed, \
+             patch.object(history.time, "sleep"):
+            with self.assertRaises(HTTPException):
+                history.run_retention_sweep(owner)
+        self.assertEqual(listed.call_count, history._RETENTION_LIST_ATTEMPTS)
+
+    def test_a_failure_that_is_not_a_lost_snapshot_is_not_retried(self):
+        owner = "owner@example.test"
+        with patch.object(history.product_store, "list_records",
+                          side_effect=HTTPException(503, "bound exceeded")) as listed:
+            with self.assertRaises(HTTPException):
+                history.run_retention_sweep(owner)
+        self.assertEqual(listed.call_count, 1)
 
     def test_a_record_with_no_revision_stops_the_sweep(self):
         owner = "owner@example.test"
