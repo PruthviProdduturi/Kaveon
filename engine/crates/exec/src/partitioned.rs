@@ -673,7 +673,7 @@ fn flush_partition_buffers(
 /// Keeps reader fan-in bounded without repeatedly rewriting a partition's full
 /// history. Merging the two smallest runs gives leveled compaction: old, large
 /// runs are only rewritten after newer runs have grown to a comparable size.
-fn compact_spill_runs(
+pub(crate) fn compact_spill_runs(
     runs: &mut Vec<SpillRun>,
     schema: &SchemaRef,
     memory: &OperatorMemoryAccount,
@@ -688,9 +688,14 @@ fn compact_spill_runs(
         by_size.sort_unstable();
         let mut selected = [by_size[0].1, by_size[1].1];
         selected.sort_unstable();
+        // Keep handles to both source runs until the replacement is safely
+        // written.  Compaction is opportunistic: under a tight query budget
+        // its batch reservation may be refused, and the caller must retain
+        // the original runs instead of losing their files.
         let right = runs.remove(selected[1]);
         let left = runs.remove(selected[0]);
-        spill.record_compaction(left.bytes().saturating_add(right.bytes()));
+        let left_keep = left.clone();
+        let right_keep = right.clone();
         let mut source = RunSource::new(Arc::clone(schema), vec![left, right]);
         let mut batch_memory = None;
         let batches = std::iter::from_fn(|| {
@@ -702,7 +707,26 @@ fn compact_spill_runs(
                 Ok(batch)
             })
         });
-        runs.push(spill.write_run_stream(schema, batches)?);
+        match spill.write_run_stream(schema, batches) {
+            Ok(run) => {
+                spill.record_compaction(left_keep.bytes().saturating_add(right_keep.bytes()));
+                runs.push(run);
+            }
+            Err(error @ KaveonError::MemoryLimit(_)) => {
+                // The source handles are dropped above, but these clones keep
+                // the input files alive while the failed output is removed.
+                runs.push(left_keep);
+                runs.push(right_keep);
+                // This was a rejected optimization, not a completed rewrite.
+                // The counters describe physical work only.
+                return Err(error);
+            }
+            Err(error) => {
+                runs.push(left_keep);
+                runs.push(right_keep);
+                return Err(error);
+            }
+        }
     }
     Ok(())
 }
@@ -2410,6 +2434,32 @@ mod tests {
             rows += batch.num_rows();
         }
         assert_eq!(rows, 16_384);
+        assert_eq!(disk.snapshot().current_bytes, 0);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn spill_compaction_refusal_keeps_the_original_runs() {
+        let pool = QueryMemoryPool::new("compact-refusal", 1).unwrap();
+        let account = pool.operator("compact").unwrap();
+        let disk = spill();
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        let mut runs = Vec::new();
+        for id in 0..MAX_RUNS_PER_PARTITION {
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int64Array::from(vec![id as i64]))],
+            )
+            .unwrap();
+            runs.push(disk.write_run(&schema, &[batch]).unwrap());
+        }
+        let original_bytes = runs.iter().map(SpillRun::bytes).sum::<u64>();
+        let error = compact_spill_runs(&mut runs, &schema, &account, &disk).unwrap_err();
+        assert!(matches!(error, KaveonError::MemoryLimit(_)), "{error}");
+        assert_eq!(runs.len(), MAX_RUNS_PER_PARTITION);
+        assert_eq!(runs.iter().map(SpillRun::bytes).sum::<u64>(), original_bytes);
+        assert_eq!(disk.snapshot().current_bytes, original_bytes);
+        drop(runs);
         assert_eq!(disk.snapshot().current_bytes, 0);
         assert_eq!(pool.snapshot().current_bytes, 0);
     }
