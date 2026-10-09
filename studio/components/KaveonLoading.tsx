@@ -12,12 +12,20 @@ interface KaveonLoadingProps {
    * as one thing.
    */
   action?: React.ReactNode;
+  /**
+   * Whether to show the Kaveon mark. A page opening is the product
+   * appearing, and the mark belongs there. A statement running inside a pane
+   * that is already the product is not, and the mark only adds a second
+   * thing to look at.
+   */
+  mark?: boolean;
 }
 
 export function KaveonLoading({
   message = "Loading",
   fullScreen = true,
   action,
+  mark = true,
 }: KaveonLoadingProps) {
   const [dots, setDots] = useState("");
 
@@ -48,9 +56,11 @@ export function KaveonLoading({
           gap: 32,
         }}
       >
-        <div style={{ animation: "kaveon-breathe 3s ease-in-out infinite" }}>
-          <KaveonMark size={56} useDirectColor />
-        </div>
+        {mark && (
+          <div style={{ animation: "kaveon-breathe 3s ease-in-out infinite" }}>
+            <KaveonMark size={56} useDirectColor />
+          </div>
+        )}
 
         <p
           style={{

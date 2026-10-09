@@ -137,6 +137,7 @@ export function QueryProgress({ progress, onCancel, centered = false }: QueryPro
       <KaveonLoading
         message="Running query"
         fullScreen={false}
+        mark={false}
         action={onCancel ? (
           <button type="button" className="query-progress__cancel" onClick={onCancel}>
             Cancel
