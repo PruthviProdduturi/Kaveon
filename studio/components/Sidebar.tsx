@@ -258,8 +258,9 @@ function UserMenu({
             theme === "dark" ? <SunIcon /> : <MoonIcon />,
           )}
 
-          {/* Data Sources */}
-          {menuItem("Data Sources", () => navigate("/data-sources"),
+          {/* Registering an external database is a setting, so this goes to
+              the Settings tab that owns it rather than a page of its own. */}
+          {menuItem("Data sources", () => navigate("/settings/data-sources"),
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
           )}
 
@@ -998,9 +999,9 @@ const PAGES: Candidate[] = [
     aliases: ["saved queries history statements sql log"],
   },
   {
-    id: "p-sources", label: "Data Sources", href: "/data-sources", type: "page", glyph: "source", boost: 0, primary: true,
-    detail: "Register and manage connections to your databases",
-    aliases: ["connection connect database postgres mysql fabric starrocks register driver"],
+    id: "p-sources", label: "Data sources", href: "/settings/data-sources", type: "page", glyph: "source", boost: 0, primary: true,
+    detail: "External databases Kaveon queries over the wire",
+    aliases: ["connection connect database postgres mysql fabric starrocks register driver external"],
   },
   {
     id: "p-engine", label: "KaveonDB", href: "/engine", type: "page", glyph: "engine", boost: 0,

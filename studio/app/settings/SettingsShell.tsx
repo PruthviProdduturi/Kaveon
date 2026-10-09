@@ -11,6 +11,7 @@ import s from "./settings.module.css";
 const SECTIONS = [
   { href: "/settings/connections", label: "Connections", icon: "fa-plug", admin: true },
   { href: "/settings/storage", label: "Storage", icon: "fa-hard-drive", admin: true },
+  { href: "/settings/data-sources", label: "Data sources", icon: "fa-server", admin: true },
   { href: "/settings/maintenance", label: "Maintenance", icon: "fa-screwdriver-wrench", admin: true },
   { href: "/settings/governance", label: "Governance", icon: "fa-scale-balanced", admin: true },
   { href: "/settings/catalog-access", label: "Catalog access", icon: "fa-key", admin: true },
