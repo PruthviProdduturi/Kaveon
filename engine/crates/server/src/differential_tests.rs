@@ -1633,6 +1633,47 @@ fn a_join_under_a_refusing_budget_spills_and_matches_the_in_memory_join() {
     let _ = std::fs::remove_dir_all(&directory);
 }
 
+/// Outer and cross joins use the same executable fragment path as inner joins.
+/// Keep their qualification separate from the spill gate because a filtered
+/// right/full build may legitimately fit in memory and therefore need not
+/// increment the spill counter.
+#[test]
+fn distributed_outer_and_cross_joins_match_the_local_result() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-join-modes-{}", uuid::Uuid::new_v4()));
+    let manager = events_catalog(&directory);
+    let cases: [(&str, bool); 3] = [
+        (
+            "SELECT t.country, COUNT(*) AS n FROM events t RIGHT JOIN events o ON o.user_id = t.user_id WHERE o.event_date = '2026-07-04' GROUP BY t.country ORDER BY t.country",
+            true,
+        ),
+        (
+            "SELECT t.country, COUNT(*) AS n FROM events t FULL JOIN events o ON o.user_id = t.user_id WHERE t.event_date = '2026-07-04' OR o.event_date = '2026-07-04' GROUP BY t.country ORDER BY t.country",
+            true,
+        ),
+        (
+            "SELECT COUNT(*) AS n FROM events t CROSS JOIN events o WHERE t.user_id = o.user_id",
+            false,
+        ),
+    ];
+    for (statement, ordered) in cases {
+        let plan = bound_plan(statement, &manager);
+        let pool = QueryMemoryPool::new("join-modes", 256 << 20).unwrap();
+        let mut local_plan = crate::planner::plan_query_with_memory(&plan, &manager, &pool)
+            .unwrap_or_else(|error| panic!("{statement}: {error}"));
+        let local = canonical_rows(&drain(local_plan.operator.as_mut()), ordered);
+        drop(local_plan);
+        assert_eq!(pool.snapshot().current_bytes, 0, "{statement} leaked locally");
+        let pool = QueryMemoryPool::new("join-modes", 256 << 20).unwrap();
+        let distributed = execute_distributed("join-modes", &plan, &manager, 2, &pool)
+            .unwrap_or_else(|error| panic!("{statement} (distributed): {error}"));
+        assert_eq!(pool.snapshot().current_bytes, 0, "{statement} leaked distributed");
+        assert_eq!(canonical_rows(&distributed, ordered), local, "{statement}");
+        assert!(!local.is_empty(), "{statement}");
+    }
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
 /// The statements the cube answers over the events directory, each with
 /// the scanned statement it must equal: the same text, or — for a
 /// distinct count the `approximate` setting lowers — the `APPROX_*`
