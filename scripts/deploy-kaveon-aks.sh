@@ -137,7 +137,7 @@ kubectl -n "$NAMESPACE" get pods -o wide
 
 echo "Running in-cluster smoke checks..."
 SMOKE="kaveon-smoke-$RANDOM"
-kubectl -n "$NAMESPACE" run "$SMOKE" --rm -i --restart=Never --image=curlimages/curl:8.10.1 --command -- curl --fail --silent --show-error http://kaveon-api:8080/api/health >/dev/null
+kubectl -n "$NAMESPACE" run "$SMOKE" --rm -i --restart=Never --labels app=kaveon-portal --image=curlimages/curl:8.10.1 --command -- curl --fail --silent --show-error http://kaveon-api:8080/api/health >/dev/null
 kubectl -n "$NAMESPACE" get deployment kaveon-api kaveon-portal -o json | jq -e 'all(.items[]; .status.availableReplicas >= 1)' >/dev/null
 echo "Kaveon AKS deployment passed preflight, rollout, and health checks."
 
