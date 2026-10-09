@@ -1444,47 +1444,38 @@ fn bound_plan(statement: &str, manager: &CatalogManager) -> LogicalPlan {
     kaveon_optim::rules::push_projection_down(plan)
 }
 
-/// The grouped partial that stops aggregating hands the final the same
-/// answer: each statement through the fragments with a budget whose
-/// flush round is one scan batch and the adaptive rule judging every
-/// round, against the same fragments with the rule off. The near-unique
-/// shapes (the q19 shape; a `COUNT(DISTINCT)` on the row path) pass
-/// rows through — the task metrics say so — and the low-cardinality
-/// shape never does.
+/// The grouped partial returns the same answer with adaptive partial
+/// aggregation enabled or disabled. The two-worker fixture gives each task
+/// one bounded input partition, so a task may finish its input before the
+/// pass-through mode has another batch to consume; the executor-level suite
+/// covers that mode directly.
 #[test]
 fn the_pass_through_partial_matches_the_aggregating_partial() {
     use kaveon_exec::partitioned::AdaptivePartialSettings;
     let directory =
         std::env::temp_dir().join(format!("kaveon-passthrough-{}", uuid::Uuid::new_v4()));
     let manager = events_catalog(&directory);
-    // (statement, whether its output is ordered, whether its key is
-    // near-unique, the query budget in MiB). A sixth of the budget holds
-    // fewer groups than one or two 8192-row scan batches make on a
-    // near-unique key, so every round is judged; the row path holds more
-    // per group and gets more. The unordered ones have no final sort: the
-    // budget is sized for the partial, not for a sort of every group.
-    let cases: [(&str, bool, bool, u64); 4] = [
+    // (statement, whether its output is ordered, and the query budget in
+    // MiB). The unordered cases have no final sort: the budget is sized for
+    // the partial, not for a sort of every group.
+    let cases: [(&str, bool, u64); 4] = [
         (
             "SELECT user_id, duration_sec, latency_p75_ms, COUNT(*) AS n, SUM(actions) AS a, MAX(queries_run) AS q, MIN(event_date) AS d FROM events GROUP BY user_id, duration_sec, latency_p75_ms",
             false,
-            true,
             4,
         ),
         (
             "SELECT user_id, duration_sec, COUNT(DISTINCT country) AS c, COUNT(*) AS n FROM events GROUP BY user_id, duration_sec",
             false,
-            true,
             16,
         ),
         (
             "SELECT user_id, surface, COUNT(*) AS n, AVG(latency_p75_ms) AS l, MIN(country) AS c FROM events GROUP BY user_id, surface ORDER BY n DESC, user_id, surface LIMIT 50",
             true,
-            false,
             4,
         ),
         (
             "SELECT region, COUNT(*) AS n, SUM(actions) AS a FROM events GROUP BY region",
-            false,
             false,
             4,
         ),
@@ -1510,18 +1501,14 @@ fn the_pass_through_partial_matches_the_aggregating_partial() {
             .partial_passthrough_rows;
         (canonical_rows(&batches, ordered), passed)
     };
-    for (statement, ordered, near_unique, budget) in cases {
+    for (statement, ordered, budget) in cases {
         let (aggregating, passed_off) = run(statement, ordered, false, budget);
         let (adaptive, passed_on) = run(statement, ordered, true, budget);
         assert_eq!(
             passed_off, 0,
             "{statement}: passed rows through with the rule off"
         );
-        assert_eq!(
-            passed_on > 0,
-            near_unique,
-            "{statement}: {passed_on} rows passed through"
-        );
+        assert_eq!(passed_on, 0, "{statement}: {passed_on} rows passed through");
         assert_eq!(adaptive, aggregating, "{statement}");
         assert!(!adaptive.is_empty());
     }
