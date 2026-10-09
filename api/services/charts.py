@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 import database.metadata as db
-from services import chart_backfill, product_outbox, product_shadow_read, product_store
+from services import chart_backfill, product_outbox, product_shadow_read, product_store, thumbnails
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +111,7 @@ def _adapt(row: dict, layout: str) -> dict:
         "dataset_name": row.get("dataset_name"),
         "chart_type": row.get("chart_type") or "table",
         "thumbnail": row.get("thumbnail"),
+        "has_thumbnail": bool(row.get("thumbnail")),
         "config": config,
         "query_config": query_config,
         "viz_config": viz_config,
@@ -132,7 +133,9 @@ def _adapt_product(document: dict) -> dict:
         raise RuntimeError("KaveonDB chart configuration is invalid")
     return {
         **document, "config": {**query_config, **viz_config}, "sql_text": None,
-        "dataset_name": None, "thumbnail": None,
+        "dataset_name": None,
+        "thumbnail": document.get("thumbnail"),
+        "has_thumbnail": bool(document.get("thumbnail")),
         "owner": document.get("created_by"), "favorite": bool(document.get("favorite", False)),
     }
 
@@ -159,7 +162,15 @@ def _product_document(data: dict, chart_id: str, actor: str, prior: dict | None 
     chart_type = data.get("chart_type", prior.get("chart_type", "table")) or "table"
     if not isinstance(chart_type, str) or not chart_type:
         raise ValueError("Chart type is invalid")
+    # The Library preview is part of the record, so it has to survive an update
+    # that does not mention it. Absent rather than null when there is none, so a
+    # chart that was never rendered carries no key at all.
+    thumbnail = thumbnails.normalise(
+        data["thumbnail"] if "thumbnail" in data else prior.get("thumbnail"),
+        thumbnails.CHART_MAX_CHARS,
+    )
     return {
+        **({"thumbnail": thumbnail} if thumbnail else {}),
         "id": chart_id, "name": data.get("name", prior.get("name")),
         "description": data.get("description", prior.get("description")),
         "dataset_id": dataset_id, "dataset_revision": dataset_revision,
@@ -168,6 +179,22 @@ def _product_document(data: dict, chart_id: str, actor: str, prior: dict | None 
         "created_at": prior.get("created_at") or now, "updated_at": now,
         "created_by": owner, "modified_by": actor,
     }
+
+
+def _summary(chart: dict) -> dict:
+    """A list entry: everything except the preview image itself.
+
+    Seventy inline data URIs would make every Library load megabytes of JSON the
+    browser cannot cache, so the list says only whether a preview exists and the
+    card fetches each one from /charts/{id}/thumbnail.
+    """
+    return {**chart, "thumbnail": None}
+
+
+def get_chart_thumbnail(chart_id: str, user_email: str, role: str) -> Optional[str]:
+    """Return one chart's stored preview data URI, or None when it has none."""
+    chart = get_chart_by_id(chart_id, user_email, role, include_thumbnail=True)
+    return (chart or {}).get("thumbnail") or None
 
 
 def _vis_clause(role_idx: int, email_idx: int, alias: str = "c") -> str:
@@ -182,11 +209,11 @@ def _vis_clause(role_idx: int, email_idx: int, alias: str = "c") -> str:
 def list_charts(user_email: str, role: str = "Viewer") -> List[dict]:
     from services import product_read_authority
     if product_read_authority.enabled("charts"):
-        return [_adapt_product(item) for item in
+        return [_summary(_adapt_product(item)) for item in
                 product_read_authority.list_documents("charts", user_email, role)]
     layout = _chart_schema()
     if layout == "legacy":
-        return _legacy_list_charts(user_email, role)
+        return [_summary(chart) for chart in _legacy_list_charts(user_email, role)]
     vis = _vis_clause(1, 0)
     result = db.query(f"""
         SELECT c.id, c.name, c.description, c.dataset_id, c.chart_type, c.config,
@@ -200,13 +227,23 @@ def list_charts(user_email: str, role: str = "Viewer") -> List[dict]:
         WHERE c.id IS NOT NULL AND {vis}
         ORDER BY c.modified_at DESC
     """, [user_email, role])
-    return [_adapt(r, layout) for r in result["rows"]]
+    return [_summary(_adapt(r, layout)) for r in result["rows"]]
 
 
-def get_chart_by_id(chart_id: str, user_email: Optional[str] = None, role: str = "Admin") -> Optional[dict]:
+def get_chart_by_id(
+    chart_id: str,
+    user_email: Optional[str] = None,
+    role: str = "Admin",
+    *,
+    include_thumbnail: bool = False,
+) -> Optional[dict]:
     """
     role defaults to 'Admin' for internal service calls so chart rendering
     is never blocked by visibility. Pass the actual role from user-facing endpoints.
+
+    The preview image is withheld unless asked for: it is a binary resource the
+    browser should fetch and cache on its own, not a field every caller of this
+    function has to carry. get_chart_thumbnail is the one reader that wants it.
     """
     from services import product_read_authority
     if product_read_authority.enabled("charts"):
@@ -215,7 +252,8 @@ def get_chart_by_id(chart_id: str, user_email: Optional[str] = None, role: str =
         )
         if document is not None:
             document.setdefault("favorite", False)
-            return _adapt_product(document)
+            chart = _adapt_product(document)
+            return chart if include_thumbnail else _summary(chart)
         return None
     layout = _chart_schema()
     if layout == "legacy":
@@ -225,14 +263,14 @@ def get_chart_by_id(chart_id: str, user_email: Optional[str] = None, role: str =
         row = db.query_one(f"""
             SELECT c.id, c.name, c.description, c.dataset_id, c.chart_type, c.config,
                    c.created_by, c.modified_by, c.created_at, c.modified_at,
-                   c.visibility
+                   c.visibility, c.thumbnail
             FROM dbo.charts c
             WHERE c.id = @param0 AND c.id IS NOT NULL AND {vis}
         """, [chart_id, user_email, role])
     else:
         row = db.query_one("""
             SELECT id, name, description, dataset_id, chart_type, config,
-                   created_by, modified_by, created_at, modified_at, visibility
+                   created_by, modified_by, created_at, modified_at, visibility, thumbnail
             FROM dbo.charts WHERE id = @param0 AND id IS NOT NULL
         """, [chart_id])
     chart = _adapt(row, layout) if row else None
@@ -243,7 +281,9 @@ def get_chart_by_id(chart_id: str, user_email: Optional[str] = None, role: str =
                 logger.info("chart_shadow_read %s", json.dumps(report, sort_keys=True))
         except Exception as error:
             logger.warning("chart_shadow_read_error type=%s", type(error).__name__)
-    return chart
+    if chart is None or include_thumbnail:
+        return chart
+    return _summary(chart)
 
 
 def create_chart(data: dict, user_id: str) -> dict:
@@ -292,7 +332,8 @@ def create_chart(data: dict, user_id: str) -> dict:
     return created
 
 
-def update_chart(chart_id: str, data: dict, actor: str | None = None) -> Optional[dict]:
+def update_chart(chart_id: str, data: dict, actor: str | None = None,
+                 role: str = "Analyst") -> Optional[dict]:
     from services import product_read_authority
     if product_read_authority.enabled("charts"):
         if not actor:
@@ -306,7 +347,7 @@ def update_chart(chart_id: str, data: dict, actor: str | None = None) -> Optiona
         updated = _product_document(data, chart_id, actor, document)
         product_store.transact([
             product_store.ProductMutation("update", "chart", chart_id, updated, revision)
-        ], actor, "Analyst")
+        ], product_store.writer(document.get("created_by"), actor, role), "Analyst")
         return get_chart_by_id(chart_id, actor, "Admin")
     if _chart_schema() == "legacy":
         return _legacy_update_chart(chart_id, data, actor)
@@ -330,7 +371,8 @@ def update_chart(chart_id: str, data: dict, actor: str | None = None) -> Optiona
         vis = data["visibility"] if data["visibility"] in VALID_VISIBILITY else "internal"
         updates.append(f"visibility = @param{i}"); params.append(vis); i += 1
     if "thumbnail" in data:
-        updates.append(f"thumbnail = @param{i}"); params.append(data["thumbnail"]); i += 1
+        updates.append(f"thumbnail = @param{i}")
+        params.append(thumbnails.normalise(data["thumbnail"], thumbnails.CHART_MAX_CHARS)); i += 1
 
     updates.append(f"modified_at = @param{i}"); params.append(now); i += 1
     params.append(chart_id)
@@ -347,7 +389,8 @@ def update_chart(chart_id: str, data: dict, actor: str | None = None) -> Optiona
     return get_chart_by_id(chart_id)
 
 
-def delete_chart(chart_id: str, actor: str | None = None) -> bool:
+def delete_chart(chart_id: str, actor: str | None = None,
+                 role: str = "Analyst") -> bool:
     from services import product_read_authority
     if product_read_authority.enabled("charts"):
         if not actor:
@@ -355,13 +398,13 @@ def delete_chart(chart_id: str, actor: str | None = None) -> bool:
         current = product_store.read("chart", chart_id, actor, "Admin")
         if current is None:
             return False
-        revision = current.get("revision")
-        if type(revision) is not int or revision < 1:
+        revision, document = current.get("revision"), current.get("document")
+        if type(revision) is not int or revision < 1 or not isinstance(document, dict):
             raise RuntimeError("KaveonDB returned invalid chart revision state")
         product_store.transact([
             product_store.ProductMutation("delete", "chart", chart_id,
                                           expected_revision=revision)
-        ], actor, "Analyst")
+        ], product_store.writer(document.get("created_by"), actor, role), "Analyst")
         return True
     if _chart_schema() == "legacy":
         if not _outbox_enabled():
@@ -421,13 +464,15 @@ def _legacy_get_chart(chart_id: str, user_email: Optional[str], role: str) -> Op
         vis = _vis_clause(2, 1)
         row = db.query_one(f"""
             SELECT c.id, c.name, c.description, c.chart_type, c.query_config, c.viz_config,
-                   c.created_on, c.created_by, c.changed_on, c.updated_by, c.created_at, c.updated_at, c.visibility
+                   c.created_on, c.created_by, c.changed_on, c.updated_by, c.created_at, c.updated_at,
+                   c.visibility, c.thumbnail
             FROM dbo.charts c WHERE c.id = @param0 AND c.id IS NOT NULL AND {vis}
         """, [chart_id_int, user_email, role])
     else:
         row = db.query_one("""
             SELECT id, name, description, chart_type, query_config, viz_config,
-                   created_on, created_by, changed_on, updated_by, created_at, updated_at, visibility
+                   created_on, created_by, changed_on, updated_by, created_at, updated_at,
+                   visibility, thumbnail
             FROM dbo.charts WHERE id = @param0 AND id IS NOT NULL
         """, [chart_id_int])
     return _adapt(row, "legacy") if row else None
@@ -475,7 +520,8 @@ def _legacy_update_chart(chart_id: str, data: dict, actor: str | None = None) ->
     if "visibility" in data:
         updates.append(f"visibility = @param{index}"); params.append(data["visibility"] if data["visibility"] in VALID_VISIBILITY else "internal"); index += 1
     if "thumbnail" in data:
-        updates.append(f"thumbnail = @param{index}"); params.append(data["thumbnail"]); index += 1
+        updates.append(f"thumbnail = @param{index}")
+        params.append(thumbnails.normalise(data["thumbnail"], thumbnails.CHART_MAX_CHARS)); index += 1
     updates.append(f"changed_on = @param{index}"); params.append(now); index += 1
     updates.append(f"updated_at = @param{index}"); params.append(now); index += 1
     params.append(int(chart_id))

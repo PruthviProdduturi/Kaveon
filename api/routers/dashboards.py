@@ -1,11 +1,14 @@
 """Dashboards router — /api/v1/dashboards."""
 
+import hashlib
+
 from fastapi import APIRouter, Response, HTTPException, Depends
 from middleware.auth import require_auth, require_user_context, UserContext
 from middleware.permissions import require_min_role, can_write, can_publish
 from middleware.demo import allowed_in_demo
 from models.dashboards import DashboardCreate, DashboardUpdate, DashboardFavoriteBody
 import services.dashboards as svc
+import services.thumbnails as thumbnails
 import services.favorites as fav_svc
 import services.user_recents as recents_svc
 
@@ -40,6 +43,31 @@ def get_dashboard(dashboard_id: str, response: Response, ctx: UserContext = Depe
     return {**dashboard, "is_favorite": is_fav}
 
 
+@router.get("/dashboards/{dashboard_id}/thumbnail")
+def get_dashboard_thumbnail(
+    dashboard_id: str,
+    theme: str = "light",
+    ctx: UserContext = Depends(require_user_context),
+):
+    """Serve the Library preview for one theme as an image rather than as JSON.
+
+    A dashboard is captured once per theme; when only one capture exists it is
+    served for both, so a dashboard never falls back to a placeholder merely
+    because the viewer flipped themes. No preview at all answers 404.
+    """
+    stored = svc.get_dashboard_thumbnail(dashboard_id, ctx.email, ctx.role, theme == "dark")
+    if not stored:
+        raise HTTPException(status_code=404, detail="Dashboard thumbnail not found")
+    try:
+        content, media_type = thumbnails.decode(stored)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from None
+    return Response(content=content, media_type=media_type, headers={
+        "Cache-Control": "private, max-age=60, must-revalidate",
+        "ETag": f'"{hashlib.sha256(content).hexdigest()[:32]}"',
+    })
+
+
 @router.post("/dashboards", status_code=201)
 def create_dashboard(
     data: DashboardCreate,
@@ -67,7 +95,7 @@ def update_dashboard(
     if payload.get("visibility") == "published" and not can_publish(ctx):
         payload["visibility"] = "internal"
 
-    result = svc.update_dashboard(dashboard_id, payload, ctx.email)
+    result = svc.update_dashboard(dashboard_id, payload, ctx.email, ctx.role)
     if not result:
         raise HTTPException(status_code=404, detail="Dashboard not found")
     return result
@@ -80,7 +108,7 @@ def delete_dashboard(dashboard_id: str, ctx: UserContext = Depends(require_user_
         raise HTTPException(status_code=404, detail="Dashboard not found")
     if not can_write(existing["created_by"], ctx):
         raise HTTPException(status_code=403, detail="You don't have permission to delete this dashboard")
-    svc.delete_dashboard(dashboard_id, ctx.email)
+    svc.delete_dashboard(dashboard_id, ctx.email, ctx.role)
     # Also purge it from every user's recents so it doesn't linger there.
     # Recents store the id prefixed by type (e.g. "dashboard-<id>").
     try:

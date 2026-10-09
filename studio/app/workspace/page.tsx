@@ -21,6 +21,8 @@ interface WorkspaceItem {
   created_at?: string | null;
   thumbnail?: string | null;
   thumbnail_dark?: string | null;
+  has_thumbnail?: boolean;
+  has_thumbnail_dark?: boolean;
   chart_type?: string | null;
   dataset_name?: string | null;
   database_name?: string | null;
@@ -38,6 +40,53 @@ const PIN_TYPE: Record<TabKey, string> = {
   charts: "chart",
   datasets: "dataset",
   queries: "query",
+};
+
+/**
+ * Library card cover.
+ *
+ * A preview is a binary resource: the list response says only whether one
+ * exists, and the image itself is fetched from
+ * /api/v1/{charts,dashboards}/{id}/thumbnail through the same-origin proxy, so
+ * the browser caches it and the list stays small at seventy charts. Anything
+ * that cannot be shown — no capture yet, a request that fails, a record type
+ * that has no preview — degrades to the group-tinted panel and the tab glyph.
+ */
+const CardCover: React.FC<{
+  src: string | null;
+  label: string;
+  accent: string;
+  Glyph: React.FC<{ size?: number; color?: string }>;
+  children?: React.ReactNode;
+}> = ({ src, label, accent, Glyph, children }) => {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => { setFailed(false); }, [src]);
+  const showImage = !!src && !failed;
+  return (
+    <div style={{
+      position: "relative", height: 128, flexShrink: 0,
+      background: showImage ? "var(--bg-elevated)" : `${accent}14`,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      borderBottom: "1px solid var(--border)",
+    }}>
+      {!showImage && <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: accent, opacity: 0.85 }} />}
+      {showImage ? (
+        // Top-align (objectPosition:top) so a tall dashboard shows its top, not a centre crop.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={src as string}
+          alt={label}
+          loading="lazy"
+          decoding="async"
+          onError={() => setFailed(true)}
+          style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "top" }}
+        />
+      ) : (
+        <Glyph size={34} color={accent} />
+      )}
+      {children}
+    </div>
+  );
 };
 
 // SVG icons for tabs and items
@@ -348,12 +397,20 @@ export default function WorkspacePage() {
     const label = item.name ?? item.title ?? "Untitled";
     const ts = item.updated_at ?? item.created_at;
     const owner = ownerFirst(item.created_by);
-    // Prefer the thumbnail matching the current theme; fall back to the other so
-    // a dashboard that only has one still shows something.
-    const themedThumb = isDark
+    // An inline data URI is still honoured when one is present, so a record read
+    // from a source that carries the image whole needs no special case; otherwise
+    // the cover points at the preview endpoint, which serves the theme-matching
+    // capture and falls back to the other theme server-side.
+    const inlineThumb = isDark
       ? (item.thumbnail_dark || item.thumbnail)
       : (item.thumbnail || item.thumbnail_dark);
-    const hasThumb = !!themedThumb && String(themedThumb).startsWith("data:");
+    const storedPreview = Boolean(item.has_thumbnail || item.has_thumbnail_dark);
+    const coverSrc = inlineThumb && String(inlineThumb).startsWith("data:")
+      ? String(inlineThumb)
+      : storedPreview && (activeTab === "charts" || activeTab === "dashboards")
+        ? `/api/kaveon/api/v1/${activeTab}/${item.id}/thumbnail`
+          + (activeTab === "dashboards" ? `?theme=${isDark ? "dark" : "light"}` : "")
+        : null;
     return (
       <div
         key={item.id}
@@ -383,23 +440,10 @@ export default function WorkspacePage() {
           if (pin && !item.favorite) pin.style.opacity = "0";
         }}
       >
-        {/* Cover: real thumbnail (dashboards) else a calm group-tinted panel + glyph.
-            Color comes from the item's GROUP accent, not a random per-card hue. */}
-        <div style={{
-          position: "relative", height: 128, flexShrink: 0,
-          background: hasThumb ? "#0b1220" : `${accent}14`,
-          display: "flex", alignItems: "center", justifyContent: "center",
-          borderBottom: "1px solid var(--border)",
-        }}>
-          {!hasThumb && <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: accent, opacity: 0.85 }} />}
-          {hasThumb ? (
-            // Top-align (objectPosition:top) so a tall dashboard shows its top, not a center crop.
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={themedThumb as string} alt={label} style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "top" }} />
-          ) : (
-            <TabItemIcon size={34} color={accent} />
-          )}
-
+        {/* Cover: the captured preview when there is one, else a calm group-tinted
+            panel + glyph. Colour comes from the item's GROUP accent, not a random
+            per-card hue. */}
+        <CardCover src={coverSrc} label={label} accent={accent} Glyph={TabItemIcon}>
           {/* Pin — always visible when pinned, else reveals on hover */}
           <button
             type="button"
@@ -442,7 +486,7 @@ export default function WorkspacePage() {
               </svg>
             )}
           </button>
-        </div>
+        </CardCover>
 
         {/* Body */}
         <div style={{ padding: "12px 14px 14px", flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>

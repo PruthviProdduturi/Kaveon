@@ -5,6 +5,9 @@ import { useTheme } from "../../contexts/ThemeContext";
 import { applyChartTheme } from "../../utils/echartsTheme";
 import { getPlugin } from "./chartPluginRegistry";
 import { normaliseCountryName } from "../../utils/countryAliases";
+import { encodeThumbnail, surfaceColor } from "../../utils/thumbnail";
+import { msalFetch } from "../../utils/msalFetch";
+import { API_BASE } from "../../config";
 
 const WorldMapGlobe = dynamic(() => import("./WorldMapGlobe"), { ssr: false });
 
@@ -850,11 +853,12 @@ interface ChartPreviewProps {
 }
 
 const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterExports }) => {
-  const { selectedTemplate, selectedDatasetId, previewOptions, sqlPreview, description, chartType, advancedOptions, cancelRunningQuery, runContext, runPreviewQuery, registerThumbnailCapture } = useChartBuilder();
+  const { chartId, selectedTemplate, selectedDatasetId, previewOptions, sqlPreview, description, chartType, advancedOptions, cancelRunningQuery, runContext, runPreviewQuery, registerThumbnailCapture } = useChartBuilder();
   const { theme: appTheme } = useTheme();
   const isDark = appTheme === "dark";
   const echartsInstanceRef = useRef<any>(null);
   const previewCardRef = useRef<HTMLDivElement>(null);
+  const previewInnerRef = useRef<HTMLDivElement>(null);
 
   // ── Download helpers ─────────────────────────────────────────────────────────
   const downloadPng = useCallback(() => {
@@ -888,28 +892,81 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
     onRegisterExports?.({ downloadPng, downloadCsv });
   }, [onRegisterExports, downloadPng, downloadCsv]);
 
-  // Register a thumbnail-capture fn so the chart builder can persist a real
-  // preview on save. ECharts snapshots itself (fast, crisp); other renderers
-  // (table, big-number, map) fall back to html-to-image of the preview node so
-  // EVERY chart type gets a real thumbnail.
-  useEffect(() => {
-    registerThumbnailCapture?.(async () => {
-      try {
-        const inst = echartsInstanceRef.current;
-        if (inst && typeof inst.getDataURL === "function") {
-          return inst.getDataURL({ type: "jpeg", pixelRatio: 0.5, backgroundColor: "#fff" });
-        }
-        const node = previewCardRef.current;
-        if (!node) return null;
-        const { toJpeg } = await import("html-to-image");
-        const url = await toJpeg(node, { quality: 0.6, pixelRatio: 0.5, backgroundColor: "#fff", cacheBust: true, skipFonts: true });
-        return url && url.length < 2_500_000 ? url : null;
-      } catch {
-        return null;
+  // Snapshot the rendered chart as a Library preview. ECharts snapshots itself
+  // (fast, crisp); other renderers (table, big-number, map) fall back to
+  // html-to-image of the chart body so EVERY chart type gets a real preview.
+  // Both sources then go through encodeThumbnail, which fixes the geometry,
+  // format and size budget in one place — see utils/thumbnail.ts. The ground is
+  // read off the rendered node, so the stored preview carries the surface the
+  // chart was actually authored against in either theme.
+  const captureThumbnail = useCallback(async (): Promise<string | null> => {
+    const background = surfaceColor(previewInnerRef.current ?? previewCardRef.current);
+    try {
+      const inst = echartsInstanceRef.current;
+      if (inst && typeof inst.getDataURL === "function") {
+        // PNG here, not JPEG: getDataURL takes no quality argument, so a JPEG
+        // from it would be re-encoded from an already-lossy source.
+        const snapshot = inst.getDataURL({ type: "png", pixelRatio: 1, backgroundColor: background });
+        const encoded = await encodeThumbnail(snapshot, background);
+        if (encoded) return encoded;
       }
-    });
+      const node = previewInnerRef.current ?? previewCardRef.current;
+      if (!node) return null;
+      const { toPng } = await import("html-to-image");
+      const raster = await toPng(node, { pixelRatio: 1, backgroundColor: background, cacheBust: true, skipFonts: true });
+      return await encodeThumbnail(raster, background);
+    } catch {
+      return null;
+    }
+  }, []);
+
+  // The chart builder persists it on save.
+  useEffect(() => {
+    registerThumbnailCapture?.(captureThumbnail);
     return () => registerThumbnailCapture?.(null);
-  }, [registerThumbnailCapture]);
+  }, [registerThumbnailCapture, captureThumbnail]);
+
+  // Preview backfill. A chart's preview is captured when the chart is saved, so
+  // charts that predate previews carry none and would sit on the placeholder
+  // until someone happened to re-save each one. Settings → Maintenance opens
+  // each chart here with ?capture=1; this stores the preview once the chart has
+  // actually rendered, then reports back so the job can advance. Without the
+  // flag nothing below runs, so a normal edit session is untouched.
+  const backfilledRef = useRef(false);
+  useEffect(() => {
+    if (backfilledRef.current || !chartId) return;
+    if (!previewOptions || sqlPreview.isRunning || !sqlPreview.dataRows?.length) return;
+    if (new URLSearchParams(window.location.search).get("capture") !== "1") return;
+    backfilledRef.current = true;
+
+    const report = () => {
+      try {
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage(
+            { type: "kaveon-chart-thumb-done", id: String(chartId) }, window.location.origin,
+          );
+        }
+      } catch { /* the job falls back to its own timeout */ }
+    };
+
+    // Let the render settle (ECharts animates in) before snapshotting.
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const thumb = await captureThumbnail();
+          if (thumb) {
+            await msalFetch(`${API_BASE}/api/v1/charts/${chartId}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ thumbnail: thumb }),
+            });
+          }
+        } catch { /* a preview is never worth failing on */ }
+        report();
+      })();
+    }, 900);
+    return () => clearTimeout(timer);
+  }, [chartId, previewOptions, sqlPreview.isRunning, sqlPreview.dataRows, captureThumbnail]);
 
   const hasOption = Boolean(previewOptions);
 
@@ -1347,6 +1404,7 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
         </div>
       </div>
       <div
+        ref={previewInnerRef}
         className={
           hasOption && !sqlPreview.isRunning
             ? "chart-builder-preview-inner"
