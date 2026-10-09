@@ -80,6 +80,10 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
   // record transactions — so the rail reads them from the platform, and only
   // for an administrator, who is the only role the Engine answers for.
   const [systemTables, setSystemTables] = useState<SystemTable[] | null>(null);
+  // A refusal and an empty catalog are different facts, and the node says
+  // which. A server that does not publish the reading is not a catalog with
+  // nothing in it.
+  const [systemError, setSystemError] = useState<string | null>(null);
 
   const sourceFor = useCallback((catalog: string) => catalogs?.find(c => c.catalog === catalog) ?? null, [catalogs]);
   const fail = (e: unknown) => setError(e instanceof CatalogError ? e : new CatalogError(0, "The catalog could not be read."));
@@ -141,11 +145,15 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
   // asks for it without counts. A refusal leaves the node listing no tables
   // rather than putting an error over the whole tree.
   useEffect(() => {
-    if (!isAdmin) { setSystemTables(null); return; }
+    if (!isAdmin) { setSystemTables(null); setSystemError(null); return; }
     let cancelled = false;
     fetchSystemCatalog()
-      .then(reading => { if (!cancelled) setSystemTables(reading.tables); })
-      .catch(() => { if (!cancelled) setSystemTables([]); });
+      .then(reading => { if (!cancelled) { setSystemTables(reading.tables); setSystemError(null); } })
+      .catch(failure => {
+        if (cancelled) return;
+        setSystemTables([]);
+        setSystemError(failure instanceof Error ? failure.message : "The reading did not arrive.");
+      });
     return () => { cancelled = true; };
   }, [isAdmin]);
 
@@ -198,7 +206,7 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
                     return (
                       <SystemNode
                         key={name} open={isOpen} isAdmin={isAdmin} tables={systemTables}
-                        onToggle={() => toggle(name)}
+                        failure={systemError} onToggle={() => toggle(name)}
                       />
                     );
                   }
@@ -281,8 +289,9 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
  * reader without the administrator role sees the catalog and one line saying
  * why it lists nothing, rather than an empty node or no node at all.
  */
-function SystemNode({ open, isAdmin, tables, onToggle }: {
-  open: boolean; isAdmin: boolean; tables: SystemTable[] | null; onToggle: () => void;
+function SystemNode({ open, isAdmin, tables, failure, onToggle }: {
+  open: boolean; isAdmin: boolean; tables: SystemTable[] | null;
+  failure: string | null; onToggle: () => void;
 }) {
   return (
     <div>
@@ -314,7 +323,11 @@ function SystemNode({ open, isAdmin, tables, onToggle }: {
             </div>
           ))}
           {!tables && <div className={`${s.treeNote} ${s.level2}`}>Reading</div>}
-          {tables?.length === 0 && <div className={`${s.treeNote} ${s.level2}`}>No tables could be read.</div>}
+          {tables?.length === 0 && (
+            <div className={`${s.treeNote} ${s.level2}`}>
+              {failure ?? "This catalog holds no record families."}
+            </div>
+          )}
         </>
       )}
     </div>
