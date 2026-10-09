@@ -58,7 +58,10 @@ async function reason(res: Response, body?: unknown): Promise<string> {
   const text = detailText((known as { detail?: unknown } | null)?.detail);
   if (res.status === 503) return text ?? "KaveonDB is not configured on this server.";
   if (res.status === 502) return text ?? "KaveonDB did not answer. It may be restarting or unreachable from the server.";
-  if (res.status === 404) return text ?? "KaveonDB no longer has this definition.";
+  // Every read in this file can 404, not only a definition read, so the
+  // fallback says what is missing without naming something that may not have
+  // been asked for.
+  if (res.status === 404) return text ?? "KaveonDB does not have this. It may have been removed since this page was opened.";
   if (res.status === 403) return "Your role does not include this action.";
   return text ?? `The server returned ${res.status}.`;
 }
