@@ -265,9 +265,9 @@ const DEFAULT_SUGGESTIONS = [
 ];
 
 const EMPTY_SUGGESTIONS = [
-  { label: "Connect Fabric SQL", href: "/data-sources" },
-  { label: "Connect PostgreSQL", href: "/data-sources" },
-  { label: "Connect Azure SQL", href: "/data-sources" },
+  { label: "Connect Fabric SQL", href: "/settings/data-sources" },
+  { label: "Connect PostgreSQL", href: "/settings/data-sources" },
+  { label: "Connect Azure SQL", href: "/settings/data-sources" },
 ];
 
 // ── Chat History Sidebar ────────────────────────────────────────────────────────
