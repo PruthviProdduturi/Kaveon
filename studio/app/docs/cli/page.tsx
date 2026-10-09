@@ -11,7 +11,7 @@ export default function CliDocs() {
         lead="A terminal client with a live session header, streaming result pages, query cancellation, catalog completion and scriptable output."
       />
 
-      <Callout type="note">The remote shell is Beta. Embedded <code>--local</code> mode is Alpha. The full reference, including every key binding and output field, lives in the <a href="https://github.com/PruthviProdduturi/Kaveon/blob/dev/docs/guides/engine-cli.md">CLI guide</a>.</Callout>
+      <Callout type="note">The remote shell is Beta. Embedded <code>--local</code> mode is Alpha. The full reference covers every option, dot command, SQL keyword, catalog/schema/table lifecycle command, optimization clause, output field and unsupported boundary in the <a href="https://github.com/PruthviProdduturi/Kaveon/blob/dev/docs/guides/engine-cli.md">CLI guide</a>.</Callout>
 
       <h2>Install once</h2>
       <Code lang="powershell">{`irm https://raw.githubusercontent.com/PruthviProdduturi/Kaveon/dev/scripts/install.ps1 | iex
@@ -74,6 +74,23 @@ kaveon --server https://localhost:18443 --ca-cert $ca --catalog OpenSource --sch
 .format JSONL
 exit`}</Code>
       <p>SQL metadata statements and dot commands are kept separate: dot commands never get sent to the SQL parser. The CLI can list granted catalogs, schemas, tables and columns, switch context, inspect recent queries and stop a running query.</p>
+
+      <h2>Register and optimize lake tables</h2>
+      <p>Administrators can create a catalog; analysts or administrators can create schemas and register existing Parquet, Delta, or Iceberg tables. Registration probes the location before activation and never copies the rows.</p>
+      <Code lang="sql">{`CREATE CATALOG IF NOT EXISTS Analytics WITH (
+  storage = 'adls', account = 'kaveonlake', container = 'opensource',
+  root = 'snapshots/2026-09-09-v1',
+  credential = 'workload-identity:kaveon-reader'
+);
+CREATE SCHEMA IF NOT EXISTS Analytics.sales;
+CREATE TABLE IF NOT EXISTS Analytics.sales.orders WITH (
+  location = 'sales/orders', format = 'parquet',
+  partitioned_by = ARRAY['order_date'], clustered_by = ARRAY['customer_id'],
+  bloom = ARRAY['order_id']
+);
+ANALYZE Analytics.sales.orders WITH (sketches = true);
+OPTIMIZE Analytics.sales.orders;`}</Code>
+      <p>Use <code>ALTER TABLE … SET CLUSTERED BY</code> and <code>SET SHAPE</code> before a cube build, then inspect <code>SHOW STATS</code>, <code>DESCRIBE DETAIL</code> and <code>SHOW CREATE TABLE</code>. The detailed keyword matrix and lifecycle rules are in the <a href="https://github.com/PruthviProdduturi/Kaveon/blob/dev/docs/guides/engine-cli.md#sql-keywords-and-query-patterns">CLI reference</a>.</p>
     </div>
   );
 }
