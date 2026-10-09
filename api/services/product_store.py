@@ -21,6 +21,41 @@ ProductKind = Literal["dataset", "chart", "dashboard", "saved_query", "user_them
 _KINDS = {"dataset", "chart", "dashboard", "saved_query", "user_theme", "dlm_definition", "dlm_run", "favorite", "source", "user_recent", "query_history", "activity", "chat_session", "chat_message"}
 _MIGRATION_PRINCIPAL = re.compile(r"^[A-Za-z0-9@._+\-]{1,255}$")
 
+# The owner the platform stamps on content it seeds — the demo dashboards,
+# their charts and their dataset. It is a sentinel, not a person: nobody holds
+# that identity and nobody can sign in as it.
+SEEDED_OWNER = "system"
+# Roles the API already lets edit content belonging to someone else; see
+# middleware.permissions.can_write, which is the authority for that decision.
+_STEWARD_ROLES = frozenset({"Editor", "Admin"})
+
+
+def writer(owner: Optional[str], actor: str, role: str) -> str:
+    """The principal a product write is made as.
+
+    KaveonDB requires a record's owner to be the principal writing it, and —
+    unlike its read path — grants no exception to an Admin. The API's own rule
+    is the opposite: `can_write` lets an Editor or an Admin edit anyone's
+    content. Nothing reconciled the two, so content seeded under the `system`
+    sentinel could be authorized by the API and then refused by the Engine,
+    which is why saving one of the seeded dashboards failed with "product
+    record owner does not match the authenticated principal". Seeded content
+    is owned by nobody, so that made it permanently uneditable.
+
+    Authorization has already happened by the time a caller reaches here, so
+    this decides attribution only: a write an Editor or Admin makes to seeded
+    content is made as the sentinel, which both satisfies the Engine and
+    leaves the content seeded rather than quietly transferring it to whoever
+    edited it first.
+
+    Deliberately narrow. Content belonging to a real person is still written
+    as the caller, so the Engine goes on enforcing that one user cannot write
+    another's records and this cannot become a general impersonation path.
+    """
+    if owner == SEEDED_OWNER and role in _STEWARD_ROLES:
+        return SEEDED_OWNER
+    return actor
+
 
 def _migration_actor(default_actor: str) -> str:
     """Return an explicitly allowlisted actor for offline backfill calls only."""
