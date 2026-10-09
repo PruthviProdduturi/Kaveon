@@ -60,6 +60,10 @@ jobs:
         working-directory: api
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Operational source-replay tests restore immutable historical blobs
+          # by git object id; a shallow checkout cannot provide those objects.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
