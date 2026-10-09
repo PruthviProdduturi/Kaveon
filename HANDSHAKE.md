@@ -55,6 +55,43 @@ cutover and PostgreSQL scale-down/deletion. Start with
 local commands recorded in the continuation brief.
 
 
+## Claude update — Library preview passes survive navigation — October 8, 2026
+
+Settings → Maintenance kept its capture run entirely in React state, so leaving
+the page abandoned it: no progress on return, a remount handed back an enabled
+button that could start a second concurrent runner, and a reload left a
+half-captured Library with no record a pass had ever run. The runner moves to
+`studio/utils/previewRefresh.ts` — a module singleton that owns the hidden
+capture frame, holds one lock across both passes, and mirrors progress into
+`localStorage` every step. A route change no longer interrupts anything; a run
+still marked running with a cold heartbeat is reported as interrupted.
+
+The run record is deliberately browser-local. A capture reads a rendered
+ECharts canvas, so only a browser can make one, and a shared server record
+would need a fifteenth `product_store.ProductKind` — a closed set, mid
+migration. What every administrator does see is server-derived: previews
+stored and outstanding captures come from `has_thumbnail` /
+`has_thumbnail_dark`. "Last refreshed" comes from the run record, because
+`updated_at` is bumped by any edit and cannot tell a re-captured preview from
+a stale one. Automatic refresh is an opt-in interval the page enforces when an
+administrator opens it; there is no server-side schedule and the copy says so.
+
+Also fixed, each found by driving the page in Chrome against the live API:
+the completion listener accepted any message of the right type, so a late
+message from one capture could skip the next (it now checks origin and matches
+the record and theme in flight); and `ChartPreview`'s backfill tested only for
+`?capture=1`, so the dashboard pass — captured at
+`/dashboards/{id}/view?capture=1` — quietly rewrote every contained chart's
+preview from a dashboard-sized tile (it now requires the chart's own path).
+
+Evidence: the dashboard pass took stored previews from 2 of 7 to 7 of 7 in
+both themes, the three `system`-owned dashboards included, confirming the
+`product_store.writer` seeded-owner fix on the live API; the chart pass took
+41 of 70 to 55 of 70 before being stopped. Gates: `tsc --noEmit` and
+`next lint` clean. Claude-owned files only — `studio/app/settings/maintenance/page.tsx`,
+`studio/app/settings/settings.module.css`, `studio/utils/previewRefresh.ts`,
+`studio/components/charts/ChartPreview.tsx`. No API or Engine change.
+
 ## Claude update — "Loading data context" is one read, not seventeen — October 8, 2026
 
 The chat workbench disabled its composer behind a placeholder reading "Loading
