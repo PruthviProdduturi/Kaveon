@@ -20,6 +20,14 @@ var tags = {
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
   name: storageAccountName
 }
+resource blobs 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' existing = {
+  parent: storage
+  name: 'default'
+}
+resource productContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' existing = {
+  parent: blobs
+  name: 'product'
+}
 resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
   name: registryName
 }
@@ -173,6 +181,15 @@ resource readerRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
     principalId: readerIdentity.properties.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1')
+  }
+}
+resource writerRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: productContainer
+  name: guid(productContainer.id, readerIdentity.id, 'product-write')
+  properties: {
+    principalId: readerIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
   }
 }
 
