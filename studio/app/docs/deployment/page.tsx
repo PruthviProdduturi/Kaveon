@@ -13,22 +13,22 @@ export default function DeploymentDocs() {
 
       <h2>Topology</h2>
       <Callout type="note">
-        The current production-shaped cloud Engine is <code>kaveon-aks</code> in
-        <code>kaveon-rg</code>, with a coordinator and autoscaled worker pool.
-        Vercel hosts the current Studio deployment separately. The qualified
-        Engine runs on AKS; the API and DLM remain on the VM reference path
-        until the API cutover is qualified. Use <a href="/docs/installation">Install &amp; deploy</a> for the
-        supported VM, Docker and AKS paths.
+        The production cloud topology is <code>kaveon-aks</code> in
+        <code>kaveon-rg</code>, with a coordinator, autoscaled worker pool, API
+        and DLM deployed as one PostgreSQL-free Helm release. Vercel hosts the
+        Studio separately. The VM is a legacy migration reference only; use
+        <a href="/docs/installation">Install &amp; deploy</a> and the automated
+        AKS workflow for new deployments.
       </Callout>
       <Diagram
         src="/docs/architecture/kaveon-deployment-topology.svg"
-        alt="Browser to Studio on Vercel, through a same-origin proxy to the API on kaveon-vm, into the Kaveon Engine coordinator and two workers, reading Delta tables in ADLS Gen2 while the platform's own records are written to a separate container"
+        alt="Browser to Studio on Vercel, through a same-origin proxy to the API on AKS, into the Kaveon Engine coordinator and autoscaled workers, reading Delta tables in ADLS Gen2 while the platform's own records are written to a separate container"
         caption="One request path. Table data and the platform's own records are separate containers in the same storage account."
       />
       <Code lang="text">{`Browser ──► Vercel  (Kaveon Studio · Auth.js: GitHub / Google / Microsoft)
                │  same-origin /api/kaveon proxy (injects X-User-* + secret)
                ▼
-            kaveon-vm  ── Caddy (TLS) ──► API + DLM (FastAPI)
+            AKS private services ── TLS ──► API + DLM (FastAPI)
                │
                ├──► Kaveon Engine coordinator ──► worker-1, worker-2
                │         planning, cube and statistics   fragment execution
@@ -43,9 +43,8 @@ export default function DeploymentDocs() {
         Engine&rsquo;s own ports are bound to localhost on the VM and are never reachable from outside it.
       </p>
       <p>
-        The reference host is a <code>Standard_B2als_v2</code> — two vCPUs and 3&nbsp;GB — in <code>westus2</code>,
-        running the repository&rsquo;s own <code>docker-compose.yml</code>: the coordinator, two workers, the API,
-        Studio and Caddy. Datasets, charts, dashboards, saved statements, chat history and audit entries are
+        Local Docker uses the repository&rsquo;s <code>docker-compose.yml</code> for development; AKS uses the
+        production Helm release. Datasets, charts, dashboards, saved statements, chat history and audit entries are
         transactional rows in <code>kaveon.product.*</code>, written only through KaveonDB&rsquo;s transaction
         boundary; the table data itself is Delta in object storage, read in place.
       </p>
@@ -102,11 +101,12 @@ export default function DeploymentDocs() {
         Studio deploys to Vercel.
       </p>
       <p>
-        <strong>The API is not deployed by the current workflow.</strong> It is updated on the VM by checking out the commit and
-        rebuilding its image there, which is a manual step today — nothing in CI reaches the host.{" "}
-        <code>.github/workflows/deploy.yml</code> still describes an Azure Container Apps rollout and is{" "}
-        <strong>manual-only</strong>: the container app it targeted was deleted once the VM became the deployment, and
-        a workflow that always fails hides the one that matters.
+        <strong>AKS deployment is explicit and environment-gated.</strong> The
+        <code>.github/workflows/deploy-aks-platform.yml</code> workflow invokes
+        <code>scripts/deploy-kaveon-aks.sh</code> with Azure OIDC. It checks
+        immutable images, workload identity, Engine CA, ADLS, auth credentials
+        and retirement evidence before an atomic Helm rollout. The retired
+        Container Apps workflow is not used for new releases.
       </p>
 
       <h2>Running the whole platform locally</h2>
@@ -139,7 +139,7 @@ export default function DeploymentDocs() {
         <tbody>
           <tr><td>Both tiers</td><td><code>KAVEON_PROXY_SECRET</code> (must match)</td></tr>
           <tr><td>Studio (Vercel)</td><td><code>AUTH_SECRET</code>, <code>AUTH_URL</code>, provider IDs and secrets, <code>API_URL</code>, <code>AUTH_ADMIN_EMAILS</code></td></tr>
-          <tr><td>API (kaveon-vm)</td><td><code>KAVEON_PROXY_SECRET</code>, <code>KAVEON_ENGINE_BRIDGE_TOKEN</code>, <code>KAVEON_ENGINE_CATALOG_TOKEN</code>, <code>KAVEON_CREDENTIAL_KEYS</code>, <code>KAVEON_CREDENTIAL_ACTIVE_KEY</code></td></tr>
+          <tr><td>API (AKS)</td><td><code>KAVEON_PROXY_SECRET</code>, <code>KAVEON_ENGINE_BRIDGE_TOKEN</code>, <code>KAVEON_ENGINE_CATALOG_TOKEN</code>, <code>KAVEON_CREDENTIAL_KEYS</code>, <code>KAVEON_CREDENTIAL_ACTIVE_KEY</code>, workload identity and retirement evidence</td></tr>
           <tr><td>The system store (coordinator and API, same values)</td><td><code>KAVEON_PRODUCT_STORAGE_MODE</code>, and for object storage <code>KAVEON_PRODUCT_ADLS_ACCOUNT</code>, <code>KAVEON_PRODUCT_ADLS_CONTAINER</code>, <code>KAVEON_PRODUCT_ADLS_PREFIX</code>; for a directory <code>KAVEON_PRODUCT_LOCAL_PATH</code></td></tr>
           <tr><td>Engine (coordinator and workers)</td><td><code>KAVEON_DATA_DIR</code>, <code>KAVEON_EXCHANGE_TOKEN</code>, <code>KAVEON_DISCOVERY_URI</code>, memory and spill settings</td></tr>
         </tbody>
@@ -151,10 +151,10 @@ export default function DeploymentDocs() {
 
       <h2>Production notes</h2>
       <p>
-        The reference deployment is a small demo host, not a hardened one: a single burstable VM runs the API, the
-        coordinator, both workers and the edge, and a cube build needs it temporarily resized. For production, separate
-        the Engine from the API, put both on private networking, keep secrets in a managed store such as Key Vault, and
-        prefer managed-identity auth for registered Fabric and Azure SQL sources over connection strings.
+        The AKS release separates the API from the coordinator and worker pool,
+        uses private service networking, keeps opaque credentials in Key Vault,
+        and uses workload identity for Azure resources. The deployment script
+        refuses a PostgreSQL-backed render in either supported cutover mode.
       </p>
 
       <Pager prev={{ href: "/docs/sql-compatibility", title: "SQL Compatibility" }} next={{ href: "/docs/auth", title: "Auth & RBAC" }} />
