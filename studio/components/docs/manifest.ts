@@ -35,6 +35,7 @@ export const DOCS_NAV: readonly DocsGroup[] = [
   {
     label: "Studio",
     items: [
+      { title: "Kaveon Studio", href: "/docs/studio", description: "The governed workspace for chat, SQL, catalogs, charts, and dashboards.", keywords: ["studio", "chat", "sql", "catalog"] },
       { title: "SQL Lab", href: "/docs/sql-lab", description: "Explore data with the query editor." },
       { title: "Chart Builder", href: "/docs/charts", description: "Create reusable interactive visualizations." },
       { title: "Dashboards", href: "/docs/dashboards", description: "Compose and publish analytical canvases." },
