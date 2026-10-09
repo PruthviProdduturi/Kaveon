@@ -215,6 +215,126 @@ def list_datasets(user_email: str, role: str = "Viewer") -> List[dict]:
     return items
 
 
+def _qualified_table(schema_name: Optional[str], table: Optional[str]) -> str:
+    """The table a question should be written against, qualified once.
+
+    A default schema (``public`` on PostgreSQL, ``dbo`` on SQL Server) is not
+    worth naming, and a table that already carries its schema must not be
+    qualified twice.
+    """
+    raw = (table or "").strip()
+    if not raw:
+        return "data"
+    schema = (schema_name or "").strip()
+    if not schema or schema.lower() in {"public", "dbo"} or "." in raw:
+        return raw
+    return f"{schema}.{raw}"
+
+
+def _schema_entry(dataset: dict, columns: list, metrics: list) -> dict:
+    return {
+        "id": str(dataset.get("id")),
+        "name": dataset.get("dataset_name") or dataset.get("name"),
+        "description": dataset.get("description"),
+        "database_name": dataset.get("database_name"),
+        "schema_name": dataset.get("schema_name"),
+        "table": _qualified_table(
+            dataset.get("schema_name"),
+            dataset.get("fact_table") or dataset.get("table_name"),
+        ),
+        "columns": [
+            {
+                "name": column.get("column_name") or column.get("name"),
+                "data_type": column.get("data_type"),
+            }
+            for column in columns
+            if (column.get("column_name") or column.get("name"))
+        ],
+        "metrics": [
+            {
+                "name": metric.get("metric_name") or metric.get("name"),
+                "expression": metric.get("expression") or metric.get("sql_expression"),
+            }
+            for metric in metrics
+            if (metric.get("metric_name") or metric.get("name"))
+        ],
+    }
+
+
+def list_dataset_schemas(user_email: str, role: str = "Viewer") -> List[dict]:
+    """Every visible dataset's askable shape — columns and metrics — in one read.
+
+    The chat workbench and the chart editor need the name and type of each
+    column and each metric of *every* dataset the caller can see, so a question
+    can be routed to the dataset that can answer it. Asked for one dataset at a
+    time that is one ``GET /datasets/{id}`` per dataset, and each of those costs
+    a document read plus three component reads plus a shadow-read observation —
+    so the browser paid that several times over, in parallel, before its
+    composer would accept a keystroke.
+
+    This answers the same question once. Where the dataset documents already
+    carry their components (KaveonDB read authority) the shape is projected
+    straight off the list with no further read; on the SQL authority the
+    components come from three bulk reads over the visible set, not three per
+    dataset. Nothing here is cached: it is a projection of the dataset
+    documents as they are at the moment of the call.
+    """
+    datasets = list_datasets(user_email, role)
+    if not datasets:
+        return []
+
+    # KaveonDB read authority returns whole documents, components included.
+    if all(isinstance(dataset.get("columns"), list) for dataset in datasets):
+        return [
+            _schema_entry(dataset, dataset.get("columns") or [], dataset.get("metrics") or [])
+            for dataset in datasets
+        ]
+
+    ids: list[int] = []
+    for dataset in datasets:
+        try:
+            ids.append(int(dataset["id"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    if not ids:
+        return [_schema_entry(dataset, [], []) for dataset in datasets]
+
+    placeholders = ", ".join(f"@param{index}" for index in range(len(ids)))
+
+    def grouped(table: str, columns: str) -> dict[int, list[dict]]:
+        try:
+            result = db.query(
+                f"SELECT dataset_id, {columns} FROM dbo.{table} "
+                f"WHERE dataset_id IN ({placeholders}) ORDER BY dataset_id, id",
+                list(ids),
+            )
+        except Exception as error:
+            logger.warning("dataset_schema_bulk_read_error table=%s type=%s",
+                           table, type(error).__name__)
+            return {}
+        buckets: dict[int, list[dict]] = {}
+        for row in result["rows"]:
+            buckets.setdefault(int(row["dataset_id"]), []).append(row)
+        return buckets
+
+    all_columns = grouped("dataset_columns", "table_name, column_name, data_type, is_dimension, is_metric, semantic_type")
+    all_metrics = grouped("dataset_metrics", "metric_name, expression, metric_type, format")
+    all_dimensions = grouped("dataset_dimensions", "dimension_table, table_name, join_condition, fact_key, join_key, dim_name, display_name")
+
+    entries = []
+    for dataset in datasets:
+        try:
+            did = int(dataset["id"])
+        except (KeyError, TypeError, ValueError):
+            entries.append(_schema_entry(dataset, [], []))
+            continue
+        columns = _expand_columns_from_dimensions(
+            all_columns.get(did, []), all_dimensions.get(did, []),
+        )
+        entries.append(_schema_entry(dataset, columns, all_metrics.get(did, [])))
+    return entries
+
+
 def get_dataset_by_id(
     dataset_id: str,
     user_email: Optional[str] = None,

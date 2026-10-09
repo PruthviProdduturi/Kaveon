@@ -30,6 +30,18 @@ def datasets_summary(response: Response, ctx: UserContext = Depends(require_user
     return {"count": len(items), "recent": items}
 
 
+@router.get("/datasets/schemas")
+def datasets_schemas(response: Response, ctx: UserContext = Depends(require_user_context)):
+    """Every visible dataset's askable shape in one read.
+
+    Declared ahead of ``/datasets/{dataset_id}`` so "schemas" is not taken for
+    a dataset identifier.
+    """
+    response.headers.update(NO_CACHE)
+    items = svc.list_dataset_schemas(ctx.email, ctx.role)
+    return {"count": len(items), "schemas": items}
+
+
 @router.get("/datasets/{dataset_id}")
 def get_dataset(dataset_id: str, response: Response, ctx: UserContext = Depends(require_user_context)):
     response.headers.update(NO_CACHE)

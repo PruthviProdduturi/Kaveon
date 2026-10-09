@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback, KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback, KeyboardEvent } from "react";
 import { useAuth } from "../../auth/useAuth";
 import { useSetup } from "../../components/ClientLayout";
 import { msalFetch } from "../../utils/msalFetch";
@@ -12,6 +12,7 @@ import { InlineChart } from "../../components/chat/InlineChart";
 import { EvidencePanel, Evidence, Row, headlineOf } from "../../components/chat/EvidencePanel";
 import { API_BASE } from "../../config";
 import { useRecents } from "../../hooks/useRecents";
+import { useDatasetSchemas } from "../../hooks/useDatasetSchemas";
 import { useDemoQuota } from "../../hooks/useDemoQuota";
 import { rateLimitNotice } from "../../utils/demoQuota";
 import { useSearchParams } from "next/navigation";
@@ -155,10 +156,8 @@ function ThinkingBubble() {
 }
 
 interface PageData {
-  datasetCount: number;
   sourceCount: number;
   tableCount: number;
-  sourceNames: string[];
 }
 
 interface DatasetOption {
@@ -299,12 +298,20 @@ export default function Home() {
   const [data, setData] = useState<PageData | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [sending, setSending] = useState(false);
-  const [datasets, setDatasets] = useState<DatasetOption[]>([]);
   const [sources, setSources] = useState<SourceOption[]>([]);
+  // Every visible dataset's askable shape, read once at mount.
+  const catalogueHandle = useDatasetSchemas(isSetupOk === true);
+  const { schemas: catalogue, state: catalogueState } = catalogueHandle;
+  const datasets: DatasetOption[] = useMemo(
+    () => catalogue.map(entry => ({
+      id: entry.id,
+      name: entry.name,
+      database_name: entry.databaseName ?? undefined,
+    })),
+    [catalogue],
+  );
   const [selectedDataset, setSelectedDataset] = useState<number | null>(null);
   const [selectedSource, setSelectedSource] = useState<SourceOption | null>(null);
-  const [datasetSchema, setDatasetSchema] = useState<DatasetSchema | null>(null);
-  const [schemasReady, setSchemasReady] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const chatAbortRef = useRef<AbortController | null>(null);
   const chatCancelTokenRef = useRef<string | null>(null);
@@ -477,10 +484,12 @@ export default function Home() {
   }, [startNewChat]);
 
   const email = account?.email ?? "";
-  // A dataset over an Engine table is askable with no registered data
-  // source, so the platform is empty only when it holds neither.
-  const hasData = data !== null && (data.sourceCount > 0 || datasets.length > 0);
-  const isEmpty = data !== null && data.sourceCount === 0 && datasets.length === 0;
+  // A dataset over an Engine table is askable with no registered data source,
+  // so the platform is empty only when it holds neither — and only once both
+  // reads have answered: a catalogue still in flight is not an absence of data.
+  const catalogueSettled = catalogueState !== "loading";
+  const isEmpty = data !== null && catalogueSettled
+    && data.sourceCount === 0 && datasets.length === 0;
   const inConversation = messages.length > 0;
 
   // ── Data fetching ────────────────────────────────────────────────────────────
@@ -489,17 +498,16 @@ export default function Home() {
     if (!isSetupOk || !email) return;
     const headers = { "x-user-email": email };
 
+    // The connection facts only. The dataset catalogue is read once by
+    // useDatasetSchemas, in parallel with this, and is the authority for which
+    // datasets this user can see and what each one can be asked.
     async function load() {
-      setSchemasReady(false);
       try {
-        const [summaryRes, listRes, activeRes, dsRes] = await Promise.all([
-          msalFetch("/api/v1/metadata/summary", { headers }),
+        const [listRes, activeRes] = await Promise.all([
           msalFetch("/api/v1/data-sources/list", { headers }),
           msalFetch("/api/v1/data-sources/active", { headers }),
-          msalFetch("/api/v1/datasets"),
         ]);
 
-        const summary = summaryRes.ok ? await summaryRes.json() : { dataset_count: 0 };
         const listRaw = listRes.ok ? await listRes.json() : [];
         const list = Array.isArray(listRaw) ? listRaw : (listRaw.dataSources || listRaw.sources || []);
         const active = activeRes.ok ? await activeRes.json() : {};
@@ -515,116 +523,60 @@ export default function Home() {
           tableCount = active.dataSources.reduce((sum: number, s: any) => sum + (typeof s.table_count === "number" ? s.table_count : 0), 0);
         }
 
-        const datasetCount = summary.dataset_count ?? summary.datasets_count ?? summary.datasetCount ?? (Array.isArray(summary.datasets) ? summary.datasets.length : 0);
-
-        setData({
-          datasetCount,
-          sourceCount: list.length,
-          tableCount,
-          sourceNames: list.map((s: any) => s.database_name ?? s.name ?? "Unknown"),
-        });
-
+        setData({ sourceCount: list.length, tableCount });
         setSources(list.map((s: any) => ({ id: s.id, name: s.name, database_name: s.database_name })));
-
-        if (dsRes.ok) {
-          const dd = await dsRes.json();
-          const rawDs = Array.isArray(dd) ? dd : (dd.recent || dd.datasets || dd.result || []);
-          const dsList = rawDs.map((ds: any) => ({
-            id: ds.id,
-            name: ds.dataset_name || ds.name || `Dataset ${ds.id}`,
-            database_name: ds.database_name,
-          }));
-          setDatasets(dsList);
-          if (dsList.length === 0) setSchemasReady(true);
-          // Auto-select: the dataset named in the URL when it is visible to this user, else the first.
-          if (dsList.length > 0 && !selectedDataset) {
-            const requested = Number(new URLSearchParams(window.location.search).get("dataset"));
-            const initial = dsList.find((d: { id: number }) => d.id === requested) ?? dsList[0];
-            setSelectedDataset(initial.id);
-            // Auto-select matching source
-            const matchSource = list.find((s: any) => s.database_name === initial.database_name);
-            if (matchSource) setSelectedSource({ id: matchSource.id, name: matchSource.name, database_name: matchSource.database_name });
-          }
-        } else {
-          setSchemasReady(true);
-        }
       } catch {
-        setData({ datasetCount: 0, sourceCount: 0, tableCount: 0, sourceNames: [] });
-        setSchemasReady(true);
+        setData({ sourceCount: 0, tableCount: 0 });
       }
     }
 
     load();
   }, [isSetupOk, email]);
 
-  // Fetch dataset schema when selected
+  // Auto-select the dataset named in the URL when it is visible to this user,
+  // else the first — and the source it sits in, once both have arrived.
   useEffect(() => {
-    if (!selectedDataset) { setDatasetSchema(null); return; }
-    msalFetch(`/api/v1/datasets/${selectedDataset}`)
-      .then(r => r.ok ? r.json() : null)
-      .then(d => {
-        if (!d) { setDatasetSchema(null); return; }
-        const cols = (d.columns || []).map((c: any) => ({
-          name: c.column_name || c.name,
-          type: c.data_type?.includes("int") || c.data_type?.includes("float") || c.data_type?.includes("decimal") || c.data_type?.includes("numeric") ? "number"
-            : c.data_type?.includes("date") || c.data_type?.includes("time") ? "date" : "string",
-          description: c.description || "",
-        }));
-        const metrics = (d.metrics || []).map((m: any) => ({
-          name: m.name || m.metric_name,
-          expression: m.sql_expression || m.expression || `SUM(${m.name})`,
-          description: m.description || "",
-        }));
-        const table = d.fact_table ? (d.schema_name ? `${d.schema_name}.${d.fact_table}` : d.fact_table) : d.table_name || "data";
-        setDatasetSchema({ tableName: table, columns: cols, metrics });
-      })
-      .catch(() => setDatasetSchema(null));
-  }, [selectedDataset]);
+    if (datasets.length === 0 || selectedDataset) return;
+    const requested = Number(new URLSearchParams(window.location.search).get("dataset"));
+    const initial = datasets.find((d) => d.id === requested) ?? datasets[0];
+    setSelectedDataset(initial.id);
+    const matchSource = sources.find((s) => s.database_name === initial.database_name);
+    if (matchSource) setSelectedSource(matchSource);
+  }, [datasets, sources, selectedDataset]);
+
+  // The schema of the dataset in the picker, taken from the catalogue that is
+  // already in hand rather than re-read one dataset at a time.
+  const datasetSchema: DatasetSchema | null =
+    catalogue.find(entry => entry.id === selectedDataset)?.schema ?? null;
 
   // Auto-scroll
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Cache all dataset schemas for auto-matching
+  // Each catalogue entry bound to the source it is queried through. The
+  // in-browser fallback parser needs the source to execute what it writes.
   type SchemaEntry = { id: number; name: string; sourceId?: number; sourceName?: string; schema: DatasetSchema };
-  const [allSchemas, setAllSchemas] = useState<SchemaEntry[]>([]);
+  const allSchemas: SchemaEntry[] = useMemo(
+    () => catalogue.map(entry => {
+      const src = sources.find(s => s.database_name === entry.databaseName);
+      return {
+        id: entry.id,
+        name: entry.name,
+        sourceId: src?.id,
+        sourceName: src?.database_name || entry.databaseName || undefined,
+        schema: entry.schema,
+      };
+    }),
+    [catalogue, sources],
+  );
   const allSchemasRef = useRef<SchemaEntry[]>([]);
-
-  useEffect(() => {
-    if (datasets.length === 0) return;
-    // Fetch schema for each dataset
-    Promise.all(
-      datasets.map(async (ds) => {
-        try {
-          const r = await msalFetch(`/api/v1/datasets/${ds.id}`);
-          if (!r.ok) return null;
-          const d = await r.json();
-          const cols = (d.columns || []).map((c: any) => ({
-            name: c.column_name || c.name,
-            type: c.data_type?.includes("int") || c.data_type?.includes("float") || c.data_type?.includes("decimal") || c.data_type?.includes("numeric") ? "number"
-              : c.data_type?.includes("date") || c.data_type?.includes("time") ? "date" : "string",
-            description: c.description || "",
-          }));
-          const metrics = (d.metrics || []).map((m: any) => ({
-            name: m.name || m.metric_name,
-            expression: m.sql_expression || m.expression || `SUM(${m.name})`,
-            description: m.description || "",
-          }));
-          const rawTable = d.fact_table || d.table_name || "data";
-          const table = d.schema_name && d.schema_name !== "public" && d.schema_name !== "dbo" && !rawTable.includes(".")
-            ? `${d.schema_name}.${rawTable}` : rawTable;
-          const src = sources.find(s => s.database_name === ds.database_name);
-          return { id: ds.id, name: ds.name, sourceId: src?.id, sourceName: src?.database_name || ds.database_name, schema: { tableName: table, columns: cols, metrics } };
-        } catch { return null; }
-      })
-    ).then(results => {
-      const valid = results.filter(Boolean) as SchemaEntry[];
-      allSchemasRef.current = valid;
-      setAllSchemas(valid);
-      setSchemasReady(true);
-    });
-  }, [datasets, sources]);
+  allSchemasRef.current = allSchemas;
+  // Read inside sendMessage without making it depend on a render.
+  const catalogueStateRef = useRef(catalogueState);
+  catalogueStateRef.current = catalogueState;
+  const catalogueSettledRef = useRef(catalogueHandle.settled);
+  catalogueSettledRef.current = catalogueHandle.settled;
 
   // ── Send message ─────────────────────────────────────────────────────────────
 
@@ -672,7 +624,12 @@ export default function Home() {
     return best;
   }
 
-  const canSend = schemasReady && !sending && !isEmpty;
+  // The composer is usable as soon as the platform is known to hold data.
+  // The primary path, POST /dlm/ask, routes the question server-side and
+  // needs nothing from the browser's catalogue; only the fallback parser
+  // below does, and sendMessage awaits the catalogue if it ever gets there
+  // first. Blocking every keystroke on the fallback's data was backwards.
+  const canSend = !sending && !isEmpty;
 
   function generateInsight(
     rows: (string | number | null)[][],
@@ -976,6 +933,12 @@ export default function Home() {
         // DLM unavailable — fall through to the in-browser parser
       }
 
+      // The in-browser parser is the only path that needs the dataset
+      // catalogue. Reaching it before the one read at mount has settled is
+      // possible but rare, so wait on that read here rather than holding every
+      // keystroke on the whole page behind it.
+      if (catalogueStateRef.current === "loading") await catalogueSettledRef.current();
+
       // Auto-find best matching dataset
       const match = findBestSchema(queryText);
       const schema = match?.schema || datasetSchema;
@@ -1147,7 +1110,6 @@ export default function Home() {
 
   const heroText = isEmpty ? "Connect your first data source" : "Your data has answers";
   const placeholder = isEmpty ? "Set up a connection to get started..."
-    : !schemasReady ? "Loading your data context..."
     : "Talk to your data...";
 
   // Build meta line — only show positive counts
@@ -1155,7 +1117,7 @@ export default function Home() {
   if (data && !isEmpty) {
     if (data.sourceCount > 0) metaParts.push(`${data.sourceCount} source${data.sourceCount !== 1 ? "s" : ""}`);
     if (data.tableCount > 0) metaParts.push(`${data.tableCount} table${data.tableCount !== 1 ? "s" : ""}`);
-    const dsCount = datasets.length || data.datasetCount;
+    const dsCount = datasets.length;
     if (dsCount > 0) metaParts.push(`${dsCount} dataset${dsCount !== 1 ? "s" : ""}`);
   }
   const metaLine = metaParts.length > 0 ? metaParts.join(" · ") : null;

@@ -8,8 +8,10 @@ import { msalFetch } from "../utils/msalFetch";
  * the date range each covers, row counts, and how many filter values are
  * indexed. Lets users see what they can ask about before they start testing.
  *
- * Reads GET /api/v1/dlm/coverage (no-LLM compiled artifacts). Renders nothing
- * until data resolves; shows a hint when no DLM has been generated yet.
+ * Reads GET /api/v1/dlm/coverage (no-LLM compiled artifacts). While that read
+ * is in flight the strip holds its place and says so, rather than appearing
+ * from nowhere and pushing the page down under the reader's cursor; it shows a
+ * hint when no DLM has been generated yet, and is dismissible either way.
  */
 
 interface DateRange {
@@ -76,9 +78,9 @@ export function ContextBanner() {
     return () => { alive = false; };
   }, []);
 
-  if (items === null || dismissed) return null;
+  if (dismissed) return null;
 
-  const ready = items.filter((d) => d.status === "ready" || (d.values_indexed ?? 0) > 0 || d.date_range);
+  const ready = (items ?? []).filter((d) => d.status === "ready" || (d.values_indexed ?? 0) > 0 || d.date_range);
 
   const wrap: React.CSSProperties = {
     position: "sticky", top: 0, zIndex: 20,
@@ -110,6 +112,18 @@ export function ContextBanner() {
     border: "none", background: "transparent", cursor: "pointer",
     color: "var(--text-secondary)", fontSize: 13, padding: 4,
   };
+
+  if (items === null) {
+    return (
+      <div style={wrap} aria-busy="true">
+        <span style={label}><i className="fas fa-database" /> Context</span>
+        <span style={{ ...pill, color: "var(--text-secondary)" }}>
+          <span style={{ ...dot(false), background: "var(--text-muted)" }} />
+          Reading compiled context
+        </span>
+      </div>
+    );
+  }
 
   if (ready.length === 0) {
     return (
