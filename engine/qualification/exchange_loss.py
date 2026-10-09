@@ -39,13 +39,17 @@ def stop(process):
             process.wait(timeout=5)
 
 
-def proxy_handler(target, reached, released, intercept):
+def proxy_handler(target, worker_index, reached, reached_worker, seen_stage_ids, released, intercept):
     class Proxy(BaseHTTPRequestHandler):
         def log_message(self, *_args):
             pass
         def do_POST(self):
             body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
-            if intercept and self.path == "/v1/task" and json.loads(body).get("stage_id") == 2:
+            payload = json.loads(body) if body else {}
+            if self.path == "/v1/task":
+                seen_stage_ids.append((worker_index, payload.get("stage_id")))
+            if intercept and self.path == "/v1/task" and payload.get("stage_id") == 2:
+                reached_worker[0] = worker_index
                 reached.set()
                 if not released.wait(15):
                     self.send_error(504)
@@ -96,11 +100,16 @@ def main():
         headers = {"Authorization": "Bearer " + token}
         reached, released = threading.Event(), threading.Event()
         processes = []
+        reached_worker = [None]
+        seen_stage_ids = []
         for index in range(3):
             actual_port = coordinator_port if index == 0 else port()
             advertised = f"http://127.0.0.1:{actual_port}"
             if index:
-                proxy = ThreadingHTTPServer(("127.0.0.1", 0), proxy_handler(advertised, reached, released, index == 1))
+                proxy = ThreadingHTTPServer(
+                    ("127.0.0.1", 0),
+                    proxy_handler(advertised, index, reached, reached_worker, seen_stage_ids, released, True),
+                )
                 advertised = f"http://127.0.0.1:{proxy.server_address[1]}"
                 threading.Thread(target=proxy.serve_forever, daemon=True).start()
                 stack.callback(proxy.server_close)
@@ -111,7 +120,12 @@ def main():
                         "KAVEON_DISCOVERY_URI": base, "KAVEON_DATA_DIR": str(data), "KAVEON_CATALOG_DIR": str(work / "catalogs"),
                         "KAVEON_CATALOG_DATABASE_PATH": str(work / f"catalog-{index}.db"),
                         "KAVEON_EXCHANGE_SPOOL_ROOT": str(spool), "KAVEON_EXCHANGE_TOKEN": exchange_token,
-                        "KAVEON_SECURITY_JSON": json.dumps({"principals": [{"token": token, "principal": "qualification", "role": "analyst"}]})})
+                        # This harness qualifies the distributed runtime, not catalog
+                        # authorization.  The bootstrap catalog is intentionally
+                        # administrator-visible until grants are imported, so use
+                        # an admin test principal and keep authorization out of the
+                        # fault-injection result.
+                        "KAVEON_SECURITY_JSON": json.dumps({"principals": [{"token": token, "principal": "qualification", "role": "admin"}]})})
             output = stack.enter_context((args.output / f"node-{index}.log").open("w"))
             process = subprocess.Popen([str(binary), str(work / "absent.toml")], cwd=work, env=env, stdout=output, stderr=subprocess.STDOUT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             processes.append(process)
@@ -135,11 +149,18 @@ def main():
             query = executor.submit(requests.post, base + "/v1/statement", headers=headers, json={"query": sql, "settings": {"result_cache": False}}, timeout=120)
             try:
                 if not reached.wait(30):
-                    raise AssertionError("Join consumer barrier was not reached")
+                    detail = f"; task requests observed through proxies: {seen_stage_ids}"
+                    if query.done():
+                        failed = query.result()
+                        detail += f"; query response: {failed.status_code} {failed.text}"
+                    raise AssertionError("Join consumer barrier was not reached" + detail)
                 report["producer_chunks_before_failure"] = len(list(spool.rglob("*.chunk")))
                 if not report["producer_chunks_before_failure"]:
                     raise AssertionError("No coordinator exchanges were materialized")
-                stop(processes[1])
+                if reached_worker[0] is None:
+                    raise AssertionError("Consumer worker identity was not recorded")
+                report["consumer_worker"] = reached_worker[0]
+                stop(processes[reached_worker[0]])
                 released.set()
                 response = query.result(timeout=90)
                 result = response.json()
