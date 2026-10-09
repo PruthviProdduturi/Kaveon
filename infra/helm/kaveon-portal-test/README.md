@@ -1,4 +1,4 @@
-# Kaveon portal test add-on
+# Kaveon platform Helm chart
 
 This chart is a test-AKS add-on for the existing Engine in the `kaveon`
 namespace. In normal mode it creates one Studio service (`kaveon-portal:3000`),

@@ -1,6 +1,6 @@
 apiVersion: v2
-name: kaveon-portal-test
-description: Test-only Studio, API, PostgreSQL, and private Engine bridge add-on
+name: kaveon-platform
+description: Kaveon Studio and API deployment with a private Engine bridge
 type: application
 version: 0.1.0
 appVersion: "0.1.0"

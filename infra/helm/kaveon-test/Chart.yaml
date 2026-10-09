@@ -1,6 +1,6 @@
 apiVersion: v2
-name: kaveon-test
-description: Private AKS test deployment of the Kaveon Engine
+name: kaveon-engine
+description: Kaveon Engine coordinator and distributed worker deployment
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
