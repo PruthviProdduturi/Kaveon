@@ -1,4 +1,4 @@
-# Test AKS only. Every image must be pinned by immutable digest at install time.
+# Private-cloud AKS release. Every image must be pinned by immutable digest at install time.
 namespace: kaveon
 images:
   api: {repository: "", digest: ""}
@@ -146,3 +146,4 @@ studio:
   resources:
     requests: {cpu: 100m, memory: 256Mi}
     limits: {cpu: 500m, memory: 512Mi}
+

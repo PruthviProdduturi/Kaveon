@@ -13,7 +13,7 @@ with the three image repositories and digests and the ADLS location for the
 already registered `OpenSource` catalog. The init Job applies `/app/schema_postgresql.sql`, then upserts the
 active native ADLS catalog-source record using `engine_catalog = OpenSource`.
 
-The deployment assumes these existing same-namespace resources:
+The automated deploy creates the portal Secret and Engine CA ConfigMap; manual Helm installs must provide these same-namespace resources:
 
 | Resource | Required keys / purpose |
 | --- | --- |
@@ -134,3 +134,7 @@ create a reviewed final overlay that changes only those mode booleans to
 `false/true`. Keep the write fence on, replay/shadow/report Jobs off, and the
 PostgreSQL image reference available for rollback. Neither mode renders the
 PostgreSQL StatefulSet or deletes its PVC.
+
+## Automated AKS deployment
+
+`.github/workflows/deploy-aks-platform.yml` exposes the same script behind an OIDC-authenticated, production-environment workflow. It is fail-closed: missing image digests, Engine CA, workload identity, Key Vault, ADLS artifact locations, auth credentials, or reviewed retirement evidence stop the run before Helm mutation. Use `rehearsal` for the first PostgreSQL-free restart rehearsal and `retirement` only after the complete evidence validator has passed.

@@ -1,0 +1,86 @@
+name: Deploy Kaveon platform to AKS
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: PostgreSQL-free cutover mode
+        required: true
+        default: rehearsal
+        type: choice
+        options: [rehearsal, retirement]
+  push:
+    branches: [dev]
+    paths:
+      - 'infra/helm/kaveon-portal-test/**'
+      - 'scripts/deploy-kaveon-aks.sh'
+      - '.github/workflows/deploy-aks-platform.yml'
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: kaveon-aks-platform
+  cancel-in-progress: false
+
+env:
+  AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || 'kaveon-rg' }}
+  AZURE_AKS_NAME: ${{ vars.AZURE_AKS_NAME || 'kaveon-aks' }}
+  KAVEON_ACR_NAME: ${{ vars.KAVEON_ACR_NAME || 'kaveonacr' }}
+  KAVEON_NAMESPACE: kaveon
+  KAVEON_ADLS_ACCOUNT: ${{ vars.KAVEON_ADLS_ACCOUNT || 'kaveonlake' }}
+  KAVEON_ADLS_CONTAINER: ${{ vars.KAVEON_ADLS_CONTAINER || 'product-transactions' }}
+  KAVEON_ADLS_ROOT_PATH: ${{ vars.KAVEON_ADLS_ROOT_PATH }}
+  KAVEON_API_WORKLOAD_IDENTITY_CLIENT_ID: ${{ vars.KAVEON_API_WORKLOAD_IDENTITY_CLIENT_ID }}
+  KAVEON_KEY_VAULT_URL: ${{ vars.KAVEON_KEY_VAULT_URL }}
+  API_IMAGE_DIGEST: ${{ vars.KAVEON_API_IMAGE_DIGEST }}
+  STUDIO_IMAGE_DIGEST: ${{ vars.KAVEON_STUDIO_IMAGE_DIGEST }}
+  KAVEON_ENGINE_BRIDGE_TOKEN: ${{ secrets.KAVEON_ENGINE_BRIDGE_TOKEN }}
+  KAVEON_ENGINE_CATALOG_TOKEN: ${{ secrets.KAVEON_ENGINE_CATALOG_TOKEN }}
+  KAVEON_CREDENTIAL_ACTIVE_KEY: ${{ secrets.KAVEON_CREDENTIAL_ACTIVE_KEY }}
+  KAVEON_CREDENTIAL_KEYS: ${{ secrets.KAVEON_CREDENTIAL_KEYS }}
+  AUTH_MICROSOFT_ENTRA_ID_ID: ${{ secrets.AUTH_MICROSOFT_ENTRA_ID_ID }}
+  AUTH_MICROSOFT_ENTRA_ID_ISSUER: ${{ vars.AUTH_MICROSOFT_ENTRA_ID_ISSUER }}
+  AUTH_ENTRA_ADMIN_OBJECT_IDS: ${{ vars.AUTH_ENTRA_ADMIN_OBJECT_IDS }}
+  KAVEON_AUTHORITY_FAMILIES: ${{ vars.KAVEON_AUTHORITY_FAMILIES }}
+  KAVEON_READ_AUTHORITY_FAMILIES: ${{ vars.KAVEON_READ_AUTHORITY_FAMILIES }}
+  KAVEON_EVIDENCE_PVC: ${{ vars.KAVEON_EVIDENCE_PVC || 'kaveon-retirement-evidence' }}
+  KAVEON_ENGINE_CA_B64: ${{ secrets.KAVEON_ENGINE_CA_B64 }}
+
+jobs:
+  deploy:
+    name: Preflight and deploy
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install kubelogin
+        uses: azure/use-kubelogin@v1
+        with:
+          kubelogin-version: v0.2.10
+
+      - name: Verify required deployment inputs without printing secrets
+        shell: bash
+        run: |
+          required=(AZURE_SUBSCRIPTION_ID KAVEON_ADLS_ROOT_PATH KAVEON_API_WORKLOAD_IDENTITY_CLIENT_ID KAVEON_KEY_VAULT_URL API_IMAGE_DIGEST STUDIO_IMAGE_DIGEST AUTH_MICROSOFT_ENTRA_ID_ID AUTH_MICROSOFT_ENTRA_ID_ISSUER AUTH_ENTRA_ADMIN_OBJECT_IDS KAVEON_AUTHORITY_FAMILIES KAVEON_READ_AUTHORITY_FAMILIES KAVEON_ENGINE_CA_B64)
+          for name in "${required[@]}"; do
+            [[ -n "${!name:-}" ]] || { echo "Missing Actions variable/secret: $name" >&2; exit 1; }
+          done
+
+      - name: Deploy atomically with PostgreSQL-free preflight
+        shell: bash
+        env:
+          DEPLOY_MODE: ${{ inputs.mode || 'rehearsal' }}
+        run: |
+          chmod +x scripts/deploy-kaveon-aks.sh
+          ./scripts/deploy-kaveon-aks.sh --mode "$DEPLOY_MODE"
