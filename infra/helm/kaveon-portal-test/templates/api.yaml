@@ -108,12 +108,15 @@ spec:
           env:
             - {name: NODE_ENV, value: production}
             - {name: KAVEON_DEMO_MODE, value: {{ .Values.api.demoMode | quote }}}
+{{- if not (or $retirement $rehearsal) }}
             - {name: METADATA_DB_TYPE, value: postgresql}
             - {name: METADATA_HOST, value: kaveon-postgres}
             - {name: METADATA_PORT, value: "5432"}
             - {name: METADATA_DATABASE, value: kaveonmeta}
             - {name: METADATA_USER, value: kaveon}
             - {name: METADATA_SSLMODE, value: disable}
+            - {name: METADATA_PASSWORD, valueFrom: {secretKeyRef: {name: {{ required "secrets.portalAuth is required" .Values.secrets.portalAuth }}, key: METADATA_PASSWORD}}}
+{{- end }}
             - {name: KAVEON_KEY_VAULT_URL, value: {{ required "api.keyVaultUrl is required" .Values.api.keyVaultUrl | quote }}}
             - {name: KAVEON_PRODUCT_REPLAY_ENABLED, value: {{ .Values.api.productReplay.enabled | quote }}}
             - {name: KAVEON_PRODUCT_REPLAY_BATCH_SIZE, value: {{ .Values.api.productReplay.batchSize | quote }}}
@@ -151,7 +154,6 @@ spec:
             - {name: KAVEON_CHAT_HISTORY_OUTBOX_ENABLED, value: {{ .Values.api.cutover.outbox.chatHistory | quote }}}
             - {name: KAVEON_ENGINE_URL, value: "https://{{ .Values.engine.service }}:{{ .Values.engine.port }}"}
             - {name: KAVEON_ENGINE_CA_CERT, value: /var/run/kaveon/engine-ca/{{ .Values.engine.caKey }}}
-            - {name: METADATA_PASSWORD, valueFrom: {secretKeyRef: {name: {{ required "secrets.portalAuth is required" .Values.secrets.portalAuth }}, key: METADATA_PASSWORD}}}
             - {name: KAVEON_PROXY_SECRET, valueFrom: {secretKeyRef: {name: {{ .Values.secrets.portalAuth }}, key: KAVEON_PROXY_SECRET}}}
             - {name: KAVEON_ENGINE_BRIDGE_TOKEN, valueFrom: {secretKeyRef: {name: {{ .Values.secrets.portalAuth }}, key: KAVEON_ENGINE_BRIDGE_TOKEN}}}
             - {name: KAVEON_ENGINE_CATALOG_TOKEN, valueFrom: {secretKeyRef: {name: {{ .Values.secrets.portalAuth }}, key: KAVEON_ENGINE_CATALOG_TOKEN}}}
