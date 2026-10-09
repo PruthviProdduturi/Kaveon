@@ -248,6 +248,108 @@ impl IncrementalAggregateMerger {
         Ok(())
     }
 
+    /// Merge only the selected rows of a grouped-state batch without making
+    /// an Arrow `take`/filter copy. Returns `false` when this merger chose the
+    /// row-oriented fallback; the caller may then use its existing filtered
+    /// path. The columnar path reserves the selected batch's complete growth
+    /// before applying it, so a memory refusal cannot leave a partially
+    /// applied selection and spill retry remains exact.
+    pub fn push_selected_batch(
+        &mut self,
+        batch: &RecordBatch,
+        selected: &[u32],
+    ) -> Result<bool> {
+        self.applied = 0;
+        // Keep the same transient input reservation as `push_batch`.  The
+        // exchange source may be waiting for pressure relief; without this
+        // guard a selected merge can consume the last headroom and make the
+        // source refusal final before the merge has a chance to spill.
+        let _batch_guard = self
+            .memory
+            .as_ref()
+            .map(|memory| memory.reserve(batch.get_array_memory_size() as u64))
+            .transpose()?;
+        let types = grouped_aggregate_key_types(&batch.schema())?;
+        let keys = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .ok_or_else(|| error("invalid aggregate key column"))?;
+        let states = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .ok_or_else(|| error("invalid aggregate state column"))?;
+        if selected.is_empty() {
+            self.applied = batch.num_rows();
+            return Ok(true);
+        }
+        let first = usize::try_from(selected[0])
+            .map_err(|_| error("selected aggregate row index overflow"))?;
+        if first >= batch.num_rows() {
+            return Err(error("selected aggregate row index is out of bounds"));
+        }
+        if matches!(self.columnar, Columnar::Undecided) {
+            if keys.is_null(first) || states.is_null(first) {
+                return Err(error("grouped aggregate state row cannot contain nulls"));
+            }
+            let mut first_states = Vec::new();
+            decode_group_states_into(states.value(first), &mut first_states)?;
+            self.decide(&types, &first_states);
+        }
+        if !matches!(self.columnar, Columnar::Groups { .. }) {
+            return Ok(false);
+        }
+        let Columnar::Groups { .. } = self.columnar else {
+            unreachable!();
+        };
+        self.merge_columnar_selected(keys, states, selected)?;
+        self.applied = batch.num_rows();
+        Ok(true)
+    }
+
+    fn merge_columnar_selected(
+        &mut self,
+        keys: &BinaryArray,
+        states: &BinaryArray,
+        selected: &[u32],
+    ) -> Result<()> {
+        let Columnar::Groups {
+            groups,
+            slot_bytes,
+            growth_reserved_at,
+            growth,
+        } = &mut self.columnar
+        else {
+            return Err(error("columnar merge without columnar groups"));
+        };
+        let rows = selected.len();
+        let _scratch = if let Some(memory) = &self.memory {
+            memory.check_cancelled()?;
+            let doubling = groups.growth_bytes(rows);
+            if doubling != 0 && groups.capacity() != *growth_reserved_at {
+                drop(growth.take());
+                *growth = Some(memory.reserve(doubling)?);
+                *growth_reserved_at = groups.capacity();
+            }
+            self.reservations
+                .ensure(memory, (rows as u64).saturating_mul(*slot_bytes))?;
+            Some(memory.reserve(groups.scratch_bytes(rows))?)
+        } else {
+            None
+        };
+        let (created, new_bytes) = groups.merge_encoded_selected_batch(keys, states, selected)?;
+        if let Some(memory) = &self.memory {
+            let bytes = (created as u64)
+                .saturating_mul(*slot_bytes)
+                .saturating_add(new_bytes);
+            if bytes != 0 {
+                self.reservations.reserve(memory, bytes)?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn push_batch(&mut self, batch: &RecordBatch) -> Result<()> {
         self.applied = 0;
         let _batch_guard = self

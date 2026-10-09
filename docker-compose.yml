@@ -114,6 +114,7 @@ services:
       KAVEON_EXCHANGE_COMPRESSION: ${KAVEON_EXCHANGE_COMPRESSION:-}
       KAVEON_USE_UTF8_VIEW: ${KAVEON_USE_UTF8_VIEW:-}
       KAVEON_DIRECT_GROUPED_EXCHANGE: ${KAVEON_DIRECT_GROUPED_EXCHANGE:-}
+      KAVEON_ZERO_COPY_SELECTED_MERGE: ${KAVEON_ZERO_COPY_SELECTED_MERGE:-}
     volumes:
       - ./engine/etc/coordinator.toml:/etc/kaveon/config.toml:ro
       - catalog-data:/var/lib/kaveon
@@ -160,6 +161,7 @@ services:
       KAVEON_EXCHANGE_COMPRESSION: ${KAVEON_EXCHANGE_COMPRESSION:-}
       KAVEON_USE_UTF8_VIEW: ${KAVEON_USE_UTF8_VIEW:-}
       KAVEON_DIRECT_GROUPED_EXCHANGE: ${KAVEON_DIRECT_GROUPED_EXCHANGE:-}
+      KAVEON_ZERO_COPY_SELECTED_MERGE: ${KAVEON_ZERO_COPY_SELECTED_MERGE:-}
     volumes: &engine-worker-volumes
       - ./engine/etc/worker.toml:/etc/kaveon/config.toml:ro
       - type: bind

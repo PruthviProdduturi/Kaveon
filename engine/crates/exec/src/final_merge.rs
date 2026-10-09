@@ -24,7 +24,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use ahash::RandomState;
-use arrow::array::{Array, ArrayBuilder, BinaryArray, BinaryBuilder, BooleanArray, UInt32Array};
+use arrow::array::{Array, ArrayBuilder, BinaryArray, BinaryBuilder, UInt32Array};
 use arrow::compute::take;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -93,6 +93,9 @@ pub struct HybridFinalMerge {
     /// This merge sees every batch and keeps the rows whose key hashes
     /// to its thread.
     selection: Option<(ThreadSelector, usize)>,
+    /// Opt-in selected-row merge for benchmarking; the filtered Arrow path
+    /// remains the compatibility default until spill behavior is qualified.
+    zero_copy_selection: bool,
     /// Runs on the disk by sub-partition, each a set of distinct groups.
     runs: Vec<Vec<SpillRun>>,
     /// Sub-partitions still to merge back once the input is drained.
@@ -141,6 +144,7 @@ impl HybridFinalMerge {
             rendezvous: None,
             pressure: None,
             selection: None,
+            zero_copy_selection: false,
             runs: (0..partitions).map(|_| Vec::new()).collect(),
             pending: VecDeque::new(),
             drained: false,
@@ -162,6 +166,12 @@ impl HybridFinalMerge {
     #[must_use]
     pub fn with_selection(mut self, index: usize, workers: usize) -> Self {
         self.selection = (workers > 1).then(|| (ThreadSelector::new(workers), index));
+        self
+    }
+
+    #[must_use]
+    pub fn with_zero_copy_selection(mut self) -> Self {
+        self.zero_copy_selection = true;
         self
     }
 
@@ -401,16 +411,19 @@ impl HybridFinalMerge {
             if grouped_aggregate_output_types(&batch.schema())? != self.output_types {
                 return Err(error("final aggregate input output schema changed"));
             }
-            let batch = match &self.selection {
-                Some((selector, index)) => {
-                    let Some(batch) = select_rows(&batch, selector, *index)? else {
-                        continue;
-                    };
-                    batch
+            if let Some((selector, index)) = &self.selection {
+                let selected = selected_rows(&batch, selector, *index)?;
+                if selected.is_empty() {
+                    continue;
                 }
-                None => batch,
-            };
-            self.push(batch)?;
+                if self.zero_copy_selection {
+                    self.push_selected(&batch, &selected)?;
+                } else {
+                    self.push(select_rows_by_indices(&batch, &selected)?)?;
+                }
+            } else {
+                self.push(batch)?;
+            }
         }
         Ok(())
     }
@@ -485,6 +498,43 @@ impl HybridFinalMerge {
                 return Ok(());
             }
             batch = batch.slice(applied, batch.num_rows() - applied);
+        }
+    }
+
+    /// Push a hash-selected grouped-state batch. Columnar mergers consume the
+    /// selected row indices directly, avoiding Arrow filter/take allocation;
+    /// row-oriented layouts retain the existing filtered fallback. A memory
+    /// refusal happens before selected rows are applied, so spilling and
+    /// retrying preserve the same exact semantics as `push`.
+    fn push_selected(&mut self, batch: &RecordBatch, selected: &[u32]) -> Result<()> {
+        if self.merger_memory.is_none() {
+            let prepaid = if self.spill.is_some() {
+                (batch.get_array_memory_size() as u64).saturating_mul(PREPAID_BATCHES)
+            } else {
+                0
+            };
+            self.merger_memory = Some(self.memory.prepaid(prepaid)?);
+        }
+        let merger_memory = self.merger_memory.clone();
+        loop {
+            let merger = self.merger.get_or_insert_with(|| {
+                IncrementalAggregateMerger::new(merger_memory.clone())
+            });
+            match merger.push_selected_batch(batch, selected) {
+                Ok(true) => return Ok(()),
+                Ok(false) => {
+                    let selected_batch = select_rows_by_indices(batch, selected)?;
+                    return self.push(selected_batch);
+                }
+                Err(KaveonError::MemoryLimit(message)) => {
+                    if self.spill.is_none() || merger.group_count() == 0 {
+                        return Err(KaveonError::MemoryLimit(message));
+                    }
+                    let merger = self.merger.take().expect("held above");
+                    self.spill_table(merger)?;
+                }
+                Err(error) => return Err(error),
+            }
         }
     }
 
@@ -634,29 +684,38 @@ impl HybridFinalMerge {
 
 /// The rows of a grouped-state batch whose key hashes to thread `index`,
 /// or None when there are none; the batch itself when they all do.
-fn select_rows(
+fn selected_rows(
     batch: &RecordBatch,
     selector: &ThreadSelector,
     index: usize,
-) -> Result<Option<RecordBatch>> {
+) -> Result<Vec<u32>> {
     let keys = batch
         .column(0)
         .as_any()
         .downcast_ref::<BinaryArray>()
         .ok_or_else(|| error("invalid aggregate key column"))?;
-    let mut kept = 0usize;
-    let mask = BooleanArray::from_iter((0..batch.num_rows()).map(|row| {
-        let mine = !keys.is_null(row) && selector.thread_of(keys.value(row)) == index;
-        kept += usize::from(mine);
-        Some(mine)
-    }));
-    if kept == 0 {
-        return Ok(None);
+    let mut selected = Vec::new();
+    for row in 0..batch.num_rows() {
+        if !keys.is_null(row) && selector.thread_of(keys.value(row)) == index {
+            selected.push(
+                u32::try_from(row).map_err(|_| error("aggregate batch exceeds Arrow row limit"))?,
+            );
+        }
     }
-    if kept == batch.num_rows() {
-        return Ok(Some(batch.clone()));
+    Ok(selected)
+}
+
+fn select_rows_by_indices(batch: &RecordBatch, selected: &[u32]) -> Result<RecordBatch> {
+    if selected.len() == batch.num_rows() {
+        return Ok(batch.clone());
     }
-    Ok(Some(arrow::compute::filter_record_batch(batch, &mask)?))
+    let indices = UInt32Array::from(selected.to_vec());
+    let columns = batch
+        .columns()
+        .iter()
+        .map(|column| arrow::compute::take(column.as_ref(), &indices, None))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(RecordBatch::try_new(batch.schema().clone(), columns)?)
 }
 
 /// Bytes per row of a grouped-state batch: its key and state bytes with

@@ -1363,6 +1363,9 @@ fn hybrid_final_aggregate(
     }
     if let Some((index, workers)) = selection {
         merge = merge.with_selection(index, workers);
+        if std::env::var("KAVEON_ZERO_COPY_SELECTED_MERGE").as_deref() == Ok("1") {
+            merge = merge.with_zero_copy_selection();
+        }
     }
     if let Some(ticket) = pressure {
         merge = merge.with_pressure(ticket);
