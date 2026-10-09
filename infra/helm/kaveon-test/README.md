@@ -1,4 +1,4 @@
-# Private AKS engine test chart
+# Kaveon Engine Helm chart
 
 The client-facing Service is `kaveon` (the Helm release name):
 
