@@ -59,6 +59,9 @@ interface DatasetDetail {
   columns?: DatasetColumn[];
   metrics?: DatasetMetric[];
   filters?: DatasetFilter[];
+  /** Which SQL this dataset takes, resolved by the server from the registered
+   *  catalog sources. `engine` means double-quoted identifiers and LIMIT. */
+  sql_dialect?: "engine" | "tsql";
 }
 
 function compactNum(n: number): string {
@@ -119,8 +122,17 @@ function buildDatasetPreviewSql(dataset: DatasetDetail, rowLimit: number = 100):
   const schema = dataset.schema_name || "dbo";
   const table = dataset.table_name;
   const top = Math.max(1, Math.min(rowLimit, 1000));
-  // PostgreSQL uses "schema"."table" LIMIT N; SQL Server uses [schema].[table] TOP N
-  const isPg = schema === "public" || schema === "climate_energy" || (dataset.database_name || "").includes("postgres") || (dataset.database_name || "") === "kaveon";
+  // An Engine catalog takes `schema.table` with LIMIT N; Fabric SQL and Azure
+  // SQL take [schema].[table] with TOP N. The server resolves which, because
+  // only it knows whether `database_name` names an Engine catalog or a
+  // registered external database. This was inferred here from the schema name,
+  // with `public` and `climate_energy` hardcoded as the two that meant Engine,
+  // so a dataset in any other schema — every ai_benchmarks dataset — was given
+  // `SELECT TOP 100 … FROM [ai_benchmarks].[leaderboard]`, which the Engine
+  // refuses with "schema not found" because the brackets become part of the
+  // quoted name. Default to the Engine: a deployment with no registered
+  // external database has nothing else to be.
+  const isEngine = (dataset.sql_dialect ?? "engine") === "engine";
 
   const filters = dataset.filters || [];
   const whereClauses: string[] = [];
@@ -282,7 +294,7 @@ function buildDatasetPreviewSql(dataset: DatasetDetail, rowLimit: number = 100):
     });
   });
 
-  const factRef = isPg ? `${schema}.${table}` : `${quoteIdentifier(schema)}.${quoteIdentifier(table)}`;
+  const factRef = isEngine ? `${schema}.${table}` : `${quoteIdentifier(schema)}.${quoteIdentifier(table)}`;
 
   let selectClause: string;
   if (modelColumns.length > 0) {
@@ -352,7 +364,7 @@ function buildDatasetPreviewSql(dataset: DatasetDetail, rowLimit: number = 100):
     selectClause = "*";
   }
 
-  let base = isPg
+  let base = isEngine
     ? `SELECT ${selectClause} FROM ${factRef}`
     : `SELECT TOP ${top} ${selectClause} FROM ${factRef}`;
   if (joinClauses.length > 0) {
@@ -361,7 +373,7 @@ function buildDatasetPreviewSql(dataset: DatasetDetail, rowLimit: number = 100):
   if (whereClauses.length > 0) {
     base = `${base} WHERE ${whereClauses.join(" AND ")}`;
   }
-  if (isPg) {
+  if (isEngine) {
     base = `${base} LIMIT ${top}`;
   }
   return base;
