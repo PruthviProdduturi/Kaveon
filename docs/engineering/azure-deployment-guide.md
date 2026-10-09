@@ -1,4 +1,10 @@
-# Kaveon on Azure: deploy, connect and test
+# Kaveon on Azure: qualification and production-shaped deployment
+
+For the current production-shaped resource naming, autoscaling and GitHub
+Actions path, start with [Azure production deployment](../guides/azure-production-deployment.md).
+This document remains the detailed qualification and troubleshooting runbook
+for the test chart; it deliberately uses the `kaveon-test` names and should not
+be used as the production naming guide.
 
 Use **Part A** if Kaveon is already deployed. Use **Part B** once to create a new
 test environment. Commands below are for PowerShell. The Engine UI uses port

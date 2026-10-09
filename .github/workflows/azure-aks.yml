@@ -1,0 +1,68 @@
+name: Azure AKS infrastructure
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dev]
+    paths:
+      - 'infra/bicep/environments/aks-production.bicep'
+      - '.github/workflows/azure-aks.yml'
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: azure-aks-production
+  cancel-in-progress: false
+
+env:
+  AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || 'kaveon-rg' }}
+  AZURE_LOCATION: ${{ vars.AZURE_LOCATION || 'westus2' }}
+  KAVEON_STORAGE_ACCOUNT: ${{ vars.KAVEON_STORAGE_ACCOUNT || 'kaveonlake' }}
+  KAVEON_REGISTRY: ${{ vars.KAVEON_REGISTRY || 'kaveonacr' }}
+
+jobs:
+  provision:
+    name: Provision Kaveon AKS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve operator identity
+        id: operator
+        shell: bash
+        run: |
+          test -n "${{ vars.AZURE_OPERATOR_OBJECT_ID }}" || {
+            echo 'AZURE_OPERATOR_OBJECT_ID repository variable is required'; exit 1;
+          }
+          echo "object_id=${{ vars.AZURE_OPERATOR_OBJECT_ID }}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy production infrastructure
+        run: |
+          az deployment group create \
+            --name kaveon-production-infra \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --template-file infra/bicep/environments/aks-production.bicep \
+            --parameters \
+              storageAccountName="$KAVEON_STORAGE_ACCOUNT" \
+              registryName="$KAVEON_REGISTRY" \
+              operatorObjectId="${{ steps.operator.outputs.object_id }}" \
+              location="$AZURE_LOCATION" \
+              minWorkers=1 \
+              maxWorkers=4
+
+      - name: Verify cluster and autoscaler bounds
+        run: |
+          az aks show --resource-group "$AZURE_RESOURCE_GROUP" --name kaveon-aks \
+            --query '{state:provisioningState,power:powerState.code,sku:sku.tier,version:kubernetesVersion}' -o json
+          az aks nodepool show --resource-group "$AZURE_RESOURCE_GROUP" \
+            --cluster-name kaveon-aks --name workers \
+            --query '{count:count,autoscaling:enableAutoScaling,min:minCount,max:maxCount}' -o json
