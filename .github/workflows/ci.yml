@@ -84,6 +84,22 @@ jobs:
             echo "No tests found — skipping pytest"
           fi
 
+      # scripts/ has its own tests and none of them were running: this job sets
+      # working-directory to api, so pytest never saw them. They cover the
+      # operational paths where a mistake is least recoverable — the system
+      # store's backup and restore rehearsal, the events table build, and
+      # kaveon-up.sh's environment file, which used to delete an operator's
+      # sign-in keys on every re-run.
+      # The lake-building tests read and write Parquet, which the API itself
+      # does not, so these are installed for this step rather than added to
+      # api/requirements.txt and shipped in the API image.
+      - name: Install script test dependencies
+        run: pip install pyarrow numpy
+
+      - name: Test operational scripts (pytest)
+        working-directory: ${{ github.workspace }}
+        run: pytest -q --tb=short scripts
+
   secrets:
     name: Secret scan (gitleaks)
     runs-on: ubuntu-latest
