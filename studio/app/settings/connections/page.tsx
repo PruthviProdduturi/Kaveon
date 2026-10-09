@@ -8,9 +8,19 @@ import { useRole } from "../../../hooks/useRole";
 import { SETUP_DB_ICONS } from "../../../components/DataSourceIcons";
 import s from "../settings.module.css";
 
+interface SystemStore {
+  configured: boolean;
+  mode: "local" | "adls" | null;
+  durable: boolean | null;
+  account: string | null;
+  container: string | null;
+  prefix: string | null;
+  location: string | null;
+}
 interface MetadataConfig {
   db_type: "fabric_sql" | "azure_sql" | "postgresql" | "mysql" | "kaveondb";
-  label: string; endpoint: string; host: string; port: string; database: string; ui_configured: boolean;
+  label: string; endpoint: string; host: string; port: string; database: string;
+  ui_configured: boolean; schema?: string; storage?: SystemStore;
 }
 interface EngineStatus { configured: boolean; connected: boolean; catalog_count: number | null }
 interface EngineCluster { environment: string; coordinator: { version: string; uptime_secs: number }; active_workers: number; total_nodes: number }
@@ -23,6 +33,29 @@ function uptime(secs: number): string {
 
 function Status({ on, children }: { on: boolean | null; children: React.ReactNode }) {
   return <span className={`${s.status} ${on === true ? s.statusOn : s.statusOff}`}><span className={s.dot} />{children}</span>;
+}
+
+function Facts({ rows }: { rows: [string, string][] }) {
+  return (
+    <div className={s.facts}>
+      {rows.filter(([, v]) => v).map(([k, v]) => (
+        <div key={k} className={s.fact}>
+          <div className={s.factLabel}>{k}</div>
+          <div className={s.factValue} title={v}>{v}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** What the system store is, in one phrase a reader can act on. Reports the
+ *  absence of a setting as an absence — the server does not guess a location,
+ *  and neither does this. */
+function storeSummary(store: SystemStore | undefined): string {
+  if (!store) return "";
+  if (!store.configured) return "Not configured";
+  if (store.mode === "adls") return `${store.account} · ${store.location}`;
+  return store.location ?? "";
 }
 
 export default function ConnectionsPage() {
@@ -43,8 +76,73 @@ export default function ConnectionsPage() {
     return () => { cancelled = true; };
   }, [roleLoading, isAdmin]);
 
+  // KaveonDB is both the query runtime and the system of record, so there is
+  // one system to show, not two. Only a deployment still served by an external
+  // metadata database has a second connection worth a card of its own.
+  const unified = meta?.db_type === "kaveondb";
+  const store = meta?.storage;
+
+  const engineCard = (
+    <section className={s.card} aria-labelledby="db-title">
+      <div className={s.cardHead}>
+        <div className={s.cardId}>
+          <div className={s.mark} style={{ color: "var(--accent)" }}><i className="fas fa-bolt" /></div>
+          <div style={{ minWidth: 0 }}>
+            <h2 id="db-title" className={s.cardTitle}>KaveonDB</h2>
+            <p className={s.cardSub}>
+              {unified
+                ? <>Distributed query runtime and system of record. Datasets, charts, dashboards and history are transactional rows in <code>{meta?.database}.{meta?.schema ?? "product"}</code>.</>
+                : <>Distributed query and transaction runtime. Reads your lake in place.</>}
+            </p>
+          </div>
+        </div>
+        <Status on={engine === undefined ? null : !!engine?.connected}>{engine === undefined ? "Checking" : engine?.connected ? "Connected" : "Unavailable"}</Status>
+      </div>
+      {engine?.connected && cluster && (
+        <Facts rows={[
+          ["Environment", cluster.environment],
+          ["Coordinator", `v${cluster.coordinator.version}`],
+          ["Uptime", uptime(cluster.coordinator.uptime_secs)],
+          ["Workers", `${cluster.active_workers} of ${cluster.total_nodes} nodes`],
+          ["Catalogs", String(engine.catalog_count ?? 0)],
+          ...(unified ? ([["System store", storeSummary(store)]] as [string, string][]) : []),
+        ]} />
+      )}
+      {unified && store?.configured && store.durable === false && (
+        <p className={s.note} style={{ marginTop: 12, color: "var(--warning, #f59e0b)" }}>
+          The system store is a directory on the host, which does not survive the container that writes it.
+          Point <code>KAVEON_PRODUCT_STORAGE_MODE</code> at object storage before this deployment holds
+          anything you cannot rebuild.
+        </p>
+      )}
+      {unified && store && !store.configured && (
+        <p className={s.note} style={{ marginTop: 12 }}>
+          The server has not been told where KaveonDB keeps its records, so this page will not guess.
+          Set <code>KAVEON_PRODUCT_STORAGE_MODE</code> and the account, container and prefix for it.
+        </p>
+      )}
+      <div className={s.cardFoot}>
+        <p className={s.note}>
+          {engine?.connected
+            ? "Connection and credentials are set at deployment. The console shows live workers, memory and every query KaveonDB has recorded."
+            : "The server could not verify its KaveonDB connection. Set KAVEON_ENGINE_URL and the bridge credential at deployment."}
+        </p>
+        {engine?.connected && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <Link href="/catalog" className={s.ghost}>Catalog</Link>
+            <Link href="/engine" className={`${s.ghost} ${s.primary}`}>Open KaveonDB console</Link>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+
+  if (unified || meta === undefined) return <div className={s.stack}>{engineCard}</div>;
+
+  // A deployment still served by an external metadata database: two systems,
+  // two cards, and the PostgreSQL case says plainly that it is on its way out.
   const metaIcon = meta ? SETUP_DB_ICONS[meta.db_type] : null;
-  const metaOn = meta === undefined ? null : !!meta?.ui_configured;
+  const legacy = meta?.db_type === "postgresql";
 
   return (
     <div className={s.stack}>
@@ -53,63 +151,32 @@ export default function ConnectionsPage() {
           <div className={s.cardId}>
             <div className={s.mark} style={metaIcon ? { background: metaIcon.bg, borderColor: metaIcon.border } : undefined}>{metaIcon?.icon ?? <i className="fas fa-database" />}</div>
             <div style={{ minWidth: 0 }}>
-              <h2 id="meta-title" className={s.cardTitle}>{meta?.db_type === "postgresql" ? "Legacy metadata database" : "Metadata database"}</h2>
+              <h2 id="meta-title" className={s.cardTitle}>{legacy ? "Legacy metadata database" : "Metadata database"}</h2>
               <p className={s.cardSub}>
-                {meta?.ui_configured ? meta.db_type === "postgresql"
-                  ? <>Control-plane metadata is still served by <code>PostgreSQL</code>; KaveonDB is the query runtime. Retirement is pending its final migration gates.</>
-                  : <>Datasets, charts, dashboards and history live here · <code>{meta.label}</code></>
+                {meta?.ui_configured
+                  ? legacy
+                    ? <>Control-plane metadata is still served by <code>PostgreSQL</code>; KaveonDB is the query runtime. Retirement is pending its final migration gates.</>
+                    : <>Datasets, charts, dashboards and history live here · <code>{meta.label}</code></>
                   : "Where Kaveon keeps datasets, charts, dashboards and history."}
               </p>
             </div>
           </div>
-          <Status on={meta === undefined ? null : meta?.db_type === "postgresql" ? false : metaOn}>{meta === undefined ? "Checking" : meta?.db_type === "postgresql" ? "Retirement pending" : meta?.ui_configured ? "Connected" : "Not configured"}</Status>
+          <Status on={legacy ? false : meta === null ? null : !!meta?.ui_configured}>
+            {legacy ? "Retirement pending" : meta?.ui_configured ? "Connected" : "Not configured"}
+          </Status>
         </div>
         {meta?.ui_configured ? (
-          <div className={s.facts}>
-            {[["Database", meta.database], ["Host", meta.host], ["Endpoint", meta.endpoint], ["Port", meta.port]]
-              .filter(([, v]) => v).map(([k, v]) => <div key={k} className={s.fact}><div className={s.factLabel}>{k}</div><div className={s.factValue} title={v}>{v}</div></div>)}
-          </div>
+          <Facts rows={[["Database", meta.database], ["Host", meta.host], ["Endpoint", meta.endpoint], ["Port", meta.port]]} />
         ) : meta === null ? (
-            <p className={s.note} style={{ marginTop: 12 }}>Run the setup wizard to connect a metadata database. Nothing can be saved until it exists.</p>
-          ) : meta?.db_type === "postgresql" ? (
-            <p className={s.note} style={{ marginTop: 12, color: "var(--warning, #f59e0b)" }}>
-              PostgreSQL remains the active control-plane authority in this deployment. Do not delete it until the 16-family replay, shadow parity, write fence, restart, and backup/restore gates pass.
-            </p>
-          ) : null}
-      </section>
-
-      <section className={s.card} aria-labelledby="db-title">
-        <div className={s.cardHead}>
-          <div className={s.cardId}>
-            <div className={s.mark} style={{ color: "var(--accent)" }}><i className="fas fa-bolt" /></div>
-            <div style={{ minWidth: 0 }}>
-              <h2 id="db-title" className={s.cardTitle}>KaveonDB</h2>
-              <p className={s.cardSub}>Distributed query and transaction runtime. Reads your lake in place.</p>
-            </div>
-          </div>
-          <Status on={engine === undefined ? null : !!engine?.connected}>{engine === undefined ? "Checking" : engine?.connected ? "Connected" : "Unavailable"}</Status>
-        </div>
-        {engine?.connected && cluster && (
-          <div className={s.facts}>
-            {[["Environment", cluster.environment], ["Coordinator", `v${cluster.coordinator.version}`], ["Uptime", uptime(cluster.coordinator.uptime_secs)],
-              ["Workers", `${cluster.active_workers} of ${cluster.total_nodes} nodes`], ["Catalogs", String(engine.catalog_count ?? 0)]]
-              .map(([k, v]) => <div key={k} className={s.fact}><div className={s.factLabel}>{k}</div><div className={s.factValue}>{v}</div></div>)}
-          </div>
-        )}
-        <div className={s.cardFoot}>
-          <p className={s.note}>
-            {engine?.connected
-              ? "Connection and credentials are set at deployment. The console shows live workers, memory and every query KaveonDB has recorded."
-              : "The server could not verify its KaveonDB connection. Set KAVEON_ENGINE_URL and the bridge credential at deployment."}
+          <p className={s.note} style={{ marginTop: 12 }}>Run the setup wizard to connect a metadata database. Nothing can be saved until it exists.</p>
+        ) : null}
+        {legacy && (
+          <p className={s.note} style={{ marginTop: 12, color: "var(--warning, #f59e0b)" }}>
+            PostgreSQL remains the active control-plane authority in this deployment. Do not delete it until the 16-family replay, shadow parity, write fence, restart, and backup/restore gates pass.
           </p>
-          {engine?.connected && (
-            <div style={{ display: "flex", gap: 8 }}>
-              <Link href="/catalog" className={s.ghost}>Catalog</Link>
-              <Link href="/engine" className={`${s.ghost} ${s.primary}`}>Open KaveonDB console</Link>
-            </div>
-          )}
-        </div>
+        )}
       </section>
+      {engineCard}
     </div>
   );
 }

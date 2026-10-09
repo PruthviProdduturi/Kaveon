@@ -48,8 +48,26 @@ export interface SystemTable {
   error: string | null;
 }
 
+/**
+ * Where the deployment keeps all of this. Read from the server's own
+ * configuration, never assumed: `configured` is false when the deployment has
+ * not said, and the UI reports that rather than naming a location it cannot
+ * stand behind. `durable` is false for a host directory, which does not
+ * survive the container that writes it.
+ */
+export interface SystemStore {
+  configured: boolean;
+  mode: "local" | "adls" | null;
+  durable: boolean | null;
+  account: string | null;
+  container: string | null;
+  prefix: string | null;
+  location: string | null;
+}
+
 export interface SystemCatalogReading {
   catalog: { identifier: string; schema: string };
+  storage: SystemStore;
   /** Whether this reading counted records, or only listed the families. */
   counted: boolean;
   /** The committed generation read, and whether all of it came from one. */

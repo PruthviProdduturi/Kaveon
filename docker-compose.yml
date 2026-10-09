@@ -222,6 +222,19 @@ services:
       KAVEON_ENGINE_BRIDGE_TOKEN: ${KAVEON_ENGINE_BRIDGE_TOKEN:-kaveon-local-bridge-token-not-for-production}
       KAVEON_ENGINE_CATALOG_TOKEN: ${KAVEON_CATALOG_ADMIN_TOKEN:-kaveon-local-catalog-admin}
       KAVEON_PRODUCT_REPLAY_ENABLED: "false"
+      # Where KaveonDB keeps the control plane, as Studio reports it. The same
+      # root `.env` values the coordinator above is given, so one setting
+      # reaches both tiers and there is nothing to drift. The API never writes
+      # to this store; it reads these only to tell an administrator what the
+      # system of record is, and says "not configured" when they are unset
+      # rather than guessing a location. The catalog's own identifier is not
+      # here on purpose: `kaveon.product.` is a contract with the Engine's
+      # parser, pinned in services/system_catalog.py, not a deployment choice.
+      KAVEON_PRODUCT_STORAGE_MODE: ${KAVEON_PRODUCT_STORAGE_MODE:-local}
+      KAVEON_PRODUCT_LOCAL_PATH: ${KAVEON_PRODUCT_LOCAL_PATH:-/var/lib/kaveon/product-transactions}
+      KAVEON_PRODUCT_ADLS_ACCOUNT: ${KAVEON_PRODUCT_ADLS_ACCOUNT:-}
+      KAVEON_PRODUCT_ADLS_CONTAINER: ${KAVEON_PRODUCT_ADLS_CONTAINER:-}
+      KAVEON_PRODUCT_ADLS_PREFIX: ${KAVEON_PRODUCT_ADLS_PREFIX:-kaveon/product-catalog}
       KAVEON_CREDENTIAL_KEYS: ${KAVEON_CREDENTIAL_KEYS:-}
       KAVEON_CREDENTIAL_ACTIVE_KEY: ${KAVEON_CREDENTIAL_ACTIVE_KEY:-}
     depends_on:
