@@ -48,6 +48,16 @@ COLUMNS = [{"column_name": "order_date", "data_type": "date"},
            {"column_name": "event_date", "data_type": "varchar"}]
 
 
+AVERAGED_DATASET = {
+    **BOUND_DATASET,
+    "columns": BOUND_DATASET["columns"] + [
+        {"table_name": "kaveon_events_users", "column_name": "latency_p75_ms",
+         "data_type": "bigint", "is_dimension": False}],
+    "metrics": BOUND_DATASET["metrics"] + [
+        {"name": "Avg Latency", "expression": "AVG(latency_p75_ms)", "metric_type": "avg"}],
+}
+
+
 def _record(mode, detail=None, approximate=None, source_version=VERSION_A):
     execution = {"mode": mode, "detail": detail or mode}
     if mode == "context":
@@ -324,6 +334,50 @@ class EngineAskTests(unittest.TestCase):
             answer = engine.ask("top 3 devices by users", actor="analyst@example.com", role="Analyst")
         self.assertTrue(answer["ok"], answer)
         self.assertTrue(harness.calls[0]["sql"].endswith("GROUP BY device ORDER BY Users DESC LIMIT 3"))
+
+    def test_an_average_over_a_declared_axis_is_issued_as_a_sum_and_a_count(self):
+        """Dropping ORDER BY and LIMIT is only half of what the cube needs: an
+        AVG is not a cell it holds, so "which surface has the highest average
+        latency" was cube-shaped in every respect except its aggregate and
+        scanned the whole table for it."""
+        result = _result(
+            ["platform", "__kaveon_avg_sum_1", "__kaveon_avg_count_1"],
+            [["Desktop", 3000, 4], ["Mobile", 900, 3]],
+            _record("context", "cube at delta v1 (bc4993280608)"))
+        with EngineAskHarness(result) as harness,              patch.object(engine.datasets_svc, "get_dataset_by_id",
+                          lambda i, *a, **k: AVERAGED_DATASET):
+            answer = engine.ask("avg latency by platform",
+                                actor="analyst@example.com", role="Analyst")
+        self.assertTrue(answer["ok"], answer)
+        issued = harness.calls[0]["sql"]
+        self.assertIn("SUM(", issued)
+        self.assertIn("COUNT(", issued)
+        self.assertNotIn("AVG(", issued)
+        self.assertNotIn("ORDER BY", issued)
+        self.assertNotIn("LIMIT", issued)
+        # The substituted columns are the rewrite's own and must not surface.
+        self.assertNotIn("__kaveon_avg_sum_1", answer["columns"])
+        self.assertNotIn("__kaveon_avg_count_1", answer["columns"])
+        # SUM over COUNT is what AVG computes, and the ranking still holds.
+        self.assertEqual([row[0] for row in answer["rows"]], ["Desktop", "Mobile"])
+        self.assertEqual([row[-1] for row in answer["rows"]], [750.0, 300.0])
+
+    def test_an_undeclared_ranking_is_not_substituted_either(self):
+        """The substitution rides on the statement already being cube-shaped.
+        An axis the shape does not declare cannot be answered from cells at
+        all, so taking its ORDER BY and LIMIT off would ask the Engine for
+        every group just so the API could sort them."""
+        undeclared = {**AVERAGED_DATASET,
+                      "columns": AVERAGED_DATASET["columns"] + [{"table_name": "kaveon_events_users",
+                                                                 "column_name": "device",
+                                                                 "data_type": "varchar", "is_dimension": True}]}
+        result = _result(["device", "Latency"], [["Tablet", 9.0]], _record("distributed"))
+        with EngineAskHarness(result) as harness, \
+             patch.object(engine.datasets_svc, "get_dataset_by_id", lambda i, *a, **k: undeclared):
+            answer = engine.ask("top 3 devices by average latency",
+                                actor="analyst@example.com", role="Analyst")
+        self.assertTrue(answer["ok"], answer)
+        self.assertNotIn("__kaveon_avg_", harness.calls[0]["sql"])
 
     def test_a_viewer_runs_as_the_service_principal(self):
         result = _result(["Users"], [[3000000]], _record("context"))
