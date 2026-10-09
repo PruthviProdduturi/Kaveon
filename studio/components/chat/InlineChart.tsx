@@ -119,7 +119,7 @@ export function InlineChart({ rows, columns, chartType, xAxis, yAxis, title, sql
             {yAxis ?? title}
           </div>
         </div>
-        <Footer sql={sql} sqlOpen={sqlOpen} setSqlOpen={setSqlOpen} />
+        <Footer sql={sql} title={title} sqlOpen={sqlOpen} setSqlOpen={setSqlOpen} />
       </div>
     );
   }
@@ -178,7 +178,7 @@ export function InlineChart({ rows, columns, chartType, xAxis, yAxis, title, sql
             </tbody>
           </table>
         </div>
-        <Footer sql={sql} sqlOpen={sqlOpen} setSqlOpen={setSqlOpen} />
+        <Footer sql={sql} title={title} sqlOpen={sqlOpen} setSqlOpen={setSqlOpen} />
       </div>
     );
   }
@@ -196,7 +196,7 @@ export function InlineChart({ rows, columns, chartType, xAxis, yAxis, title, sql
         notMerge
         lazyUpdate
       />
-      <Footer sql={sql} sqlOpen={sqlOpen} setSqlOpen={setSqlOpen} />
+      <Footer sql={sql} title={title} sqlOpen={sqlOpen} setSqlOpen={setSqlOpen} />
     </div>
   );
 }
@@ -247,10 +247,12 @@ function TitleBar({ title, chartType }: { title: string; chartType: string }) {
 
 function Footer({
   sql,
+  title,
   sqlOpen,
   setSqlOpen,
 }: {
   sql?: string;
+  title: string;
   sqlOpen: boolean;
   setSqlOpen: (v: boolean) => void;
 }) {
@@ -285,8 +287,17 @@ function Footer({
           <span>{sqlOpen ? "▾" : "▸"}</span>
           <span>SQL</span>
         </button>
+        {/* The Lab reads `query`, not `sql` — this link had been handing it a
+            parameter it ignores, so the statement never arrived and the Lab
+            opened empty. `run` carries the rest of the intent: the answer on
+            screen came from this statement, so arriving at a Run button you
+            have to press again makes the hand-off a dead end. */}
         <a
-          href={"/lab?sql=" + encodeURIComponent(sql)}
+          href={
+            "/lab?query=" + encodeURIComponent(sql)
+            + "&name=" + encodeURIComponent(title || "Chat query")
+            + "&run=1"
+          }
           style={{
             fontSize: 12,
             color: "var(--text-muted)",

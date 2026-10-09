@@ -576,6 +576,10 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
   // When navigated with ?query= param (e.g. from dataset "Execute in Lab"),
   // open a new tab pre-filled with the SQL.
   const [urlQueryLoaded, setUrlQueryLoaded] = useState(false);
+  // A statement handed over by something that already ran it — a chat
+  // answer's "Open in SQL Lab" — arrives ready to run, so it is run rather
+  // than left sitting behind a button the person has to find and press.
+  const [pendingAutoRun, setPendingAutoRun] = useState<string | null>(null);
   useEffect(() => {
     if (!isAuthenticated || urlQueryLoaded) return;
     const sql = searchParams.get("query");
@@ -595,6 +599,7 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
       return [...prev, { id: newId, name, text: sql }];
     });
     setActiveQueryId(() => reuse ?? newId);
+    if (searchParams.get("run") === "1") setPendingAutoRun(sql);
   }, [isAuthenticated, urlQueryLoaded, searchParams]);
 
   // When navigated from a dataset detail page with datasetId, open a
@@ -1270,6 +1275,23 @@ return;
       demoQuota.refresh();
     }
   };
+
+  // Run a statement that arrived ready to run, once the tab holding it is the
+  // active one. The run is deferred to an effect rather than fired from the
+  // URL handler because the tab and the catalog are set through state there,
+  // and executing in the same pass would read the values they replace. The
+  // statement is passed explicitly so the run cannot pick up a different
+  // tab's text if the person switches tabs first.
+  useEffect(() => {
+    if (pendingAutoRun === null || isExecuting) return;
+    const active = getActiveQuery();
+    if (!active || active.text !== pendingAutoRun) return;
+    setPendingAutoRun(null);
+    void executeQuery(pendingAutoRun);
+    // executeQuery is re-created every render and is not a dependency: the
+    // guard above is what decides when this runs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingAutoRun, isExecuting, queries, activeQueryId]);
 
   /**
    * A KaveonDB statement, streamed: submit with `stream: true`, then read
