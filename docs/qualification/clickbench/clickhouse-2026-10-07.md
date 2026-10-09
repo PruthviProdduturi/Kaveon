@@ -912,3 +912,13 @@ this host against the generic release build. It regressed q33 to **24.289 s**
 and q35 to **20.148 s** (generic balanced controls were approximately 18--20 s
 and 14--16 s). The Dockerfile was restored to the portable generic release
 build; no native-only assumption is retained.
+
+## 2026-10-08 final-merge routing boundary
+
+A single-thread final-merge control was exact but regressed q33 to **35.51 s**.
+The current multi-thread final stage broadcasts each producer payload to every
+merge thread and selects rows by hash; this is required because a key may occur
+in more than one producer payload. Assigning whole payloads to local threads
+would silently split duplicate keys. The safe next design must carry a
+worker-local partition identity through the exchange, so each final thread can
+consume a disjoint grouped-state stream without a second local repartition.
