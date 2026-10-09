@@ -43,9 +43,12 @@ export function KaveonLoading({
           ? { position: "fixed", inset: 0, zIndex: 9999 }
           : {
               width: "100%",
+              // A floor so the mark is not cramped, and nothing else. No
+              // border, no radius: inline, this is a page waiting for its
+              // own content, not a card of its own. Drawing one put a box
+              // around every section that loads — the Library, the Lab's
+              // results — where there had never been one.
               minHeight: 240,
-              borderRadius: 8,
-              border: "1px solid var(--border)",
             }),
         display: "flex",
         alignItems: "center",

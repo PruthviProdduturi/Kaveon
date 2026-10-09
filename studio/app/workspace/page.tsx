@@ -169,11 +169,6 @@ const TAB_LAYOUT: Record<TabKey, "cards" | "rows" | "custom"> = {
 // and both of those cases are shown rather than hidden.
 type ChartGrouping = "dataset" | "dashboard";
 
-const CHART_GROUPINGS: { key: ChartGrouping; label: string }[] = [
-  { key: "dataset", label: "Dataset" },
-  { key: "dashboard", label: "Dashboard" },
-];
-
 // Headings for the charts a grouping cannot place. Named for what is actually
 // true of them, so neither an ordinary state nor a fault lands in a catch-all.
 const UNPLACED_HEADING: Record<ChartGrouping, string> = {
@@ -253,7 +248,12 @@ export default function WorkspacePage() {
   // the dashboard sectioning needs. Placements are read once, from the same
   // dashboard list the Dashboards tab uses, and only when that grouping is
   // chosen — the default grouping costs no extra request.
-  const [chartGrouping, setChartGrouping] = useState<ChartGrouping>("dataset");
+  // Charts section by where they are read. Pruthvi asked for the Group by
+  // control to go and for dashboards to be the answer, so the state stays
+  // only as the fallback below: when the dashboard placements cannot be
+  // read there is nothing to section by, and dataset is the honest
+  // substitute rather than one undifferentiated list.
+  const [chartGrouping] = useState<ChartGrouping>("dashboard");
   const [placements, setPlacements] = useState<Map<string, string[]> | null>(null);
   const [placementsFailed, setPlacementsFailed] = useState(false);
 
@@ -283,22 +283,6 @@ export default function WorkspacePage() {
   // Sections belong to a tab and, on Charts, to the chosen grouping — the two
   // groupings have different headings, so they remember their own open sections.
   const sectionScope = activeTab === "charts" ? `charts:${chartGrouping}` : activeTab;
-
-  // Restore the chosen chart grouping before anything is sectioned by it.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    try {
-      const stored = sessionStorage.getItem("ws-group-charts");
-      if (CHART_GROUPINGS.some((option) => option.key === stored)) {
-        setChartGrouping(stored as ChartGrouping);
-      }
-    } catch {}
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    try { sessionStorage.setItem("ws-group-charts", chartGrouping); } catch {}
-  }, [chartGrouping]);
 
   // Persist + restore expanded sections and scroll per tab, so navigating away
   // (opening a chart) and back returns you to the exact position you left.
@@ -840,29 +824,6 @@ export default function WorkspacePage() {
             </button>
           ))}
         </div>
-
-        {/* Section the Charts tab by how a chart is built (its dataset) or by
-            where it is read (its dashboards). Only Charts spans both. */}
-        {activeTab === "charts" && (
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-            <span style={{ fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap" }}>Group by</span>
-            <div style={{ display: "flex", gap: 0, background: "var(--bg-surface)", borderRadius: 8, border: "1px solid var(--border)", overflow: "hidden" }}>
-              {CHART_GROUPINGS.map((option) => {
-                const chosen = chartGrouping === option.key;
-                return (
-                  <button key={option.key} type="button" onClick={() => setChartGrouping(option.key)} style={{
-                    padding: "6px 14px", fontSize: 12, fontWeight: chosen ? 600 : 400,
-                    color: chosen ? "var(--text-primary)" : "var(--text-muted)",
-                    background: chosen ? "var(--bg-hover)" : "transparent",
-                    border: "none", cursor: "pointer", transition: "all 0.15s", whiteSpace: "nowrap",
-                  }}>
-                    {option.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
 
         {/* Search */}
         <div style={{ position: "relative", flex: 1, minWidth: 0, maxWidth: 200 }}>
