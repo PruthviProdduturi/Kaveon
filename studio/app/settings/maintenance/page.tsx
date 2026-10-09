@@ -1,91 +1,233 @@
 "use client";
 
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API_BASE } from "../../../config";
 import { msalFetch } from "../../../utils/msalFetch";
+import {
+	CaptureStep, PassId, PassRun, REFRESH_INTERVALS, RunScope,
+	isDue, isRunningElsewhere, parseTimestamp, readInterval, readRun,
+	startPass, stopPass, subscribe, writeInterval,
+} from "../../../utils/previewRefresh";
+import g from "../governance/governance.module.css";
 import s from "../settings.module.css";
 
-interface Job { running: boolean; done: number; total: number; label: string }
-
-interface CaptureStep { label: string; src: string }
-
-/**
- * A Library preview is captured in the browser once the chart or dashboard has
- * finished rendering, which normally happens when it is saved. These jobs cover
- * the records that were never re-saved: each one is opened in a hidden frame
- * with ?capture=1, the page stores its own preview and posts a completion
- * message, and the runner advances. A step that never reports is given up on
- * after its timeout rather than stalling the job.
- */
-function useCaptureJob(doneMessage: string, stepTimeoutMs: number) {
-	const [job, setJob] = useState<Job | null>(null);
-	const runningRef = useRef(false);
-
-	const run = useCallback(async (
-		loadingLabel: string,
-		emptyLabel: string,
-		failedLabel: string,
-		plan: () => Promise<CaptureStep[]>,
-	) => {
-		if (runningRef.current) return;
-		runningRef.current = true;
-		setJob({ running: true, done: 0, total: 0, label: loadingLabel });
-
-		let steps: CaptureStep[] = [];
-		try {
-			steps = await plan();
-		} catch {
-			runningRef.current = false;
-			setJob({ running: false, done: 0, total: 0, label: failedLabel });
-			setTimeout(() => setJob(null), 5000);
-			return;
-		}
-		if (!steps.length) {
-			runningRef.current = false;
-			setJob({ running: false, done: 0, total: 0, label: emptyLabel });
-			setTimeout(() => setJob(null), 5000);
-			return;
-		}
-
-		const frame = document.createElement("iframe");
-		frame.style.cssText = "position:fixed;left:-9999px;top:0;width:1280px;height:800px;border:0;visibility:hidden;";
-		document.body.appendChild(frame);
-		let resolveDone: (() => void) | null = null;
-		const onMessage = (e: MessageEvent) => {
-			if (e.data?.type === "kaveon-thumb-done" || e.data?.type === "kaveon-chart-thumb-done") resolveDone?.();
-		};
-		window.addEventListener("message", onMessage);
-		try {
-			for (let i = 0; i < steps.length; i++) {
-				setJob({ running: true, done: i, total: steps.length, label: steps[i].label });
-				await new Promise<void>((resolve) => {
-					const finish = () => { clearTimeout(timer); resolveDone = null; resolve(); };
-					const timer = setTimeout(finish, stepTimeoutMs);
-					resolveDone = finish;
-					frame.src = steps[i].src;
-				});
-			}
-			setJob({ running: false, done: steps.length, total: steps.length, label: `${doneMessage} ${steps.length}.` });
-		} finally {
-			window.removeEventListener("message", onMessage);
-			frame.remove();
-			runningRef.current = false;
-			setTimeout(() => setJob(null), 6000);
-		}
-	}, [doneMessage, stepTimeoutMs]);
-
-	return { job, run };
+/** One record as the pass needs to see it: whether it has a preview, and when it last changed. */
+interface PreviewRecord {
+	id: string;
+	name: string;
+	updatedAt: number | null;
+	light: boolean;
+	dark: boolean;
 }
 
-async function loadRecords(path: string): Promise<{ id: string; name: string }[]> {
-	const res = await msalFetch(`${API_BASE}/api/v1/${path}`);
-	if (!res.ok) throw new Error(`${path} could not be loaded`);
-	const data = await res.json();
-	const rows = Array.isArray(data) ? data : data.result || data.items || [];
-	return rows.map((row: { id: string | number; name?: string }) => ({
-		id: String(row.id), name: row.name || "Untitled",
+interface PassCopy {
+	title: string;
+	description: string;
+	noun: string;
+	plural: string;
+	scheduleHelp: string;
+}
+
+const COPY: Record<PassId, PassCopy> = {
+	dashboards: {
+		title: "Dashboard previews",
+		description:
+			"Each dashboard is captured once per theme, so the Library shows the preview that matches the viewer's theme. "
+			+ "A capture runs in this browser: it keeps going while you move around Studio, and is recorded as interrupted if the tab is closed or reloaded.",
+		noun: "dashboard",
+		plural: "dashboards",
+		scheduleHelp:
+			"When an administrator opens this page and the previews are older than the chosen interval, the outstanding ones are captured here. "
+			+ "A preview is read off a rendered chart, so there is no server-side schedule that can run it unattended.",
+	},
+	charts: {
+		title: "Chart previews",
+		description:
+			"A chart's preview is captured when the chart is saved, so this pass covers charts that have not been re-saved since. "
+			+ "Each capture runs the chart's query, so a full refresh takes several minutes.",
+		noun: "chart",
+		plural: "charts",
+		scheduleHelp:
+			"When an administrator opens this page and the previews are older than the chosen interval, the outstanding ones are captured here. "
+			+ "Captures run one at a time and only for charts that need one, so the pass never floods the Engine.",
+	},
+};
+
+async function loadRecords(pass: PassId): Promise<PreviewRecord[]> {
+	const response = await msalFetch(`${API_BASE}/api/v1/${pass}`);
+	if (!response.ok) throw new Error(`${pass} could not be loaded`);
+	const payload = await response.json();
+	const rows: Record<string, unknown>[] = Array.isArray(payload)
+		? payload
+		: (payload.result as Record<string, unknown>[]) || (payload.items as Record<string, unknown>[]) || [];
+	return rows.map((row) => ({
+		id: String(row.id),
+		name: typeof row.name === "string" && row.name ? row.name : "Untitled",
+		updatedAt: parseTimestamp(row.updated_at),
+		light: Boolean(row.has_thumbnail),
+		dark: Boolean(row.has_thumbnail_dark),
 	}));
 }
+
+/**
+ * A preview is outstanding when there is none, or when the record it previews
+ * changed after the last completed pass. Without a completed pass there is no
+ * baseline against which to call an existing preview stale, so only the missing
+ * ones count — the pass would rather do too little than re-capture the whole
+ * Library on a timestamp it cannot interpret.
+ */
+function outstanding(hasPreview: boolean, updatedAt: number | null, baseline: number | null): boolean {
+	if (!hasPreview) return true;
+	return baseline !== null && updatedAt !== null && updatedAt > baseline;
+}
+
+function baselineOf(run: PassRun | null): number | null {
+	return run && run.status === "completed" ? run.finishedAt : null;
+}
+
+function planSteps(
+	pass: PassId,
+	records: PreviewRecord[],
+	scope: RunScope,
+	baseline: number | null,
+): CaptureStep[] {
+	if (pass === "charts") {
+		return records
+			.filter((record) => scope === "all" || outstanding(record.light, record.updatedAt, baseline))
+			.map((record) => ({ id: record.id, label: record.name, src: `/charts/${record.id}?capture=1` }));
+	}
+	const themes: { theme: "light" | "dark"; label: string }[] = [
+		{ theme: "light", label: "Light theme" },
+		{ theme: "dark", label: "Dark theme" },
+	];
+	return records.flatMap((record) =>
+		themes
+			.filter(({ theme }) => scope === "all"
+				|| outstanding(theme === "dark" ? record.dark : record.light, record.updatedAt, baseline))
+			.map(({ theme, label }) => ({
+				id: record.id, theme, label: `${record.name} · ${label}`,
+				src: `/dashboards/${record.id}/view?capture=1&forceTheme=${theme}`,
+			})),
+	);
+}
+
+function formatMoment(at: number): string {
+	try {
+		return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(at);
+	} catch {
+		return new Date(at).toISOString();
+	}
+}
+
+function outcomeOf(run: PassRun | null): string {
+	if (!run) return "No run recorded";
+	switch (run.status) {
+		case "running": return `In progress · ${run.done} of ${run.total || "?"}`;
+		case "completed": return run.total ? `Completed · ${run.total} captured` : "Completed · nothing outstanding";
+		case "stopped": return `Stopped · ${run.done} of ${run.total}`;
+		case "interrupted": return `Interrupted · ${run.done} of ${run.total}`;
+		case "failed": return "Could not start";
+	}
+}
+
+/**
+ * The Maintenance view of one pass.
+ *
+ * The run itself lives in `utils/previewRefresh`, outside React, so this hook
+ * only attaches to it: it reads the stored record on mount, follows the live
+ * run while the page is open, and re-reads coverage from the API when a run
+ * ends. `blocked` is the other pass capturing — one capture at a time.
+ */
+function usePass(pass: PassId, blocked: boolean) {
+	const [run, setRun] = useState<PassRun | null>(null);
+	const [elsewhere, setElsewhere] = useState(false);
+	const [intervalDays, setIntervalDays] = useState(0);
+	const [records, setRecords] = useState<PreviewRecord[] | null>(null);
+	const [problem, setProblem] = useState<string | null>(null);
+	const [scheduled, setScheduled] = useState(false);
+	const runRef = useRef<PassRun | null>(null);
+	const autoRef = useRef(false);
+	const mountedRef = useRef(true);
+
+	useEffect(() => () => { mountedRef.current = false; }, []);
+
+	const sync = useCallback((next: PassRun | null) => {
+		runRef.current = next;
+		if (!mountedRef.current) return;
+		setRun(next);
+		setElsewhere(next?.status === "running" ? isRunningElsewhere(pass) : false);
+	}, [pass]);
+
+	useEffect(() => {
+		sync(readRun(pass));
+		setIntervalDays(readInterval(pass));
+		return subscribe(pass, sync);
+	}, [pass, sync]);
+
+	const reload = useCallback(async () => {
+		try {
+			const loaded = await loadRecords(pass);
+			if (!mountedRef.current) return;
+			setRecords(loaded);
+			setProblem(null);
+		} catch {
+			if (!mountedRef.current) return;
+			setRecords([]);
+			setProblem(`The ${COPY[pass].noun} list could not be loaded.`);
+		}
+	}, [pass]);
+
+	useEffect(() => { void reload(); }, [reload]);
+
+	const begin = useCallback(async (scope: RunScope): Promise<boolean> => {
+		const started = await startPass(pass, scope, async () =>
+			planSteps(pass, await loadRecords(pass), scope, baselineOf(runRef.current)));
+		if (started) await reload();
+		return started;
+	}, [pass, reload]);
+
+	const baseline = baselineOf(run);
+	const pending = useMemo(
+		() => (records ? planSteps(pass, records, "outstanding", baseline) : []),
+		[pass, records, baseline],
+	);
+	const stored = useMemo(
+		() => (records ?? []).filter((record) => record.light || record.dark).length,
+		[records],
+	);
+
+	// The automatic refresh. It fires only from this page, only once the chosen
+	// interval has elapsed, only for what is outstanding, and only when nothing
+	// else is capturing — and it releases the attempt if the lock was already
+	// taken, so the other pass finishes first and this one starts when it frees.
+	const live = run?.status === "running" && !elsewhere;
+	useEffect(() => {
+		if (!records || intervalDays <= 0 || live || blocked || elsewhere) return;
+		if (autoRef.current || !pending.length || !isDue(run, intervalDays)) return;
+		autoRef.current = true;
+		setScheduled(true);
+		void (async () => {
+			if (!(await begin("outstanding")) && mountedRef.current) {
+				autoRef.current = false;
+				setScheduled(false);
+			}
+		})();
+	}, [records, intervalDays, live, blocked, elsewhere, pending.length, run, begin]);
+
+	const chooseInterval = useCallback((days: number) => {
+		writeInterval(pass, days);
+		setIntervalDays(days);
+	}, [pass]);
+
+	return {
+		pass, run, live, elsewhere, blocked, intervalDays, problem, scheduled,
+		total: records?.length ?? 0, stored, pending: pending.length,
+		ready: records !== null, begin, chooseInterval,
+		stop: useCallback(() => stopPass(pass), [pass]),
+	};
+}
+
+type Pass = ReturnType<typeof usePass>;
 
 function ImagesIcon() {
 	return (
@@ -109,79 +251,152 @@ function ChartIcon() {
 	);
 }
 
-const JobStatus: React.FC<{ job: Job | null }> = ({ job }) => {
-	if (!job) return null;
+/** The sentence under the facts: what is happening, or what happened last. */
+function statusLine(pass: Pass): string | null {
+	const { run, live, elsewhere, scheduled, pending, ready } = pass;
+	const copy = COPY[pass.pass];
+	if (elsewhere) return "A refresh of these previews is already running in another browser tab.";
+	if (live && run) {
+		const progress = run.total ? ` · ${run.done} of ${run.total}` : "";
+		const prefix = scheduled ? "Scheduled refresh — " : "";
+		return `${prefix}${run.label}${progress}`;
+	}
+	if (run?.status === "interrupted") {
+		return `The last run was interrupted after ${run.done} of ${run.total} — the tab was closed or reloaded before it finished.`
+			+ (pending ? " Resume to capture what is left." : "");
+	}
+	if (run?.status === "failed") return run.detail ?? "The last run could not be started.";
+	if (run?.status === "stopped") {
+		return `The last run was stopped after ${run.done} of ${run.total}.`
+			+ (pending ? " Resume to capture what is left." : "");
+	}
+	if (!ready) return null;
+	if (!pass.total) return `There are no ${copy.plural} to preview.`;
+	if (!pending) return "Every preview is current.";
+	return `${pending} ${pending === 1 ? "capture is" : "captures are"} outstanding.`;
+}
+
+const PassCard: React.FC<{ pass: Pass; icon: React.ReactNode }> = ({ pass, icon }) => {
+	const copy = COPY[pass.pass];
+	const { run, live, elsewhere, blocked, pending, intervalDays } = pass;
+	const resumable = run?.status === "interrupted" || run?.status === "stopped";
+	const unavailable = elsewhere || blocked || !pass.ready;
+	const percent = live && run?.total ? Math.round((run.done / run.total) * 100) : 0;
+	const status = statusLine(pass);
+
 	return (
-		<div style={{ marginTop: 12 }} role="status" aria-live="polite">
-			<p className={s.note}>{job.label}{job.running && job.total ? ` · ${job.done} of ${job.total}` : ""}</p>
-			{job.running && job.total > 0 && (
-				<div className={s.progress}><span className={s.progressFill} style={{ width: `${Math.round((job.done / job.total) * 100)}%` }} /></div>
-			)}
-		</div>
+		<section className={s.card}>
+			<div className={s.cardHead}>
+				<div className={s.cardId}>
+					<div className={s.mark}>{icon}</div>
+					<div>
+						<h2 className={s.cardTitle}>{copy.title}</h2>
+						<p className={s.cardSub}>{copy.description}</p>
+					</div>
+				</div>
+				<div className={s.actions}>
+					{live ? (
+						<button type="button" className={s.ghost} onClick={pass.stop}>Stop</button>
+					) : (
+						<>
+							<button
+								type="button"
+								className={s.ghost}
+								onClick={() => void pass.begin("all")}
+								disabled={unavailable || !pass.total}
+							>
+								Refresh all
+							</button>
+							<button
+								type="button"
+								className={`${s.ghost} ${s.primary}`}
+								onClick={() => void pass.begin("outstanding")}
+								disabled={unavailable || !pending}
+							>
+								{resumable && pending ? "Resume" : "Refresh outstanding"}
+							</button>
+						</>
+					)}
+				</div>
+			</div>
+
+			<div className={s.facts}>
+				<div className={s.fact}>
+					<div className={s.factLabel}>Previews stored</div>
+					<div className={s.factValue}>{pass.ready ? `${pass.stored} of ${pass.total}` : "—"}</div>
+				</div>
+				<div className={s.fact}>
+					<div className={s.factLabel}>Outstanding captures</div>
+					<div className={s.factValue}>{pass.ready ? pending : "—"}</div>
+				</div>
+				<div className={s.fact}>
+					<div className={s.factLabel}>Last refreshed</div>
+					<div className={s.factValue}>
+						{run?.finishedAt ? formatMoment(run.finishedAt) : "Not yet in this browser"}
+					</div>
+				</div>
+				<div className={s.fact}>
+					<div className={s.factLabel}>Last run</div>
+					<div className={s.factValue}>{outcomeOf(run)}</div>
+				</div>
+			</div>
+
+			{live && run?.total ? (
+				<div
+					className={s.progress}
+					role="progressbar"
+					aria-valuemin={0}
+					aria-valuemax={100}
+					aria-valuenow={percent}
+					aria-label={`${copy.title} refresh progress`}
+				>
+					<span className={s.progressFill} style={{ width: `${percent}%` }} />
+				</div>
+			) : null}
+
+			{status ? (
+				<div className={s.cardFoot}>
+					<p className={s.note} role="status" aria-live="polite">{status}</p>
+				</div>
+			) : null}
+
+			{pass.problem ? <p className={g.problem}>{pass.problem}</p> : null}
+
+			<div className={s.schedule}>
+				<div>
+					<div className={s.rowLabel}>Automatic refresh</div>
+					<div className={s.rowHelp}>{copy.scheduleHelp}</div>
+				</div>
+				<select
+					className={g.select}
+					value={intervalDays}
+					onChange={(event) => pass.chooseInterval(Number(event.target.value))}
+					aria-label={`Automatic refresh interval for ${copy.title.toLowerCase()}`}
+				>
+					{REFRESH_INTERVALS.map((choice) => (
+						<option key={choice.days} value={choice.days}>{choice.label}</option>
+					))}
+				</select>
+			</div>
+		</section>
 	);
 };
 
 export default function MaintenancePage() {
-	// A dashboard is captured once per theme, so the Library can show the preview
-	// that matches the viewer's theme; a chart carries one preview.
-	const dashboards = useCaptureJob("Refreshed", 25000);
-	const charts = useCaptureJob("Refreshed", 35000);
+	// Both passes drive hidden frames in this tab, so only one may capture at a
+	// time; each card is told whether the other is busy.
+	const [dashboardsBusy, setDashboardsBusy] = useState(false);
+	const [chartsBusy, setChartsBusy] = useState(false);
+	const dashboards = usePass("dashboards", chartsBusy);
+	const charts = usePass("charts", dashboardsBusy);
 
-	const refreshDashboards = () => dashboards.run(
-		"Loading dashboards…",
-		"There are no dashboards to refresh.",
-		"Dashboards could not be loaded.",
-		async () => (await loadRecords("dashboards")).flatMap((d) =>
-			(["light", "dark"] as const).map((theme) => ({
-				label: `${d.name} · ${theme}`,
-				src: `/dashboards/${d.id}/view?capture=1&forceTheme=${theme}`,
-			})),
-		),
-	);
-
-	const refreshCharts = () => charts.run(
-		"Loading charts…",
-		"There are no charts to refresh.",
-		"Charts could not be loaded.",
-		async () => (await loadRecords("charts")).map((c) => ({
-			label: c.name,
-			src: `/charts/${c.id}?capture=1`,
-		})),
-	);
+	useEffect(() => { setDashboardsBusy(dashboards.live); }, [dashboards.live]);
+	useEffect(() => { setChartsBusy(charts.live); }, [charts.live]);
 
 	return (
 		<div className={s.stack}>
-			<section className={s.card}>
-				<div className={s.cardHead}>
-					<div className={s.cardId}>
-						<div className={s.mark}><ImagesIcon /></div>
-						<div>
-							<h2 className={s.cardTitle}>Dashboard previews</h2>
-							<p className={s.cardSub}>Re-capture every dashboard preview in light and dark. Runs in this browser tab; leave it open until it finishes.</p>
-						</div>
-					</div>
-					<button type="button" className={`${s.ghost} ${s.primary}`} onClick={refreshDashboards} disabled={!!dashboards.job?.running}>
-						{dashboards.job?.running ? "Refreshing…" : "Refresh dashboard previews"}
-					</button>
-				</div>
-				<JobStatus job={dashboards.job} />
-			</section>
-
-			<section className={s.card}>
-				<div className={s.cardHead}>
-					<div className={s.cardId}>
-						<div className={s.mark}><ChartIcon /></div>
-						<div>
-							<h2 className={s.cardTitle}>Chart previews</h2>
-							<p className={s.cardSub}>Re-capture every chart preview. A chart is normally captured when it is saved, so this is for charts that have not been re-saved since. Each one runs its query, so allow a few minutes.</p>
-						</div>
-					</div>
-					<button type="button" className={`${s.ghost} ${s.primary}`} onClick={refreshCharts} disabled={!!charts.job?.running}>
-						{charts.job?.running ? "Refreshing…" : "Refresh chart previews"}
-					</button>
-				</div>
-				<JobStatus job={charts.job} />
-			</section>
+			<PassCard pass={dashboards} icon={<ImagesIcon />} />
+			<PassCard pass={charts} icon={<ChartIcon />} />
 		</div>
 	);
 }
