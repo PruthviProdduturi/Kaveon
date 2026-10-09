@@ -48,7 +48,35 @@ def get_dataset(dataset_id: str, response: Response, ctx: UserContext = Depends(
     dataset = svc.get_dataset_by_id(dataset_id, ctx.email, ctx.role)
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
+    # Which SQL a client may write against this dataset. The server resolves it
+    # from the registered catalog sources, because only the server knows
+    # whether `database_name` is an Engine catalog or a registered external
+    # database. Studio used to infer it from the schema name, with `public` and
+    # `climate_energy` written in as the two that meant "Engine" — so every
+    # dataset in any other schema was handed SQL Server syntax the Engine
+    # rejects.
+    dataset["sql_dialect"] = _dialect_for(dataset.get("database_name") or "")
     return dataset
+
+
+def _dialect_for(database: str) -> str:
+    """`engine` for a catalog the Engine serves, `tsql` otherwise.
+
+    An Engine catalog takes double-quoted identifiers and `LIMIT`; Fabric SQL
+    and Azure SQL take bracketed identifiers and `TOP`. Unknown resolves to
+    `engine`: every dataset in a deployment without a registered external
+    database reads the lake, and guessing T-SQL there is the failure this
+    replaces.
+    """
+    from routers.sql import _is_engine_catalog
+    if not database:
+        return "engine"
+    try:
+        return "engine" if _is_engine_catalog(database) else "tsql"
+    except Exception:
+        # A catalog listing that cannot be read is not a reason to answer with
+        # a dialect the Engine refuses.
+        return "engine"
 
 
 @router.get("/datasets/{dataset_id}/columns")
