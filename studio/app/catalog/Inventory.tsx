@@ -147,8 +147,11 @@ const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
 function formatMark(version: SourceVersion | null): string {
   if (version?.kind === "delta_version") return `v${version.version}`;
   if (version?.kind === "iceberg_snapshot") return version.snapshot_id != null ? `#${version.snapshot_id}` : "";
-  if (version?.kind === "listing") return "directory";
-  if (version?.kind === "file") return "single file";
+  // Nothing for a plain directory or a single file: the Holds/files count
+  // beside it already says which it is, and the words were long enough that
+  // the cell clipped them to "di…" and "si…". A version or a snapshot id is
+  // the only part of this a reader cannot get from another column.
+  if (version?.kind === "listing" || version?.kind === "file") return "";
   return "";
 }
 

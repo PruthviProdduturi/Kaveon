@@ -33,6 +33,11 @@ export function AuthScreen() {
 	const [microsoftProviderEnabled, setMicrosoftProviderEnabled] = useState(false);
 	const [microsoftOAuthEnabled, setMicrosoftOAuthEnabled] = useState(false);
 	const [githubProviderEnabled, setGithubProviderEnabled] = useState(false);
+	// Present only when the installation has no real provider at all — see
+	// `localIdentityEnabled` in auth.ts. Without it a laptop with no OAuth
+	// configured showed a sign-in screen with nothing on it to click.
+	const [localIdentityEnabled, setLocalIdentityEnabled] = useState(false);
+	const [localName, setLocalName] = useState("Local Developer");
 	const [microsoftPublicToken, setMicrosoftPublicToken] = useState<(() => Promise<string>) | null>(null);
 	const [microsoftPending, setMicrosoftPending] = useState(false);
 	useEffect(() => {
@@ -45,6 +50,9 @@ export function AuthScreen() {
 					setMicrosoftProviderEnabled(Boolean(providers?.["microsoft-entra-id"] || providers?.["entra-public"]));
 					setMicrosoftOAuthEnabled(Boolean(providers?.["microsoft-entra-id"]));
 					setGithubProviderEnabled(Boolean(providers?.github));
+					const local = providers?.["local-dev"] as { name?: string } | undefined;
+					setLocalIdentityEnabled(Boolean(local));
+					if (local?.name) setLocalName(local.name);
 				}
 			})
 			.catch(() => {
@@ -287,10 +295,25 @@ export function AuthScreen() {
 
 					<div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
 
-						<button
+						{localIdentityEnabled && <button
+							type="button"
+							onClick={() => start("local-dev")}
+							style={btnBase}
+							onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.15)"; }}
+							onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)"; }}
+						>
+							<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" /></svg>
+							Continue as {localName}
+						</button>}
+
+						{/* Offered only when this installation actually has Microsoft
+						    configured. It used to render always, merely disabled, so an
+						    installation with no Microsoft provider showed a dead button
+						    as its only visible way in. */}
+						{(microsoftProviderEnabled || microsoftPublicToken) && <button
 							type="button"
 							onClick={startMicrosoft}
-							disabled={microsoftPending || (!microsoftProviderEnabled && !microsoftPublicToken)}
+							disabled={microsoftPending}
 							aria-busy={microsoftPending}
 							style={{ ...btnBase, cursor: microsoftPending ? "wait" : "pointer", opacity: microsoftPending ? 0.7 : 1 }}
 							onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.15)"; }}
@@ -303,7 +326,7 @@ export function AuthScreen() {
 								<rect x="11" y="11" width="9" height="9" fill="#ffb900" />
 							</svg>
 							{microsoftPending ? "Connecting to Microsoft…" : "Continue with Microsoft"}
-						</button>
+						</button>}
 						{githubProviderEnabled && <button
 							type="button"
 							onClick={() => start("github")}

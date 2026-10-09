@@ -33,6 +33,20 @@ const githubConfigured = Boolean(process.env.GITHUB_ID && process.env.GITHUB_SEC
 const googleConfigured = Boolean(process.env.GOOGLE_ID && process.env.GOOGLE_SECRET);
 const microsoftConfigured = Boolean(process.env.AUTH_MICROSOFT_ENTRA_ID_ID && process.env.AUTH_MICROSOFT_ENTRA_ID_SECRET);
 const publicClientEnabled = process.env.KAVEON_ENTRA_PUBLIC_CLIENT === "true";
+
+/** Whether this installation signs in with its local development identity.
+ *
+ *  Only when no real provider is configured at all, so an installation that
+ *  has GitHub, Google or Entra set can never reach it. One constant, used both
+ *  for the provider below and for the middleware's bypass, because the two
+ *  disagreeing is the failure this fixes: `KAVEON_DEV_USER_EMAIL` already let
+ *  a request past the middleware and already stamped the API proxy, but
+ *  nothing ever created a session. So a laptop with no OAuth configured
+ *  reached a sign-in wall it could not pass — the opposite of what
+ *  docs/guides/self-hosting.md promises. */
+const localIdentityEnabled = !hasConfiguredSignInProvider()
+  && (process.env.NODE_ENV === "development" || process.env.KAVEON_LOCAL_MODE === "true")
+  && Boolean(process.env.KAVEON_DEV_USER_EMAIL);
 const entraAdmins = new Set((process.env.AUTH_ENTRA_ADMIN_OBJECT_IDS ?? "")
   .split(",").map((value) => value.trim().toLowerCase()).filter(isEntraObjectId));
 
@@ -70,6 +84,26 @@ function roleFor(email?: string | null, username?: string | null): "Admin" | "Vi
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   providers: [
+    // The local development identity. No secret and no challenge, because
+    // there is nothing to authenticate against: this is the single-user
+    // installation the self-hosting guide describes, and it exists only when
+    // no real provider does.
+    ...(localIdentityEnabled ? [Credentials({
+      id: "local-dev",
+      name: process.env.KAVEON_DEV_USER_NAME || "Local Developer",
+      credentials: {},
+      async authorize() {
+        const email = process.env.KAVEON_DEV_USER_EMAIL;
+        if (!email) return null;
+        const role = process.env.KAVEON_DEV_USER_ROLE === "Viewer" ? "Viewer" : "Admin";
+        return {
+          id: email,
+          email,
+          name: process.env.KAVEON_DEV_USER_NAME || "Local Developer",
+          role,
+        };
+      },
+    })] : []),
     ...(publicClientEnabled ? [Credentials({
       id: "entra-public",
       name: "Microsoft Entra ID",
@@ -146,7 +180,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     authorized({ auth: session, request: { nextUrl } }) {
       // Local-dev bypass — mirrors the API proxy. Container local mode must be
       // opted into explicitly; hosted deployments leave KAVEON_LOCAL_MODE unset.
-      if (!hasConfiguredSignInProvider() && (process.env.NODE_ENV === "development" || process.env.KAVEON_LOCAL_MODE === "true") && process.env.KAVEON_DEV_USER_EMAIL) {
+      if (localIdentityEnabled) {
         return true;
       }
       const isLoggedIn = !!session?.user;
