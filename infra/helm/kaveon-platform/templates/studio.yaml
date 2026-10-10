@@ -55,11 +55,25 @@ spec:
             - {name: AUTH_URL, value: {{ .Values.portal.publicUrl | default (ternary (printf "https://%s" (.Values.ingress.host | default "")) "http://localhost:3000" .Values.ingress.enabled) | quote }}}
             - {name: WEB_URL, value: {{ .Values.portal.publicUrl | default (ternary (printf "https://%s" (.Values.ingress.host | default "")) "http://localhost:3000" .Values.ingress.enabled) | quote }}}
             - {name: AUTH_TRUST_HOST, value: "true"}
-            - {name: KAVEON_ENTRA_PUBLIC_CLIENT, value: "true"}
+            # Which Microsoft flow this installation uses.
+            #
+            # The browser public-client flow needs a pop-up, and a blocked
+            # pop-up is indistinguishable to the visitor from a broken
+            # sign-in. The confidential redirect flow needs no pop-up, so it
+            # is the default wherever a client secret is configured; the
+            # pop-up flow stays available for a registration that has no
+            # secret to give. Hardcoding "true" here left a deployment whose
+            # only path to sign in was one the browser could veto.
+            - {name: KAVEON_ENTRA_PUBLIC_CLIENT, value: {{ .Values.portal.entraPublicClient | quote }}}
             - {name: AUTH_SECRET, valueFrom: {secretKeyRef: {name: {{ required "secrets.portalAuth is required" .Values.secrets.portalAuth }}, key: AUTH_SECRET}}}
             - {name: KAVEON_PROXY_SECRET, valueFrom: {secretKeyRef: {name: {{ .Values.secrets.portalAuth }}, key: KAVEON_PROXY_SECRET}}}
             - {name: AUTH_MICROSOFT_ENTRA_ID_ID, valueFrom: {secretKeyRef: {name: {{ .Values.secrets.portalAuth }}, key: AUTH_MICROSOFT_ENTRA_ID_ID}}}
             - {name: AUTH_MICROSOFT_ENTRA_ID_ISSUER, valueFrom: {secretKeyRef: {name: {{ .Values.secrets.portalAuth }}, key: AUTH_MICROSOFT_ENTRA_ID_ISSUER}}}
+            # Optional: present only when the registration has a client
+            # secret. auth.ts registers the confidential provider only when
+            # the id and the secret are both set, so an installation without
+            # one simply offers the pop-up flow instead of a dead button.
+            - {name: AUTH_MICROSOFT_ENTRA_ID_SECRET, valueFrom: {secretKeyRef: {name: {{ .Values.secrets.portalAuth }}, key: AUTH_MICROSOFT_ENTRA_ID_SECRET, optional: true}}}
             # A provider turns itself on when its pair is present, so an
             # installation that configures GitHub gets a GitHub button and
             # one that does not gets no dead control. Only Entra was passed

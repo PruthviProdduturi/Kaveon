@@ -63,6 +63,10 @@ read_existing_secret() {
 }
 AUTH_SECRET="${AUTH_SECRET:-$(read_existing_secret AUTH_SECRET)}"
 PROXY_SECRET="${PROXY_SECRET:-$(read_existing_secret KAVEON_PROXY_SECRET)}"
+# Carried through like the two above. A deploy that was not handed this value
+# would otherwise write an empty one, un-registering the confidential provider
+# and leaving the browser pop-up as the only way to sign in.
+ENTRA_CLIENT_SECRET="${AUTH_MICROSOFT_ENTRA_ID_SECRET:-$(read_existing_secret AUTH_MICROSOFT_ENTRA_ID_SECRET)}"
 AUTH_SECRET="${AUTH_SECRET:-$(openssl rand -base64 32 | tr -d '\n')}"
 PROXY_SECRET="${PROXY_SECRET:-$(openssl rand -hex 32)}"
 
@@ -95,12 +99,17 @@ kubectl -n "$NAMESPACE" create secret generic "$AUTH_SECRET_NAME" \
   --from-literal=KAVEON_CREDENTIAL_KEYS="$KAVEON_CREDENTIAL_KEYS" \
   --from-literal=AUTH_MICROSOFT_ENTRA_ID_ID="$AUTH_MICROSOFT_ENTRA_ID_ID" \
   --from-literal=AUTH_MICROSOFT_ENTRA_ID_ISSUER="$AUTH_MICROSOFT_ENTRA_ID_ISSUER" \
+  --from-literal=AUTH_MICROSOFT_ENTRA_ID_SECRET="$ENTRA_CLIENT_SECRET" \
   --from-literal=AUTH_ENTRA_ADMIN_OBJECT_IDS="$AUTH_ENTRA_ADMIN_OBJECT_IDS" \
   --from-literal=GITHUB_ID="${GITHUB_ID:-}" \
   --from-literal=GITHUB_SECRET="${GITHUB_SECRET:-}" \
   --from-literal=AUTH_ADMIN_EMAILS="${AUTH_ADMIN_EMAILS:-}" \
   --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
+# Which Microsoft sign-in flow this installation runs. A registration that has
+# a client secret can use the server-side redirect flow, which no pop-up
+# blocker can stop; only a registration without one needs the browser pop-up.
+ENTRA_PUBLIC_CLIENT=$( [[ -n "$ENTRA_CLIENT_SECRET" ]] && echo false || echo true )
 RETIREMENT=$( [[ "$MODE" == retirement ]] && echo true || echo false )
 REHEARSAL=$( [[ "$MODE" == rehearsal ]] && echo true || echo false )
 cat > "$tmp/values.yaml" <<EOF
@@ -109,6 +118,9 @@ images:
   api: {repository: ${KAVEON_ACR_NAME}.azurecr.io/kaveon-api, digest: $API_IMAGE_DIGEST}
   studio: {repository: ${KAVEON_ACR_NAME}.azurecr.io/kaveon-studio, digest: $STUDIO_IMAGE_DIGEST}
 secrets: {portalAuth: $AUTH_SECRET_NAME}
+portal:
+  publicUrl: "${KAVEON_PORTAL_PUBLIC_URL:-}"
+  entraPublicClient: $ENTRA_PUBLIC_CLIENT
 # The one published door. Off unless the installation names a host, so a
 # deployment is never exposed by default; the API stays cluster-internal
 # either way and is reached only through Studio's proxy.

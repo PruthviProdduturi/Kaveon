@@ -115,9 +115,13 @@ export function AuthScreen() {
 			const details = error && typeof error === "object" ? error as { errorCode?: unknown; message?: unknown } : {};
 			const rawCode = typeof details.errorCode === "string" ? details.errorCode : "";
 			const code = /^[a-z0-9_-]{1,80}$/i.test(rawCode) ? rawCode : "sign_in_failed";
-			if (microsoftOAuthEnabled && !["user_cancelled", "user_cancelled_error", "popup_window_error", "empty_window_error"].includes(code)) {
-				// Older Entra registrations often have a Web callback but no SPA
-				// callback. Let Auth.js use that registered callback automatically.
+			// Anything but a deliberate cancellation is worth retrying through
+			// the server-side redirect flow when this installation has one.
+			// A blocked pop-up was excluded from this, so a visitor whose
+			// browser vetoed the pop-up was asked to go change a browser
+			// setting even though a flow that needs no pop-up was configured
+			// and one redirect away.
+			if (microsoftOAuthEnabled && !["user_cancelled", "user_cancelled_error"].includes(code)) {
 				start("microsoft-entra-id");
 				return;
 			}
