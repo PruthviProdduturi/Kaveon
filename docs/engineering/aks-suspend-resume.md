@@ -43,7 +43,7 @@ and `SELECT COUNT(*) FROM tpch_sf100.lineitem` (600,037,902) — both through
 at 0 replicas (a Trino window scales them up and registers the TPC-H Delta
 tables again by their logs, `scripts/benchmark-trino-suite.py`). The
 Engine's admission and exchange settings are in the chart
-(`infra/helm/kaveon-test/values.yaml`); a StatefulSet that lost a
+(`infra/helm/kaveon-engine/values.yaml`); a StatefulSet that lost a
 `kubectl set image` roll keeps the digest recorded in the last run record
 under `docs/qualification/clickbench/runs/`.
 

@@ -19,7 +19,7 @@ restart, network controls and operational recovery.
 
 Every memory, disk and parallelism bound is a setting with a default from
 the code and a value on the AKS cluster, listed in the [settings
-reference](settings.md). The chart `infra/helm/kaveon-test` renders those
+reference](settings.md). The chart `infra/helm/kaveon-engine` renders those
 values per role, so `helm upgrade` reproduces the running StatefulSets.
 
 ## Production gates

@@ -47,7 +47,7 @@ Engine URL.
 Example validation does not contact a cluster:
 
 ```powershell
-helm lint infra/helm/kaveon-portal-test --namespace kaveon `
+helm lint infra/helm/kaveon-platform --namespace kaveon `
   --set images.api.repository=registry.example/kaveon-api `
   --set images.api.digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa `
   --set images.studio.repository=registry.example/kaveon-studio `
@@ -58,7 +58,7 @@ helm lint infra/helm/kaveon-portal-test --namespace kaveon `
   --set api.workloadIdentity.clientId=00000000-0000-0000-0000-000000000000 `
   --set api.keyVaultUrl=https://example.vault.azure.net/
 
-helm template kaveon-portal-test infra/helm/kaveon-portal-test --namespace kaveon `
+helm template kaveon-portal-test infra/helm/kaveon-platform --namespace kaveon `
   --set images.api.repository=registry.example/kaveon-api `
   --set images.api.digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa `
   --set images.studio.repository=registry.example/kaveon-studio `
@@ -122,9 +122,9 @@ restricted evidence PVC and the smoke Job without any credential value. Replace
 all angle-bracket placeholders and render it before use:
 
 ```powershell
-$values = "infra/helm/kaveon-portal-test/examples/postgresql-free.values.yaml"
-helm lint infra/helm/kaveon-portal-test --namespace kaveon -f $values
-helm template kaveon-portal-test infra/helm/kaveon-portal-test `
+$values = "infra/helm/kaveon-platform/examples/postgresql-free.values.yaml"
+helm lint infra/helm/kaveon-platform --namespace kaveon -f $values
+helm template kaveon-portal-test infra/helm/kaveon-platform `
   --namespace kaveon -f $values > tmp/postgresql-free-rendered.yaml
 ```
 

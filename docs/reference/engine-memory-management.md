@@ -92,7 +92,7 @@ Compatibility constructors remain available for embedded callers, so this is
 server-runtime enforcement, not a claim that every library embedding is
 bounded.
 
-On the AKS qualification cluster (`infra/helm/kaveon-test`, values
+On the AKS qualification cluster (`infra/helm/kaveon-engine`, values
 `<role>.memory.*`) workers run 3 GiB per query and 4 GiB admission inside a
 6 GiB container, and the coordinator 512 MiB per query and 2 GiB admission
 inside 4 GiB; `KAVEON_PROCESS_MEMORY_LIMIT_BYTES` is deliberately not set so
