@@ -68,7 +68,13 @@ PROXY_SECRET="${PROXY_SECRET:-$(openssl rand -hex 32)}"
 
 echo "Checking Engine and evidence prerequisites..."
 kubectl -n "$NAMESPACE" get service kaveon-coordinator >/dev/null || { echo 'Engine service kaveon-coordinator is missing' >&2; exit 1; }
-if [[ "$MODE" == retirement || "$MODE" == rehearsal ]]; then kubectl -n "$NAMESPACE" get pvc "$EVIDENCE_PVC" >/dev/null || { echo "Evidence PVC $EVIDENCE_PVC is missing; run the reviewed replay/evidence job first" >&2; exit 1; }; fi
+# The evidence volume must exist before the API mounts it, but the chart
+# creates it unless told otherwise, so requiring it up front failed a first
+# deploy on a volume that run was about to make. Insist only when we are not
+# the ones creating it.
+if [[ ( "$MODE" == retirement || "$MODE" == rehearsal ) && "${KAVEON_CREATE_EVIDENCE_PVC:-true}" != "true" ]]; then
+  kubectl -n "$NAMESPACE" get pvc "$EVIDENCE_PVC" >/dev/null || { echo "Evidence PVC $EVIDENCE_PVC is missing and KAVEON_CREATE_EVIDENCE_PVC is not true; run the reviewed replay/evidence job first" >&2; exit 1; }
+fi
 if [[ -n "${KAVEON_ENGINE_CA_FILE:-}" ]]; then
   [[ -f "$KAVEON_ENGINE_CA_FILE" ]] || { echo "CA file does not exist: $KAVEON_ENGINE_CA_FILE" >&2; exit 1; }
   cp "$KAVEON_ENGINE_CA_FILE" "$tmp/ca.crt"
@@ -106,7 +112,7 @@ seed:
   name: OpenSource
   adls: {account: $KAVEON_ADLS_ACCOUNT, container: opensource, rootPath: $KAVEON_ADLS_ROOT_PATH}
 api:
-  evidenceStorage: {create: false, name: $EVIDENCE_PVC, storageClass: azurefile-csi, size: 1Gi, accessModes: [ReadWriteMany], retain: true}
+  evidenceStorage: {create: ${KAVEON_CREATE_EVIDENCE_PVC:-true}, name: $EVIDENCE_PVC, storageClass: azurefile-csi, size: 1Gi, accessModes: [ReadWriteMany], retain: true}
   cutover:
     retirementMode: $RETIREMENT
     restartRehearsalMode: $REHEARSAL

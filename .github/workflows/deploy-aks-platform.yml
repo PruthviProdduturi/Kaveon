@@ -12,6 +12,10 @@ on:
   push:
     branches: [dev]
     paths:
+      - 'api/**'
+      - 'studio/**'
+      - 'packages/**'
+      - 'pnpm-lock.yaml'
       - 'infra/helm/kaveon-platform/**'
       - 'scripts/deploy-kaveon-aks.sh'
       - '.github/workflows/deploy-aks-platform.yml'
@@ -35,8 +39,6 @@ env:
   KAVEON_ADLS_ROOT_PATH: ${{ vars.KAVEON_ADLS_ROOT_PATH }}
   KAVEON_API_WORKLOAD_IDENTITY_CLIENT_ID: ${{ vars.KAVEON_API_WORKLOAD_IDENTITY_CLIENT_ID }}
   KAVEON_KEY_VAULT_URL: ${{ vars.KAVEON_KEY_VAULT_URL }}
-  API_IMAGE_DIGEST: ${{ vars.KAVEON_API_IMAGE_DIGEST }}
-  STUDIO_IMAGE_DIGEST: ${{ vars.KAVEON_STUDIO_IMAGE_DIGEST }}
   KAVEON_ENGINE_BRIDGE_TOKEN: ${{ secrets.KAVEON_ENGINE_BRIDGE_TOKEN }}
   KAVEON_ENGINE_CATALOG_TOKEN: ${{ secrets.KAVEON_ENGINE_CATALOG_TOKEN }}
   KAVEON_CREDENTIAL_ACTIVE_KEY: ${{ secrets.KAVEON_CREDENTIAL_ACTIVE_KEY }}
@@ -50,10 +52,66 @@ env:
   KAVEON_ENGINE_CA_B64: ${{ secrets.KAVEON_ENGINE_CA_B64 }}
 
 jobs:
-  deploy:
-    name: Preflight and deploy
+  # The images this release is made of, built from the commit being deployed.
+  # Their digests used to be Actions variables a person pasted in, which meant
+  # a change to api/ reached the cluster only if someone remembered to build
+  # an image and edit repository settings. Now the commit produces them.
+  build:
+    name: Build images
     runs-on: ubuntu-latest
     environment: production
+    outputs:
+      api: ${{ steps.digests.outputs.api }}
+      studio: ${{ steps.digests.outputs.studio }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Built in the registry rather than on the runner: the image is then
+      # already where the cluster pulls from, and nothing has to push.
+      # `az acr build` uses classic Docker with no BuildKit, so neither
+      # Dockerfile may use `RUN --mount=type=cache`.
+      - name: Build the API and Studio images in ACR
+        shell: bash
+        run: |
+          set -euo pipefail
+          az acr build --registry "$KAVEON_ACR_NAME" --only-show-errors \
+            --image "kaveon-api:${GITHUB_SHA}" --file api/Dockerfile .
+          az acr build --registry "$KAVEON_ACR_NAME" --only-show-errors \
+            --image "kaveon-studio:${GITHUB_SHA}" --file studio/Dockerfile .
+
+      # The chart pins by digest, never by tag, so a retag cannot silently
+      # change what is running.
+      - name: Resolve the digests the chart will pin
+        id: digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for image in api studio; do
+            digest="$(az acr manifest show \
+              --registry "$KAVEON_ACR_NAME" \
+              --name "kaveon-${image}:${GITHUB_SHA}" \
+              --query digest -o tsv --only-show-errors)"
+            [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] \
+              || { echo "kaveon-${image}: unusable digest '${digest}'" >&2; exit 1; }
+            echo "${image}=${digest}" >> "$GITHUB_OUTPUT"
+            echo "kaveon-${image} -> ${digest}"
+          done
+
+  deploy:
+    name: Preflight and deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      API_IMAGE_DIGEST: ${{ needs.build.outputs.api }}
+      STUDIO_IMAGE_DIGEST: ${{ needs.build.outputs.studio }}
     steps:
       - uses: actions/checkout@v4
 
@@ -80,7 +138,7 @@ jobs:
       - name: Deploy atomically with PostgreSQL-free preflight
         shell: bash
         env:
-          DEPLOY_MODE: ${{ inputs.mode || 'rehearsal' }}
+          DEPLOY_MODE: ${{ inputs.mode || 'retirement' }}
         run: |
           chmod +x scripts/deploy-kaveon-aks.sh
           ./scripts/deploy-kaveon-aks.sh --mode "$DEPLOY_MODE"
