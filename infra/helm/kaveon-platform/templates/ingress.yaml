@@ -1,0 +1,43 @@
+{{- if .Values.ingress.enabled }}
+{{- $host := required "ingress.host is required when ingress.enabled" .Values.ingress.host }}
+{{- /*
+  The one door into a Kaveon installation.
+
+  Studio is the only thing published. The API keeps its ClusterIP Service and
+  the NetworkPolicy beside it admits the portal alone, so a request reaches the
+  API only by going through Studio's server-side proxy, which is what stamps
+  the verified identity the API trusts. Publishing the API as well would put a
+  second door next to a lock whose key is only issued at the first.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kaveon-portal
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: kaveon-portal
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts: [{{ $host | quote }}]
+      secretName: {{ required "ingress.tls.secretName is required when TLS is enabled" .Values.ingress.tls.secretName | quote }}
+  {{- end }}
+  rules:
+    - host: {{ $host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kaveon-portal
+                port:
+                  number: 3000
+{{- end }}
