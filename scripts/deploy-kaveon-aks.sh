@@ -84,9 +84,6 @@ else
   echo 'Provide KAVEON_ENGINE_CA_FILE or KAVEON_ENGINE_CA_B64' >&2; exit 1
 fi
 test -s "$tmp/ca.crt" || { echo 'Engine CA is empty' >&2; exit 1; }
-  --from-literal=GITHUB_ID="${GITHUB_ID:-}" \
-  --from-literal=GITHUB_SECRET="${GITHUB_SECRET:-}" \
-  --from-literal=AUTH_ADMIN_EMAILS="${AUTH_ADMIN_EMAILS:-}" \
 kubectl -n "$NAMESPACE" create configmap "$CA_CONFIGMAP" --from-file="$CA_KEY=$tmp/ca.crt" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
 echo "Applying portal authentication Secret (values are not printed)..."
@@ -99,6 +96,9 @@ kubectl -n "$NAMESPACE" create secret generic "$AUTH_SECRET_NAME" \
   --from-literal=AUTH_MICROSOFT_ENTRA_ID_ID="$AUTH_MICROSOFT_ENTRA_ID_ID" \
   --from-literal=AUTH_MICROSOFT_ENTRA_ID_ISSUER="$AUTH_MICROSOFT_ENTRA_ID_ISSUER" \
   --from-literal=AUTH_ENTRA_ADMIN_OBJECT_IDS="$AUTH_ENTRA_ADMIN_OBJECT_IDS" \
+  --from-literal=GITHUB_ID="${GITHUB_ID:-}" \
+  --from-literal=GITHUB_SECRET="${GITHUB_SECRET:-}" \
+  --from-literal=AUTH_ADMIN_EMAILS="${AUTH_ADMIN_EMAILS:-}" \
   --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
 RETIREMENT=$( [[ "$MODE" == retirement ]] && echo true || echo false )
