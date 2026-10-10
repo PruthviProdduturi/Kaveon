@@ -106,6 +106,18 @@ images:
   api: {repository: ${KAVEON_ACR_NAME}.azurecr.io/kaveon-api, digest: $API_IMAGE_DIGEST}
   studio: {repository: ${KAVEON_ACR_NAME}.azurecr.io/kaveon-studio, digest: $STUDIO_IMAGE_DIGEST}
 secrets: {portalAuth: $AUTH_SECRET_NAME}
+# The one published door. Off unless the installation names a host, so a
+# deployment is never exposed by default; the API stays cluster-internal
+# either way and is reached only through Studio's proxy.
+ingress:
+  enabled: ${KAVEON_INGRESS_ENABLED:-false}
+  host: "${KAVEON_INGRESS_HOST:-}"
+  className: "${KAVEON_INGRESS_CLASS:-}"
+  annotations:
+    cert-manager.io/cluster-issuer: "${KAVEON_CERT_ISSUER:-}"
+  tls:
+    enabled: ${KAVEON_INGRESS_TLS_ENABLED:-false}
+    secretName: "${KAVEON_INGRESS_TLS_SECRET:-}"
 engine: {service: kaveon-coordinator.$NAMESPACE.svc.cluster.local, port: 8080, caConfigMap: $CA_CONFIGMAP, caKey: $CA_KEY}
 seed:
   catalog: OpenSource

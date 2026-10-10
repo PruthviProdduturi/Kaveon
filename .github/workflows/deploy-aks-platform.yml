@@ -50,6 +50,13 @@ env:
   KAVEON_READ_AUTHORITY_FAMILIES: ${{ vars.KAVEON_READ_AUTHORITY_FAMILIES }}
   KAVEON_EVIDENCE_PVC: ${{ vars.KAVEON_EVIDENCE_PVC || 'kaveon-retirement-evidence' }}
   KAVEON_ENGINE_CA_B64: ${{ secrets.KAVEON_ENGINE_CA_B64 }}
+  # The published host. Unset means no ingress is rendered at all.
+  KAVEON_INGRESS_ENABLED: ${{ vars.KAVEON_INGRESS_HOST != '' }}
+  KAVEON_INGRESS_HOST: ${{ vars.KAVEON_INGRESS_HOST }}
+  KAVEON_INGRESS_CLASS: ${{ vars.KAVEON_INGRESS_CLASS }}
+  KAVEON_INGRESS_TLS_ENABLED: ${{ vars.KAVEON_INGRESS_TLS_SECRET != '' }}
+  KAVEON_INGRESS_TLS_SECRET: ${{ vars.KAVEON_INGRESS_TLS_SECRET }}
+  KAVEON_CERT_ISSUER: ${{ vars.KAVEON_CERT_ISSUER }}
 
 jobs:
   # The images this release is made of, built from the commit being deployed.

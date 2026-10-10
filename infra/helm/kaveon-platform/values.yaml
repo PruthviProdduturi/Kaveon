@@ -6,6 +6,28 @@ images:
 secrets:
   # Existing secret; this chart never creates or populates it.
   portalAuth: kaveon-portal-auth
+# How a person reaches this installation. Studio is the only service
+# published: the API stays cluster-internal behind the NetworkPolicy, so every
+# request arrives through Studio's proxy, which is what stamps the identity the
+# API trusts.
+#
+# Disabled by default. An installation chooses its own ingress controller and
+# certificate source, and a chart that published a service by default would be
+# deciding that for them.
+ingress:
+  enabled: false
+  # The name people type. Required when enabled.
+  host: ""
+  # e.g. "webapprouting.kubernetes.azure.com" on AKS managed ingress, or
+  # "nginx" for an ingress-nginx install.
+  className: ""
+  annotations: {}
+  tls:
+    enabled: false
+    # The Secret an issuer writes the certificate into — cert-manager's
+    # `cert-manager.io/cluster-issuer` annotation, or one created by hand.
+    secretName: ""
+
 engine:
   service: kaveon-coordinator.kaveon.svc.cluster.local
   port: 8080
