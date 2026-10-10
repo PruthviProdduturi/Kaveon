@@ -94,9 +94,9 @@ jobs:
         run: |
           set -euo pipefail
           for image in api studio; do
-            digest="$(az acr manifest show \
-              --registry "$KAVEON_ACR_NAME" \
-              --name "kaveon-${image}:${GITHUB_SHA}" \
+            digest="$(az acr repository show \
+              --name "$KAVEON_ACR_NAME" \
+              --image "kaveon-${image}:${GITHUB_SHA}" \
               --query digest -o tsv --only-show-errors)"
             [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] \
               || { echo "kaveon-${image}: unusable digest '${digest}'" >&2; exit 1; }
