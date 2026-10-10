@@ -31,9 +31,29 @@ export async function verifyEntraAccessTokenWithKey(token: string, config: Entra
     const tid = typeof payload.tid === "string" ? payload.tid : null;
     const expiresAt = typeof payload.exp === "number" && Number.isSafeInteger(payload.exp) ? payload.exp * 1_000 : null;
     const scopes = typeof payload.scp === "string" ? payload.scp.split(/\s+/) : [];
+    const refusal = !objectId ? "no usable oid claim"
+      : !tid ? "no tid claim"
+      : !expiresAt ? "no usable exp claim"
+      : expiresAt <= Date.now() ? "token already expired"
+      : tid.toLowerCase() !== config.tenantId
+        ? `tenant mismatch: token tid=${tid.toLowerCase()}, deployment expects ${config.tenantId}`
+      : !scopes.includes("access_as_user")
+        ? `scope missing: token carries [${scopes.join(" ")}]`
+      : null;
+    if (refusal) console.warn(`[entra] refused an access token - ${refusal}`);
+    // The guard is kept whole rather than replaced by the message above: it is
+    // what narrows these claims for the return, and a diagnostic must never be
+    // what decides whether a token is accepted.
     if (!objectId || !tid || !expiresAt || expiresAt <= Date.now() || tid.toLowerCase() !== config.tenantId || !scopes.includes("access_as_user")) return null;
     return { id: `${config.tenantId}:${objectId}`, objectId, email: typeof payload.preferred_username === "string" ? payload.preferred_username : null, name: typeof payload.name === "string" ? payload.name : null, expiresAt };
-  } catch { return null; }
+  } catch (error) {
+    // jwtVerify checks signature, issuer and audience, and its message says
+    // which of them failed. Swallowing it turned the whole diagnosis into
+    // one opaque "sign_in_failed". Logged server-side only: why a token was
+    // refused is itself something an attacker would like to know.
+    console.warn(`[entra] token verification threw - ${(error as Error)?.message ?? error}`);
+    return null;
+  }
 }
 
 export async function verifyEntraAccessToken(token: string): Promise<EntraIdentity | null> {
