@@ -47,7 +47,13 @@ spec:
             - {name: NODE_ENV, value: production}
             - {name: HOSTNAME, value: "0.0.0.0"}
             - {name: API_URL, value: http://kaveon-api:8080}
-            - {name: AUTH_URL, value: http://localhost:3000}
+            # Where this Studio tells a browser it lives. It was written in
+            # as http://localhost:3000, so every sign-in link and every
+            # post-login redirect a published deployment produced pointed at
+            # the visitor's own machine. Derived from the published host when
+            # there is one; localhost remains right for a port-forward.
+            - {name: AUTH_URL, value: {{ .Values.portal.publicUrl | default (ternary (printf "https://%s" (.Values.ingress.host | default "")) "http://localhost:3000" .Values.ingress.enabled) | quote }}}
+            - {name: WEB_URL, value: {{ .Values.portal.publicUrl | default (ternary (printf "https://%s" (.Values.ingress.host | default "")) "http://localhost:3000" .Values.ingress.enabled) | quote }}}
             - {name: AUTH_TRUST_HOST, value: "true"}
             - {name: KAVEON_ENTRA_PUBLIC_CLIENT, value: "true"}
             - {name: AUTH_SECRET, valueFrom: {secretKeyRef: {name: {{ required "secrets.portalAuth is required" .Values.secrets.portalAuth }}, key: AUTH_SECRET}}}

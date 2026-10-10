@@ -14,6 +14,13 @@ secrets:
 # Disabled by default. An installation chooses its own ingress controller and
 # certificate source, and a chart that published a service by default would be
 # deciding that for them.
+# Studio's own settings.
+portal:
+  # The address a browser reaches this Studio at. Defaults to the ingress
+  # host; set it explicitly when something in front (a CDN, a custom domain)
+  # answers on a different name than the ingress does.
+  publicUrl: ""
+
 ingress:
   enabled: false
   # The name people type. Required when enabled.
