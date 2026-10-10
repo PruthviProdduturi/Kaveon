@@ -50,6 +50,9 @@ env:
   KAVEON_READ_AUTHORITY_FAMILIES: ${{ vars.KAVEON_READ_AUTHORITY_FAMILIES }}
   KAVEON_EVIDENCE_PVC: ${{ vars.KAVEON_EVIDENCE_PVC || 'kaveon-retirement-evidence' }}
   KAVEON_ENGINE_CA_B64: ${{ secrets.KAVEON_ENGINE_CA_B64 }}
+  GITHUB_ID: ${{ secrets.KAVEON_GITHUB_OAUTH_ID }}
+  GITHUB_SECRET: ${{ secrets.KAVEON_GITHUB_OAUTH_SECRET }}
+  AUTH_ADMIN_EMAILS: ${{ vars.AUTH_ADMIN_EMAILS }}
   # The published host. Unset means no ingress is rendered at all.
   KAVEON_INGRESS_ENABLED: ${{ vars.KAVEON_INGRESS_HOST != '' }}
   KAVEON_INGRESS_HOST: ${{ vars.KAVEON_INGRESS_HOST }}
