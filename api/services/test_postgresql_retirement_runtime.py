@@ -49,6 +49,63 @@ class RetirementRuntimeTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "incomplete"):
                 runtime.validate(now=NOW)
 
+    def test_a_greenfield_install_is_not_asked_to_evidence_a_migration(self):
+        """An installation that never had PostgreSQL cannot produce evidence of
+        retiring it. Demanding it refused to start a fresh cluster until
+        someone fabricated a reconciliation report for a database that never
+        existed."""
+        environment = {
+            runtime.MODE_KEY: "true",
+            runtime.AUTHORITY_KEY: ",".join(gate.AUTHORITY_FAMILIES),
+            product_read_authority.ENVIRONMENT_KEY: ",".join(product_read_authority.SUPPORTED_FAMILIES),
+            "KAVEON_ENGINE_URL": "https://engine.example.test",
+            "KAVEON_ENGINE_BRIDGE_TOKEN": "test-token",
+            "KAVEON_DLM_LIVE_ARTIFACT_PUBLISH_ENABLED": "true",
+            "KAVEON_ADLS_ACCOUNT": "account",
+            "KAVEON_ADLS_CONTAINER": "artifacts",
+        }
+        with patch.dict(os.environ, environment, clear=True), \
+             patch.object(runtime.engine_bridge, "_verify_context", return_value=True):
+            state = runtime.validate(now=NOW)
+        self.assertEqual(state["phase"], "greenfield")
+        self.assertEqual((state["enabled"], state["authority"]), (True, "kaveondb"))
+        self.assertIsNone(state["evidence_sha256"])
+
+    def test_greenfield_still_requires_the_authority_configuration(self):
+        """Skipping the evidence must not skip the checks that establish
+        KaveonDB as the authority, which are the ones that matter on a new
+        install."""
+        environment = {
+            runtime.MODE_KEY: "true",
+            runtime.AUTHORITY_KEY: "datasets",
+            product_read_authority.ENVIRONMENT_KEY: ",".join(product_read_authority.SUPPORTED_FAMILIES),
+            "KAVEON_ENGINE_URL": "https://engine.example.test",
+            "KAVEON_ENGINE_BRIDGE_TOKEN": "test-token",
+        }
+        with patch.dict(os.environ, environment, clear=True):
+            with self.assertRaises(RuntimeError):
+                runtime.validate(now=NOW)
+
+    def test_a_migrated_install_cannot_skip_the_gate_by_dropping_its_config(self):
+        """`KAVEON_POSTGRESQL_WAS_PRESENT` keeps the evidence requirement on a
+        deployment that did have a database, so removing METADATA_* is not a
+        way around proving the cutover."""
+        environment = {
+            runtime.MODE_KEY: "true",
+            runtime.AUTHORITY_KEY: ",".join(gate.AUTHORITY_FAMILIES),
+            product_read_authority.ENVIRONMENT_KEY: ",".join(product_read_authority.SUPPORTED_FAMILIES),
+            "KAVEON_ENGINE_URL": "https://engine.example.test",
+            "KAVEON_ENGINE_BRIDGE_TOKEN": "test-token",
+            "KAVEON_DLM_LIVE_ARTIFACT_PUBLISH_ENABLED": "true",
+            "KAVEON_ADLS_ACCOUNT": "account",
+            "KAVEON_ADLS_CONTAINER": "artifacts",
+            "KAVEON_POSTGRESQL_WAS_PRESENT": "true",
+        }
+        with patch.dict(os.environ, environment, clear=True), \
+             patch.object(runtime.engine_bridge, "_verify_context", return_value=True):
+            with self.assertRaises(RuntimeError):
+                runtime.validate(now=NOW)
+
     def test_mode_requires_fresh_passing_evidence_and_engine_configuration(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "evidence.json"
@@ -65,6 +122,10 @@ class RetirementRuntimeTests(unittest.TestCase):
                 "KAVEON_ENGINE_BRIDGE_TOKEN": "test-token",
                 "KAVEON_DLM_LIVE_ARTIFACT_PUBLISH_ENABLED": "true",
                 "KAVEON_ADLS_ACCOUNT": "account", "KAVEON_ADLS_CONTAINER": "artifacts",
+                # This installation had a PostgreSQL, so it must still prove its
+                # cutover. Without this it reads as greenfield, and a greenfield
+                # install is not asked to evidence a migration it never made.
+                "KAVEON_POSTGRESQL_WAS_PRESENT": "true",
             }
             with patch.dict(os.environ, environment, clear=True), \
                  patch.object(runtime.engine_bridge, "_verify_context", return_value=True):

@@ -29,6 +29,22 @@ def _local_requested() -> bool:
     return os.getenv(LOCAL_MODE_KEY, "").strip().lower() == "true"
 
 
+def _greenfield() -> bool:
+    """Whether this installation ever had a PostgreSQL to retire.
+
+    An installation that was given no metadata database — no type, no host —
+    has nothing to migrate from. `KAVEON_POSTGRESQL_WAS_PRESENT=true` forces
+    the evidence gate back on for a deployment that did have one and must
+    still prove its cutover, so an existing installation cannot skip the gate
+    by deleting its configuration.
+    """
+    if os.getenv("KAVEON_POSTGRESQL_WAS_PRESENT", "").strip().lower() == "true":
+        return False
+    return not (os.getenv("METADATA_DB_TYPE", "").strip()
+                or os.getenv("METADATA_HOST", "").strip()
+                or os.getenv("METADATA_ENDPOINT", "").strip())
+
+
 def _final_requested() -> bool:
     return os.getenv(MODE_KEY, "").strip().lower() == "true"
 
@@ -147,6 +163,24 @@ def validate(*, now: datetime | None = None) -> dict:
         raise RuntimeError("PostgreSQL retirement evidence configuration is invalid") from error
     if not _final_requested():
         audit = _validate_rehearsal_evidence(current, max_age)
+    elif _greenfield():
+        # Nothing was retired here, so there is no retirement to evidence.
+        #
+        # The evidence gate exists to prove a migration off PostgreSQL
+        # completed safely before the database was cut away. An installation
+        # that never had one cannot produce that proof and should not be asked
+        # to: demanding it meant a fresh cluster refused to start until someone
+        # fabricated a reconciliation report for a database that never existed.
+        # Every other check above still applies — the authority families, the
+        # runtime read families, the bridge credential, artifact publication —
+        # because those verify that KaveonDB really is the authority, which is
+        # the part that matters on a new install.
+        audit = {
+            "authority_family_count": len(configured),
+            "evidence_sha256": None,
+            "checked_at": current.isoformat(),
+            "phase": "greenfield",
+        }
     else:
         evidence_path = Path(os.getenv(EVIDENCE_KEY, ""))
         audit_path = Path(os.getenv(AUDIT_KEY, ""))
