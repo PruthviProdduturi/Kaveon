@@ -195,7 +195,7 @@
    or keep one after the pane had run out. Both answer to their own width. */
 .band {
   container: band / inline-size;
-  margin: 0 0 22px; padding: 24px 26px 26px;
+  margin: 0 0 16px; padding: 18px 20px 19px;
   border: 1px solid color-mix(in srgb, var(--border) 82%, var(--accent));
   border-radius: 18px;
   background:
@@ -209,14 +209,14 @@
 /* With no title to hold the left edge, the field holds it: the search runs
    from the page's left margin and the three actions end on its right, so the
    line is anchored at both ends instead of drifting to one of them. */
-.bandTop { display: flex; align-items: flex-start; gap: 24px; min-height: 52px }
-.bandTitleBlock { min-width: 240px; flex: 1 1 auto }
+.bandTop { display: flex; align-items: flex-start; justify-content: space-between; gap: 28px; min-height: 48px }
+.bandTitleBlock { min-width: 240px; flex: 0 1 460px }
 .eyebrow { display: flex; align-items: center; gap: 7px; margin: 0 0 5px; color: var(--accent); font: 600 10px/1 Inter, sans-serif; letter-spacing: .14em; text-transform: uppercase }
 .eyebrow i { font-size: 10px; letter-spacing: 0 }
 .bandTitle { margin: 0; font: 700 28px/1.08 Inter, sans-serif; letter-spacing: -.035em; color: var(--text-primary) }
 .bandLead { max-width: 560px; margin: 8px 0 0; color: var(--text-muted); font: 400 13px/1.5 Inter, sans-serif }
-.bandActions { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 9px; padding-top: 4px }
-.bandActions .search { margin-right: auto }
+.bandActions { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding-top: 1px; flex-wrap: wrap }
+.bandActions .search { margin-right: 0; flex: 0 1 250px }
 .rotate { animation: spin .9s linear infinite }
 
 /* ── What the lake can answer ───────────────────────────────────────────────
@@ -226,7 +226,7 @@
    is the whole of the colour on this page doing the whole of its one job.
    Beneath it, two quiet lines: what stands behind the fraction, then what
    the lake physically is. ──────────────────────────────────────────────── */
-.lake { margin-top: 28px; padding-top: 2px }
+.lake { margin-top: 18px; padding-top: 0 }
 /* A figure and its noun are one word for wrapping purposes. */
 .nowrapPair { white-space: nowrap }
 .headline {
@@ -314,7 +314,7 @@
    the pane, not a panel inside it — no border, no radius, no shadow — so the
    first column begins and the last ends on the same edges the band above
    them uses. The head stays while the list moves under it. */
-.tableWrap { container: inv / inline-size; overflow-x: auto; border: 1px solid var(--border); border-radius: 16px; background: color-mix(in srgb, var(--bg-surface) 72%, transparent); box-shadow: 0 14px 35px rgba(0, 0, 0, .10) }
+.tableWrap { container: inv / inline-size; overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--bg-surface) 72%, transparent); box-shadow: 0 10px 24px rgba(0, 0, 0, .08) }
 .inv { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: var(--fs-row) }
 .inv thead th {
   position: sticky; z-index: 2;
@@ -405,18 +405,18 @@
    Format value with nothing in between. The row stopped reading as a row.
    Percentages keep the cluster of figures together at every width, and the
    container queries below still collapse individual columns to zero. */
-.colName { width: 28% }
-.colFormat { width: 10% }
-.colRows { width: 12% }
-.colSize { width: 9% }
+.colName { width: 34% }
+.colFormat { width: 8% }
+.colRows { width: 13% }
+.colSize { width: 10% }
 .colFiles { width: 7% }
-.colChanged { width: 9% }
-.colMeasured { width: 9% }
+.colChanged { width: 10% }
+.colMeasured { width: 10% }
 /* Answers is empty on every row but the few that carry sketches, so it had
    18% of the table holding nothing. 14% took back too much: "Counts and
    bounds" clipped at every width. The cell that says what a question costs
    is the one a reader came here for, and an ellipsis in it says nothing. */
-.colAnswer { width: 16% }
+.colAnswer { width: 8% }
 
 .cName { position: relative; min-width: 0; padding-left: 0 !important }
 .cFormat { text-align: right; color: var(--text-faint) }
