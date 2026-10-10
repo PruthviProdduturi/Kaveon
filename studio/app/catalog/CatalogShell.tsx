@@ -126,20 +126,16 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
           const ordered = [...list].sort((a, b) => catalogOrder(a) - catalogOrder(b) || a.name.localeCompare(b.name));
           setCatalogs(ordered);
           setError(null);
-          setOpen(new Set(ordered.map(c => c.catalog)));
+          // Keep the index calm on large installations. Opening every catalog
+          // here used to trigger a schema read for every source and made a
+          // hundred-catalog tenant feel like one enormous table. A deep link
+          // is opened by the path effect below; the overview starts collapsed.
+          setOpen(current.catalog ? new Set([current.catalog]) : new Set());
         }
       })
       .catch(e => { if (!cancelled) fail(e); });
     return () => { cancelled = true; };
   }, []);
-
-  // Catalogs are few and always worth seeing open; load their schema lists
-  // once known. The system catalog is not among them: its one Engine schema
-  // is the coordinator's empty session default, which is not what the node
-  // lists and not a place anything belongs.
-  useEffect(() => {
-    catalogs?.forEach(c => { if (!isSystemCatalog(c.catalog)) loadSchemas(c.catalog); });
-  }, [catalogs, loadSchemas]);
 
   // The structure of the system catalog costs nothing to read, so the rail
   // asks for it without counts. A refusal leaves the node listing no tables
@@ -160,6 +156,7 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
   // A deep link lands expanded along its own path.
   useEffect(() => {
     if (!current.catalog) return;
+    if (!isSystemCatalog(current.catalog)) loadSchemas(current.catalog);
     setOpen(prev => {
       const next = new Set(prev); next.add(current.catalog!);
       if (current.schema) next.add(tableKey(current.catalog!, current.schema));
