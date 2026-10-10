@@ -20,6 +20,13 @@ portal:
   # host; set it explicitly when something in front (a CDN, a custom domain)
   # answers on a different name than the ingress does.
   publicUrl: ""
+  # Sign in to Microsoft through the browser pop-up flow (a public client)
+  # rather than the server-side redirect flow (a confidential client).
+  #
+  # Leave false when the registration has a client secret: the redirect flow
+  # cannot be blocked by a pop-up blocker. Set true only for a registration
+  # that has no secret to hold.
+  entraPublicClient: false
 
 ingress:
   enabled: false
