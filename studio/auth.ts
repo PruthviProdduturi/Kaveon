@@ -44,9 +44,29 @@ const publicClientEnabled = process.env.KAVEON_ENTRA_PUBLIC_CLIENT === "true";
  *  nothing ever created a session. So a laptop with no OAuth configured
  *  reached a sign-in wall it could not pass — the opposite of what
  *  docs/guides/self-hosting.md promises. */
+function servesLoopbackOnly(url: string | undefined): boolean {
+  // No address configured means nothing is being served to anyone else yet.
+  if (!url) return true;
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+  } catch {
+    // An address we cannot parse is not an address we can vouch for.
+    return false;
+  }
+}
+
 const localIdentityEnabled = !hasConfiguredSignInProvider()
   && (process.env.NODE_ENV === "development" || process.env.KAVEON_LOCAL_MODE === "true")
-  && Boolean(process.env.KAVEON_DEV_USER_EMAIL);
+  && Boolean(process.env.KAVEON_DEV_USER_EMAIL)
+  // Bound to loopback. This provider mints an Admin session with no
+  // credential of any kind, and `docker-compose.yml` ships
+  // KAVEON_LOCAL_MODE=true with KAVEON_DEV_USER_EMAIL set and
+  // NODE_ENV=production — so without this a deployment that published port
+  // 3000 before configuring OAuth would hand an administrator session to
+  // anyone who loaded the page. A deployment reachable at any other address
+  // gets the sign-in wall instead, which is the correct answer for it.
+  && servesLoopbackOnly(process.env.AUTH_URL);
 const entraAdmins = new Set((process.env.AUTH_ENTRA_ADMIN_OBJECT_IDS ?? "")
   .split(",").map((value) => value.trim().toLowerCase()).filter(isEntraObjectId));
 
