@@ -3,7 +3,6 @@ namespace: kaveon
 images:
   api: {repository: "", digest: ""}
   studio: {repository: "", digest: ""}
-  postgres: {repository: "", digest: ""}
 secrets:
   # Existing secret; this chart never creates or populates it.
   portalAuth: kaveon-portal-auth
@@ -22,12 +21,6 @@ seed:
     container: opensource
     rootPath: snapshots/2026-09-09-v1
   credentialRef: kaveon-test-reader
-postgres:
-  storageClass: managed-csi
-  storageSize: 20Gi
-  resources:
-    requests: {cpu: 250m, memory: 512Mi}
-    limits: {cpu: "1", memory: 1Gi}
 api:
   # The demo posture (KAVEON_DEMO_MODE): every mutating platform route is
   # read-only below the Admin role and submitted SQL is confined to read

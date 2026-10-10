@@ -9,7 +9,7 @@ all exit paths. It never creates or resizes an AKS node pool.
 Kaveon activation waits for all workers to advertise the coordinator's current
 catalog snapshot, in addition to ordinary worker readiness.
 
-The role budgets exactly mirror `infra/helm/kaveon-test`: coordinator requests
+The role budgets exactly mirror `infra/helm/kaveon-engine`: coordinator requests
 500m CPU/1 GiB and limits 2 CPU/4 GiB; each worker requests 1 CPU/2 GiB and
 limits 3 CPU/6 GiB. The preflight also requires one system node, three worker
 nodes, one node SKU, immutable images, three-way worker spreading, and no

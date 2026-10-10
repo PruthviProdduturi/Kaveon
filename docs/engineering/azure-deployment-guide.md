@@ -175,7 +175,7 @@ kaveon --server https://localhost:8080 --ca-cert ./kaveon-ca.crt --catalog medal
 
 This part creates an Engine qualification environment. It does not establish
 that product metadata has moved out of PostgreSQL. To install Studio and the API,
-use the immutable images and `infra/helm/kaveon-portal-test` chart from the same
+use the immutable images and `infra/helm/kaveon-platform` chart from the same
 release bundle, then follow the
 [AKS PostgreSQL retirement rehearsal](aks-postgresql-retirement-rehearsal.md).
 Keep every `api.cutover` retirement flag false on the initial install.
@@ -362,7 +362,7 @@ Engine admin credentials and private keys stay with the administrator.
 ### 7. Deploy the coordinator and three workers
 
 ```powershell
-helm upgrade --install kaveon infra/helm/kaveon-test --namespace kaveon --set image.repository="${registry}.azurecr.io/kaveon-engine" --set image.digest=$digest --set coordinator.credentialsSecret=kaveon-coordinator-auth --set workloadIdentity.clientId=$readerClientId --set productTransactions.enabled=true --set productTransactions.account=$storage --set productTransactions.container=$productContainer --set productTransactions.prefix=$productPrefix
+helm upgrade --install kaveon infra/helm/kaveon-engine --namespace kaveon --set image.repository="${registry}.azurecr.io/kaveon-engine" --set image.digest=$digest --set coordinator.credentialsSecret=kaveon-coordinator-auth --set workloadIdentity.clientId=$readerClientId --set productTransactions.enabled=true --set productTransactions.account=$storage --set productTransactions.container=$productContainer --set productTransactions.prefix=$productPrefix
 kubectl get pods -n kaveon -o wide
 ```
 

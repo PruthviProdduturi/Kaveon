@@ -12,7 +12,7 @@ on:
   push:
     branches: [dev]
     paths:
-      - 'infra/helm/kaveon-portal-test/**'
+      - 'infra/helm/kaveon-platform/**'
       - 'scripts/deploy-kaveon-aks.sh'
       - '.github/workflows/deploy-aks-platform.yml'
 

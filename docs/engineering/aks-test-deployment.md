@@ -28,7 +28,7 @@ East US hosts `kaveon-test-aks`, a Kubernetes 1.35.7 test cluster with one syste
 
 ## Engine deployment
 
-`infra/helm/kaveon-test` renders a single coordinator and three workers in namespace `kaveon`. Each worker is required to occupy a different worker node. The coordinator uses a 32 GiB Azure Disk PVC for SQLite/WAL and exchange state; workers use bounded ephemeral scratch. This is a single-coordinator test system, not high availability.
+`infra/helm/kaveon-engine` renders a single coordinator and three workers in namespace `kaveon`. Each worker is required to occupy a different worker node. The coordinator uses a 32 GiB Azure Disk PVC for SQLite/WAL and exchange state; workers use bounded ephemeral scratch. This is a single-coordinator test system, not high availability.
 
 The final Engine image is pinned as:
 
@@ -230,7 +230,7 @@ Resume with the same command using `start`. Storage, registry, disks and some ne
 
 ## Design record: the 2026-09-08 plan
 
-The plan the deployment above was built from, kept as the design record; the charts and templates it asked for exist (`infra/helm/kaveon-test`, `infra/helm/kaveon-portal-test`, `infra/bicep/environments/aks-test.bicep`), and where the plan and the deployment differ, the sections above describe what runs.
+The plan the deployment above was built from, kept as the design record; the charts and templates it asked for exist (`infra/helm/kaveon-engine`, `infra/helm/kaveon-platform`, `infra/bicep/environments/aks-test.bicep`), and where the plan and the deployment differ, the sections above describe what runs.
 
 ### Decision and inventory
 

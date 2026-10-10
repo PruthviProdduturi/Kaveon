@@ -186,7 +186,7 @@ bounds that node's spool and `KAVEON_EXCHANGE_QUERY_DISK_LIMIT_BYTES` is one
 query's share of it (default 8 GiB). `KAVEON_IPC_SPOOL_ROOT` chooses where a
 node spools received exchange payloads before decoding, defaulting to the system
 temporary directory; the directory must exist. The AKS qualification cluster runs
-this mode (`infra/helm/kaveon-test`): workers spool under `/state/exchange` with
+this mode (`infra/helm/kaveon-engine`): workers spool under `/state/exchange` with
 an 8 GiB node / 6 GiB query limit and `KAVEON_IPC_SPOOL_ROOT=/state`, and the
 coordinator spool is off.
 

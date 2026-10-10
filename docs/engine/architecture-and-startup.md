@@ -45,7 +45,7 @@ state and the result cache, and binds HTTP or HTTPS. Readiness on the
 coordinator requires usable catalog state; worker readiness proves process
 health only. Docker Compose supplies one coordinator, two workers, a shared
 exchange token, and persistent coordinator metadata; the AKS chart
-(`infra/helm/kaveon-test`) supplies one coordinator and three workers with
+(`infra/helm/kaveon-engine`) supplies one coordinator and three workers with
 TLS, `KAVEON_SECURITY_JSON`, workload identity for ADLS and per-role memory
 and exchange budgets.
 

@@ -40,7 +40,7 @@ if [[ "$MODE" == retirement || "$MODE" == rehearsal ]]; then
 fi
 NAMESPACE="${KAVEON_NAMESPACE:-kaveon}"
 RELEASE="${KAVEON_HELM_RELEASE:-kaveon-platform}"
-CHART="${KAVEON_CHART_DIR:-infra/helm/kaveon-portal-test}"
+CHART="${KAVEON_CHART_DIR:-infra/helm/kaveon-platform}"
 EVIDENCE_PVC="${KAVEON_EVIDENCE_PVC:-kaveon-retirement-evidence}"
 AUTH_SECRET_NAME="${KAVEON_AUTH_SECRET_NAME:-kaveon-portal-auth}"
 CA_CONFIGMAP="${KAVEON_ENGINE_CA_CONFIGMAP:-kaveon-engine-ca}"
@@ -99,7 +99,6 @@ namespace: $NAMESPACE
 images:
   api: {repository: ${KAVEON_ACR_NAME}.azurecr.io/kaveon-api, digest: $API_IMAGE_DIGEST}
   studio: {repository: ${KAVEON_ACR_NAME}.azurecr.io/kaveon-studio, digest: $STUDIO_IMAGE_DIGEST}
-  postgres: {repository: ${KAVEON_ACR_NAME}.azurecr.io/postgres, digest: sha256:$(printf '%064d' 0)}
 secrets: {portalAuth: $AUTH_SECRET_NAME}
 engine: {service: kaveon-coordinator.$NAMESPACE.svc.cluster.local, port: 8080, caConfigMap: $CA_CONFIGMAP, caKey: $CA_KEY}
 seed:

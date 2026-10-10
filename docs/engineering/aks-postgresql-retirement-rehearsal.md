@@ -12,8 +12,8 @@ URLs, or account keys in the overlay. Start with retirement and restart modes
 false. Validate locally:
 
 ```powershell
-helm lint infra/helm/kaveon-portal-test -f $values
-helm template kaveon infra/helm/kaveon-portal-test -f $values > tmp/retirement-rendered.yaml
+helm lint infra/helm/kaveon-platform -f $values
+helm template kaveon infra/helm/kaveon-platform -f $values > tmp/retirement-rendered.yaml
 ```
 
 Create a JSON plan with `schema_version: 1`, one immutable `run_id`, and these
@@ -24,7 +24,7 @@ Use absolute local paths. Do not use a shell, `python -c`, or `python -m`.
 1. `snapshot_inventory`: run the reviewed source-state and live-inventory
    scripts, persisting the source watermark and discovered authority tables.
 2. `helm_migration`: `helm upgrade --install kaveon
-   infra/helm/kaveon-portal-test -n kaveon -f <absolute-overlay> --atomic
+   infra/helm/kaveon-platform -n kaveon -f <absolute-overlay> --atomic
    --wait`; enable outbox/replay, DLM migration, and the two special report jobs.
 3. `dlm_migration`: wait for the revision-named DLM migration and both special
    report Jobs, then copy their restricted evidence from the PVC.
