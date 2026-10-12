@@ -1897,11 +1897,11 @@ fn ast_data_type_to_cast_target(dt: &ast::DataType) -> Result<CastTarget> {
                         .map_err(|_| sql_err("DECIMAL scale must be between 0 and precision"))?;
                     (precision, scale)
                 }
-                ast::ExactNumberInfo::Precision(p) => {
-                    (u8::try_from(*p).map_err(|_| {
-                        sql_err("DECIMAL precision must be between 1 and 38")
-                    })?, 0)
-                }
+                ast::ExactNumberInfo::Precision(p) => (
+                    u8::try_from(*p)
+                        .map_err(|_| sql_err("DECIMAL precision must be between 1 and 38"))?,
+                    0,
+                ),
                 ast::ExactNumberInfo::None => (38, 10),
             };
             if !(1..=38).contains(&p) {
@@ -3231,10 +3231,9 @@ mod tests {
 
     #[test]
     fn parses_cast_to_timestamp_with_timezone() {
-        let plan = sql_to_logical_plan(
-            "SELECT CAST(event_time AS TIMESTAMP WITH TIME ZONE) FROM events",
-        )
-        .unwrap();
+        let plan =
+            sql_to_logical_plan("SELECT CAST(event_time AS TIMESTAMP WITH TIME ZONE) FROM events")
+                .unwrap();
         let LogicalPlan::Project { columns, .. } = plan else {
             panic!("expected Project");
         };
@@ -3431,9 +3430,9 @@ mod tests {
     #[test]
     fn prepared_parameters_fail_with_an_explicit_binding_diagnostic() {
         let error = sql_to_logical_plan("SELECT * FROM t WHERE user_id = $1").unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("prepared parameter '$1' is not supported; bind values before submitting SQL"));
+        assert!(error.to_string().contains(
+            "prepared parameter '$1' is not supported; bind values before submitting SQL"
+        ));
     }
 
     #[test]
@@ -3750,6 +3749,26 @@ mod tests {
                     .contains("correlated")
             );
         }
+    }
+
+    #[test]
+    fn correlated_scalar_subqueries_are_rejected_with_explicit_scope_diagnostic() {
+        let sql =
+            "SELECT o.id FROM orders o WHERE o.total > (SELECT AVG(u.score) FROM users u WHERE u.id = o.id)";
+        let error = sql_to_logical_plan(sql).unwrap_err();
+        assert!(
+            error.to_string().contains("correlated subqueries are unsupported"),
+            "unexpected diagnostic: {error}"
+        );
+
+        // The binder lowering entry point deliberately preserves the outer
+        // reference in the subquery filter. This is only a lowering contract;
+        // an Apply/lateral execution operator is still required before this
+        // shape can be admitted to runtime execution.
+        let binder_plan = sql_to_logical_plan_for_binder(sql).unwrap();
+        let text = format!("{binder_plan:?}");
+        assert!(text.contains("Column(\"o.id\")"), "correlation was lost");
+        assert!(text.contains("Column(\"u.id\")"), "inner key was lost");
     }
 
     /// Lowered for the binder, the same statements keep the outer

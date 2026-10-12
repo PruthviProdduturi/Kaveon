@@ -28,7 +28,11 @@ numeric `ARRAY[...]` literals now execute as null-preserving Arrow
 stable element type). `JSON_EXTRACT_SCALAR(document, path)` now supports
 `$`-rooted dot-separated object paths, returns scalar values as text, and
 preserves SQL null for missing, JSON null, array/object, or malformed values.
-Map/row values and complex casts remain pending.
+Map/row values and complex casts remain pending. Correlated scalar
+subqueries are intentionally rejected at lowering/binding: supporting them
+requires an Apply/lateral execution operator, and the new exact test keeps
+that limitation fail-closed while correlated `EXISTS`/`IN` retain their
+separate binder path.
 
 ## Live cloud cutover and security verification — October 12, 2026
 
