@@ -1882,6 +1882,12 @@ fn ast_data_type_to_cast_target(dt: &ast::DataType) -> Result<CastTarget> {
         | ast::DataType::Char(_)
         | ast::DataType::CharVarying(_) => Ok(CastTarget::Utf8),
         ast::DataType::Date => Ok(CastTarget::Date32),
+        ast::DataType::Timestamp(_, timezone) => Ok(CastTarget::TimestampMicros {
+            with_timezone: matches!(
+                timezone,
+                ast::TimezoneInfo::WithTimeZone | ast::TimezoneInfo::Tz
+            ),
+        }),
         ast::DataType::Decimal(info) | ast::DataType::Numeric(info) => {
             let (p, s) = match info {
                 ast::ExactNumberInfo::PrecisionAndScale(p, s) => (*p as u8, *s as i8),
@@ -3199,6 +3205,26 @@ mod tests {
             columns[0],
             Expr::Cast {
                 data_type: CastTarget::Date32,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parses_cast_to_timestamp_with_timezone() {
+        let plan = sql_to_logical_plan(
+            "SELECT CAST(event_time AS TIMESTAMP WITH TIME ZONE) FROM events",
+        )
+        .unwrap();
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("expected Project");
+        };
+        assert!(matches!(
+            columns[0],
+            Expr::Cast {
+                data_type: CastTarget::TimestampMicros {
+                    with_timezone: true
+                },
                 ..
             }
         ));

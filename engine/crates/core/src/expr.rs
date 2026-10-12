@@ -72,6 +72,7 @@ pub enum CastTarget {
     Float64,
     Utf8,
     Date32,
+    TimestampMicros { with_timezone: bool },
     Decimal128 { precision: u8, scale: i8 },
 }
 
@@ -107,6 +108,10 @@ impl CastTarget {
             Self::Float64 => arrow::datatypes::DataType::Float64,
             Self::Utf8 => arrow::datatypes::DataType::Utf8,
             Self::Date32 => arrow::datatypes::DataType::Date32,
+            Self::TimestampMicros { with_timezone } => arrow::datatypes::DataType::Timestamp(
+                arrow::datatypes::TimeUnit::Microsecond,
+                with_timezone.then(|| "UTC".into()),
+            ),
             Self::Decimal128 { precision, scale } => {
                 arrow::datatypes::DataType::Decimal128(*precision, *scale)
             }
