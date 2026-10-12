@@ -139,6 +139,9 @@ qualification documents; this tracker remains the single ordered work list.
   (`43a2f8f9`). AKS worker-loss qualification remains open.
 - `JSON_EXTRACT_SCALAR` now supports nested dot paths with null/malformed
   input semantics and executor coverage (`054e898a`).
+- Correlated scalar subqueries now have explicit rejection and binder-boundary
+  coverage; the preserved outer reference documents the remaining Apply/lateral
+  runtime requirement (`72c7e302`).
 
 Track 1 remains partial because distributed global ordering and a full
 worker-loss/spill/cancellation corpus still need a correctness gate. The
