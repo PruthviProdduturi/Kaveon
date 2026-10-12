@@ -118,6 +118,24 @@ api:
     enabled: false
     batchSize: 50
     intervalSeconds: 5
+  # Scheduled archive of the Engine's own registry — the catalogs, schemas,
+  # tables and statistics that say what exists and where it lives.
+  #
+  # The product catalog needs no schedule: it commits to object storage on
+  # every transaction. The registry is a database on the coordinator's volume,
+  # and without this nothing copies it anywhere, so losing that volume leaves
+  # every byte of data intact in the lake with nothing able to find it.
+  #
+  # An unchanged registry writes nothing, so the interval costs reads and not
+  # storage. It bounds how much registration can be lost, which is the only
+  # reason to make it shorter.
+  catalogArchive:
+    enabled: true
+    schedule: "*/15 * * * *"
+    # Not the container holding the live catalog — container deletion is the
+    # one accident blob soft delete does not cover.
+    container: backups
+    timeoutSeconds: 600
   systemAuthorityReplay:
     # One-shot operator job; never run this in the API web process.
     enabled: false
