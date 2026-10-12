@@ -1890,10 +1890,26 @@ fn ast_data_type_to_cast_target(dt: &ast::DataType) -> Result<CastTarget> {
         }),
         ast::DataType::Decimal(info) | ast::DataType::Numeric(info) => {
             let (p, s) = match info {
-                ast::ExactNumberInfo::PrecisionAndScale(p, s) => (*p as u8, *s as i8),
-                ast::ExactNumberInfo::Precision(p) => (*p as u8, 0),
+                ast::ExactNumberInfo::PrecisionAndScale(p, s) => {
+                    let precision = u8::try_from(*p)
+                        .map_err(|_| sql_err("DECIMAL precision must be between 1 and 38"))?;
+                    let scale = i8::try_from(*s)
+                        .map_err(|_| sql_err("DECIMAL scale must be between 0 and precision"))?;
+                    (precision, scale)
+                }
+                ast::ExactNumberInfo::Precision(p) => {
+                    (u8::try_from(*p).map_err(|_| {
+                        sql_err("DECIMAL precision must be between 1 and 38")
+                    })?, 0)
+                }
                 ast::ExactNumberInfo::None => (38, 10),
             };
+            if !(1..=38).contains(&p) {
+                return Err(sql_err("DECIMAL precision must be between 1 and 38"));
+            }
+            if s < 0 || s as u8 > p {
+                return Err(sql_err("DECIMAL scale must be between 0 and precision"));
+            }
             Ok(CastTarget::Decimal128 {
                 precision: p,
                 scale: s,
@@ -3662,6 +3678,23 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn rejects_invalid_decimal_precision_and_scale() {
+        for (sql, expected) in [
+            (
+                "SELECT CAST(x AS DECIMAL(39,2)) FROM t",
+                "DECIMAL precision must be between 1 and 38",
+            ),
+            (
+                "SELECT CAST(x AS DECIMAL(8,9)) FROM t",
+                "DECIMAL scale must be between 0 and precision",
+            ),
+        ] {
+            let error = sql_to_logical_plan(sql).unwrap_err();
+            assert!(error.to_string().contains(expected), "{sql}: {error}");
+        }
     }
 
     #[test]

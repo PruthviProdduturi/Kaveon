@@ -3302,4 +3302,27 @@ mod tests {
         assert_eq!(timestamps.value(0), 20_000);
         assert!(timestamps.is_null(1));
     }
+
+    #[test]
+    fn evaluates_cast_to_decimal128() {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("amount", DataType::Int64, true)])),
+            vec![Arc::new(Int64Array::from(vec![Some(12), None]))],
+        )
+        .unwrap();
+        let expr = Expr::Cast {
+            expr: Box::new(Expr::Column("amount".into())),
+            data_type: CastTarget::Decimal128 {
+                precision: 10,
+                scale: 2,
+            },
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        let decimals = result
+            .as_primitive::<arrow::datatypes::Decimal128Type>();
+        assert_eq!(decimals.value(0), 1_200);
+        assert_eq!(decimals.value(1), 0);
+        assert!(decimals.is_null(1));
+        assert_eq!(result.data_type(), &DataType::Decimal128(10, 2));
+    }
 }
