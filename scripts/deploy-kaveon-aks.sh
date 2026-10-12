@@ -127,6 +127,10 @@ portal:
 ingress:
   enabled: ${KAVEON_INGRESS_ENABLED:-false}
   host: "${KAVEON_INGRESS_HOST:-}"
+  # Comma-separated. Each must already resolve to this ingress: an ACME
+  # HTTP-01 issuer proves every name on the certificate, so one that does not
+  # fails the renewal for all of them.
+  aliasHosts: [${KAVEON_INGRESS_ALIAS_HOSTS:-}]
   className: "${KAVEON_INGRESS_CLASS:-}"
   annotations:
     cert-manager.io/cluster-issuer: "${KAVEON_CERT_ISSUER:-}"
