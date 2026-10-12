@@ -426,7 +426,7 @@ pub async fn fetch_payload(
     if !response.status().is_success() {
         return Err(ExchangeError::HttpStatus(response.status().as_u16()));
     }
-    let payload = crate::transport::receive(response)
+    let payload = crate::transport::receive_replayable(response)
         .await
         .map_err(ExchangeError::Transport)?;
     Ok(payload)
