@@ -1255,6 +1255,20 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let result: StringArray = arr.iter().map(|v| v.map(|s| s.trim().to_owned())).collect();
             Ok(Arc::new(result))
         }
+        "JSON_EXTRACT_SCALAR" => {
+            check_arity(name, args, 2)?;
+            let documents = as_string_array(&args[0])?;
+            let paths = as_string_array(&args[1])?;
+            let result: StringArray = (0..num_rows)
+                .map(|row| {
+                    if documents.is_null(row) || paths.is_null(row) {
+                        return None;
+                    }
+                    json_extract_scalar(documents.value(row), paths.value(row))
+                })
+                .collect();
+            Ok(Arc::new(result))
+        }
         "LTRIM" => {
             check_arity(name, args, 1)?;
             let arr = as_string_array(&args[0])?;
@@ -1841,7 +1855,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         .as_any()
                         .downcast_ref::<Float64Array>()
                         .expect("ARRAY numeric cast");
-                    builder.values().append_option(value.is_valid(row).then(|| value.value(row)));
+                    builder
+                        .values()
+                        .append_option(value.is_valid(row).then(|| value.value(row)));
                 }
                 builder.append(true);
             }
@@ -1920,6 +1936,29 @@ fn eval_extract(field: DateField, expr: &Expr, batch: &RecordBatch) -> Result<Ar
         dt => Err(KaveonError::Execution(format!(
             "EXTRACT not supported for type {dt}"
         ))),
+    }
+}
+
+/// Extract a scalar at a conservative SQL/JSON path. The supported path is
+/// `$` followed by dot-separated object keys (for example `$.customer.id`).
+/// Arrays and objects are deliberately rejected by the scalar function rather
+/// than being silently stringified.
+fn json_extract_scalar(document: &str, path: &str) -> Option<String> {
+    let keys = path
+        .strip_prefix("$")?
+        .split('.')
+        .filter(|key| !key.is_empty());
+    let mut value = serde_json::from_str::<serde_json::Value>(document).ok()?;
+    for key in keys {
+        value = value.get(key)?.clone();
+    }
+    match value {
+        serde_json::Value::Null | serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+            None
+        }
+        serde_json::Value::String(text) => Some(text),
+        serde_json::Value::Bool(value) => Some(value.to_string()),
+        serde_json::Value::Number(value) => Some(value.to_string()),
     }
 }
 
@@ -3298,7 +3337,11 @@ mod tests {
     #[test]
     fn evaluates_cast_to_timestamp_micros() {
         let batch = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("micros", DataType::Int64, true)])),
+            Arc::new(Schema::new(vec![Field::new(
+                "micros",
+                DataType::Int64,
+                true,
+            )])),
             vec![Arc::new(Int64Array::from(vec![Some(20_000), None]))],
         )
         .unwrap();
@@ -3317,7 +3360,11 @@ mod tests {
     #[test]
     fn evaluates_cast_to_decimal128() {
         let batch = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new("amount", DataType::Int64, true)])),
+            Arc::new(Schema::new(vec![Field::new(
+                "amount",
+                DataType::Int64,
+                true,
+            )])),
             vec![Arc::new(Int64Array::from(vec![Some(12), None]))],
         )
         .unwrap();
@@ -3329,8 +3376,7 @@ mod tests {
             },
         };
         let result = evaluate(&expr, &batch).unwrap();
-        let decimals = result
-            .as_primitive::<arrow::datatypes::Decimal128Type>();
+        let decimals = result.as_primitive::<arrow::datatypes::Decimal128Type>();
         assert_eq!(decimals.value(0), 1_200);
         assert_eq!(decimals.value(1), 0);
         assert!(decimals.is_null(1));
@@ -3357,7 +3403,45 @@ mod tests {
             &DataType::List(Arc::new(Field::new("item", DataType::Float64, true)))
         );
         let lists = result.as_list::<i32>();
-        assert_eq!(lists.value(0).as_primitive::<Float64Type>().values(), &[1.0, 2.5]);
-        assert_eq!(lists.value(1).as_primitive::<Float64Type>().values(), &[1.0, 2.5]);
+        assert_eq!(
+            lists.value(0).as_primitive::<Float64Type>().values(),
+            &[1.0, 2.5]
+        );
+        assert_eq!(
+            lists.value(1).as_primitive::<Float64Type>().values(),
+            &[1.0, 2.5]
+        );
+    }
+
+    #[test]
+    fn evaluates_json_extract_scalar_with_nested_keys_and_nulls() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "document",
+                Arc::new(StringArray::from(vec![
+                    Some(r#"{"customer":{"id":42}}"#),
+                    Some(r#"{"customer":{"id":null}}"#),
+                    None,
+                ])) as ArrayRef,
+            ),
+            (
+                "path",
+                Arc::new(StringArray::from(vec![
+                    Some("$.customer.id"),
+                    Some("$.customer.id"),
+                    Some("$.customer.id"),
+                ])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let expr = Expr::Function {
+            name: "JSON_EXTRACT_SCALAR".into(),
+            args: vec![Expr::Column("document".into()), Expr::Column("path".into())],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        let values = result.as_string::<i32>();
+        assert_eq!(values.value(0), "42");
+        assert!(values.is_null(1));
+        assert!(values.is_null(2));
     }
 }
