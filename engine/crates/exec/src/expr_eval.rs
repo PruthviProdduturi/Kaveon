@@ -1,6 +1,6 @@
 use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, Decimal128Array, Float64Array, Int32Array,
-    Int32DictionaryArray, Int64Array, StringArray, StringBuilder,
+    Array, ArrayRef, AsArray, BooleanArray, Decimal128Array, Float64Array, Float64Builder,
+    Int32Array, Int32DictionaryArray, Int64Array, ListBuilder, StringArray, StringBuilder,
 };
 use arrow::compute;
 use arrow::datatypes::{DataType, Float64Type, Int32Type, Int64Type};
@@ -1826,16 +1826,27 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let fmt_arr = as_string_array(&args[1])?;
             eval_to_char(source, fmt_arr, num_rows)
         }
-        // `ARRAY[…]` is carried this far as a call because one construct does
-        // read it — APPROX_PERCENTILE's percentile list, which consumes the
-        // constants while binding and never reaches evaluation. Arriving here
-        // means it was written somewhere that wants an array *value*, and the
-        // Engine has no array type to give. Say which, rather than reporting an
-        // unknown function the caller plainly did write.
-        "ARRAY" => Err(KaveonError::Execution(
-            "ARRAY[…] is supported only as the percentile list of APPROX_PERCENTILE,              as in APPROX_PERCENTILE(column, ARRAY[0.5, 0.9]); the Engine has no              general array type"
-                .into(),
-        )),
+        // ARRAY[...] is a typed numeric list expression. Numeric arguments are
+        // promoted to Float64 so mixed integer/decimal literals have one
+        // stable Arrow type; null elements are preserved.
+        "ARRAY" => {
+            let values = args
+                .iter()
+                .map(|arg| compute::cast(arg, &DataType::Float64))
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let mut builder = ListBuilder::new(Float64Builder::new());
+            for row in 0..num_rows {
+                for value in &values {
+                    let value = value
+                        .as_any()
+                        .downcast_ref::<Float64Array>()
+                        .expect("ARRAY numeric cast");
+                    builder.values().append_option(value.is_valid(row).then(|| value.value(row)));
+                }
+                builder.append(true);
+            }
+            Ok(Arc::new(builder.finish()))
+        }
         other => Err(KaveonError::Execution(format!(
             "unknown scalar function: {other}"
         ))),
@@ -3324,5 +3335,29 @@ mod tests {
         assert_eq!(decimals.value(1), 0);
         assert!(decimals.is_null(1));
         assert_eq!(result.data_type(), &DataType::Decimal128(10, 2));
+    }
+
+    #[test]
+    fn evaluates_numeric_array_literal_as_float64_list() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+        )])
+        .unwrap();
+        let expr = Expr::Function {
+            name: "ARRAY".into(),
+            args: vec![
+                Expr::Literal(ScalarValue::Int64(1)),
+                Expr::Literal(ScalarValue::Float64(2.5)),
+            ],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        assert_eq!(
+            result.data_type(),
+            &DataType::List(Arc::new(Field::new("item", DataType::Float64, true)))
+        );
+        let lists = result.as_list::<i32>();
+        assert_eq!(lists.value(0).as_primitive::<Float64Type>().values(), &[1.0, 2.5]);
+        assert_eq!(lists.value(1).as_primitive::<Float64Type>().values(), &[1.0, 2.5]);
     }
 }

@@ -23,7 +23,9 @@ until the API can bind typed values before planning.
 TIMESTAMP (with explicit UTC timezone metadata) in addition to the existing
 scalar and decimal targets. Decimal precision/scale bounds are validated before
 planning, and Decimal128 execution now has an exact null-preserving test;
-complex-type casts remain pending.
+numeric `ARRAY[...]` literals now execute as null-preserving Arrow
+`List<Float64>` expressions (integer and decimal elements are promoted to one
+stable element type). Map/row values and complex casts remain pending.
 
 ## Live cloud cutover and security verification — October 12, 2026
 
