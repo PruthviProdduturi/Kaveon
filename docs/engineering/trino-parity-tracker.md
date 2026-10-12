@@ -137,6 +137,9 @@ qualification documents; this tracker remains the single ordered work list.
 - A distributed self-join with grouped output now has exact worker-loss
   recovery coverage, including retries and moved exchange spools
   (`43a2f8f9`). AKS worker-loss qualification remains open.
+- A three-worker high-cardinality grouped aggregate now has exact local versus
+  distributed equivalence under 4 MiB spill pressure, with spill cleanup and
+  zero reservation checks (`69d327e9`). Larger-scale and AKS spill gates remain.
 - `JSON_EXTRACT_SCALAR` now supports nested dot paths with null/malformed
   input semantics and executor coverage (`054e898a`).
 - Correlated scalar subqueries now have explicit rejection and binder-boundary
