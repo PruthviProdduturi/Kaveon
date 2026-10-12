@@ -3266,4 +3266,21 @@ mod tests {
         assert_eq!(arr.value(0), "hello world");
         assert_eq!(arr.value(1), "foobar");
     }
+
+    #[test]
+    fn evaluates_cast_to_date32() {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("day", DataType::Int32, true)])),
+            vec![Arc::new(Int32Array::from(vec![Some(20_000), None]))],
+        )
+        .unwrap();
+        let expr = Expr::Cast {
+            expr: Box::new(Expr::Column("day".into())),
+            data_type: CastTarget::Date32,
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        let dates = result.as_primitive::<arrow::datatypes::Date32Type>();
+        assert_eq!(dates.value(0), 20_000);
+        assert!(dates.is_null(1));
+    }
 }
