@@ -1,5 +1,42 @@
 # Kaveon — Engineer Coordination
 
+## Live cloud cutover and security verification — October 12, 2026
+
+The current AKS verification was run against subscription
+`4ed07f02-b111-4eea-98ce-1c177d573a51`, resource group `kaveon-rg`, cluster
+`kaveon-aks`, namespace `kaveon`. This is the latest runtime evidence and must
+be read alongside the older migration notes below; historical entries are not
+rewritten.
+
+**Passed:** `https://kaveon.io` returned HTTP 200 from Vercel; the production
+Auth.js provider endpoint exposed Microsoft Entra public sign-in, Microsoft
+Entra OIDC, and GitHub with the production callback origin; API, portal,
+coordinator and worker workloads were running; no PostgreSQL pod or StatefulSet
+was present; and the API health endpoint returned `status: healthy`,
+`authority: kaveondb`, 16 authority families, `kaveondb.connected: true`, and
+`postgresql.connected: false, required: false`. The Engine returned `/health`
+`status: ok` and `/ready` `ready: true` with a published catalog snapshot.
+Unauthenticated catalog access through the Studio proxy returned HTTP 401.
+
+**Security observations:** API, portal, coordinator and worker pod security
+contexts require non-root execution. Engine and API credentials are referenced
+through Kubernetes Secrets and were not emitted by the verification commands.
+The public provider metadata contains callback URLs only and no credentials.
+Engine traffic is ClusterIP-only and the current ingress policy is namespace
+internal.
+
+**Open hardening items:** the `catalog-archive-verify` Job is in
+`CreateContainerConfigError` because its API image runs as root while the Job
+requires `runAsNonRoot`; fix the image or Job security context before accepting
+archive evidence. The Engine ingress policy currently permits any pod in the
+namespace, and egress is not explicitly restricted; narrow both policies after
+the Job is corrected. The live cluster currently has one worker, which is an
+availability/performance limitation rather than an authentication finding.
+
+This verification is read-only. It proves the deployed health and authority
+signals above; it does not by itself prove replay completeness, backup/restore,
+rollback, or multi-worker qualification.
+
 ## Codex handoff — October 7, 2026 — cloud KaveonDB cutover in progress
 
 The local profile is PostgreSQL-free and verified. The personal Azure cloud
