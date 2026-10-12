@@ -107,8 +107,8 @@ qualification documents; this tracker remains the single ordered work list.
 ### Completed implementation slices in the current cycle
 
 - Exchange decoding no longer assembles a second contiguous in-memory payload
-  before Arrow decoding (`8bfb76fa`). The network response is still spooled
-  before decode; full async streaming remains open.
+  before Arrow decoding (`8bfb76fa`). The HTTP exchange path now feeds a
+  bounded replayable append-only spool before Arrow consumption.
 - Windows with compatible shared partition keys are hash-partitioned across
   workers (`06e1fb80`). Unpartitioned and mixed-key windows stay centralized.
 - Differential coverage now includes `INTERSECT`, `EXCEPT`, and non-recursive
@@ -120,14 +120,14 @@ qualification documents; this tracker remains the single ordered work list.
 - SQL placeholders (`$1`, `?`, and named forms) now fail with an explicit
   binding diagnostic rather than being misinterpreted as literals
   (`89499c7b`). Positional `$1`, `$2` binding now safely converts typed AST
-  literals without string interpolation (`74f66a10`); HTTP request transport
-  and coordinator routing remain to be wired.
+  literals without string interpolation (`74f66a10`), and the HTTP statement
+  API routes validated scalar parameters before planning (`0ea777ba`).
 - A bounded replayable append-only exchange spool foundation is implemented
   with partial-read, fork/retry, cancellation, and writer-failure tests
-  (`79ddf443`). It is not yet wired into async HTTP exchange fetching.
+  (`79ddf443`).
 - The spool now exposes an incremental Arrow IPC reader with partial-write and
-  later-batch coverage (`13f27d74`). HTTP exchange fetches still await complete
-  `ArrowPayload` files before entering the replayable input path.
+  later-batch coverage (`13f27d74`); HTTP exchange fetches use it through
+  `5dd9d275`.
 - Decimal casts now validate precision/scale before planning and execute with
   Decimal128 null/scale coverage (`81b610e2`).
 - Numeric `ARRAY[...]` literals now execute as null-preserving Arrow
@@ -143,6 +143,8 @@ qualification documents; this tracker remains the single ordered work list.
   zero reservation checks (`69d327e9`). Larger-scale and AKS spill gates remain.
 - `JSON_EXTRACT_SCALAR` now supports nested dot paths with null/malformed
   input semantics and executor coverage (`054e898a`).
+- Typed positional parameters are now exposed through the HTTP statement API,
+  validated as JSON scalars, and bound before planning (`0ea777ba`).
 - Correlated scalar subqueries now have explicit rejection and binder-boundary
   coverage; the preserved outer reference documents the remaining Apply/lateral
   runtime requirement (`72c7e302`).
