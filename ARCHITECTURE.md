@@ -85,7 +85,7 @@ flowchart LR
     Workers -->|Root Arrow results| Coordinator
 ```
 
-Today the Engine queries local Parquet and multi-file Delta tables, plus individual Parquet objects in ADLS Gen2 through ranged object-store reads. The coordinator builds validated stage DAGs and versioned fragments for scan/filter/project, partial/final aggregates, Sort/TopN/limit, and repartitioned or broadcast joins. Workers execute deterministic partitions, exchange Arrow IPC payloads, and support bounded retry/cancellation lifecycle behavior. Delta snapshot resolution still requires complete local JSON commit history from version 0; cloud Delta checkpoints are unsupported. Studio and FastAPI route native analytical work and retirement DLM scans through the Engine bridge; registered external SQL sources use a separate passthrough path. Python bindings remain a scaffold. S3 and Iceberg remain non-executable target paths.
+Today the Engine queries local Parquet, Delta, and Iceberg tables, plus Parquet and Delta objects in ADLS Gen2 through ranged object-store reads. The Iceberg reader and shared S3 object-store reader are implemented, but Iceberg has only local qualification and S3 has no live-bucket qualification yet. The coordinator builds validated stage DAGs and versioned fragments for scan/filter/project, partial/final aggregates, Sort/TopN/limit, and repartitioned or broadcast joins. Workers execute deterministic partitions, exchange Arrow IPC payloads, and support bounded retry/cancellation lifecycle behavior. Delta snapshot resolution requires supported JSON commits or v1 checkpoints; broader Delta protocol-v2 features remain unsupported. Studio and FastAPI route native analytical work and retirement DLM scans through the Engine bridge; registered external SQL sources use a separate passthrough path rather than Engine federation. Python bindings remain a scaffold.
 
 HTTP query records are inserted at submission and retain measured analysis, physical-planning, execution, and result-serialization durations. Completed storage scans report files opened, row groups considered/read/pruned, selected compressed Parquet bytes, emitted rows and batches, Delta snapshot time, footer time, read time, and throughput. Completed distributed stages report their worker tasks, partitions, elapsed time, output rows, Arrow batches, and transport bytes. The shared telemetry types distinguish a measured zero from an unavailable value. Physical operator CPU/memory, blocked time, spill, and live task updates are not yet emitted.
 
@@ -306,11 +306,11 @@ Performance claims must name dataset, hardware, version, cache state, concurrenc
 
 | Horizon | Engine capability |
 |---|---|
-| **Delivered alpha** | Local Parquet/Delta, optimizer, analytical operators, native catalog, remote CLI, distributed fragments/exchanges/retry/cancellation |
-| **Next** | ADLS Gen2 range reads, API/Studio identity bridge, catalog synchronization, admission control, aggregate/join spill |
-| **Then** | Delta checkpoints, schema evolution, deletion vectors, time travel, cost/statistics planning, dynamic filtering |
+| **Delivered alpha** | Local Parquet/Delta/Iceberg, ADLS Gen2 Parquet/Delta reads, optimizer, analytical operators, native catalog, remote CLI, distributed fragments/exchanges/retry/cancellation |
+| **Next** | Iceberg ADLS qualification, S3 live-bucket qualification, API/Studio identity bridge, catalog synchronization, admission control, aggregate/join spill |
+| **Then** | Broader Delta protocol support, schema evolution, deletion vectors, time travel, cost-based join planning, dynamic filtering, and live S3/Iceberg qualification |
 | **Scale qualification** | Exchange flow control, worker-loss/concurrency/skew tests, operator telemetry, five-worker AKS evidence, comparative benchmarks |
-| **Post-launch** | Iceberg, optimized ingest, SIMD/JIT candidates, cost-based optimization |
+| **Post-launch** | Cross-source federation, catalog-service adapters, optimized ingest, SIMD/JIT candidates, and broader lake-format protocol support |
 
 ## Architectural decisions
 
@@ -328,7 +328,7 @@ Performance claims must name dataset, hardware, version, cache state, concurrenc
 
 - Engine query execution is not integrated with Studio/FastAPI identity, and Python bindings remain a scaffold.
 - The platform PostgreSQL source registry and Engine native catalog need a revision-aware synchronization bridge.
-- ADLS Gen2/S3 readers and broader Delta/Iceberg protocol semantics are not executable.
+- ADLS Gen2 Parquet/Delta reads are executable and qualified for their declared paths. S3 reads are implemented through the shared object-store reader but remain unqualified; Iceberg is locally qualified but has no completed ADLS/AKS qualification. Broader Delta/Iceberg protocol semantics remain unsupported.
 - Aggregate/join spill, coordinator-wired admission, exchange streaming flow control, dynamic filtering, and cost-based optimization are absent. The admission and aggregate/join accounting foundations are opt-in and fail closed when enabled.
 - Engine statement HTTP lacks end-user authentication, TLS, authorization, resource groups, and quotas.
 - Query responses still materialize root results synchronously; retained history is process-local.
