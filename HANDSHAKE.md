@@ -16,9 +16,11 @@ need multiset-aware logical plans and fragment operators; scalar subqueries in
 projections, correlated subqueries, prepared client parameters, recursive
 CTEs, and complex array/map/row types remain unsupported. Unsupported scalar
 shapes return explicit diagnostics rather than being sent to execution.
-Prepared placeholders now fail at SQL lowering with a clear binding
-diagnostic; request-level parameter transport is intentionally not exposed
-until the API can bind typed values before planning.
+The SQL front end now exposes a typed positional binding entry point for
+`$1`, `$2`, …; values become AST literals before planning and are never
+interpolated into SQL text. Missing positions and `?`/named placeholders fail
+before planning. The HTTP request field and worker propagation remain the next
+integration dependency before this is exposed through clients.
 `CAST` now covers DATE and fixed-precision microsecond
 TIMESTAMP (with explicit UTC timezone metadata) in addition to the existing
 scalar and decimal targets. Decimal precision/scale bounds are validated before
