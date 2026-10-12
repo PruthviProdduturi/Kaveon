@@ -1640,6 +1640,61 @@ fn a_join_under_a_refusing_budget_spills_and_matches_the_in_memory_join() {
     let _ = std::fs::remove_dir_all(&directory);
 }
 
+/// A high-cardinality grouped aggregate must preserve the same rows when its
+/// distributed final merge is forced to spill. The local result is the
+/// reference; both normal and constrained distributed runs must match it and
+/// release their query reservations and spill runs.
+#[test]
+fn a_distributed_grouped_aggregate_under_spill_matches_the_local_result() {
+    let directory =
+        std::env::temp_dir().join(format!("kaveon-aggregate-spill-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let manager = events_catalog(&directory);
+    let statement = "SELECT user_id, duration_sec, COUNT(*) AS n, SUM(actions) AS total FROM events GROUP BY user_id, duration_sec";
+    let plan = bound_plan(statement, &manager);
+
+    let reference_pool = QueryMemoryPool::new("aggregate-spill-reference", 256 << 20).unwrap();
+    let mut reference = crate::planner::plan_query_with_memory(&plan, &manager, &reference_pool)
+        .unwrap_or_else(|error| panic!("{statement}: {error}"));
+    let expected = canonical_rows(&drain(reference.operator.as_mut()), false);
+    drop(reference);
+    assert_eq!(reference_pool.snapshot().current_bytes, 0);
+
+    let run_distributed = |name: &str, budget: u64| {
+        let pool = QueryMemoryPool::new(name, budget).unwrap();
+        let spill_root = directory.join(name);
+        let spill = kaveon_exec::spill::SpillManager::new(&spill_root, 256 << 20).unwrap();
+        let spill_metrics = spill.clone();
+        kaveon_exec::partitioned::register_spill(&pool, spill, 8).unwrap();
+        let plan = bound_plan(statement, &manager);
+        let batches = execute_distributed(name, &plan, &manager, 3, &pool)
+            .unwrap_or_else(|error| panic!("{statement} ({name}): {error}"));
+        let actual = canonical_rows(&batches, false);
+        assert_eq!(
+            pool.snapshot().current_bytes,
+            0,
+            "{name} leaked reservations"
+        );
+        (actual, spill_metrics.snapshot())
+    };
+
+    let (normal, normal_spill) = run_distributed("aggregate-normal", 256 << 20);
+    assert_eq!(normal, expected, "normal distributed aggregate diverged");
+    assert_eq!(normal_spill.bytes_written, 0);
+
+    let (spilled, spill) = run_distributed("aggregate-constrained", 4 << 20);
+    assert_eq!(spilled, expected, "spilled distributed aggregate diverged");
+    assert!(
+        spill.bytes_written > 0,
+        "aggregate did not write a spill run"
+    );
+    assert_eq!(
+        spill.current_bytes, 0,
+        "aggregate spill runs were not cleaned"
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
 /// Outer and cross joins use the same executable fragment path as inner joins.
 /// Keep their qualification separate from the spill gate because a filtered
 /// right/full build may legitimately fit in memory and therefore need not
