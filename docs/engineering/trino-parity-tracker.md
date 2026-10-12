@@ -63,9 +63,9 @@ foundations, but several operators are still centralized or narrow:
   focused parser/executor coverage. `CAST(... AS TIMESTAMP)` and
   `TIMESTAMP WITH TIME ZONE` now map to Arrow microsecond timestamps with
   nullable execution coverage.
-- Arrays are limited; maps and structs/row values are not represented as a
-  complete SQL expression type. Complex casts, dereference, `UNNEST`, and broad
-  JSON operations remain open.
+- Numeric array literals are supported as null-preserving Arrow lists; maps and
+  structs/row values are not yet represented as complete SQL expression types.
+  Complex casts, dereference, `UNNEST`, and broad JSON operations remain open.
 - There is no Trino-style cross-source federation yet. Registered SQL sources
   are API passthrough paths, while the strongest native Engine path is
   Parquet/Delta/Iceberg. S3 and Iceberg status must be reconciled between the
@@ -127,6 +127,8 @@ qualification documents; this tracker remains the single ordered work list.
   `ArrowPayload` files before entering the replayable input path.
 - Decimal casts now validate precision/scale before planning and execute with
   Decimal128 null/scale coverage (`81b610e2`).
+- Numeric `ARRAY[...]` literals now execute as null-preserving Arrow
+  `List<Float64>` values with parser and executor coverage (`b1fe824f`).
 
 Track 1 remains partial because distributed global ordering and a full
 worker-loss/spill/cancellation corpus still need a correctness gate. The
