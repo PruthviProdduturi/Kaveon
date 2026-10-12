@@ -9,11 +9,25 @@ image:
 workloadIdentity:
   clientId: ""
 studioUrl: ""
+# Where KaveonDB keeps the platform's own records — datasets, charts,
+# dashboards, sources, chat, query history, activity. Immutable snapshot
+# objects plus a conditional head update, so the store itself is the system of
+# record and the coordinator's disk holds nothing that matters.
 productTransactions:
   enabled: false
   account: ""
   container: ""
-  prefix: kaveon/product-catalog
+  # The full prefix of the catalog, head object included.
+  #
+  # This read `kaveon/product-catalog`, one segment short of the catalog it was
+  # meant to open. The Engine found no head there, so rather than failing it
+  # initialised a fresh genesis head beside the real one — and Studio correctly
+  # reported an installation with no datasets while nine of them, thirteen
+  # dashboards and eighty-nine charts sat intact at generation 9630 one
+  # directory deeper. A prefix that points at nothing is indistinguishable
+  # from a new installation, which is exactly why it has to be written out in
+  # full and never assembled from parts.
+  prefix: kaveon/product-catalog/product-transactions
 serviceAccountName: kaveon-engine
 serviceAccount:
   create: true
