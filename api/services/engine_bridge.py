@@ -149,6 +149,20 @@ def definition(source):
             "lifecycle": source["lifecycle"].capitalize()}
 
 
+def catalog_read(path, actor, *, timeout=60):
+    """Read one catalog metadata resource.
+
+    The Engine's own registry — which catalogs, schemas and tables exist, and
+    their statistics — is held in a SQLite database on the coordinator's
+    ReadWriteOnce volume, which no other process can open while the coordinator
+    is running. Its REST surface is therefore the only readable form of it, and
+    the only one that stays valid across Engine versions, so anything that
+    needs to read or copy the registry comes through here rather than through
+    that file.
+    """
+    return _request("GET", path, "KAVEON_ENGINE_CATALOG_TOKEN", actor, timeout=timeout)
+
+
 def sync_catalog(source, actor, expected_revision=None):
     desired = definition(source)
     path = "/v1/catalog/definitions/" + quote(desired["id"], safe="")

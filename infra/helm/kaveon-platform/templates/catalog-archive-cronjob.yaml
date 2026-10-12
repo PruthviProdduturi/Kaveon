@@ -1,0 +1,90 @@
+{{- if .Values.api.catalogArchive.enabled }}
+{{- /*
+  Archives the Engine's own registry — which catalogs, schemas and tables
+  exist, and the statistics observed for them — to object storage.
+
+  The product catalog is committed to ADLS on every transaction, so it needs no
+  schedule. The registry is a SQLite database on the coordinator's volume, and
+  nothing archived it: its only copy in object storage was the hand-made
+  transplant from the VM this installation replaced. Every table registered
+  after that existed on one disk, in one zone, while all the data it pointed at
+  sat safely in ADLS with nothing left to say it was there.
+
+  This runs the API image, because reading the registry means talking to the
+  Engine over mutual TLS with the catalog token and writing to ADLS with the
+  API's workload identity — three things that pod is already allowed to do. It
+  does not mount the coordinator's volume, which is ReadWriteOnce and held by
+  the Engine while it runs.
+
+  An unchanged registry writes nothing: the archive is addressed by the digest
+  of its own bytes, so a run that finds no change resolves to an object that
+  already exists and returns without publishing.
+*/}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kaveon-catalog-archive
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: kaveon-catalog-archive
+spec:
+  schedule: {{ .Values.api.catalogArchive.schedule | quote }}
+  # Two archives of one registry would race for the same content-addressed
+  # object. The loser's create fails, which is correct but noisy, so a late run
+  # waits for its turn rather than overlapping.
+  concurrencyPolicy: Forbid
+  # A run that starts long after its slot still archives the current registry,
+  # so a missed window is better skipped than queued behind the clock.
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      # Bounded so a hung Engine read cannot hold the Forbid lock until the
+      # next schedule, which would silently stop archiving altogether.
+      activeDeadlineSeconds: {{ .Values.api.catalogArchive.timeoutSeconds }}
+      template:
+        metadata:
+          labels:
+            app: kaveon-catalog-archive
+            azure.workload.identity/use: "true"
+        spec:
+          restartPolicy: Never
+          serviceAccountName: kaveon-api
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: archive
+              image: {{ include "portal.image" (list .Values.images.api "api") }}
+              command: ["python", "-m", "services.engine_catalog_archive"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: [ALL]}
+              env:
+                - {name: KAVEON_ENGINE_URL, value: "https://{{ .Values.engine.service }}:{{ .Values.engine.port }}"}
+                - {name: KAVEON_ENGINE_CA_CERT, value: /var/run/kaveon/engine-ca/{{ .Values.engine.caKey }}}
+                - {name: KAVEON_ENGINE_CATALOG_TOKEN, valueFrom: {secretKeyRef: {name: {{ .Values.secrets.portalAuth }}, key: KAVEON_ENGINE_CATALOG_TOKEN}}}
+                - {name: KAVEON_ADLS_ACCOUNT, value: {{ required "api.cutover.artifactAccount is required when catalogArchive is enabled" .Values.api.cutover.artifactAccount | quote }}}
+                # Deliberately not the container the live catalog is in. Blob
+                # soft delete does not protect against container deletion, so
+                # an archive beside its original is lost to the same accident.
+                - {name: KAVEON_CATALOG_ARCHIVE_CONTAINER, value: {{ .Values.api.catalogArchive.container | quote }}}
+              volumeMounts:
+                - {name: tmp, mountPath: /tmp}
+                - {name: engine-ca, mountPath: /var/run/kaveon/engine-ca, readOnly: true}
+              resources:
+                requests: {cpu: 25m, memory: 128Mi}
+                limits: {cpu: 500m, memory: 512Mi}
+          volumes:
+            - name: tmp
+              emptyDir: {}
+            - name: engine-ca
+{{- if .Values.engine.caSecret }}
+              secret: {secretName: {{ .Values.engine.caSecret }}}
+{{- else }}
+              configMap: {name: {{ required "engine.caConfigMap is required when engine.caSecret is empty" .Values.engine.caConfigMap }}}
+{{- end }}
+{{- end }}
