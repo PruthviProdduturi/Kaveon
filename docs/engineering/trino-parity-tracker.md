@@ -56,6 +56,9 @@ foundations, but several operators are still centralized or narrow:
 - Non-recursive CTEs, derived tables, joins, aggregates, `HAVING`, `CASE`, and
   common set operations work. Scalar subqueries, recursive CTEs, `INTERSECT ALL`,
   `EXCEPT ALL`, prepared parameters, and general lake-table DML remain missing.
+  Uncorrelated aggregate scalar subqueries in `WHERE` are now supported with
+  exact-result differential coverage; projection, correlated, and multi-row
+  scalar forms remain explicitly rejected.
   `CAST(... AS DATE)` is now supported with nullable `Date32` execution and
   focused parser/executor coverage. `CAST(... AS TIMESTAMP)` and
   `TIMESTAMP WITH TIME ZONE` now map to Arrow microsecond timestamps with
@@ -110,11 +113,16 @@ qualification documents; this tracker remains the single ordered work list.
   CTEs (`59aaf0ec`). `CAST(... AS DATE)` now maps to Arrow `Date32` and keeps
   nulls (`bf49f5cb`). Timestamp and timestamp-with-time-zone casts are covered
   in `52fa76c6`.
+- Uncorrelated aggregate scalar subqueries in `WHERE`, plus actionable
+  multi-row and multi-column diagnostics, are covered in `3a60cf23`.
 
-Track 1 remains partial because replayable network streaming and distributed
-global ordering still need a correctness gate. Track 2 remains partial because
-scalar/prepared subqueries, complex types, multiset set operations, and broader
-typed DML are not yet implemented.
+Track 1 remains partial because distributed global ordering and a full
+worker-loss/spill/cancellation corpus still need a correctness gate. The
+current exchange spool is bounded and replayable; replacing it with an
+append-only network-streaming provider is a separate design task.
+Track 2 remains partial because prepared parameters, correlated/projection
+scalar subqueries, complex types, multiset set operations, and broader typed
+DML are not yet implemented.
 
 These slices do not close Tracks 1 and 2's qualification gates; the broader
 three-worker corpus, complex types, scalar/prepared subqueries, worker-loss,
