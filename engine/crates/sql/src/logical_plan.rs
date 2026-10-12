@@ -1616,9 +1616,9 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
         ast::Expr::IsNotNull(expr) => Ok(Expr::IsNotNull(Box::new(ast_expr_to_expr(expr)?))),
         ast::Expr::Nested(inner) => ast_expr_to_expr(inner),
         ast::Expr::Function(func) => ast_function_to_expr(func),
-        // `ARRAY[…]` is carried as a call named ARRAY: the only place it is
-        // accepted is an aggregate's argument list, where the aggregate
-        // reads the constants and the projection names the output by them.
+        // `ARRAY[…]` is carried as a call named ARRAY. The executor evaluates
+        // numeric array literals as Arrow List<Float64> values; aggregate
+        // lowering also consumes constant percentile lists here.
         ast::Expr::Array(array) => Ok(Expr::Function {
             name: "ARRAY".into(),
             args: array
@@ -3677,6 +3677,19 @@ mod tests {
                 },
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn parses_numeric_array_literal_as_an_expression() {
+        let plan = sql_to_logical_plan("SELECT ARRAY[1, 2.5] FROM t").unwrap();
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("expected Project");
+        };
+        assert!(matches!(
+            &columns[0],
+            Expr::Function { name, args }
+                if name == "ARRAY" && args.len() == 2
         ));
     }
 
