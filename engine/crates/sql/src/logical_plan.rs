@@ -3385,6 +3385,31 @@ mod tests {
     }
 
     #[test]
+    fn scalar_subquery_rejects_non_single_row_shapes_with_actionable_errors() {
+        let cases = [
+            (
+                "SELECT a FROM t WHERE b > (SELECT b FROM t)",
+                "a scalar subquery must be an ungrouped aggregate, so that it yields one row",
+            ),
+            (
+                "SELECT a FROM t WHERE b > (SELECT max(b), min(b) FROM t)",
+                "a scalar subquery must select exactly one column",
+            ),
+            (
+                "SELECT (SELECT max(b) FROM t) FROM t",
+                "scalar subqueries are not yet supported",
+            ),
+        ];
+        for (sql, expected) in cases {
+            let error = sql_to_logical_plan(sql).expect_err(sql);
+            assert!(
+                error.to_string().contains(expected),
+                "{sql}: expected `{expected}` in `{error}`"
+            );
+        }
+    }
+
+    #[test]
     fn a_scalar_subquery_in_having_joins_the_aggregate_output() {
         let plan = sql_to_logical_plan(
             "SELECT k, sum(v) AS total FROM t GROUP BY k HAVING sum(v) > (SELECT sum(v) * 0.5 FROM t) AND count(*) > 1 ORDER BY total DESC",

@@ -212,6 +212,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "scalar_aggregate_filter",
+        "SELECT country, COUNT(*) AS n FROM {T} WHERE user_id < (SELECT MAX(user_id) FROM {U}) GROUP BY country ORDER BY country",
+        true,
+    ),
+    (
         "not_equal",
         "SELECT COUNT(*) AS n FROM {T} WHERE region <> 'Asia'",
         false,
