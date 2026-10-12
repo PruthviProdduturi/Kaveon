@@ -392,6 +392,16 @@ pub fn sql_to_logical_plan_for_binder_with_parameters(
     lower_statements(statements, true, false)
 }
 
+/// Parameterized form of [`sql_to_logical_plan_for_binder_approximate`].
+pub fn sql_to_logical_plan_for_binder_approximate_with_parameters(
+    sql: &str,
+    parameters: &[ScalarValue],
+) -> Result<LogicalPlan> {
+    let mut statements = parse_sql(sql)?;
+    bind_positional_parameters(&mut statements, parameters)?;
+    lower_statements(statements, true, true)
+}
+
 /// [`sql_to_logical_plan_for_binder`] with every plain `COUNT(DISTINCT
 /// expr)` lowered as `APPROX_COUNT_DISTINCT` named as COUNT
 /// ([`AggregateExpr::approximated`]): the `approximate` session setting.
