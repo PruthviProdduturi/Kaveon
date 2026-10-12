@@ -21,7 +21,9 @@ diagnostic; request-level parameter transport is intentionally not exposed
 until the API can bind typed values before planning.
 `CAST` now covers DATE and fixed-precision microsecond
 TIMESTAMP (with explicit UTC timezone metadata) in addition to the existing
-scalar and decimal targets; complex-type casts remain pending.
+scalar and decimal targets. Decimal precision/scale bounds are validated before
+planning, and Decimal128 execution now has an exact null-preserving test;
+complex-type casts remain pending.
 
 ## Live cloud cutover and security verification — October 12, 2026
 
