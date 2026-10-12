@@ -1,6 +1,7 @@
 //! Receive Arrow IPC incrementally into a bounded private disk spool, or
 //! decode it batch by batch as it arrives (`receive_stream`).
 //! The immutable spool permits decoding without retaining an encoded body copy.
+use crate::replayable_spool::{ReplayableSpool, SpoolReader};
 use arrow::{datatypes::SchemaRef, ipc::reader::StreamReader, record_batch::RecordBatch};
 use axum::body::Bytes;
 use futures::StreamExt;
@@ -121,31 +122,82 @@ impl Drop for DiskSpool {
     }
 }
 pub struct ArrowPayload {
+    reader: ArrowPayloadReader,
+    spool: ArrowPayloadSpool,
+}
+
+enum ArrowPayloadReader {
+    Disk(StreamReader<BufReader<File>>),
+    Replayable(StreamReader<SpoolReader>),
+}
+
+enum ArrowPayloadSpool {
     // Field order closes the reader before deleting the file on Windows.
-    reader: StreamReader<BufReader<File>>,
-    spool: std::sync::Arc<DiskSpool>,
+    Disk(std::sync::Arc<DiskSpool>),
+    Replayable {
+        spool: ReplayableSpool,
+        pump: std::sync::Arc<ReplayablePump>,
+    },
+}
+
+struct ReplayablePump {
+    spool: ReplayableSpool,
+    abort: tokio::task::AbortHandle,
+}
+
+impl Drop for ReplayablePump {
+    fn drop(&mut self) {
+        self.abort.abort();
+        self.spool.cancel();
+    }
 }
 impl ArrowPayload {
     pub fn schema(&self) -> SchemaRef {
-        self.reader.schema()
+        match &self.reader {
+            ArrowPayloadReader::Disk(reader) => reader.schema(),
+            ArrowPayloadReader::Replayable(reader) => reader.schema(),
+        }
     }
     pub fn fork(&self) -> Result<Self, String> {
-        let reader = StreamReader::try_new(
-            BufReader::new(File::open(&self.spool.path).map_err(|error| error.to_string())?),
-            None,
-        )
-        .map_err(|error| error.to_string())?;
-        Ok(Self {
-            reader,
-            spool: self.spool.clone(),
-        })
+        match &self.spool {
+            ArrowPayloadSpool::Disk(spool) => {
+                let reader = StreamReader::try_new(
+                    BufReader::new(File::open(&spool.path).map_err(|error| error.to_string())?),
+                    None,
+                )
+                .map_err(|error| error.to_string())?;
+                Ok(Self {
+                    reader: ArrowPayloadReader::Disk(reader),
+                    spool: ArrowPayloadSpool::Disk(spool.clone()),
+                })
+            }
+            ArrowPayloadSpool::Replayable { spool, pump } => {
+                let spool = spool.clone();
+                let reader = spool
+                    .open_arrow_reader()
+                    .map_err(|error| error.to_string())?;
+                Ok(Self {
+                    reader: ArrowPayloadReader::Replayable(reader),
+                    spool: ArrowPayloadSpool::Replayable {
+                        spool,
+                        pump: pump.clone(),
+                    },
+                })
+            }
+        }
     }
     pub fn bytes(&self) -> usize {
-        self.spool.bytes as usize
+        match &self.spool {
+            ArrowPayloadSpool::Disk(spool) => spool.bytes as usize,
+            ArrowPayloadSpool::Replayable { spool, .. } => spool.bytes() as usize,
+        }
     }
     pub fn next_batch(&mut self) -> Result<Option<RecordBatch>, String> {
-        self.reader
-            .next()
+        let result = match &mut self.reader {
+            ArrowPayloadReader::Disk(reader) => reader.next(),
+            ArrowPayloadReader::Replayable(reader) => reader.next(),
+        };
+        result
             .transpose()
             .map_err(|error| format!("invalid Arrow stream: {error}"))
     }
@@ -222,8 +274,75 @@ async fn receive_with_limit(
     )
     .map_err(|error| error.to_string())?;
     Ok(ArrowPayload {
-        reader,
-        spool: std::sync::Arc::new(spool),
+        reader: ArrowPayloadReader::Disk(reader),
+        spool: ArrowPayloadSpool::Disk(std::sync::Arc::new(spool)),
+    })
+}
+
+/// Receive an exchange body into an append-only replayable spool. The body
+/// pump continues asynchronously while the caller decodes Arrow batches; the
+/// first schema is awaited on a blocking thread because Arrow's IPC reader is
+/// synchronous and must preserve `fork`/`open_each` semantics.
+pub async fn receive_replayable(response: reqwest::Response) -> Result<ArrowPayload, String> {
+    receive_replayable_with_limit(response, MAX_PAYLOAD_BYTES).await
+}
+
+async fn receive_replayable_with_limit(
+    response: reqwest::Response,
+    limit: u64,
+) -> Result<ArrowPayload, String> {
+    if response.content_length().is_some_and(|bytes| bytes > limit) {
+        return Err("Arrow payload Content-Length exceeds receive limit".into());
+    }
+    receive_replayable_body(response.bytes_stream(), limit).await
+}
+
+async fn receive_replayable_body<S, E>(body: S, limit: u64) -> Result<ArrowPayload, String>
+where
+    S: futures::Stream<Item = Result<Bytes, E>> + Send + 'static,
+    E: std::fmt::Display + Send + 'static,
+{
+    let (spool, writer) =
+        ReplayableSpool::new_with_quota(limit, &RETAINED_BYTES, PROCESS_SPOOL_BYTES)
+            .map_err(|error| error.to_string())?;
+    let pump = tokio::spawn(async move {
+        let mut body = Box::pin(body);
+        let mut writer = writer;
+        let result: Result<(), String> = async {
+            while let Some(chunk) = body.next().await {
+                let chunk = chunk.map_err(|error| format!("network receive: {error}"))?;
+                writer.append(&chunk).map_err(|error| error.to_string())?;
+            }
+            Ok(())
+        }
+        .await;
+        match result {
+            Ok(()) => writer.finish().map_err(|error| error.to_string()),
+            Err(error) => {
+                let _ = writer.finish_with_error(Some(error.clone()));
+                Err(error)
+            }
+        }
+    });
+    let reader_spool = spool.clone();
+    let reader = tokio::task::spawn_blocking(move || reader_spool.open_arrow_reader())
+        .await
+        .map_err(|error| format!("Arrow spool reader task failed: {error}"))?
+        .map_err(|error| error.to_string())?;
+    let pump_guard = std::sync::Arc::new(ReplayablePump {
+        spool: spool.clone(),
+        abort: pump.abort_handle(),
+    });
+    // The pump owns the writer and remains attached to the spool through the
+    // writer's Arc. The guard aborts it when every payload fork is dropped;
+    // reader errors surface network/body failures at the next batch boundary.
+    drop(pump);
+    Ok(ArrowPayload {
+        reader: ArrowPayloadReader::Replayable(reader),
+        spool: ArrowPayloadSpool::Replayable {
+            spool,
+            pump: pump_guard,
+        },
     })
 }
 
@@ -526,8 +645,8 @@ impl ArrowPayload {
         )
         .map_err(|error| error.to_string())?;
         Ok(Self {
-            reader,
-            spool: std::sync::Arc::new(spool),
+            reader: ArrowPayloadReader::Disk(reader),
+            spool: ArrowPayloadSpool::Disk(std::sync::Arc::new(spool)),
         })
     }
 }
@@ -606,7 +725,10 @@ mod tests {
             .unwrap();
         assert_eq!(*payload.schema(), schema);
         assert!(payload.next_batch().unwrap().is_none());
-        let path = payload.spool.path.clone();
+        let path = match &payload.spool {
+            ArrowPayloadSpool::Disk(spool) => spool.path.clone(),
+            ArrowPayloadSpool::Replayable { .. } => unreachable!("receive uses disk spool"),
+        };
         assert!(path.exists());
         let mut fork = payload.fork().unwrap();
         drop(payload);
@@ -698,6 +820,33 @@ mod tests {
                 .map(|message| message.len() as u64)
                 .sum::<u64>()
         );
+    }
+
+    #[tokio::test]
+    async fn replayable_receive_decodes_batches_before_body_finishes_and_replays() {
+        let (schema, messages) = ipc_messages();
+        let (sender, body) = chunk_source();
+        sender.send(Ok(Bytes::from(messages[0].clone()))).unwrap();
+        let mut payload = receive_replayable_body(body, MAX_PAYLOAD_BYTES)
+            .await
+            .unwrap();
+        assert_eq!(payload.schema().as_ref(), schema.as_ref());
+
+        sender.send(Ok(Bytes::from(messages[1].clone()))).unwrap();
+        assert_eq!(payload.next_batch().unwrap().unwrap().num_rows(), 4);
+
+        // A retry starts at offset zero while the producer is still open.
+        let mut retry = payload.fork().unwrap();
+        sender.send(Ok(Bytes::from(messages[2].clone()))).unwrap();
+        assert_eq!(payload.next_batch().unwrap().unwrap().num_rows(), 4);
+        assert_eq!(retry.next_batch().unwrap().unwrap().num_rows(), 4);
+
+        sender.send(Ok(Bytes::from(messages[3].clone()))).unwrap();
+        sender.send(Ok(Bytes::from(messages[4].clone()))).unwrap();
+        assert_eq!(payload.next_batch().unwrap().unwrap().num_rows(), 4);
+        assert_eq!(payload.next_batch().unwrap().unwrap().num_rows(), 4);
+        drop(sender);
+        assert!(payload.next_batch().unwrap().is_none());
     }
 
     #[tokio::test]

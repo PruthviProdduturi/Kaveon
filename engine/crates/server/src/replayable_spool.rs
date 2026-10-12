@@ -10,6 +10,7 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 #[cfg(windows)]
 use std::os::windows::fs::OpenOptionsExt;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
@@ -22,13 +23,28 @@ struct State {
 struct Inner {
     path: PathBuf,
     limit: u64,
+    quota: Option<Quota>,
     state: Mutex<State>,
     changed: Condvar,
     cancelled: std::sync::atomic::AtomicBool,
 }
 
+#[derive(Clone, Copy)]
+struct Quota {
+    counter: &'static AtomicU64,
+    limit: u64,
+}
+
 impl Drop for Inner {
     fn drop(&mut self) {
+        if let Some(quota) = self.quota {
+            let written = self
+                .state
+                .lock()
+                .map(|state| state.written)
+                .unwrap_or_default();
+            quota.counter.fetch_sub(written, Ordering::AcqRel);
+        }
         let _ = std::fs::remove_file(&self.path);
     }
 }
@@ -53,6 +69,26 @@ pub struct SpoolReader {
 
 impl ReplayableSpool {
     pub fn new(limit: u64) -> io::Result<(Self, SpoolWriter)> {
+        Self::new_inner(limit, None)
+    }
+
+    /// Create a spool charged against a process-wide byte counter. The
+    /// counter is released when the last reader/writer drops the spool.
+    pub fn new_with_quota(
+        limit: u64,
+        counter: &'static AtomicU64,
+        quota_limit: u64,
+    ) -> io::Result<(Self, SpoolWriter)> {
+        Self::new_inner(
+            limit,
+            Some(Quota {
+                counter,
+                limit: quota_limit,
+            }),
+        )
+    }
+
+    fn new_inner(limit: u64, quota: Option<Quota>) -> io::Result<(Self, SpoolWriter)> {
         if limit == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -65,6 +101,7 @@ impl ReplayableSpool {
         let inner = Arc::new(Inner {
             path,
             limit,
+            quota,
             state: Mutex::new(State {
                 written: 0,
                 finished: false,
@@ -107,6 +144,14 @@ impl ReplayableSpool {
             .store(true, std::sync::atomic::Ordering::Release);
         self.inner.changed.notify_all();
     }
+
+    pub fn bytes(&self) -> u64 {
+        self.inner
+            .state
+            .lock()
+            .map(|state| state.written)
+            .unwrap_or_default()
+    }
 }
 
 impl SpoolWriter {
@@ -128,10 +173,29 @@ impl SpoolWriter {
                 "replayable spool limit exceeded",
             ));
         }
+        if let Some(quota) = self.inner.quota {
+            quota
+                .counter
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                    used.checked_add(bytes.len() as u64)
+                        .filter(|total| *total <= quota.limit)
+                })
+                .map_err(|_| {
+                    io::Error::new(io::ErrorKind::StorageFull, "process spool quota exceeded")
+                })?;
+        }
         self.file
             .as_mut()
             .expect("writer file open")
-            .write_all(bytes)?;
+            .write_all(bytes)
+            .map_err(|error| {
+                if let Some(quota) = self.inner.quota {
+                    quota
+                        .counter
+                        .fetch_sub(bytes.len() as u64, Ordering::AcqRel);
+                }
+                error
+            })?;
         self.file.as_mut().expect("writer file open").flush()?;
         state.written = end;
         drop(state);
