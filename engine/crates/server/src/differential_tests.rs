@@ -331,6 +331,21 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "intersect_distinct",
+        "SELECT country FROM {T} WHERE region = 'Asia' INTERSECT SELECT country FROM {U} WHERE locale = 'ja-JP' ORDER BY country",
+        true,
+    ),
+    (
+        "except_distinct",
+        "SELECT country FROM {T} WHERE region = 'Asia' EXCEPT SELECT country FROM {U} WHERE user_id < 0 ORDER BY country",
+        true,
+    ),
+    (
+        "cte_aggregate_projection",
+        "WITH regional AS (SELECT region, SUM(actions) AS actions FROM {T} GROUP BY region) SELECT region, actions FROM regional ORDER BY region",
+        true,
+    ),
+    (
         "subquery_in",
         "SELECT COUNT(*) AS n FROM {T} WHERE country IN (SELECT country FROM {U} WHERE locale = 'ja-JP' GROUP BY country)",
         false,
