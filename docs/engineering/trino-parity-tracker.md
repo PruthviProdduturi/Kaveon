@@ -115,6 +115,13 @@ qualification documents; this tracker remains the single ordered work list.
   in `52fa76c6`.
 - Uncorrelated aggregate scalar subqueries in `WHERE`, plus actionable
   multi-row and multi-column diagnostics, are covered in `3a60cf23`.
+- SQL placeholders (`$1`, `?`, and named forms) now fail with an explicit
+  binding diagnostic rather than being misinterpreted as literals
+  (`89499c7b`). Typed request-level parameter transport is still required
+  before prepared execution can be enabled.
+- A bounded replayable append-only exchange spool foundation is implemented
+  with partial-read, fork/retry, cancellation, and writer-failure tests
+  (`79ddf443`). It is not yet wired into async HTTP exchange fetching.
 
 Track 1 remains partial because distributed global ordering and a full
 worker-loss/spill/cancellation corpus still need a correctness gate. The
