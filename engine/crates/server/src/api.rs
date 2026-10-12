@@ -13075,13 +13075,30 @@ mod tests {
         assert_eq!(refused["limit"]["max_statements"], 2);
         assert_eq!(refused["limit"]["count"], "live");
         let refused_record = {
-            let store = super::QUERY_STORE.read().await;
-            let record = store
-                .queries
-                .values()
-                .find(|record| record.sql == refused_sql)
-                .expect("the refused statement has a record");
-            serde_json::to_value(record).unwrap()
+            let mut latest = None;
+            for _ in 0..50 {
+                let candidate = {
+                    let store = super::QUERY_STORE.read().await;
+                    store
+                        .queries
+                        .values()
+                        .filter(|record| record.sql == refused_sql)
+                        .max_by_key(|record| record.submitted_at_ms)
+                        .map(serde_json::to_value)
+                        .transpose()
+                        .unwrap()
+                };
+                if candidate
+                    .as_ref()
+                    .is_some_and(|record| record["state"] == "FAILED")
+                {
+                    latest = candidate;
+                    break;
+                }
+                latest = candidate;
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+            latest.expect("the refused statement has a record")
         };
         assert_eq!(refused_record["state"], "FAILED");
         assert_eq!(refused_record["error_code"], "RATE_LIMITED");
