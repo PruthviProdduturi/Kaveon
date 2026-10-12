@@ -16,6 +16,7 @@ mod optimize;
 pub mod orchestrator;
 pub mod planner;
 pub mod resource_groups;
+pub mod replayable_spool;
 pub mod result_cache;
 pub mod results;
 pub mod runtime;

@@ -1,0 +1,280 @@
+//! A bounded append-only spool for exchange inputs.
+//!
+//! The writer can receive a network body while readers consume complete or
+//! partial Arrow streams. Readers wait for bytes to arrive, can be forked from
+//! offset zero for retry/multi-consumer execution, and never retain the whole
+//! payload in memory.
+
+use std::fs::{File, OpenOptions};
+use std::io::{self, Read, Seek, SeekFrom, Write};
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
+use std::path::PathBuf;
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
+
+struct State {
+    written: u64,
+    finished: bool,
+    failure: Option<String>,
+}
+
+struct Inner {
+    path: PathBuf,
+    limit: u64,
+    state: Mutex<State>,
+    changed: Condvar,
+    cancelled: std::sync::atomic::AtomicBool,
+}
+
+impl Drop for Inner {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// A spool whose bytes remain replayable until all readers and the writer are
+/// dropped. The file is bounded before bytes are written.
+pub struct ReplayableSpool {
+    inner: Arc<Inner>,
+}
+
+pub struct SpoolWriter {
+    inner: Arc<Inner>,
+    file: Option<File>,
+}
+
+pub struct SpoolReader {
+    inner: Arc<Inner>,
+    file: File,
+    offset: u64,
+}
+
+impl ReplayableSpool {
+    pub fn new(limit: u64) -> io::Result<(Self, SpoolWriter)> {
+        if limit == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "spool limit must be positive",
+            ));
+        }
+        let path =
+            std::env::temp_dir().join(format!("kaveon-replayable-{}.arrow", uuid::Uuid::new_v4()));
+        let file = open_spool(&path, true)?;
+        let inner = Arc::new(Inner {
+            path,
+            limit,
+            state: Mutex::new(State {
+                written: 0,
+                finished: false,
+                failure: None,
+            }),
+            changed: Condvar::new(),
+            cancelled: std::sync::atomic::AtomicBool::new(false),
+        });
+        Ok((
+            Self {
+                inner: Arc::clone(&inner),
+            },
+            SpoolWriter {
+                inner,
+                file: Some(file),
+            },
+        ))
+    }
+
+    pub fn reader(&self) -> io::Result<SpoolReader> {
+        Ok(SpoolReader {
+            inner: Arc::clone(&self.inner),
+            file: open_spool(&self.inner.path, false)?,
+            offset: 0,
+        })
+    }
+
+    pub fn cancel(&self) {
+        self.inner
+            .cancelled
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.inner.changed.notify_all();
+    }
+}
+
+impl SpoolWriter {
+    pub fn append(&mut self, bytes: &[u8]) -> io::Result<()> {
+        let mut state = self.inner.state.lock().expect("spool state poisoned");
+        if state.finished {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "spool is finished",
+            ));
+        }
+        let end = state
+            .written
+            .checked_add(bytes.len() as u64)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "spool size overflow"))?;
+        if end > self.inner.limit {
+            return Err(io::Error::new(
+                io::ErrorKind::StorageFull,
+                "replayable spool limit exceeded",
+            ));
+        }
+        self.file
+            .as_mut()
+            .expect("writer file open")
+            .write_all(bytes)?;
+        self.file.as_mut().expect("writer file open").flush()?;
+        state.written = end;
+        drop(state);
+        self.inner.changed.notify_all();
+        Ok(())
+    }
+
+    pub fn finish(self) -> io::Result<()> {
+        self.finish_with_error(None)
+    }
+
+    pub fn finish_with_error(mut self, error: Option<String>) -> io::Result<()> {
+        if let Some(file) = self.file.as_mut() {
+            file.flush()?;
+        }
+        let mut state = self.inner.state.lock().expect("spool state poisoned");
+        state.failure = error;
+        state.finished = true;
+        drop(state);
+        self.inner.changed.notify_all();
+        self.file.take();
+        Ok(())
+    }
+}
+
+impl Drop for SpoolWriter {
+    fn drop(&mut self) {
+        if self.file.is_some() {
+            let mut state = self.inner.state.lock().expect("spool state poisoned");
+            state.failure = Some("spool writer dropped before completion".into());
+            state.finished = true;
+            drop(state);
+            self.inner.changed.notify_all();
+        }
+    }
+}
+
+impl SpoolReader {
+    pub fn fork(&self) -> io::Result<Self> {
+        Ok(Self {
+            inner: Arc::clone(&self.inner),
+            file: open_spool(&self.inner.path, false)?,
+            offset: 0,
+        })
+    }
+}
+
+impl Read for SpoolReader {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            if self
+                .inner
+                .cancelled
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "spool read cancelled",
+                ));
+            }
+            let state = self.inner.state.lock().expect("spool state poisoned");
+            if self.offset < state.written {
+                let available = (state.written - self.offset) as usize;
+                let count = available.min(buffer.len());
+                drop(state);
+                self.file.seek(SeekFrom::Start(self.offset))?;
+                let read = self.file.read(&mut buffer[..count])?;
+                if read == 0 {
+                    continue;
+                }
+                self.offset += read as u64;
+                return Ok(read);
+            }
+            if state.finished {
+                if let Some(error) = &state.failure {
+                    return Err(io::Error::new(io::ErrorKind::UnexpectedEof, error.clone()));
+                }
+                return Ok(0);
+            }
+            let _ = self
+                .inner
+                .changed
+                .wait_timeout(state, Duration::from_millis(50))
+                .expect("spool state poisoned");
+        }
+    }
+}
+
+fn open_spool(path: &PathBuf, truncate: bool) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(truncate).create(truncate);
+    if truncate {
+        options.truncate(true);
+    }
+    #[cfg(windows)]
+    options.share_mode(0x00000007);
+    options.open(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::thread;
+
+    #[test]
+    fn reader_waits_for_partial_writes_and_reads_incrementally() {
+        let (spool, mut writer) = ReplayableSpool::new(32).unwrap();
+        let mut reader = spool.reader().unwrap();
+        let (received, sent) = mpsc::channel();
+        let task = thread::spawn(move || {
+            let mut bytes = [0; 4];
+            let first = reader.read(&mut bytes).unwrap();
+            received.send(bytes[..first].to_vec()).unwrap();
+            let second = reader.read(&mut bytes).unwrap();
+            received.send(bytes[..second].to_vec()).unwrap();
+        });
+        writer.append(b"abcd").unwrap();
+        assert_eq!(sent.recv().unwrap(), b"abcd");
+        writer.append(b"efgh").unwrap();
+        assert_eq!(sent.recv().unwrap(), b"efgh");
+        writer.finish().unwrap();
+        task.join().unwrap();
+    }
+
+    #[test]
+    fn forks_replay_completed_bytes_for_retries_and_multiple_consumers() {
+        let (spool, mut writer) = ReplayableSpool::new(64).unwrap();
+        writer.append(b"replay-me").unwrap();
+        writer.finish().unwrap();
+        let mut first = spool.reader().unwrap();
+        let mut retry = first.fork().unwrap();
+        let mut one = Vec::new();
+        let mut two = Vec::new();
+        first.read_to_end(&mut one).unwrap();
+        retry.read_to_end(&mut two).unwrap();
+        assert_eq!(one, b"replay-me");
+        assert_eq!(two, one);
+    }
+
+    #[test]
+    fn cancellation_releases_a_reader_waiting_for_the_next_chunk() {
+        let (spool, _writer) = ReplayableSpool::new(32).unwrap();
+        let mut reader = spool.reader().unwrap();
+        let task = thread::spawn(move || {
+            let mut bytes = [0; 1];
+            reader.read(&mut bytes).unwrap_err().kind()
+        });
+        thread::sleep(Duration::from_millis(20));
+        spool.cancel();
+        assert_eq!(task.join().unwrap(), io::ErrorKind::Interrupted);
+    }
+}
