@@ -1,5 +1,19 @@
 # Kaveon — Engineer Coordination
 
+## SQL compatibility track — October 12, 2026
+
+Commit `59aaf0ec` expanded the differential corpus with `INTERSECT`,
+`EXCEPT`, and a non-recursive CTE aggregate projection; the distributed
+Parquet-encoding sweep passes. Commit `04fc5272` adds `CAST(... AS DATE)` to
+the SQL expression model as Arrow `Date32`, preserving nulls, with parser and
+executor tests.
+
+The remaining high-value SQL gaps are unchanged: `INTERSECT ALL`/`EXCEPT ALL`
+need multiset-aware logical plans and fragment operators; scalar subqueries,
+prepared client parameters, recursive CTEs, and complex array/map/row types
+remain unsupported. `CAST` now covers DATE in addition to the existing scalar
+and decimal targets; timestamp and complex-type casts remain pending.
+
 ## Live cloud cutover and security verification — October 12, 2026
 
 The current AKS verification was run against subscription

@@ -71,6 +71,7 @@ pub enum CastTarget {
     Int64,
     Float64,
     Utf8,
+    Date32,
     Decimal128 { precision: u8, scale: i8 },
 }
 
@@ -105,6 +106,7 @@ impl CastTarget {
             Self::Int64 => arrow::datatypes::DataType::Int64,
             Self::Float64 => arrow::datatypes::DataType::Float64,
             Self::Utf8 => arrow::datatypes::DataType::Utf8,
+            Self::Date32 => arrow::datatypes::DataType::Date32,
             Self::Decimal128 { precision, scale } => {
                 arrow::datatypes::DataType::Decimal128(*precision, *scale)
             }

@@ -1881,6 +1881,7 @@ fn ast_data_type_to_cast_target(dt: &ast::DataType) -> Result<CastTarget> {
         | ast::DataType::String(_)
         | ast::DataType::Char(_)
         | ast::DataType::CharVarying(_) => Ok(CastTarget::Utf8),
+        ast::DataType::Date => Ok(CastTarget::Date32),
         ast::DataType::Decimal(info) | ast::DataType::Numeric(info) => {
             let (p, s) = match info {
                 ast::ExactNumberInfo::PrecisionAndScale(p, s) => (*p as u8, *s as i8),
@@ -3186,6 +3187,21 @@ mod tests {
             }
             _ => panic!("expected Project"),
         }
+    }
+
+    #[test]
+    fn parses_cast_to_date() {
+        let plan = sql_to_logical_plan("SELECT CAST(event_date AS DATE) FROM events").unwrap();
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("expected Project");
+        };
+        assert!(matches!(
+            columns[0],
+            Expr::Cast {
+                data_type: CastTarget::Date32,
+                ..
+            }
+        ));
     }
 
     #[test]
