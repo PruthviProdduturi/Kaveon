@@ -37,6 +37,13 @@ This verification is read-only. It proves the deployed health and authority
 signals above; it does not by itself prove replay completeness, backup/restore,
 rollback, or multi-worker qualification.
 
+**PostgreSQL retirement confirmation:** on October 12, the active Azure
+subscription returned no `Microsoft.DBforPostgreSQL/flexibleServers` resources,
+and the AKS namespace returned no PostgreSQL pods or StatefulSets. PostgreSQL is
+therefore retired from the current cloud runtime and resource group. Older
+entries below that describe an active PostgreSQL server are historical evidence
+from before this cutover and must not be used as the current deployment state.
+
 ## Codex handoff — October 7, 2026 — cloud KaveonDB cutover in progress
 
 The local profile is PostgreSQL-free and verified. The personal Azure cloud
