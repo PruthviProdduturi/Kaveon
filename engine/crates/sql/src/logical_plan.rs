@@ -1936,6 +1936,9 @@ fn ast_value_to_expr(value: &ast::Value) -> Result<Expr> {
         }
         ast::Value::Boolean(b) => Ok(Expr::Literal(ScalarValue::Bool(*b))),
         ast::Value::Null => Ok(Expr::Literal(ScalarValue::Null)),
+        ast::Value::Placeholder(name) => Err(sql_err(format!(
+            "prepared parameter '{name}' is not supported; bind values before submitting SQL"
+        ))),
         _ => Err(sql_err(format!("unsupported value: {value}"))),
     }
 }
@@ -3407,6 +3410,14 @@ mod tests {
                 "{sql}: expected `{expected}` in `{error}`"
             );
         }
+    }
+
+    #[test]
+    fn prepared_parameters_fail_with_an_explicit_binding_diagnostic() {
+        let error = sql_to_logical_plan("SELECT * FROM t WHERE user_id = $1").unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("prepared parameter '$1' is not supported; bind values before submitting SQL"));
     }
 
     #[test]
