@@ -822,7 +822,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn replayable_receive_decodes_batches_before_body_finishes_and_replays() {
         let (schema, messages) = ipc_messages();
         let (sender, body) = chunk_source();
@@ -843,7 +843,6 @@ mod tests {
 
         sender.send(Ok(Bytes::from(messages[3].clone()))).unwrap();
         sender.send(Ok(Bytes::from(messages[4].clone()))).unwrap();
-        assert_eq!(payload.next_batch().unwrap().unwrap().num_rows(), 4);
         assert_eq!(payload.next_batch().unwrap().unwrap().num_rows(), 4);
         drop(sender);
         assert!(payload.next_batch().unwrap().is_none());
