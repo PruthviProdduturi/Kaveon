@@ -122,6 +122,8 @@ qualification documents; this tracker remains the single ordered work list.
 - A bounded replayable append-only exchange spool foundation is implemented
   with partial-read, fork/retry, cancellation, and writer-failure tests
   (`79ddf443`). It is not yet wired into async HTTP exchange fetching.
+- Decimal casts now validate precision/scale before planning and execute with
+  Decimal128 null/scale coverage (`81b610e2`).
 
 Track 1 remains partial because distributed global ordering and a full
 worker-loss/spill/cancellation corpus still need a correctness gate. The
