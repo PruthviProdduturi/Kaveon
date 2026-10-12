@@ -52,8 +52,17 @@ spec:
         spec:
           restartPolicy: Never
           serviceAccountName: kaveon-api
+          automountServiceAccountToken: false
+          # The same identity the API pod runs as. `runAsNonRoot` alone is not
+          # enough: the image declares no USER, so the kubelet refuses the
+          # container with CreateContainerConfigError rather than picking a uid
+          # for it — a failure that repeats every schedule and produces no
+          # application log to notice it by.
           securityContext:
             runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
             seccompProfile: {type: RuntimeDefault}
           containers:
             - name: archive
