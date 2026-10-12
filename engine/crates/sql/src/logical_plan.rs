@@ -9,6 +9,8 @@ use kaveon_core::{
     WindowFrameBound, WindowFrameUnits, is_aggregate_function,
 };
 use sqlparser::ast;
+use sqlparser::ast::visit_expressions_mut;
+use std::ops::ControlFlow;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AggregateExpr {
@@ -378,6 +380,18 @@ pub fn sql_to_logical_plan_for_binder(sql: &str) -> Result<LogicalPlan> {
     lower(sql, true, false)
 }
 
+/// Lower a statement after binding typed positional values to `$1`, `$2`, …
+/// placeholders in the parsed AST. Values are replaced as AST literals, never
+/// interpolated into SQL text.
+pub fn sql_to_logical_plan_for_binder_with_parameters(
+    sql: &str,
+    parameters: &[ScalarValue],
+) -> Result<LogicalPlan> {
+    let mut statements = parse_sql(sql)?;
+    bind_positional_parameters(&mut statements, parameters)?;
+    lower_statements(statements, true, false)
+}
+
 /// [`sql_to_logical_plan_for_binder`] with every plain `COUNT(DISTINCT
 /// expr)` lowered as `APPROX_COUNT_DISTINCT` named as COUNT
 /// ([`AggregateExpr::approximated`]): the `approximate` session setting.
@@ -388,6 +402,14 @@ pub fn sql_to_logical_plan_for_binder_approximate(sql: &str) -> Result<LogicalPl
 
 fn lower(sql: &str, outer_references: bool, approximate: bool) -> Result<LogicalPlan> {
     let stmts = parse_sql(sql)?;
+    lower_statements(stmts, outer_references, approximate)
+}
+
+fn lower_statements(
+    stmts: Vec<ast::Statement>,
+    outer_references: bool,
+    approximate: bool,
+) -> Result<LogicalPlan> {
     if stmts.is_empty() {
         return Err(sql_err("empty query"));
     }
@@ -404,6 +426,63 @@ fn lower(sql: &str, outer_references: bool, approximate: bool) -> Result<Logical
             },
         ),
         _ => Err(sql_err("only SELECT queries are supported")),
+    }
+}
+
+fn bind_positional_parameters(
+    statements: &mut Vec<ast::Statement>,
+    parameters: &[ScalarValue],
+) -> Result<()> {
+    let mut error = None;
+    let mut bind = |expr: &mut ast::Expr| {
+        let ast::Expr::Value(ast::Value::Placeholder(name)) = expr else {
+            return ControlFlow::<()>::Continue(());
+        };
+        let Some(index) = name.strip_prefix('$').and_then(|n| n.parse::<usize>().ok()) else {
+            error = Some(sql_err(format!(
+                "unsupported parameter placeholder '{name}'; use $1, $2, …"
+            )));
+            return ControlFlow::Break(());
+        };
+        if index == 0 || index > parameters.len() {
+            error = Some(sql_err(format!(
+                "parameter {name} is not bound (received {} values)",
+                parameters.len()
+            )));
+            return ControlFlow::Break(());
+        }
+        *expr = ast::Expr::Value(scalar_to_ast_value(&parameters[index - 1]));
+        ControlFlow::Continue(())
+    };
+    let _ = visit_expressions_mut(statements, &mut bind);
+    error.map_or(Ok(()), Err)
+}
+
+fn scalar_to_ast_value(value: &ScalarValue) -> ast::Value {
+    match value {
+        ScalarValue::Null => ast::Value::Null,
+        ScalarValue::Bool(value) => ast::Value::Boolean(*value),
+        ScalarValue::Int64(value) => ast::Value::Number(value.to_string(), false),
+        ScalarValue::Float64(value) => ast::Value::Number(value.to_string(), false),
+        ScalarValue::Utf8(value) => ast::Value::SingleQuotedString(value.clone()),
+        ScalarValue::Decimal128 {
+            value,
+            precision: _,
+            scale,
+        } => {
+            let negative = *value < 0;
+            let digits = value.unsigned_abs().to_string();
+            let scale = (*scale).max(0) as usize;
+            let text = if scale == 0 {
+                digits
+            } else if digits.len() <= scale {
+                format!("0.{}{}", "0".repeat(scale - digits.len()), digits)
+            } else {
+                let split = digits.len() - scale;
+                format!("{}.{}", &digits[..split], &digits[split..])
+            };
+            ast::Value::Number(if negative { format!("-{text}") } else { text }, true)
+        }
     }
 }
 
@@ -3436,6 +3515,36 @@ mod tests {
     }
 
     #[test]
+    fn binds_positional_parameters_as_typed_ast_literals() {
+        let plan = sql_to_logical_plan_for_binder_with_parameters(
+            "SELECT * FROM t WHERE user_id = $1 AND active = $2",
+            &[ScalarValue::Int64(42), ScalarValue::Bool(true)],
+        )
+        .unwrap();
+        let text = format!("{plan:?}");
+        assert!(text.contains("Int64(42)"), "integer parameter was not bound");
+        assert!(text.contains("Bool(true)"), "boolean parameter was not bound");
+    }
+
+    #[test]
+    fn rejects_missing_or_non_positional_parameters_before_planning() {
+        let missing = sql_to_logical_plan_for_binder_with_parameters(
+            "SELECT * FROM t WHERE user_id = $2",
+            &[ScalarValue::Int64(42)],
+        )
+        .unwrap_err();
+        assert!(missing.to_string().contains("parameter $2 is not bound"));
+        let named = sql_to_logical_plan_for_binder_with_parameters(
+            "SELECT * FROM t WHERE user_id = ?",
+            &[ScalarValue::Int64(42)],
+        )
+        .unwrap_err();
+        assert!(named
+            .to_string()
+            .contains("unsupported parameter placeholder '?'"));
+    }
+
+    #[test]
     fn a_scalar_subquery_in_having_joins_the_aggregate_output() {
         let plan = sql_to_logical_plan(
             "SELECT k, sum(v) AS total FROM t GROUP BY k HAVING sum(v) > (SELECT sum(v) * 0.5 FROM t) AND count(*) > 1 ORDER BY total DESC",
@@ -3753,11 +3862,12 @@ mod tests {
 
     #[test]
     fn correlated_scalar_subqueries_are_rejected_with_explicit_scope_diagnostic() {
-        let sql =
-            "SELECT o.id FROM orders o WHERE o.total > (SELECT AVG(u.score) FROM users u WHERE u.id = o.id)";
+        let sql = "SELECT o.id FROM orders o WHERE o.total > (SELECT AVG(u.score) FROM users u WHERE u.id = o.id)";
         let error = sql_to_logical_plan(sql).unwrap_err();
         assert!(
-            error.to_string().contains("correlated subqueries are unsupported"),
+            error
+                .to_string()
+                .contains("correlated subqueries are unsupported"),
             "unexpected diagnostic: {error}"
         );
 
