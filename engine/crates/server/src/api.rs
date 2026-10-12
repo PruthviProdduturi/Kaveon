@@ -17344,10 +17344,31 @@ mod streamed_root_tests {
         ),
         String,
     > {
+        run_inline_statement(
+            state,
+            query_id,
+            "SELECT v, COUNT(*) AS c FROM numbers GROUP BY v",
+        )
+        .await
+    }
+
+    async fn run_inline_statement(
+        state: &Arc<AppState>,
+        query_id: &str,
+        statement: &str,
+    ) -> Result<
+        (
+            TaskResponse,
+            Vec<StageTelemetry>,
+            u64,
+            Option<QueryRecovery>,
+        ),
+        String,
+    > {
         let mut context = context();
         context.result_delivery = None;
         let snapshot = Arc::clone(&*state.catalog.read().await);
-        let plan = plan("SELECT v, COUNT(*) AS c FROM numbers GROUP BY v", &snapshot);
+        let plan = plan(statement, &snapshot);
         let mut reason = None;
         execute_distributed_fragments(
             state,
@@ -17367,6 +17388,18 @@ mod streamed_root_tests {
 
     /// The grouped statement's exact result: every value once, counted once.
     fn assert_grouped_result_exact(response: &TaskResponse) {
+        assert_eq!(response.columns.len(), 2);
+        assert_eq!(response.data.len(), (ROW_GROUPS * ROWS_PER_GROUP) as usize);
+        let mut sum = 0i64;
+        for row in &response.data {
+            sum += row[0].as_i64().unwrap();
+            assert_eq!(row[1].as_i64(), Some(1));
+        }
+        let n = ROW_GROUPS * ROWS_PER_GROUP;
+        assert_eq!(sum, n * (n - 1) / 2);
+    }
+
+    fn assert_self_join_result_exact(response: &TaskResponse) {
         assert_eq!(response.columns.len(), 2);
         assert_eq!(response.data.len(), (ROW_GROUPS * ROWS_PER_GROUP) as usize);
         let mut sum = 0i64;
@@ -17500,6 +17533,44 @@ mod streamed_root_tests {
         retried.sort_unstable();
         assert_eq!(retried, vec![(0, 0, "worker-a", 1), (0, 1, "worker-a", 1)]);
         DISPATCH_PROBES.lock().unwrap().remove("q-loss-during");
+        for server in servers {
+            server.abort();
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_worker_lost_during_a_distributed_join_is_recovered_exactly() {
+        let directory = std::env::temp_dir().join(format!("kaveon-join-loss-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let (state, servers, workers) = cluster_with_stage_retry_limit(
+            &directory,
+            crate::orchestrator::DEFAULT_STAGE_RETRY_LIMIT,
+        )
+        .await;
+        let query = "q-join-loss";
+        stop_worker_when_stage_dispatches(query, 1, workers[1].address.clone());
+        let (response, stages, _, recovery) = run_inline_statement(
+            &state,
+            query,
+            "SELECT l.v, COUNT(*) AS c FROM numbers l JOIN numbers r ON l.v = r.v GROUP BY l.v",
+        )
+        .await
+        .expect("the distributed join statement completes");
+        assert_self_join_result_exact(&response);
+        let recovery = recovery.expect("the worker loss is recorded");
+        assert_eq!(recovery.lost_workers, vec!["worker-b"]);
+        assert!(recovery.reexecuted_stages.contains(&0));
+        assert!(
+            recovery
+                .stage_retries
+                .iter()
+                .any(|retry| retry.from == "worker-b" && retry.attempt == 1),
+            "expected a retry away from worker-b: {:?}",
+            recovery.stage_retries
+        );
+        assert!(stages.iter().any(|stage| stage.completed_tasks > 0));
+        DISPATCH_PROBES.lock().unwrap().remove(query);
         for server in servers {
             server.abort();
         }
