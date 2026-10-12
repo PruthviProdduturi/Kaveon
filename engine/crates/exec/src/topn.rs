@@ -656,6 +656,103 @@ mod tests {
     }
 
     #[test]
+    fn three_worker_global_top_n_matches_single_partition_reference() {
+        // Each worker keeps only its local candidates. The final merge must
+        // still agree with sorting the complete input, including NULLs and
+        // equal primary keys. This is the correctness contract for the
+        // current centralized global ORDER BY/TopN merge.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("score", DataType::Int64, true),
+            Field::new("name", DataType::Utf8, false),
+        ]));
+        let workers = [
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(Int64Array::from(vec![
+                        Some(10),
+                        None,
+                        Some(8),
+                        Some(8),
+                        Some(2),
+                    ])),
+                    Arc::new(StringArray::from(vec!["a", "null-a", "z", "b", "low-a"])),
+                ],
+            )
+            .unwrap(),
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(Int64Array::from(vec![
+                        Some(10),
+                        Some(9),
+                        None,
+                        Some(8),
+                        Some(1),
+                    ])),
+                    Arc::new(StringArray::from(vec!["c", "n", "null-b", "c", "low-b"])),
+                ],
+            )
+            .unwrap(),
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(Int64Array::from(vec![
+                        Some(9),
+                        Some(8),
+                        Some(8),
+                        None,
+                        Some(0),
+                    ])),
+                    Arc::new(StringArray::from(vec!["m", "a", "d", "null-c", "low-c"])),
+                ],
+            )
+            .unwrap(),
+        ];
+        let ordering = vec![
+            SortExpr::new(Expr::Column("score".into()), false).with_nulls_first(false),
+            SortExpr::new(Expr::Column("name".into()), true),
+        ];
+        let local_candidates = workers
+            .iter()
+            .map(|worker| merge_top_n(&schema, std::slice::from_ref(worker), &ordering, 4))
+            .collect::<Result<Vec<_>>>()
+            .unwrap()
+            .into_iter()
+            .map(Option::unwrap)
+            .collect::<Vec<_>>();
+        let distributed = merge_top_n(&schema, &local_candidates, &ordering, 4)
+            .unwrap()
+            .unwrap();
+
+        let complete = concat_batches(&schema, &workers).unwrap();
+        let columns = ordering
+            .iter()
+            .map(|sort_expr| {
+                Ok(SortColumn {
+                    values: evaluate(&sort_expr.expr, &complete).unwrap(),
+                    options: Some(SortOptions {
+                        descending: !sort_expr.ascending,
+                        nulls_first: sort_expr.nulls_first,
+                    }),
+                })
+            })
+            .collect::<std::result::Result<Vec<_>, arrow::error::ArrowError>>()
+            .unwrap();
+        let indices = lexsort_to_indices(&columns, Some(4)).unwrap();
+        let expected = RecordBatch::try_new(
+            schema.clone(),
+            complete
+                .columns()
+                .iter()
+                .map(|column| take(column.as_ref(), &indices, None).unwrap())
+                .collect(),
+        )
+        .unwrap();
+        assert_eq!(distributed, expected);
+    }
+
+    #[test]
     fn merge_rejects_incompatible_partition_schema() {
         let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
         let incompatible_schema =
