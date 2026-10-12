@@ -33,6 +33,41 @@ Workstreams **1** and **2** begin in parallel. Workstreams **3**, **4**, and
 **7** are being audited in parallel so implementation work is measured against
 the same acceptance contract rather than separate informal benchmarks.
 
+## Audit snapshot — October 12, 2026
+
+The initial repository audit confirms that the Engine has real distributed
+foundations, but several operators are still centralized or narrow:
+
+- Hash repartition, broadcast, joins, partial/final aggregates, spill, retry,
+  cancellation, and snapshot fields exist. Cluster qualification remains open
+  for skew, spill pressure, rolling worker loss, and cancellation stress.
+- Exchange producers stream output, but consumers still assemble the complete
+  payload before decoding. This is a memory and latency blocker for large
+  federated exchanges.
+- Windows gather to one task. Set operations and final sort/TopN also have
+  centralized merge stages. These are not Trino-class parallel plans yet.
+- Dynamic filtering, general join reordering, skew mitigation, and qualified
+  coordinator failover are missing.
+- Ordinary distributed joins require equality keys; residual predicates are
+  only partially supported. Semi/anti joins are not yet partitioned by default.
+- Non-recursive CTEs, derived tables, joins, aggregates, `HAVING`, `CASE`, and
+  common set operations work. Scalar subqueries, recursive CTEs, `INTERSECT ALL`,
+  `EXCEPT ALL`, prepared parameters, and general lake-table DML remain missing.
+- Arrays are limited; maps and structs/row values are not represented as a
+  complete SQL expression type. Complex casts, dereference, `UNNEST`, and broad
+  JSON operations remain open.
+- There is no Trino-style cross-source federation yet. Registered SQL sources
+  are API passthrough paths, while the strongest native Engine path is
+  Parquet/Delta/Iceberg. S3 and Iceberg status must be reconciled between the
+  connector matrix and older architecture wording before publication.
+- The October 7 AKS comparison is valid for its declared 12-query fixture
+  (3.8282 versus 1.8012 successful exact-result QPS, 2.1254x), but it is not
+  broad Trino parity. TPC-H SF100 and repeated ClickBench qualification remain
+  open.
+
+The detailed source audit is recorded in the Engine status and connector
+qualification documents; this tracker remains the single ordered work list.
+
 ## Workstream 1 — distributed SQL execution
 
 | Capability | Status | Evidence required |
