@@ -12,7 +12,11 @@ single-column aggregate are now covered in `WHERE` by the
 the same lowering.
 
 The remaining high-value SQL gaps are unchanged: `INTERSECT ALL`/`EXCEPT ALL`
-need multiset-aware logical plans and fragment operators; scalar subqueries in
+need multiset-aware logical plans and fragment operators. Both forms currently
+fail during lowering with the exact `sql: INTERSECT ALL is unsupported` or
+`sql: EXCEPT ALL is unsupported` diagnostic; this is intentional because the
+current set-operation operator is distinct-oriented and does not retain row
+multiplicity. Scalar subqueries in
 projections, correlated subqueries, prepared client parameters, recursive
 CTEs, and complex array/map/row types remain unsupported. Unsupported scalar
 shapes return explicit diagnostics rather than being sent to execution.
