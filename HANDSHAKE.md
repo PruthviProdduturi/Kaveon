@@ -19,8 +19,10 @@ shapes return explicit diagnostics rather than being sent to execution.
 The SQL front end now exposes a typed positional binding entry point for
 `$1`, `$2`, …; values become AST literals before planning and are never
 interpolated into SQL text. Missing positions and `?`/named placeholders fail
-before planning. The HTTP request field and worker propagation remain the next
-integration dependency before this is exposed through clients.
+before planning. `StatementRequest.parameters` now accepts the same JSON
+scalar values and runs them through the typed binder before planning; invalid
+arrays/objects and unbound positions fail with HTTP 400. Workers receive the
+compiled fragment, so parameter values never cross the worker boundary.
 `CAST` now covers DATE and fixed-precision microsecond
 TIMESTAMP (with explicit UTC timezone metadata) in addition to the existing
 scalar and decimal targets. Decimal precision/scale bounds are validated before

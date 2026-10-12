@@ -17,9 +17,13 @@ use kaveon_core::{
     ColumnDefinition, ExchangeId, ExecutableFragment, MemoryAdmissionController, SchemaDefinition,
     SchemaId, StageId, TableDefinition, TableId, TaskId,
 };
+use kaveon_core::predicate::ScalarValue;
 use kaveon_exec::sort::SortExpr;
 use kaveon_exec::topn::merge_top_n;
-use kaveon_sql::logical_plan::sql_to_logical_plan_for_binder;
+use kaveon_sql::logical_plan::{
+    sql_to_logical_plan_for_binder, sql_to_logical_plan_for_binder_approximate_with_parameters,
+    sql_to_logical_plan_for_binder_with_parameters,
+};
 use kaveon_sql::logical_plan::{AggregateExpr, LogicalPlan};
 use kaveon_sql::parser::{
     NativeTransactionalStatement, adapt_product_dml, parse_native_transactional,
@@ -752,6 +756,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 #[derive(Deserialize)]
 struct StatementRequest {
     query: String,
+    /// Typed positional values for `$1`, `$2`, …; values are bound in the
+    /// parsed AST before planning and are never interpolated into SQL text.
+    #[serde(default)]
+    parameters: Vec<serde_json::Value>,
     #[serde(default)]
     catalog: Option<String>,
     #[serde(default)]
@@ -772,6 +780,27 @@ struct StatementRequest {
     /// Per-request settings; see `crate::settings`.
     #[serde(default)]
     settings: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+fn request_parameters(values: &[serde_json::Value]) -> Result<Vec<ScalarValue>, String> {
+    values
+        .iter()
+        .enumerate()
+        .map(|(position, value)| match value {
+            serde_json::Value::Null => Ok(ScalarValue::Null),
+            serde_json::Value::Bool(value) => Ok(ScalarValue::Bool(*value)),
+            serde_json::Value::Number(value) => value
+                .as_i64()
+                .map(ScalarValue::Int64)
+                .or_else(|| value.as_f64().map(ScalarValue::Float64))
+                .ok_or_else(|| format!("parameter ${} is not a supported number", position + 1)),
+            serde_json::Value::String(value) => Ok(ScalarValue::Utf8(value.clone())),
+            serde_json::Value::Array(_) | serde_json::Value::Object(_) => Err(format!(
+                "parameter ${} must be null, boolean, number, or string",
+                position + 1
+            )),
+        })
+        .collect()
 }
 
 #[derive(Serialize, Deserialize)]
@@ -3082,12 +3111,19 @@ async fn run_statement(
     }
 
     let analysis_start = Instant::now();
+    let parameters = match request_parameters(&req.parameters) {
+        Ok(parameters) => parameters,
+        Err(error) => {
+            let message = error.to_string();
+            return task_failure_response(StatusCode::BAD_REQUEST, &message);
+        }
+    };
     // `settings.approximate`: every plain COUNT(DISTINCT) lowers as a
     // sketch, as APPROX_COUNT_DISTINCT would; the record says so.
     let lowered = if settings.approximate() {
-        kaveon_sql::logical_plan::sql_to_logical_plan_for_binder_approximate(&sql)
+        sql_to_logical_plan_for_binder_approximate_with_parameters(&sql, &parameters)
     } else {
-        sql_to_logical_plan_for_binder(&sql)
+        sql_to_logical_plan_for_binder_with_parameters(&sql, &parameters)
     };
     let mut plan = match lowered {
         Ok(p) => p,
@@ -5952,6 +5988,7 @@ async fn run_sub_statement(
     client_tags.push(format!("analyze:{parent_id}"));
     let request = StatementRequest {
         query,
+        parameters: vec![],
         catalog: Some(context.catalog.clone()),
         schema: Some(context.schema.clone()),
         source: context.source.clone(),
@@ -11291,6 +11328,7 @@ mod tests {
     fn statement_request(query: &str, settings: serde_json::Value) -> super::StatementRequest {
         super::StatementRequest {
             query: query.into(),
+            parameters: vec![],
             catalog: None,
             schema: None,
             source: None,
@@ -11301,6 +11339,35 @@ mod tests {
             result_delivery: None,
             settings: settings.as_object().cloned(),
         }
+    }
+
+    #[test]
+    fn request_parameters_accept_only_scalar_json_values() {
+        let parsed = super::request_parameters(&[
+            serde_json::json!(42),
+            serde_json::json!(true),
+            serde_json::json!("safe literal"),
+            serde_json::Value::Null,
+        ])
+        .unwrap();
+        assert_eq!(
+            parsed,
+            vec![
+                super::ScalarValue::Int64(42),
+                super::ScalarValue::Bool(true),
+                super::ScalarValue::Utf8("safe literal".into()),
+                super::ScalarValue::Null,
+            ]
+        );
+        let error = super::request_parameters(&[serde_json::json!({"unsafe": "object"})])
+            .unwrap_err();
+        assert!(error.contains("parameter $1 must be null, boolean, number, or string"));
+        let request: super::StatementRequest = serde_json::from_value(serde_json::json!({
+            "query": "SELECT * FROM t WHERE id = $1",
+            "parameters": [7]
+        }))
+        .unwrap();
+        assert_eq!(request.parameters, vec![serde_json::json!(7)]);
     }
 
     #[test]
@@ -13531,6 +13598,7 @@ mod tests {
             axum::Extension(identity.clone()),
             axum::Json(super::StatementRequest {
                 query: query.into(),
+                parameters: vec![],
                 catalog: Some("lake".into()),
                 schema: Some("sales".into()),
                 source: None,
@@ -14448,6 +14516,7 @@ mod tests {
                     admin,
                     super::StatementRequest {
                         query: "ANALYZE orders WITH (distinct = true)".into(),
+                        parameters: vec![],
                         catalog: Some("lake".into()),
                         schema: Some("sales".into()),
                         source: None,
@@ -15672,6 +15741,7 @@ mod tests {
                     admin(),
                     super::StatementRequest {
                         query: "ANALYZE events WITH (cube = true)".into(),
+                        parameters: vec![],
                         catalog: Some("lake".into()),
                         schema: Some("sales".into()),
                         source: None,
