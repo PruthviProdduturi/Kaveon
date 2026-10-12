@@ -35,6 +35,7 @@ impl Drop for Inner {
 
 /// A spool whose bytes remain replayable until all readers and the writer are
 /// dropped. The file is bounded before bytes are written.
+#[derive(Clone)]
 pub struct ReplayableSpool {
     inner: Arc<Inner>,
 }
@@ -89,6 +90,15 @@ impl ReplayableSpool {
             file: open_spool(&self.inner.path, false)?,
             offset: 0,
         })
+    }
+
+    /// Open an Arrow IPC reader over the append-only spool. This blocks until
+    /// the IPC schema is available, so callers should invoke it from a
+    /// blocking task. Once opened, Arrow reads batches as the writer appends
+    /// them and waits at the spool boundary instead of seeing a premature EOF.
+    pub fn open_arrow_reader(&self) -> io::Result<arrow::ipc::reader::StreamReader<SpoolReader>> {
+        arrow::ipc::reader::StreamReader::try_new(self.reader()?, None)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
     }
 
     pub fn cancel(&self) {
@@ -276,5 +286,46 @@ mod tests {
         thread::sleep(Duration::from_millis(20));
         spool.cancel();
         assert_eq!(task.join().unwrap(), io::ErrorKind::Interrupted);
+    }
+
+    #[test]
+    fn arrow_reader_waits_for_later_ipc_batches() {
+        use arrow::array::{Int64Array, RecordBatch};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::ipc::writer::StreamWriter;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        let mut encoded = Vec::new();
+        {
+            let mut writer = StreamWriter::try_new(&mut encoded, &schema).unwrap();
+            writer
+                .write(
+                    &RecordBatch::try_new(
+                        schema.clone(),
+                        vec![Arc::new(Int64Array::from(vec![1, 2]))],
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            writer.finish().unwrap();
+        }
+        let (spool, mut writer) = ReplayableSpool::new(encoded.len() as u64 + 8).unwrap();
+        let split = encoded.len() / 2;
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let reader_spool = spool.clone();
+        let task = thread::spawn(move || {
+            let mut reader = reader_spool.open_arrow_reader().unwrap();
+            let batch = reader.next().unwrap().unwrap();
+            ready_tx.send(batch.num_rows()).unwrap();
+            assert!(reader.next().is_none());
+            done_tx.send(()).unwrap();
+        });
+        writer.append(&encoded[..split]).unwrap();
+        writer.append(&encoded[split..]).unwrap();
+        writer.finish().unwrap();
+        assert_eq!(ready_rx.recv().unwrap(), 2);
+        done_rx.recv().unwrap();
+        task.join().unwrap();
     }
 }
