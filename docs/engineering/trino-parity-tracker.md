@@ -119,8 +119,9 @@ qualification documents; this tracker remains the single ordered work list.
   multi-row and multi-column diagnostics, are covered in `3a60cf23`.
 - SQL placeholders (`$1`, `?`, and named forms) now fail with an explicit
   binding diagnostic rather than being misinterpreted as literals
-  (`89499c7b`). Typed request-level parameter transport is still required
-  before prepared execution can be enabled.
+  (`89499c7b`). Positional `$1`, `$2` binding now safely converts typed AST
+  literals without string interpolation (`74f66a10`); HTTP request transport
+  and coordinator routing remain to be wired.
 - A bounded replayable append-only exchange spool foundation is implemented
   with partial-read, fork/retry, cancellation, and writer-failure tests
   (`79ddf443`). It is not yet wired into async HTTP exchange fetching.
