@@ -32,6 +32,16 @@ ingress:
   enabled: false
   # The name people type. Required when enabled.
   host: ""
+  # Other names that answer on the same Studio — a `www.` form, a legacy
+  # hostname kept alive during a cutover.
+  #
+  # Every name here joins the certificate, and an ACME HTTP-01 issuer proves
+  # each one by being reached at it. So a name that does not resolve to this
+  # ingress fails the whole certificate, including the canonical host — the
+  # existing certificate keeps serving until it expires, and then the site is
+  # down with nothing in the logs but a renewal that has been quietly failing
+  # for weeks. Add a name here only once its DNS already points here.
+  aliasHosts: []
   # e.g. "webapprouting.kubernetes.azure.com" on AKS managed ingress, or
   # "nginx" for an ingress-nginx install.
   className: ""
