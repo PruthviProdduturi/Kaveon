@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
-use std::io::Cursor;
+use std::io::{self, Read};
 use std::sync::{Arc, RwLock};
 
 use arrow::datatypes::SchemaRef;
@@ -876,14 +876,65 @@ pub fn decode_batches(
     chunks: Vec<ExchangeChunk>,
     limits: ExchangeLimits,
 ) -> ExchangeResult<(ExchangeIdentity, SchemaRef, Vec<RecordBatch>)> {
-    let (identity, payload) = assemble_chunks(chunks, limits)?;
-    let reader = StreamReader::try_new(Cursor::new(payload), None)
+    let chunks = ordered_chunks(chunks, limits)?;
+    let identity = chunks[0].identity.clone();
+    // Feed Arrow directly from the ordered chunk bodies.  The previous path
+    // concatenated every chunk into a second contiguous payload allocation
+    // before Arrow could read the schema or first batch.  Keeping the chunks
+    // as the reader's backing storage removes that transient copy while
+    // preserving the same validation and payload ceiling.
+    let reader = StreamReader::try_new(ChunkReader::new(chunks), None)
         .map_err(|error| ExchangeError::Arrow(error.to_string()))?;
     let schema = reader.schema();
     let batches = reader
         .map(|batch| batch.map_err(|error| ExchangeError::Arrow(error.to_string())))
         .collect::<ExchangeResult<Vec<_>>>()?;
     Ok((identity, schema, batches))
+}
+
+struct ChunkReader {
+    chunks: std::vec::IntoIter<ExchangeChunk>,
+    current: Option<Bytes>,
+    offset: usize,
+}
+
+impl ChunkReader {
+    fn new(chunks: Vec<ExchangeChunk>) -> Self {
+        Self {
+            chunks: chunks.into_iter(),
+            current: None,
+            offset: 0,
+        }
+    }
+}
+
+impl Read for ChunkReader {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            if let Some(current) = &self.current {
+                let remaining = &current[self.offset..];
+                if !remaining.is_empty() {
+                    let count = remaining.len().min(buffer.len());
+                    buffer[..count].copy_from_slice(&remaining[..count]);
+                    self.offset += count;
+                    if self.offset == current.len() {
+                        self.current = None;
+                        self.offset = 0;
+                    }
+                    return Ok(count);
+                }
+                self.current = None;
+                self.offset = 0;
+            }
+            let Some(chunk) = self.chunks.next() else {
+                return Ok(0);
+            };
+            self.current = Some(chunk.payload);
+        }
+    }
 }
 
 fn ordered_chunks(
