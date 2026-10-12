@@ -11,8 +11,9 @@ executor tests.
 The remaining high-value SQL gaps are unchanged: `INTERSECT ALL`/`EXCEPT ALL`
 need multiset-aware logical plans and fragment operators; scalar subqueries,
 prepared client parameters, recursive CTEs, and complex array/map/row types
-remain unsupported. `CAST` now covers DATE in addition to the existing scalar
-and decimal targets; timestamp and complex-type casts remain pending.
+remain unsupported. `CAST` now covers DATE and fixed-precision microsecond
+TIMESTAMP (with explicit UTC timezone metadata) in addition to the existing
+scalar and decimal targets; complex-type casts remain pending.
 
 ## Live cloud cutover and security verification — October 12, 2026
 
