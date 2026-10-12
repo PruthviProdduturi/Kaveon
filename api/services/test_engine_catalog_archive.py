@@ -119,6 +119,39 @@ class EngineCatalogArchiveTests(unittest.TestCase):
         # An unchanged registry is still a successful run that knows what it saw.
         self.assertEqual(second["counts"], first["counts"])
 
+    def test_a_second_run_at_a_later_observation_time_is_still_unchanged(self):
+        """The case the unchanged-registry test above could not see.
+
+        That test archives the same registry twice with the same observation
+        timestamp, so the bytes matched by luck. In production every run
+        observes statistics afresh, so `observed_at_ms` moves while the
+        identity does not — and the archive wrote a payload that its own
+        content-addressed path did not describe. The corruption check then
+        fired on the ordinary case and the registry stopped being archived at
+        all, which is how this reached the cluster.
+        """
+        client = FakeClient()
+        with patch.object(archive.engine_bridge, "catalog_read", reader(registry(observed_at=1))):
+            first = archive.archive(client, now_ms=1_700_000_000_000)
+        before = dict(client.objects)
+        with patch.object(archive.engine_bridge, "catalog_read",
+                          reader(registry(observed_at=9_999_999))):
+            second = archive.archive(client, now_ms=1_700_000_600_000)
+        self.assertTrue(first["written"])
+        self.assertFalse(second["written"])
+        self.assertEqual(client.objects, before)
+
+    def test_the_stored_bytes_are_the_bytes_the_path_is_named_for(self):
+        """A content-addressed path whose digest does not cover its own content
+        is not content-addressed, and makes every integrity check meaningless."""
+        import hashlib
+        client = FakeClient()
+        with patch.object(archive.engine_bridge, "catalog_read", reader(registry())):
+            result = archive.archive(client, now_ms=1_700_000_000_000)
+        stored = client.objects[result["path"]]
+        self.assertEqual(hashlib.sha256(stored).hexdigest(), result["identity_sha256"])
+        self.assertTrue(result["path"].endswith(f"{result['identity_sha256']}.json"))
+
     def test_a_table_that_advanced_is_archived_beside_the_old_one(self):
         client = FakeClient()
         with patch.object(archive.engine_bridge, "catalog_read", reader(registry(version=0))):

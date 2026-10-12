@@ -170,12 +170,26 @@ def archive(client, *, actor: str = ACTOR, now_ms: int | None = None) -> dict:
     """
     now_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
     document = export(actor)
-    document_identity = identity(document)
+
+    # The stored bytes are exactly the bytes the identity is computed over.
+    #
+    # They were not. The path was the identity — which excludes the statistics
+    # observation timestamps, so that re-observing an unchanged registry is not
+    # a change — while the payload was the document with those timestamps still
+    # in it. Two runs of an unchanged registry therefore agreed on the path and
+    # disagreed on the bytes, and the check below, which exists to catch an
+    # object whose content does not match the digest naming it, fired on the
+    # ordinary case and refused to archive anything at all.
+    #
+    # Storing the canonical form the identity is taken over makes the path a
+    # true digest of its own content, which is what made the check worth having.
+    # Nothing is lost: an observation time is not registry state, and the run
+    # record carries when the archive was taken.
+    payload = _canonical(_without_observation_times(document))
+    document_identity = hashlib.sha256(payload).hexdigest()
     if re.fullmatch(r"[0-9a-f]{64}", document_identity) is None:
         raise RuntimeError("registry identity is not a SHA-256 digest")
-
     path = f"{PREFIX}/catalog/{document_identity}.json"
-    payload = _canonical({**document, "identity_sha256": document_identity})
 
     existing = client.read(path, len(payload) + 1)
     if existing is not None:
@@ -183,7 +197,7 @@ def archive(client, *, actor: str = ACTOR, now_ms: int | None = None) -> dict:
         # Verified rather than assumed: a path that holds different bytes than
         # its own digest is corruption, and reporting it as "unchanged" would
         # hide it.
-        if hashlib.sha256(existing).hexdigest() != hashlib.sha256(payload).hexdigest():
+        if hashlib.sha256(existing).hexdigest() != document_identity:
             raise RuntimeError(f"{path} holds bytes that are not the registry it is named for")
         return {"written": False, "identity_sha256": document_identity, "path": path,
                 "counts": document["counts"], "run_id": None}
