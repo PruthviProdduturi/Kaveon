@@ -57,7 +57,9 @@ foundations, but several operators are still centralized or narrow:
   common set operations work. Scalar subqueries, recursive CTEs, `INTERSECT ALL`,
   `EXCEPT ALL`, prepared parameters, and general lake-table DML remain missing.
   `CAST(... AS DATE)` is now supported with nullable `Date32` execution and
-  focused parser/executor coverage.
+  focused parser/executor coverage. `CAST(... AS TIMESTAMP)` and
+  `TIMESTAMP WITH TIME ZONE` now map to Arrow microsecond timestamps with
+  nullable execution coverage.
 - Arrays are limited; maps and structs/row values are not represented as a
   complete SQL expression type. Complex casts, dereference, `UNNEST`, and broad
   JSON operations remain open.
@@ -106,7 +108,13 @@ qualification documents; this tracker remains the single ordered work list.
   workers (`06e1fb80`). Unpartitioned and mixed-key windows stay centralized.
 - Differential coverage now includes `INTERSECT`, `EXCEPT`, and non-recursive
   CTEs (`59aaf0ec`). `CAST(... AS DATE)` now maps to Arrow `Date32` and keeps
-  nulls (`bf49f5cb`).
+  nulls (`bf49f5cb`). Timestamp and timestamp-with-time-zone casts are covered
+  in `52fa76c6`.
+
+Track 1 remains partial because replayable network streaming and distributed
+global ordering still need a correctness gate. Track 2 remains partial because
+scalar/prepared subqueries, complex types, multiset set operations, and broader
+typed DML are not yet implemented.
 
 These slices do not close Tracks 1 and 2's qualification gates; the broader
 three-worker corpus, complex types, scalar/prepared subqueries, worker-loss,
