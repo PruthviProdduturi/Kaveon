@@ -276,6 +276,22 @@ fn relation(
     plan: &LogicalPlan,
     stats: &mut impl FnMut(&str) -> Option<RelationStatistics>,
 ) -> Option<Estimate> {
+    if let LogicalPlan::Limit { input, count } = plan {
+        let mut estimate = relation(input, stats)?;
+        let source_rows = estimate.rows;
+        estimate.rows = estimate.rows.min(*count as u64);
+        estimate.bytes = estimate.bytes.map(|bytes| {
+            if source_rows == 0 {
+                0
+            } else {
+                bytes
+                    .saturating_mul(estimate.rows)
+                    .checked_div(source_rows)
+                    .unwrap_or(0)
+            }
+        });
+        return Some(estimate);
+    }
     let (scan, predicate) = match plan {
         LogicalPlan::Filter { input, predicate } => (input.as_ref(), Some(predicate)),
         other => (other, None),
@@ -837,5 +853,45 @@ mod tests {
         let (left, _, distribution) = find_join(&plan).expect("a join");
         assert_eq!(distribution, JoinDistribution::Partitioned);
         assert!(matches!(left, LogicalPlan::Filter { .. }));
+    }
+
+    #[test]
+    fn a_limited_build_relation_uses_its_cardinality_bound_for_broadcast() {
+        let plan = LogicalPlan::Join {
+            left: Box::new(LogicalPlan::Scan {
+                table: "large".into(),
+                alias: Some("l".into()),
+                columns: None,
+            }),
+            right: Box::new(LogicalPlan::Limit {
+                input: Box::new(LogicalPlan::Scan {
+                    table: "lookup".into(),
+                    alias: Some("r".into()),
+                    columns: None,
+                }),
+                count: 100,
+            }),
+            join_type: JoinType::Inner,
+            condition: Some(Expr::BinaryOp {
+                left: Box::new(Expr::Column("l.id".into())),
+                op: BinaryOp::Eq,
+                right: Box::new(Expr::Column("r.id".into())),
+            }),
+            distribution: JoinDistribution::Partitioned,
+        };
+        let optimized = optimize_with_statistics(plan, &mut |table| {
+            Some(RelationStatistics::exact(
+                if table == "large" {
+                    10_000_000
+                } else {
+                    1_000_000
+                },
+                vec!["id".into()],
+            ))
+        });
+        let LogicalPlan::Join { distribution, .. } = optimized else {
+            panic!("join was unexpectedly rewritten");
+        };
+        assert_eq!(distribution, JoinDistribution::BroadcastRight);
     }
 }
