@@ -239,6 +239,45 @@ function UserMenu({
             zIndex: 200,
           }}
         >
+          {/* Who you are signed in as.
+              The menu offered Sign Out without ever saying which account it
+              would sign out of. Installations accept more than one provider,
+              and an account's role is decided by its email address, so the
+              address is the one fact a person needs here and it was the one
+              fact the menu held but never showed. */}
+          <div style={{ padding: "8px 14px 10px" }}>
+            <div style={{
+              fontSize: 13,
+              fontWeight: 500,
+              color: "var(--text-primary)",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}>
+              {account?.name ?? "Signed in"}
+            </div>
+            {account?.email && (
+              <div
+                title={account.email}
+                style={{
+                  fontSize: 12,
+                  color: "var(--text-muted)",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  marginTop: 2,
+                }}
+              >
+                {account.email}
+              </div>
+            )}
+            <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>
+              {isAdmin ? "Admin" : "Viewer"}
+            </div>
+          </div>
+
+          <div style={{ height: 1, background: "var(--border)", margin: "0 8px 4px" }} />
+
           {/* About */}
           {menuItem("About Kaveon", () => window.open("/", "_blank"),
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
