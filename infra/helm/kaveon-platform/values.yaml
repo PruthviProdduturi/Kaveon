@@ -131,7 +131,14 @@ api:
   # reason to make it shorter.
   catalogArchive:
     enabled: true
-    schedule: "*/15 * * * *"
+    # Five minutes, not fifteen: an unchanged registry publishes nothing, so
+    # the interval costs about forty reads per run and no storage at all. The
+    # only thing it buys is a shorter window of registry change exposed to
+    # losing the volume, so there is no reason to make it longer.
+    #
+    # A schedule is not a transaction. This bounds the loss; it does not
+    # eliminate it. See the registry-durability entry in HANDSHAKE.md.
+    schedule: "*/5 * * * *"
     # Not the container holding the live catalog — container deletion is the
     # one accident blob soft delete does not cover.
     container: backups
