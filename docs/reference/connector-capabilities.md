@@ -1,11 +1,12 @@
 # Connectors
 
 Kaveon reads data in two ways. KaveonDB, the Engine, reads lake tables where
-they live — Delta, Iceberg and Parquet on ADLS Gen2, local disk or S3 —
-through catalogs it holds itself. The platform API also connects to SQL
-systems through drivers for SQL Lab, datasets and the DLM. This page says,
-for each, what is implemented, what is qualified on the AKS cluster, and how
-to register it: from the API, from Studio, and from SQL DDL and the CLI.
+they live — Delta, Iceberg and Parquet on local disk or ADLS Gen2, with an
+implemented but unqualified S3 object-store path — through catalogs it holds
+itself. The platform API also connects to SQL systems through drivers for SQL
+Lab, datasets and the DLM. This page says, for each, what is implemented, what
+is qualified on the AKS cluster, and how to register it: from the API, from
+Studio, and from SQL DDL and the CLI.
 
 "Implemented" means the code is in the shipping path. "Qualified" means it has
 been run end to end on the test cluster against real data and recorded under
@@ -31,7 +32,25 @@ mismatch between the definition and the files.
 |---|---|---|---|
 | **ADLS Gen2** | `account`, `container`, `root_path` | Workload identity on AKS (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_FEDERATED_TOKEN_FILE`), or the Azure CLI for local development; the definition carries a credential *reference* (`workload_identity` + a name), never a key. Object identity (ETag or version, with size) is pinned before a footer is read; a replaced object fails closed rather than returning mixed data. | Implemented and qualified. |
 | **Local disk** | `base_path` | None. | Implemented and qualified (Docker Compose stack, `KAVEON_DATA_DIR`). |
-| **S3** | `bucket`, `region`, `prefix` | The AWS environment provider chain. | Implemented in the same object-store reader; **not qualified** — no S3 bucket has been read in qualification. |
+| **S3** | `bucket`, `region`, `prefix` | The AWS environment provider chain. | Reader and catalog storage type implemented through the shared object-store path; **not qualified** — no live S3 bucket has been read in qualification. |
+
+### Qualification evidence
+
+The current evidence is deliberately format- and environment-specific:
+
+- [ClickBench on AKS](../qualification/clickbench-2026-09-16.md) verifies a
+  14.78 GB Parquet object read from ADLS Gen2 by Kaveon and Trino on the same
+  cluster. It does not qualify S3 or Iceberg.
+- [Iceberg local qualification](../qualification/iceberg/local-2026-09-21.md)
+  verifies the current snapshot of an Iceberg v2 table on the local Compose
+  stack. It does not qualify Iceberg on ADLS Gen2, v1 tables, delete files,
+  schema evolution, or S3.
+- No live S3 bucket has completed a Kaveon qualification run. S3 therefore
+  remains implemented but unqualified.
+
+These are lake-format read qualifications. They do not establish cross-source
+federation: the Engine still executes against one selected KaveonDB catalog,
+while registered SQL systems use the platform API's passthrough drivers.
 
 Table locations are relative to the catalog's container or root path
 (`benchmarks/tpch/sf100/lineitem`, `clickbench/hits.parquet`), never URIs.
@@ -133,7 +152,9 @@ its paths say and typed by inference.
 ## SQL sources on the platform API
 
 These connect through the platform API's drivers for SQL Lab, datasets, charts
-and the DLM. They are not KaveonDB catalogs; a query runs on the source.
+and the DLM. They are not KaveonDB catalogs; a query runs on the source. The
+API can route a selected source, but the Engine does not yet join across these
+sources or across multiple KaveonDB catalogs.
 
 | Source | Studio picker | API driver | Authentication | DLM notes |
 |---|---|---|---|---|
