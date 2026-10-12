@@ -41,9 +41,11 @@ foundations, but several operators are still centralized or narrow:
 - Hash repartition, broadcast, joins, partial/final aggregates, spill, retry,
   cancellation, and snapshot fields exist. Cluster qualification remains open
   for skew, spill pressure, rolling worker loss, and cancellation stress.
-- Exchange producers stream output, but consumers still assemble the complete
-  payload before decoding. This is a memory and latency blocker for large
-  federated exchanges.
+- Exchange producers stream output, and HTTP consumers now pump each response
+  into a bounded replayable append-only spool while Arrow decodes batches
+  incrementally. The old second contiguous payload copy is gone; network
+  backpressure, pressure qualification, and sustained federated-exchange
+  evidence remain open.
 - Windows gather to one task. Set operations and final sort/TopN also have
   centralized merge stages. Compatible windows with a shared non-empty
   `PARTITION BY` are now hash-partitioned across workers; unpartitioned and
@@ -55,7 +57,10 @@ foundations, but several operators are still centralized or narrow:
   only partially supported. Semi/anti joins are not yet partitioned by default.
 - Non-recursive CTEs, derived tables, joins, aggregates, `HAVING`, `CASE`, and
   common set operations work. Scalar subqueries, recursive CTEs, `INTERSECT ALL`,
-  `EXCEPT ALL`, prepared parameters, and general lake-table DML remain missing.
+  `EXCEPT ALL`, the full prepared-statement protocol, and general lake-table
+  DML remain missing. Typed positional `$1` parameters are now validated and
+  bound through the HTTP statement API; named and `?` forms still fail with an
+  explicit binding diagnostic.
   Uncorrelated aggregate scalar subqueries in `WHERE` are now supported with
   exact-result differential coverage; projection, correlated, and multi-row
   scalar forms remain explicitly rejected.
@@ -70,8 +75,9 @@ foundations, but several operators are still centralized or narrow:
   paths.
 - There is no Trino-style cross-source federation yet. Registered SQL sources
   are API passthrough paths, while the strongest native Engine path is
-  Parquet/Delta/Iceberg. S3 and Iceberg status must be reconciled between the
-  connector matrix and older architecture wording before publication.
+  Parquet/Delta/Iceberg. The connector matrix now records S3 as implemented
+  but unqualified and Iceberg as locally qualified but not yet qualified on
+  ADLS/AKS; federation remains an open workstream.
 - The October 7 AKS comparison is valid for its declared 12-query fixture
   (3.8282 versus 1.8012 successful exact-result QPS, 2.1254x), but it is not
   broad Trino parity. TPC-H SF100 and repeated ClickBench qualification remain
@@ -145,17 +151,22 @@ qualification documents; this tracker remains the single ordered work list.
   input semantics and executor coverage (`054e898a`).
 - Typed positional parameters are now exposed through the HTTP statement API,
   validated as JSON scalars, and bound before planning (`0ea777ba`).
+- The HTTP parameter path now has an explicit regression test proving validated
+  scalar values reach SQL planning without string interpolation (`dcd67679`).
 - Correlated scalar subqueries now have explicit rejection and binder-boundary
   coverage; the preserved outer reference documents the remaining Apply/lateral
   runtime requirement (`72c7e302`).
 
 Track 1 remains partial because distributed global ordering and a full
 worker-loss/spill/cancellation corpus still need a correctness gate. The
-current exchange spool is bounded and replayable; replacing it with an
-append-only network-streaming provider is a separate design task.
-Track 2 remains partial because prepared parameters, correlated/projection
-scalar subqueries, complex types, multiset set operations, and broader typed
-DML are not yet implemented.
+current HTTP exchange spool is bounded, replayable, and incrementally decoded;
+network backpressure, sustained pressure evidence, and AKS cancellation
+qualification remain open.
+Track 2 remains partial because the full prepared-statement protocol,
+correlated/projection scalar subqueries, complex types, multiset set
+operations, and broader typed DML are not yet implemented. Positional scalar
+parameters are supported through the HTTP statement API; named and `?`
+placeholders remain explicit unsupported cases.
 
 These slices do not close Tracks 1 and 2's qualification gates; the broader
 three-worker corpus, complex types, scalar/prepared subqueries, worker-loss,
