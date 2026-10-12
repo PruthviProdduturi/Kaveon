@@ -129,6 +129,9 @@ qualification documents; this tracker remains the single ordered work list.
   Decimal128 null/scale coverage (`81b610e2`).
 - Numeric `ARRAY[...]` literals now execute as null-preserving Arrow
   `List<Float64>` values with parser and executor coverage (`b1fe824f`).
+- Three-worker global `ORDER BY`/TopN centralized merge correctness is now
+  qualified for NULL ordering and ties against a single-partition reference
+  (`bb788709`). Parallel global merge performance remains open.
 
 Track 1 remains partial because distributed global ordering and a full
 worker-loss/spill/cancellation corpus still need a correctness gate. The
