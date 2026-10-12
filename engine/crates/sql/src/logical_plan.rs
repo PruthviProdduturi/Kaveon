@@ -2674,8 +2674,15 @@ mod tests {
             sql_to_logical_plan("SELECT x FROM a UNION SELECT x FROM b").unwrap(),
             LogicalPlan::Distinct { .. }
         ));
-        assert!(sql_to_logical_plan("SELECT x FROM a INTERSECT ALL SELECT x FROM b").is_err());
-        assert!(sql_to_logical_plan("SELECT x FROM a EXCEPT ALL SELECT x FROM b").is_err());
+        let intersect_all = sql_to_logical_plan("SELECT x FROM a INTERSECT ALL SELECT x FROM b")
+            .expect_err("INTERSECT ALL must fail during lowering");
+        assert_eq!(
+            intersect_all.to_string(),
+            "sql: INTERSECT ALL is unsupported"
+        );
+        let except_all = sql_to_logical_plan("SELECT x FROM a EXCEPT ALL SELECT x FROM b")
+            .expect_err("EXCEPT ALL must fail during lowering");
+        assert_eq!(except_all.to_string(), "sql: EXCEPT ALL is unsupported");
     }
 
     #[test]
