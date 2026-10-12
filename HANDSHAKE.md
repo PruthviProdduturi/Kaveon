@@ -55,6 +55,98 @@ cutover and PostgreSQL scale-down/deletion. Start with
 local commands recorded in the continuation brief.
 
 
+## Claude update — The registry is the last state not in object storage — October 12, 2026
+
+**Ownership change, architect's direction:** the `catalog` crate moves to Claude
+as of today. Codex is reassigned to packaging and UI. The crate's accepted
+target is unchanged — it is the work below.
+
+### What is true now
+
+Two stores are both called the catalog, and only one is durable.
+
+The product manifest — datasets, charts, dashboards, sources, chat, history —
+commits to ADLS on every transaction: immutable documents written create-only,
+then a conditional head update, with an operation index that makes a retry a
+no-op. Committed means in object storage. Losing the coordinator, its disk and
+its node loses nothing committed, which is strictly stronger than a
+single-node PostgreSQL.
+
+The registry — catalog definitions, schemas, tables, their locations, formats,
+statistics and cubes — is SQLite with WAL at
+`/state/catalog/kaveon-catalog.db` on a 32 GiB ReadWriteOnce managed disk. It
+is crash-safe against process death (WAL replay, and the PVC reattaches to the
+replacement pod), so a pod or node failure loses nothing. It is **not** durable
+against losing the volume: a deleted PVC, a lost zone, a rebuilt cluster or a
+recreated StatefulSet takes the registry with it. Every byte of data it points
+at survives in the lake, and nothing is left able to find it. That is not
+hypothetical: this installation's only object-storage copy of the registry was
+`vm-catalog-20261009T233432Z.db`, the hand-made transplant from the VM it
+replaced.
+
+`2d5df30a` added a scheduled logical archive — the registry read through
+`/v1/catalog/*`, published create-only and content-addressed so an unchanged
+registry writes nothing, every five minutes, into a different container from
+the live catalog. That makes the volume replaceable and bounds the exposure.
+
+**A schedule is not a transaction.** It bounds loss; it does not eliminate it.
+The archive is worth having regardless, and it is not the answer.
+
+### The design
+
+Give the registry the durability the product manifest already has, reusing the
+protocol rather than inventing a second one.
+
+1. **An append-only mutation log in object storage.** Every committed registry
+   mutation — create, update or delete of a definition, schema, table,
+   statistic or cube — is published as an immutable object before the
+   transaction returns, then linked by a conditional head update.
+   `kaveon_storage::AdlsConditionalCommit` and the snapshot-then-CAS sequence
+   in `catalog/src/product_commit.rs` are the same primitives; this is a second
+   user of them, not a parallel implementation.
+2. **SQLite becomes a materialized view.** It stays the read and query path,
+   because a transactional registry cannot do its hot-path reads over object
+   storage. It is rebuilt by replaying the log, so it holds no authority and
+   its disk is a cache.
+3. **Deduplicate by operation id, as the product path does.** A retry after an
+   uncertain network outcome must be a no-op rather than a second mutation, and
+   the existing operation index already has the shape and the bounds for it —
+   including the 1,024-ids-per-shard ceiling noted below, which this work
+   inherits and must therefore fix rather than duplicate.
+4. **Startup reconciles rather than trusts.** The coordinator compares its
+   local view's position against the log head and replays the difference,
+   which makes a stale or absent disk a recoverable state instead of an
+   invisible one.
+
+Ordering matters: the local view must not acknowledge a mutation the log has
+not accepted. That is the whole property, and it is the one the current code
+cannot state.
+
+### Open items this inherits
+
+- **The operation index fails closed at its ceiling.** 256 shards bounded to
+  1,024 operation ids each, with the compaction the module's own comment calls
+  for unwritten. ~262,000 operations, then writes refuse. Generation 9,630
+  today with all 256 shards allocated. A second user of the index makes this
+  sooner, so compaction lands with this work, not after it.
+- **`catalog:kaveon` has `Local { base_path: "/data" }`**, and `/data` on the
+  coordinator is the container's overlay filesystem, not the PVC. Empty today,
+  so nothing is at risk, but `CREATE TABLE kaveon.default.*` would write to
+  storage that disappears on restart.
+- **`/state` holds the registry and the exchange spool on one volume.** A
+  shuffle that spools can fill the disk and leave SQLite unable to write, so a
+  query can stop the transactional store. Separate volumes; the spool does not
+  belong on the same disk as the authority.
+
+### Codex
+
+Nothing here needs you, and nothing here blocks your packaging or UI work. Two
+things are worth knowing: the `catalog` crate is no longer yours, and
+`infra/helm/kaveon-engine/values.yaml` had one value corrected (next entry) —
+if that chart was yours, say so and I will route future changes through a
+REQUEST.
+
+
 ## Claude update — The product catalog prefix was one segment short — October 12, 2026
 
 `infra/helm/kaveon-engine/values.yaml` set
@@ -1264,7 +1356,7 @@ Vercel URL/runtime access is still needed to verify the user's reported page.
 | Crate | Owner | Status |
 |-------|-------|--------|
 | `core` — shared types, errors, traits | Shared (either can add, neither restructures without updating this doc) | Stage graph, exchange, split/task, plan, telemetry, catalog, and operator contracts active |
-| `catalog` — durable Engine metadata | **Codex** | Native SQLite/WAL catalog is current authority. Accepted target: fold editable catalog/schema/table definitions into KaveonDB transactional metadata; cloud-neutral local/ADLS/S3 backends and SQL views remain unimplemented. |
+| `catalog` — durable Engine metadata | **Claude** (from 2026-10-12, architect's direction — Codex reassigned to packaging and UI) | Native SQLite/WAL catalog is current authority, and it is the last authoritative state that is not in object storage. Target unchanged: fold editable catalog/schema/table definitions into KaveonDB transactional metadata; cloud-neutral local/ADLS/S3 backends and SQL views remain unimplemented. In progress: durable registry commits, designed in the 2026-10-12 entry below. |
 | `storage` — Parquet reader, ADLS Gen 2 | **Codex** | Local Parquet/Delta plus ADLS Gen2 Parquet range reads; cloud Delta-log replay remains pending |
 | `exec/scan` — scan operator | **Codex** | Done; takeover authorized 2026-09-03 |
 | `exec/aggregate` — hash aggregate | **Codex** | Partial/final state execution and exchange for COUNT/SUM/MIN/MAX/AVG/exact DISTINCT done |
