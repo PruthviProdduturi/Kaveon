@@ -11371,6 +11371,27 @@ mod tests {
     }
 
     #[test]
+    fn statement_request_parameters_reach_typed_sql_planning() {
+        let request: super::StatementRequest = serde_json::from_value(serde_json::json!({
+            "query": "SELECT * FROM events WHERE user_id = $1 AND region = $2",
+            "parameters": [42, "Europe"]
+        }))
+        .unwrap();
+        let values = super::request_parameters(&request.parameters).unwrap();
+        let plan = kaveon_sql::logical_plan::sql_to_logical_plan_for_binder_with_parameters(
+            &request.query,
+            &values,
+        )
+        .unwrap();
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("Int64(42)"), "integer did not reach planning");
+        assert!(
+            debug.contains("Utf8(\"Europe\")"),
+            "string did not reach planning"
+        );
+    }
+
+    #[test]
     fn request_settings_fold_the_object_and_the_set_session_prefix() {
         let config = crate::config::ServerConfig {
             query_memory_limit_bytes: 1 << 30,
