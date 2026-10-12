@@ -21,8 +21,8 @@ connector or SQL extension must be copied.
 
 | ID | Workstream | Current status | Next acceptance gate |
 |---|---|---|---|
-| 1 | Distributed SQL execution | Partial | Three-worker exact-result corpus covering joins, aggregates, windows, sort, TopN, set operations, worker loss, cancellation, and snapshot pinning |
-| 2 | SQL compatibility and types | Partial | Differential corpus against Trino/DuckDB covering NULLs, casts, arrays/structs/maps, CTEs, windows, subqueries, set operations, and explicit unsupported errors |
+| 1 | Distributed SQL execution | Partial — initial implementation slices complete | Three-worker exact-result corpus covering joins, aggregates, windows, sort, TopN, set operations, worker loss, cancellation, and snapshot pinning |
+| 2 | SQL compatibility and types | Partial — initial implementation slices complete | Differential corpus against Trino/DuckDB covering NULLs, casts, arrays/structs/maps, CTEs, windows, subqueries, set operations, and explicit unsupported errors |
 | 3 | Federation connectors and pushdown | Partial | Connector matrix with authenticated reads, predicate/projection/limit pushdown, partition pruning, retries, cancellation, and secret isolation |
 | 4 | Statistics and cost-based optimization | Partial | Exact Parquet/Delta/Iceberg statistics, join-order and broadcast decisions, runtime filters, and plan-regression evidence |
 | 5 | Memory, spill, and admission | Partial | Concurrent join/aggregate/sort pressure, bounded reservations, spill cleanup, quotas, cancellation, and no silent coordinator fallback |
@@ -45,7 +45,10 @@ foundations, but several operators are still centralized or narrow:
   payload before decoding. This is a memory and latency blocker for large
   federated exchanges.
 - Windows gather to one task. Set operations and final sort/TopN also have
-  centralized merge stages. These are not Trino-class parallel plans yet.
+  centralized merge stages. Compatible windows with a shared non-empty
+  `PARTITION BY` are now hash-partitioned across workers; unpartitioned and
+  mixed-key windows remain centralized for correctness. These are not yet
+  Trino-class parallel plans across the full window corpus.
 - Dynamic filtering, general join reordering, skew mitigation, and qualified
   coordinator failover are missing.
 - Ordinary distributed joins require equality keys; residual predicates are
@@ -53,6 +56,8 @@ foundations, but several operators are still centralized or narrow:
 - Non-recursive CTEs, derived tables, joins, aggregates, `HAVING`, `CASE`, and
   common set operations work. Scalar subqueries, recursive CTEs, `INTERSECT ALL`,
   `EXCEPT ALL`, prepared parameters, and general lake-table DML remain missing.
+  `CAST(... AS DATE)` is now supported with nullable `Date32` execution and
+  focused parser/executor coverage.
 - Arrays are limited; maps and structs/row values are not represented as a
   complete SQL expression type. Complex casts, dereference, `UNNEST`, and broad
   JSON operations remain open.
@@ -91,6 +96,21 @@ qualification documents; this tracker remains the single ordered work list.
 | Decimal, timestamp, interval, and casts | Partial | Overflow, timezone, precision, and implicit-cast cases |
 | `CASE`, `HAVING`, `FILTER`, `QUALIFY` | Partial | Exact-result and error semantics |
 | Native DML and prepared parameters | Partial | `BEGIN`/`COMMIT`/`ROLLBACK`, parameter binding, and transactional visibility |
+
+### Completed implementation slices in the current cycle
+
+- Exchange decoding no longer assembles a second contiguous in-memory payload
+  before Arrow decoding (`8bfb76fa`). The network response is still spooled
+  before decode; full async streaming remains open.
+- Windows with compatible shared partition keys are hash-partitioned across
+  workers (`06e1fb80`). Unpartitioned and mixed-key windows stay centralized.
+- Differential coverage now includes `INTERSECT`, `EXCEPT`, and non-recursive
+  CTEs (`59aaf0ec`). `CAST(... AS DATE)` now maps to Arrow `Date32` and keeps
+  nulls (`bf49f5cb`).
+
+These slices do not close Tracks 1 and 2's qualification gates; the broader
+three-worker corpus, complex types, scalar/prepared subqueries, worker-loss,
+and exact-result differential runs are still required.
 
 ## 9/10 exit gate
 
