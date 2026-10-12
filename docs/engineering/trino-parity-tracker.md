@@ -65,7 +65,9 @@ foundations, but several operators are still centralized or narrow:
   nullable execution coverage.
 - Numeric array literals are supported as null-preserving Arrow lists; maps and
   structs/row values are not yet represented as complete SQL expression types.
-  Complex casts, dereference, `UNNEST`, and broad JSON operations remain open.
+  Complex casts, dereference, `UNNEST`, and broad JSON operations remain open;
+  scalar extraction via `JSON_EXTRACT_SCALAR` is implemented for dotted object
+  paths.
 - There is no Trino-style cross-source federation yet. Registered SQL sources
   are API passthrough paths, while the strongest native Engine path is
   Parquet/Delta/Iceberg. S3 and Iceberg status must be reconciled between the
@@ -132,6 +134,11 @@ qualification documents; this tracker remains the single ordered work list.
 - Three-worker global `ORDER BY`/TopN centralized merge correctness is now
   qualified for NULL ordering and ties against a single-partition reference
   (`bb788709`). Parallel global merge performance remains open.
+- A distributed self-join with grouped output now has exact worker-loss
+  recovery coverage, including retries and moved exchange spools
+  (`43a2f8f9`). AKS worker-loss qualification remains open.
+- `JSON_EXTRACT_SCALAR` now supports nested dot paths with null/malformed
+  input semantics and executor coverage (`054e898a`).
 
 Track 1 remains partial because distributed global ordering and a full
 worker-loss/spill/cancellation corpus still need a correctness gate. The
