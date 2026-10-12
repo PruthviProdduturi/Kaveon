@@ -1307,6 +1307,31 @@ fn fragment_join_type(join_type: JoinType) -> FragmentJoinType {
     }
 }
 
+fn window_partition_columns(window_exprs: &[Expr]) -> Option<Vec<String>> {
+    let mut shared = None;
+    for expression in window_exprs {
+        let Expr::WindowFunction { partition_by, .. } = expression else {
+            return None;
+        };
+        let columns = partition_by
+            .iter()
+            .map(expression_column)
+            .collect::<Result<Vec<_>>>()
+            .ok()?;
+        if columns.is_empty() {
+            return None;
+        }
+        if let Some(expected) = &shared {
+            if expected != &columns {
+                return None;
+            }
+        } else {
+            shared = Some(columns);
+        }
+    }
+    shared
+}
+
 struct StageGraphBuilder {
     worker_count: usize,
     exchange_partition_count: usize,
@@ -1475,12 +1500,39 @@ impl StageGraphBuilder {
                 }
                 Ok(target)
             }
-            LogicalPlan::Window { input, .. } => {
+            LogicalPlan::Window {
+                input,
+                window_exprs,
+            } => {
                 let source = self.build(input)?;
                 let physical = physical_plan_tree(plan);
-                let target = self.add_exchange_stage("FinalWindow", physical.attributes, 1, 1);
-                self.add_exchange(source, target, Partitioning::Single);
-                Ok(target)
+                // A window with a shared PARTITION BY can execute one whole
+                // partition on one worker. Keep unpartitioned windows and
+                // mixed partition specifications gathered, because splitting
+                // those would change global ordering or produce incomplete
+                // frames.
+                if let Some(columns) = window_partition_columns(window_exprs) {
+                    let target = self.add_exchange_stage(
+                        "PartitionedWindow",
+                        physical.attributes,
+                        self.worker_count,
+                        1,
+                    );
+                    self.add_exchange(
+                        source,
+                        target,
+                        Partitioning::Hash {
+                            columns,
+                            partition_count: self.worker_count,
+                        },
+                    );
+                    Ok(target)
+                } else {
+                    let target =
+                        self.add_exchange_stage("FinalWindow", physical.attributes, 1, 1);
+                    self.add_exchange(source, target, Partitioning::Single);
+                    Ok(target)
+                }
             }
             LogicalPlan::Intersect { left, right } | LogicalPlan::Except { left, right } => {
                 let left_stage = self.build(left)?;
@@ -3787,6 +3839,30 @@ mod tests {
                     .starts_with("Final")
             );
         }
+    }
+
+    #[test]
+    fn partitions_windows_when_all_expressions_share_partition_keys() {
+        let expr = kaveon_core::Expr::WindowFunction {
+            name: "ROW_NUMBER".into(),
+            args: vec![],
+            partition_by: vec![kaveon_core::Expr::Column("category".into())],
+            order_by: vec![],
+            frame: None,
+        };
+        assert_eq!(window_partition_columns(&[expr]), Some(vec!["category".into()]));
+    }
+
+    #[test]
+    fn keeps_mixed_window_partitions_on_single_final_stage() {
+        let expr = |column: &str| kaveon_core::Expr::WindowFunction {
+            name: "ROW_NUMBER".into(),
+            args: vec![],
+            partition_by: vec![kaveon_core::Expr::Column(column.into())],
+            order_by: vec![],
+            frame: None,
+        };
+        assert_eq!(window_partition_columns(&[expr("category"), expr("region")]), None);
     }
 
     #[test]
