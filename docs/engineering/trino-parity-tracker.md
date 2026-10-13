@@ -207,6 +207,10 @@ qualification documents; this tracker remains the single ordered work list.
   predicates reach the build scan, while runtime build-key propagation to the
   probe scan remains refused until its correctness and exchange behavior are
   qualified (`57db621d`).
+- Semi/anti join planning now explicitly qualifies the current distributed
+  boundary: the probe remains distributed across four tasks while the
+  subquery is broadcast, and runtime build-key propagation is not claimed
+  (`cc833eae`).
 - Streamed-root task metrics now have a stabilized eventual-read test: the
   metrics endpoint may report `202 Accepted` briefly and is polled until the
   completed metrics record is available (`6cd66cb4`).
