@@ -255,7 +255,8 @@ qualification documents; this tracker remains the single ordered work list.
   negative-index semantics, null list/index handling, and null for out-of-range
   positions; array slices remain an explicit boundary.
 - `ROW(...).field` now lowers to a typed `ROW_FIELD` projection over Arrow
-  structs; map subscript lookup and row/map comparison remain open.
+  structs, and map subscript syntax lowers to `ELEMENT_AT` with typed key
+  lookup; row/map comparison remains open.
 
 ### Current focused validation
 
