@@ -339,6 +339,15 @@ worker-loss tests, six spill/recovery tests, and two cancellation tests passed.
 Those tests prove bounded local behavior and simulated worker failure; they do
 not substitute for a deployed multi-worker loss-and-recovery run.
 
+On 2026-10-12 the five-worker native soak harness completed 120.5 seconds with
+696 exact-result queries and five control cycles, including an intentional
+worker loss. All query results matched the DuckDB reference; cancellation and
+queue handling, bounded history, exchange cleanup, monitor responsiveness,
+bounded RSS growth, and surviving-worker health all passed. The run recorded a
+265 ms median and 515 ms p95 latency. This is a stronger local qualification
+snapshot, but it is not AKS evidence: it uses the local binary and fixture and
+does not qualify Azure storage, TLS, network policy, or node-drain behavior.
+
 The distributed/local join-mode differential now also includes an inner
 residual predicate (`key equality AND value inequality`); local and
 distributed result sets match and all reservations are released.
