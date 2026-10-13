@@ -2468,6 +2468,32 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         "ARRAY_POSITION currently supports ARRAY/List values only".into(),
                     )
                 })?;
+            macro_rules! position_primitive {
+                ($ty:ty, $data_type:expr) => {{
+                    let needle = compute::cast(&args[1], &$data_type)?;
+                    let needle = needle.as_primitive::<$ty>();
+                    (0..num_rows)
+                        .map(|row| {
+                            if list.is_null(row) {
+                                return None;
+                            }
+                            let inner = list.value(row);
+                            let values = inner.as_primitive::<$ty>();
+                            (0..values.len())
+                                .find(|&index| {
+                                    if needle.is_null(row) {
+                                        values.is_null(index)
+                                    } else {
+                                        !values.is_null(index)
+                                            && values.value(index) == needle.value(row)
+                                    }
+                                })
+                                .map(|index| index as i64 + 1)
+                                .or(Some(0))
+                        })
+                        .collect::<Vec<_>>()
+                }};
+            }
             let result = match list.value_type() {
                 DataType::Int64 => {
                     let needle = compute::cast(&args[1], &DataType::Int64)?;
@@ -2517,6 +2543,20 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         })
                         .collect::<Vec<_>>()
                 }
+                DataType::Date32 => position_primitive!(Date32Type, DataType::Date32),
+                DataType::Date64 => position_primitive!(Date64Type, DataType::Date64),
+                DataType::Time32(TimeUnit::Second) => position_primitive!(
+                    Time32SecondType,
+                    DataType::Time32(TimeUnit::Second)
+                ),
+                DataType::Time32(TimeUnit::Millisecond) => position_primitive!(
+                    Time32MillisecondType,
+                    DataType::Time32(TimeUnit::Millisecond)
+                ),
+                DataType::Timestamp(TimeUnit::Microsecond, timezone) => position_primitive!(
+                    TimestampMicrosecondType,
+                    DataType::Timestamp(TimeUnit::Microsecond, timezone.clone())
+                ),
                 DataType::Decimal128(precision, scale) => {
                     let needle = compute::cast(
                         &args[1],
@@ -7798,6 +7838,39 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![Some(0), Some(0)]
         );
+    }
+
+    #[test]
+    fn evaluates_array_position_for_temporal_lists() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "first_day",
+                Arc::new(arrow::array::Date32Array::from(vec![Some(10)])) as ArrayRef,
+            ),
+            (
+                "second_day",
+                Arc::new(arrow::array::Date32Array::from(vec![Some(20)])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "ARRAY_POSITION".into(),
+                args: vec![
+                    Expr::Function {
+                        name: "ARRAY".into(),
+                        args: vec![
+                            Expr::Column("first_day".into()),
+                            Expr::Column("second_day".into()),
+                        ],
+                    },
+                    Expr::Column("second_day".into()),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(result.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(), vec![Some(2)]);
     }
 
     #[test]
