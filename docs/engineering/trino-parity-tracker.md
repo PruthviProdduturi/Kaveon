@@ -64,9 +64,9 @@ foundations, but several operators are still centralized or narrow:
   other scalar forms, recursive CTEs, the full prepared-statement protocol,
   and general lake-table DML remain missing. `INTERSECT ALL` and `EXCEPT ALL`
   now preserve multiplicity through local and distributed execution.
-  Typed positional `$1` and sequential `?` parameters are now validated and
-  bound through the HTTP statement API; named placeholders still fail with an
-  explicit binding diagnostic.
+  Typed positional `$1`, sequential `?`, and named `:name` parameters are now
+  validated and bound through the HTTP statement API; the full prepare/describe/
+  bind/execute protocol remains open.
   Uncorrelated aggregate scalar subqueries in `WHERE` are now supported with
   exact-result differential coverage; projection, correlated, and multi-row
   scalar forms remain explicitly rejected.
@@ -132,12 +132,13 @@ qualification documents; this tracker remains the single ordered work list.
   in `52fa76c6`.
 - Uncorrelated aggregate scalar subqueries in `WHERE`, plus actionable
   multi-row and multi-column diagnostics, are covered in `3a60cf23`.
-- Unsupported placeholder forms and named forms fail with an explicit binding
-  diagnostic rather than being misinterpreted as literals (`89499c7b`).
+- Unsupported placeholder forms fail with an explicit binding diagnostic rather
+  than being misinterpreted as literals (`89499c7b`).
   Positional `$1`, `$2` binding safely converts typed AST literals without
   string interpolation (`74f66a10`), sequential `?` placeholders are bound in
   appearance order (`0a3fa2a4`), and the HTTP statement API routes validated
-  scalar parameters before planning (`0ea777ba`).
+  scalar parameters before planning (`0ea777ba`). Named `:name` values now use
+  the same typed binding path and fail closed when missing.
 - A bounded replayable append-only exchange spool foundation is implemented
   with partial-read, fork/retry, cancellation, and writer-failure tests
   (`79ddf443`).
@@ -223,14 +224,15 @@ qualification documents; this tracker remains the single ordered work list.
 - Streamed-root task metrics now have a stabilized eventual-read test: the
   metrics endpoint may report `202 Accepted` briefly and is polled until the
   completed metrics record is available (`6cd66cb4`).
-- Named parameter placeholders now have exact unsupported coverage, while
-  sequential `?` and typed positional `$n` remain the supported parameter
-  forms (`c20173d7`). `QUALIFY` continues to fail closed with a stable
-  planner diagnostic rather than being silently ignored.
+- Named `:name` parameters now bind typed scalar values through the HTTP
+  statement API, alongside sequential `?` and typed positional `$n`; missing
+  names fail before planning (`in this cycle`). `QUALIFY`
+  continues to fail closed with a stable planner diagnostic rather than being
+  silently ignored.
 
 ### Current focused validation
 
-The latest focused validation passes 329 `kaveon-server` tests, 98
+The latest focused validation passes 330 `kaveon-server` tests, 100
 `kaveon-sql` tests, and 216 `kaveon-exec` tests. These counts are package-level
 validation snapshots; they do not close the broader multi-worker, AKS, or
 cross-connector qualification gates below.
@@ -245,9 +247,9 @@ Track 2 remains partial because the full prepared-statement protocol,
 correlated and other unsupported scalar subqueries, complex types, and broader
 typed DML are not yet implemented. Multiset set operations are now implemented
 and covered end to end. Positional
-scalar parameters are supported through the HTTP statement API; named
-placeholders and the full prepared-statement protocol remain explicit
-unsupported cases.
+ scalar parameters, including named placeholders, are supported through the
+HTTP statement API; the full prepared-statement protocol remains an explicit
+unsupported case.
 
 These slices do not close Tracks 1 and 2's qualification gates; the broader
 three-worker corpus, complex types, correlated/unsupported scalar shapes,

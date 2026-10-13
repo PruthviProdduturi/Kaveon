@@ -134,7 +134,10 @@ Each request carries one statement and a transaction ID after `BEGIN`. Product
 operations are authenticated, owner-isolated, revision-checked, and limited to
 the supported product families. Multi-row values, `INSERT ... SELECT`,
 `RETURNING`, `ON CONFLICT`, savepoints, transaction modifiers, arbitrary user
-tables, and parameter binding are rejected explicitly. The current contract
+tables, and lake-table DML are rejected explicitly. Statement execution accepts
+typed positional (`$1`, `?`) and named (`:name`) scalar parameters through the
+HTTP API; values are bound before planning and are never interpolated into SQL.
+The current product transaction contract
 does not provide PostgreSQL MVCC isolation, row-level indexes, foreign-key
 enforcement, or crash-recovery parity.
 

@@ -21,8 +21,9 @@ use kaveon_core::predicate::ScalarValue;
 use kaveon_exec::sort::SortExpr;
 use kaveon_exec::topn::merge_top_n;
 use kaveon_sql::logical_plan::{
-    sql_to_logical_plan_for_binder, sql_to_logical_plan_for_binder_approximate_with_parameters,
-    sql_to_logical_plan_for_binder_with_parameters,
+    sql_to_logical_plan_for_binder,
+    sql_to_logical_plan_for_binder_approximate_with_parameter_bindings,
+    sql_to_logical_plan_for_binder_with_parameter_bindings,
 };
 use kaveon_sql::logical_plan::{AggregateExpr, LogicalPlan};
 use kaveon_sql::parser::{
@@ -760,6 +761,10 @@ struct StatementRequest {
     /// parsed AST before planning and are never interpolated into SQL text.
     #[serde(default)]
     parameters: Vec<serde_json::Value>,
+    /// Typed named values for `:name` placeholders. Names are sent without
+    /// the leading colon, e.g. `{ "region": "EU" }`.
+    #[serde(default)]
+    named_parameters: HashMap<String, serde_json::Value>,
     #[serde(default)]
     catalog: Option<String>,
     #[serde(default)]
@@ -801,6 +806,40 @@ fn request_parameters(values: &[serde_json::Value]) -> Result<Vec<ScalarValue>, 
             )),
         })
         .collect()
+}
+
+fn request_named_parameters(
+    values: &HashMap<String, serde_json::Value>,
+) -> Result<HashMap<String, ScalarValue>, String> {
+    let mut parsed = HashMap::with_capacity(values.len());
+    for (name, value) in values {
+        if name.is_empty() || name.starts_with(':') {
+            return Err(format!(
+                "named parameter keys must be non-empty identifiers without ':' (got '{name}')"
+            ));
+        }
+        let scalar = match value {
+            serde_json::Value::Null => ScalarValue::Null,
+            serde_json::Value::Bool(value) => ScalarValue::Bool(*value),
+            serde_json::Value::Number(value) => {
+                if let Some(integer) = value.as_i64() {
+                    ScalarValue::Int64(integer)
+                } else if let Some(float) = value.as_f64() {
+                    ScalarValue::Float64(float)
+                } else {
+                    return Err(format!("named parameter '{name}' is not a supported number"));
+                }
+            }
+            serde_json::Value::String(value) => ScalarValue::Utf8(value.clone()),
+            _ => {
+                return Err(format!(
+                    "named parameter '{name}' must be a scalar JSON value"
+                ));
+            }
+        };
+        parsed.insert(name.clone(), scalar);
+    }
+    Ok(parsed)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -3118,12 +3157,26 @@ async fn run_statement(
             return task_failure_response(StatusCode::BAD_REQUEST, &message);
         }
     };
+    let named_parameters = match request_named_parameters(&req.named_parameters) {
+        Ok(parameters) => parameters,
+        Err(error) => {
+            return task_failure_response(StatusCode::BAD_REQUEST, &error.to_string());
+        }
+    };
     // `settings.approximate`: every plain COUNT(DISTINCT) lowers as a
     // sketch, as APPROX_COUNT_DISTINCT would; the record says so.
     let lowered = if settings.approximate() {
-        sql_to_logical_plan_for_binder_approximate_with_parameters(&sql, &parameters)
+        sql_to_logical_plan_for_binder_approximate_with_parameter_bindings(
+            &sql,
+            &parameters,
+            &named_parameters,
+        )
     } else {
-        sql_to_logical_plan_for_binder_with_parameters(&sql, &parameters)
+        sql_to_logical_plan_for_binder_with_parameter_bindings(
+            &sql,
+            &parameters,
+            &named_parameters,
+        )
     };
     let mut plan = match lowered {
         Ok(p) => p,
@@ -5989,6 +6042,7 @@ async fn run_sub_statement(
     let request = StatementRequest {
         query,
         parameters: vec![],
+        named_parameters: std::collections::HashMap::new(),
         catalog: Some(context.catalog.clone()),
         schema: Some(context.schema.clone()),
         source: context.source.clone(),
@@ -11329,6 +11383,7 @@ mod tests {
         super::StatementRequest {
             query: query.into(),
             parameters: vec![],
+        named_parameters: std::collections::HashMap::new(),
             catalog: None,
             schema: None,
             source: None,
@@ -11403,6 +11458,25 @@ mod tests {
         let debug = format!("{plan:?}");
         assert!(debug.contains("Int64(42)"));
         assert!(debug.contains("Utf8(\"Europe\")"));
+    }
+
+    #[test]
+    fn statement_request_named_parameters_reach_typed_sql_planning() {
+        let request: super::StatementRequest = serde_json::from_value(serde_json::json!({
+            "query": "SELECT * FROM events WHERE region = :region AND active = :active",
+            "named_parameters": {"region": "Europe", "active": true}
+        }))
+        .unwrap();
+        let values = super::request_named_parameters(&request.named_parameters).unwrap();
+        let plan = kaveon_sql::logical_plan::sql_to_logical_plan_for_binder_with_parameter_bindings(
+            &request.query,
+            &[],
+            &values,
+        )
+        .unwrap();
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("Utf8(\"Europe\")"));
+        assert!(debug.contains("Bool(true)"));
     }
 
     #[test]
@@ -13663,6 +13737,7 @@ mod tests {
             axum::Json(super::StatementRequest {
                 query: query.into(),
                 parameters: vec![],
+        named_parameters: std::collections::HashMap::new(),
                 catalog: Some("lake".into()),
                 schema: Some("sales".into()),
                 source: None,
@@ -14581,6 +14656,7 @@ mod tests {
                     super::StatementRequest {
                         query: "ANALYZE orders WITH (distinct = true)".into(),
                         parameters: vec![],
+        named_parameters: std::collections::HashMap::new(),
                         catalog: Some("lake".into()),
                         schema: Some("sales".into()),
                         source: None,
@@ -15806,6 +15882,7 @@ mod tests {
                     super::StatementRequest {
                         query: "ANALYZE events WITH (cube = true)".into(),
                         parameters: vec![],
+        named_parameters: std::collections::HashMap::new(),
                         catalog: Some("lake".into()),
                         schema: Some("sales".into()),
                         source: None,

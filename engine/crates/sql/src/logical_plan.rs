@@ -389,8 +389,19 @@ pub fn sql_to_logical_plan_for_binder_with_parameters(
     sql: &str,
     parameters: &[ScalarValue],
 ) -> Result<LogicalPlan> {
+    sql_to_logical_plan_for_binder_with_parameter_bindings(sql, parameters, &HashMap::new())
+}
+
+/// Lower SQL after binding both positional (`$1`, `?`) and named (`:name`)
+/// values to typed AST literals. Binding happens before planning so values are
+/// never interpolated into SQL text or sent as an untyped worker parameter.
+pub fn sql_to_logical_plan_for_binder_with_parameter_bindings(
+    sql: &str,
+    parameters: &[ScalarValue],
+    named_parameters: &HashMap<String, ScalarValue>,
+) -> Result<LogicalPlan> {
     let mut statements = parse_sql(sql)?;
-    bind_positional_parameters(&mut statements, parameters)?;
+    bind_parameters(&mut statements, parameters, named_parameters)?;
     lower_statements(statements, true, false)
 }
 
@@ -399,8 +410,22 @@ pub fn sql_to_logical_plan_for_binder_approximate_with_parameters(
     sql: &str,
     parameters: &[ScalarValue],
 ) -> Result<LogicalPlan> {
+    sql_to_logical_plan_for_binder_approximate_with_parameter_bindings(
+        sql,
+        parameters,
+        &HashMap::new(),
+    )
+}
+
+/// Approximate-count variant of
+/// [`sql_to_logical_plan_for_binder_with_parameter_bindings`].
+pub fn sql_to_logical_plan_for_binder_approximate_with_parameter_bindings(
+    sql: &str,
+    parameters: &[ScalarValue],
+    named_parameters: &HashMap<String, ScalarValue>,
+) -> Result<LogicalPlan> {
     let mut statements = parse_sql(sql)?;
-    bind_positional_parameters(&mut statements, parameters)?;
+    bind_parameters(&mut statements, parameters, named_parameters)?;
     lower_statements(statements, true, true)
 }
 
@@ -441,9 +466,10 @@ fn lower_statements(
     }
 }
 
-fn bind_positional_parameters(
+fn bind_parameters(
     statements: &mut Vec<ast::Statement>,
     parameters: &[ScalarValue],
+    named_parameters: &HashMap<String, ScalarValue>,
 ) -> Result<()> {
     let mut error = None;
     let mut question_index = 0usize;
@@ -456,6 +482,22 @@ fn bind_positional_parameters(
             question_index
         } else if let Some(index) = name.strip_prefix('$').and_then(|n| n.parse::<usize>().ok()) {
             index
+        } else if let Some(key) = name.strip_prefix(':') {
+            if let Some(value) = named_parameters.get(key) {
+                *expr = ast::Expr::Value(scalar_to_ast_value(value));
+                return ControlFlow::Continue(());
+            }
+            if named_parameters.is_empty() {
+                error = Some(sql_err(format!(
+                    "unsupported parameter placeholder '{name}'; use $1, $2, …, ?, or named_parameters"
+                )));
+            } else {
+                error = Some(sql_err(format!(
+                    "parameter {name} is not bound (received {} named values)",
+                    named_parameters.len()
+                )));
+            }
+            return ControlFlow::Break(());
         } else {
             error = Some(sql_err(format!(
                 "unsupported parameter placeholder '{name}'; use $1, $2, … or ?"
@@ -3677,6 +3719,35 @@ mod tests {
         assert!(named
             .to_string()
             .contains("unsupported parameter placeholder ':region'"));
+    }
+
+    #[test]
+    fn binds_named_parameters_as_typed_ast_literals() {
+        let mut named = HashMap::new();
+        named.insert("region".to_owned(), ScalarValue::Utf8("EU".to_owned()));
+        named.insert("active".to_owned(), ScalarValue::Bool(true));
+        let plan = sql_to_logical_plan_for_binder_with_parameter_bindings(
+            "SELECT * FROM t WHERE region = :region AND active = :active",
+            &[],
+            &named,
+        )
+        .unwrap();
+        let text = format!("{plan:?}");
+        assert!(text.contains("Utf8(\"EU\")"));
+        assert!(text.contains("Bool(true)"));
+    }
+
+    #[test]
+    fn missing_named_parameters_fail_before_planning() {
+        let mut named = HashMap::new();
+        named.insert("other".to_owned(), ScalarValue::Utf8("EU".to_owned()));
+        let error = sql_to_logical_plan_for_binder_with_parameter_bindings(
+            "SELECT * FROM t WHERE region = :region",
+            &[],
+            &named,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("parameter :region is not bound"));
     }
 
     #[test]
