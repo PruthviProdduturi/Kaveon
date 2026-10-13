@@ -373,9 +373,9 @@ qualification documents; this tracker remains the single ordered work list.
   order and keeps at most one NULL for numeric, text, and boolean lists;
   `ARRAY_SORT` orders those same supported element types with NULL values last;
   `ARRAY_REVERSE` reverses those lists while preserving NULL elements;
-  temporal DATE32, DATE64, TIME32 second/millisecond, and TIMESTAMP microsecond
-  lists are also supported for these operations; broader element types remain
-  an explicit boundary.
+  Int32 and temporal DATE32, DATE64, TIME32 second/millisecond, and TIMESTAMP
+  microsecond lists are also supported for these operations; broader element
+  types remain an explicit boundary.
 - Array constructors now execute as typed Arrow lists for boolean, 32/64-bit integer,
   `DATE`/`DATE64`, `TIME32`, floating-point, UTF-8, decimal, and all-NULL elements. Mixed integer and
   floating-point literals are promoted to `DOUBLE`; null elements preserve the

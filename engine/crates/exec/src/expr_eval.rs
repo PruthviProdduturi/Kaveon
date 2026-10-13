@@ -2710,6 +2710,10 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 }};
             }
             match list.value_type() {
+                DataType::Int32 => distinct_primitive!(
+                    Int32Type,
+                    PrimitiveBuilder::<Int32Type>::new()
+                ),
                 DataType::Int64 => {
                     let mut builder = ListBuilder::new(Int64Builder::new());
                     for row in 0..num_rows {
@@ -5614,6 +5618,35 @@ mod tests {
         let inner = list.value(0);
         let values = inner.as_primitive::<Date32Type>();
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(10), Some(20)]);
+    }
+
+    #[test]
+    fn array_distinct_preserves_int32_element_type() {
+        let batch = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(arrow::array::Int32Array::from(vec![Some(2)])) as ArrayRef,
+        )])
+        .unwrap();
+        let value = evaluate(
+            &Expr::Function {
+                name: "ARRAY_DISTINCT".into(),
+                args: vec![Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![
+                        Expr::Column("value".into()),
+                        Expr::Column("value".into()),
+                        Expr::Column("value".into()),
+                    ],
+                }],
+            },
+            &batch,
+        )
+        .unwrap();
+        let list = value.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(list.value_type(), DataType::Int32);
+        let inner = list.value(0);
+        let values = inner.as_primitive::<Int32Type>();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(2)]);
     }
 
     #[test]
