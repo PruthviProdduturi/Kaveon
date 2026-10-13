@@ -139,12 +139,38 @@ def engine_status(ctx: UserContext = Depends(require_min_role("Admin"))):
     data.  The catalog listing is both a connectivity check and an
     authorization check performed with the server-side bridge credential.
     """
-    from services.engine_bridge import catalogs
+    from services import engine_bridge
 
-    result = catalogs(ctx.email, ctx.role)
+    # Whether the deployment was told where its Engine is, which is a different
+    # question from whether the Engine answered. This raised 502 on an
+    # unreachable coordinator, so Studio saw no response at all and told the
+    # administrator to set KAVEON_ENGINE_URL and the bridge credential — the
+    # one thing that was already correct. A coordinator restarting during a
+    # rollout is not a configuration error, and reporting it as one sends
+    # someone to change settings that are fine.
+    configured = bool(engine_bridge.configured())
+    if not configured:
+        return {"success": True, "configured": False, "connected": False,
+                "catalog_count": None, "reason": "not_configured"}
+    try:
+        result = engine_bridge.catalogs(ctx.email, ctx.role)
+    except HTTPException as error:
+        # 502/504 from the bridge means the endpoint and credential exist and
+        # the coordinator did not answer. Reported as reachability, with the
+        # upstream status kept so an operator can tell a refused connection
+        # from a rejected credential.
+        if error.status_code in {502, 504}:
+            return {"success": True, "configured": True, "connected": False,
+                    "catalog_count": None, "reason": "unreachable",
+                    "upstream_status": error.status_code}
+        raise
     names = result.get("catalogs") if isinstance(result, dict) else None
     if not isinstance(names, list):
-        raise HTTPException(502, "Engine returned an invalid catalog listing")
+        # Reached and answered with something that is not a catalog listing.
+        # That is the Engine disagreeing with us, not an absent deployment
+        # setting, so it is not reported as one.
+        return {"success": True, "configured": True, "connected": False,
+                "catalog_count": None, "reason": "invalid_listing"}
     return {
         "success": True,
         "configured": True,

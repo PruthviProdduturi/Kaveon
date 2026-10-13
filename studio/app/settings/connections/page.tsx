@@ -22,7 +22,11 @@ interface MetadataConfig {
   label: string; endpoint: string; host: string; port: string; database: string;
   ui_configured: boolean; schema?: string; storage?: SystemStore;
 }
-interface EngineStatus { configured: boolean; connected: boolean; catalog_count: number | null }
+interface EngineStatus {
+  configured: boolean; connected: boolean; catalog_count: number | null;
+  reason?: "not_configured" | "unreachable" | "invalid_listing";
+  upstream_status?: number;
+}
 interface EngineCluster { environment: string; coordinator: { version: string; uptime_secs: number }; active_workers: number; total_nodes: number }
 
 function uptime(secs: number): string {
@@ -96,7 +100,13 @@ export default function ConnectionsPage() {
             </p>
           </div>
         </div>
-        <Status on={engine === undefined ? null : !!engine?.connected}>{engine === undefined ? "Checking" : engine?.connected ? "Connected" : "Unavailable"}</Status>
+        <Status on={engine === undefined || engine === null ? null : !!engine?.connected}>
+          {engine === undefined ? "Checking"
+            : engine === null ? "Unknown"
+            : engine.connected ? "Connected"
+            : engine.configured ? "Not answering"
+            : "Not configured"}
+        </Status>
       </div>
       {engine?.connected && cluster && (
         <Facts rows={[
@@ -123,9 +133,18 @@ export default function ConnectionsPage() {
       )}
       <div className={s.cardFoot}>
         <p className={s.note}>
+          {/* Three different things, which this reported as one. A reader sent
+              to change KAVEON_ENGINE_URL because a coordinator was restarting
+              goes and edits the one setting that was already correct. */}
           {engine?.connected
             ? "Connection and credentials are set at deployment. The console shows live workers, memory and every query KaveonDB has recorded."
-            : "The server could not verify its KaveonDB connection. Set KAVEON_ENGINE_URL and the bridge credential at deployment."}
+            : engine === null
+            ? "This page could not reach the Kaveon API, so it cannot say anything about KaveonDB. Nothing is known to be wrong."
+            : engine?.reason === "unreachable"
+            ? "The endpoint and credential are configured and the coordinator did not answer. It may be restarting; this page reports what it finds and changes nothing."
+            : engine?.reason === "invalid_listing"
+            ? "The coordinator answered with something other than a catalog listing. The connection is configured and reaching a server that disagrees with this version."
+            : "No KaveonDB endpoint is configured. Set KAVEON_ENGINE_URL and the bridge credential at deployment."}
         </p>
         {engine?.connected && (
           <div style={{ display: "flex", gap: 8 }}>
@@ -138,6 +157,36 @@ export default function ConnectionsPage() {
   );
 
   if (unified || meta === undefined) return <div className={s.stack}>{engineCard}</div>;
+
+  // A read that failed is not an answer. `meta === null` means this page could
+  // not reach the API — during a rollout, for instance — and it used to fall
+  // through to the card below and state that no metadata database exists and
+  // that nothing can be saved until one does. Both were false, and the wizard
+  // it sent an administrator to is refused outright on a KaveonDB
+  // installation. An unknown is now reported as unknown.
+  if (meta === null) {
+    return (
+      <div className={s.stack}>
+        <section className={s.card} aria-labelledby="meta-title">
+          <div className={s.cardHead}>
+            <div className={s.cardId}>
+              <div className={s.mark}><i className="fas fa-database" /></div>
+              <div style={{ minWidth: 0 }}>
+                <h2 id="meta-title" className={s.cardTitle}>System of record</h2>
+                <p className={s.cardSub}>Where Kaveon keeps datasets, charts, dashboards and history.</p>
+              </div>
+            </div>
+            <Status on={null}>Unknown</Status>
+          </div>
+          <p className={s.note} style={{ marginTop: 12 }}>
+            This page could not reach the Kaveon API, so it cannot report what holds your
+            records. Nothing is known to be missing. Reload once the API is serving.
+          </p>
+        </section>
+        {engineCard}
+      </div>
+    );
+  }
 
   // A deployment still served by an external metadata database: two systems,
   // so two cards.
@@ -158,15 +207,15 @@ export default function ConnectionsPage() {
               </p>
             </div>
           </div>
-          <Status on={meta === null ? null : !!meta?.ui_configured}>
+          <Status on={!!meta?.ui_configured}>
             {meta?.ui_configured ? "Connected" : "Not configured"}
           </Status>
         </div>
         {meta?.ui_configured ? (
           <Facts rows={[["Database", meta.database], ["Host", meta.host], ["Endpoint", meta.endpoint], ["Port", meta.port]]} />
-        ) : meta === null ? (
+        ) : (
           <p className={s.note} style={{ marginTop: 12 }}>Run the setup wizard to connect a metadata database. Nothing can be saved until it exists.</p>
-        ) : null}
+        )}
       </section>
       {engineCard}
     </div>
