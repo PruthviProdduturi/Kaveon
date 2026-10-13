@@ -378,9 +378,9 @@ invalidation, isolation, bounds, and restart evidence listed above.
   differential row canonicalizer now
   uses Arrow's type-aware formatter, so literal array/map-valued projections
   are compared across local and distributed paths instead of being silently
-  excluded by an unsupported UTF-8 cast. Representative `ROW(...)` and
-  `MAP_KEYS(...)` nested projections now pass the same gate; arbitrary nested
-  element types and complex-valued ordering remain open.
+  excluded by an unsupported UTF-8 cast. Representative `ROW(...)`, arrays of
+  rows/maps, and `MAP_KEYS(...)` nested projections now pass the same gate;
+  mixed element types and complex-valued ordering remain open.
 - Array equality and inequality now use null-preserving, element-wise
   semantics, including nested list values; ordered array comparisons now use
   lexicographic semantics with prefix handling and NULL propagation. The
