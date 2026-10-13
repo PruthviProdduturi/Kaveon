@@ -16,10 +16,12 @@ need multiset-aware logical plans and fragment operators. Both forms currently
 fail during lowering with the exact `sql: INTERSECT ALL is unsupported` or
 `sql: EXCEPT ALL is unsupported` diagnostic; this is intentional because the
 current set-operation operator is distinct-oriented and does not retain row
-multiplicity. Scalar subqueries in
-projections, correlated subqueries, prepared client parameters, recursive
-CTEs, and complex array/map/row types remain unsupported. Unsupported scalar
-shapes return explicit diagnostics rather than being sent to execution.
+multiplicity. Projection scalar subqueries are now supported when they select
+one ungrouped aggregate column; the scalar relation is cross-joined after
+outer aggregation and its alias is preserved. Correlated subqueries, prepared
+client parameters, recursive CTEs, and complex array/map/row types remain
+unsupported. Multi-row and correlated projection forms return explicit
+diagnostics rather than being sent to execution.
 The SQL front end now exposes a typed positional binding entry point for
 `$1`, `$2`, …; values become AST literals before planning and are never
 interpolated into SQL text. Missing positions and `?`/named placeholders fail
