@@ -2375,6 +2375,35 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     }
                     Ok(Arc::new(builder.finish()))
                 }
+                DataType::Decimal128(precision, scale) => {
+                    let mut builder = ListBuilder::new(
+                        Decimal128Builder::new()
+                            .with_precision_and_scale(precision, scale)
+                            .map_err(|error| KaveonError::Execution(error.to_string()))?,
+                    );
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let inner = list.value(row);
+                        let values = inner.as_primitive::<arrow::datatypes::Decimal128Type>();
+                        let mut sorted = (0..values.len())
+                            .map(|index| values.is_valid(index).then(|| values.value(index)))
+                            .collect::<Vec<_>>();
+                        sorted.sort_by(|left, right| match (left, right) {
+                            (None, None) => std::cmp::Ordering::Equal,
+                            (None, Some(_)) => std::cmp::Ordering::Greater,
+                            (Some(_), None) => std::cmp::Ordering::Less,
+                            (Some(left), Some(right)) => left.cmp(right),
+                        });
+                        for value in sorted {
+                            builder.values().append_option(value);
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }
                 DataType::Utf8 => {
                     let mut builder = ListBuilder::new(StringBuilder::new());
                     for row in 0..num_rows {
@@ -5350,6 +5379,23 @@ mod tests {
                 .value(1),
             2
         );
+        let sorted = Expr::Function {
+            name: "ARRAY_SORT".into(),
+            args: vec![Expr::Function {
+                name: "ARRAY".into(),
+                args: vec![decimal(2), decimal(1), Expr::Literal(ScalarValue::Null)],
+            }],
+        };
+        let sorted = evaluate(&sorted, &batch).unwrap();
+        let sorted = sorted
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap()
+            .value(0);
+        let sorted = sorted.as_primitive::<arrow::datatypes::Decimal128Type>();
+        assert_eq!(sorted.value(0), 1);
+        assert_eq!(sorted.value(1), 2);
+        assert!(sorted.is_null(2));
     }
 
     #[test]
