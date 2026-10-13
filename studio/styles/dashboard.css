@@ -60,8 +60,8 @@
   bottom: 3px;
   width: 8px;
   height: 8px;
-  border-right: 3px solid #0078D4;
-  border-bottom: 3px solid #0078D4;
+  border-right: 3px solid var(--accent);
+  border-bottom: 3px solid var(--accent);
   opacity: 0.7;
   transition: opacity 0.2s ease;
 }
@@ -81,7 +81,7 @@
 }
 
 .react-grid-item.static {
-  background: #f8fafc;
+  background: var(--bg-elevated);
 }
 
 .react-grid-item.react-draggable-dragging {
@@ -99,7 +99,7 @@
   opacity: 0.5;
   transition-duration: 100ms;
   z-index: 2;
-  border: 2px dashed #0078D4;
+  border: 2px dashed var(--accent);
 }
 
 /* Dashboard Canvas */
@@ -200,39 +200,51 @@
 }
 
 .dashboard-component-chart.dashboard-component-selected {
-  border-color: #0078D4;
+  border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(0, 120, 212, 0.2);
 }
 
+/* The component's own chrome: drag handle, title, actions. Tokenised because
+   it hardcoded a light strip from before the dark theme existed, so on the
+   default theme it was a pale band with low-contrast icons across the top of
+   every chart. */
 .dashboard-component-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 8px 12px;
-  border-bottom: 1px solid #e2e8f0;
-  background: #f8fafc;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
   min-height: 40px;
 }
 
 .dashboard-component-title {
   font-size: 14px;
   font-weight: 600;
-  color: #1e293b;
+  color: var(--text-primary);
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* Visible while building, emphasised on hover.
+   These were `opacity: 0` until the component was hovered — so duplicate and
+   remove existed, were clickable, and could not be seen. "There is no way to
+   remove a chart" is exactly how that reads, and on a touch device there is
+   genuinely no way: there is no hover to reveal them. A builder's controls are
+   the point of a builder, so in edit mode they are shown; hover and selection
+   still bring them to full strength. */
 .dashboard-component-actions {
   display: flex;
   gap: 4px;
-  opacity: 0;
+  opacity: 0.75;
   transition: opacity 0.2s ease;
 }
 
 .dashboard-component:hover .dashboard-component-actions,
-.dashboard-component-selected .dashboard-component-actions {
+.dashboard-component-selected .dashboard-component-actions,
+.dashboard-component-actions:focus-within {
   opacity: 1;
 }
 
@@ -243,13 +255,18 @@
   border-radius: 4px;
   cursor: pointer;
   font-size: 12px;
-  color: #64748b;
+  color: var(--text-secondary);
   transition: all 0.15s ease;
 }
 
 .dashboard-component-action-btn:hover {
-  background: #e2e8f0;
-  color: #1e293b;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+/* Removal is destructive and should not look like duplication. */
+.dashboard-component-action-btn:hover .fa-trash {
+  color: var(--danger, #ef4444);
 }
 
 .dashboard-component-body {
@@ -275,7 +292,7 @@
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: #94a3b8;
+  color: var(--text-muted);
   font-size: 14px;
 }
 
@@ -291,13 +308,13 @@
 
 .dashboard-chart-error-icon {
   font-size: 32px;
-  color: #ef4444;
+  color: var(--danger, #ef4444);
   margin-bottom: 12px;
 }
 
 .dashboard-chart-error-message {
   font-size: 14px;
-  color: #64748b;
+  color: var(--text-secondary);
 }
 
 /* Dashboard Text Component */
@@ -314,13 +331,13 @@
 }
 
 .dashboard-text-editable:hover {
-  border-color: #cbd5e1;
-  background: #f8fafc;
+  border-color: var(--border);
+  background: var(--bg-elevated);
 }
 
 .dashboard-text-editable:focus-within {
-  border-color: #0078D4;
-  background: #ffffff;
+  border-color: var(--accent);
+  background: var(--bg-surface);
 }
 
 .dashboard-text-textarea {
@@ -331,7 +348,7 @@
   font-family: inherit;
   font-size: 14px;
   line-height: 1.6;
-  color: #334155;
+  color: var(--text-primary);
   resize: vertical;
 }
 
@@ -345,21 +362,21 @@
 .dashboard-header-h1 {
   font-size: 28px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--text-primary);
   margin: 0;
 }
 
 .dashboard-header-h2 {
   font-size: 22px;
   font-weight: 600;
-  color: #334155;
+  color: var(--text-primary);
   margin: 0;
 }
 
 .dashboard-header-h3 {
   font-size: 18px;
   font-weight: 600;
-  color: #475569;
+  color: var(--text-secondary);
   margin: 0;
 }
 
@@ -372,8 +389,8 @@
 }
 
 .dashboard-header-editable:hover {
-  border-color: #cbd5e1;
-  background: #f8fafc;
+  border-color: var(--border);
+  background: var(--bg-elevated);
 }
 
 .dashboard-header-input {
@@ -396,8 +413,8 @@
 
 .dashboard-tabs-header {
   display: flex;
-  border-bottom: 2px solid #e2e8f0;
-  background: #f8fafc;
+  border-bottom: 2px solid var(--border);
+  background: var(--bg-elevated);
   padding: 0 12px;
 }
 
@@ -410,36 +427,36 @@
   cursor: pointer;
   font-size: 14px;
   font-weight: 500;
-  color: #64748b;
+  color: var(--text-secondary);
   transition: all 0.2s ease;
   user-select: none;
 }
 
 .dashboard-tab:hover {
-  color: #1e293b;
+  color: var(--text-primary);
   background: rgba(0, 0, 0, 0.03);
 }
 
 .dashboard-tab-active {
-  color: #0078D4;
-  border-bottom-color: #0078D4;
+  color: var(--accent);
+  border-bottom-color: var(--accent);
 }
 
 .dashboard-tab-add-btn {
   padding: 8px 12px;
   margin-left: 8px;
   background: transparent;
-  border: 1px dashed #cbd5e1;
+  border: 1px dashed var(--border);
   border-radius: 4px;
   cursor: pointer;
   font-size: 12px;
-  color: #64748b;
+  color: var(--text-secondary);
   transition: all 0.2s ease;
 }
 
 .dashboard-tab-add-btn:hover {
-  border-color: #0078D4;
-  color: #0078D4;
+  border-color: var(--accent);
+  color: var(--accent);
   background: rgba(37, 99, 235, 0.05);
 }
 
@@ -456,7 +473,7 @@
   cursor: move;
   cursor: grab;
   padding: 4px 8px;
-  color: #94a3b8;
+  color: var(--text-muted);
   transition: all 0.2s ease;
   border-radius: 4px;
   display: flex;
@@ -465,13 +482,13 @@
 }
 
 .dashboard-drag-handle:hover {
-  color: #0078D4;
+  color: var(--accent);
   background: rgba(37, 99, 235, 0.1);
 }
 
 .dashboard-drag-handle:active {
   cursor: grabbing;
-  color: #1e40af;
+  color: var(--accent);
   background: rgba(37, 99, 235, 0.2);
 }
 
@@ -481,8 +498,8 @@
 
 /* Dashboard Filter Bar */
 .dashboard-filter-bar {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
   padding: 16px;
   margin-bottom: 16px;
 }
@@ -497,7 +514,7 @@
 .dashboard-filter-bar-title {
   font-size: 14px;
   font-weight: 600;
-  color: #1e293b;
+  color: var(--text-primary);
 }
 
 .dashboard-filter-bar-actions {
@@ -517,17 +534,17 @@
   align-items: center;
   gap: 6px;
   padding: 6px 12px;
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
+  background: rgba(var(--accent-rgb), 0.10);
+  border: 1px solid rgba(var(--accent-rgb), 0.35);
   border-radius: 16px;
   font-size: 13px;
-  color: #1e40af;
+  color: var(--accent);
 }
 
 .dashboard-filter-pill-disabled {
-  background: #f1f5f9;
-  border-color: #cbd5e1;
-  color: #64748b;
+  background: var(--bg-elevated);
+  border-color: var(--border);
+  color: var(--text-secondary);
   opacity: 0.6;
 }
 
@@ -537,19 +554,19 @@
   padding: 0;
   margin-left: 4px;
   cursor: pointer;
-  color: #60a5fa;
+  color: var(--accent);
   font-size: 14px;
   transition: color 0.15s ease;
 }
 
 .dashboard-filter-pill-remove:hover {
-  color: #ef4444;
+  color: var(--danger, #ef4444);
 }
 
 /* Dashboard Component Palette (Sidebar) */
 .dashboard-sidebar {
-  background: #ffffff;
-  border-right: 1px solid #e2e8f0;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border);
   width: 280px;
   height: 100%;
   overflow-y: auto;
@@ -563,7 +580,7 @@
 .dashboard-sidebar-section-title {
   font-size: 12px;
   font-weight: 600;
-  color: #64748b;
+  color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   margin-bottom: 12px;
@@ -574,8 +591,8 @@
   align-items: center;
   gap: 12px;
   padding: 12px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
   border-radius: 6px;
   margin-bottom: 8px;
   cursor: grab;
@@ -583,8 +600,8 @@
 }
 
 .dashboard-component-palette-item:hover {
-  background: #eff6ff;
-  border-color: #bfdbfe;
+  background: rgba(var(--accent-rgb), 0.10);
+  border-color: rgba(var(--accent-rgb), 0.35);
   transform: translateX(4px);
 }
 
@@ -594,7 +611,7 @@
 
 .dashboard-component-palette-icon {
   font-size: 20px;
-  color: #64748b;
+  color: var(--text-secondary);
   width: 24px;
   text-align: center;
 }
@@ -603,13 +620,13 @@
   flex: 1;
   font-size: 14px;
   font-weight: 500;
-  color: #334155;
+  color: var(--text-primary);
 }
 
 /* Dashboard Properties Panel */
 .dashboard-properties-panel {
-  background: #ffffff;
-  border-left: 1px solid #e2e8f0;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border);
   width: 320px;
   height: 100%;
   overflow-y: auto;
@@ -619,7 +636,7 @@
 .dashboard-properties-section {
   margin-bottom: 24px;
   padding-bottom: 24px;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--border);
 }
 
 .dashboard-properties-section:last-child {
@@ -629,7 +646,7 @@
 .dashboard-properties-section-title {
   font-size: 14px;
   font-weight: 600;
-  color: #1e293b;
+  color: var(--text-primary);
   margin-bottom: 12px;
 }
 
@@ -641,48 +658,48 @@
   display: block;
   font-size: 13px;
   font-weight: 500;
-  color: #475569;
+  color: var(--text-secondary);
   margin-bottom: 6px;
 }
 
 .dashboard-properties-input {
   width: 100%;
   padding: 8px 12px;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--border);
   border-radius: 6px;
   font-size: 14px;
-  color: #334155;
+  color: var(--text-primary);
   transition: all 0.2s ease;
 }
 
 .dashboard-properties-input:focus {
   outline: none;
-  border-color: #0078D4;
+  border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
 }
 
 .dashboard-properties-select {
   width: 100%;
   padding: 8px 12px;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--border);
   border-radius: 6px;
   font-size: 14px;
-  color: #334155;
-  background: #ffffff;
+  color: var(--text-primary);
+  background: var(--bg-surface);
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
 .dashboard-properties-select:focus {
   outline: none;
-  border-color: #0078D4;
+  border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
 }
 
 /* Drag Ghost Preview */
 .dashboard-drag-ghost {
-  background: #ffffff;
-  border: 2px dashed #0078D4;
+  background: var(--bg-surface);
+  border: 2px dashed var(--accent);
   padding: 16px;
   opacity: 0.8;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
@@ -741,7 +758,7 @@
 
 .dashboard-canvas .react-grid-item.react-grid-placeholder {
   background: rgba(37, 99, 235, 0.1);
-  border: 2px dashed #0078D4;
+  border: 2px dashed var(--accent);
   opacity: 1;
   transition-duration: 100ms;
 }
@@ -757,7 +774,7 @@
 }
 
 .dashboard-row-component:hover {
-  border-color: #6366f1 !important;
+  border-color: var(--accent) !important;
 }
 
 .dashboard-column-component {
@@ -770,7 +787,7 @@
 }
 
 .dashboard-column-component:hover {
-  border-color: #10b981 !important;
+  border-color: var(--success, #10b981) !important;
 }
 
 /* ============================================
@@ -996,7 +1013,7 @@
 [data-theme="dark"] [style*="background:#dcfce7"],
 [data-theme="dark"] [style*="background:#d1fae5"] {
   background: rgba(16, 185, 129, 0.15) !important;
-  color: #10b981 !important;
+  color: var(--success, #10b981) !important;
   border-color: rgba(16, 185, 129, 0.2) !important;
 }
 
