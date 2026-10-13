@@ -2052,11 +2052,9 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
             }
         }
 
-        // The equality forms of quantified array predicates are equivalent
-        // to membership and can use the same vectorized, nullable path.
-        // Other comparison operators need a reduction over every element
-        // (including Trino's empty-array and NULL rules), so reject them
-        // explicitly rather than silently changing their meaning.
+        // Equality forms are equivalent to membership and use the same
+        // vectorized nullable path. Other operators lower to an explicit
+        // reduction so empty-array and NULL rules stay visible in execution.
         ast::Expr::AnyOp {
             left,
             compare_op: ast::BinaryOperator::Eq,
