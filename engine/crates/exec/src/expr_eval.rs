@@ -1773,6 +1773,23 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             }
             Ok(Arc::new(builder.finish()))
         }
+        "REGEXP_LIKE" => {
+            check_arity(name, args, 2)?;
+            let values = as_string_array(&args[0])?;
+            let patterns = as_string_array(&args[1])?;
+            let result: BooleanArray = (0..num_rows)
+                .map(|row| {
+                    if values.is_null(row) || patterns.is_null(row) {
+                        return Ok(None);
+                    }
+                    Ok(Some(
+                        compiled_regex(patterns.value(row))?.is_match(values.value(row)),
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?
+                .into();
+            Ok(Arc::new(result))
+        }
         "REPLACE" => {
             check_arity(name, args, 3)?;
             let arr = as_string_array(&args[0])?;
@@ -6880,5 +6897,44 @@ mod tests {
         let values = result.as_string::<i32>();
         assert_eq!(values.value(0), "1,?,3");
         assert_eq!(values.value(1), "");
+    }
+
+    #[test]
+    fn evaluates_regexp_like_with_nulls_and_invalid_patterns() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "value",
+                Arc::new(StringArray::from(vec![Some("alpha-17"), Some("beta"), None]))
+                    as ArrayRef,
+            ),
+            (
+                "pattern",
+                Arc::new(StringArray::from(vec![Some(r"^alpha-\d+$"), Some("^alpha"), Some("^x")]))
+                    as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let expr = Expr::Function {
+            name: "REGEXP_LIKE".into(),
+            args: vec![Expr::Column("value".into()), Expr::Column("pattern".into())],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        assert_eq!(
+            result
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(true), Some(false), None]
+        );
+
+        let invalid = RecordBatch::try_from_iter([
+            ("value", Arc::new(StringArray::from(vec![Some("a")])) as ArrayRef),
+            ("pattern", Arc::new(StringArray::from(vec![Some("[a")])) as ArrayRef),
+        ])
+        .unwrap();
+        let error = evaluate(&expr, &invalid).unwrap_err();
+        assert!(error.to_string().contains("pattern") && error.to_string().contains("invalid"));
     }
 }
