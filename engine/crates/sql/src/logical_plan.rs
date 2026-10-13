@@ -1911,14 +1911,24 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
 
         // ── CAST ────────────────────────────────────────────────────────
         ast::Expr::Cast {
-            expr, data_type, ..
+            kind,
+            expr,
+            data_type,
+            ..
         } => {
             let inner = ast_expr_to_expr(expr)?;
             let target = ast_data_type_to_cast_target(data_type)?;
-            Ok(Expr::Cast {
-                expr: Box::new(inner),
-                data_type: target,
-            })
+            if matches!(kind, ast::CastKind::TryCast | ast::CastKind::SafeCast) {
+                Ok(Expr::Function {
+                    name: format!("TRY_CAST_{}", cast_target_name(target)),
+                    args: vec![inner],
+                })
+            } else {
+                Ok(Expr::Cast {
+                    expr: Box::new(inner),
+                    data_type: target,
+                })
+            }
         }
 
         // ── EXTRACT ──────────────────────────────────────────────────────
@@ -1983,6 +1993,20 @@ fn null_safe_comparison(left: Expr, right: Expr, not_distinct: bool) -> Expr {
             ],
             else_expr: Some(Box::new(different)),
         }
+    }
+}
+
+fn cast_target_name(target: CastTarget) -> String {
+    match target {
+        CastTarget::Boolean => "BOOLEAN".into(),
+        CastTarget::Int32 => "INT32".into(),
+        CastTarget::Int64 => "INT64".into(),
+        CastTarget::Float64 => "FLOAT64".into(),
+        CastTarget::Utf8 => "UTF8".into(),
+        CastTarget::Date32 => "DATE32".into(),
+        CastTarget::TimestampMicros { with_timezone: false } => "TIMESTAMP".into(),
+        CastTarget::TimestampMicros { with_timezone: true } => "TIMESTAMP_TZ".into(),
+        CastTarget::Decimal128 { precision, scale } => format!("DECIMAL_{precision}_{scale}"),
     }
 }
 
@@ -3780,6 +3804,13 @@ mod tests {
             assert!(debug.contains("Case"), "{sql} did not lower to CASE");
             assert!(debug.contains(expected), "{sql} lost its comparison");
         }
+    }
+
+    #[test]
+    fn try_cast_lowers_to_a_safe_typed_expression() {
+        let plan = sql_to_logical_plan("SELECT TRY_CAST(value AS BIGINT) FROM t").unwrap();
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("TRY_CAST_INT64"));
     }
 
     #[test]

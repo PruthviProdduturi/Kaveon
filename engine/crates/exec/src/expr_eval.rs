@@ -1236,7 +1236,53 @@ fn eval_cast(expr: &Expr, target: CastTarget, batch: &RecordBatch) -> Result<Arr
 // ── Scalar functions ────────────────────────────────────────────────────────
 
 fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
-    match name.to_uppercase().as_str() {
+    let upper = name.to_uppercase();
+    if let Some(target) = upper.strip_prefix("TRY_CAST_") {
+        check_arity(name, args, 1)?;
+        let target = match target {
+            "BOOLEAN" => CastTarget::Boolean,
+            "INT32" => CastTarget::Int32,
+            "INT64" => CastTarget::Int64,
+            "FLOAT64" => CastTarget::Float64,
+            "UTF8" => CastTarget::Utf8,
+            "DATE32" => CastTarget::Date32,
+            "TIMESTAMP" => CastTarget::TimestampMicros {
+                with_timezone: false,
+            },
+            "TIMESTAMP_TZ" => CastTarget::TimestampMicros {
+                with_timezone: true,
+            },
+            decimal if decimal.starts_with("DECIMAL_") => {
+                let mut pieces = decimal.split('_');
+                let _ = pieces.next();
+                let precision = pieces.next().and_then(|value| value.parse::<u8>().ok());
+                let scale = pieces.next().and_then(|value| value.parse::<i8>().ok());
+                if pieces.next().is_some() || precision.is_none() || scale.is_none() {
+                    return Err(KaveonError::Execution(format!(
+                        "unsupported TRY_CAST target: {decimal}"
+                    )));
+                }
+                CastTarget::Decimal128 {
+                    precision: precision.unwrap(),
+                    scale: scale.unwrap(),
+                }
+            }
+            _ => {
+                return Err(KaveonError::Execution(format!(
+                    "unsupported TRY_CAST target: {target}"
+                )));
+            }
+        };
+        return Ok(compute::cast_with_options(
+            &args[0],
+            &target.to_arrow_type(),
+            &compute::CastOptions {
+                safe: true,
+                ..Default::default()
+            },
+        )?);
+    }
+    match upper.as_str() {
         "UPPER" => {
             check_arity(name, args, 1)?;
             let arr = as_string_array(&args[0])?;
@@ -2354,6 +2400,35 @@ mod tests {
         assert_eq!(
             values.as_boolean().iter().collect::<Vec<_>>(),
             vec![Some(true), Some(true), Some(false), Some(false)]
+        );
+    }
+
+    #[test]
+    fn try_cast_returns_null_only_for_invalid_values() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("value", DataType::Utf8, true),
+        ]));
+        let input = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(StringArray::from(vec![
+                Some("12"),
+                Some("bad"),
+                None,
+                Some("-4"),
+            ]))],
+        )
+        .unwrap();
+        let values = evaluate(
+            &Expr::Function {
+                name: "TRY_CAST_INT64".into(),
+                args: vec![Expr::Column("value".into())],
+            },
+            &input,
+        )
+        .unwrap();
+        assert_eq!(
+            values.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+            vec![Some(12), None, None, Some(-4)]
         );
     }
 
