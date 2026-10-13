@@ -55,8 +55,18 @@ def execution_metrics(comparison):
 
 def slo_evidence(comparison, pressure, base_gates):
     """Evaluate the Track 1 SLO without treating missing evidence as success."""
+    # The original fault-pressure runner nested the exact requests under
+    # ``concurrent_exact``.  The live runner records the same requests under
+    # ``pressure`` alongside its resource samples.  Accept both shapes so an
+    # archived live report can be merged without rewriting evidence by hand.
     requests = (pressure.get("concurrent_exact") or {}).get("requests") or []
-    admission_refusals = sum(request.get("status") == 429 for request in requests)
+    if not requests:
+        requests = (pressure.get("pressure") or {}).get("requests") or []
+    admission_refusals = sum(
+        int(request.get("admission_refusals", 0) or 0)
+        + int(request.get("status") == 429)
+        for request in requests
+    )
     accepted_requests = [request for request in requests if request.get("status") != 429]
     successful = sum(
         request.get("exact") is True and request.get("status") == 200
@@ -90,6 +100,8 @@ def slo_evidence(comparison, pressure, base_gates):
 def merge(comparison, pressure):
     concurrent = pressure.get("concurrent_exact", {})
     concurrent_requests = concurrent.get("requests", [])
+    if not concurrent_requests:
+        concurrent_requests = (pressure.get("pressure") or {}).get("requests", [])
     exact_requests = bool(concurrent_requests) and all(
         request.get("exact") is True and request.get("status") == 200
         for request in concurrent_requests
@@ -99,6 +111,14 @@ def merge(comparison, pressure):
         pressure.get("checks", {}).get("worker_loss_exact_retry_and_recovery")
         and worker_loss.get("exact") is True
         and worker_loss.get("retry", {}).get("attempt_incremented") is True
+    )
+    # Current live reports expose the same invariant as a direct exact-match
+    # and retry-observed pair. Keep the older nested form above for existing
+    # qualification artifacts.
+    retry = retry or bool(
+        pressure.get("checks", {}).get("worker_loss_exact_retry_and_recovery")
+        and worker_loss.get("exact_match") is True
+        and worker_loss.get("retry_attempt_observed") is True
     )
     retained_after = pressure.get("retained_files_after", {})
     coordinator_cleanup = retained_after.get("coordinator_exchange") == 0

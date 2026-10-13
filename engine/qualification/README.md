@@ -243,7 +243,9 @@ arbitrary data or hardware:
 Missing samples, task metrics, image/configuration binding, or any required
 failure/recovery evidence leaves the SLO pending. A passing local unit suite or
 an isolated latency sample cannot satisfy this SLO. The current report merger
-does not claim coordinator-loss survival, sustained network-pressure,
+accepts both the legacy nested fault-pressure schema and the current live
+runner schema, including per-request admission-refusal counts. It does not
+claim coordinator-loss survival, sustained network-pressure,
 cloud-storage fault injection, longer endurance, or upgrade/rollback evidence;
 those remain explicit Track 1 blockers.
 

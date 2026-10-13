@@ -48,6 +48,31 @@ class MergeQualificationTests(unittest.TestCase):
             },
         }
 
+    def current_pressure(self, cleanup=True):
+        """Shape emitted by the live pod-loss runner."""
+        return {
+            "checks": {
+                "worker_loss_exact_retry_and_recovery": True,
+                "cancellation_cleanup": True,
+            },
+            "pressure": {
+                "requests": [
+                    {"exact": True, "status": 200, "admission_refusals": 2},
+                    {"exact": True, "status": 200, "admission_refusals": 0},
+                    {"exact": False, "status": 429},
+                ],
+                "sampled_engine_memory_within_pod_limits": True,
+            },
+            "worker_loss": {
+                "exact_match": True,
+                "retry_attempt_observed": True,
+            },
+            "retained_files_after": {
+                "coordinator_exchange": 0 if cleanup else 2,
+                "kaveon-worker-0_spill": 0,
+            },
+        }
+
     def test_passes_only_when_all_recovery_gates_pass(self):
         result = merge_aks.merge(self.comparison(), self.pressure())
         self.assertTrue(result["passed"])
@@ -92,6 +117,18 @@ class MergeQualificationTests(unittest.TestCase):
         self.assertEqual(result["slo"]["admission_refusals"], 1)
         self.assertEqual(result["slo"]["accepted_success_rate"], 1.0)
         self.assertTrue(result["slo"]["requirements"]["accepted_success_rate"])
+
+    def test_merges_current_live_fault_pressure_shape(self):
+        result = merge_aks.merge(self.comparison(), self.current_pressure())
+        self.assertTrue(result["gates"]["worker_retry"])
+        self.assertEqual(result["slo"]["accepted_requests"], 2)
+        self.assertEqual(result["slo"]["admission_refusals"], 3)
+        self.assertTrue(result["slo"]["requirements"]["cancellation_cleanup"])
+
+    def test_current_live_shape_stays_pending_when_cleanup_is_missing(self):
+        result = merge_aks.merge(self.comparison(), self.current_pressure(cleanup=False))
+        self.assertFalse(result["passed"])
+        self.assertFalse(result["gates"]["coordinator_restart_cleanup"])
 
 
 if __name__ == "__main__":
