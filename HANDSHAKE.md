@@ -1,5 +1,11 @@
 # Kaveon — Engineer Coordination
 
+## SQL compatibility track — October 12, 2026 · row constructors
+
+Commit `pending` adds executable `ROW(...)` constructors. The expression path
+returns typed Arrow `StructArray` values and preserves nullable child fields.
+`MAP(...)`, row dereference, and row comparison remain explicit boundaries.
+
 ## SQL compatibility track — October 12, 2026 · safe casts
 
 The next compatibility slice adds `TRY_CAST` (`6e4a8a44`) for the

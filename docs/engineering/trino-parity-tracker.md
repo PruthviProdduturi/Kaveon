@@ -75,9 +75,10 @@ foundations, but several operators are still centralized or narrow:
   `TIMESTAMP WITH TIME ZONE` now map to Arrow microsecond timestamps with
   nullable execution coverage.
 - Numeric array literals are supported as null-preserving Arrow lists, and
-  `CARDINALITY` returns their nullable list length; maps and structs/row values
-  are not yet represented as complete SQL expression types. `ROW(...)` and
-  `MAP(...)` now fail with typed planner diagnostics. Scalar, DATE, timestamp,
+  `CARDINALITY` returns their nullable list length; `ROW(...)` now produces
+  typed Arrow structs, while maps, field dereference, and row comparison remain
+  open. `MAP(...)` still fails with a typed planner diagnostic. Scalar, DATE,
+  timestamp,
   and DECIMAL casts are supported; complex cast targets fail with typed
   planner diagnostics. Dereference, `UNNEST`, other array operations, and
   broad JSON operations remain open; scalar extraction via
@@ -236,11 +237,14 @@ qualification documents; this tracker remains the single ordered work list.
 - `TRY_CAST` now lowers to Arrow safe per-element casts for the supported
   primitive, date/time, and decimal targets; invalid values become NULL while
   valid values in the same batch remain intact (`6e4a8a44`).
+- `ROW(...)` constructors now produce typed Arrow `StructArray` values with
+  null-preserving child fields; map construction and struct dereference remain
+  explicit complex-type gaps.
 
 ### Current focused validation
 
-The latest focused validation passes 330 `kaveon-server` tests, 102
-`kaveon-sql` tests, and 218 `kaveon-exec` tests. These counts are package-level
+The latest focused validation passes 330 `kaveon-server` tests, 103
+`kaveon-sql` tests, and 219 `kaveon-exec` tests. These counts are package-level
 validation snapshots; they do not close the broader multi-worker, AKS, or
 cross-connector qualification gates below.
 
