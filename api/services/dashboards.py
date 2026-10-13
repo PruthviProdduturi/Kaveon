@@ -87,6 +87,11 @@ def _adapt(row: dict) -> dict:
         "thumbnail_dark": row.get("thumbnail_dark"),
         "has_thumbnail": bool(row.get("thumbnail")),
         "has_thumbnail_dark": bool(row.get("thumbnail_dark")),
+        # The metadata tables carry no capture time, so a preview read from one
+        # reports none and the refresh pass treats it as current rather than
+        # guessing. Only a KaveonDB product record stamps it.
+        "thumbnail_updated_at": None,
+        "thumbnail_dark_updated_at": None,
         "layout": layout,
         "charts": row.get("charts") or "[]",
         "filters": row.get("filters") or "[]",
@@ -114,6 +119,8 @@ def _adapt_product(document: dict) -> dict:
         "thumbnail_dark": document.get("thumbnail_dark"),
         "has_thumbnail": bool(document.get("thumbnail")),
         "has_thumbnail_dark": bool(document.get("thumbnail_dark")),
+        "thumbnail_updated_at": document.get("thumbnail_updated_at"),
+        "thumbnail_dark_updated_at": document.get("thumbnail_dark_updated_at"),
         "owner": result.get("created_by"), "favorite": bool(result.get("favorite", False)),
     })
     return result
@@ -159,8 +166,34 @@ def _product_document(data: dict, dashboard_id: str, actor: str, prior: dict | N
         )
         for field in ("thumbnail", "thumbnail_dark")
     }
+    # When each slot was captured, so the Library's refresh pass can tell a
+    # current preview from one the dashboard has since outgrown; `updated_at`
+    # alone cannot say that. Stamped only when that slot's image changes, and
+    # absent on a record whose preview predates the field, which the pass reads
+    # as "cannot tell" rather than as stale.
+    captured = {}
+    for field, value in previews.items():
+        stamp = prior.get(f"{field}_updated_at")
+        if not isinstance(stamp, str) or not stamp:
+            stamp = None
+        if value and value != prior.get(field):
+            stamp = now
+        if value and stamp:
+            captured[f"{field}_updated_at"] = stamp
+    # Storing a preview is not an edit of the dashboard. It used to be written
+    # as one, so each theme's capture pushed `updated_at` past the other
+    # theme's capture time and made it stale again — the two slots could never
+    # both be current — and a dashboard jumped to the top of the Library's
+    # recently-modified order merely by being viewed. A write that carries
+    # nothing but previews keeps the record's own modification identity.
+    preview_only = bool(prior) and bool(data) and set(data) <= set(previews)
+    prior_updated_at = prior.get("updated_at")
+    updated_at = prior_updated_at if preview_only and isinstance(prior_updated_at, str) and prior_updated_at else now
+    prior_modified_by = prior.get("modified_by")
+    modified_by = prior_modified_by if preview_only and isinstance(prior_modified_by, str) and prior_modified_by else actor
     return {
         **{field: value for field, value in previews.items() if value},
+        **captured,
         "id": dashboard_id,
         "name": data.get("name", prior.get("name")),
         "description": data.get("description", prior.get("description")),
@@ -173,9 +206,9 @@ def _product_document(data: dict, dashboard_id: str, actor: str, prior: dict | N
         "is_published": bool(data.get("is_published", prior.get("is_published", False))),
         "is_archived": bool(data.get("is_archived", prior.get("is_archived", False))),
         "created_by": owner,
-        "modified_by": actor,
+        "modified_by": modified_by,
         "created_at": prior.get("created_at") or now,
-        "updated_at": now,
+        "updated_at": updated_at,
     }
 
 
@@ -191,8 +224,20 @@ def _summary(dashboard: dict) -> dict:
 
 def get_dashboard_thumbnail(dashboard_id: str, user_email: str, role: str, dark: bool) -> Optional[str]:
     """Return one dashboard's stored preview for a theme, falling back to the
-    other theme so a dashboard captured only once still shows a preview."""
-    dashboard = get_dashboard_by_id(dashboard_id, user_email, role, include_thumbnails=True)
+    other theme so a dashboard captured only once still shows a preview.
+
+    A cover needs the record's bytes and the authority to serve them. Reading
+    it as a whole Library card also asked whether the viewer had favorited the
+    dashboard — an independent product read of its own, half a second, which
+    cannot change the image — so the cover does not ask.
+    """
+    from services import product_read_authority
+    if product_read_authority.enabled("dashboards"):
+        dashboard = product_read_authority.read_document(
+            "dashboards", dashboard_id, user_email, role, with_favorite=False,
+        )
+    else:
+        dashboard = get_dashboard_by_id(dashboard_id, user_email, role, include_thumbnails=True)
     if dashboard is None:
         return None
     order = ("thumbnail_dark", "thumbnail") if dark else ("thumbnail", "thumbnail_dark")
