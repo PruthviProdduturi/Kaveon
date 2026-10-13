@@ -242,6 +242,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "date_array_functions",
+        "SELECT CARDINALITY(ARRAY[DATE '2026-01-01', DATE '2026-02-01']) AS card, ARRAY_POSITION(ARRAY[DATE '2026-01-01', DATE '2026-02-01'], DATE '2026-02-01') AS pos FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "scalar_aggregate_filter",
         "SELECT country, COUNT(*) AS n FROM {T} WHERE user_id < (SELECT MAX(user_id) FROM {U}) GROUP BY country ORDER BY country",
         true,
