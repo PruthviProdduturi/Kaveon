@@ -137,8 +137,14 @@ def read_document(
     return result
 
 
-def list_documents(family: str, actor: str, role: str) -> list[dict]:
-    """List one cutover family from KaveonDB with legacy visibility and order."""
+def list_documents(family: str, actor: str, role: str, *,
+                   max_records: int | None = None) -> list[dict]:
+    """List one cutover family from KaveonDB with legacy visibility and order.
+
+    `max_records` is passed through for a family whose own retention bound is
+    close to the store's listing ceiling, so the caller states the bound it
+    expects instead of discovering the default by exceeding it.
+    """
     if not enabled(family):
         raise ProductReadAuthorityError(f"{family} has not moved to KaveonDB read authority")
     if family == "chat_history":
@@ -150,7 +156,8 @@ def list_documents(family: str, actor: str, role: str) -> list[dict]:
     wants_favorites = family in {
         "datasets", "charts", "dashboards", "saved_queries", "sources"
     }
-    reads = [lambda: product_store.list_records(_KIND[family], actor, "Admin")]
+    bound = {} if max_records is None else {"max_records": max_records}
+    reads = [lambda: product_store.list_records(_KIND[family], actor, "Admin", **bound)]
     if wants_favorites:
         reads.append(lambda: product_store.list_records("favorite", actor, "Admin"))
     listed = product_reads.gather(*reads)

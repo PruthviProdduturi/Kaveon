@@ -17,7 +17,21 @@ from services.query_history_backfill import document as migration_document
 import os
 import logging
 MAX_DELETE_FANOUT=100
-MAX_HISTORY_PER_OWNER=1_000
+# How many rows one owner keeps, and why it is not 1,000.
+#
+# `product_store.list_records` refuses a `max_records` above 1,000 and raises
+# 503 once a listing exceeds the bound it was given, so 1,000 is a hard
+# transport ceiling. Retention was set to exactly that ceiling, which meant an
+# owner the sweep had filled could not be listed at all: every read of their
+# history answered 503, and the page reported no history for someone who had
+# the most of it. Rows written between sweeps pushed it over with nothing to
+# pull it back until the next sweep ran.
+#
+# So the retention bound sits below the ceiling with room for the writes that
+# arrive before a sweep. The two numbers are related and the relationship is
+# the point — raising this without raising the ceiling reintroduces the fault.
+HISTORY_LIST_CEILING=1_000
+MAX_HISTORY_PER_OWNER=800
 
 
 _BASE_COLS = (
@@ -83,7 +97,10 @@ def list_history(user_id: Optional[str], limit: int = 50) -> List[dict]:
     if product_read_authority.enabled("query_history"):
         actor = user_id if user_id and user_id != "all" else "kaveon-system"
         role = "Admin" if not user_id or user_id == "all" else "Viewer"
-        return product_read_authority.list_documents("query_history", actor, role)[:limit]
+        # Ask for the ceiling explicitly rather than inheriting a default: a
+        # read of this family must not be the thing that discovers the bound.
+        return product_read_authority.list_documents(
+            "query_history", actor, role, max_records=HISTORY_LIST_CEILING)[:limit]
     columns = _BASE_COLS + (_ENGINE_COLS if _supports_engine_details() else "")
     fetch_all = not user_id or user_id == "all"
     if fetch_all:
