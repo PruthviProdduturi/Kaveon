@@ -2827,6 +2827,37 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         "ARRAY_POSITION currently supports ARRAY/List values only".into(),
                     )
                 })?;
+            if matches!(
+                list.value_type(),
+                DataType::List(_)
+                    | DataType::LargeList(_)
+                    | DataType::Struct(_)
+                    | DataType::Map(_, _)
+            ) {
+                let result = (0..num_rows)
+                    .map(|row| {
+                        if list.is_null(row) {
+                            return None;
+                        }
+                        let values = list.value(row);
+                        let needle_is_null = args[1].is_null(row);
+                        let needle = (!needle_is_null).then(|| args[1].slice(row, 1));
+                        let position = (0..values.len()).find(|&index| {
+                            if values.is_null(index) {
+                                return needle_is_null;
+                            }
+                            let Some(needle) = needle.as_ref() else {
+                                return false;
+                            };
+                            comparison(&values.slice(index, 1), needle, CompareKind::Eq)
+                                .map(|equal| !equal.is_null(0) && equal.value(0))
+                                .unwrap_or(false)
+                        });
+                        Some(position.map(|index| index as i64 + 1).unwrap_or(0))
+                    })
+                    .collect::<Vec<_>>();
+                return Ok(Arc::new(Int64Array::from(result)));
+            }
             macro_rules! position_primitive {
                 ($ty:ty, $data_type:expr) => {{
                     let needle = compute::cast(&args[1], &$data_type)?;
@@ -6717,6 +6748,34 @@ mod tests {
         assert_eq!(values.len(), 2);
         assert_eq!(values.value(0).as_primitive::<Int64Type>().value(0), 1);
         assert_eq!(values.value(1).as_primitive::<Int64Type>().value(0), 2);
+    }
+
+    #[test]
+    fn array_position_finds_nested_row_elements() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        let row = |value: i64| Expr::Function {
+            name: "ROW".into(),
+            args: vec![Expr::Literal(ScalarValue::Int64(value))],
+        };
+        let result = evaluate(
+            &Expr::Function {
+                name: "ARRAY_POSITION".into(),
+                args: vec![
+                    Expr::Function {
+                        name: "ARRAY".into(),
+                        args: vec![row(4), row(9)],
+                    },
+                    row(9),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(result.as_primitive::<Int64Type>().value(0), 2);
     }
 
     #[test]

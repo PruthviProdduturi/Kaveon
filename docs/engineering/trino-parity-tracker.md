@@ -359,10 +359,10 @@ invalidation, isolation, bounds, and restart evidence listed above.
   executor coverage (`b2054d10`). Broader element types and array operations
   remain outside the current typed expression model.
 - `ARRAY_POSITION(array, value)` now returns the first 1-based position, `0`
-  when a value is absent, and matches null elements for numeric and text lists;
-  null list inputs remain null. Unsupported list element types retain an
-  explicit execution diagnostic, with parser and executor coverage in this
-  slice.
+  when a value is absent, and matches null elements for numeric, text, nested
+  list, row, and map values; null list inputs remain null. Unsupported list
+  element types retain an explicit execution diagnostic, with parser and
+  executor coverage in this slice.
 - The differential corpus now exercises scalar `CARDINALITY`,
   `ARRAY_POSITION`, `ARRAY_JOIN`, and `ARRAYS_OVERLAP` results across alternate
   Parquet encodings and local/two-worker execution paths. This extends the
