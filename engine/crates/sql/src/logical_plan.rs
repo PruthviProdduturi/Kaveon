@@ -685,15 +685,25 @@ fn select_to_plan_with_bindings(
     select: &ast::Select,
     ctes: &Lowering,
 ) -> Result<(LogicalPlan, ExpressionBindings)> {
-    if select.qualify.is_some() {
-        return Err(sql_err(
-            "QUALIFY is unsupported; window-aware filtering is not yet implemented",
-        ));
-    }
+    let qualify = select
+        .qualify
+        .as_ref()
+        .map(ast_expr_to_expr)
+        .transpose()?;
     // Projection scalar subqueries are lowered after the outer aggregation and
     // window stages.  That keeps their single-row relation available to the
     // final projection without making it a grouping key or aggregate input.
     let (projection, projection_scalars) = replace_projection_scalars(select, ctes)?;
+    let mut aliases = Vec::new();
+    for item in &projection {
+        if let ast::SelectItem::ExprWithAlias { expr, alias } = item {
+            aliases.push((
+                Expr::Column(alias.value.clone()),
+                ast_expr_to_expr(expr)?,
+            ));
+        }
+    }
+    let qualify = qualify.map(|predicate| replace_bound_expression(predicate, &aliases));
     let plan = build_from_clause(select, ctes)?;
     let plan = build_where(plan, select, ctes)?;
 
@@ -717,6 +727,18 @@ fn select_to_plan_with_bindings(
             input: Box::new(plan),
             window_exprs,
         }
+    };
+
+    // QUALIFY runs after window evaluation and before the final projection,
+    // matching Trino's evaluation order. Window expressions resolve through
+    // the names materialized by the Window operator.
+    let plan = if let Some(predicate) = qualify {
+        LogicalPlan::Filter {
+            input: Box::new(plan),
+            predicate,
+        }
+    } else {
+        plan
     };
 
     let plan = attach_projection_scalars(plan, projection_scalars);
@@ -2687,6 +2709,9 @@ fn collect_window_exprs(select: &ast::Select) -> Result<Vec<Expr>> {
             _ => {}
         }
     }
+    if let Some(qualify) = &select.qualify {
+        collect_windows_from_ast_expr(qualify, &mut window_exprs)?;
+    }
     Ok(window_exprs)
 }
 
@@ -4332,15 +4357,18 @@ mod tests {
     }
 
     #[test]
-    fn rejects_qualify_instead_of_dropping_the_window_filter() {
-        let error = sql_to_logical_plan(
+    fn qualifies_after_window_evaluation() {
+        let plan = sql_to_logical_plan(
             "SELECT row_number() OVER (PARTITION BY region ORDER BY user_id) AS rn FROM events QUALIFY rn = 1",
         )
-        .unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "sql: QUALIFY is unsupported; window-aware filtering is not yet implemented"
-        );
+        .unwrap();
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("expected final projection");
+        };
+        let LogicalPlan::Filter { input, .. } = *input else {
+            panic!("expected QUALIFY filter");
+        };
+        assert!(matches!(*input, LogicalPlan::Window { .. }));
     }
 
     #[test]

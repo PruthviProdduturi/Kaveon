@@ -238,9 +238,10 @@ qualification documents; this tracker remains the single ordered work list.
 - The filtered-aggregate corpus case now compares dictionary, plain, split,
   clustered, partitioned, and two-worker distributed execution paths with
   exact canonical rows (`56a07582`).
-- `QUALIFY` is now rejected during planning with a stable diagnostic instead
-  of being parsed and silently ignored; window-aware QUALIFY execution remains
-  an explicit Track 2 gap.
+- `QUALIFY` now lowers to a filter after the window stage, including
+  projection aliases that reference window expressions; the planner no longer
+  silently drops the clause. Broader QUALIFY shapes still require additional
+  differential coverage.
 - Bounded projection scalar subqueries now support an ungrouped, single-column
   aggregate and preserve its alias; correlated and multi-row projection forms
   remain explicitly rejected (`d7be5f9a`).
@@ -265,9 +266,8 @@ qualification documents; this tracker remains the single ordered work list.
   completed metrics record is available (`6cd66cb4`).
 - Named `:name` parameters now bind typed scalar values through the HTTP
   statement API, alongside sequential `?` and typed positional `$n`; missing
-  names fail before planning (`080c9ace`). `QUALIFY`
-  continues to fail closed with a stable planner diagnostic rather than being
-  silently ignored.
+  names fail before planning (`080c9ace`). QUALIFY predicates now execute after
+  window materialization; broader window-aware differential coverage remains.
 - `IS DISTINCT FROM` and `IS NOT DISTINCT FROM` now lower to null-total
   `CASE` expressions using the existing vectorized null predicates and
   comparisons; executor coverage verifies both-null, one-null, equal, and
