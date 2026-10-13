@@ -105,7 +105,15 @@ KaveonDB, verified at the same moment. Two different histories, one of which
 reads as the other's absence, which is why it was reported as data loss.
 
 ### D-26 · An unavailable Engine is reported as an empty catalog
-**open** · 2026-10-13
+**fixed, deployed** · `f769e508` + `d825ac30` · nineteen surfaces plus the home
+page, which was the worst of them: a failed read satisfied every condition for
+emptiness and the page disabled its own composer. `components/Reading.tsx`
+holds the rule. **Residual, open:** `/dlm/coverage` still answers 200 with a
+short list when the Engine is down, so no client can tell that from an
+uncompiled installation — the `None` token in `revalidating_cache` is the
+signal and is not on the response. And `app/lab/LabWorkbench.tsx` still shows
+"No tables found" on a failed listing and titles a modal "Metadata database not
+configured" from a sessionStorage flag.
 
 With the Engine scaled to zero, the catalog page reported "0 tables" and "No
 tables found". That is the D-10 shape again on a third surface: a failed read
@@ -114,7 +122,12 @@ is stale, or say it could not reach the Engine — never claim a catalog is
 empty because nobody answered.
 
 ### D-27 · Nothing is warmed before the first reader arrives
-**open** · 2026-10-13 · the strategy asked for
+**fixed, deployed** · `d825ac30` · verified live (`Hot-read warming started`).
+Banner 2.276s cold against 48.5µs warm. **Residual, open:** only the warmer
+reads the listing cache. Adopting it in `services/charts`, `services/dashboards`,
+`services/datasets` and the sources listings needs a write hook invalidating on
+mutation in the same change, or a reader would not see their own edit until the
+staleness bound.
 
 Every hot read is computed on the first request that needs it, so the first
 visit after a restart pays the full cost, and so does the first visit after
@@ -137,6 +150,20 @@ therefore runs with library defaults and no drag handle.
 `/catalog/OpenSource` lists every registered catalog's schemas rather than
 that catalog's. Confined to registered catalogs by the D-24 fix, so it is no
 longer showing benchmark scratch, but it still shows the wrong scope.
+
+### D-30 · The availability guard was hand-applied and broke every deploy
+**fixed** · 2026-10-13 · my own doing, recorded because the lesson generalises
+
+The guard was applied with `kubectl apply` to prove it worked before being
+committed. Helm then refused to adopt objects it did not create — "missing
+app.kubernetes.io/managed-by" — so three consecutive platform deploys failed
+and nothing merged after `4cf47195` was live, while the tests passed and the
+commits looked clean.
+
+Testing it live was right. Leaving Helm-unowned objects behind was not: for
+anything a chart also manages, the proof has to come from a `helm upgrade`.
+Resolved by deleting the four objects and redeploying; the guard is now
+`managed-by: Helm` and verified holding the floor.
 
 ### D-5 · 4,068 query-history rows belong to synthetic accounts
 **open, by decision** · 2026-10-13
