@@ -62,6 +62,10 @@ pub fn check_expression_cancelled() -> Result<()> {
 /// query in the process: a pattern is compiled once, not once per batch.
 /// Bounded; a burst of distinct patterns clears it rather than growing it.
 fn compiled_regex(pattern: &str) -> Result<regex::Regex> {
+    compiled_regex_for("REGEXP_REPLACE", pattern)
+}
+
+fn compiled_regex_for(function: &str, pattern: &str) -> Result<regex::Regex> {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
     const MAX_CACHED_PATTERNS: usize = 256;
@@ -76,7 +80,7 @@ fn compiled_regex(pattern: &str) -> Result<regex::Regex> {
     }
     let regex = regex::Regex::new(pattern).map_err(|error| {
         KaveonError::Execution(format!(
-            "REGEXP_REPLACE pattern {pattern:?} is invalid: {error}"
+            "{function} pattern {pattern:?} is invalid: {error}"
         ))
     })?;
     let mut cache = cache
@@ -1783,7 +1787,8 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         return Ok(None);
                     }
                     Ok(Some(
-                        compiled_regex(patterns.value(row))?.is_match(values.value(row)),
+                        compiled_regex_for("REGEXP_LIKE", patterns.value(row))?
+                            .is_match(values.value(row)),
                     ))
                 })
                 .collect::<Result<Vec<_>>>()?
