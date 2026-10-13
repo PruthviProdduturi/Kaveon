@@ -365,9 +365,9 @@ invalidation, isolation, bounds, and restart evidence listed above.
   types retain explicit diagnostics.
 - `ARRAY_POSITION(array, value)` now returns the first 1-based position, `0`
   when a value is absent, and matches null elements for numeric, text, nested
-  list, row, and map values; null list inputs remain null. Unsupported list
-  element types retain an explicit execution diagnostic, with parser and
-  executor coverage in this slice.
+  list, row, and map values, including `LargeList` containers; null list
+  inputs remain null. Unsupported list element types retain an explicit
+  execution diagnostic, with parser and executor coverage in this slice.
 - The differential corpus now exercises scalar `CARDINALITY`,
   `ARRAY_POSITION`, `ARRAY_JOIN`, and `ARRAYS_OVERLAP` results across alternate
   Parquet encodings and local/two-worker execution paths. This extends the
