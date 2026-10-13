@@ -86,6 +86,15 @@ workers:
   # down for a whole campaign. See BENCH_WORKERS / DEMO_WORKERS / REST_WORKERS
   # in scripts/benchmark-rounds.py.
   replicas: 4
+  # Pod components a worker must never share a node with, matched on
+  # `app.kubernetes.io/component`. The benchmark runs a second query engine on
+  # this cluster for a node-equal comparison, and a Kaveon worker sharing a
+  # node with it makes that comparison meaningless — so the separation is
+  # declared rather than left to the scheduler, which has no reason to prefer
+  # an empty node over a busy one.
+  separateFrom:
+    - trino-worker
+    - trino-coordinator
   nodeSelector:
     workload: kaveon-worker
   # One worker per node, so the node is close to theirs alone. A 6 GiB ceiling

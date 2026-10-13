@@ -125,11 +125,27 @@ spec:
       affinity:
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
+            # One worker per node.
             - topologyKey: kubernetes.io/hostname
               labelSelector:
                 matchLabels:
                   app.kubernetes.io/instance: {{ $.Release.Name }}
                   app.kubernetes.io/component: worker
+{{- range $component := $.Values.workers.separateFrom }}
+            # Never a node shared with {{ $component }}.
+            #
+            # Without this, a four-node pool does not actually separate
+            # anything: the scheduler has no reason to prefer the free node, so
+            # a Kaveon worker brought up during a benchmark round landed beside
+            # a Trino worker while the spare node sat empty — contaminating the
+            # measurement the extra node was bought to protect. Required, not
+            # preferred, because a contaminated measurement is worse than a
+            # worker that does not schedule.
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/component: {{ $component }}
+{{- end }}
       {{- end }}
       containers:
         - name: engine
