@@ -1,8 +1,17 @@
 import { API_BASE } from "../../config";
 import { msalFetch } from "../../utils/msalFetch";
+import { SYSTEM_CATALOG_LABEL, isSystemCatalog } from "../../utils/systemCatalog";
 
 // The Catalog reads the same endpoints as the SQL Lab tree, so the two can
 // never disagree about what exists. Only the table definition is Catalog's own.
+//
+// `fetchSources` is that shared read: the registry's active native catalog
+// sources, narrowed to the ones the Engine grants the verified principal. It
+// is what the Lab's source picker lists, so a catalog it does not return is a
+// catalog no statement can name. `fetchDefinitions` is the Engine's own
+// definition list: the same catalogs plus anything written directly into the
+// Engine, carrying the ids a schema or table read needs. The two are joined,
+// never used interchangeably.
 
 export interface EngineSource { id: string; name: string; catalog: string }
 export interface ColumnDef { name: string; dataType: string; isNullable: boolean }
@@ -67,6 +76,20 @@ async function reason(res: Response, body?: unknown): Promise<string> {
 }
 
 export const fetchSources = async () => (await get<{ sources: EngineSource[] }>("/lab/engine/sources")).sources;
+
+/**
+ * The platform's own catalog, under either of the two names it goes by.
+ *
+ * `utils/systemCatalog.isSystemCatalog` tests the Engine's identifier, which
+ * is the only name a statement may use. A registry row can carry the product
+ * label instead — KaveonDB's source record names its engine catalog
+ * "KaveonDB" — so anything reconciling the registry against the Engine has to
+ * recognise both, or the one catalog appears as a registration the Engine
+ * never defined and a definition nobody registered.
+ */
+export const isSystemCatalogName = (name: string | null | undefined) =>
+  isSystemCatalog(name)
+  || (typeof name === "string" && name.toLowerCase() === SYSTEM_CATALOG_LABEL.toLowerCase());
 export const fetchSchemas = async (source: string) => (await get<{ schemas: string[] }>(`/lab/engine/${enc(source)}/schemas`)).schemas;
 export const fetchTables = async (source: string, schema: string) =>
   (await get<{ tables: string[] }>(`/lab/engine/${enc(source)}/schemas/${enc(schema)}/tables`)).tables;
