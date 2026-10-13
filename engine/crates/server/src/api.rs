@@ -2999,10 +2999,23 @@ async fn trino_response_shape(response: Response) -> Response {
             );
         }
         if let Some(error) = object.remove("error") {
-            object.insert("error".to_owned(), serde_json::json!({
-                "message": error,
-                "errorName": "KAVEON_ERROR"
-            }));
+            let shaped = match error {
+                serde_json::Value::Object(mut details) => {
+                    details
+                        .entry("errorName".to_owned())
+                        .or_insert_with(|| serde_json::Value::String("KAVEON_ERROR".to_owned()));
+                    serde_json::Value::Object(details)
+                }
+                serde_json::Value::String(message) => serde_json::json!({
+                    "message": message,
+                    "errorName": "KAVEON_ERROR"
+                }),
+                other => serde_json::json!({
+                    "message": other,
+                    "errorName": "KAVEON_ERROR"
+                }),
+            };
+            object.insert("error".to_owned(), shaped);
         }
     }
     (status, Json(value)).into_response()
@@ -18765,5 +18778,20 @@ mod streamed_root_tests {
         assert!(value.get("next_uri").is_none());
         assert_eq!(value["stats"]["elapsedTimeMillis"], 7);
         assert!(value.get("elapsed_ms").is_none());
+    }
+
+    #[tokio::test]
+    async fn trino_response_shape_preserves_structured_errors() {
+        let response = Response::new(Body::from(
+            r#"{"error":{"message":"bad query","errorName":"SYNTAX_ERROR","failureInfo":{"type":"ParseError"}}}"#,
+        ));
+        let response = trino_response_shape(response).await;
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error"]["message"], "bad query");
+        assert_eq!(value["error"]["errorName"], "SYNTAX_ERROR");
+        assert_eq!(value["error"]["failureInfo"]["type"], "ParseError");
     }
 }
