@@ -225,10 +225,10 @@ qualification documents; this tracker remains the single ordered work list.
   the combined in-process path; deployed worker-loss qualification remains
   open.
 - Trino `COUNT_IF(predicate)` now lowers to the existing null-preserving
-  filtered-count state, including window use, distributed partial/final
-  merges, and explicit arity/wildcard diagnostics. The differential corpus
-  covers grouped `COUNT_IF` results across alternate encodings and execution
-  paths.
+  filtered-count state, including aggregate `FILTER` composition, window use,
+  distributed partial/final merges, and explicit arity/wildcard diagnostics.
+  The differential corpus covers grouped `COUNT_IF` results across alternate
+  encodings and execution paths.
 - A three-worker high-cardinality grouped aggregate now has exact local versus
   distributed equivalence under 4 MiB spill pressure, with spill cleanup and
   zero reservation checks (`69d327e9`). Larger-scale and AKS spill gates remain.
