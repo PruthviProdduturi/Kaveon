@@ -6,12 +6,55 @@ full dataset-document read and a COUNT(*) per table through the Engine, writing
 the result back — and when a source could not answer that count nothing was
 written, so the whole attempt repeated on every load of the page. These cases
 pin it to reads: one for the artifacts, one for their values, and no write.
+
+It then still cost 1.45s on a repeat load, because establishing whether
+anything had changed meant three catalog listings and the Engine answers any
+product listing in about half a second (defect D-3). The later cases pin the
+repeat load to *no* Engine round trip at all, with the recheck behind the
+response and the staleness bounded.
 """
 
+import contextlib
+import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from dlm import engine
+from services import dlm_compiled_artifact as _compiled
+from services import postgresql_retirement_runtime as _runtime
+from services import revalidating_cache
+
+
+class _Clock:
+    """Time this test moves by hand, so no case depends on how long it ran."""
+
+    def __init__(self):
+        self.now = 1_000.0
+
+    def advance(self, seconds):
+        self.now += seconds
+
+    def __call__(self):
+        return self.now
+
+
+class _Spawner:
+    """Runs work behind the response on a real thread, and lets a case wait."""
+
+    def __init__(self):
+        self.threads = []
+
+    def __call__(self, work, name):
+        thread = threading.Thread(target=work, name=name, daemon=True)
+        self.threads.append(thread)
+        thread.start()
+
+    def join(self):
+        for thread in self.threads:
+            thread.join(timeout=10)
+            assert not thread.is_alive(), f"{thread.name} did not finish"
+        self.threads = []
+
 
 ARTIFACTS = [
     {"dataset_id": "136", "status": "ready", "built_at": "2026-10-01T00:00:00Z",
@@ -129,80 +172,174 @@ class BulkValueIndex(unittest.TestCase):
         self.assertEqual((samples, counts), ({}, {}))
 
 
-if __name__ == "__main__":
-    unittest.main()
+class TheBannerIsServedFromMemoryWithNoEngineRoundTrip(unittest.TestCase):
+    """A repeat load of the banner must not ask the Engine anything at all.
 
+    The previous cache was keyed on a digest of the dataset, definition and run
+    records, which is exact — but taking that digest means three catalog
+    listings, and the Engine answers any product listing in about half a second
+    regardless of how few records it returns (defect D-3). So a cache *hit*
+    still cost ~1.4s and saved only the artifact reads: measured in the
+    cluster, 2.82s cold against 1.45s warm.
 
-class BannerIsServedFromWhatTheCatalogSaysAboutCompiledContent(unittest.TestCase):
-    """The banner is recomputed when compiled content moves, and not otherwise.
-
-    Rebuilding it means fetching every dataset's compiled artifact, and the
-    home page paid that on every visit — including a reader who had just
-    loaded it. The dataset, definition and run listings are what say whether
-    anything compiled has changed, and they cost a fraction of the artifacts
-    they point at, so the answer is kept against a digest of them.
-
-    Deliberately not the catalog's own snapshot identity, which would have
-    been cheaper to ask for and wrong: it advances on every product write, and
-    the platform records its query history in that same catalog, so running
-    one query would have invalidated a banner that could not have changed.
+    The answer is now served from memory first and the digest rechecked behind
+    the response. These cases pin that down: a served hit makes no listing and
+    no artifact read, it answers even when both would fail, a recheck is
+    started once however many readers arrive, and the staleness is bounded —
+    a write this process performs is reflected immediately, and an answer
+    whose recheck keeps failing stops being served.
     """
 
     def setUp(self):
-        engine._COVERAGE_CACHE.clear()
-        self.addCleanup(engine._COVERAGE_CACHE.clear)
+        self.clock = _Clock()
+        self.spawner = _Spawner()
+        self.cache = revalidating_cache.RevalidatingCache(
+            "test-dlm-coverage", fresh_for=engine.COVERAGE_FRESH_FOR,
+            max_served_age=engine.COVERAGE_MAX_SERVED_AGE,
+            clock=self.clock, spawn=self.spawner)
+        patcher = patch.object(engine, "_COVERAGE_CACHE", self.cache)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(self.spawner.join)
 
-    def _coverage(self, identity, actor="owner", role="Admin"):
-        """Render the banner as `actor`, with the catalog in a given state."""
-        state = engine._RetirementServingState(actor, role)
-        state.identity = identity
-        state.context = object()  # already listed; nothing left to read for the key
-        token = engine._RETIREMENT_SERVING.set(state)
-        try:
-            with patch.object(engine, "ensure_tables"),                  patch.object(engine, "_serving_artifacts",
-                              return_value=ARTIFACTS) as artifacts,                  patch.object(engine, "_bulk_value_index",
-                              return_value=({}, {})) as values:
-                rows = engine.coverage()
-            return rows, artifacts, values
-        finally:
-            engine._RETIREMENT_SERVING.reset(token)
+    @contextlib.contextmanager
+    def _engine(self, *, identity="digest-a", listing=None, artifacts=ARTIFACTS):
+        """Stand in for every Engine round trip the banner could make.
 
-    def test_unchanged_compiled_content_is_not_fetched_a_second_time(self):
-        first, artifacts, values = self._coverage("digest-a")
-        artifacts.assert_called_once()
-        values.assert_called_once()
+        `listing` is the three catalog listings that establish the digest and
+        `artifacts` the compiled-artifact reads behind the answer — the two
+        things a served hit must not do.
+        """
+        listed = Mock(side_effect=listing or (lambda _actor: object()))
+        read = (Mock(side_effect=artifacts) if callable(artifacts)
+                else Mock(return_value=artifacts))
+        with patch.object(engine, "ensure_tables"), \
+             patch.object(_runtime, "requested", return_value=True), \
+             patch.object(_compiled, "load_bulk_context", listed), \
+             patch.object(_compiled, "context_identity", return_value=identity), \
+             patch.object(engine, "_serving_artifacts", read), \
+             patch.object(engine, "_bulk_value_index", return_value=({}, {})):
+            yield listed, read
 
-        second, artifacts, values = self._coverage("digest-a")
-        # Nothing was fetched: the previous answer still describes this state.
-        artifacts.assert_not_called()
-        values.assert_not_called()
+    def _coverage(self, actor="owner", role="Admin", **engine_state):
+        """Render the banner as `actor`, and let the recheck behind it finish.
+
+        Waiting for the recheck is what makes these cases deterministic — what
+        is asserted is which reads happened, never how long anything took.
+        """
+        with self._engine(**engine_state) as (listed, read):
+            rows = engine.coverage(actor, role)
+            self.spawner.join()
+        return rows, listed, read
+
+    def _unavailable(self, _actor=None):
+        raise RuntimeError("the Engine is not answering")
+
+    def test_a_repeat_load_asks_the_engine_for_nothing(self):
+        first, listed, read = self._coverage()
+        listed.assert_called_once()
+        read.assert_called_once()
+
+        second, listed, read = self._coverage()
+        # Zero round trips: neither the listings that establish the digest nor
+        # the artifacts behind the answer.
+        listed.assert_not_called()
+        read.assert_not_called()
         self.assertEqual(second, first)
 
-    def test_a_recompiled_dataset_is_reflected_on_the_next_load(self):
-        self._coverage("digest-a")
-        _, artifacts, _ = self._coverage("digest-b")
-        artifacts.assert_called_once()
+    def test_a_repeat_load_answers_while_the_engine_is_refusing_both_reads(self):
+        first, *_ = self._coverage()
+        # Would fail on any implementation that reaches the Engine to serve.
+        second, listed, read = self._coverage(listing=self._unavailable,
+                                              artifacts=self._unavailable)
+        self.assertEqual(second, first)
+        listed.assert_not_called()
+        read.assert_not_called()
 
-    def test_a_superseded_state_does_not_keep_its_entry(self):
-        self._coverage("digest-a")
-        self._coverage("digest-b")
-        # One answer per state of the catalog, not one per visit for the life
-        # of the process.
-        self.assertEqual({key[0] for key in engine._COVERAGE_CACHE}, {"digest-b"})
+    def test_past_the_freshness_window_the_recheck_runs_behind_the_answer(self):
+        first, *_ = self._coverage()
+        self.clock.advance(engine.COVERAGE_FRESH_FOR + 1)
+        second, listed, read = self._coverage()
+        # The reader was answered from memory; the digest was rechecked after
+        # the answer went out, and an unchanged digest refetches no artifact.
+        self.assertEqual(second, first)
+        listed.assert_called_once()
+        read.assert_not_called()
+
+    def test_a_recompiled_dataset_is_reflected_on_the_next_load(self):
+        self._coverage(identity="digest-a")
+        self.clock.advance(engine.COVERAGE_FRESH_FOR + 1)
+        recompiled = [dict(ARTIFACTS[0], dataset_id="991")]
+        _, _, read = self._coverage(identity="digest-b", artifacts=recompiled)
+        # The digest moved, so the recheck fetched the artifacts again.
+        read.assert_called_once()
+        rows, listed, read = self._coverage(identity="digest-b")
+        self.assertEqual([row["dataset_id"] for row in rows], ["991"])
+        listed.assert_not_called()
+
+    def test_a_dlm_this_process_generates_does_not_wait_for_a_recheck(self):
+        self._coverage()
+        with patch.object(engine, "_evict_answers", return_value=0):
+            engine.invalidate_caches()
+        # Immediately, not at the end of the staleness window.
+        _, listed, read = self._coverage()
+        listed.assert_called_once()
+        read.assert_called_once()
 
     def test_one_readers_banner_is_not_served_to_another(self):
-        self._coverage("digest-a", actor="owner", role="Admin")
-        # Visibility is per caller, so a Viewer who shares a catalog state with
-        # an Admin must still be shown only what they may see.
-        _, artifacts, _ = self._coverage("digest-a", actor="guest", role="Viewer")
-        artifacts.assert_called_once()
+        self._coverage(actor="owner", role="Admin")
+        # The payload is visibility filtered, so a Viewer who shares a catalog
+        # state with an Admin is still shown only what they may see.
+        _, listed, read = self._coverage(actor="guest", role="Viewer")
+        listed.assert_called_once()
+        read.assert_called_once()
 
-    def test_a_caller_that_cannot_list_is_answered_without_a_cache(self):
-        # No key means recomputed every time. Slower, never stale.
-        self._coverage(None)
-        _, artifacts, _ = self._coverage(None)
-        artifacts.assert_called_once()
-        self.assertEqual(engine._COVERAGE_CACHE, {})
+    def test_an_answer_that_cannot_be_placed_in_the_catalog_is_not_remembered(self):
+        # No digest means nothing says what state the answer reflects, so it is
+        # handed to its caller and never served again. Slower, never stale.
+        self._coverage(listing=self._unavailable)
+        _, _, read = self._coverage(listing=self._unavailable)
+        read.assert_called_once()
+        self.assertEqual(self.cache.stats()["entries"], 0)
+
+    def test_a_recheck_that_keeps_failing_stops_the_answer_being_served(self):
+        self._coverage()
+        # `validated_at` advances only on success, so continued failure ages
+        # the entry past its bound rather than serving it for ever.
+        self.clock.advance(engine.COVERAGE_MAX_SERVED_AGE + 1)
+        with self.assertRaises(RuntimeError):
+            self._coverage(listing=self._unavailable, artifacts=self._unavailable)
+
+    def test_one_recheck_runs_however_many_readers_arrive(self):
+        self._coverage()
+        self.clock.advance(engine.COVERAGE_FRESH_FOR + 1)
+
+        in_flight = threading.Barrier(2, timeout=5)
+        release = threading.Event()
+        listings = []
+
+        def _listing(actor):
+            listings.append(actor)
+            # The recheck is demonstrably running while readers are served:
+            # a request-path implementation deadlocks here, which is half the
+            # assertion. The other half is that no second recheck arrives.
+            in_flight.wait()
+            release.wait(5)
+            return object()
+
+        # Held open for the whole case, because the recheck is still inside it.
+        with self._engine(listing=_listing) as (listed, read):
+            first = engine.coverage("owner", "Admin")
+            in_flight.wait()
+            for _ in range(4):
+                self.assertEqual(engine.coverage("owner", "Admin"), first)
+            # Four more readers, no second recheck and no read of their own.
+            listed.assert_called_once()
+            read.assert_not_called()
+            self.assertEqual(self.cache.stats()["in_flight"], 1)
+            release.set()
+            self.spawner.join()
+        self.assertEqual(listings, ["owner"])
 
 
 class CompiledArtifactsAreFetchedTogether(unittest.TestCase):
@@ -275,3 +412,7 @@ class CompiledArtifactsAreFetchedTogether(unittest.TestCase):
         # The request path must not open a connection per dataset.
         self.assertEqual(pool.call_args.kwargs["max_workers"],
                          engine._ARTIFACT_READ_CONCURRENCY)
+
+
+if __name__ == "__main__":
+    unittest.main()

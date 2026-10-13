@@ -50,6 +50,7 @@ import dlm.hll as hll
 import dlm.curation as auto_curation
 import dlm.classes as classes
 from services import engine_cube_rewrite
+from services import revalidating_cache
 
 logger = logging.getLogger(__name__)
 
@@ -739,6 +740,13 @@ def _generate_dlm_bound(dataset_id: str, force: bool, actor: Optional[str], ds: 
                 if compiled is not None:
                     dlm_compiled_artifact.enqueue_run(transaction, str(dataset_id),
                         definition.owner, publication_actor, definition.revision, compiled)
+        # A write this process performed does not wait to be rediscovered. The
+        # banner is served from memory against a bounded staleness window, and
+        # that window exists for writes by *other* processes — context the user
+        # has just had generated must be on their next load, whichever branch
+        # above published it, and whether the caller was the Studio action, the
+        # data-change webhook or the freshness sweep (all of which arrive here).
+        _COVERAGE_CACHE.invalidate()
 
     return {
         "ok": True,
@@ -3431,6 +3439,9 @@ _STALE_THRESHOLD = 0.5
 
 def invalidate_caches(dataset_id: Optional[str] = None) -> int:
     """Clear in-memory caches. Returns count of datasets cleared."""
+    # The banner names every compiled dataset, so one dataset's context moving
+    # changes it — there is nothing per-dataset to drop.
+    _COVERAGE_CACHE.invalidate()
     if dataset_id:
         ds_id = str(dataset_id)
         cleared = int(_evict_answers(ds_id) > 0)
@@ -5397,55 +5408,99 @@ def _bulk_value_index(dataset_ids: List[str], *, serving: bool,
     return samples, counts
 
 
-# The banner's last answer, kept against the catalog snapshot it was computed
-# from. Every product write advances that snapshot, so an unchanged identity is
-# proof that nothing the banner reports has moved — which makes this an exact
-# invalidation rather than a guess about how long an answer stays true.
-_COVERAGE_CACHE: Dict[tuple, List[Dict[str, Any]]] = {}
+# The banner's last answer, served to a reader from memory while a recheck
+# runs behind the response.
+#
+# A cache that checked before answering could not make this instant. Its key
+# has to be a digest of the dataset, definition and run records — the catalog's
+# own snapshot identity is unusable, because it advances on every product write
+# and the platform records its query history in that same catalog, so running
+# one query would invalidate a banner that could not have changed. But taking
+# that digest means three catalog listings, and the Engine answers any product
+# listing in about half a second regardless of how few records it returns
+# (defect D-3, Engine-side). So a *hit* still paid ~1.4s and saved only the
+# nine artifact reads: measured in the cluster, 2.82s cold against 1.45s warm.
+#
+# Answering from memory first and rechecking behind the response is what makes
+# a repeat load cost nothing. The two windows, and why they are these:
+#
+#   COVERAGE_FRESH_FOR — inside this an answer is served and no recheck is
+#   started at all. One page load reads this banner from two components, and a
+#   reader who reloads straight away is the case the whole thing exists for;
+#   collapsing those asks the Engine for nothing.
+#
+#   COVERAGE_MAX_SERVED_AGE — past this an answer is not served from memory and
+#   the caller waits for the recheck. This is the explicit bound on how stale
+#   the banner can be, and what it bounds is a write by *another* process: a
+#   second API replica, or the hourly freshness CronJob landing on one. A
+#   generation this process performs invalidates immediately, so context a
+#   reader just generated is on their next load rather than five minutes later.
+#   Waiting is also never worse than the behaviour this replaces — an unchanged
+#   digest returns the stored answer without re-fetching a single artifact,
+#   which is exactly what the old warm path did for 1.45s.
+COVERAGE_FRESH_FOR = 10.0
+COVERAGE_MAX_SERVED_AGE = 300.0
+
+_COVERAGE_CACHE = revalidating_cache.RevalidatingCache(
+    "dlm-coverage",
+    fresh_for=COVERAGE_FRESH_FOR,
+    max_served_age=COVERAGE_MAX_SERVED_AGE,
+    # One entry per reader and role that has loaded the page recently.
+    max_entries=64,
+)
 
 
-def _coverage_identity() -> Optional[str]:
-    """What the loaded compiled artifacts say, as a digest — the cache key.
+def _revalidated_coverage(actor: str, role: str,
+                          previous: Optional[tuple]) -> tuple:
+    """Recheck what the catalog says about compiled content; rebuild if it moved.
 
-    Taken from the records already read for this request, so it costs nothing
-    of its own. The catalog's snapshot identity would have been cheaper to ask
-    for and wrong to use: it advances on every product write, and the platform
-    records its own query history in that same catalog, so running a single
-    query would have invalidated a banner that could not have changed.
+    This runs behind the response, on a thread that inherits none of the
+    request's context, so it installs its own serving state rather than
+    touching the request's.
     """
-    state = _RETIREMENT_SERVING.get()
-    if state is None or state.identity is None:
-        return None
-    return state.identity
+    token = _RETIREMENT_SERVING.set(_RetirementServingState(actor, role))
+    try:
+        identity = _loaded_identity()
+        if not identity:
+            # The listing failed. The reader still gets a banner, built the
+            # slow always-correct way, and nothing is remembered: an answer we
+            # cannot place in the catalog's history must not be served later as
+            # though we could.
+            return _coverage_rows(), None
+        if previous is not None and previous[1] == identity:
+            # Nothing compiled has moved, so the answer already held still
+            # describes it and its artifacts need not be fetched to say so.
+            return previous
+        return _coverage_rows(), identity
+    finally:
+        _RETIREMENT_SERVING.reset(token)
 
 
 def coverage(actor: Optional[str] = None, role: str = "Viewer") -> List[Dict[str, Any]]:
     """What context is available to test against — one row per compiled DLM, with
     the date range, row count, and value coverage. Drives the homepage banner.
 
-    Served from the last answer while the catalog snapshot is unchanged. The
-    page was paying six seconds on every visit to rebuild a strip that only
-    changes when a context does — three catalog listings and a content fetch
-    per dataset, repeated for a reader who had just loaded it.
+    Served from memory with no Engine round trip while the last recheck is
+    inside its staleness bound; the recheck runs behind the response. The page
+    was paying six seconds on every visit, and still 1.45s once cached, to
+    redraw a strip that only changes when a context does.
     """
     if actor and _RETIREMENT_SERVING.get() is None:
         return _with_serving_identity(actor, role, lambda: coverage())
     state = _RETIREMENT_SERVING.get()
-    cache_key = None
-    serving = None
-    if state is not None:
-        # The three catalog listings come first and are cheap next to the
-        # artifacts they point at. They are what says whether anything
-        # compiled has changed, so the key is taken from them and the
-        # artifacts are fetched only on a miss.
-        identity = _loaded_identity()
-        if identity:
-            # Keyed by caller and role as well: what a reader may see is
-            # visibility filtered, so one person's banner is not another's.
-            cache_key = (identity, state.actor, state.role)
-            cached = _COVERAGE_CACHE.get(cache_key)
-            if cached is not None:
-                return cached
+    if state is None:
+        # The legacy metadata-DB path is two local reads and needs no cache.
+        return _coverage_rows()
+    # Keyed by caller and role: the payload is visibility filtered, so one
+    # person's banner is never served to another.
+    return _COVERAGE_CACHE.serve(
+        (state.actor, state.role),
+        lambda previous: _revalidated_coverage(state.actor, state.role, previous),
+    )
+
+
+def _coverage_rows() -> List[Dict[str, Any]]:
+    """Build the banner from whatever the current serving state can read."""
     ensure_tables()
     if _RETIREMENT_SERVING.get() is not None:
         res = {"rows_objects": _serving_artifacts()}
@@ -5499,13 +5554,6 @@ def coverage(actor: Optional[str] = None, role: str = "Viewer") -> List[Dict[str
             "status": r.get("status"),
             "built_at": r.get("built_at"),
         })
-    if cache_key is not None:
-        # One answer per snapshot, so a superseded snapshot's entries go rather
-        # than accumulating one per commit for the life of the process. Every
-        # reader of the current snapshot keeps theirs.
-        for stale in [key for key in _COVERAGE_CACHE if key[0] != cache_key[0]]:
-            _COVERAGE_CACHE.pop(stale, None)
-        _COVERAGE_CACHE[cache_key] = out
     return out
 
 
