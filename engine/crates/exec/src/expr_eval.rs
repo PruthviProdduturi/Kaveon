@@ -3006,6 +3006,73 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .as_any()
                 .downcast_ref::<ListArray>()
                 .ok_or_else(|| KaveonError::Execution("ARRAY_DISTINCT requires an ARRAY/List value".into()))?;
+            if matches!(
+                list.value_type(),
+                DataType::List(_)
+                    | DataType::LargeList(_)
+                    | DataType::Struct(_)
+                    | DataType::Map(_, _)
+            ) {
+                let mut selected = Vec::<ArrayRef>::new();
+                let mut offsets = vec![0_i32];
+                let mut valid = Vec::with_capacity(num_rows);
+                for row in 0..num_rows {
+                    if list.is_null(row) {
+                        valid.push(false);
+                        offsets.push(selected.len() as i32);
+                        continue;
+                    }
+                    valid.push(true);
+                    let inner = list.value(row);
+                    let row_start = selected.len();
+                    let mut saw_null = false;
+                    for index in 0..inner.len() {
+                        if inner.is_null(index) {
+                            if !saw_null {
+                                selected.push(arrow::array::new_null_array(
+                                    inner.data_type(),
+                                    1,
+                                ));
+                                saw_null = true;
+                            }
+                            continue;
+                        }
+                        let candidate = inner.slice(index, 1);
+                        let duplicate = selected[row_start..].iter().any(|previous| {
+                            if previous.null_count() != 0 {
+                                return false;
+                            }
+                            comparison(&candidate, previous, CompareKind::Eq)
+                                .map(|equal| equal.value(0))
+                                .unwrap_or(false)
+                        });
+                        if !duplicate {
+                            selected.push(candidate);
+                        }
+                    }
+                    offsets.push(selected.len() as i32);
+                }
+                let values = if selected.is_empty() {
+                    arrow::array::new_empty_array(&list.value_type())
+                } else {
+                    let chunks = selected
+                        .iter()
+                        .map(|value| value.as_ref() as &dyn Array)
+                        .collect::<Vec<_>>();
+                    compute::concat(&chunks)?
+                };
+                let field = Arc::new(arrow::datatypes::Field::new(
+                    "item",
+                    values.data_type().clone(),
+                    true,
+                ));
+                return Ok(Arc::new(ListArray::try_new(
+                    field,
+                    OffsetBuffer::new(ScalarBuffer::from(offsets)),
+                    values,
+                    Some(arrow::buffer::NullBuffer::from(valid)),
+                )?));
+            }
             macro_rules! distinct_primitive {
                 ($ty:ty, $builder:expr) => {{
                     let mut builder = ListBuilder::new($builder);
@@ -6618,6 +6685,38 @@ mod tests {
         let keys = maps.keys().as_string::<i32>();
         assert_eq!((0..keys.len()).map(|i| keys.value(i)).collect::<Vec<_>>(), ["a", "b"]);
         assert_eq!(maps.values().as_primitive::<Int64Type>().values(), &[1, 2]);
+    }
+
+    #[test]
+    fn array_distinct_deduplicates_nested_array_elements_in_order() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        let array = |values: Vec<Expr>| Expr::Function {
+            name: "ARRAY".into(),
+            args: values,
+        };
+        let input = array(vec![
+            array(vec![Expr::Literal(ScalarValue::Int64(1))]),
+            array(vec![Expr::Literal(ScalarValue::Int64(1))]),
+            array(vec![Expr::Literal(ScalarValue::Int64(2))]),
+        ]);
+        let result = evaluate(
+            &Expr::Function {
+                name: "ARRAY_DISTINCT".into(),
+                args: vec![input],
+            },
+            &batch,
+        )
+        .unwrap();
+        let outer = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let values = outer.value(0);
+        let values = values.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(values.len(), 2);
+        assert_eq!(values.value(0).as_primitive::<Int64Type>().value(0), 1);
+        assert_eq!(values.value(1).as_primitive::<Int64Type>().value(0), 2);
     }
 
     #[test]
