@@ -2801,7 +2801,10 @@ fn prepared_parameter_names(query: &str) -> Vec<String> {
                     continue;
                 }
             }
-            ':' if index + 1 < chars.len() && chars[index + 1] != ':' => {
+            ':' if index + 1 < chars.len()
+                && chars[index + 1] != ':'
+                && (index == 0 || chars[index - 1] != ':') =>
+            {
                 let start = index;
                 index += 1;
                 if index < chars.len()
@@ -16482,6 +16485,10 @@ mod tests {
                 "SELECT ':fake', \"$2\" -- ?\n /* :ignored */ WHERE x = $1 AND y = :yes"
             ),
             vec!["$1".to_owned(), ":yes".to_owned()]
+        );
+        assert_eq!(
+            super::prepared_parameter_names("SELECT value::bigint, value = :yes"),
+            vec![":yes".to_owned()]
         );
         let owner = admin();
         let prepared = super::prepare_statement(
