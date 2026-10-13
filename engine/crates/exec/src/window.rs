@@ -176,7 +176,10 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
     let name = name.to_uppercase();
     let partition_cols = columns(partition_by, batch)?;
     let order_cols = columns(
-        &order_by.iter().map(|(e, _)| e.clone()).collect::<Vec<_>>(),
+        &order_by
+            .iter()
+            .map(|(e, _, _)| e.clone())
+            .collect::<Vec<_>>(),
         batch,
     )?;
     let mut sorts = partition_cols
@@ -193,11 +196,11 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
         order_cols
             .iter()
             .zip(order_by)
-            .map(|(c, (_, asc))| SortColumn {
+            .map(|(c, (_, asc, nulls_first))| SortColumn {
                 values: c.clone(),
                 options: Some(SortOptions {
                     descending: !asc,
-                    nulls_first: false,
+                    nulls_first: *nulls_first,
                 }),
             }),
     );
@@ -415,7 +418,7 @@ fn frame_bounds(
     starts: &[usize],
     groups: &[usize],
     cols: &[ArrayRef],
-    order: &[(Expr, bool)],
+    order: &[(Expr, bool, bool)],
 ) -> Result<(usize, usize)> {
     use WindowFrameBound::*;
     let bound = |b: WindowFrameBound, end: bool| -> Result<usize> {
@@ -645,7 +648,7 @@ mod tests {
                 Expr::Column("x".into())
             }],
             partition_by: vec![],
-            order_by: vec![(Expr::Column("x".into()), true)],
+            order_by: vec![(Expr::Column("x".into()), true, false)],
             frame,
         }
     }
@@ -784,6 +787,17 @@ mod tests {
             vec![Some(9007199254740992); 4]
         );
     }
+
+    #[test]
+    fn explicit_nulls_first_changes_window_order() {
+        let input = batch(vec![Some(1), None, Some(2)]);
+        let mut expr = expression("RANK", None);
+        if let Expr::WindowFunction { order_by, .. } = &mut expr {
+            order_by[0].2 = true;
+        }
+        assert_eq!(ints(expr, &input), vec![Some(2), Some(1), Some(3)]);
+    }
+
     #[test]
     fn invalid_frames_and_offsets_fail_even_on_empty_input() {
         use WindowFrameBound::*;

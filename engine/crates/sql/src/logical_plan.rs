@@ -1563,7 +1563,9 @@ fn replace_bound_expression(expr: Expr, bindings: &ExpressionBindings) -> Expr {
                 .collect(),
             order_by: order_by
                 .into_iter()
-                .map(|(e, b)| (replace_bound_expression(e, bindings), b))
+                .map(|(e, b, nulls_first)| {
+                    (replace_bound_expression(e, bindings), b, nulls_first)
+                })
                 .collect(),
             frame,
         },
@@ -2436,12 +2438,12 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
                     .order_by
                     .iter()
                     .map(|ob| {
-                        if ob.nulls_first == Some(true) {
-                            return Err(sql_err("window NULLS FIRST ordering is unsupported"));
-                        }
                         let expr = ast_expr_to_expr(&ob.expr)?;
                         let asc = ob.asc.unwrap_or(true);
-                        Ok((expr, asc))
+                        // Trino defaults window ordering to NULLS LAST; retain
+                        // an explicit NULLS FIRST/LAST clause when supplied.
+                        let nulls_first = ob.nulls_first.unwrap_or(false);
+                        Ok((expr, asc, nulls_first))
                     })
                     .collect::<Result<Vec<_>>>()?;
                 let frame = spec
@@ -2982,7 +2984,7 @@ fn validate_uncorrelated(plan: &LogicalPlan) -> Result<()> {
                 for e in args
                     .iter()
                     .chain(partition_by)
-                    .chain(order_by.iter().map(|(e, _)| e))
+                    .chain(order_by.iter().map(|(e, _, _)| e))
                 {
                     check(e, relations)?;
                 }
@@ -4566,12 +4568,17 @@ mod tests {
 
     #[test]
     fn rejects_unimplemented_window_modifiers() {
-        for sql in [
-            "SELECT COUNT(DISTINCT x) OVER () FROM t",
-            "SELECT COUNT(*) OVER (ORDER BY x NULLS FIRST) FROM t",
-        ] {
+        for sql in ["SELECT COUNT(DISTINCT x) OVER () FROM t"] {
             assert!(sql_to_logical_plan(sql).is_err());
         }
+    }
+
+    #[test]
+    fn window_order_preserves_explicit_nulls_first() {
+        let plan = sql_to_logical_plan("SELECT RANK() OVER (ORDER BY x NULLS FIRST) FROM t")
+            .expect("window NULLS FIRST is supported");
+        let text = format!("{plan:?}");
+        assert!(text.contains("true"), "{text}");
     }
 
     #[test]

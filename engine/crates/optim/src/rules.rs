@@ -433,7 +433,7 @@ fn collect_columns(expression: &Expr, columns: &mut HashSet<String>) {
             for expr in partition_by {
                 collect_columns(expr, columns);
             }
-            for (expr, _) in order_by {
+            for (expr, _, _) in order_by {
                 collect_columns(expr, columns);
             }
         }
@@ -615,7 +615,9 @@ fn strip_qualifier(expression: Expr, qualifier: &str) -> Expr {
                 .collect(),
             order_by: order_by
                 .into_iter()
-                .map(|(expr, ascending)| (strip_qualifier(expr, qualifier), ascending))
+                .map(|(expr, ascending, nulls_first)| {
+                    (strip_qualifier(expr, qualifier), ascending, nulls_first)
+                })
                 .collect(),
             frame,
         },

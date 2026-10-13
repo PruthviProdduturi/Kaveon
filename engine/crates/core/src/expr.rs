@@ -55,7 +55,8 @@ pub enum Expr {
         name: String,
         args: Vec<Expr>,
         partition_by: Vec<Expr>,
-        order_by: Vec<(Expr, bool)>,
+        /// `(expression, ascending, nulls_first)` ordering for the window.
+        order_by: Vec<(Expr, bool, bool)>,
         frame: Option<WindowFrame>,
     },
     Extract {

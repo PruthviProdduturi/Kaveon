@@ -1139,9 +1139,9 @@ impl Binder<'_> {
                     .collect::<Result<_>>()?,
                 order_by: order_by
                     .into_iter()
-                    .map(|(expr, ascending)| {
+                    .map(|(expr, ascending, nulls_first)| {
                         self.bind_expr(expr, scope, aggregate_input)
-                            .map(|expr| (expr, ascending))
+                            .map(|expr| (expr, ascending, nulls_first))
                     })
                     .collect::<Result<_>>()?,
                 frame,
@@ -1474,7 +1474,9 @@ fn rename_column(expr: Expr, from: &str, to: &str) -> Expr {
                 .collect(),
             order_by: order_by
                 .into_iter()
-                .map(|(expr, ascending)| (rename_column(expr, from, to), ascending))
+                .map(|(expr, ascending, nulls_first)| {
+                    (rename_column(expr, from, to), ascending, nulls_first)
+                })
                 .collect(),
             frame,
         },
@@ -1572,7 +1574,7 @@ fn column_references(expr: &Expr, into: &mut Vec<String>) {
             for expr in args
                 .iter()
                 .chain(partition_by)
-                .chain(order_by.iter().map(|(expr, _)| expr))
+                .chain(order_by.iter().map(|(expr, _, _)| expr))
             {
                 column_references(expr, into);
             }
