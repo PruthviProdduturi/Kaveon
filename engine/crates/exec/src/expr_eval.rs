@@ -1,5 +1,6 @@
 use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, BooleanBuilder, Date32Array, Decimal128Array,
+    Array, ArrayRef, AsArray, BooleanArray, BooleanBuilder, Date32Array, Date64Array,
+    Decimal128Array,
     Decimal128Builder,
     Float64Array, Float64Builder,
     Int32Array, Int32Builder, Int32DictionaryArray, Int64Array, Int64Builder, ListArray,
@@ -11,7 +12,7 @@ use arrow::array::{
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute;
 use arrow::datatypes::{
-    ArrowPrimitiveType, DataType, Date32Type, Float64Type, Int32Type, Int64Type,
+    ArrowPrimitiveType, DataType, Date32Type, Date64Type, Float64Type, Int32Type, Int64Type,
 };
 use arrow::record_batch::RecordBatch;
 use kaveon_core::predicate::ScalarValue;
@@ -1482,6 +1483,11 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 PrimitiveBuilder::<arrow::datatypes::Date32Type>::new(),
                 Date32Array,
                 |values: &Date32Array, row| values.value(row)
+            ),
+            DataType::Date64 => build_array!(
+                PrimitiveBuilder::<arrow::datatypes::Date64Type>::new(),
+                Date64Array,
+                |values: &Date64Array, row| values.value(row)
             ),
             DataType::Float64 => {
                 let mut builder = ListBuilder::new(Float64Builder::new());
@@ -7035,6 +7041,27 @@ mod tests {
         let lists = result.as_list::<i32>();
         assert_eq!(lists.value(0).as_primitive::<Date32Type>().iter().collect::<Vec<_>>(), vec![Some(10)]);
         assert_eq!(lists.value(1).as_primitive::<Date32Type>().iter().collect::<Vec<_>>(), vec![None]);
+    }
+
+    #[test]
+    fn evaluates_date64_array_elements() {
+        let batch = RecordBatch::try_from_iter([(
+            "day",
+            Arc::new(arrow::array::Date64Array::from(vec![Some(86_400_000), None]))
+                as ArrayRef,
+        )])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "ARRAY".into(),
+                args: vec![Expr::Column("day".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        let lists = result.as_list::<i32>();
+        assert_eq!(lists.value(0).as_primitive::<Date64Type>().iter().collect::<Vec<_>>(), vec![Some(86_400_000)]);
+        assert_eq!(lists.value(1).as_primitive::<Date64Type>().iter().collect::<Vec<_>>(), vec![None]);
     }
 
     #[test]

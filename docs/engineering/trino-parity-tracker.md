@@ -356,7 +356,7 @@ qualification documents; this tracker remains the single ordered work list.
   `ARRAY_REVERSE` reverses those lists while preserving NULL elements;
   broader element types remain an explicit boundary.
 - Array constructors now execute as typed Arrow lists for boolean, 32/64-bit integer,
-  `DATE`, floating-point, UTF-8, decimal, and all-NULL elements. Mixed integer and
+  `DATE`/`DATE64`, floating-point, UTF-8, decimal, and all-NULL elements. Mixed integer and
   floating-point literals are promoted to `DOUBLE`; null elements preserve the
   list's inferred type. Compound and unsupported element types remain explicit
   boundaries.
