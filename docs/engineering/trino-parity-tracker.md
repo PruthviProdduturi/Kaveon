@@ -259,8 +259,8 @@ qualification documents; this tracker remains the single ordered work list.
 
 ### Current focused validation
 
-The latest focused validation passes 330 `kaveon-server` tests, 105
-`kaveon-sql` tests, and 224 `kaveon-exec` tests (four executor benchmarks are
+The latest focused validation passes 330 `kaveon-server` tests, 106
+`kaveon-sql` tests, and 225 `kaveon-exec` tests (four executor benchmarks are
 ignored). These counts are package-level validation snapshots; they do not
 close the broader multi-worker, AKS, or cross-connector qualification gates
 below.
