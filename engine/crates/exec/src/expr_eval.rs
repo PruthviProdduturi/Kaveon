@@ -5041,6 +5041,48 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     "ARRAYS_OVERLAP requires arrays with matching row counts and element types".into(),
                 ));
             }
+            if matches!(
+                left.value_type(),
+                DataType::List(_)
+                    | DataType::LargeList(_)
+                    | DataType::Struct(_)
+                    | DataType::Map(_, _)
+            ) {
+                let rows = (0..num_rows)
+                    .map(|row| {
+                        if left.is_null(row) || right.is_null(row) {
+                            return None;
+                        }
+                        let left_values = left.value(row);
+                        let right_values = right.value(row);
+                        let mut saw_null = false;
+                        for left_index in 0..left_values.len() {
+                            if left_values.is_null(left_index) {
+                                saw_null = true;
+                                continue;
+                            }
+                            for right_index in 0..right_values.len() {
+                                if right_values.is_null(right_index) {
+                                    saw_null = true;
+                                    continue;
+                                }
+                                if comparison(
+                                    &left_values.slice(left_index, 1),
+                                    &right_values.slice(right_index, 1),
+                                    CompareKind::Eq,
+                                )
+                                .map(|equal| !equal.is_null(0) && equal.value(0))
+                                .unwrap_or(false)
+                                {
+                                    return Some(true);
+                                }
+                            }
+                        }
+                        if saw_null { None } else { Some(false) }
+                    })
+                    .collect::<BooleanArray>();
+                return Ok(Arc::new(rows));
+            }
             macro_rules! overlap_primitive {
                 ($ty:ty) => {
                     (0..num_rows)
@@ -6831,6 +6873,32 @@ mod tests {
                     },
                     row(9),
                 ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(result.as_boolean().value(0), true);
+    }
+
+    #[test]
+    fn arrays_overlap_matches_nested_row_elements() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        let row = |value: i64| Expr::Function {
+            name: "ROW".into(),
+            args: vec![Expr::Literal(ScalarValue::Int64(value))],
+        };
+        let array = |values: Vec<Expr>| Expr::Function {
+            name: "ARRAY".into(),
+            args: values,
+        };
+        let result = evaluate(
+            &Expr::Function {
+                name: "ARRAYS_OVERLAP".into(),
+                args: vec![array(vec![row(1), row(2)]), array(vec![row(2), row(3)])],
             },
             &batch,
         )
