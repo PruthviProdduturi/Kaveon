@@ -3879,6 +3879,26 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             match list.value_type() {
                 DataType::Int64 => append_primitive!(Int64Type, Int64Builder::new()),
                 DataType::Float64 => append_primitive!(Float64Type, Float64Builder::new()),
+                DataType::Date32 => append_primitive!(
+                    Date32Type,
+                    PrimitiveBuilder::<Date32Type>::new()
+                ),
+                DataType::Date64 => append_primitive!(
+                    Date64Type,
+                    PrimitiveBuilder::<Date64Type>::new()
+                ),
+                DataType::Time32(TimeUnit::Second) => append_primitive!(
+                    Time32SecondType,
+                    PrimitiveBuilder::<Time32SecondType>::new()
+                ),
+                DataType::Time32(TimeUnit::Millisecond) => append_primitive!(
+                    Time32MillisecondType,
+                    PrimitiveBuilder::<Time32MillisecondType>::new()
+                ),
+                DataType::Timestamp(TimeUnit::Microsecond, _) => append_primitive!(
+                    TimestampMicrosecondType,
+                    PrimitiveBuilder::<TimestampMicrosecondType>::new()
+                ),
                 DataType::Decimal128(precision, scale) => {
                     let scalar = compute::cast(&args[1], &list.value_type())?;
                     let scalar = scalar.as_primitive::<arrow::datatypes::Decimal128Type>();
@@ -4019,6 +4039,26 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             match list.value_type() {
                 DataType::Int64 => remove_primitive!(Int64Type, Int64Builder::new()),
                 DataType::Float64 => remove_primitive!(Float64Type, Float64Builder::new()),
+                DataType::Date32 => remove_primitive!(
+                    Date32Type,
+                    PrimitiveBuilder::<Date32Type>::new()
+                ),
+                DataType::Date64 => remove_primitive!(
+                    Date64Type,
+                    PrimitiveBuilder::<Date64Type>::new()
+                ),
+                DataType::Time32(TimeUnit::Second) => remove_primitive!(
+                    Time32SecondType,
+                    PrimitiveBuilder::<Time32SecondType>::new()
+                ),
+                DataType::Time32(TimeUnit::Millisecond) => remove_primitive!(
+                    Time32MillisecondType,
+                    PrimitiveBuilder::<Time32MillisecondType>::new()
+                ),
+                DataType::Timestamp(TimeUnit::Microsecond, _) => remove_primitive!(
+                    TimestampMicrosecondType,
+                    PrimitiveBuilder::<TimestampMicrosecondType>::new()
+                ),
                 DataType::Decimal128(precision, scale) => {
                     let target = compute::cast(&args[1], &list.value_type())?;
                     let target = target.as_primitive::<arrow::datatypes::Decimal128Type>();
@@ -7233,6 +7273,52 @@ mod tests {
             .value(0);
         let values = values.as_primitive::<arrow::datatypes::Date32Type>();
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(10), Some(20)]);
+    }
+
+    #[test]
+    fn appends_and_removes_temporal_array_elements_without_coercion() {
+        let batch = RecordBatch::try_from_iter([(
+            "day",
+            Arc::new(arrow::array::Date32Array::from(vec![Some(10)])) as ArrayRef,
+        )])
+        .unwrap();
+        let array = Expr::Function {
+            name: "ARRAY".into(),
+            args: vec![Expr::Column("day".into())],
+        };
+        let append = evaluate(
+            &Expr::Function {
+                name: "ARRAY_APPEND".into(),
+                args: vec![array.clone(), Expr::Column("day".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        let values = append
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap()
+            .value(0)
+            .as_primitive::<arrow::datatypes::Date32Type>()
+            .iter()
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![Some(10), Some(10)]);
+
+        let remove = evaluate(
+            &Expr::Function {
+                name: "ARRAY_REMOVE".into(),
+                args: vec![array, Expr::Column("day".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        let values = remove
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap()
+            .value(0);
+        assert_eq!(values.len(), 0);
+        assert_eq!(values.data_type(), &DataType::Date32);
     }
 
     #[test]
