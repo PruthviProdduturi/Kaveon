@@ -348,6 +348,9 @@ invalidation, isolation, bounds, and restart evidence listed above.
 - The spool now exposes an incremental Arrow IPC reader with partial-write and
   later-batch coverage (`13f27d74`); HTTP exchange fetches use it through
   `5dd9d275`.
+- Task telemetry now carries exchange input/output bytes, decoded bytes,
+  partition hash/copy time, copy allocations, and copied bytes through the
+  response header; API coverage verifies those counters survive serialization.
 - Decimal casts now validate precision/scale before planning and execute with
   Decimal128 null/scale coverage (`81b610e2`).
 - Numeric `ARRAY[...]` literals now execute as null-preserving Arrow
