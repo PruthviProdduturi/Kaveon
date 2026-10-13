@@ -243,7 +243,7 @@ const CASES: &[(&str, &str, bool)] = &[
     ),
     (
         "date_array_functions",
-        "SELECT CARDINALITY(ARRAY[DATE '2026-01-01', DATE '2026-02-01']) AS card, ARRAY_POSITION(ARRAY[DATE '2026-01-01', DATE '2026-02-01'], DATE '2026-02-01') AS pos FROM {T} LIMIT 1",
+        "SELECT CARDINALITY(ARRAY[DATE '2026-01-01', DATE '2026-02-01']) AS card, ARRAY_POSITION(ARRAY[DATE '2026-01-01', DATE '2026-02-01'], DATE '2026-02-01') AS pos, ARRAY_REVERSE(ARRAY[DATE '2026-01-01', DATE '2026-02-01']) AS reversed, ARRAY_DISTINCT(ARRAY[DATE '2026-01-01', DATE '2026-01-01']) AS distinct_dates FROM {T} LIMIT 1",
         false,
     ),
     (
