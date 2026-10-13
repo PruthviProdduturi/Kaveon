@@ -75,7 +75,9 @@ foundations, but several operators are still centralized or narrow:
   `CAST(... AS DATE)` is now supported with nullable `Date32` execution and
   focused parser/executor coverage. `CAST(... AS TIMESTAMP)` and
   `TIMESTAMP WITH TIME ZONE` now map to Arrow microsecond timestamps with
-  nullable execution coverage.
+  nullable execution coverage. `MIN` and `MAX` over timestamp columns now
+  preserve the input unit/timezone and exact integer values, including grouped
+  and null-only groups (`178c3bdb`).
 - Numeric, text, and boolean array literals are supported as null-preserving
   typed Arrow lists. `CARDINALITY`, `CONTAINS`, `ARRAY_POSITION`,
   positive/negative-stride slices, and `ELEMENT_AT` cover those list types;
@@ -291,7 +293,7 @@ qualification documents; this tracker remains the single ordered work list.
 ### Current focused validation
 
 The latest focused validation passes 333 `kaveon-server` tests, 109
-`kaveon-sql` tests, and 237 `kaveon-exec` tests (four executor benchmarks are
+`kaveon-sql` tests, and 238 `kaveon-exec` tests (four executor benchmarks are
 ignored). The repository differential gate
 (`differential_tests::the_differential_sweep_matches_across_parquet_encodings_and_execution_paths`)
 also passes, comparing the same corpus across alternate Parquet encodings and
