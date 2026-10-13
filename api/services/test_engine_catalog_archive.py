@@ -100,8 +100,8 @@ class EngineCatalogArchiveTests(unittest.TestCase):
             result = archive.archive(client, now_ms=1_700_000_000_000)
         self.assertTrue(result["written"])
         self.assertEqual(client.writes,
-                         [f"engine-catalog/catalog/{result['identity_sha256']}.json",
-                          f"engine-catalog/runs/{result['run_id']}.json"])
+                         [f"engine-catalog/catalog/v1/{result['identity_sha256']}.json",
+                          f"engine-catalog/runs/v1/{result['run_id']}.json"])
 
     def test_an_unchanged_registry_writes_nothing(self):
         """The architect's rule: object storage sees a write when something
@@ -170,7 +170,7 @@ class EngineCatalogArchiveTests(unittest.TestCase):
         with patch.object(archive.engine_bridge, "catalog_read", reader(registry())):
             document = archive.export()
             key = archive.identity(document)
-            client = FakeClient({f"engine-catalog/catalog/{key}.json": b'{"not":"the registry"}'})
+            client = FakeClient({f"engine-catalog/catalog/v1/{key}.json": b'{"not":"the registry"}'})
             with self.assertRaises(RuntimeError):
                 archive.archive(client)
 

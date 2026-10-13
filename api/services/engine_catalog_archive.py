@@ -189,7 +189,15 @@ def archive(client, *, actor: str = ACTOR, now_ms: int | None = None) -> dict:
     document_identity = hashlib.sha256(payload).hexdigest()
     if re.fullmatch(r"[0-9a-f]{64}", document_identity) is None:
         raise RuntimeError("registry identity is not a SHA-256 digest")
-    path = f"{PREFIX}/catalog/{document_identity}.json"
+    # Versioned, so a change in what gets stored can never collide with
+    # objects written by an earlier format. It already has: the first release
+    # stored the document with observation timestamps while naming the object
+    # after the digest of the document without them, and every run afterwards
+    # read back bytes that did not match the name and refused — correctly, and
+    # permanently, because the offending object was never going to change.
+    # An unversioned content address is only content-addressed for as long as
+    # the content's shape never moves.
+    path = f"{PREFIX}/catalog/v{SCHEMA_VERSION}/{document_identity}.json"
 
     existing = client.read(path, len(payload) + 1)
     if existing is not None:
@@ -212,7 +220,7 @@ def archive(client, *, actor: str = ACTOR, now_ms: int | None = None) -> dict:
     # the job's own business — its logs and its exit status say so — and is not
     # worth an object per schedule tick in a container with no expiry policy.
     run_id = _run_id(now_ms)
-    run_path = f"{PREFIX}/runs/{run_id}.json"
+    run_path = f"{PREFIX}/runs/v{SCHEMA_VERSION}/{run_id}.json"
     run = _canonical({"schema_version": SCHEMA_VERSION, "run_id": run_id,
                       "archived_at_ms": now_ms, "identity_sha256": document_identity,
                       "catalog_path": path, "etag": etag, "counts": document["counts"]})
