@@ -11323,6 +11323,32 @@ fn presented_type(data_type: &arrow::datatypes::DataType) -> String {
         arrow::datatypes::DataType::List(field) => {
             format!("List({})", presented_type(field.data_type()))
         }
+        arrow::datatypes::DataType::LargeList(field) => {
+            format!("List({})", presented_type(field.data_type()))
+        }
+        arrow::datatypes::DataType::FixedSizeList(field, _) => {
+            format!("List({})", presented_type(field.data_type()))
+        }
+        arrow::datatypes::DataType::Struct(fields) => format!(
+            "Row({})",
+            fields
+                .iter()
+                .map(|field| format!("{} {}", field.name(), presented_type(field.data_type())))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        arrow::datatypes::DataType::Map(field, _) => {
+            if let arrow::datatypes::DataType::Struct(fields) = field.data_type() {
+                if fields.len() == 2 {
+                    return format!(
+                        "Map({}, {})",
+                        presented_type(fields[0].data_type()),
+                        presented_type(fields[1].data_type())
+                    );
+                }
+            }
+            "Map".to_owned()
+        }
         other => other.to_string(),
     }
 }
@@ -19078,5 +19104,28 @@ mod streamed_root_tests {
         ]));
         let batch = RecordBatch::try_new(schema, vec![list, Arc::new(row), map]).unwrap();
         assert_eq!(batches_to_json(&[batch]), vec![vec![serde_json::json!([1, 2]), serde_json::json!({"name": "east", "count": 7}), serde_json::json!({"a": 3})]]);
+    }
+
+    #[test]
+    fn presented_type_uses_client_facing_nested_names() {
+        use arrow::datatypes::{DataType, Field};
+        let map = DataType::Map(
+            Field::new(
+                "entries",
+                DataType::Struct(vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::Int64, true),
+                ].into()),
+                false,
+            )
+            .into(),
+            false,
+        );
+        let row = DataType::Struct(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("attributes", map.clone(), true),
+        ].into());
+        assert_eq!(presented_type(&map), "Map(Utf8, Int64)");
+        assert_eq!(presented_type(&row), "Row(name Utf8, attributes Map(Utf8, Int64))");
     }
 }
