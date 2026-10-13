@@ -74,15 +74,16 @@ foundations, but several operators are still centralized or narrow:
   focused parser/executor coverage. `CAST(... AS TIMESTAMP)` and
   `TIMESTAMP WITH TIME ZONE` now map to Arrow microsecond timestamps with
   nullable execution coverage.
-- Numeric array literals are supported as null-preserving Arrow lists, and
-  `CARDINALITY` returns nullable array and map lengths; `ROW(...)` now produces
-  typed Arrow structs with field projection and equality; `MAP(...)` now builds
-  Arrow maps with key lookup and typed key/value projections. Ordered row/map
-  comparison remains open. Scalar, DATE, timestamp,
-  and DECIMAL casts are supported; complex cast targets fail with typed
-  planner diagnostics. Dereference, `UNNEST`, other array operations, and
-  broad JSON operations remain open; scalar extraction via
-  `JSON_EXTRACT_SCALAR` is implemented for dotted object paths.
+- Numeric, text, and boolean array literals are supported as null-preserving
+  typed Arrow lists. `CARDINALITY`, `CONTAINS`, `ARRAY_POSITION`,
+  positive/negative-stride slices, and `ELEMENT_AT` cover those list types;
+  `ROW(...)` produces typed Arrow structs with field projection and equality;
+  `MAP(...)` builds Arrow maps with key lookup, order-independent equality,
+  and typed key/value projections. Ordered row/map comparison remains open.
+  Scalar, DATE, timestamp, and DECIMAL casts are supported; complex cast
+  targets fail with typed planner diagnostics. Dereference, `UNNEST`, other
+  array operations, and broad JSON operations remain open; scalar extraction
+  via `JSON_EXTRACT_SCALAR` is implemented for dotted object paths.
 - There is no Trino-style cross-source federation yet. Registered SQL sources
   are API passthrough paths, while the strongest native Engine path is
   Parquet/Delta/Iceberg. The connector matrix now records S3 as implemented
