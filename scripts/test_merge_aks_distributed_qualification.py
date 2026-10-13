@@ -70,6 +70,16 @@ class MergeQualificationTests(unittest.TestCase):
         self.assertFalse(result["slo"]["passed"])
         self.assertFalse(result["slo"]["requirements"]["cancellation_cleanup"])
 
+    def test_slo_rejects_an_accepted_query_success_rate_below_999_percent(self):
+        pressure = self.pressure()
+        pressure["concurrent_exact"]["requests"] = [
+            {"exact": True, "status": 200}
+        ] * 998 + [{"exact": False, "status": 500}] * 2
+        result = merge_aks.merge(self.comparison(), pressure)
+        self.assertAlmostEqual(result["slo"]["accepted_success_rate"], 0.998, places=6)
+        self.assertFalse(result["slo"]["requirements"]["accepted_success_rate"])
+        self.assertFalse(result["slo"]["passed"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -617,6 +617,11 @@ and incrementally decoded; network backpressure under sustained pressure,
 cloud-storage fault injection, longer endurance, upgrade/rollback, and
 deployed cancellation under those conditions remain open.
 
+The fault-pressure runner now includes the active-query cancellation probe and
+records `checks.cancellation_cleanup`; the merged SLO artifact consumes that
+field rather than inferring cleanup from a successful query response
+(`097e2084`, `b90b067e`).
+
 ### Track 1 distributed execution SLO
 
 The SLO is scoped to a declared qualification workload and image; it is not a
