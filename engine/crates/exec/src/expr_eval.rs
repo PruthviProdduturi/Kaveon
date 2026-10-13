@@ -1352,6 +1352,52 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             map.nulls().cloned(),
         )?));
     }
+    if upper == "MAP_ELEMENT_AT" {
+        check_arity(name, args, 2)?;
+        let map = args[0]
+            .as_any()
+            .downcast_ref::<MapArray>()
+            .ok_or_else(|| KaveonError::Execution("MAP_ELEMENT_AT requires a MAP value".into()))?;
+        let map_keys = map.keys();
+        let requested = compute::cast(&args[1], map_keys.data_type())?;
+        let mut positions = Vec::with_capacity(num_rows);
+        for row in 0..num_rows {
+            if map.is_null(row) || requested.is_null(row) {
+                positions.push(None);
+                continue;
+            }
+            let start = map.value_offsets()[row] as usize;
+            let end = map.value_offsets()[row + 1] as usize;
+            let found = match map_keys.data_type() {
+                DataType::Float64 => {
+                    let keys = map_keys.as_primitive::<Float64Type>();
+                    let needle = requested.as_primitive::<Float64Type>().value(row);
+                    (start..end).find(|&index| !keys.is_null(index) && keys.value(index) == needle)
+                }
+                DataType::Int64 => {
+                    let keys = map_keys.as_primitive::<Int64Type>();
+                    let needle = requested.as_primitive::<Int64Type>().value(row);
+                    (start..end).find(|&index| !keys.is_null(index) && keys.value(index) == needle)
+                }
+                DataType::Utf8 => {
+                    let keys = map_keys.as_string::<i32>();
+                    let needle = requested.as_string::<i32>().value(row);
+                    (start..end).find(|&index| !keys.is_null(index) && keys.value(index) == needle)
+                }
+                other => {
+                    return Err(KaveonError::Execution(format!(
+                        "MAP_ELEMENT_AT does not support key type {other}"
+                    )));
+                }
+            };
+            positions.push(found.map(|index| index as i64));
+        }
+        return Ok(compute::take(
+            map.values().as_ref(),
+            &Int64Array::from(positions),
+            None,
+        )?);
+    }
     if let Some(target) = upper.strip_prefix("TRY_CAST_") {
         check_arity(name, args, 1)?;
         let target = match target {
@@ -1863,6 +1909,50 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "ELEMENT_AT" => {
             check_arity(name, args, 2)?;
+            if let Some(map) = args[0].as_any().downcast_ref::<MapArray>() {
+                let map_keys = map.keys();
+                let requested = compute::cast(&args[1], map_keys.data_type())?;
+                let mut positions = Vec::with_capacity(num_rows);
+                for row in 0..num_rows {
+                    if map.is_null(row) || requested.is_null(row) {
+                        positions.push(None);
+                        continue;
+                    }
+                    let start = map.value_offsets()[row] as usize;
+                    let end = map.value_offsets()[row + 1] as usize;
+                    let found = match map_keys.data_type() {
+                        DataType::Float64 => {
+                            let keys = map_keys.as_primitive::<Float64Type>();
+                            let needle = requested.as_primitive::<Float64Type>().value(row);
+                            (start..end)
+                                .find(|&index| !keys.is_null(index) && keys.value(index) == needle)
+                        }
+                        DataType::Int64 => {
+                            let keys = map_keys.as_primitive::<Int64Type>();
+                            let needle = requested.as_primitive::<Int64Type>().value(row);
+                            (start..end)
+                                .find(|&index| !keys.is_null(index) && keys.value(index) == needle)
+                        }
+                        DataType::Utf8 => {
+                            let keys = map_keys.as_string::<i32>();
+                            let needle = requested.as_string::<i32>().value(row);
+                            (start..end)
+                                .find(|&index| !keys.is_null(index) && keys.value(index) == needle)
+                        }
+                        other => {
+                            return Err(KaveonError::Execution(format!(
+                                "ELEMENT_AT does not support MAP key type {other}"
+                            )));
+                        }
+                    };
+                    positions.push(found.map(|index| index as i64));
+                }
+                return Ok(compute::take(
+                    map.values().as_ref(),
+                    &Int64Array::from(positions),
+                    None,
+                )?);
+            }
             let list = args[0]
                 .as_any()
                 .downcast_ref::<ListArray>()
@@ -2711,6 +2801,46 @@ mod tests {
         assert_eq!(
             value.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
             vec![Some(7), Some(9)]
+        );
+    }
+
+    #[test]
+    fn element_at_looks_up_map_keys_and_returns_null_when_absent() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+        )])
+        .unwrap();
+        let map = Expr::Function {
+            name: "MAP".into(),
+            args: vec![
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![
+                        Expr::Literal(ScalarValue::Utf8("a".into())),
+                        Expr::Literal(ScalarValue::Utf8("b".into())),
+                    ],
+                },
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![
+                        Expr::Literal(ScalarValue::Int64(1)),
+                        Expr::Literal(ScalarValue::Int64(2)),
+                    ],
+                },
+            ],
+        };
+        let value = evaluate(
+            &Expr::Function {
+                name: "ELEMENT_AT".into(),
+                args: vec![map, Expr::Literal(ScalarValue::Utf8("b".into()))],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            value.as_primitive::<Float64Type>().iter().collect::<Vec<_>>(),
+            vec![Some(2.0), Some(2.0)]
         );
     }
 

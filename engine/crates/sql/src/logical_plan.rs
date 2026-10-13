@@ -1812,6 +1812,19 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
                 Expr::Literal(ScalarValue::Utf8(key.value.clone())),
             ],
         }),
+        ast::Expr::MapAccess { column, keys } => {
+            if keys.is_empty() {
+                return Err(sql_err("map access requires a key"));
+            }
+            let mut value = ast_expr_to_expr(column)?;
+            for key in keys {
+                value = Expr::Function {
+                    name: "MAP_ELEMENT_AT".into(),
+                    args: vec![value, ast_expr_to_expr(&key.key)?],
+                };
+            }
+            Ok(value)
+        }
         ast::Expr::Subscript { expr, subscript } => match subscript.as_ref() {
             ast::Subscript::Index { index } => Ok(Expr::Function {
                 name: "ELEMENT_AT".into(),
@@ -3840,6 +3853,13 @@ mod tests {
         let plan = sql_to_logical_plan("SELECT (ROW(id, name)).field0 FROM t").unwrap();
         let debug = format!("{plan:?}");
         assert!(debug.contains("Function { name: \"ROW_FIELD\""));
+    }
+
+    #[test]
+    fn map_key_access_lowers_to_map_element_at() {
+        let plan = sql_to_logical_plan("SELECT MAP(ARRAY['a'], ARRAY[1])['a'] FROM t").unwrap();
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("Function { name: \"ELEMENT_AT\""), "{debug}");
     }
 
     #[test]
