@@ -801,9 +801,20 @@ enum CompareKind {
 
 fn comparison(left: &ArrayRef, right: &ArrayRef, kind: CompareKind) -> Result<BooleanArray> {
     use arrow::compute::kernels::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
-    if let (DataType::LargeList(left_field), DataType::LargeList(right_field)) =
-        (left.data_type(), right.data_type())
+    let left_list_field = match left.data_type() {
+        DataType::List(field) | DataType::LargeList(field) => Some(field),
+        _ => None,
+    };
+    let right_list_field = match right.data_type() {
+        DataType::List(field) | DataType::LargeList(field) => Some(field),
+        _ => None,
+    };
+    if matches!(left.data_type(), DataType::LargeList(_))
+        || matches!(right.data_type(), DataType::LargeList(_))
     {
+        let (Some(left_field), Some(right_field)) = (left_list_field, right_list_field) else {
+            unreachable!("large-list comparison branch has list operands");
+        };
         if left_field.data_type() != right_field.data_type() {
             return Err(KaveonError::Execution(
                 "ARRAY values must have matching element types for comparison".into(),
@@ -6284,7 +6295,7 @@ mod tests {
 
     #[test]
     fn large_list_array_comparison_uses_the_same_semantics() {
-        use arrow::array::{Int64Builder, LargeListBuilder};
+        use arrow::array::{Int64Builder, LargeListBuilder, ListBuilder};
 
         let mut left_builder = LargeListBuilder::new(Int64Builder::new());
         left_builder.values().append_value(1);
@@ -6300,6 +6311,14 @@ mod tests {
 
         let result = comparison(&left, &right, CompareKind::Lt).unwrap();
         assert!(result.value(0));
+
+        let mut small_builder = ListBuilder::new(Int64Builder::new());
+        small_builder.values().append_value(1);
+        small_builder.values().append_value(2);
+        small_builder.append(true);
+        let small = Arc::new(small_builder.finish()) as ArrayRef;
+        let mixed = comparison(&small, &right, CompareKind::Lt).unwrap();
+        assert!(mixed.value(0));
     }
 
     #[test]
