@@ -232,6 +232,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "array_scalar_functions",
+        "SELECT CARDINALITY(ARRAY[1, 2, 3]) AS card, ARRAY_POSITION(ARRAY[1, 2, 3], 2) AS pos, ARRAY_JOIN(ARRAY['a', 'b'], '-') AS joined, ARRAYS_OVERLAP(ARRAY[1, 2], ARRAY[2, 3]) AS overlap FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "scalar_aggregate_filter",
         "SELECT country, COUNT(*) AS n FROM {T} WHERE user_id < (SELECT MAX(user_id) FROM {U}) GROUP BY country ORDER BY country",
         true,

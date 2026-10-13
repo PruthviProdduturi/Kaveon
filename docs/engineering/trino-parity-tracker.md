@@ -281,6 +281,11 @@ qualification documents; this tracker remains the single ordered work list.
   null list inputs remain null. Unsupported list element types retain an
   explicit execution diagnostic, with parser and executor coverage in this
   slice.
+- The differential corpus now exercises scalar `CARDINALITY`,
+  `ARRAY_POSITION`, `ARRAY_JOIN`, and `ARRAYS_OVERLAP` results across alternate
+  Parquet encodings and local/two-worker execution paths. This extends the
+  complex-type parity gate without claiming support for row-producing `UNNEST`
+  or array/map-valued result comparison.
 - Three-worker global `ORDER BY`/TopN centralized merge correctness is now
   qualified for NULL ordering and ties against a single-partition reference
   (`bb788709`). The input remains distributed, while the exact global merge
