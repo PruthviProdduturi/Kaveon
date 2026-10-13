@@ -59,8 +59,9 @@ foundations, but several operators are still centralized or narrow:
 - Ordinary distributed joins use equality keys; inner residual predicates now
   lower to a correctness-first cross join plus filter, while residual outer
   joins remain unsupported. Semi/anti joins now hash-partition both inputs on
-  their keys; runtime build-key propagation and adaptive broadcast selection
-  remain open.
+  ordinary column keys and retain a deliberate broadcast fallback for
+  unhashable aggregate/correlated keys; runtime build-key propagation and
+  adaptive broadcast selection remain open.
 - Non-recursive CTEs, derived tables, joins, aggregates, `HAVING`, `CASE`, and
   common set operations work. Uncorrelated aggregate scalar subqueries in
   `WHERE` and bounded projection scalar subqueries are supported when they
@@ -262,8 +263,9 @@ qualification documents; this tracker remains the single ordered work list.
   probe scan remains refused until its correctness and exchange behavior are
   qualified (`57db621d`).
 - Semi/anti join planning now hash-partitions both inputs across the worker
-  set, with spill-safe execution and no runtime build-key propagation claim.
-  Adaptive broadcast selection remains open.
+  set when both keys are ordinary columns, with spill-safe execution. Queries
+  exposing an unhashable `*` key retain the explicit broadcast fallback;
+  runtime build-key propagation and adaptive broadcast selection remain open.
 - Streamed-root task metrics now have a stabilized eventual-read test: the
   metrics endpoint may report `202 Accepted` briefly and is polled until the
   completed metrics record is available (`6cd66cb4`).

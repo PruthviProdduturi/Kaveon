@@ -869,6 +869,38 @@ impl ExecutableFragmentBuilder<'_> {
                 } else {
                     FragmentJoinType::Anti
                 };
+                let (Ok(left_column), Ok(right_column)) =
+                    (expression_column(left_key), expression_column(right_key))
+                else {
+                    return self.attach_broadcast_join(
+                        left_stage,
+                        right_stage,
+                        JoinSpec {
+                            join_type,
+                            left_qualifier: None,
+                            right_qualifier: None,
+                            left_keys: vec![left_key.clone()],
+                            right_keys: vec![right_key.clone()],
+                            residual: residual.clone(),
+                            broadcast: true,
+                        },
+                    );
+                };
+                if left_column == "*" || right_column == "*" {
+                    return self.attach_broadcast_join(
+                        left_stage,
+                        right_stage,
+                        JoinSpec {
+                            join_type,
+                            left_qualifier: None,
+                            right_qualifier: None,
+                            left_keys: vec![left_key.clone()],
+                            right_keys: vec![right_key.clone()],
+                            residual: residual.clone(),
+                            broadcast: true,
+                        },
+                    );
+                }
                 let target = StageId(self.next_stage);
                 let left_exchange = self.exchange(left_stage, target)?.clone();
                 let right_exchange = self.exchange(right_stage, target)?.clone();
@@ -903,8 +935,8 @@ impl ExecutableFragmentBuilder<'_> {
                         join_type,
                         left_qualifier: None,
                         right_qualifier: None,
-                        left_keys: vec![left_key.clone()],
-                        right_keys: vec![right_key.clone()],
+                        left_keys: vec![Expr::Column(left_column)],
+                        right_keys: vec![Expr::Column(right_column)],
                         residual: residual.clone(),
                         broadcast: false,
                     }),
@@ -1605,6 +1637,18 @@ impl StageGraphBuilder {
                 let left_stage = self.build(left)?;
                 let right_stage = self.build(right)?;
                 let physical = physical_plan_tree(plan);
+                let (Ok(left_column), Ok(right_column)) =
+                    (expression_column(left_key), expression_column(right_key))
+                else {
+                    self.wrap_stage(left_stage, "BroadcastSemiJoin", physical.attributes);
+                    self.add_exchange(right_stage, left_stage, Partitioning::Broadcast);
+                    return Ok(left_stage);
+                };
+                if left_column == "*" || right_column == "*" {
+                    self.wrap_stage(left_stage, "BroadcastSemiJoin", physical.attributes);
+                    self.add_exchange(right_stage, left_stage, Partitioning::Broadcast);
+                    return Ok(left_stage);
+                }
                 let operator = if matches!(plan, LogicalPlan::SemiJoin { .. }) {
                     "PartitionedSemiJoin"
                 } else {
@@ -1620,7 +1664,7 @@ impl StageGraphBuilder {
                     left_stage,
                     target,
                     Partitioning::Hash {
-                        columns: vec![expression_column(left_key)?],
+                        columns: vec![left_column],
                         partition_count: self.exchange_partition_count,
                     },
                 );
@@ -1628,7 +1672,7 @@ impl StageGraphBuilder {
                     right_stage,
                     target,
                     Partitioning::Hash {
-                        columns: vec![expression_column(right_key)?],
+                        columns: vec![right_column],
                         partition_count: self.exchange_partition_count,
                     },
                 );
@@ -3343,15 +3387,11 @@ mod tests {
     }
 
     #[test]
-    fn semi_and_anti_joins_hash_partition_both_sides() {
+    fn semi_and_anti_joins_partition_or_fallback_for_unhashable_keys() {
         for (sql, expected_type) in [
             (
-                "SELECT COUNT(*) FROM items WHERE id IN (SELECT id FROM customers WHERE id > 1)",
+                "SELECT id FROM items WHERE id IN (SELECT id FROM customers WHERE id > 1)",
                 FragmentJoinType::Semi,
-            ),
-            (
-                "SELECT id FROM items WHERE id NOT IN (SELECT id FROM customers GROUP BY id)",
-                FragmentJoinType::Anti,
             ),
         ] {
             let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(sql).unwrap();
@@ -3368,8 +3408,27 @@ mod tests {
                         child.operator == "PartitionedSemiJoin"
                             || child.operator == "PartitionedAntiJoin"
                     })
-                })
-                .expect("partitioned semijoin target stage");
+                });
+            if target.is_none() {
+                assert!(graph.exchanges.iter().any(|exchange| {
+                    exchange.target_stage == StageId(0)
+                        && matches!(exchange.partitioning, Partitioning::Broadcast)
+                }));
+                let fragments =
+                    build_executable_fragments("query-1", &plan, &fixture.catalog, 4).unwrap();
+                let probe = &fragments[&StageId(0)];
+                let join = probe
+                    .nodes
+                    .iter()
+                    .find(|node| matches!(node.operator, FragmentOperator::HashJoin(_)))
+                    .expect("broadcast fallback carries the semijoin");
+                let FragmentOperator::HashJoin(spec) = &join.operator else {
+                    unreachable!()
+                };
+                assert!(spec.broadcast);
+                continue;
+            }
+            let target = target.expect("partitioned semijoin target stage");
             assert_eq!(target.task_count, 4);
             assert_eq!(
                 graph

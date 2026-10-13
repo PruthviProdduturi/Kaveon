@@ -1576,7 +1576,7 @@ fn q21_is_an_anti_join_over_a_semi_join_each_with_a_residual() {
                     kaveon_core::JoinType::Semi | kaveon_core::JoinType::Anti
                 ) =>
             {
-                assert!(spec.broadcast);
+                assert!(!spec.broadcast);
                 Some(
                     spec.residual
                         .clone()
