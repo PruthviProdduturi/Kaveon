@@ -144,7 +144,7 @@ class CompiledArtifactTests(unittest.TestCase):
              patch("services.postgresql_retirement_runtime.requested", return_value=True), \
              patch.object(artifact, "read", return_value=expected) as read:
             self.assertIs(engine.get_dlm("7", "viewer", "Viewer"), expected)
-        read.assert_called_once_with("7", "viewer", "Viewer")
+        read.assert_called_once_with("7", "viewer", "Viewer", context=None)
         postgres.assert_not_called()
 
 

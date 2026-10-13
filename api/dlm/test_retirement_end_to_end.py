@@ -1,7 +1,7 @@
 """Retirement-mode DLM workflows may never fall back to PostgreSQL metadata."""
 import contextlib
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, ANY
 
 import pytest
 from fastapi import HTTPException
@@ -102,8 +102,22 @@ def test_retirement_discovery_uses_admin_storage_read_then_caller_visibility(no_
         with patch("services.product_store.list_records", return_value=[{"id": "24"}]) as records, \
              patch.object(engine, "get_dlm", return_value=ARTIFACT) as visible_read:
             assert engine._serving_artifacts() == [ARTIFACT]
-        records.assert_called_once_with("dataset", "viewer", "Admin", max_records=1000)
-        visible_read.assert_called_once_with("24", "viewer", "Viewer")
+        # Three listings — datasets, definitions and runs — read once for the
+        # whole page and resolved against memory. Each artifact used to be
+        # resolved on its own, and resolving one lists every DLM run and reads
+        # its dataset, so the cost grew with the number of datasets: the banner
+        # took twenty-five seconds, and got slower as more datasets gained
+        # context. What this asserts is that the count does not depend on how
+        # many datasets there are.
+        assert records.call_count == 3, records.call_args_list
+        assert [call.args[0] for call in records.call_args_list] == [
+            "dataset",
+            "dlm_definition",
+            "dlm_run",
+        ]
+        for call in records.call_args_list:
+            assert call.args[1:] == ("viewer", "Admin")
+        visible_read.assert_called_once_with("24", "viewer", "Viewer", context=ANY)
     finally:
         engine._RETIREMENT_SERVING.reset(token)
     no_postgres.assert_not_called()
