@@ -1805,6 +1805,13 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
         }
         ast::Expr::Nested(inner) => ast_expr_to_expr(inner),
         ast::Expr::Function(func) => ast_function_to_expr(func),
+        ast::Expr::CompositeAccess { expr, key } => Ok(Expr::Function {
+            name: "ROW_FIELD".into(),
+            args: vec![
+                ast_expr_to_expr(expr)?,
+                Expr::Literal(ScalarValue::Utf8(key.value.clone())),
+            ],
+        }),
         ast::Expr::Subscript { expr, subscript } => match subscript.as_ref() {
             ast::Subscript::Index { index } => Ok(Expr::Function {
                 name: "ELEMENT_AT".into(),
@@ -3826,6 +3833,13 @@ mod tests {
         let plan = sql_to_logical_plan("SELECT ROW(id, name) FROM t").unwrap();
         let debug = format!("{plan:?}");
         assert!(debug.contains("Function { name: \"ROW\""));
+    }
+
+    #[test]
+    fn row_field_access_lowers_to_row_field() {
+        let plan = sql_to_logical_plan("SELECT (ROW(id, name)).field0 FROM t").unwrap();
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("Function { name: \"ROW_FIELD\""));
     }
 
     #[test]
