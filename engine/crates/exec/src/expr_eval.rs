@@ -3065,6 +3065,46 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let lower = lower.as_primitive::<Int64Type>();
             let upper = upper.as_primitive::<Int64Type>();
             let stride = stride.as_primitive::<Int64Type>();
+            macro_rules! slice_primitive {
+                ($ty:ty, $builder:expr) => {{
+                    let mut builder = ListBuilder::new($builder);
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let inner = list.value(row);
+                        let values = inner.as_primitive::<$ty>();
+                        let length = values.len() as i64;
+                        let step = stride.is_valid(row).then(|| stride.value(row)).unwrap_or(1);
+                        let start = lower
+                            .is_valid(row)
+                            .then(|| lower.value(row))
+                            .unwrap_or(if step < 0 { length } else { 1 });
+                        let end = upper
+                            .is_valid(row)
+                            .then(|| upper.value(row))
+                            .unwrap_or(if step < 0 { 1 } else { length });
+                        if step == 0 {
+                            return Err(KaveonError::Execution("ARRAY_SLICE stride cannot be zero".into()));
+                        }
+                        let first = if step > 0 { start.max(1).min(length + 1) } else { start.max(1).min(length) };
+                        let last = if step > 0 { end.max(0).min(length) } else { end.max(1).min(length) };
+                        if (step > 0 && first <= last) || (step < 0 && first >= last) {
+                            let mut index = first;
+                            while (step > 0 && index <= last) || (step < 0 && index >= last) {
+                                let offset = (index - 1) as usize;
+                                builder.values().append_option(
+                                    values.is_valid(offset).then(|| values.value(offset)),
+                                );
+                                index += step;
+                            }
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }};
+            }
             match list.value_type() {
                 DataType::Int64 => {
                     let mut builder = ListBuilder::new(Int64Builder::new());
@@ -3146,6 +3186,26 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     }
                     Ok(Arc::new(builder.finish()))
                 }
+                DataType::Date32 => slice_primitive!(
+                    Date32Type,
+                    PrimitiveBuilder::<Date32Type>::new()
+                ),
+                DataType::Date64 => slice_primitive!(
+                    Date64Type,
+                    PrimitiveBuilder::<Date64Type>::new()
+                ),
+                DataType::Time32(TimeUnit::Second) => slice_primitive!(
+                    Time32SecondType,
+                    PrimitiveBuilder::<Time32SecondType>::new()
+                ),
+                DataType::Time32(TimeUnit::Millisecond) => slice_primitive!(
+                    Time32MillisecondType,
+                    PrimitiveBuilder::<Time32MillisecondType>::new()
+                ),
+                DataType::Timestamp(TimeUnit::Microsecond, _) => slice_primitive!(
+                    TimestampMicrosecondType,
+                    PrimitiveBuilder::<TimestampMicrosecondType>::new()
+                ),
                 DataType::Decimal128(precision, scale) => {
                     let values_builder = Decimal128Builder::new()
                         .with_precision_and_scale(precision, scale)
@@ -7564,6 +7624,52 @@ mod tests {
             .value(0);
         let values = inner.as_primitive::<arrow::datatypes::Date32Type>();
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(10), Some(20), None]);
+    }
+
+    #[test]
+    fn slices_temporal_array_elements_with_stride() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "first_day",
+                Arc::new(arrow::array::Date32Array::from(vec![Some(10)])) as ArrayRef,
+            ),
+            (
+                "second_day",
+                Arc::new(arrow::array::Date32Array::from(vec![Some(20)])) as ArrayRef,
+            ),
+            (
+                "third_day",
+                Arc::new(arrow::array::Date32Array::from(vec![Some(30)])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "ARRAY_SLICE".into(),
+                args: vec![
+                    Expr::Function {
+                        name: "ARRAY".into(),
+                        args: vec![
+                            Expr::Column("first_day".into()),
+                            Expr::Column("second_day".into()),
+                            Expr::Column("third_day".into()),
+                        ],
+                    },
+                    Expr::Literal(ScalarValue::Int64(1)),
+                    Expr::Literal(ScalarValue::Int64(3)),
+                    Expr::Literal(ScalarValue::Int64(2)),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        let inner = result
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap()
+            .value(0);
+        let values = inner.as_primitive::<arrow::datatypes::Date32Type>();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(10), Some(30)]);
     }
 
     #[test]
