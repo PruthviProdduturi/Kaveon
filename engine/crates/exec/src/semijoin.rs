@@ -16,7 +16,9 @@ use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, AsArray, RecordBatch, StringArray, UInt32Array};
 use arrow::compute::{interleave, take};
-use arrow::datatypes::{Float64Type, Int32Type, Int64Type, Schema, SchemaRef, UInt64Type};
+use arrow::datatypes::{
+    Float64Type, Int32Type, Int64Type, Schema, SchemaRef, TimeUnit, UInt64Type,
+};
 use kaveon_core::{
     BatchOperator, Expr, KaveonError, OperatorMemoryAccount, ReservationSlab, Result,
 };
@@ -752,6 +754,23 @@ fn extract_value(array: &dyn Array, row: usize) -> Result<Key> {
             array
                 .as_primitive::<arrow::datatypes::Date32Type>()
                 .value(row) as i128,
+            0,
+        )),
+        arrow::datatypes::DataType::Timestamp(unit, _) => Ok(Key::Number(
+            match unit {
+                TimeUnit::Second => array
+                    .as_primitive::<arrow::datatypes::TimestampSecondType>()
+                    .value(row),
+                TimeUnit::Millisecond => array
+                    .as_primitive::<arrow::datatypes::TimestampMillisecondType>()
+                    .value(row),
+                TimeUnit::Microsecond => array
+                    .as_primitive::<arrow::datatypes::TimestampMicrosecondType>()
+                    .value(row),
+                TimeUnit::Nanosecond => array
+                    .as_primitive::<arrow::datatypes::TimestampNanosecondType>()
+                    .value(row),
+            } as i128,
             0,
         )),
         arrow::datatypes::DataType::Int64 => Ok(Key::Number(

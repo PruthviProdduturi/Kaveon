@@ -1,7 +1,7 @@
 use ahash::AHashMap;
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, UInt64Array};
 use arrow::compute::{concat_batches, take};
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use kaveon_core::{BatchOperator, KaveonError, MemoryReservation, OperatorMemoryAccount, Result};
 use std::sync::Arc;
@@ -760,6 +760,20 @@ fn row_key(
                         .as_primitive::<arrow::datatypes::Date32Type>()
                         .value(row),
                 ),
+                DataType::Timestamp(unit, _) => Key::Int64(match unit {
+                    TimeUnit::Second => column
+                        .as_primitive::<arrow::datatypes::TimestampSecondType>()
+                        .value(row),
+                    TimeUnit::Millisecond => column
+                        .as_primitive::<arrow::datatypes::TimestampMillisecondType>()
+                        .value(row),
+                    TimeUnit::Microsecond => column
+                        .as_primitive::<arrow::datatypes::TimestampMicrosecondType>()
+                        .value(row),
+                    TimeUnit::Nanosecond => column
+                        .as_primitive::<arrow::datatypes::TimestampNanosecondType>()
+                        .value(row),
+                }),
                 DataType::Int64 => Key::Int64(
                     column
                         .as_primitive::<arrow::datatypes::Int64Type>()
@@ -798,7 +812,7 @@ fn exec_err(message: impl Into<String>) -> KaveonError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int64Array, StringArray};
+    use arrow::array::{Int64Array, StringArray, TimestampMillisecondArray};
     use std::collections::VecDeque;
 
     struct Input {
@@ -884,6 +898,53 @@ mod tests {
                 run(vec![("id".into(), "id".into()), ("id".into(), "id".into())])
             );
         }
+    }
+
+    #[test]
+    fn timestamp_join_keys_match_across_duplicate_and_null_rows() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "ts",
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                true,
+            ),
+            Field::new("side", DataType::Utf8, false),
+        ]));
+        let left = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(TimestampMillisecondArray::from(vec![
+                    Some(1_000),
+                    Some(2_000),
+                    None,
+                ])),
+                Arc::new(StringArray::from(vec!["a", "b", "null"])),
+            ],
+        )
+        .unwrap();
+        let right = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(TimestampMillisecondArray::from(vec![
+                    Some(1_000),
+                    Some(1_000),
+                    None,
+                ])),
+                Arc::new(StringArray::from(vec!["x", "y", "null"])),
+            ],
+        )
+        .unwrap();
+        let mut join = HashJoin::try_new(
+            Box::new(Input::new(left)),
+            Box::new(Input::new(right)),
+            JoinType::Inner,
+            vec![("ts".into(), "ts".into())],
+        )
+        .unwrap();
+        let batches = kaveon_core::collect_batches(&mut join).unwrap();
+        let result = concat_batches(join.schema(), &batches).unwrap();
+        assert_eq!(result.num_rows(), 2);
+        assert_eq!(result.column(0).null_count(), 0);
     }
 
     #[test]
