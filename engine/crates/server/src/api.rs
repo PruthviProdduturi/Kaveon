@@ -2732,8 +2732,24 @@ async fn submit_trino_statement(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let query = match trino_prepared_query(&headers).or_else(|| String::from_utf8(body.to_vec()).ok()) {
-        Some(query) if !query.trim().is_empty() => query,
+    let body_text = String::from_utf8(body.to_vec()).ok();
+    let prepared_query = trino_prepared_query(&headers);
+    let (query, parameters) = match (prepared_query, body_text) {
+        (Some(query), Some(body)) => match trino_execute_parameters(&body) {
+            Ok(parameters) => (query, parameters),
+            Err(error) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": error,
+                        "errorName": "INVALID_PARAMETER"
+                    })),
+                )
+                    .into_response();
+            }
+        },
+        (Some(query), None) => (query, Vec::new()),
+        (None, Some(query)) if !query.trim().is_empty() => (query, Vec::new()),
         _ => {
             return (
                 StatusCode::BAD_REQUEST,
@@ -2747,7 +2763,7 @@ async fn submit_trino_statement(
     };
     let request = StatementRequest {
         query,
-        parameters: Vec::new(),
+        parameters,
         named_parameters: HashMap::new(),
         catalog: trino_header(&headers, "x-trino-catalog"),
         schema: trino_header(&headers, "x-trino-schema"),
@@ -2807,6 +2823,102 @@ fn trino_prepared_query(headers: &HeaderMap) -> Option<String> {
         index += 1;
     }
     String::from_utf8(decoded).ok()
+}
+
+/// Parse the scalar values from Trino's `EXECUTE name USING ...` request.
+/// The prepared SQL itself remains in the header; values are converted into
+/// typed request parameters and bound by the normal AST binder. This keeps
+/// values out of SQL text and deliberately rejects compound expressions until
+/// the wire protocol supports them end to end.
+fn trino_execute_parameters(body: &str) -> Result<Vec<serde_json::Value>, String> {
+    let trimmed = body.trim().trim_end_matches(';').trim();
+    let mut words = trimmed.split_whitespace();
+    if !words
+        .next()
+        .is_some_and(|word| word.eq_ignore_ascii_case("execute"))
+    {
+        return Ok(Vec::new());
+    }
+    let Some(using_offset) = trimmed
+        .match_indices(char::is_whitespace)
+        .map(|(index, _)| index)
+        .find(|&index| {
+            trimmed[index..]
+                .split_whitespace()
+                .next()
+                .is_some_and(|word| word.eq_ignore_ascii_case("using"))
+        })
+    else {
+        return Ok(Vec::new());
+    };
+    let using = trimmed[using_offset..].trim_start();
+    let mut using_words = using.splitn(2, char::is_whitespace);
+    let keyword = using_words.next().unwrap_or_default();
+    if !keyword.eq_ignore_ascii_case("using") {
+        return Err("EXECUTE request has malformed USING clause".to_owned());
+    }
+    let values = using_words.next().unwrap_or_default().trim();
+    if values.is_empty() {
+        return Ok(Vec::new());
+    }
+    split_trino_arguments(values)
+        .into_iter()
+        .map(|value| trino_literal_to_json(value.trim()))
+        .collect()
+}
+
+fn split_trino_arguments(input: &str) -> Vec<&str> {
+    let bytes = input.as_bytes();
+    let mut result = Vec::new();
+    let mut start = 0;
+    let mut quote = false;
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\'' => {
+                if quote && bytes.get(index + 1) == Some(&b'\'') {
+                    index += 1;
+                } else {
+                    quote = !quote;
+                }
+            }
+            b',' if !quote => {
+                result.push(&input[start..index]);
+                start = index + 1;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    result.push(&input[start..]);
+    result
+}
+
+fn trino_literal_to_json(value: &str) -> Result<serde_json::Value, String> {
+    if value.eq_ignore_ascii_case("null") {
+        return Ok(serde_json::Value::Null);
+    }
+    if value.eq_ignore_ascii_case("true") {
+        return Ok(serde_json::Value::Bool(true));
+    }
+    if value.eq_ignore_ascii_case("false") {
+        return Ok(serde_json::Value::Bool(false));
+    }
+    if value.len() >= 2 && value.starts_with('\'') && value.ends_with('\'') {
+        let text = value[1..value.len() - 1].replace("''", "'");
+        return Ok(serde_json::Value::String(text));
+    }
+    if let Ok(integer) = value.parse::<i64>() {
+        return Ok(serde_json::json!(integer));
+    }
+    if let Ok(float) = value.parse::<f64>() {
+        if float.is_finite() {
+            return Ok(serde_json::json!(float));
+        }
+    }
+    Err(format!(
+        "Trino EXECUTE USING value '{value}' is not a supported scalar literal"
+    ))
 }
 
 async fn trino_response_shape(response: Response) -> Response {
@@ -18546,6 +18658,31 @@ mod streamed_root_tests {
             trino_prepared_query(&headers).as_deref(),
             Some("SELECT 1 AS n")
         );
+    }
+
+    #[test]
+    fn trino_execute_using_binds_scalar_literals_without_sql_interpolation() {
+        let values = trino_execute_parameters(
+            "EXECUTE statement USING 42, 'O''Reilly', true, NULL, -1.25;",
+        )
+        .unwrap();
+        assert_eq!(
+            values,
+            vec![
+                serde_json::json!(42),
+                serde_json::json!("O'Reilly"),
+                serde_json::json!(true),
+                serde_json::Value::Null,
+                serde_json::json!(-1.25),
+            ]
+        );
+    }
+
+    #[test]
+    fn trino_execute_using_rejects_compound_literals() {
+        let error = trino_execute_parameters("EXECUTE statement USING ARRAY[1, 2]")
+            .expect_err("compound literals must not be interpolated");
+        assert!(error.contains("not a supported scalar literal"), "{error}");
     }
 
     #[tokio::test]
