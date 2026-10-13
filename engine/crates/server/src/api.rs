@@ -11398,14 +11398,46 @@ pub(crate) fn batches_to_json(
                     DataType::LargeUtf8 => {
                         serde_json::Value::String(arr.as_string::<i64>().value(row).to_owned())
                     }
-                    // A list of doubles (`APPROX_PERCENTILE(col, ARRAY[…])`)
-                    // as a JSON array.
-                    DataType::List(field) if field.data_type() == &DataType::Float64 => {
-                        let items = arr.as_list::<i32>().value(row);
-                        let items = items.as_primitive::<Float64Type>();
-                        serde_json::Value::Array(
-                            items.iter().map(|item| serde_json::json!(item)).collect(),
-                        )
+                    // Complex values must remain JSON-native at the API boundary. Falling
+                    // through to Arrow's Debug representation makes arrays, maps and rows
+                    // unusable to SQL Lab and clients (and is not Trino-compatible).
+                    DataType::List(_) => array_value_to_json(arr.as_list::<i32>().value(row)),
+                    DataType::LargeList(_) => {
+                        array_value_to_json(arr.as_list::<i64>().value(row))
+                    }
+                    DataType::FixedSizeList(_, _) => {
+                        array_value_to_json(arr.as_fixed_size_list().value(row))
+                    }
+                    DataType::Struct(fields) => {
+                        let value = arr.as_any().downcast_ref::<arrow::array::StructArray>().unwrap();
+                        let mut object = serde_json::Map::with_capacity(fields.len());
+                        for (index, field) in fields.iter().enumerate() {
+                            object.insert(field.name().clone(), array_value_to_json(value.column(index).slice(row, 1)));
+                        }
+                        serde_json::Value::Object(object)
+                    }
+                    DataType::Map(_, _) => {
+                        let value = arr.as_any().downcast_ref::<arrow::array::MapArray>().unwrap();
+                        let entries = value.value(row);
+                        let entry_struct = entries.as_any().downcast_ref::<arrow::array::StructArray>().unwrap();
+                        let keys = entry_struct.column(0);
+                        let values = entry_struct.column(1);
+                        let mut object = serde_json::Map::new();
+                        let mut pairs = Vec::new();
+                        for index in 0..entries.len() {
+                            let key = array_value_to_json(keys.slice(index, 1));
+                            let item = array_value_to_json(values.slice(index, 1));
+                            if let Some(key) = key.as_str() {
+                                object.insert(key.to_owned(), item);
+                            } else {
+                                pairs.push(serde_json::json!([key, item]));
+                            }
+                        }
+                        if pairs.is_empty() {
+                            serde_json::Value::Object(object)
+                        } else {
+                            serde_json::Value::Array(pairs)
+                        }
                     }
                     // Temporal and decimal values as their logical text —
                     // ISO 8601 dates, timestamps and times, exact decimal
@@ -11476,6 +11508,70 @@ pub(crate) fn batches_to_json(
         }
     }
     rows
+}
+
+/// Convert one Arrow value to the JSON shape exposed by HTTP and CLI results.
+fn array_value_to_json(array: arrow::array::ArrayRef) -> serde_json::Value {
+    use arrow::array::{Array, AsArray};
+    use arrow::datatypes::*;
+    if array.is_null(0) {
+        return serde_json::Value::Null;
+    }
+    if array.len() > 1 {
+        return (0..array.len())
+            .map(|index| array_value_to_json(array.slice(index, 1)))
+            .collect::<Vec<_>>()
+            .into();
+    }
+    match array.data_type() {
+        DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _) => {
+            let values = match array.data_type() {
+                DataType::List(_) => array.as_list::<i32>().value(0),
+                DataType::LargeList(_) => array.as_list::<i64>().value(0),
+                _ => array.as_fixed_size_list().value(0),
+            };
+            (0..values.len())
+                .map(|index| array_value_to_json(values.slice(index, 1)))
+                .collect::<Vec<_>>()
+                .into()
+        }
+        DataType::Struct(fields) => {
+            let value = array.as_any().downcast_ref::<arrow::array::StructArray>().unwrap();
+            fields.iter().enumerate().map(|(index, field)| {
+                (field.name().clone(), array_value_to_json(value.column(index).slice(0, 1)))
+            }).collect::<serde_json::Map<_, _>>().into()
+        }
+        DataType::Map(_, _) => {
+            let value = array.as_any().downcast_ref::<arrow::array::MapArray>().unwrap();
+            let entries = value.value(0);
+            let entry_struct = entries.as_any().downcast_ref::<arrow::array::StructArray>().unwrap();
+            let keys = entry_struct.column(0);
+            let values = entry_struct.column(1);
+            let mut object = serde_json::Map::new();
+            let mut pairs = Vec::new();
+            for index in 0..entries.len() {
+                let key = array_value_to_json(keys.slice(index, 1));
+                let item = array_value_to_json(values.slice(index, 1));
+                if let Some(key) = key.as_str() { object.insert(key.to_owned(), item); }
+                else { pairs.push(serde_json::json!([key, item])); }
+            }
+            if pairs.is_empty() { object.into() } else { pairs.into() }
+        }
+        DataType::Boolean => serde_json::json!(array.as_boolean().value(0)),
+        DataType::Int8 => serde_json::json!(array.as_primitive::<Int8Type>().value(0)),
+        DataType::Int16 => serde_json::json!(array.as_primitive::<Int16Type>().value(0)),
+        DataType::Int32 => serde_json::json!(array.as_primitive::<Int32Type>().value(0)),
+        DataType::Int64 => serde_json::json!(array.as_primitive::<Int64Type>().value(0)),
+        DataType::UInt8 => serde_json::json!(array.as_primitive::<UInt8Type>().value(0)),
+        DataType::UInt16 => serde_json::json!(array.as_primitive::<UInt16Type>().value(0)),
+        DataType::UInt32 => serde_json::json!(array.as_primitive::<UInt32Type>().value(0)),
+        DataType::UInt64 => serde_json::json!(array.as_primitive::<UInt64Type>().value(0)),
+        DataType::Float32 => serde_json::json!(array.as_primitive::<Float32Type>().value(0)),
+        DataType::Float64 => serde_json::json!(array.as_primitive::<Float64Type>().value(0)),
+        DataType::Utf8 => serde_json::json!(array.as_string::<i32>().value(0)),
+        DataType::LargeUtf8 => serde_json::json!(array.as_string::<i64>().value(0)),
+        _ => serde_json::Value::String(format!("{:?}", array.slice(0, 1))),
+    }
 }
 
 fn elapsed_ms(start: Instant) -> u64 {
@@ -18954,5 +19050,33 @@ mod streamed_root_tests {
         assert_eq!(value["error"]["message"], "bad query");
         assert_eq!(value["error"]["errorName"], "SYNTAX_ERROR");
         assert_eq!(value["error"]["failureInfo"]["type"], "ParseError");
+    }
+
+    #[test]
+    fn result_rows_encode_nested_arrow_values_as_json() {
+        use arrow::array::{Array, ArrayRef, Int64Array, ListBuilder, MapBuilder, StringArray, StructArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        let mut list_builder = ListBuilder::new(arrow::array::Int64Builder::new());
+        list_builder.values().append_value(1);
+        list_builder.values().append_value(2);
+        list_builder.append(true);
+        let list = Arc::new(list_builder.finish());
+        let mut map_builder = MapBuilder::new(None, arrow::array::StringBuilder::new(), arrow::array::Int64Builder::new());
+        map_builder.keys().append_value("a");
+        map_builder.values().append_value(3);
+        map_builder.append(true).unwrap();
+        let map = Arc::new(map_builder.finish());
+        let row = StructArray::from(vec![
+            (Arc::new(Field::new("name", DataType::Utf8, false)), Arc::new(StringArray::from(vec!["east"])) as ArrayRef),
+            (Arc::new(Field::new("count", DataType::Int64, false)), Arc::new(Int64Array::from(vec![7])) as ArrayRef),
+        ]);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("values", list.data_type().clone(), false),
+            Field::new("row", row.data_type().clone(), false),
+            Field::new("attributes", map.data_type().clone(), false),
+        ]));
+        let batch = RecordBatch::try_new(schema, vec![list, Arc::new(row), map]).unwrap();
+        assert_eq!(batches_to_json(&[batch]), vec![vec![serde_json::json!([1, 2]), serde_json::json!({"name": "east", "count": 7}), serde_json::json!({"a": 3})]]);
     }
 }
