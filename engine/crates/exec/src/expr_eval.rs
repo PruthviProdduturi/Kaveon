@@ -1991,6 +1991,51 @@ fn array_distinct_nested<L: OffsetSizeTrait>(
     )?))
 }
 
+fn array_reverse_generic<L: OffsetSizeTrait>(
+    list: &GenericListArray<L>,
+) -> Result<ArrayRef> {
+    let mut selected = Vec::<ArrayRef>::new();
+    let mut offsets = vec![L::zero()];
+    let mut valid = Vec::with_capacity(list.len());
+    for row in 0..list.len() {
+        if list.is_null(row) {
+            valid.push(false);
+            offsets.push(L::from_usize(selected.len()).ok_or_else(|| {
+                KaveonError::Execution("ARRAY_REVERSE result offset overflow".into())
+            })?);
+            continue;
+        }
+        valid.push(true);
+        let inner = list.value(row);
+        for index in (0..inner.len()).rev() {
+            selected.push(inner.slice(index, 1));
+        }
+        offsets.push(L::from_usize(selected.len()).ok_or_else(|| {
+            KaveonError::Execution("ARRAY_REVERSE result offset overflow".into())
+        })?);
+    }
+    let values = if selected.is_empty() {
+        arrow::array::new_empty_array(&list.value_type())
+    } else {
+        let chunks = selected
+            .iter()
+            .map(|value| value.as_ref() as &dyn Array)
+            .collect::<Vec<_>>();
+        compute::concat(&chunks)?
+    };
+    let field = Arc::new(arrow::datatypes::Field::new(
+        "item",
+        values.data_type().clone(),
+        true,
+    ));
+    Ok(Arc::new(GenericListArray::<L>::try_new(
+        field,
+        OffsetBuffer::new(ScalarBuffer::from(offsets)),
+        values,
+        Some(arrow::buffer::NullBuffer::from(valid)),
+    )?))
+}
+
 fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
     let upper = name.to_uppercase();
     if upper.starts_with("ARRAY_ANY_") || upper.starts_with("ARRAY_ALL_") {
@@ -3810,10 +3855,22 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "ARRAY_REVERSE" => {
             check_arity(name, args, 1)?;
+            if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
+                return array_reverse_generic(list);
+            }
             let list = args[0]
                 .as_any()
                 .downcast_ref::<ListArray>()
                 .ok_or_else(|| KaveonError::Execution("ARRAY_REVERSE requires an ARRAY/List value".into()))?;
+            if matches!(
+                list.value_type(),
+                DataType::List(_)
+                    | DataType::LargeList(_)
+                    | DataType::Struct(_)
+                    | DataType::Map(_, _)
+            ) {
+                return array_reverse_generic(list);
+            }
             macro_rules! reverse_primitive {
                 ($ty:ty, $builder:expr) => {{
                     let mut builder = ListBuilder::new($builder);
@@ -7326,6 +7383,27 @@ mod tests {
         .unwrap();
         let result = result.as_any().downcast_ref::<LargeListArray>().unwrap();
         assert_eq!(result.value(0).len(), 2);
+
+        let mut reverse_builder = LargeListBuilder::new(ListBuilder::new(Int64Builder::new()));
+        for value in [1_i64, 2, 3] {
+            reverse_builder.values().values().append_value(value);
+            reverse_builder.values().append(true);
+        }
+        reverse_builder.append(true);
+        let result = eval_scalar_function(
+            "ARRAY_REVERSE",
+            &[Arc::new(reverse_builder.finish()) as ArrayRef],
+            1,
+        )
+        .unwrap();
+        let result = result.as_any().downcast_ref::<LargeListArray>().unwrap();
+        let reversed_values = result.value(0);
+        let reversed_values = reversed_values.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(reversed_values.len(), 3);
+        for (index, expected) in [3_i64, 2, 1].into_iter().enumerate() {
+            let value = reversed_values.value(index);
+            assert_eq!(value.as_primitive::<Int64Type>().value(0), expected);
+        }
     }
 
     #[test]
