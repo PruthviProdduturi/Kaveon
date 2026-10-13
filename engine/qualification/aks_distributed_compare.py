@@ -259,8 +259,22 @@ def active_worker_nodes(kube, statefulset_name, worker_count, excluded_statefuls
         if any(owner.get("kind") == "StatefulSet" and owner.get("name") in excluded_statefulsets
                for owner in owners):
             continue
+        metadata = pod.get("metadata", {})
+        controller = next((owner for owner in owners if owner.get("controller")), None)
+        if controller:
+            # Pod names include rollout hashes and restart-generated suffixes.
+            # They are not stable topology identities and caused long runs to
+            # fail when a system deployment recreated an otherwise identical
+            # co-tenant between two engine phases.
+            identity = f"{controller.get('kind')}/{controller.get('name')}"
+        else:
+            labels = metadata.get("labels") or {}
+            stable = next((labels.get(key) for key in (
+                "app.kubernetes.io/name", "k8s-app", "app", "component"
+            ) if labels.get(key)), metadata.get("name"))
+            identity = f"pod/{stable}"
         contenders.append(
-            f"{pod.get('spec', {}).get('nodeName')}/{pod['metadata'].get('namespace')}/{pod['metadata'].get('name')}"
+            f"{pod.get('spec', {}).get('nodeName')}/{metadata.get('namespace')}/{identity}"
         )
     image_ids = sorted({status.get("imageID") for pod in ready for status in pod.get("status", {}).get("containerStatuses", [])
                         if status.get("imageID")})
