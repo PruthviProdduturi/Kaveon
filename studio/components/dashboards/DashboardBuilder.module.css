@@ -191,35 +191,6 @@
   padding: 12px;
 }
 
-/*
- * Empty canvas, themed.
- *
- * `.dashboard-canvas-empty` (styles/dashboard.css) hardcodes a white fill and
- * slate text from before the dark theme existed. Now that it stretches to the
- * full canvas height it would be a full-height white slab on the default dark
- * theme, so the builder's copy is re-tokenised here. Scoped under .canvasPane
- * so it outranks the global single-class rule by specificity, not by load
- * order; the shared rule itself is not this component's to change.
- */
-.canvasPane :global(.dashboard-canvas-empty) {
-  background: var(--bg-surface);
-  border-color: var(--border);
-  border-radius: 12px;
-}
-
-.canvasPane :global(.dashboard-canvas-empty-icon) {
-  color: var(--text-muted);
-  opacity: 0.5;
-}
-
-.canvasPane :global(.dashboard-canvas-empty-title) {
-  color: var(--text-primary);
-}
-
-.canvasPane :global(.dashboard-canvas-empty-subtitle) {
-  color: var(--text-muted);
-}
-
 /* ── Shared controls ─────────────────────────────────────────────────────── */
 
 .search {
