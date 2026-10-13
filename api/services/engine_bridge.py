@@ -12,6 +12,27 @@ import httpx
 from fastapi import HTTPException
 
 
+def configured() -> bool:
+    """Whether this deployment has been told where its Engine is and how to
+    authenticate to it.
+
+    Deliberately separate from whether the Engine answers. A status surface
+    that cannot tell those apart reports a coordinator restarting during a
+    rollout as a missing setting, and sends an operator to change an endpoint
+    that is already right. Raises nothing: an unusable endpoint is reported as
+    unconfigured, which is what it is to a reader.
+    """
+    if not os.getenv("KAVEON_ENGINE_URL", "").strip():
+        return False
+    if not os.getenv("KAVEON_ENGINE_BRIDGE_TOKEN", "").strip():
+        return False
+    try:
+        _endpoint()
+    except HTTPException:
+        return False
+    return True
+
+
 def _endpoint():
     value = os.getenv("KAVEON_ENGINE_URL", "").rstrip("/")
     parsed = urlsplit(value)
