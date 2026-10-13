@@ -184,7 +184,8 @@ class CoTenantFilteringTests(unittest.TestCase):
         ])
         runtime = active_worker_nodes(kube, "kaveon-worker", 2,
                                       ("kaveon-worker", "trino-worker"))
-        self.assertEqual(runtime["co_tenants"], ["node-a/bench/Deployment/metrics"])
+        self.assertEqual(runtime["co_tenants"], ["bench/Deployment/metrics"])
+        self.assertEqual(runtime["co_tenant_placements"], ["node-a/bench/Deployment/metrics"])
 
     def test_controller_identity_ignores_pod_restart_suffix(self):
         image = "docker-pullable://engine@sha256:" + "a" * 64
@@ -196,7 +197,19 @@ class CoTenantFilteringTests(unittest.TestCase):
         pods[-1]["metadata"]["namespace"] = "platform"
         runtime = active_worker_nodes(FakeKube(pods), "kaveon-worker", 2,
                                       ("kaveon-worker", "trino-worker"))
-        self.assertEqual(runtime["co_tenants"], ["node-a/platform/ReplicaSet/api-abc"])
+        self.assertEqual(runtime["co_tenants"], ["platform/ReplicaSet/api-abc"])
+
+    def test_controller_identity_survives_worker_rescheduling(self):
+        image = "docker-pullable://engine@sha256:" + "a" * 64
+        pods = [
+            _pod("kaveon-worker-0", "node-c", "StatefulSet", "kaveon-worker", ready=True, image_id=image),
+            _pod("kaveon-worker-1", "node-d", "StatefulSet", "kaveon-worker", ready=True, image_id=image),
+            _pod("metrics", "node-c", "Deployment", "metrics"),
+        ]
+        runtime = active_worker_nodes(FakeKube(pods), "kaveon-worker", 2,
+                                      ("kaveon-worker", "trino-worker"))
+        self.assertEqual(runtime["co_tenants"], ["bench/Deployment/metrics"])
+        self.assertEqual(runtime["co_tenant_placements"], ["node-c/bench/Deployment/metrics"])
 
     def test_aks_command_pods_are_not_co_tenants(self):
         image = "docker-pullable://engine@sha256:" + "a" * 64

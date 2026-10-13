@@ -195,9 +195,11 @@ time, hash/copy time, copy allocations/bytes, and spill bytes/runs/compactions.
 Missing task metrics remain visible through `tasks_with_metrics` and
 `tasks_with_cpu`; they are not inferred.
 
-The co-tenant lease check records stable controller identities (`kind/name`)
-instead of restart-specific pod names, so an unrelated pod recreation cannot
-invalidate a long comparison while a real workload or node change still fails
+The co-tenant lease check records stable controller identities
+(`namespace/kind/name`) instead of node-prefixed, restart-specific pod names.
+Node placements are retained separately in each observation for audit. This
+means an unrelated pod recreation or worker rescheduling cannot invalidate a
+long comparison while a real workload appearing or disappearing still fails
 closed.
 
 This harness does not itself kill a worker. Before publishing a distributed

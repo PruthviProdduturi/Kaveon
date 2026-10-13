@@ -236,6 +236,7 @@ def active_worker_nodes(kube, statefulset_name, worker_count, excluded_statefuls
         raise RuntimeError(f"{statefulset_name} workers are not Ready on {worker_count} distinct nodes")
     allowed = {pod["metadata"]["uid"] for pod in ready}
     contenders = []
+    placements = []
     for pod in kube.pods():
         if pod.get("spec", {}).get("nodeName") not in nodes or pod["metadata"].get("uid") in allowed:
             continue
@@ -281,14 +282,15 @@ def active_worker_nodes(kube, statefulset_name, worker_count, excluded_statefuls
                 "app.kubernetes.io/name", "k8s-app", "app", "component"
             ) if labels.get(key)), metadata.get("name"))
             identity = f"pod/{stable}"
-        contenders.append(
-            f"{pod.get('spec', {}).get('nodeName')}/{metadata.get('namespace')}/{identity}"
-        )
+        stable_identity = f"{metadata.get('namespace')}/{identity}"
+        contenders.append(stable_identity)
+        placements.append(f"{pod.get('spec', {}).get('nodeName')}/{stable_identity}")
     image_ids = sorted({status.get("imageID") for pod in ready for status in pod.get("status", {}).get("containerStatuses", [])
                         if status.get("imageID")})
     if not image_ids or not all("sha256:" in value for value in image_ids):
         raise RuntimeError(f"{statefulset_name} runtime image digest was not reported")
-    return {"nodes": sorted(nodes), "worker_image_ids": image_ids, "co_tenants": sorted(contenders)}
+    return {"nodes": sorted(nodes), "worker_image_ids": image_ids,
+            "co_tenants": sorted(contenders), "co_tenant_placements": sorted(placements)}
 
 
 def workload_identity_token():
@@ -607,7 +609,8 @@ def main():
             elif runtime["co_tenants"] != report["co_tenant_baseline"]:
                 raise RuntimeError(f"worker-node co-tenant topology changed before {engine} phase")
             report["co_tenant_observations"].append(
-                {"engine": engine, "worker_nodes": runtime["nodes"], "co_tenants": runtime["co_tenants"]}
+                {"engine": engine, "worker_nodes": runtime["nodes"], "co_tenants": runtime["co_tenants"],
+                 "co_tenant_placements": runtime["co_tenant_placements"]}
             )
             return runtime
 
