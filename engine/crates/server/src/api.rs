@@ -2753,7 +2753,39 @@ fn prepared_parameter_names(query: &str) -> Vec<String> {
     let chars = query.chars().collect::<Vec<_>>();
     let mut names = Vec::new();
     let mut index = 0;
+    let mut quote = None;
     while index < chars.len() {
+        if let Some(delimiter) = quote {
+            if chars[index] == delimiter {
+                if index + 1 < chars.len() && chars[index + 1] == delimiter {
+                    index += 2;
+                    continue;
+                }
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        if matches!(chars[index], '\'' | '"' | '`') {
+            quote = Some(chars[index]);
+            index += 1;
+            continue;
+        }
+        if chars[index] == '-' && index + 1 < chars.len() && chars[index + 1] == '-' {
+            index += 2;
+            while index < chars.len() && chars[index] != '\n' {
+                index += 1;
+            }
+            continue;
+        }
+        if chars[index] == '/' && index + 1 < chars.len() && chars[index + 1] == '*' {
+            index += 2;
+            while index + 1 < chars.len() && !(chars[index] == '*' && chars[index + 1] == '/') {
+                index += 1;
+            }
+            index = (index + 2).min(chars.len());
+            continue;
+        }
         match chars[index] {
             '$' => {
                 let start = index;
@@ -16442,6 +16474,12 @@ mod tests {
 
     #[tokio::test]
     async fn prepared_statement_lifecycle_is_owner_scoped() {
+        assert_eq!(
+            super::prepared_parameter_names(
+                "SELECT ':fake', \"$2\" -- ?\n /* :ignored */ WHERE x = $1 AND y = :yes"
+            ),
+            vec!["$1".to_owned(), ":yes".to_owned()]
+        );
         let owner = admin();
         let prepared = super::prepare_statement(
             axum::Extension(owner.clone()),
