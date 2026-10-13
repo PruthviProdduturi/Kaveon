@@ -74,7 +74,8 @@ foundations, but several operators are still centralized or narrow:
   validated and bound through the HTTP statement API; the full prepare/describe/
   bind/execute protocol remains open.
   A `/v1/trino/statement` adapter now accepts raw SQL with standard
-  `X-Trino-*` session headers, recognizes the encoded
+  `X-Trino-*` session headers (including URL-decoded `X-Trino-Session`
+  properties), recognizes the encoded
   `X-Trino-Prepared-Statement` SQL header, binds scalar `EXECUTE ... USING`
   values through the typed binder, and emits `nextUri`/`stats`-shaped
   responses. Compound prepared literals and the full prepare/describe/bind

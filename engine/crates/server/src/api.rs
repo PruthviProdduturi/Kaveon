@@ -2732,6 +2732,19 @@ async fn submit_trino_statement(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    let session_settings = match trino_session_settings(&headers) {
+        Ok(settings) => settings,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": error,
+                    "errorName": "INVALID_SESSION"
+                })),
+            )
+                .into_response();
+        }
+    };
     let body_text = String::from_utf8(body.to_vec()).ok();
     let prepared_query = trino_prepared_query(&headers);
     let (query, parameters) = match (prepared_query, body_text) {
@@ -2783,7 +2796,7 @@ async fn submit_trino_statement(
             })
             .unwrap_or_default(),
         result_delivery: Some("paged".to_owned()),
-        settings: None,
+        settings: session_settings,
     };
     let response = run_statement(state, identity, request, Uuid::new_v4().to_string())
         .await
@@ -2800,12 +2813,37 @@ fn trino_header(headers: &HeaderMap, name: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn trino_session_settings(
+    headers: &HeaderMap,
+) -> Result<Option<serde_json::Map<String, serde_json::Value>>, String> {
+    let Some(value) = trino_header(headers, "x-trino-session") else {
+        return Ok(None);
+    };
+    let mut settings = serde_json::Map::new();
+    for item in value.split(',').filter(|item| !item.trim().is_empty()) {
+        let Some((raw_key, raw_value)) = item.split_once('=') else {
+            return Err(format!("X-Trino-Session entry '{item}' must use key=value"));
+        };
+        let key = trino_percent_decode(raw_key.trim())?;
+        let setting = trino_percent_decode(raw_value.trim())?;
+        if key.is_empty() || setting.is_empty() {
+            return Err("X-Trino-Session keys and values must be non-empty".to_owned());
+        }
+        settings.insert(key, serde_json::Value::String(setting));
+    }
+    Ok(Some(settings))
+}
+
 /// Trino encodes prepared statements as `name=<url-encoded SQL>` in a
 /// request header. Decode only this header value; SQL in the request body is
 /// otherwise left byte-for-byte intact.
 fn trino_prepared_query(headers: &HeaderMap) -> Option<String> {
     let value = trino_header(headers, "x-trino-prepared-statement")?;
     let encoded = value.split_once('=')?.1;
+    trino_percent_decode(encoded).ok()
+}
+
+fn trino_percent_decode(encoded: &str) -> Result<String, String> {
     let bytes = encoded.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut index = 0;
@@ -2813,8 +2851,14 @@ fn trino_prepared_query(headers: &HeaderMap) -> Option<String> {
         match bytes[index] {
             b'+' => decoded.push(b' '),
             b'%' if index + 2 < bytes.len() => {
-                let high = (bytes[index + 1] as char).to_digit(16)? as u8;
-                let low = (bytes[index + 2] as char).to_digit(16)? as u8;
+                let high = (bytes[index + 1] as char)
+                    .to_digit(16)
+                    .ok_or_else(|| "invalid percent-encoded header value".to_owned())?
+                    as u8;
+                let low = (bytes[index + 2] as char)
+                    .to_digit(16)
+                    .ok_or_else(|| "invalid percent-encoded header value".to_owned())?
+                    as u8;
                 decoded.push((high << 4) | low);
                 index += 2;
             }
@@ -2822,7 +2866,7 @@ fn trino_prepared_query(headers: &HeaderMap) -> Option<String> {
         }
         index += 1;
     }
-    String::from_utf8(decoded).ok()
+    String::from_utf8(decoded).map_err(|_| "header value is not valid UTF-8".to_owned())
 }
 
 /// Parse the scalar values from Trino's `EXECUTE name USING ...` request.
@@ -18658,6 +18702,20 @@ mod streamed_root_tests {
             trino_prepared_query(&headers).as_deref(),
             Some("SELECT 1 AS n")
         );
+        headers.insert(
+            "x-trino-session",
+            "result_cache=false%2Cunused=ignored".parse().unwrap(),
+        );
+        let settings = trino_session_settings(&headers).unwrap().unwrap();
+        assert_eq!(settings["result_cache"], serde_json::json!("false,unused=ignored"));
+    }
+
+    #[test]
+    fn trino_session_settings_reject_malformed_entries() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-trino-session", "result_cache".parse().unwrap());
+        let error = trino_session_settings(&headers).expect_err("missing equals");
+        assert!(error.contains("key=value"), "{error}");
     }
 
     #[test]
