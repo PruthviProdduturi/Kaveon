@@ -1719,7 +1719,7 @@ fn distributed_outer_and_cross_joins_match_the_local_result() {
     let directory =
         std::env::temp_dir().join(format!("kaveon-join-modes-{}", uuid::Uuid::new_v4()));
     let manager = events_catalog(&directory);
-    let cases: [(&str, bool); 3] = [
+    let cases: [(&str, bool); 4] = [
         (
             "SELECT t.country, COUNT(*) AS n FROM events t RIGHT JOIN events o ON o.user_id = t.user_id WHERE o.event_date = '2026-07-04' GROUP BY t.country ORDER BY t.country",
             true,
@@ -1730,6 +1730,10 @@ fn distributed_outer_and_cross_joins_match_the_local_result() {
         ),
         (
             "SELECT COUNT(*) AS n FROM events t CROSS JOIN events o WHERE t.user_id = o.user_id",
+            false,
+        ),
+        (
+            "SELECT COUNT(*) AS n FROM events t JOIN events o ON t.user_id = o.user_id AND t.actions >= o.actions",
             false,
         ),
     ];

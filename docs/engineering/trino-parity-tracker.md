@@ -295,6 +295,10 @@ worker-loss tests, six spill/recovery tests, and two cancellation tests passed.
 Those tests prove bounded local behavior and simulated worker failure; they do
 not substitute for a deployed multi-worker loss-and-recovery run.
 
+The distributed/local join-mode differential now also includes an inner
+residual predicate (`key equality AND value inequality`); local and
+distributed result sets match and all reservations are released.
+
 Track 1 remains partial because global ordering still uses a centralized merge
 and a full worker-loss/spill/cancellation corpus still needs a correctness
 gate. The
