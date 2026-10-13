@@ -53,6 +53,38 @@ def execution_metrics(comparison):
     return {"totals": totals, "peaks": peaks}
 
 
+def image_binding_is_consistent(comparison, pressure):
+    """Require comparison and fault evidence to refer to the same Engine image.
+
+    Older synthetic/unit reports do not carry pod images, so their explicit
+    preflight flag remains the only available binding. Live reports include
+    pod image digests; when present, a digest mismatch must fail closed.
+    """
+    preflight = comparison.get("preflight") or {}
+    checks = preflight.get("checks") or {}
+    preflight_ok = (
+        preflight.get("kaveon_image_pinned_and_expected") is True
+        or checks.get("kaveon_image_pinned_and_expected") is True
+    )
+    if not preflight_ok:
+        return False
+    expected_images = preflight.get("images") or {}
+    expected_digests = {
+        value.rsplit("@", 1)[1]
+        for key, value in expected_images.items()
+        if key.startswith("kaveon_") and isinstance(value, str) and "@" in value
+    }
+    observed_images = []
+    for pod_set in (pressure.get("pods_before") or {}, pressure.get("pods_after") or {}):
+        for name, pod in pod_set.items():
+            image = pod.get("image") if isinstance(pod, dict) else None
+            if name.startswith("kaveon-") and isinstance(image, str) and "kaveon-engine" in image and "@" in image:
+                observed_images.append(image.rsplit("@", 1)[1])
+    if not observed_images:
+        return True
+    return bool(expected_digests) and set(observed_images) == expected_digests
+
+
 def slo_evidence(comparison, pressure, base_gates):
     """Evaluate the Track 1 SLO without treating missing evidence as success."""
     # The original fault-pressure runner nested the exact requests under
@@ -74,13 +106,12 @@ def slo_evidence(comparison, pressure, base_gates):
     )
     accepted_success_rate = successful / len(accepted_requests) if accepted_requests else None
     latency = latency_summary(comparison)
-    preflight = comparison.get("preflight") or {}
     checks = pressure.get("checks") or {}
     requirements = {
         "exact_results": base_gates["exact_results"],
         "accepted_success_rate": accepted_success_rate is not None and accepted_success_rate >= 0.999,
         "latency_samples": latency["samples"] > 0,
-        "image_binding": preflight.get("kaveon_image_pinned_and_expected") is True,
+        "image_binding": image_binding_is_consistent(comparison, pressure),
         "worker_retry": base_gates["worker_retry"],
         "cancellation_cleanup": checks.get("cancellation_cleanup") is True,
         "bounded_memory": base_gates["memory_within_pod_limits"],

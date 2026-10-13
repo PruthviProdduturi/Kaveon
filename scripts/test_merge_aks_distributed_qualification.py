@@ -125,6 +125,33 @@ class MergeQualificationTests(unittest.TestCase):
         self.assertEqual(result["slo"]["admission_refusals"], 3)
         self.assertTrue(result["slo"]["requirements"]["cancellation_cleanup"])
 
+    def test_reads_nested_preflight_image_binding_from_archived_comparison(self):
+        comparison = self.comparison()
+        comparison["preflight"] = {
+            "checks": {"kaveon_image_pinned_and_expected": True}
+        }
+        result = merge_aks.merge(comparison, self.pressure())
+        self.assertTrue(result["slo"]["requirements"]["image_binding"])
+
+    def test_live_fault_report_must_match_comparison_engine_digest(self):
+        comparison = self.comparison()
+        comparison["preflight"] = {
+            "checks": {"kaveon_image_pinned_and_expected": True},
+            "images": {
+                "kaveon_coordinator": "registry/kaveon-engine@sha256:old",
+                "kaveon_worker": "registry/kaveon-engine@sha256:old",
+            },
+        }
+        pressure = self.pressure()
+        pressure["pods_before"] = {
+            "kaveon-coordinator-0": {
+                "image": "registry/kaveon-engine@sha256:new"
+            }
+        }
+        result = merge_aks.merge(comparison, pressure)
+        self.assertFalse(result["slo"]["requirements"]["image_binding"])
+        self.assertFalse(result["slo"]["passed"])
+
     def test_current_live_shape_stays_pending_when_cleanup_is_missing(self):
         result = merge_aks.merge(self.comparison(), self.current_pressure(cleanup=False))
         self.assertFalse(result["passed"])
