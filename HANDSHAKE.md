@@ -2,9 +2,10 @@
 
 ## SQL compatibility track — October 12, 2026 · row constructors
 
-Commit `12d44965` adds executable `ROW(...)` constructors. The expression path
-returns typed Arrow `StructArray` values and preserves nullable child fields.
-`MAP(...)`, row dereference, and row comparison remain explicit boundaries.
+Commit `12d44965` plus the current map slice adds executable `ROW(...)` and
+`MAP(...)` constructors. The expression path returns typed Arrow
+`StructArray`/`MapArray` values, preserves nullable child fields, and rejects
+NULL map keys. Row/map dereference and comparison remain explicit boundaries.
 
 ## SQL compatibility track — October 12, 2026 · safe casts
 

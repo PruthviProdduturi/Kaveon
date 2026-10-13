@@ -1,7 +1,7 @@
 use arrow::array::{
     Array, ArrayRef, AsArray, BooleanArray, Decimal128Array, Float64Array, Float64Builder,
-    Int32Array, Int32DictionaryArray, Int64Array, ListBuilder, StringArray, StringBuilder,
-    StructArray,
+    Int32Array, Int32DictionaryArray, Int64Array, ListArray, ListBuilder, MapArray, StringArray,
+    StringBuilder, StructArray,
 };
 use arrow::compute;
 use arrow::datatypes::{DataType, Float64Type, Int32Type, Int64Type};
@@ -1253,6 +1253,61 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             .into();
         return Ok(Arc::new(StructArray::new(fields, args.to_vec(), None)));
     }
+    if upper == "MAP" {
+        check_arity(name, args, 2)?;
+        let keys = args[0].as_any().downcast_ref::<ListArray>().ok_or_else(|| {
+            KaveonError::Execution("MAP keys must be an ARRAY/List value".into())
+        })?;
+        let values = args[1]
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .ok_or_else(|| KaveonError::Execution("MAP values must be an ARRAY/List value".into()))?;
+        if keys.offsets().as_ref() != values.offsets().as_ref() {
+            return Err(KaveonError::Execution(
+                "MAP keys and values must have matching list offsets".into(),
+            ));
+        }
+        if keys.nulls() != values.nulls() {
+            return Err(KaveonError::Execution(
+                "MAP keys and values must have matching null rows".into(),
+            ));
+        }
+        if keys.values().null_count() > 0 {
+            return Err(KaveonError::Execution(
+                "MAP keys cannot contain NULL values".into(),
+            ));
+        }
+        let fields = vec![
+            Arc::new(arrow::datatypes::Field::new(
+                "key",
+                keys.values().data_type().clone(),
+                false,
+            )),
+            Arc::new(arrow::datatypes::Field::new(
+                "value",
+                values.values().data_type().clone(),
+                true,
+            )),
+        ];
+        let entry_fields: arrow::datatypes::Fields = fields.clone().into();
+        let entries = StructArray::new(
+            entry_fields.clone(),
+            vec![keys.values().clone(), values.values().clone()],
+            None,
+        );
+        let entry_field = Arc::new(arrow::datatypes::Field::new(
+            "entries",
+            DataType::Struct(entry_fields),
+            false,
+        ));
+        return Ok(Arc::new(MapArray::try_new(
+            entry_field,
+            keys.offsets().clone(),
+            entries,
+            keys.nulls().cloned(),
+            false,
+        )?));
+    }
     if let Some(target) = upper.strip_prefix("TRY_CAST_") {
         check_arity(name, args, 1)?;
         let target = match target {
@@ -2479,6 +2534,54 @@ mod tests {
         assert_eq!(row.column(0).data_type(), &DataType::Int64);
         assert_eq!(row.column(1).data_type(), &DataType::Utf8);
         assert!(row.column(0).is_null(1));
+    }
+
+    #[test]
+    fn map_constructor_preserves_offsets_and_rejects_null_keys() {
+        let input = RecordBatch::try_from_iter([(
+            "dummy",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        let value = evaluate(
+            &Expr::Function {
+                name: "MAP".into(),
+                args: vec![
+                    Expr::Function {
+                        name: "ARRAY".into(),
+                        args: vec![Expr::Literal(ScalarValue::Utf8("a".into()))],
+                    },
+                    Expr::Function {
+                        name: "ARRAY".into(),
+                        args: vec![Expr::Literal(ScalarValue::Int64(1))],
+                    },
+                ],
+            },
+            &input,
+        )
+        .unwrap();
+        let map = value.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.entries().num_columns(), 2);
+
+        let error = evaluate(
+            &Expr::Function {
+                name: "MAP".into(),
+                args: vec![
+                    Expr::Function {
+                        name: "ARRAY".into(),
+                        args: vec![Expr::Literal(ScalarValue::Null)],
+                    },
+                    Expr::Function {
+                        name: "ARRAY".into(),
+                        args: vec![Expr::Literal(ScalarValue::Int64(1))],
+                    },
+                ],
+            },
+            &input,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("MAP keys cannot contain NULL"));
     }
 
     #[test]

@@ -2231,9 +2231,8 @@ fn ast_binop_to_binop(op: &ast::BinaryOperator) -> Option<BinaryOp> {
 fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
     let name = canonical_function_name(func);
     if name == "MAP" {
-        return Err(sql_err(format!(
-            "{name} expressions are unsupported; map types are not yet supported"
-        )));
+        // MAP is lowered as a regular function. The executor validates that
+        // both arguments are list values with matching offsets.
     }
     let mut args: Vec<Expr> = match &func.args {
         ast::FunctionArguments::List(arg_list) => arg_list
@@ -4135,14 +4134,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_map_expressions_with_typed_diagnostics() {
-        for (sql, expected) in [(
-            "SELECT MAP(ARRAY[1], ARRAY[2]) FROM t",
-            "MAP expressions are unsupported; map types are not yet supported",
-        )] {
-            let error = sql_to_logical_plan(sql).unwrap_err();
-            assert_eq!(error.to_string(), format!("sql: {expected}"), "{sql}");
-        }
+    fn map_constructor_is_retained_as_a_typed_expression() {
+        let plan = sql_to_logical_plan("SELECT MAP(ARRAY['a'], ARRAY[1]) FROM t").unwrap();
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("Function { name: \"MAP\""));
     }
 
     #[test]
