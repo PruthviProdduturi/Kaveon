@@ -24,6 +24,16 @@
  * guard below then withheld the grid *forever* — so on a brand-new dashboard
  * the first chart added never appeared, and nothing could be dragged, moved or
  * resized. See docs/engineering/OPEN-DEFECTS.md D-2.
+ *
+ * Tiles drag by an explicit handle — the grab strip along each tile's top edge,
+ * declared to react-grid-layout as `dragConfig.handle`. With no handle declared
+ * the whole tile is the drag surface, and a dashboard tile is almost entirely
+ * chart: the gesture then competes with the chart's own interactions (press a
+ * bar, move three pixels, and the tile moves instead of cross-filtering), it
+ * dies wherever ECharts consumes the gesture itself, and nothing on the tile
+ * tells the user where to grab. `.dashboard-drag-handle` was already designed
+ * and styled for this and was never rendered on the canvas — only the tabs
+ * fallback in DashboardItem renders it, never a chart or a text block.
  */
 'use client';
 
@@ -31,7 +41,9 @@ import React from 'react';
 // react-grid-layout v2 API (installed 2.2.4). @types are v1, so treat as any.
 import * as RGL from 'react-grid-layout';
 import { useDashboard } from './DashboardContext';
+import { useBuilderContext } from './BuilderContext';
 import DashboardItem from './DashboardItem';
+import styles from './DashboardCanvas.module.css';
 import {
   DASHBOARD_GRID_COLS,
   DASHBOARD_GRID_EDGE,
@@ -49,7 +61,19 @@ const GRID_CONFIG = {
   margin: [20, 20] as [number, number],
   containerPadding: [DASHBOARD_GRID_EDGE, DASHBOARD_GRID_EDGE] as [number, number],
 };
-const DRAG_CANCEL = 'button, a, input, select, textarea, .chart-actions-overlay, .no-drag';
+/**
+ * The only drag surface on a tile. react-draggable matches this against the
+ * pointer target and every ancestor up to the tile, so a press anywhere else —
+ * the chart, its legend, its tooltip, the ⋯ menu — never starts a drag.
+ */
+const DRAG_HANDLE = '.dashboard-drag-handle';
+/**
+ * Controls that must not begin a drag even when one is nested inside the grab
+ * strip. `.chart-actions-overlay` and `.no-drag` used to be listed here and
+ * match nothing in the codebase, so the intent they encoded was never wired to
+ * anything; the handle above is what actually confines the gesture now.
+ */
+const DRAG_CANCEL = 'button, a, input, select, textarea';
 const RESIZE_HANDLES = ['se', 'e', 's'];
 
 interface DashboardCanvasProps {
@@ -58,6 +82,9 @@ interface DashboardCanvasProps {
 
 const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => {
   const { layout, setLayout, adoptLayout, isEditMode, addLayoutItem } = useDashboard();
+  // Present inside the builder, null in view-only mode. The builder owns the
+  // chart picker; the canvas only asks for it.
+  const builder = useBuilderContext();
   // Measure before the first paint so tiles never land on a stale width.
   const { width, mounted, containerRef } = useContainerWidth({ measureBeforeMount: true });
   // react-grid-layout reports its own normalisation of the authored layout
@@ -105,6 +132,22 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
 
   const markUserMove = () => { userMovedTilesRef.current = true; };
 
+  /**
+   * "Add Chart" picks a chart first.
+   *
+   * It used to call `addLayoutItem('chart')` with no config, which puts a chart
+   * item on the canvas with no `chartId`. DashboardChartComponent then renders
+   * `item.chartId!` — undefined — and the tile reports "Failed to load chart"
+   * the moment it appears. The builder already holds the picker state for
+   * exactly this (`chartPickerTarget`), so the button opens it and the chosen
+   * chart arrives with its id. Outside the builder there is no picker, and no
+   * button either, so the direct add stays as the fallback.
+   */
+  const handleAddChart = () => {
+    if (builder) builder.openChartPickerForContainer(null);
+    else addLayoutItem('chart');
+  };
+
   return (
     <div
       ref={containerRef}
@@ -124,7 +167,7 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
             {isEditMode ? 'Add a chart to start building your dashboard' : 'This dashboard has no content to display'}
           </div>
           {isEditMode && (
-            <button onClick={() => addLayoutItem('chart')} style={addBtnStyle}>
+            <button onClick={handleAddChart} style={addBtnStyle}>
               <i className="fas fa-plus" /> Add Chart
             </button>
           )}
@@ -142,14 +185,22 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
           width={width}
           layout={placements}
           gridConfig={GRID_CONFIG}
-          dragConfig={{ enabled: isEditMode, cancel: DRAG_CANCEL }}
+          dragConfig={{ enabled: isEditMode, handle: DRAG_HANDLE, cancel: DRAG_CANCEL }}
           resizeConfig={{ enabled: isEditMode, handles: RESIZE_HANDLES }}
           onLayoutChange={handleLayoutChange}
           onDragStart={markUserMove}
           onResizeStart={markUserMove}
         >
           {rootItems.map((item) => (
-            <div key={item.i} style={{ height: '100%', overflow: 'hidden' }}>
+            <div key={item.i} className={styles.tile}>
+              {isEditMode && (
+                <div
+                  className={`dashboard-drag-handle ${styles.grab}`}
+                  title="Drag to move"
+                >
+                  <i className="fas fa-grip-lines" />
+                </div>
+              )}
               <DashboardItem item={item} isEditMode={isEditMode} />
             </div>
           ))}
@@ -158,7 +209,7 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
 
       {isFlatGrid && isEditMode && (
         <div style={{ display: 'flex', justifyContent: 'center', padding: '12px 0 8px', gap: 10 }}>
-          <button onClick={() => addLayoutItem('chart')} style={addBtnStyle}>
+          <button onClick={handleAddChart} style={addBtnStyle}>
             <i className="fas fa-plus" /> Add Chart
           </button>
           <button onClick={() => addLayoutItem('text')} style={{ ...addBtnStyle, background: 'transparent', color: 'var(--text-muted)', border: '2px dashed var(--border)' }}>
