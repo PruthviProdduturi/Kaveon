@@ -958,15 +958,54 @@ fn apply_joins(mut left: LogicalPlan, joins: &[ast::Join], ctes: &Lowering) -> R
         if join_type != JoinType::Cross && condition.is_none() {
             return Err(sql_err("non-cross joins require an ON condition"));
         }
-        left = LogicalPlan::Join {
-            left: Box::new(left),
-            right: Box::new(right),
-            join_type,
-            condition,
-            distribution: JoinDistribution::Partitioned,
-        };
+        // The physical hash join requires equality keys. An inner join with a
+        // residual predicate is still semantically well-defined: lower it to
+        // a cross join followed by the original filter so the executor keeps
+        // SQL's three-valued predicate semantics. Outer residual joins remain
+        // rejected by the physical planner because null-extension requires a
+        // dedicated residual-aware outer join implementation.
+        if join_type == JoinType::Inner
+            && condition
+                .as_ref()
+                .is_some_and(|expr| !is_equality_join_condition(expr))
+        {
+            let predicate = condition.expect("checked above");
+            left = LogicalPlan::Join {
+                left: Box::new(left),
+                right: Box::new(right),
+                join_type: JoinType::Cross,
+                condition: None,
+                distribution: JoinDistribution::Partitioned,
+            };
+            left = LogicalPlan::Filter {
+                input: Box::new(left),
+                predicate,
+            };
+        } else {
+            left = LogicalPlan::Join {
+                left: Box::new(left),
+                right: Box::new(right),
+                join_type,
+                condition,
+                distribution: JoinDistribution::Partitioned,
+            };
+        }
     }
     Ok(left)
+}
+
+fn is_equality_join_condition(expr: &Expr) -> bool {
+    match expr {
+        Expr::BinaryOp {
+            left,
+            op: kaveon_core::BinaryOp::Eq,
+            right,
+        } => matches!((&**left, &**right), (Expr::Column(_), Expr::Column(_))),
+        Expr::And(left, right) => {
+            is_equality_join_condition(left) && is_equality_join_condition(right)
+        }
+        _ => false,
+    }
 }
 
 fn build_where(plan: LogicalPlan, select: &ast::Select, ctes: &Lowering) -> Result<LogicalPlan> {
@@ -3489,6 +3528,26 @@ mod tests {
         };
         assert_eq!(join_type, JoinType::Cross);
         assert!(condition.is_none());
+    }
+
+    #[test]
+    fn lowers_inner_residual_join_to_cross_join_and_filter() {
+        let plan = sql_to_logical_plan(
+            "SELECT * FROM users u JOIN orders o ON u.id = o.user_id AND u.value > o.value",
+        )
+        .unwrap();
+        let LogicalPlan::Filter { input, predicate } = plan else {
+            panic!("an inner residual join should be filtered after its cross join");
+        };
+        assert!(matches!(predicate, Expr::And(_, _)));
+        let LogicalPlan::Join {
+            join_type: JoinType::Cross,
+            condition: None,
+            ..
+        } = *input
+        else {
+            panic!("residual inner join should lower to a cross join");
+        };
     }
 
     #[test]

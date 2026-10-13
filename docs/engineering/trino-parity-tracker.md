@@ -55,8 +55,9 @@ foundations, but several operators are still centralized or narrow:
   joins; the build-side key set is not yet propagated to the probe scan at
   runtime. General dynamic filtering, join reordering, skew mitigation, and
   qualified coordinator failover remain open.
-- Ordinary distributed joins require equality keys; residual predicates are
-  only partially supported. Semi/anti joins are not yet partitioned by default.
+- Ordinary distributed joins use equality keys; inner residual predicates now
+  lower to a correctness-first cross join plus filter, while residual outer
+  joins remain unsupported. Semi/anti joins are not yet partitioned by default.
 - Non-recursive CTEs, derived tables, joins, aggregates, `HAVING`, `CASE`, and
   common set operations work. Uncorrelated aggregate scalar subqueries in
   `WHERE` and bounded projection scalar subqueries are supported when they
@@ -301,8 +302,10 @@ current HTTP exchange spool is bounded, replayable, and incrementally decoded;
 network backpressure, sustained pressure evidence, and AKS cancellation
 qualification remain open.
 Track 2 remains partial because the full prepared-statement protocol,
-correlated and other unsupported scalar subqueries, ordered map comparisons,
-non-numeric/text array slices, and broader typed DML are not yet implemented.
+correlated and other unsupported scalar subqueries, residual outer joins,
+ordered map comparisons, broader array element types, and broader typed DML are
+not yet implemented. Inner residual joins are correctness-complete but use a
+cross-join fallback until a residual-aware hash join is available.
 Multiset set operations are now implemented
 and covered end to end. Positional
  scalar parameters, including named placeholders, are supported through the
