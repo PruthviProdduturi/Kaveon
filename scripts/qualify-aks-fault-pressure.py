@@ -656,7 +656,10 @@ def main() -> int:
             )
             cancellation_ok = (
                 cancel_reply.status_code == 204
-                and cancel_response.get("id") == cancel_query_id
+                # The canceled 409 response is intentionally minimal and may
+                # omit the query id; the lifecycle record is the authoritative
+                # identity check above.
+                and cancel_response.get("id") in {None, cancel_query_id}
                 and cancel_response.get("_http_status") in {200, 409}
                 and canceled_record.get("state") == "CANCELED"
                 and cancellation_cleanup
