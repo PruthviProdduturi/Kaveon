@@ -2538,7 +2538,11 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
 /// semantics unchanged: rows that fail the predicate contribute NULL, while
 /// COUNT(*) receives a non-null constant only when the predicate is true.
 fn aggregate_filter_expr(name: &str, argument: Expr, filter: &ast::Expr) -> Result<Expr> {
-    if name.starts_with("APPROX_") || name == "COLUMN_STATISTICS" {
+    // Sketch aggregates consume non-null values, so lowering FILTER to a
+    // null-preserving CASE is equivalent to filtering their input rows. A
+    // column profile is different: it deliberately counts nulls and therefore
+    // cannot inherit aggregate FILTER semantics through this lowering.
+    if name == "COLUMN_STATISTICS" {
         return Err(sql_err(format!("FILTER is unsupported for {name}")));
     }
     let value = if matches!(argument, Expr::Star) {
@@ -4752,6 +4756,29 @@ mod tests {
         )
         .unwrap();
         assert!(format!("{plan:?}").contains("Case {"));
+    }
+
+    #[test]
+    fn lowers_approximate_aggregate_filters_to_null_preserving_case() {
+        let plan = sql_to_logical_plan(
+            "SELECT APPROX_COUNT_DISTINCT(user_id) FILTER (WHERE active), \
+                    APPROX_PERCENTILE(latency, 0.95) FILTER (WHERE status = 'ok') \
+             FROM events",
+        )
+        .unwrap();
+        let debug = format!("{plan:?}");
+        assert!(debug.matches("Case {").count() >= 2, "{debug}");
+        assert!(!debug.contains("FILTER is unsupported"), "{debug}");
+    }
+
+    #[test]
+    fn keeps_column_statistics_filter_explicitly_unsupported() {
+        let error = sql_to_logical_plan(
+            "SELECT COLUMN_STATISTICS(value) FILTER (WHERE active) FROM events",
+        )
+        .unwrap_err()
+        .to_string();
+        assert_eq!(error, "sql: FILTER is unsupported for COLUMN_STATISTICS");
     }
 
     #[test]

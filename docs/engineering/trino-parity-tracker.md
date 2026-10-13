@@ -403,9 +403,10 @@ latency evidence as the remaining qualification work.
   casts remain the qualified cast surface (`c259e5d1`).
 - Ordinary aggregate `FILTER (WHERE ...)` clauses now lower to
   null-preserving `CASE` expressions, including `COUNT(*) FILTER`, so the
-  existing aggregate and spill paths retain their exact semantics. Window
-  filters, sketch filters, and non-aggregate filters remain explicit
-  unsupported diagnostics (`0eac03cc`).
+  existing aggregate and spill paths retain their exact semantics. Approximate
+  distinct and percentile sketches use the same null-elision contract, so their
+  filters are supported as well; column-statistics profiles, window filters,
+  and non-aggregate filters remain explicit unsupported diagnostics.
 - The filtered-aggregate corpus case now compares dictionary, plain, split,
   clustered, partitioned, and two-worker distributed execution paths with
   exact canonical rows (`56a07582`).
