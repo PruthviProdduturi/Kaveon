@@ -52,6 +52,10 @@ env:
   KAVEON_AUTHORITY_FAMILIES: ${{ vars.KAVEON_AUTHORITY_FAMILIES }}
   KAVEON_READ_AUTHORITY_FAMILIES: ${{ vars.KAVEON_READ_AUTHORITY_FAMILIES }}
   KAVEON_EVIDENCE_PVC: ${{ vars.KAVEON_EVIDENCE_PVC || 'kaveon-retirement-evidence' }}
+  # The principal the scheduled DLM-freshness sweep reads and recompiles as.
+  # Unset, no sweep is scheduled: compiled context is owned content and a
+  # sweep with no identity would check nothing and report success.
+  KAVEON_DLM_SWEEP_ACTOR: ${{ vars.KAVEON_DLM_SWEEP_ACTOR }}
   KAVEON_ENGINE_CA_B64: ${{ secrets.KAVEON_ENGINE_CA_B64 }}
   GITHUB_ID: ${{ secrets.KAVEON_GITHUB_OAUTH_ID }}
   GITHUB_SECRET: ${{ secrets.KAVEON_GITHUB_OAUTH_SECRET }}
