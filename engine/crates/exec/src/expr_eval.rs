@@ -2318,6 +2318,31 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     .as_any()
                     .downcast_ref::<arrow::array::ListArray>()
                     .expect("list data type must be ListArray");
+                macro_rules! contains_primitive {
+                    ($ty:ty, $data_type:expr) => {{
+                        let needle = compute::cast(&args[1], &$data_type)?;
+                        let needle = needle.as_primitive::<$ty>();
+                        let result: BooleanArray = (0..num_rows)
+                            .map(|row| {
+                                if list.is_null(row) || needle.is_null(row) {
+                                    return None;
+                                }
+                                let inner = list.value(row);
+                                let values = inner.as_primitive::<$ty>();
+                                let mut saw_null = false;
+                                for index in 0..values.len() {
+                                    if values.is_null(index) {
+                                        saw_null = true;
+                                    } else if values.value(index) == needle.value(row) {
+                                        return Some(true);
+                                    }
+                                }
+                                if saw_null { None } else { Some(false) }
+                            })
+                            .collect();
+                        return Ok(Arc::new(result));
+                    }};
+                }
                 match list.value_type() {
                     DataType::Int64 => {
                         let needle = compute::cast(&args[1], &DataType::Int64)?;
@@ -2365,6 +2390,20 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             .collect();
                         return Ok(Arc::new(result));
                     }
+                    DataType::Date32 => contains_primitive!(Date32Type, DataType::Date32),
+                    DataType::Date64 => contains_primitive!(Date64Type, DataType::Date64),
+                    DataType::Time32(TimeUnit::Second) => contains_primitive!(
+                        Time32SecondType,
+                        DataType::Time32(TimeUnit::Second)
+                    ),
+                    DataType::Time32(TimeUnit::Millisecond) => contains_primitive!(
+                        Time32MillisecondType,
+                        DataType::Time32(TimeUnit::Millisecond)
+                    ),
+                    DataType::Timestamp(TimeUnit::Microsecond, timezone) => contains_primitive!(
+                        TimestampMicrosecondType,
+                        DataType::Timestamp(TimeUnit::Microsecond, timezone.clone())
+                    ),
                     DataType::Decimal128(precision, scale) => {
                         let needle = compute::cast(
                             &args[1],
@@ -4505,6 +4544,21 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     "ARRAYS_OVERLAP requires arrays with matching row counts and element types".into(),
                 ));
             }
+            macro_rules! overlap_primitive {
+                ($ty:ty) => {
+                    (0..num_rows)
+                        .map(|row| {
+                            if left.is_null(row) || right.is_null(row) {
+                                return None;
+                            }
+                            primitive_arrays_overlap(
+                                left.value(row).as_primitive::<$ty>(),
+                                right.value(row).as_primitive::<$ty>(),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                };
+            }
             let rows = match left.value_type() {
                 DataType::Int64 => (0..num_rows)
                     .map(|row| {
@@ -4528,6 +4582,15 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         )
                     })
                     .collect::<Vec<_>>(),
+                DataType::Date32 => overlap_primitive!(Date32Type),
+                DataType::Date64 => overlap_primitive!(Date64Type),
+                DataType::Time32(TimeUnit::Second) => overlap_primitive!(Time32SecondType),
+                DataType::Time32(TimeUnit::Millisecond) => {
+                    overlap_primitive!(Time32MillisecondType)
+                }
+                DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                    overlap_primitive!(TimestampMicrosecondType)
+                }
                 DataType::Decimal128(_, _) => (0..num_rows)
                     .map(|row| {
                         if left.is_null(row) || right.is_null(row) {
@@ -7788,6 +7851,39 @@ mod tests {
     }
 
     #[test]
+    fn evaluates_contains_for_temporal_array_lists() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "first_day",
+                Arc::new(arrow::array::Date32Array::from(vec![Some(10)])) as ArrayRef,
+            ),
+            (
+                "second_day",
+                Arc::new(arrow::array::Date32Array::from(vec![Some(20)])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "CONTAINS".into(),
+                args: vec![
+                    Expr::Function {
+                        name: "ARRAY".into(),
+                        args: vec![
+                            Expr::Column("first_day".into()),
+                            Expr::Column("second_day".into()),
+                        ],
+                    },
+                    Expr::Column("second_day".into()),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(result.as_boolean().iter().collect::<Vec<_>>(), vec![Some(true)]);
+    }
+
+    #[test]
     fn evaluates_array_position_for_numeric_and_string_lists() {
         let batch = RecordBatch::try_from_iter([(
             "id",
@@ -7871,6 +7967,42 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(), vec![Some(2)]);
+    }
+
+    #[test]
+    fn evaluates_arrays_overlap_for_temporal_lists() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "left_day",
+                Arc::new(arrow::array::Date32Array::from(vec![Some(10)])) as ArrayRef,
+            ),
+            (
+                "right_day",
+                Arc::new(arrow::array::Date32Array::from(vec![Some(20)])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "ARRAYS_OVERLAP".into(),
+                args: vec![
+                    Expr::Function {
+                        name: "ARRAY".into(),
+                        args: vec![
+                            Expr::Column("left_day".into()),
+                            Expr::Column("right_day".into()),
+                        ],
+                    },
+                    Expr::Function {
+                        name: "ARRAY".into(),
+                        args: vec![Expr::Column("right_day".into())],
+                    },
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(result.as_boolean().iter().collect::<Vec<_>>(), vec![Some(true)]);
     }
 
     #[test]
