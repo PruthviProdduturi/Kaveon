@@ -75,10 +75,10 @@ foundations, but several operators are still centralized or narrow:
   `TIMESTAMP WITH TIME ZONE` now map to Arrow microsecond timestamps with
   nullable execution coverage.
 - Numeric array literals are supported as null-preserving Arrow lists, and
-  `CARDINALITY` returns their nullable list length; `ROW(...)` now produces
-  typed Arrow structs; `MAP(...)` now builds Arrow maps from matching key/value
-  lists. Field dereference, lookup, and row/map comparison remain open. Scalar, DATE,
-  timestamp,
+  `CARDINALITY` returns nullable array and map lengths; `ROW(...)` now produces
+  typed Arrow structs with field projection and equality; `MAP(...)` now builds
+  Arrow maps with key lookup and typed key/value projections. Ordered row/map
+  comparison remains open. Scalar, DATE, timestamp,
   and DECIMAL casts are supported; complex cast targets fail with typed
   planner diagnostics. Dereference, `UNNEST`, other array operations, and
   broad JSON operations remain open; scalar extraction via
@@ -276,8 +276,8 @@ current HTTP exchange spool is bounded, replayable, and incrementally decoded;
 network backpressure, sustained pressure evidence, and AKS cancellation
 qualification remain open.
 Track 2 remains partial because the full prepared-statement protocol,
-correlated and other unsupported scalar subqueries, complex types, and broader
-typed DML are not yet implemented. Multiset set operations are now implemented
+correlated and other unsupported scalar subqueries, ordered/map comparisons,
+array slices, and broader typed DML are not yet implemented. Multiset set operations are now implemented
 and covered end to end. Positional
  scalar parameters, including named placeholders, are supported through the
 HTTP statement API; the full prepared-statement protocol remains an explicit
