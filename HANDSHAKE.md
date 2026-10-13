@@ -1,5 +1,15 @@
 # Kaveon — Engineer Coordination
 
+## SQL compatibility track — October 12, 2026 · named parameters
+
+Commit `080c9ace` adds typed named SQL parameters to the HTTP statement API.
+Clients may send `named_parameters: {"region": "EU"}` for `:region`
+placeholders; values are validated and bound in the parsed AST before planning,
+with missing names rejected before execution. Positional `$n` and `?` binding
+remain compatible. This closes the named-parameter slice of Track 2; the full
+prepare/describe/bind/execute protocol, correlated scalar queries, complex
+types, and broader lake-table DML remain open.
+
 ## SQL compatibility track — October 12, 2026
 
 Commit `59aaf0ec` expanded the differential corpus with `INTERSECT`,
@@ -19,8 +29,8 @@ executor emits `min(left,right)` for intersection and `max(left-right,0)` for
 exclusion; distinct forms retain their existing behavior. Projection scalar
 subqueries are now supported when they select
 one ungrouped aggregate column; the scalar relation is cross-joined after
-outer aggregation and its alias is preserved. Correlated subqueries, prepared
-client parameters, recursive CTEs, and map/row types remain unsupported.
+outer aggregation and its alias is preserved. Correlated subqueries, the full
+prepared-statement protocol, recursive CTEs, and map/row types remain unsupported.
 Multi-row and correlated projection forms return explicit diagnostics rather
 than being sent to execution.
 `CARDINALITY(ARRAY[...])` now evaluates to a nullable `Int64` list length;
