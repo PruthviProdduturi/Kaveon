@@ -1,0 +1,53 @@
+/*
+ * Dashboard canvas tiles.
+ *
+ * `.grab` is the tile's drag handle, and it is the ONLY thing that starts a
+ * tile drag: the canvas declares it to react-grid-layout as
+ * `dragConfig.handle`. Before that it declared no handle at all, which made
+ * the whole tile the drag surface — and a dashboard tile is almost entirely
+ * chart. Pressing a bar and moving three pixels moved the tile instead of
+ * cross-filtering, pressing anywhere ECharts handles itself did nothing
+ * visible, and no part of the tile said "grab me here". A handle makes the
+ * gesture deterministic and leaves every chart interaction alone.
+ *
+ * It is a strip along the tile's top edge rather than a corner chip because
+ * every tile type puts its own controls in the top corners: charts carry the
+ * ⋯ options button at top-right, text blocks a hover toolbar, so the strip
+ * stops 40px short of the right edge and stays shallow enough to clear the
+ * text toolbar's buttons (which begin 6px down) and the chart title's top
+ * padding (12px). It only exists in edit mode.
+ */
+
+.tile {
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Written as a descendant selector so it outranks the geometry `.grab` also
+   inherits from the global `.dashboard-drag-handle` (padding, radius) without
+   depending on which stylesheet the bundler emits first. The global class is
+   still worn for its grab/grabbing cursor and accent hover. */
+.tile .grab {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 40px;
+  height: 14px;
+  z-index: 15;
+  padding: 0;
+  border-radius: 0;
+  opacity: 0.35;
+  transition: opacity 0.15s ease;
+}
+
+/* Visible while building — the controls of a builder are the point of it —
+   and unmistakable once the tile is under the pointer. */
+.tile:hover .grab,
+.grab:active {
+  opacity: 1;
+}
+
+.tile .grab i {
+  font-size: 8px;
+  line-height: 1;
+}
