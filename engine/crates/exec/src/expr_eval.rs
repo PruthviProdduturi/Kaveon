@@ -9,12 +9,13 @@ use arrow::array::{
     StringArray,
     StringBuilder, StructArray,
     Time32MillisecondArray, Time32SecondArray,
+    TimestampMicrosecondArray,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute;
 use arrow::datatypes::{
-    ArrowPrimitiveType, DataType, Float64Type, Int32Type, Int64Type,
-    Time32MillisecondType, Time32SecondType, TimeUnit,
+    ArrowPrimitiveType, DataType, Date32Type, Date64Type, Float64Type, Int32Type, Int64Type,
+    Time32MillisecondType, Time32SecondType, TimestampMicrosecondType, TimeUnit,
 };
 use arrow::record_batch::RecordBatch;
 use kaveon_core::predicate::ScalarValue;
@@ -1500,6 +1501,11 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 PrimitiveBuilder::<Time32MillisecondType>::new(),
                 Time32MillisecondArray,
                 |values: &Time32MillisecondArray, row| values.value(row)
+            ),
+            DataType::Timestamp(TimeUnit::Microsecond, _) => build_array!(
+                PrimitiveBuilder::<TimestampMicrosecondType>::new(),
+                TimestampMicrosecondArray,
+                |values: &TimestampMicrosecondArray, row| values.value(row)
             ),
             DataType::Float64 => {
                 let mut builder = ListBuilder::new(Float64Builder::new());
@@ -3516,6 +3522,14 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let boolean_array = args.iter().any(|arg| arg.data_type() == &DataType::Boolean);
             let integer_array = args.iter().any(|arg| arg.data_type() == &DataType::Int64);
             let float_array = args.iter().any(|arg| arg.data_type() == &DataType::Float64);
+            let temporal_type = args.iter().find_map(|arg| match arg.data_type() {
+                DataType::Date32
+                | DataType::Date64
+                | DataType::Time32(TimeUnit::Second)
+                | DataType::Time32(TimeUnit::Millisecond)
+                | DataType::Timestamp(TimeUnit::Microsecond, _) => Some(arg.data_type().clone()),
+                _ => None,
+            });
             let decimal_type = args.iter().find_map(|arg| match arg.data_type() {
                 DataType::Decimal128(precision, scale) => Some((*precision, *scale)),
                 _ => None,
@@ -3523,7 +3537,46 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             if string_array && boolean_array {
                 return Err(KaveonError::Execution("ARRAY elements must share a type".into()));
             }
-            if let Some((precision, scale)) = decimal_type {
+            if let Some(element_type) = temporal_type {
+                if args.iter().any(|arg| {
+                    arg.data_type() != &element_type && arg.data_type() != &DataType::Null
+                }) {
+                    return Err(KaveonError::Execution(
+                        "ARRAY temporal elements must share a type".into(),
+                    ));
+                }
+                macro_rules! temporal_array {
+                    ($ty:ty) => {{
+                        let values = args
+                            .iter()
+                            .map(|arg| compute::cast(arg, &element_type))
+                            .collect::<std::result::Result<Vec<_>, _>>()?;
+                        let mut builder = ListBuilder::new(PrimitiveBuilder::<$ty>::new());
+                        for row in 0..num_rows {
+                            for value in &values {
+                                let value = value.as_primitive::<$ty>();
+                                builder
+                                    .values()
+                                    .append_option(value.is_valid(row).then(|| value.value(row)));
+                            }
+                            builder.append(true);
+                        }
+                        Ok(Arc::new(builder.finish()))
+                    }};
+                }
+                match &element_type {
+                    DataType::Date32 => temporal_array!(Date32Type),
+                    DataType::Date64 => temporal_array!(Date64Type),
+                    DataType::Time32(TimeUnit::Second) => temporal_array!(Time32SecondType),
+                    DataType::Time32(TimeUnit::Millisecond) => {
+                        temporal_array!(Time32MillisecondType)
+                    }
+                    DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                        temporal_array!(TimestampMicrosecondType)
+                    }
+                    _ => unreachable!("temporal type was filtered above"),
+                }
+            } else if let Some((precision, scale)) = decimal_type {
                 if args.iter().any(|arg| {
                     !matches!(arg.data_type(), DataType::Decimal128(p, s) if *p == precision && *s == scale)
                         && arg.data_type() != &DataType::Null
@@ -7095,6 +7148,43 @@ mod tests {
         let lists = result.as_list::<i32>();
         assert_eq!(lists.value(0).as_primitive::<Time32SecondType>().iter().collect::<Vec<_>>(), vec![Some(42)]);
         assert_eq!(lists.value(1).as_primitive::<Time32SecondType>().iter().collect::<Vec<_>>(), vec![None]);
+    }
+
+    #[test]
+    fn evaluates_timestamp_array_elements() {
+        let batch = RecordBatch::try_from_iter([(
+            "ts",
+            Arc::new(arrow::array::TimestampMicrosecondArray::from(vec![
+                Some(1_000_000),
+                None,
+            ])) as ArrayRef,
+        )])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "ARRAY".into(),
+                args: vec![Expr::Column("ts".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        let lists = result.as_list::<i32>();
+        assert_eq!(
+            lists
+                .value(0)
+                .as_primitive::<arrow::datatypes::TimestampMicrosecondType>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(1_000_000)]
+        );
+        assert_eq!(
+            lists
+                .value(1)
+                .as_primitive::<arrow::datatypes::TimestampMicrosecondType>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![None]
+        );
     }
 
     #[test]
