@@ -217,6 +217,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "filtered_aggregates",
+        "SELECT region, COUNT(*) FILTER (WHERE sessions > 0) AS active_n, SUM(actions) FILTER (WHERE actions > 0) AS positive_actions FROM {T} GROUP BY region ORDER BY region",
+        true,
+    ),
+    (
         "not_equal",
         "SELECT COUNT(*) AS n FROM {T} WHERE region <> 'Asia'",
         false,
