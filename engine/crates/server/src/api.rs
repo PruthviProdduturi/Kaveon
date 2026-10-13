@@ -10429,7 +10429,9 @@ fn top_n_merge_contract(plan: &LogicalPlan) -> Option<(Vec<SortExpr>, usize)> {
     Some((
         order_by
             .iter()
-            .map(|(expr, ascending)| SortExpr::new(expr.clone(), *ascending))
+            .map(|(expr, ascending, nulls_first)| {
+                SortExpr::new(expr.clone(), *ascending).with_nulls_first(*nulls_first)
+            })
             .collect(),
         *count,
     ))

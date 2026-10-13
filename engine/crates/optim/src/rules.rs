@@ -173,7 +173,7 @@ fn prune_columns(plan: LogicalPlan, required: Option<HashSet<String>>) -> Logica
         }
         LogicalPlan::Sort { input, order_by } => {
             let required = required.map(|mut columns| {
-                for (expression, _) in &order_by {
+                for (expression, _, _) in &order_by {
                     collect_columns(expression, &mut columns);
                 }
                 columns
@@ -1351,7 +1351,7 @@ mod tests {
         let plan = LogicalPlan::Filter {
             input: Box::new(LogicalPlan::Sort {
                 input: Box::new(scan()),
-                order_by: vec![(column("amount"), false)],
+                order_by: vec![(column("amount"), false, true)],
             }),
             predicate: compare(column("amount"), BinaryOp::Gt, int(10)),
         };
@@ -1866,7 +1866,7 @@ mod tests {
                 )),
                 distribution: kaveon_sql::logical_plan::JoinDistribution::Partitioned,
             }),
-            order_by: vec![(column("o.o_orderdate"), true)],
+            order_by: vec![(column("o.o_orderdate"), true, false)],
         });
         let mut scans = Vec::new();
         scan_columns(&filtered_side, &mut scans);

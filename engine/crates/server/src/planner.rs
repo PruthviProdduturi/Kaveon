@@ -18,7 +18,7 @@ use kaveon_exec::sort::SortExpr;
 use kaveon_exec::union::UnionOperator;
 use kaveon_exec::window::WindowOperator;
 use kaveon_optim::rules::to_storage_predicate;
-use kaveon_sql::logical_plan::{AggregateExpr, JoinDistribution, JoinType, LogicalPlan};
+use kaveon_sql::logical_plan::{AggregateExpr, JoinDistribution, JoinType, LogicalPlan, OrderKey};
 const AGGREGATE_FUNCTIONS: &[&str] = kaveon_core::AGGREGATE_FUNCTION_NAMES;
 use kaveon_storage::{
     AdlsParquetReader, DeltaTableReader, DirectoryListing, ObjectDeltaReader,
@@ -1334,15 +1334,15 @@ fn aggregate_specs(aggregates: &[AggregateExpr]) -> Vec<AggregateSpec> {
         .collect()
 }
 
-fn sort_specs(order_by: &[(Expr, bool)]) -> Vec<SortSpec> {
+fn sort_specs(order_by: &[OrderKey]) -> Vec<SortSpec> {
     order_by
         .iter()
-        .map(|(expression, ascending)| SortSpec {
+        .map(|(expression, ascending, nulls_first)| SortSpec {
             // `ORDER BY COUNT(*) DESC` above an aggregate orders by the
             // aggregate's output column.
             expression: bind_aggregate_references(expression.clone()),
             ascending: *ascending,
-            nulls_first: !ascending,
+            nulls_first: *nulls_first,
         })
         .collect()
 }
@@ -2311,7 +2311,9 @@ fn plan_query_with_predicate(
             let planned = plan_query_inner(input, catalog, partition, memory, pins)?;
             let sort_exprs = order_by
                 .iter()
-                .map(|(expr, ascending)| SortExpr::new(expr.clone(), *ascending))
+                .map(|(expr, ascending, nulls_first)| {
+                    SortExpr::new(expr.clone(), *ascending).with_nulls_first(*nulls_first)
+                })
                 .collect();
             Ok(PlannedQuery {
                 operator: kaveon_exec::partitioned::sort_operator(
@@ -2329,7 +2331,9 @@ fn plan_query_with_predicate(
                 let sort_exprs = top_n
                     .order_by
                     .iter()
-                    .map(|(expr, ascending)| SortExpr::new(expr.clone(), *ascending))
+                    .map(|(expr, ascending, nulls_first)| {
+                        SortExpr::new(expr.clone(), *ascending).with_nulls_first(*nulls_first)
+                    })
                     .collect();
                 let retained = kaveon_exec::partitioned::top_n_operator(
                     planned.operator,

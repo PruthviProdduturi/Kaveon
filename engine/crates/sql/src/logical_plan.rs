@@ -12,6 +12,10 @@ use sqlparser::ast;
 use sqlparser::ast::visit_expressions_mut;
 use std::ops::ControlFlow;
 
+/// A top-level ordering key: expression, direction, and null placement.
+/// Window specifications keep their existing `(Expr, bool)` representation.
+pub type OrderKey = (Expr, bool, bool);
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum AggregateExpr {
     Count {
@@ -213,7 +217,7 @@ pub enum LogicalPlan {
     },
     Sort {
         input: Box<LogicalPlan>,
-        order_by: Vec<(Expr, bool)>,
+        order_by: Vec<OrderKey>,
     },
     Limit {
         input: Box<LogicalPlan>,
@@ -273,7 +277,7 @@ pub enum LogicalPlan {
 #[derive(Debug, Clone, Copy)]
 pub struct TopNShape<'a> {
     pub input: &'a LogicalPlan,
-    pub order_by: &'a [(Expr, bool)],
+    pub order_by: &'a [OrderKey],
     pub skip: usize,
     pub fetch: usize,
 }
@@ -1639,7 +1643,11 @@ fn build_order_by(
     for ob in order_by {
         let expr = replace_bound_expression(ast_expr_to_expr(&ob.expr)?, bindings);
         let asc = ob.asc.unwrap_or(true);
-        items.push((expr, asc));
+        // Trino defaults to NULLS LAST for ascending and NULLS FIRST for
+        // descending order. Preserve that default while honoring an explicit
+        // NULLS FIRST/LAST clause.
+        let nulls_first = ob.nulls_first.unwrap_or(!asc);
+        items.push((expr, asc, nulls_first));
     }
     let (plan, visible) = bind_order_keys_to_projection(plan, &mut items);
     Ok((
@@ -1657,7 +1665,7 @@ fn build_order_by(
 /// name it.
 fn bind_order_keys_to_projection(
     plan: LogicalPlan,
-    keys: &mut [(Expr, bool)],
+    keys: &mut [OrderKey],
 ) -> (LogicalPlan, Option<Vec<Expr>>) {
     let LogicalPlan::Project { input, mut columns } = plan else {
         return (plan, None);
@@ -1677,7 +1685,7 @@ fn bind_order_keys_to_projection(
     };
     let visible = columns.clone();
     let mut hidden = Vec::new();
-    for (key, _) in keys.iter_mut() {
+    for (key, _, _) in keys.iter_mut() {
         if let Expr::Column(name) = key {
             // `ORDER BY u.country` when the query selects `u.country AS
             // user_country` orders by that output column.
@@ -2876,7 +2884,7 @@ fn validate_uncorrelated(plan: &LogicalPlan) -> Result<()> {
                 visit(input, relations, expressions);
             }
             LogicalPlan::Sort { input, order_by } => {
-                expressions.extend(order_by.iter().map(|(e, _)| e));
+                expressions.extend(order_by.iter().map(|(e, _, _)| e));
                 visit(input, relations, expressions);
             }
             LogicalPlan::Window {
@@ -3054,7 +3062,7 @@ mod tests {
         let LogicalPlan::Sort { input, order_by } = plan else {
             panic!("sort");
         };
-        assert_eq!(order_by, vec![(Expr::Column("expr_1".into()), false)]);
+        assert_eq!(order_by, vec![(Expr::Column("expr_1".into()), false, true)]);
         let LogicalPlan::Project { columns, .. } = *input else {
             panic!("projection");
         };
@@ -3069,9 +3077,42 @@ mod tests {
         assert_eq!(
             order_by,
             vec![
-                (Expr::Column("total".into()), true),
-                (Expr::Column("k".into()), true)
+                (Expr::Column("total".into()), true, false),
+                (Expr::Column("k".into()), true, false)
             ]
+        );
+    }
+
+    #[test]
+    fn order_by_preserves_explicit_null_placement_and_trino_defaults() {
+        let LogicalPlan::Sort { order_by, .. } =
+            sql_to_logical_plan("SELECT x FROM t ORDER BY x NULLS FIRST").unwrap()
+        else {
+            panic!("sort");
+        };
+        assert_eq!(
+            order_by,
+            vec![(Expr::Column("x".into()), true, true)]
+        );
+
+        let LogicalPlan::Sort { order_by, .. } =
+            sql_to_logical_plan("SELECT x FROM t ORDER BY x DESC NULLS LAST").unwrap()
+        else {
+            panic!("sort");
+        };
+        assert_eq!(
+            order_by,
+            vec![(Expr::Column("x".into()), false, false)]
+        );
+
+        let LogicalPlan::Sort { order_by, .. } =
+            sql_to_logical_plan("SELECT x FROM t ORDER BY x").unwrap()
+        else {
+            panic!("sort");
+        };
+        assert_eq!(
+            order_by,
+            vec![(Expr::Column("x".into()), true, false)]
         );
     }
 
@@ -3089,7 +3130,7 @@ mod tests {
         let LogicalPlan::Sort { order_by, input } = *input else {
             panic!("sort");
         };
-        assert_eq!(order_by, vec![(Expr::Column("m".into()), true)]);
+        assert_eq!(order_by, vec![(Expr::Column("m".into()), true, false)]);
         assert!(matches!(*input, LogicalPlan::Project { .. }));
     }
 
@@ -3111,9 +3152,9 @@ mod tests {
         assert_eq!(
             order_by,
             vec![
-                (Expr::Column("n".into()), false),
-                (Expr::Column("t.country".into()), true),
-                (Expr::Column("user_country".into()), true),
+                (Expr::Column("n".into()), false, true),
+                (Expr::Column("t.country".into()), true, false),
+                (Expr::Column("user_country".into()), true, false),
             ]
         );
         // An unselected qualified column still rides along, even when a
@@ -3135,7 +3176,7 @@ mod tests {
         let LogicalPlan::Sort { order_by, .. } = *input else {
             panic!("sort");
         };
-        assert_eq!(order_by, vec![(Expr::Column("u.country".into()), true)]);
+        assert_eq!(order_by, vec![(Expr::Column("u.country".into()), true, false)]);
     }
 
     #[test]
@@ -3157,8 +3198,8 @@ mod tests {
         assert_eq!(
             order_by,
             vec![
-                (Expr::Column("event_time".into()), true),
-                (Expr::Column("phrase".into()), true)
+                (Expr::Column("event_time".into()), true, false),
+                (Expr::Column("phrase".into()), true, false)
             ]
         );
         let LogicalPlan::Project { columns, .. } = *input else {

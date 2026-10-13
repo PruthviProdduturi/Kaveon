@@ -1900,7 +1900,7 @@ fn expression_column(expression: &Expr) -> Result<String> {
 
 fn sort_expressions(keys: &[kaveon_core::SortSpec]) -> Vec<SortExpr> {
     keys.iter()
-        .map(|key| SortExpr::new(key.expression.clone(), key.ascending))
+        .map(|key| SortExpr::new(key.expression.clone(), key.ascending).with_nulls_first(key.nulls_first))
         .collect()
 }
 
