@@ -1680,27 +1680,20 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 "ARRAY elements must have one common type".into(),
             ));
         }
-        if matches!(data_type, DataType::List(_) | DataType::LargeList(_)) {
+        if matches!(
+            data_type,
+            DataType::List(_) | DataType::LargeList(_) | DataType::Struct(_) | DataType::Map(_, _)
+        ) {
             let mut child_chunks = Vec::with_capacity(num_rows.saturating_mul(args.len()));
             let mut offsets = vec![0_i32];
             for row in 0..num_rows {
                 for arg in args {
                     let chunk = match arg.data_type() {
-                        DataType::List(_) | DataType::LargeList(_) => arg.slice(row, 1),
-                        DataType::Null => {
-                            let field = match &data_type {
-                                DataType::List(field) | DataType::LargeList(field) => field.clone(),
-                                _ => unreachable!(),
-                            };
-                            let empty = arrow::array::new_empty_array(field.data_type());
-                            let nulls = arrow::buffer::NullBuffer::from(vec![false]);
-                            Arc::new(ListArray::try_new(
-                                field,
-                                OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 0_i32])),
-                                empty,
-                                Some(nulls),
-                            )?) as ArrayRef
-                        }
+                        DataType::List(_)
+                        | DataType::LargeList(_)
+                        | DataType::Struct(_)
+                        | DataType::Map(_, _) => arg.slice(row, 1),
+                        DataType::Null => arrow::array::new_null_array(&data_type, 1),
                         other => {
                             return Err(KaveonError::Execution(format!(
                                 "ARRAY elements must have one common type, found {other}"
@@ -6562,6 +6555,32 @@ mod tests {
         assert_eq!(inner.len(), 2);
         assert_eq!(inner.value(0).as_primitive::<Int64Type>().values(), &[1, 2]);
         assert_eq!(inner.value(1).as_primitive::<Int64Type>().values(), &[3]);
+    }
+
+    #[test]
+    fn arrays_of_rows_materialize_typed_struct_elements() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        let row = |value: i64| Expr::Function {
+            name: "ROW".into(),
+            args: vec![Expr::Literal(ScalarValue::Int64(value))],
+        };
+        let result = evaluate(
+            &Expr::Function {
+                name: "ARRAY".into(),
+                args: vec![row(7), row(9)],
+            },
+            &batch,
+        )
+        .unwrap();
+        let outer = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let rows = outer.value(0);
+        let rows = rows.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.column(0).as_primitive::<Int64Type>().values(), &[7, 9]);
     }
 
     #[test]
