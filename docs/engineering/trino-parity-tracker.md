@@ -439,6 +439,10 @@ The same differential corpus now covers SQL Lab's SQL Server-style bracketed
 identifiers (`SELECT DISTINCT [region] ...`) across all Parquet encodings and
 execution paths. The parser normalizes identifier-shaped brackets before
 planning, preventing them from reaching workers as an `ARRAY` scalar call.
+The deployed AKS image also returned identical exact results for bracketed and
+plain `year` forms over `OpenSource.climate_energy.energy_annual`; the live
+qualification is archived in
+`docs/qualification/engine-aks-bracketed-identifier-2026-10-13.md`.
 
 The ordering subset is green in-process as well: eight planner, fragment, and
 API tests cover distributed scan inputs, TopN lowering, OFFSET retention,

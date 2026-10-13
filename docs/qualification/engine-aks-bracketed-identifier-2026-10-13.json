@@ -1,0 +1,13 @@
+{
+  "passed": true,
+  "verified_at": "2026-10-13T04:51:00Z",
+  "context": "kaveon-aks",
+  "catalog": "OpenSource",
+  "schema": "climate_energy",
+  "table": "energy_annual",
+  "bracketed_query_state": "FINISHED",
+  "plain_query_state": "FINISHED",
+  "same_result": true,
+  "rows": [[2020], [2021], [2022], [2023], [2024], [2025]],
+  "credential_material_recorded": false
+}
