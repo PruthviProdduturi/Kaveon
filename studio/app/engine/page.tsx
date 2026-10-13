@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { KaveonMark } from "../../components/KaveonMark";
+import { LastKnown, UnknownPanel, reasonFromStatus } from "../../components/Reading";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import s from "./engine.module.css";
 import {
@@ -107,20 +108,48 @@ export default function EngineConsolePage() {
         <div className={s.mastRight}>
           <span className={s.live} aria-live="polite">
             <span className={`${s.dot} ${connected ? "" : s.dotOff}`} />
-            {connected ? (updatedAt ? `Live · updated ${relativeTime(updatedAt, now)}` : "Live") : "Not connected"}
+            {/* Three states in the one label a reader glances at: live, not
+                answering over a reading already in hand, and never reached. */}
+            {connected ? (updatedAt ? `Live · updated ${relativeTime(updatedAt, now)}` : "Live")
+              : updatedAt ? `Not answering · last reading ${relativeTime(updatedAt, now)}`
+              : "Not connected"}
           </span>
           <button type="button" className={s.iconBtn} onClick={refresh}><i className="fas fa-rotate" aria-hidden="true" /> Refresh</button>
         </div>
       </header>
 
-      {error && (
-        <div className={`${s.state} ${s.stateErr}`} role="alert">
-          <div className={s.stateTitle}>{error.status === 503 ? "KaveonDB isn't configured on this server" : "KaveonDB is unavailable"}</div>
-          <div className={s.stateBody}>
-            {error.message}
-            {error.status === 503 && <> The server needs <code>KAVEON_ENGINE_URL</code> and its bridge credential. Configure them under System settings.</>}
+      {/* A poll that failed over a console that has already read once is the
+          stale case, not the absent one: the figures below are a real
+          reading, they have simply stopped advancing. Clearing them, or
+          leaving them unlabelled as live, were both wrong — so they stay and
+          they are labelled. Only a console that never read reports the
+          failure as the whole of what it knows. */}
+      {error && (cluster || queries) && (
+        <LastKnown
+          what="KaveonDB"
+          taken={updatedAt ? relativeTime(updatedAt, now) : null}
+          detail={error.status === 503
+            ? "The server reports no KaveonDB endpoint configured."
+            : `${error.message} Nothing below has been taken away.`}
+          onRetry={refresh}
+        />
+      )}
+
+      {error && !cluster && !queries && (
+        error.status === 503 ? (
+          <div className={`${s.state} ${s.stateErr}`} role="alert">
+            <div className={s.stateTitle}>KaveonDB is not configured on this server</div>
+            <div className={s.stateBody}>
+              {error.message} The server needs <code>KAVEON_ENGINE_URL</code> and its bridge credential. Configure them under System settings.
+            </div>
           </div>
-        </div>
+        ) : (
+          <UnknownPanel
+            what="KaveonDB" says="what its cluster holds or what it has run"
+            reason={reasonFromStatus(error.status)} detail={error.message}
+            onRetry={refresh}
+          />
+        )
       )}
 
       {cluster && (

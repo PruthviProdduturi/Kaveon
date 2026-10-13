@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { msalFetch } from "../utils/msalFetch";
+import { UnknownLine } from "./Reading";
 
 /**
  * Fixed "available context" banner — shows which datasets have a compiled DLM,
@@ -12,6 +13,14 @@ import { msalFetch } from "../utils/msalFetch";
  * is in flight the strip holds its place and says so, rather than appearing
  * from nowhere and pushing the page down under the reader's cursor; it shows a
  * hint when no DLM has been generated yet, and is dismissible either way.
+ *
+ * A read that did not answer is not a hint. Both failure paths here used to
+ * end in `setItems([])`, and an empty list is what draws "No context compiled
+ * yet — open a dataset and Generate DLM to make it queryable here": with the
+ * Engine down and eight of nine datasets compiled, this strip told every
+ * reader to go and compile what they already had. The two outcomes are now
+ * held apart — the strip reports an unknown as an unknown, and only a server
+ * that answered with no compiled context draws the hint (D-26).
  */
 
 interface DateRange {
@@ -57,6 +66,8 @@ const PREF_KEY = "kaveon-context-banner";
 
 export function ContextBanner() {
   const [items, setItems] = useState<CoverageItem[] | null>(null);
+  /** Set only when the read itself did not answer; never when it answered with nothing. */
+  const [unread, setUnread] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState(() => {
     if (typeof window === "undefined") return false;
     return localStorage.getItem(PREF_KEY) === "hidden";
@@ -68,11 +79,25 @@ export function ContextBanner() {
     (async () => {
       try {
         const res = await msalFetch("/api/v1/dlm/coverage");
-        if (!res.ok) { if (alive) setItems([]); return; }
+        if (!res.ok) {
+          // A refusal and a restart are different facts, and the status is the
+          // only thing that separates them here. Neither is an empty list.
+          if (alive) {
+            setUnread(res.status === 403
+              ? "Your role does not include reading compiled context."
+              : res.status >= 500
+                ? `The server answered ${res.status}.`
+                : `The request was answered with ${res.status}.`);
+          }
+          return;
+        }
         const data = await res.json();
-        if (alive) setItems(Array.isArray(data?.datasets) ? data.datasets : []);
+        // A body that is not a dataset list is not an empty dataset list.
+        if (!alive) return;
+        if (Array.isArray(data?.datasets)) setItems(data.datasets);
+        else setUnread("The server answered with something other than a coverage listing.");
       } catch {
-        if (alive) setItems([]);
+        if (alive) setUnread("The Kaveon API could not be reached from this browser.");
       }
     })();
     return () => { alive = false; };
@@ -113,6 +138,24 @@ export function ContextBanner() {
     color: "var(--text-secondary)", fontSize: 13, padding: 4,
   };
 
+  // The read did not answer. What is compiled is unknown, and an unknown is
+  // reported as one: no count, no claim that nothing exists, and no
+  // instruction to compile context that may well already be there.
+  if (unread) {
+    return (
+      <div style={wrap}>
+        <span style={label}><i className="fas fa-database" /> Context</span>
+        <UnknownLine
+          what="Compiled context" says="which datasets can be asked about here"
+          detail={unread}
+        />
+        <button style={closeBtn} title="Dismiss" onClick={() => { setDismissed(true); localStorage.setItem(PREF_KEY, "hidden"); }}>
+          <i className="fas fa-times" />
+        </button>
+      </div>
+    );
+  }
+
   if (items === null) {
     return (
       <div style={wrap} aria-busy="true">
@@ -125,6 +168,7 @@ export function ContextBanner() {
     );
   }
 
+  // Reached only when the server answered and reported nothing compiled.
   if (ready.length === 0) {
     return (
       <div style={wrap}>

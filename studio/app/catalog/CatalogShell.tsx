@@ -13,6 +13,7 @@ import {
   CatalogError, EngineSource, enc, fetchDefinitions, fetchSchemaDefinitions,
   fetchSchemas, fetchSources, fetchTables,
 } from "./lib";
+import { UnknownLine, reasonFromStatus } from "../../components/Reading";
 
 export { catalogLabel };
 
@@ -71,7 +72,10 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
   const [catalogs, setCatalogs] = useState<EngineSource[] | null>(null);
   const [schemas, setSchemas] = useState<Record<string, string[] | undefined>>({});
   const [tables, setTables] = useState<Record<string, string[] | undefined>>({});
+  /** Only the registry read: the one failure that leaves the whole rail unable to list. */
   const [error, setError] = useState<CatalogError | null>(null);
+  /** Catalog names and "catalog schema" keys whose own listing did not answer. */
+  const [unreadNodes, setUnreadNodes] = useState<Record<string, true>>({});
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [collapsed, setCollapsed] = useState(false);
   const { isAdmin } = useRole();
@@ -87,29 +91,57 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
 
   const sourceFor = useCallback((catalog: string) => catalogs?.find(c => c.catalog === catalog) ?? null, [catalogs]);
   const fail = (e: unknown) => setError(e instanceof CatalogError ? e : new CatalogError(0, "The catalog could not be read."));
+  // One node's listing failing is a fact about that node. It used to raise the
+  // rail's single `error`, which put "the catalog could not be read" over the
+  // whole tree; and the node itself, left with no list, drew nothing — so a
+  // schema whose tables did not answer was indistinguishable from one the
+  // Engine says is empty. Marked here, said at the node.
+  const markUnread = (key: string, unread: boolean) =>
+    setUnreadNodes(prev => {
+      if (!!prev[key] === unread) return prev;
+      const next = { ...prev };
+      if (unread) next[key] = true; else delete next[key];
+      return next;
+    });
 
   const loadSchemas = useCallback(async (catalog: string) => {
     const src = sourceFor(catalog);
     if (!src || schemas[catalog]) return;
-    try { const list = await fetchSchemas(src.id); setSchemas(prev => ({ ...prev, [catalog]: list })); } catch (e) { fail(e); }
+    try {
+      const list = await fetchSchemas(src.id);
+      setSchemas(prev => ({ ...prev, [catalog]: list }));
+      markUnread(catalog, false);
+    } catch { markUnread(catalog, true); }
   }, [sourceFor, schemas]);
 
   const loadTables = useCallback(async (catalog: string, schema: string) => {
     const src = sourceFor(catalog), k = tableKey(catalog, schema);
     if (!src || tables[k]) return;
-    try { const list = await fetchTables(src.id, schema); setTables(prev => ({ ...prev, [k]: list })); } catch (e) { fail(e); }
+    try {
+      const list = await fetchTables(src.id, schema);
+      setTables(prev => ({ ...prev, [k]: list }));
+      markUnread(k, false);
+    } catch { markUnread(k, true); }
   }, [sourceFor, tables]);
 
   const refreshSchemas = useCallback(async (catalog: string) => {
     const src = sourceFor(catalog);
     if (!src) return;
-    try { const list = await fetchSchemas(src.id); setSchemas(prev => ({ ...prev, [catalog]: list })); } catch (e) { fail(e); }
+    try {
+      const list = await fetchSchemas(src.id);
+      setSchemas(prev => ({ ...prev, [catalog]: list }));
+      markUnread(catalog, false);
+    } catch { markUnread(catalog, true); }
   }, [sourceFor]);
 
   const refreshTables = useCallback(async (catalog: string, schema: string) => {
     const src = sourceFor(catalog), k = tableKey(catalog, schema);
     if (!src) return;
-    try { const list = await fetchTables(src.id, schema); setTables(prev => ({ ...prev, [k]: list })); } catch (e) { fail(e); }
+    try {
+      const list = await fetchTables(src.id, schema);
+      setTables(prev => ({ ...prev, [k]: list }));
+      markUnread(k, false);
+    } catch { markUnread(k, true); }
   }, [sourceFor]);
 
   useEffect(() => {
@@ -191,7 +223,18 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
               </div>
               <div className={s.treeBody}>
                 {!catalogs && !error && <div className={s.treeNote}>Loading catalogs…</div>}
-                {error && <div className={`${s.treeNote} ${s.treeErr}`}>{error.message}</div>}
+                {/* The rail lists nothing in two quite different situations,
+                    and it says which. A registry that did not answer leaves
+                    the rail unable to name a catalog; it does not mean there
+                    are none to name. */}
+                {error && (
+                  <div className={s.treeNote}>
+                    <UnknownLine
+                      what="The catalog registry" says="which catalogs are registered"
+                      reason={reasonFromStatus(error.status)} detail={error.message}
+                    />
+                  </div>
+                )}
                 {catalogs && catalogs.length === 0 && <div className={s.treeNote}>No catalogs are registered.</div>}
                 {catalogs?.map(cat => {
                   const name = cat.catalog, isOpen = open.has(name), list = schemas[name];
@@ -248,10 +291,16 @@ export function CatalogShell({ children }: { children: React.ReactNode }) {
                               );
                             })}
                             {sOpen && tlist && tlist.length === 0 && <div className={`${s.treeNote} ${s.level2}`}>No tables</div>}
+                            {sOpen && !tlist && unreadNodes[k] && (
+                              <div className={`${s.treeNote} ${s.level2}`}>Tables could not be listed</div>
+                            )}
                           </div>
                         );
                       })}
                       {isOpen && list && list.length === 0 && <div className={`${s.treeNote} ${s.level1}`}>No schemas</div>}
+                      {isOpen && !list && unreadNodes[name] && (
+                        <div className={`${s.treeNote} ${s.level1}`}>Schemas could not be listed</div>
+                      )}
                     </div>
                   );
                 })}

@@ -45,6 +45,7 @@ import {
   isSystemCatalogName,
 } from "./lib";
 import { isSystemCatalog, SYSTEM_CATALOG_LABEL } from "../../utils/systemCatalog";
+import { reasonFromStatus, unknownText } from "../../components/Reading";
 import s from "./catalog.module.css";
 
 export default function CatalogOverviewPage() {
@@ -68,14 +69,25 @@ function CatalogIndex({ onAdd }: { onAdd?: () => void }) {
   // and the page costs no second request for it.
   const { catalogs: registry, error: registryError } = useCatalogTree();
   const [definitions, setDefinitions] = useState<CatalogDefinition[] | null>(null);
-  const [schemas, setSchemas] = useState<Record<string, SchemaDefinition[]>>({});
+  // Three states per catalog, not two: undefined is a read still in flight,
+  // null is a read that did not answer, and an array is the Engine's answer.
+  // A failed read used to be stored as an empty array, which the card then
+  // reported as "0 schemas" — a measurement of the catalog made out of a
+  // request that never arrived.
+  const [schemas, setSchemas] = useState<Record<string, SchemaDefinition[] | null | undefined>>({});
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
     void fetchDefinitions()
       .then(list => { if (alive) { setDefinitions(list); setError(null); } })
-      .catch(() => { if (alive) setError("Catalogs could not be read."); });
+      .catch(() => {
+        if (alive) {
+          setError(unknownText({
+            what: "The catalog registry", says: "which catalogs are registered",
+          }));
+        }
+      });
     return () => { alive = false; };
   }, []);
 
@@ -113,7 +125,7 @@ function CatalogIndex({ onAdd }: { onAdd?: () => void }) {
     if (!ids.length) return;
     let alive = true;
     void Promise.all(ids.map(async id =>
-      [id, await fetchSchemaDefinitions(id).catch(() => [] as SchemaDefinition[])] as const))
+      [id, await fetchSchemaDefinitions(id).catch(() => null)] as const))
       .then(pairs => { if (alive) setSchemas(Object.fromEntries(pairs)); });
     return () => { alive = false; };
   }, [idKey]);
@@ -121,10 +133,25 @@ function CatalogIndex({ onAdd }: { onAdd?: () => void }) {
   const totalSchemas = useMemo(
     () => (listed ?? []).reduce((sum, entry) => sum + (schemas[entry.definition.id]?.length ?? 0), 0),
     [listed, schemas]);
+  // A total over catalogs that did not all answer is not the total. It is
+  // withheld rather than published short, because the one place on this page
+  // a reader takes a figure from must not quietly be a partial one.
+  const schemasUnread = useMemo(
+    () => (listed ?? []).some(entry => schemas[entry.definition.id] === null),
+    [listed, schemas]);
+  const schemasReading = useMemo(
+    () => (listed ?? []).some(entry => schemas[entry.definition.id] === undefined),
+    [listed, schemas]);
   // The platform's own catalog is shown because the Engine defines it, never
   // on the page's word: an installation without it must not be told it has one.
   const system = definitions?.find(def => isSystemCatalog(def.name)) ?? null;
-  const failure = error ?? registryError?.message ?? null;
+  // Either read failing leaves this page unable to say what is registered.
+  // Reported as an unknown, with the server's own message kept: a reader must
+  // not be left to infer absence from a page that simply lists nothing.
+  const failure = error ?? (registryError ? unknownText({
+    what: "The catalog registry", says: "which catalogs are registered",
+    reason: reasonFromStatus(registryError.status), detail: registryError.message,
+  }) : null);
 
   return (
     <main className={s.index}>
@@ -136,7 +163,10 @@ function CatalogIndex({ onAdd }: { onAdd?: () => void }) {
         </div>
         <div className={s.indexActions}>
           <span className={s.indexStat}><b>{listed?.length ?? "—"}</b><small>catalogs</small></span>
-          <span className={s.indexStat}><b>{listed ? totalSchemas : "—"}</b><small>schemas</small></span>
+          <span className={s.indexStat}
+                title={schemasUnread ? "At least one catalog did not answer when asked for its schemas, so no total is shown." : undefined}>
+            <b>{listed && !schemasUnread && !schemasReading ? totalSchemas : "—"}</b><small>schemas</small>
+          </span>
           {onAdd && <button type="button" className={`${s.ghost} ${s.primary}`} onClick={onAdd}><i className="fas fa-plus" aria-hidden="true" /> Add schema</button>}
         </div>
       </header>
@@ -152,7 +182,11 @@ function CatalogIndex({ onAdd }: { onAdd?: () => void }) {
           const list = schemas[definition.id];
           return <Link className={s.catalogCard} href={`/catalog/${enc(definition.name)}`} key={source.id}>
             <span className={s.catalogIcon}><i className="fas fa-database" aria-hidden="true" /></span>
-            <span className={s.catalogCardBody}><span className={s.catalogCardKicker}>Registered catalog</span><strong>{definition.name}</strong><span>{list ? `${list.length} ${list.length === 1 ? "schema" : "schemas"}` : "Loading schemas…"} · Open to inspect tables</span></span>
+            <span className={s.catalogCardBody}><span className={s.catalogCardKicker}>Registered catalog</span><strong>{definition.name}</strong><span>{
+              list === null ? "Schemas could not be listed"
+                : list === undefined ? "Loading schemas…"
+                : `${list.length} ${list.length === 1 ? "schema" : "schemas"}`
+            } · Open to inspect tables</span></span>
             <i className={`fas fa-arrow-up-right-from-square ${s.catalogArrow}`} aria-hidden="true" />
           </Link>;
         })}

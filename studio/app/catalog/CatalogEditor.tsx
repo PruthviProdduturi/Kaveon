@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { isSystemCatalog } from "../../utils/systemCatalog";
+import { reasonFromStatus, unknownText } from "../../components/Reading";
 import { useCatalogTree } from "./CatalogShell";
 import s from "./catalog.module.css";
 import {
@@ -50,6 +51,8 @@ export function RegisterSheet({ kind: initialKind, catalog: initialCatalog, sche
   const [definitionsError, setDefinitionsError] = useState<string | null>(null);
   const [catalog, setCatalog] = useState(initialCatalog ?? "");
   const [schemaDefs, setSchemaDefs] = useState<SchemaDefinition[] | null>(null);
+  /** The schema listing did not answer, which is not the same as a catalog with no schema. */
+  const [schemasUnread, setSchemasUnread] = useState(false);
   const [schema, setSchema] = useState(initialSchema ?? "");
   const [name, setName] = useState("");
   const [location, setLocation] = useState("");
@@ -71,7 +74,14 @@ export function RegisterSheet({ kind: initialKind, catalog: initialCatalog, sche
     let cancelled = false;
     fetchDefinitions()
       .then(list => { if (!cancelled) { setDefinitions(list); setDefinitionsError(null); } })
-      .catch(e => { if (!cancelled) setDefinitionsError(e instanceof CatalogError ? e.message : "The catalog definitions could not be read."); });
+      .catch(e => {
+        if (cancelled) return;
+        setDefinitionsError(unknownText({
+          what: "The catalog definitions", says: "which catalogs can be registered into",
+          reason: e instanceof CatalogError ? reasonFromStatus(e.status) : null,
+          detail: e instanceof CatalogError ? e.message : null,
+        }));
+      });
     return () => { cancelled = true; };
   }, []);
 
@@ -82,9 +92,13 @@ export function RegisterSheet({ kind: initialKind, catalog: initialCatalog, sche
     if (!definition || kind !== "table") { setSchemaDefs(null); return; }
     let cancelled = false;
     setSchemaDefs(null);
+    setSchemasUnread(false);
     fetchSchemaDefinitions(definition.id)
       .then(list => { if (!cancelled) setSchemaDefs(list); })
-      .catch(() => { if (!cancelled) setSchemaDefs([]); });
+      // Not an empty schema list. Caught into one, this told an editor the
+      // catalog had no active schema and to add one first — advice derived
+      // from a request that never answered.
+      .catch(() => { if (!cancelled) { setSchemaDefs([]); setSchemasUnread(true); } });
     return () => { cancelled = true; };
   }, [definition, kind]);
 
@@ -109,6 +123,9 @@ export function RegisterSheet({ kind: initialKind, catalog: initialCatalog, sche
   const catalogNote = definitionsError ? definitionsError
     : definitions && !definition && catalog ? `${catalog} is registered on the platform but not yet synchronized with KaveonDB. Synchronize it under Settings → Storage first.`
     : definition && definition.lifecycle !== "Active" ? `${catalog} is ${definition.lifecycle.toLowerCase()} on KaveonDB; activate it before adding to it.`
+    : kind === "table" && schemasUnread ? unknownText({
+        what: "The schemas in this catalog", says: "which schemas a table can be added to",
+      })
     : kind === "table" && schemaDefs && activeSchemas.length === 0 ? "This catalog has no active schema yet. Add a schema first."
     : null;
   const ready = !catalogNote && !!definition && !nameError && !locationError && !columnsError && (kind === "schema" || !!schemaDef);
