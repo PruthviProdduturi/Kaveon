@@ -2023,6 +2023,82 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             };
             Ok(Arc::new(Int64Array::from(result)))
         }
+        "ARRAY_SLICE" => {
+            check_arity(name, args, 4)?;
+            let list = args[0]
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .ok_or_else(|| KaveonError::Execution("ARRAY_SLICE requires an ARRAY/List value".into()))?;
+            let lower = compute::cast(&args[1], &DataType::Int64)?;
+            let upper = compute::cast(&args[2], &DataType::Int64)?;
+            let stride = compute::cast(&args[3], &DataType::Int64)?;
+            let lower = lower.as_primitive::<Int64Type>();
+            let upper = upper.as_primitive::<Int64Type>();
+            let stride = stride.as_primitive::<Int64Type>();
+            match list.value_type() {
+                DataType::Float64 => {
+                    let mut builder = ListBuilder::new(Float64Builder::new());
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let values = list.value(row);
+                        let values = values.as_primitive::<Float64Type>();
+                        let length = values.len() as i64;
+                        let start = lower.is_valid(row).then(|| lower.value(row)).unwrap_or(1);
+                        let end = upper.is_valid(row).then(|| upper.value(row)).unwrap_or(length);
+                        let step = stride.is_valid(row).then(|| stride.value(row)).unwrap_or(1);
+                        if step <= 0 {
+                            return Err(KaveonError::Execution("ARRAY_SLICE requires a positive stride".into()));
+                        }
+                        let first = start.max(1).min(length + 1);
+                        let last = end.max(0).min(length);
+                        if first <= last {
+                            let mut index = first;
+                            while index <= last {
+                                let offset = (index - 1) as usize;
+                                builder.values().append_option(values.is_valid(offset).then(|| values.value(offset)));
+                                index += step;
+                            }
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }
+                DataType::Utf8 => {
+                    let mut builder = ListBuilder::new(StringBuilder::new());
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let values = list.value(row);
+                        let values = values.as_string::<i32>();
+                        let length = values.len() as i64;
+                        let start = lower.is_valid(row).then(|| lower.value(row)).unwrap_or(1);
+                        let end = upper.is_valid(row).then(|| upper.value(row)).unwrap_or(length);
+                        let step = stride.is_valid(row).then(|| stride.value(row)).unwrap_or(1);
+                        if step <= 0 {
+                            return Err(KaveonError::Execution("ARRAY_SLICE requires a positive stride".into()));
+                        }
+                        let first = start.max(1).min(length + 1);
+                        let last = end.max(0).min(length);
+                        if first <= last {
+                            let mut index = first;
+                            while index <= last {
+                                let offset = (index - 1) as usize;
+                                builder.values().append_option(values.is_valid(offset).then(|| values.value(offset)));
+                                index += step;
+                            }
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }
+                other => Err(KaveonError::Execution(format!("ARRAY_SLICE does not support list element type {other}"))),
+            }
+        }
         "ELEMENT_AT" => {
             check_arity(name, args, 2)?;
             if let Some(map) = args[0].as_any().downcast_ref::<MapArray>() {
@@ -3007,6 +3083,40 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![Some(2.0), Some(2.0)]
         );
+    }
+
+    #[test]
+    fn array_slice_preserves_bounds_stride_and_null_elements() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        let value = evaluate(
+            &Expr::Function {
+                name: "ARRAY_SLICE".into(),
+                args: vec![
+                    Expr::Function {
+                        name: "ARRAY".into(),
+                        args: vec![
+                            Expr::Literal(ScalarValue::Int64(10)),
+                            Expr::Literal(ScalarValue::Null),
+                            Expr::Literal(ScalarValue::Int64(30)),
+                            Expr::Literal(ScalarValue::Int64(40)),
+                        ],
+                    },
+                    Expr::Literal(ScalarValue::Int64(2)),
+                    Expr::Literal(ScalarValue::Int64(4)),
+                    Expr::Literal(ScalarValue::Int64(2)),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        let list = value.as_any().downcast_ref::<ListArray>().unwrap();
+        let values = list.value(0);
+        let values = values.as_primitive::<Float64Type>();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![None, Some(40.0)]);
     }
 
     #[test]

@@ -253,7 +253,10 @@ qualification documents; this tracker remains the single ordered work list.
   (`df3fa16a`).
 - Array subscripts now lower to `ELEMENT_AT(array, index)` with one-based and
   negative-index semantics, null list/index handling, and null for out-of-range
-  positions; array slices remain an explicit boundary.
+  positions. PostgreSQL-style array slices now lower to `ARRAY_SLICE` for
+  numeric and text lists, including omitted bounds, positive strides, and
+  null elements; negative strides and broader element types remain explicit
+  boundaries.
 - `ROW(...).field` now lowers to a typed `ROW_FIELD` projection over Arrow
   structs, and map subscript syntax lowers to `ELEMENT_AT` with typed key
   lookup; row equality and order-independent map equality now compare typed
@@ -264,8 +267,8 @@ qualification documents; this tracker remains the single ordered work list.
 
 ### Current focused validation
 
-The latest focused validation passes 330 `kaveon-server` tests, 107
-`kaveon-sql` tests, and 229 `kaveon-exec` tests (four executor benchmarks are
+The latest focused validation passes 330 `kaveon-server` tests, 108
+`kaveon-sql` tests, and 234 `kaveon-exec` tests (four executor benchmarks are
 ignored). These counts are package-level validation snapshots; they do not
 close the broader multi-worker, AKS, or cross-connector qualification gates
 below.
@@ -278,7 +281,8 @@ network backpressure, sustained pressure evidence, and AKS cancellation
 qualification remain open.
 Track 2 remains partial because the full prepared-statement protocol,
 correlated and other unsupported scalar subqueries, ordered/map comparisons,
-array slices, and broader typed DML are not yet implemented. Multiset set operations are now implemented
+negative-stride or non-numeric/text array slices, and broader typed DML are not
+yet implemented. Multiset set operations are now implemented
 and covered end to end. Positional
  scalar parameters, including named placeholders, are supported through the
 HTTP statement API; the full prepared-statement protocol remains an explicit

@@ -792,6 +792,47 @@ fn push_filter_into(predicate: Expr, input: LogicalPlan) -> LogicalPlan {
                     remaining.push(part);
                 }
             }
+            if join_type == JoinType::Inner {
+                let original_left_parts = left_parts.clone();
+                let original_right_parts = right_parts.clone();
+                for (first_column, second_column) in join_equality_pairs(&condition) {
+                    let Some(left_qualifier) = &left_qualifier else {
+                        continue;
+                    };
+                    let Some(right_qualifier) = &right_qualifier else {
+                        continue;
+                    };
+                    let (left_column, right_column) = if first_column
+                        .starts_with(&format!("{left_qualifier}."))
+                        && second_column.starts_with(&format!("{right_qualifier}."))
+                    {
+                        (first_column, second_column)
+                    } else if first_column.starts_with(&format!("{right_qualifier}."))
+                        && second_column.starts_with(&format!("{left_qualifier}."))
+                    {
+                        (second_column, first_column)
+                    } else {
+                        continue;
+                    };
+                    if let Some(value) = equality_column_literal(&original_left_parts, &left_column)
+                    {
+                        right_parts.push(Expr::BinaryOp {
+                            left: Box::new(Expr::Column(right_column.clone())),
+                            op: BinaryOp::Eq,
+                            right: Box::new(Expr::Literal(value)),
+                        });
+                    }
+                    if let Some(value) =
+                        equality_column_literal(&original_right_parts, &right_column)
+                    {
+                        left_parts.push(Expr::BinaryOp {
+                            left: Box::new(Expr::Column(left_column.clone())),
+                            op: BinaryOp::Eq,
+                            right: Box::new(Expr::Literal(value)),
+                        });
+                    }
+                }
+            }
             let left = match conjoin(left_parts) {
                 Some(predicate) => push_filter_into(predicate, *left),
                 None => *left,
@@ -865,6 +906,55 @@ fn push_filter_into(predicate: Expr, input: LogicalPlan) -> LogicalPlan {
             predicate,
         },
     }
+}
+
+fn equality_column_literal(parts: &[Expr], column: &str) -> Option<ScalarValue> {
+    parts.iter().find_map(|part| {
+        if let Expr::And(left, right) = part {
+            return equality_column_literal(
+                &[left.as_ref().clone(), right.as_ref().clone()],
+                column,
+            );
+        }
+        let Expr::BinaryOp {
+            left,
+            op: BinaryOp::Eq,
+            right,
+        } = part
+        else {
+            return None;
+        };
+        match (left.as_ref(), right.as_ref()) {
+            (Expr::Column(name), Expr::Literal(value)) if name == column => Some(value.clone()),
+            (Expr::Literal(value), Expr::Column(name)) if name == column => Some(value.clone()),
+            _ => None,
+        }
+    })
+}
+
+fn join_equality_pairs(condition: &Option<Expr>) -> Vec<(String, String)> {
+    let Some(condition) = condition else {
+        return Vec::new();
+    };
+    let mut parts = Vec::new();
+    conjuncts(condition.clone(), &mut parts);
+    parts
+        .into_iter()
+        .filter_map(|part| {
+            let Expr::BinaryOp {
+                left,
+                op: BinaryOp::Eq,
+                right,
+            } = part
+            else {
+                return None;
+            };
+            let (Expr::Column(left), Expr::Column(right)) = (left.as_ref(), right.as_ref()) else {
+                return None;
+            };
+            Some((left.clone(), right.clone()))
+        })
+        .collect()
 }
 
 fn rewrite_for_projection(predicate: &Expr, columns: &[Expr]) -> Option<Expr> {
@@ -1058,6 +1148,45 @@ mod tests {
             alias: None,
             columns: None,
         }
+    }
+
+    #[test]
+    fn propagates_inner_join_literal_filter_across_equality_key() {
+        let join = LogicalPlan::Join {
+            left: Box::new(LogicalPlan::Scan {
+                table: "events".into(),
+                alias: Some("l".into()),
+                columns: None,
+            }),
+            right: Box::new(LogicalPlan::Scan {
+                table: "lookup".into(),
+                alias: Some("r".into()),
+                columns: None,
+            }),
+            join_type: JoinType::Inner,
+            condition: Some(compare(column("r.id"), BinaryOp::Eq, column("l.id"))),
+            distribution: kaveon_sql::logical_plan::JoinDistribution::Partitioned,
+        };
+        let plan = LogicalPlan::Filter {
+            input: Box::new(join),
+            predicate: compare(column("l.id"), BinaryOp::Eq, int(7)),
+        };
+
+        let LogicalPlan::Join { left, right, .. } = push_filter_down(plan) else {
+            panic!("filter should remain attached to the join inputs");
+        };
+        assert!(matches!(
+            *left,
+            LogicalPlan::Filter { ref predicate, .. }
+                if equality_column_literal(std::slice::from_ref(predicate), "id")
+                    == Some(ScalarValue::Int64(7))
+        ));
+        assert!(matches!(
+            *right,
+            LogicalPlan::Filter { ref predicate, .. }
+                if equality_column_literal(std::slice::from_ref(predicate), "id")
+                    == Some(ScalarValue::Int64(7))
+        ));
     }
 
     #[test]
