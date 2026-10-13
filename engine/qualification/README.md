@@ -245,7 +245,9 @@ failure/recovery evidence leaves the SLO pending. A passing local unit suite or
 an isolated latency sample cannot satisfy this SLO. The current report merger
 accepts both the legacy nested fault-pressure schema and the current live
 runner schema, including per-request admission-refusal counts. It does not
-claim coordinator-loss survival, sustained network-pressure,
+claim a release SLO when the comparison and fault-pressure reports carry
+different Engine image digests; live evidence is cross-bound before the gate
+can pass. It also does not claim coordinator-loss survival, sustained network-pressure,
 cloud-storage fault injection, longer endurance, or upgrade/rollback evidence;
 those remain explicit Track 1 blockers.
 
