@@ -163,7 +163,7 @@ pub struct CatalogSnapshot {
     #[serde(default)]
     pub product_records: BTreeMap<String, ProductRecordRef>,
     /// Revisioned typed rows owned by the same immutable catalog snapshot.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub typed_rows: BTreeMap<String, BTreeMap<String, TypedRow>>,
     /// Persistent, rebuildable typed-row primary and unique indexes.
     /// Older snapshots may omit this field and are accepted as legacy.
