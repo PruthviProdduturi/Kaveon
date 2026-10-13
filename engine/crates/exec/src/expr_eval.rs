@@ -2244,6 +2244,33 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     }
                     Ok(Arc::new(builder.finish()))
                 }
+                DataType::Decimal128(precision, scale) => {
+                    let mut builder = ListBuilder::new(
+                        Decimal128Builder::new()
+                            .with_precision_and_scale(precision, scale)
+                            .map_err(|error| KaveonError::Execution(error.to_string()))?,
+                    );
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let values = list
+                            .value(row)
+                            .as_primitive::<arrow::datatypes::Decimal128Type>()
+                            .clone();
+                        let mut seen = Vec::<Option<i128>>::new();
+                        for index in 0..values.len() {
+                            let value = values.is_valid(index).then(|| values.value(index));
+                            if !seen.contains(&value) {
+                                seen.push(value);
+                                builder.values().append_option(value);
+                            }
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }
                 DataType::Utf8 => {
                     let mut builder = ListBuilder::new(StringBuilder::new());
                     for row in 0..num_rows {
@@ -5301,6 +5328,26 @@ mod tests {
                 .unwrap()
                 .as_primitive::<Int64Type>()
                 .value(0),
+            2
+        );
+        let distinct = Expr::Function {
+            name: "ARRAY_DISTINCT".into(),
+            args: vec![Expr::Function {
+                name: "ARRAY".into(),
+                args: vec![decimal(1), decimal(1), decimal(2)],
+            }],
+        };
+        let distinct = evaluate(&distinct, &batch).unwrap();
+        let distinct = distinct
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap()
+            .value(0);
+        assert_eq!(distinct.len(), 2);
+        assert_eq!(
+            distinct
+                .as_primitive::<arrow::datatypes::Decimal128Type>()
+                .value(1),
             2
         );
     }
