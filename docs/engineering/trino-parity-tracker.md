@@ -161,8 +161,10 @@ foundations, but several operators are still centralized or narrow:
   its `NOT IN` form lower to the existing nullable `CONTAINS` path; row-
   producing `UNNEST` in `FROM` is rejected with an actionable diagnostic
   (rather than being misread as a table named `UNNEST`); dereference and other
-  array operations remain open. Equality quantified predicates `= ANY(array)` and `<> ALL(array)` use
-  the same exact membership path; other quantified comparisons fail explicitly.
+  array operations remain open. Equality quantified predicates `= ANY(array)` and
+  `<> ALL(array)` use the exact membership path; ordered and not-equal quantified
+  predicates now lower to nullable `ARRAY_ANY_*`/`ARRAY_ALL_*` reductions with
+  Trino's empty-array semantics. Unsupported element types still fail explicitly.
   `JSON_EXTRACT` now preserves objects, arrays,
   and JSON nulls as serialized JSON text; `JSON_EXTRACT_SCALAR` supports dotted
   object paths and numeric array subscripts. Invalid JSON and missing paths
@@ -734,7 +736,8 @@ the Engine HTTP lifecycle and scalar `EXECUTE ... USING` is supported by the
 Trino adapter, but the adapter still lacks a wire-compatible full protocol;
 correlated non-aggregate and other unsupported scalar subqueries, ordered map
 comparisons, broader array element types, and broader typed DML are not yet
-implemented. Equality-key outer joins now carry residual
+implemented. Quantified array comparisons now cover all scalar comparison
+operators with NULL and empty-array tests. Equality-key outer joins now carry residual
 `ON` predicates through the distributed hash join and apply null extension only
 after the complete predicate is evaluated.
 Multiset set operations are now implemented
