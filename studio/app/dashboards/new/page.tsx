@@ -5,10 +5,15 @@ import { useRouter } from "next/navigation";
 import { DashboardProvider, DashboardConfig } from "../../../components/dashboards/DashboardContext";
 import DashboardBuilder from "../../../components/dashboards/DashboardBuilder";
 import { msalFetch } from "../../../utils/msalFetch";
+import { useRole } from "../../../hooks/useRole";
 import { API_BASE } from "../../../config";
 
 const DashboardNewPage: React.FC = () => {
   const router = useRouter();
+  // POST /dashboards is `require_min_role("Analyst")`. Below that the builder
+  // would only ever end in a refusal, so it is not opened at all — the Library
+  // hides its New control too, and this covers arriving by URL.
+  const { canCreate, whyNoCreate } = useRole();
 
   /**
    * Save dashboard to the API
@@ -49,11 +54,34 @@ const DashboardNewPage: React.FC = () => {
     }
   }, [router]);
 
-  return (
-    <DashboardProvider onSave={handleSave}>
+  if (!canCreate) {
+    return (
       <div className="page-shell page-shell-wide">
-        <DashboardBuilder />
+        <div className="card page-empty-card">
+          <p className="page-empty-title">You cannot create a dashboard</p>
+          <p className="page-empty-body">{whyNoCreate("dashboard")}</p>
+          <button
+            type="button"
+            onClick={() => router.push("/workspace?tab=dashboards")}
+            style={{
+              marginTop: 16, padding: "9px 18px", fontSize: 13, fontWeight: 500,
+              background: "var(--accent)", color: "#fff", border: "none",
+              borderRadius: 10, cursor: "pointer",
+            }}
+          >
+            Browse dashboards
+          </button>
+        </div>
       </div>
+    );
+  }
+
+  return (
+    // DashboardBuilder renders its own full-height shell — wrapping it in a
+    // second page shell doubled the padding and, worse, put an auto-height box
+    // between the builder and the viewport so its canvas had no height to fill.
+    <DashboardProvider onSave={handleSave}>
+      <DashboardBuilder />
     </DashboardProvider>
   );
 };

@@ -7,6 +7,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { API_BASE } from '../../../config';
 import { msalFetch } from '../../../utils/msalFetch';
 import { useAuth } from '../../../auth/useAuth';
+import { useRole } from '../../../hooks/useRole';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from '../../../components/Button';
 
@@ -24,6 +25,9 @@ const PANEL_MIN_H = 520;
 
 const ChartNewPage: React.FC = () => {
   const { isAuthenticated } = useAuth();
+  // POST /charts is `require_min_role("Analyst")`. A role below that is told
+  // so before choosing a dataset and a chart type, not after.
+  const { canCreate, whyNoCreate } = useRole();
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -118,6 +122,28 @@ const ChartNewPage: React.FC = () => {
       setIsCreating(false);
     }
   };
+
+  if (isAuthenticated && !canCreate) {
+    return (
+      <div className="page-shell page-shell-wide">
+        <div className="card page-empty-card">
+          <p className="page-empty-title">You cannot create a chart</p>
+          <p className="page-empty-body">{whyNoCreate('chart')}</p>
+          <button
+            type="button"
+            onClick={() => router.push('/workspace?tab=charts')}
+            style={{
+              marginTop: 16, padding: '9px 18px', fontSize: 13, fontWeight: 500,
+              background: 'var(--accent)', color: '#fff', border: 'none',
+              borderRadius: 10, cursor: 'pointer',
+            }}
+          >
+            Browse charts
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="page-shell page-shell-wide" style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>

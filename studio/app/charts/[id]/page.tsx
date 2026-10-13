@@ -15,6 +15,7 @@ import SaveChartModal from "../../../components/charts/SaveChartModal";
 import { msalFetch } from "../../../utils/msalFetch";
 import { useAuth } from "../../../auth/useAuth";
 import { useRecents } from "../../../hooks/useRecents";
+import { useRole } from "../../../hooks/useRole";
 import { useRouter, useParams } from "next/navigation";
 
 export const dynamic = 'force-dynamic';
@@ -31,6 +32,8 @@ interface ChartDetail {
   query_config?: any;
   viz_config?: any;
   sql_text?: string | null;
+  /** Owner identity — what `can_write` on the API tests this caller against. */
+  created_by?: string | null;
 }
 
 interface DatasetDetailSummary {
@@ -53,6 +56,12 @@ const ChartDetailBuilderView: React.FC<ChartDetailBuilderViewProps> = ({
   dataset,
 }) => {
   const { name, setName, canSave, isSaving, saveError, saveChartAs, chartId } = useChartBuilder();
+  // What this role may actually do to this chart, taken from the API's own
+  // rules: saving over it is `can_write(created_by, ctx)`, saving a copy is
+  // `require_min_role("Analyst")` on the create route.
+  const { canCreate: mayCreate, canWrite, whyNoWrite } = useRole();
+  const mayEdit = canWrite(chart.created_by);
+  const readOnlyReason = whyNoWrite("chart");
   const headerRouter = useRouter();
   const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
   const [isAnimating, setIsAnimating] = useState(false);
@@ -118,6 +127,7 @@ const ChartDetailBuilderView: React.FC<ChartDetailBuilderViewProps> = ({
           <div className="page-header-main">
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {!isEditingName ? (
+              mayEdit ? (
               <h1
                 className="page-header-title"
                 // Plain text (matches the dashboard title). Click to rename; the
@@ -130,6 +140,11 @@ const ChartDetailBuilderView: React.FC<ChartDetailBuilderViewProps> = ({
               >
                 {displayName}
               </h1>
+              ) : (
+                // A caller who cannot save over this chart is not invited to
+                // rename it: the title is plain text, with no click affordance.
+                <h1 className="page-header-title" style={{ margin: 0 }}>{displayName}</h1>
+              )
             ) : (
               <input
                 ref={nameInputRef}
@@ -195,7 +210,9 @@ const ChartDetailBuilderView: React.FC<ChartDetailBuilderViewProps> = ({
               }}
             />
           </button>
-          {chartId && (
+          {/* Save As creates a chart, so it needs the create role rather than
+              write access to this one. */}
+          {chartId && mayCreate && (
             <button
               type="button"
               onClick={openSaveAs}
@@ -211,18 +228,38 @@ const ChartDetailBuilderView: React.FC<ChartDetailBuilderViewProps> = ({
               <i className="fas fa-copy" /> Save As
             </button>
           )}
-          <button
-            type="button"
-            className="chart-builder-primary-btn"
-            onClick={() => {
-              if (canSave) {
-                setIsSaveModalOpen(true);
-              }
-            }}
-            disabled={!canSave || isSaving}
-          >
-            {isSaving ? "Saving..." : "Save chart"}
-          </button>
+          {/* Save writes over this chart. Where that would be refused the
+              button is replaced by the standing state it is refused for, so
+              the header says why rather than offering a dead control. */}
+          {mayEdit ? (
+            <button
+              type="button"
+              className="chart-builder-primary-btn"
+              onClick={() => {
+                if (canSave) {
+                  setIsSaveModalOpen(true);
+                }
+              }}
+              disabled={!canSave || isSaving}
+            >
+              {isSaving ? "Saving..." : "Save chart"}
+            </button>
+          ) : (
+            <span
+              role="img"
+              title={readOnlyReason}
+              aria-label={`View only. ${readOnlyReason}`}
+              style={{
+                padding: "8px 14px", fontSize: 12.5, fontWeight: 600,
+                color: "var(--text-muted)", background: "var(--bg-elevated)",
+                border: "1px solid var(--border)", borderRadius: 6,
+                display: "inline-flex", alignItems: "center", gap: 7, whiteSpace: "nowrap",
+              }}
+            >
+              <i className="fas fa-lock" aria-hidden="true" style={{ fontSize: 11 }} />
+              View only
+            </span>
+          )}
         </div>
       </header>
 
