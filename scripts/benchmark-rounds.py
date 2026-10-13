@@ -46,6 +46,17 @@ def runner_image():
 
 
 KAVEON_STS = ["kaveon-coordinator", "kaveon-worker"]
+# Workers each system gets while it is the one being measured. The pool is four
+# nodes and the chart places one worker per node, so three leaves a node free
+# for the other system's survivor — which is what lets the platform stay up
+# through a round without either measurement acquiring a co-tenant.
+BENCH_WORKERS = 3
+# What Kaveon keeps while Trino is the one being measured: enough to serve the
+# platform this cluster also hosts, on the node the benchmark is not using.
+# Zero here is what took the demo down for a whole campaign.
+DEMO_WORKERS = 1
+# The resting state once a campaign is over: every node working.
+REST_WORKERS = 4
 TRINO_STS = ["kaveon-benchmark-trino-coordinator", "kaveon-benchmark-trino-worker"]
 
 
@@ -110,7 +121,7 @@ def kaveon_window(cold):
     for name in TRINO_STS:
         scale(name, 0)
     scale("kaveon-coordinator", 1)
-    scale("kaveon-worker", 3)
+    scale("kaveon-worker", BENCH_WORKERS)
     if cold:
         for name in KAVEON_STS:
             kubectl("rollout", "restart", f"sts/{name}")
@@ -119,10 +130,22 @@ def kaveon_window(cold):
 
 
 def trino_window():
-    for name in KAVEON_STS:
-        scale(name, 0)
+    """Give Trino the nodes it is measured on, and keep the platform alive.
+
+    Kaveon used to go to zero here, which is what took the demo down for the
+    length of a campaign. It now keeps its coordinator and one worker, on the
+    fourth node — the one Trino is not using — so Studio stays served and
+    Trino still measures on three nodes with nothing else on them.
+
+    That is the whole reason the pool is four and not three. On three nodes the
+    two are mutually exclusive: either Trino acquires a co-tenant and the
+    measurement is not node-equal, or Kaveon goes to zero and the platform
+    dies.
+    """
+    scale("kaveon-coordinator", 1)
+    scale("kaveon-worker", DEMO_WORKERS)
     scale("kaveon-benchmark-trino-coordinator", 1)
-    scale("kaveon-benchmark-trino-worker", 3)
+    scale("kaveon-benchmark-trino-worker", BENCH_WORKERS)
     for name in TRINO_STS:
         wait_rollout(name)
 
@@ -148,10 +171,11 @@ def restore_platform():
             scale(name, 0)
         except Exception as error:  # noqa: BLE001 - reported, never raised from finally
             failures.append(f"{name} -> 0: {error}")
-    # One coordinator and the full three workers. Never zero: the Engine is
-    # also this cluster's system of record, and a demo left with no workers is
-    # indistinguishable to a reader from an installation that has no data.
-    for name, replicas in (("kaveon-coordinator", 1), ("kaveon-worker", 3)):
+    # One coordinator and every worker the pool can hold. Never zero: the
+    # Engine is also this cluster's system of record, and a platform left with
+    # no workers is indistinguishable to a reader from an installation that has
+    # no data in it.
+    for name, replicas in (("kaveon-coordinator", 1), ("kaveon-worker", REST_WORKERS)):
         try:
             scale(name, replicas)
         except Exception as error:  # noqa: BLE001
