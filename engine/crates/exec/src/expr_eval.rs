@@ -2,11 +2,12 @@ use arrow::array::{
     Array, ArrayRef, AsArray, BooleanArray, BooleanBuilder, Decimal128Array, Decimal128Builder,
     Float64Array, Float64Builder,
     Int32Array, Int32DictionaryArray, Int64Array, Int64Builder, ListArray, ListBuilder, MapArray,
+    PrimitiveArray,
     StringArray,
     StringBuilder, StructArray,
 };
 use arrow::compute;
-use arrow::datatypes::{DataType, Float64Type, Int32Type, Int64Type};
+use arrow::datatypes::{ArrowPrimitiveType, DataType, Float64Type, Int32Type, Int64Type};
 use arrow::record_batch::RecordBatch;
 use kaveon_core::predicate::ScalarValue;
 use kaveon_core::{BinaryOp, CastTarget, DateField, Expr, KaveonError, Result};
@@ -681,6 +682,46 @@ fn literal_to_array(value: &ScalarValue, len: usize) -> Result<ArrayRef> {
                 .with_precision_and_scale(*precision, *scale)?,
         )),
     }
+}
+
+fn primitive_arrays_overlap<T>(left: &PrimitiveArray<T>, right: &PrimitiveArray<T>) -> Option<bool>
+where
+    T: ArrowPrimitiveType,
+    T::Native: PartialEq,
+{
+    let mut saw_null = false;
+    for left_index in 0..left.len() {
+        if left.is_null(left_index) {
+            saw_null = true;
+            continue;
+        }
+        for right_index in 0..right.len() {
+            if right.is_null(right_index) {
+                saw_null = true;
+            } else if left.value(left_index) == right.value(right_index) {
+                return Some(true);
+            }
+        }
+    }
+    if saw_null { None } else { Some(false) }
+}
+
+fn string_arrays_overlap(left: &arrow::array::StringArray, right: &arrow::array::StringArray) -> Option<bool> {
+    let mut saw_null = false;
+    for left_index in 0..left.len() {
+        if left.is_null(left_index) {
+            saw_null = true;
+            continue;
+        }
+        for right_index in 0..right.len() {
+            if right.is_null(right_index) {
+                saw_null = true;
+            } else if left.value(left_index) == right.value(right_index) {
+                return Some(true);
+            }
+        }
+    }
+    if saw_null { None } else { Some(false) }
 }
 
 // ── Binary operations ───────────────────────────────────────────────────────
@@ -3345,6 +3386,100 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 ))),
             }
         }
+        "ARRAYS_OVERLAP" => {
+            check_arity(name, args, 2)?;
+            let left = args[0]
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .ok_or_else(|| KaveonError::Execution("ARRAYS_OVERLAP requires ARRAY/List values".into()))?;
+            let right = args[1]
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .ok_or_else(|| KaveonError::Execution("ARRAYS_OVERLAP requires ARRAY/List values".into()))?;
+            if left.len() != right.len() || left.value_type() != right.value_type() {
+                return Err(KaveonError::Execution(
+                    "ARRAYS_OVERLAP requires arrays with matching row counts and element types".into(),
+                ));
+            }
+            let rows = match left.value_type() {
+                DataType::Int64 => (0..num_rows)
+                    .map(|row| {
+                        if left.is_null(row) || right.is_null(row) {
+                            return None;
+                        }
+                        primitive_arrays_overlap(
+                            left.value(row).as_primitive::<Int64Type>(),
+                            right.value(row).as_primitive::<Int64Type>(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                DataType::Float64 => (0..num_rows)
+                    .map(|row| {
+                        if left.is_null(row) || right.is_null(row) {
+                            return None;
+                        }
+                        primitive_arrays_overlap(
+                            left.value(row).as_primitive::<Float64Type>(),
+                            right.value(row).as_primitive::<Float64Type>(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                DataType::Decimal128(_, _) => (0..num_rows)
+                    .map(|row| {
+                        if left.is_null(row) || right.is_null(row) {
+                            return None;
+                        }
+                        primitive_arrays_overlap(
+                            left.value(row).as_primitive::<arrow::datatypes::Decimal128Type>(),
+                            right.value(row).as_primitive::<arrow::datatypes::Decimal128Type>(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                DataType::Boolean => (0..num_rows)
+                    .map(|row| {
+                        if left.is_null(row) || right.is_null(row) {
+                            return None;
+                        }
+                        let left_inner = left.value(row);
+                        let right_inner = right.value(row);
+                        let left_values = left_inner.as_boolean();
+                        let right_values = right_inner.as_boolean();
+                        let mut saw_null = false;
+                        for left_index in 0..left_values.len() {
+                            if left_values.is_null(left_index) {
+                                saw_null = true;
+                                continue;
+                            }
+                            for right_index in 0..right_values.len() {
+                                if right_values.is_null(right_index) {
+                                    saw_null = true;
+                                } else if left_values.value(left_index) == right_values.value(right_index) {
+                                    return Some(true);
+                                }
+                            }
+                        }
+                        if saw_null { None } else { Some(false) }
+                    })
+                    .collect::<Vec<_>>(),
+                DataType::Utf8 => (0..num_rows)
+                    .map(|row| {
+                        if left.is_null(row) || right.is_null(row) {
+                            return None;
+                        }
+                        string_arrays_overlap(
+                            left.value(row).as_string::<i32>(),
+                            right.value(row).as_string::<i32>(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                other => {
+                    return Err(KaveonError::Execution(format!(
+                        "ARRAYS_OVERLAP does not support list element type {other}"
+                    )))
+                }
+            };
+            Ok(Arc::new(BooleanArray::from(rows)))
+        }
         "CARDINALITY" => {
             check_arity(name, args, 1)?;
             if let Some(map) = args[0].as_any().downcast_ref::<MapArray>() {
@@ -5626,6 +5761,36 @@ mod tests {
             );
             assert_eq!(extremum.data_type(), &DataType::Decimal128(20, 2));
         }
+
+        let overlap = Expr::Function {
+            name: "ARRAYS_OVERLAP".into(),
+            args: vec![
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![decimal(1), decimal(2)],
+                },
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![Expr::Literal(ScalarValue::Null), decimal(2)],
+                },
+            ],
+        };
+        assert!(evaluate(&overlap, &batch).unwrap().as_boolean().value(0));
+
+        let null_overlap = Expr::Function {
+            name: "ARRAYS_OVERLAP".into(),
+            args: vec![
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![decimal(3), Expr::Literal(ScalarValue::Null)],
+                },
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![decimal(4)],
+                },
+            ],
+        };
+        assert!(evaluate(&null_overlap, &batch).unwrap().as_boolean().is_null(0));
     }
 
     #[test]
