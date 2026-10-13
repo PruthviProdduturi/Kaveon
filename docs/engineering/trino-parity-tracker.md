@@ -374,6 +374,9 @@ invalidation, isolation, bounds, and restart evidence listed above.
   width for both `List` and `LargeList` inputs.
 - `ARRAY_SORT` now supports the existing orderable scalar element set in
   `LargeList` containers with nulls last and stable container width.
+- `ARRAY_SLICE` now preserves nested values, negative/positive strides, null
+  elements, and `List`/`LargeList` container width through the same bound
+  normalization path.
 - The differential corpus now exercises scalar `CARDINALITY`,
   `ARRAY_POSITION`, `ARRAY_JOIN`, and `ARRAYS_OVERLAP` results across alternate
   Parquet encodings and local/two-worker execution paths. This extends the
