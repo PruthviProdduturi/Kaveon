@@ -197,7 +197,7 @@ Missing task metrics remain visible through `tasks_with_metrics` and
 
 This harness does not itself kill a worker. Before publishing a distributed
 result, attach the report from `scripts/qualify-aks-fault-pressure.py` to prove
-worker retry and exact-result recovery. The comparison report records these
+worker retry, active-query cancellation cleanup, and exact-result recovery. The comparison report records these
 gates explicitly as `verification_gates`: hash aggregate/join spill remains
 open because those operators fail closed at the memory limit, and coordinator
 restart cleanup remains open until retained exchange chunks reach zero.

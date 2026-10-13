@@ -291,6 +291,34 @@ class Engine:
             record["scan_metrics_complete"] = history.get("scan_metrics_complete")
         return record
 
+    def submit_paged_start(self, case: dict[str, Any], *, timeout: int = 30) -> dict[str, Any]:
+        """Submit a paged statement and return its lifecycle record promptly."""
+        payload = {
+            "query": case["sql"],
+            "catalog": case.get("catalog", "OpenSource"),
+            "schema": case["schema"],
+            "result_delivery": "paged",
+            "client": case.get("client", "aks-fault-pressure-qualification"),
+            "settings": {"result_cache": False},
+        }
+        with self.session() as session:
+            response = session.post(
+                self.base + "/v1/statement",
+                json=payload,
+                verify=self.ca_path,
+                timeout=timeout,
+            )
+        response.raise_for_status()
+        return response.json()
+
+    def cancel(self, query_id: str, *, timeout: int = 15) -> requests.Response:
+        with self.session() as session:
+            return session.delete(
+                self.base + "/v1/query/" + query_id,
+                verify=self.ca_path,
+                timeout=timeout,
+            )
+
 
 def cluster_summary(cluster: dict[str, Any]) -> dict[str, Any]:
     return {
@@ -345,6 +373,30 @@ def wait_for_worker_task(engine: Engine, query_id: str, timeout: int = 10) -> tu
             break
         time.sleep(0.1)
     return None, latest
+
+
+def wait_for_cancellation_cleanup(
+    kube: Kube,
+    workers: list[str],
+    before: dict[str, int | None],
+    timeout: int = 30,
+) -> tuple[bool, dict[str, int | None]]:
+    """Wait until cancellation leaves no newly retained exchange or spill files."""
+    deadline = time.monotonic() + timeout
+    latest: dict[str, int | None] = {}
+    while time.monotonic() < deadline:
+        latest = {
+            "coordinator_exchange": kube.file_count("kaveon-coordinator-0", "/state/exchange"),
+            **{name + "_spill": kube.file_count(name, "/tmp/spill") for name in workers},
+        }
+        if all(
+            after is not None
+            and (before.get(name) is None or after <= before[name])
+            for name, after in latest.items()
+        ):
+            return True, latest
+        time.sleep(0.25)
+    return False, latest
 
 
 def wait_for_recovery(kube: Kube, engine: Engine, worker: str, old_uid: str, catalog_id: str, timeout: int = 300) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -572,6 +624,46 @@ def main() -> int:
             report["checks"]["concurrent_exact_results"] = concurrent_ok
             if not concurrent_ok:
                 raise AssertionError("Concurrent exact-result gate failed")
+
+            # Prove cancellation on the same deployed image and capture the
+            # cleanup evidence consumed by the Track 1 SLO merger. This is a
+            # separate active query so the later worker-loss injection cannot
+            # make cancellation look successful by terminating the pod.
+            cancel_case = dict(fault_case)
+            cancel_case["name"] = "active_query_cancellation"
+            cancel_before = engine.get("/v1/query")
+            if isinstance(cancel_before, dict):
+                cancel_before = cancel_before.get("queries", [])
+            cancel_prior_ids = {item.get("id") for item in cancel_before}
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                cancel_future = executor.submit(engine.submit_paged_start, cancel_case)
+                cancel_query_id, _ = wait_for_query(engine, cancel_prior_ids, cancel_case["sql"])
+                _, cancel_record = wait_for_worker_task(engine, cancel_query_id, timeout=15)
+                if cancel_record.get("state") != "RUNNING":
+                    raise AssertionError("Cancellation query did not reach RUNNING")
+                cancel_reply = engine.cancel(cancel_query_id)
+                cancel_response = cancel_future.result(timeout=30)
+            canceled_record = engine.get("/v1/query/" + cancel_query_id)
+            cancellation_cleanup, retained_after_cancel = wait_for_cancellation_cleanup(
+                kube, workers, report["retained_files_before"]
+            )
+            cancellation_ok = (
+                cancel_reply.status_code == 204
+                and cancel_response.get("id") == cancel_query_id
+                and canceled_record.get("state") == "CANCELED"
+                and cancellation_cleanup
+            )
+            report["cancellation"] = {
+                "query_id": cancel_query_id,
+                "delete_status": cancel_reply.status_code,
+                "statement_response_status": cancel_response.get("state"),
+                "final_state": canceled_record.get("state"),
+                "retained_files_after": retained_after_cancel,
+                "cleanup": cancellation_cleanup,
+            }
+            report["checks"]["cancellation_cleanup"] = cancellation_ok
+            if not cancellation_ok:
+                raise AssertionError("Active query cancellation or cleanup gate failed")
 
             fault_baseline = engine.submit(fault_case)
             if not fault_baseline.get("data") or fault_baseline["data"][0][0] <= 0:
