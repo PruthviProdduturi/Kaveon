@@ -23,6 +23,7 @@ by the selected database and Kaveon's API guardrails.
 | Cross joins | Alpha | Local Cartesian semantics and distributed broadcast-build path |
 | Semi/anti joins | Alpha | `IN`/`NOT IN`/`EXISTS`/`NOT EXISTS` subqueries, locally and distributed (broadcast of the subquery side); correlated `EXISTS`/`NOT EXISTS` on one equality decorrelated by the binder |
 | Scalar subqueries | Alpha | Uncorrelated scalar subqueries in WHERE/HAVING (an ungrouped aggregate, as a single-row cross join); correlated scalar aggregates on one or two equalities decorrelated into a join on the grouped aggregate |
+| Prepared statements | Alpha | Principal-owned `POST /v1/prepare`, describe, execute, and close lifecycle; execution reuses typed positional/named parameter binding and the normal query path |
 | CTEs and derived tables | Alpha | Non-recursive CTEs; derived tables in FROM and joined with commas |
 | Arithmetic expressions | Alpha | Compatible numeric coercion for supported primitive numeric types |
 | `HAVING` | Alpha | Post-aggregation filter |
