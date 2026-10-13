@@ -226,7 +226,7 @@ qualification documents; this tracker remains the single ordered work list.
   completed metrics record is available (`6cd66cb4`).
 - Named `:name` parameters now bind typed scalar values through the HTTP
   statement API, alongside sequential `?` and typed positional `$n`; missing
-  names fail before planning (`in this cycle`). `QUALIFY`
+  names fail before planning (`080c9ace`). `QUALIFY`
   continues to fail closed with a stable planner diagnostic rather than being
   silently ignored.
 - `IS DISTINCT FROM` and `IS NOT DISTINCT FROM` now lower to null-total
