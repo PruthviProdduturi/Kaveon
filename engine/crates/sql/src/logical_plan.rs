@@ -921,6 +921,15 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
         ast::TableFactor::Table { name, alias, .. } => {
             let table_name = name.to_string();
             let alias_name = alias.as_ref().map(|a| a.name.value.clone());
+            // DuckDB's sqlparser dialect tokenizes row-producing UNNEST in
+            // FROM as a table-shaped factor instead of exposing the generic
+            // TableFactor::UNNEST variant. Refuse that shape explicitly so it
+            // cannot silently become a scan of a table named UNNEST.
+            if table_name.eq_ignore_ascii_case("UNNEST") && alias_name.is_none() {
+                return Err(sql_err(
+                    "row-producing UNNEST in FROM is not supported; use value IN UNNEST(array)",
+                ));
+            }
             let lookup = alias_name.as_deref().unwrap_or(&table_name).to_lowercase();
             if let Some(cte_query) = ctes
                 .ctes
@@ -4461,6 +4470,15 @@ mod tests {
             inner.as_ref(),
             Expr::Function { name, .. } if name == "CONTAINS"
         )));
+    }
+
+    #[test]
+    fn rejects_row_producing_unnest_with_an_actionable_diagnostic() {
+        let error = sql_to_logical_plan("SELECT * FROM UNNEST(ARRAY[1, 2])").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "sql: row-producing UNNEST in FROM is not supported; use value IN UNNEST(array)"
+        );
     }
 
     #[test]
