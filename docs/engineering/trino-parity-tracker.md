@@ -368,6 +368,8 @@ invalidation, isolation, bounds, and restart evidence listed above.
   list, row, and map values, including `LargeList` containers; null list
   inputs remain null. Unsupported list element types retain an explicit
   execution diagnostic, with parser and executor coverage in this slice.
+- `ARRAY_DISTINCT` now preserves first occurrence order and one null for
+  nested list, row, and map values in both `List` and `LargeList` containers.
 - The differential corpus now exercises scalar `CARDINALITY`,
   `ARRAY_POSITION`, `ARRAY_JOIN`, and `ARRAYS_OVERLAP` results across alternate
   Parquet encodings and local/two-worker execution paths. This extends the
