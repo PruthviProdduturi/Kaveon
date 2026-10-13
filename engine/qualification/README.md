@@ -288,6 +288,14 @@ metadata (current engine/round, completed rounds, and throughput counts); it is
 operational visibility, not claim evidence. The complete report remains the
 only artifact accepted by the claim gate.
 
+The local pressure runner's grouped case is an exact bounded-completion check;
+it does not require a filesystem spill sample because the current final
+aggregate emits bounded batches and may finish without spilling. Forced
+distributed aggregate spill and cleanup are covered separately by the server
+differential test `a_distributed_grouped_aggregate_under_spill_matches_the_local_result`.
+The pressure profile still requires deliberate rejection for window memory,
+oversized string expansion, and an exhausted disk-spill quota.
+
 The coordinator result-cache SLO is a separate Track 1 gate. It is not implied
 by the distributed execution SLO or by the local cache test suite. The AKS
 record in `docs/qualification/cache-slo-aks-2026-10-13.json` qualifies the
