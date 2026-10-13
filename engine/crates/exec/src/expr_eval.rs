@@ -1,5 +1,6 @@
 use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, BooleanBuilder, Decimal128Array, Float64Array, Float64Builder,
+    Array, ArrayRef, AsArray, BooleanArray, BooleanBuilder, Decimal128Array, Decimal128Builder,
+    Float64Array, Float64Builder,
     Int32Array, Int32DictionaryArray, Int64Array, Int64Builder, ListArray, ListBuilder, MapArray,
     StringArray,
     StringBuilder, StructArray,
@@ -2940,10 +2941,41 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let boolean_array = args.iter().any(|arg| arg.data_type() == &DataType::Boolean);
             let integer_array = args.iter().any(|arg| arg.data_type() == &DataType::Int64);
             let float_array = args.iter().any(|arg| arg.data_type() == &DataType::Float64);
+            let decimal_type = args.iter().find_map(|arg| match arg.data_type() {
+                DataType::Decimal128(precision, scale) => Some((*precision, *scale)),
+                _ => None,
+            });
             if string_array && boolean_array {
                 return Err(KaveonError::Execution("ARRAY elements must share a type".into()));
             }
-            if boolean_array {
+            if let Some((precision, scale)) = decimal_type {
+                if args.iter().any(|arg| {
+                    !matches!(arg.data_type(), DataType::Decimal128(p, s) if *p == precision && *s == scale)
+                        && arg.data_type() != &DataType::Null
+                }) {
+                    return Err(KaveonError::Execution(
+                        "ARRAY decimal elements must share precision and scale".into(),
+                    ));
+                }
+                let values = args
+                    .iter()
+                    .map(|arg| compute::cast(arg, &DataType::Decimal128(precision, scale)))
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                let decimal_builder = Decimal128Builder::new()
+                    .with_precision_and_scale(precision, scale)
+                    .map_err(|error| KaveonError::Execution(error.to_string()))?;
+                let mut builder = ListBuilder::new(decimal_builder);
+                for row in 0..num_rows {
+                    for value in &values {
+                        let value = value.as_primitive::<arrow::datatypes::Decimal128Type>();
+                        builder
+                            .values()
+                            .append_option(value.is_valid(row).then(|| value.value(row)));
+                    }
+                    builder.append(true);
+                }
+                Ok(Arc::new(builder.finish()))
+            } else if boolean_array {
                 if args
                     .iter()
                     .any(|arg| !matches!(arg.data_type(), DataType::Boolean | DataType::Null))
@@ -5167,6 +5199,38 @@ mod tests {
         assert_eq!(
             result.values().iter().collect::<Vec<_>>(),
             vec![false, true, true, true, false]
+        );
+    }
+
+    #[test]
+    fn decimal_array_literals_preserve_exact_element_type() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        let decimal = |value: i128| {
+            Expr::Literal(ScalarValue::Decimal128 {
+                value,
+                precision: 20,
+                scale: 2,
+            })
+        };
+        let array = Expr::Function {
+            name: "ARRAY".into(),
+            args: vec![decimal(9007199254740992), decimal(1)],
+        };
+        let element = Expr::Function {
+            name: "ELEMENT_AT".into(),
+            args: vec![array, Expr::Literal(ScalarValue::Int64(1))],
+        };
+        let result = evaluate(&element, &batch).unwrap();
+        assert_eq!(result.data_type(), &DataType::Decimal128(20, 2));
+        assert_eq!(
+            result
+                .as_primitive::<arrow::datatypes::Decimal128Type>()
+                .value(0),
+            9007199254740992
         );
     }
 
