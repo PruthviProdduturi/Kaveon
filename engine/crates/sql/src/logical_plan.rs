@@ -444,13 +444,19 @@ fn bind_positional_parameters(
     parameters: &[ScalarValue],
 ) -> Result<()> {
     let mut error = None;
+    let mut question_index = 0usize;
     let mut bind = |expr: &mut ast::Expr| {
         let ast::Expr::Value(ast::Value::Placeholder(name)) = expr else {
             return ControlFlow::<()>::Continue(());
         };
-        let Some(index) = name.strip_prefix('$').and_then(|n| n.parse::<usize>().ok()) else {
+        let index = if name == "?" {
+            question_index += 1;
+            question_index
+        } else if let Some(index) = name.strip_prefix('$').and_then(|n| n.parse::<usize>().ok()) {
+            index
+        } else {
             error = Some(sql_err(format!(
-                "unsupported parameter placeholder '{name}'; use $1, $2, …"
+                "unsupported parameter placeholder '{name}'; use $1, $2, … or ?"
             )));
             return ControlFlow::Break(());
         };
@@ -3606,7 +3612,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_or_non_positional_parameters_before_planning() {
+    fn rejects_missing_or_binds_sequential_parameters_before_planning() {
         let missing = sql_to_logical_plan_for_binder_with_parameters(
             "SELECT * FROM t WHERE user_id = $2",
             &[ScalarValue::Int64(42)],
@@ -3614,13 +3620,13 @@ mod tests {
         .unwrap_err();
         assert!(missing.to_string().contains("parameter $2 is not bound"));
         let named = sql_to_logical_plan_for_binder_with_parameters(
-            "SELECT * FROM t WHERE user_id = ?",
-            &[ScalarValue::Int64(42)],
+            "SELECT * FROM t WHERE user_id = ? AND region = ?",
+            &[ScalarValue::Int64(42), ScalarValue::Utf8("EU".into())],
         )
-        .unwrap_err();
-        assert!(named
-            .to_string()
-            .contains("unsupported parameter placeholder '?'"));
+        .unwrap();
+        let text = format!("{named:?}");
+        assert!(text.contains("Int64(42)"));
+        assert!(text.contains("Utf8(\"EU\")"));
     }
 
     #[test]
