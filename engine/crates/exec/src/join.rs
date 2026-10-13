@@ -751,6 +751,15 @@ fn row_key(
                         .as_primitive::<arrow::datatypes::Int32Type>()
                         .value(row),
                 ),
+                // Arrow Date32 is an i32 day number.  It has the same SQL
+                // equality/hash semantics as an integer key, while the
+                // schema check above still prevents Date32 from joining an
+                // actual Int32 column accidentally.
+                DataType::Date32 => Key::Int32(
+                    column
+                        .as_primitive::<arrow::datatypes::Date32Type>()
+                        .value(row),
+                ),
                 DataType::Int64 => Key::Int64(
                     column
                         .as_primitive::<arrow::datatypes::Int64Type>()

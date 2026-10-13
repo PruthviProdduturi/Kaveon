@@ -124,6 +124,12 @@ foundations, but several operators are still centralized or narrow:
   partitioned `ROW_NUMBER()` output. This qualifies the implemented
   row-number filter shape only; other window frames and unsupported window
   clauses remain subject to the broader corpus.
+- Hash and semi/anti joins now accept `DATE` (`Date32`) keys with the same
+  exact day-number semantics as their integer representation. A correlated
+  scalar aggregate whose correlation includes a date column now passes the
+  Parquet-encoding and local/distributed differential sweep; the focused
+  join suites pass as well. This closes the date-key slice without claiming
+  support for other unqualified complex join-key types.
 - There is no Trino-style cross-source federation yet. Registered SQL sources
   are API passthrough paths, while the strongest native Engine path is
   Parquet/Delta/Iceberg. The connector matrix now records S3 as implemented

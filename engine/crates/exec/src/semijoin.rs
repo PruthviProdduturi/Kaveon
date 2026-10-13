@@ -748,6 +748,12 @@ fn extract_value(array: &dyn Array, row: usize) -> Result<Key> {
             array.as_primitive::<Int32Type>().value(row) as i128,
             0,
         )),
+        arrow::datatypes::DataType::Date32 => Ok(Key::Number(
+            array
+                .as_primitive::<arrow::datatypes::Date32Type>()
+                .value(row) as i128,
+            0,
+        )),
         arrow::datatypes::DataType::Int64 => Ok(Key::Number(
             array.as_primitive::<Int64Type>().value(row) as i128,
             0,
