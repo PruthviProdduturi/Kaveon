@@ -186,9 +186,9 @@ qualification documents; this tracker remains the single ordered work list.
   runtime requirement (`72c7e302`).
 - Running exchange cancellation now marks all dependent stages terminal,
   drains queued work, and emits one idempotent cleanup intent (`c2ea4da2`).
-- `ROW(...)` and `MAP(...)` expressions now fail during planning with typed
-  complex-type diagnostics instead of reaching execution as unknown functions
-  (`bd38251d`).
+- `ROW(...)` and `MAP(...)` constructors now lower and execute as typed Arrow
+  struct/map values; dereference, lookup, and row/map comparison remain typed
+  complex-type boundaries (`12d44965`, `8ae24b96`).
 - Unsupported complex `CAST` targets such as `JSON` now fail during planning
   with a stable target-type diagnostic; scalar, DATE, timestamp, and DECIMAL
   casts remain the qualified cast surface (`c259e5d1`).
