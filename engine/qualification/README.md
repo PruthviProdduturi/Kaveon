@@ -54,6 +54,30 @@ silently omitted. The five initial failures are fixed; the expanded suite curren
 passes 37 SQL cases. The suite also checks authenticated paging and replay. See the
 [readiness evidence and open gates](../../docs/engineering/engine-readiness-qualification.md).
 
+## Result-cache SLO
+
+The coordinator cache has a separate fail-closed harness. It compares an
+uncached result with a cold cached result and repeated warm hits, records p50,
+p95, p99 and maximum wall latency, checks exact result hashes, verifies that
+`result_cache=false` does not add a hit, checks cache counters and clear
+behavior, and requires the Engine's hit-latency metrics. Run it against an
+admin-authenticated coordinator:
+
+```powershell
+$env:KAVEON_TOKEN = "<admin token>"
+python engine/qualification/cache_slo.py `
+  --server https://engine.example `
+  --sql "SELECT COUNT(*) AS n FROM OpenSource.public.kaveon_events_enriched" `
+  --output tmp/cache-slo/report.json
+```
+
+The restart gate is intentionally explicit. After restarting the coordinator,
+run one identical query with a fresh report and pass a JSON file containing
+`{"restart_miss": true}` through `--restart-evidence`; the harness never
+claims restart behavior from a process it did not control. A successful run
+still qualifies only the declared query and topology, not a shared cache or
+arbitrary SQL workload.
+
 ## CLI gates
 
 ```powershell
