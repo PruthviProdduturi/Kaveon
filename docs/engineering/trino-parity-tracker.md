@@ -177,6 +177,11 @@ qualification documents; this tracker remains the single ordered work list.
 - Unsupported complex `CAST` targets such as `JSON` now fail during planning
   with a stable target-type diagnostic; scalar, DATE, timestamp, and DECIMAL
   casts remain the qualified cast surface (`c259e5d1`).
+- Ordinary aggregate `FILTER (WHERE ...)` clauses now lower to
+  null-preserving `CASE` expressions, including `COUNT(*) FILTER`, so the
+  existing aggregate and spill paths retain their exact semantics. Window
+  filters, sketch filters, and non-aggregate filters remain explicit
+  unsupported diagnostics (`<pending commit>`).
 - Bounded projection scalar subqueries now support an ungrouped, single-column
   aggregate and preserve its alias; correlated and multi-row projection forms
   remain explicitly rejected (`d7be5f9a`).
@@ -193,7 +198,7 @@ qualification documents; this tracker remains the single ordered work list.
 
 ### Current focused validation
 
-The latest focused validation passes 328 `kaveon-server` tests, 94
+The latest focused validation passes 328 `kaveon-server` tests, 96
 `kaveon-sql` tests, and 213 `kaveon-exec` tests. These counts are package-level
 validation snapshots; they do not close the broader multi-worker, AKS, or
 cross-connector qualification gates below.

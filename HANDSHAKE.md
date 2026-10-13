@@ -38,6 +38,9 @@ arrays/objects and unbound positions fail with HTTP 400. Workers receive the
 compiled fragment, so parameter values never cross the worker boundary.
 The server test `statement_request_parameters_reach_typed_sql_planning`
 verifies request JSON through typed conversion into the SQL logical plan.
+Ordinary aggregate `FILTER (WHERE ...)` clauses now lower to
+null-preserving `CASE` expressions, including `COUNT(*) FILTER`; window,
+sketch, and non-aggregate filters remain explicitly rejected.
 `CAST` now covers DATE and fixed-precision microsecond
 TIMESTAMP (with explicit UTC timezone metadata) in addition to the existing
 scalar and decimal targets. Decimal precision/scale bounds are validated before
