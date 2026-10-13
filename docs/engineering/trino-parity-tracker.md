@@ -83,8 +83,9 @@ foundations, but several operators are still centralized or narrow:
   runtime. General dynamic filtering, join reordering, skew mitigation, and
   qualified coordinator failover remain open.
 - Ordinary distributed joins use equality keys; inner residual predicates now
-  lower to a correctness-first cross join plus filter, while residual outer
-  joins remain unsupported. Semi/anti joins now hash-partition both inputs on
+  lower to a correctness-first cross join plus filter, while equality-key
+  residual predicates on outer joins are evaluated inside the hash join before
+  null extension. Residual-only outer joins remain unsupported. Semi/anti joins now hash-partition both inputs on
   ordinary column keys, including positional keys projected by correlated
   EXISTS plans, and retain a deliberate broadcast fallback only when a key
   cannot be resolved; runtime build-key propagation and adaptive broadcast
