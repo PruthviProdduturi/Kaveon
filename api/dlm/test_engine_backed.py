@@ -169,9 +169,17 @@ class GenerationTests(unittest.TestCase):
             stack.enter_context(patch.object(engine, "_effective_spec",
                                              lambda i: persisted["manifest"]["context_spec"]))
             precompute = stack.enter_context(patch.object(engine, "_precompute_answers", return_value=0))
+            # The context banner is served from memory against a bounded
+            # staleness window. A publication this process performs must not
+            # wait for that window to pass, and this is the path every caller
+            # takes to publish — the Studio action, the data-change webhook and
+            # the freshness sweep alike.
+            engine._COVERAGE_CACHE.serve(("owner", "Admin"),
+                                         lambda _previous: ([], "digest-a"))
             result = engine.generate_dlm("2", force=True)
 
         self.assertTrue(result["ok"] and result["status"] == "ready", result)
+        self.assertEqual(engine._COVERAGE_CACHE.stats()["entries"], 0)
         precompute.assert_not_called()                      # no warehouse cuboids for an Engine table
         spec = persisted["manifest"]["context_spec"]
         self.assertEqual(spec["freshness_policy"], "cached")
