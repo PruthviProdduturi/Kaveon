@@ -35,20 +35,26 @@ the same acceptance contract rather than separate informal benchmarks.
 
 ## Audit snapshot — October 13, 2026
 
-The local parity baseline was rerun from commit `34914e4e` on October 13:
-`cargo test -p kaveon-server` passed **342/342** tests,
+The local parity baseline was rerun from commit `60f3f942` on October 13:
+`cargo test -p kaveon-server` passed **349/349** tests,
 `cargo test -p kaveon-sql` passed **116/116** tests, and
-`cargo test -p kaveon-exec --lib` passed **269/269** non-ignored tests with four
-benchmark tests intentionally ignored. Documentation validation also passed for 139 Markdown
+`cargo test -p kaveon-exec --lib` passed **285/285** non-ignored tests with four
+benchmark tests intentionally ignored. Documentation validation also passed for 145 Markdown
 files, 39 routes, and 9 SVGs. This is an in-process regression baseline; it
 does not replace the deployed three-worker qualification gates listed below.
 
 The complete `cargo test --workspace` run also passed on this tree, including
 catalog, CLI, core, executor, optimizer, server, SQL, and storage crates plus
-all doctests. The executor result is **269 passed, 4 ignored**; the ignored
+all doctests. The executor result is **285 passed, 4 ignored**; the ignored
 cases are explicitly marked release benchmarks. This workspace result is
 repository-wide regression evidence, not a substitute for the deployed
 three-worker and connector qualification gates.
+
+The Python qualification unit suite also passes **37/37** tests. The local
+pressure runner now authenticates its disposable bootstrap catalogs as an
+administrator, matching the documented grant model; its latest rebuilt run
+reached the execution cases, but grouped-spill observation and two deliberate
+resource-rejection cases remain open and are not counted as qualified evidence.
 
 Temporal `ARRAY[...]` literals now preserve DATE32, DATE64, TIME32 second and
 millisecond, and TIMESTAMP microsecond element types, including null elements;
