@@ -126,11 +126,43 @@ def _serving_artifacts() -> List[dict]:
     if state is None:
         return []
     if not state.all_loaded:
-        from services import product_store
-        for record in product_store.list_records("dataset", state.actor, "Admin", max_records=1000):
-            record_id = str(record.get("id") or "")
-            if record_id:
-                _serving_artifact(record_id)
+        from services import dlm_compiled_artifact
+        # One read of the datasets, definitions and runs for the whole page.
+        #
+        # This resolved each artifact independently, and resolving one lists
+        # every DLM run and reads its dataset — so the cost was a full run
+        # listing and a dataset read per dataset. The banner above the composer
+        # took twenty-five seconds to draw, and got slower as more datasets
+        # gained context, because succeeding is what made it fetch anything.
+        #
+        # The PostgreSQL path this replaced read every artifact in a single
+        # query. Restoring that shape is the point: three listings, then the
+        # artifact content, which genuinely is per dataset.
+        try:
+            context = dlm_compiled_artifact.load_bulk_context(state.actor)
+            dataset_ids = list(context.datasets)
+        except Exception:
+            # A caller that cannot list in bulk still gets the page, one read
+            # at a time, rather than no page at all.
+            context, dataset_ids = None, [
+                str(record.get("id") or "")
+                for record in __import__("services.product_store", fromlist=["x"])
+                .list_records("dataset", state.actor, "Admin", max_records=1000)
+            ]
+        for dataset_id in dataset_ids:
+            if not dataset_id:
+                continue
+            if dataset_id in state.artifacts:
+                continue
+            artifact = get_dlm(dataset_id, state.actor, state.role, context=context)
+            if artifact is None:
+                state.artifacts[dataset_id] = ((0, "missing"), None)
+                continue
+            identity = (artifact.get("version"), hashlib.sha256(
+                json.dumps(artifact, sort_keys=True, separators=(",", ":"),
+                           ensure_ascii=False).encode("utf-8")
+            ).hexdigest())
+            state.artifacts[dataset_id] = (identity, artifact)
         state.all_loaded = True
     return [entry[1] for entry in state.artifacts.values() if entry[1] is not None]
 
@@ -1113,7 +1145,8 @@ def _build_sketch_cuboids(dataset_id: str, database: str, schema: str, fact: Opt
     return built
 
 
-def get_dlm(dataset_id: str, actor: Optional[str] = None, role: str = "Viewer") -> Optional[Dict[str, Any]]:
+def get_dlm(dataset_id: str, actor: Optional[str] = None, role: str = "Viewer",
+            *, context=None) -> Optional[Dict[str, Any]]:
     """Return the compiled artifact row (manifest/rollups parsed) or None."""
     from services import postgresql_retirement_runtime
     if postgresql_retirement_runtime.requested():
@@ -1121,7 +1154,7 @@ def get_dlm(dataset_id: str, actor: Optional[str] = None, role: str = "Viewer") 
             raise RuntimeError("PostgreSQL-free DLM reads require actor identity")
         from services import dlm_compiled_artifact
         try:
-            return dlm_compiled_artifact.read(str(dataset_id), actor, role)
+            return dlm_compiled_artifact.read(str(dataset_id), actor, role, context=context)
         except dlm_compiled_artifact.DefinitionUnavailable:
             # This function answers with the artifact or None, and the
             # non-retirement branch below returns None for a dataset with no

@@ -146,7 +146,50 @@ def enqueue_run(transaction, dataset_id: str, owner: str, actor: str,
         actor=actor, owner=owner)
 
 
-def read(dataset_id: str, actor: str, role: str) -> dict | None:
+class BulkContext:
+    """The records a batch of artifact reads would otherwise fetch per dataset.
+
+    `read` resolves one artifact by listing every DLM run and reading the
+    dataset record. Called in a loop — which is what the context banner does,
+    once per dataset — that is a full run listing and a dataset read each time.
+    Nine datasets cost nine of both, and the banner took twenty-five seconds to
+    decorate a strip above the composer.
+
+    Loading them once and resolving against memory turns O(datasets) listings
+    into three, leaving only the artifact content, which genuinely is per
+    dataset.
+    """
+
+    __slots__ = ("datasets", "definitions", "runs")
+
+    def __init__(self, datasets: dict, definitions: dict, runs: list):
+        self.datasets = datasets
+        self.definitions = definitions
+        self.runs = runs
+
+
+def load_bulk_context(actor: str) -> BulkContext:
+    """Read the dataset, definition and run records once, for a batch of reads."""
+    datasets = {
+        str(record.get("id")): record
+        for record in product_store.list_records("dataset", actor, "Admin", max_records=1000)
+        if isinstance(record, dict)
+    }
+    definitions = {
+        str(record.get("id")): record
+        for record in product_store.list_records("dlm_definition", actor, "Admin", max_records=1000)
+        if isinstance(record, dict)
+    }
+    runs = [
+        record
+        for record in product_store.list_records("dlm_run", actor, "Admin", max_records=1000)
+        if isinstance(record, dict)
+    ]
+    return BulkContext(datasets, definitions, runs)
+
+
+def read(dataset_id: str, actor: str, role: str,
+         *, context: BulkContext | None = None) -> dict | None:
     """Resolve and verify the newest compiled run without a PostgreSQL fallback."""
     dataset_id = str(dataset_id or "")
     if not dataset_id.isdecimal() or not actor:
@@ -156,7 +199,8 @@ def read(dataset_id: str, actor: str, role: str) -> dict | None:
     # The bridge uses its server-held admin credential, then applies the same
     # product visibility rules as dataset routes. Passing Viewer/Analyst to the
     # storage layer would incorrectly reduce reads to owner-only records.
-    dataset = product_store.read("dataset", dataset_id, actor, "Admin")
+    dataset = (context.datasets.get(dataset_id) if context is not None
+               else product_store.read("dataset", dataset_id, actor, "Admin"))
     if dataset is None:
         return None
     dataset_document = dataset.get("document")
@@ -169,7 +213,8 @@ def read(dataset_id: str, actor: str, role: str) -> dict | None:
             or visibility == "internal" and role in {"Analyst", "Editor"}
             or visibility == "private" and owner == actor):
         return None
-    definition = product_store.read("dlm_definition", dataset_id, actor, "Admin")
+    definition = (context.definitions.get(dataset_id) if context is not None
+                  else product_store.read("dlm_definition", dataset_id, actor, "Admin"))
     expected_definition = {"dataset_id": dataset_id, "dataset_revision": dataset_revision}
     if not definition or definition.get("document") != expected_definition:
         raise DefinitionUnavailable("Compiled DLM definition is missing or stale")
@@ -177,7 +222,9 @@ def read(dataset_id: str, actor: str, role: str) -> dict | None:
     if type(definition_revision) is not int or definition_revision < 1:
         raise RuntimeError("Compiled DLM definition revision is invalid")
     candidates = []
-    for record in product_store.list_records("dlm_run", actor, "Admin", max_records=1000):
+    runs = (context.runs if context is not None
+            else product_store.list_records("dlm_run", actor, "Admin", max_records=1000))
+    for record in runs:
         document = record.get("document") if isinstance(record, dict) else None
         match = re.fullmatch(re.escape(dataset_id) + r"-v([1-9][0-9]*)", str(record.get("id") or ""))
         if (match and isinstance(document, dict) and document.get("definition_id") == dataset_id
