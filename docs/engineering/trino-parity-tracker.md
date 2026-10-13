@@ -134,6 +134,10 @@ foundations, but several operators are still centralized or narrow:
   four time units in hash and semi/anti joins. Duplicate and NULL behavior is
   covered by an execution test; timestamp joins still require matching Arrow
   units/timezones through the existing schema check.
+- Regular hash joins now support `DECIMAL(precision, scale)` keys using the
+  exact unscaled integer plus scale, matching the existing semi/anti-join
+  representation. Duplicate and NULL behavior is covered by execution tests;
+  `Decimal256` remains outside this slice.
 - There is no Trino-style cross-source federation yet. Registered SQL sources
   are API passthrough paths, while the strongest native Engine path is
   Parquet/Delta/Iceberg. The connector matrix now records S3 as implemented
