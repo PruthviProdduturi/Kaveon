@@ -18734,6 +18734,14 @@ mod streamed_root_tests {
                 serde_json::json!(-1.25),
             ]
         );
+        let typed = request_parameters(&values).unwrap();
+        let plan = kaveon_sql::logical_plan::sql_to_logical_plan_for_binder_with_parameters(
+            "SELECT * FROM events WHERE id = ? AND owner = ?",
+            &typed[..2],
+        )
+        .expect("USING values reach the typed binder");
+        assert!(format!("{plan:?}").contains("Int64(42)"));
+        assert!(format!("{plan:?}").contains("O'Reilly"));
     }
 
     #[test]
