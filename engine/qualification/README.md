@@ -219,6 +219,30 @@ also carries p50/p95/p99 latency and measured CPU, memory, exchange, spill, and
 admission counters. Exit code 2 means diagnostics were produced but at least
 one release gate remains open.
 
+### Track 1 distributed execution SLO
+
+The merged artifact is also the SLO evidence record for the declared image and
+workload. The release SLO is deliberately bounded rather than a claim about
+arbitrary data or hardware:
+
+* every accepted statement must return its expected typed result (100% exact
+  result success; admission refusals are counted separately);
+* at least 99.9% of accepted statements in the five-minute mixed-workload
+  window must complete successfully, with no silent mismatches;
+* p50, p95, p99, maximum latency, and successful exact-result QPS must be
+  present in the report; the 1.90x Trino throughput objective is a separate
+  comparison gate;
+* worker-loss retry, cancellation cleanup, and bounded memory/spill evidence
+  must be present and pass, including zero retained temporary files after the
+  cleanup checks.
+
+Missing samples, task metrics, image/configuration binding, or any required
+failure/recovery evidence leaves the SLO pending. A passing local unit suite or
+an isolated latency sample cannot satisfy this SLO. The current report merger
+does not claim coordinator-loss survival, sustained network-pressure,
+cloud-storage fault injection, longer endurance, or upgrade/rollback evidence;
+those remain explicit Track 1 blockers.
+
 `transaction_compare.py` now produces the transaction input for the product SQL
 facade. It executes point read, insert, update, delete, conflicting update, and a
 three-record commit against identical logical records. PostgreSQL stores the
