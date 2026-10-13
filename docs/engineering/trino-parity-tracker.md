@@ -63,9 +63,9 @@ foundations, but several operators are still centralized or narrow:
   return one ungrouped, single-column aggregate. Correlated, multi-row, and
   other scalar forms, recursive CTEs, `INTERSECT ALL`, `EXCEPT ALL`, the full
   prepared-statement protocol, and general lake-table DML remain missing.
-  Typed positional `$1` parameters are now validated and bound through the
-  HTTP statement API; named and `?` forms still fail with an explicit binding
-  diagnostic.
+  Typed positional `$1` and sequential `?` parameters are now validated and
+  bound through the HTTP statement API; named placeholders still fail with an
+  explicit binding diagnostic.
   Uncorrelated aggregate scalar subqueries in `WHERE` are now supported with
   exact-result differential coverage; projection, correlated, and multi-row
   scalar forms remain explicitly rejected.
@@ -129,11 +129,12 @@ qualification documents; this tracker remains the single ordered work list.
   in `52fa76c6`.
 - Uncorrelated aggregate scalar subqueries in `WHERE`, plus actionable
   multi-row and multi-column diagnostics, are covered in `3a60cf23`.
-- SQL placeholders (`$1`, `?`, and named forms) now fail with an explicit
-  binding diagnostic rather than being misinterpreted as literals
-  (`89499c7b`). Positional `$1`, `$2` binding now safely converts typed AST
-  literals without string interpolation (`74f66a10`), and the HTTP statement
-  API routes validated scalar parameters before planning (`0ea777ba`).
+- Unsupported placeholder forms and named forms fail with an explicit binding
+  diagnostic rather than being misinterpreted as literals (`89499c7b`).
+  Positional `$1`, `$2` binding safely converts typed AST literals without
+  string interpolation (`74f66a10`), sequential `?` placeholders are bound in
+  appearance order (`0a3fa2a4`), and the HTTP statement API routes validated
+  scalar parameters before planning (`0ea777ba`).
 - A bounded replayable append-only exchange spool foundation is implemented
   with partial-read, fork/retry, cancellation, and writer-failure tests
   (`79ddf443`).
@@ -183,8 +184,9 @@ qualification remain open.
 Track 2 remains partial because the full prepared-statement protocol,
 correlated and other unsupported scalar subqueries, complex types, multiset
 set operations, and broader typed DML are not yet implemented. Positional
-scalar parameters are supported through the HTTP statement API; named and
-`?` placeholders remain explicit unsupported cases.
+scalar parameters are supported through the HTTP statement API; named
+placeholders and the full prepared-statement protocol remain explicit
+unsupported cases.
 
 These slices do not close Tracks 1 and 2's qualification gates; the broader
 three-worker corpus, complex types, correlated/unsupported scalar shapes,
