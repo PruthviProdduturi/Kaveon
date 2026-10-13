@@ -26,7 +26,7 @@ by the selected database and Kaveon's API guardrails.
 | Arithmetic expressions | Alpha | Compatible numeric coercion for supported primitive numeric types |
 | `HAVING` | Alpha | Post-aggregation filter |
 | Window functions | Alpha | `ROW_NUMBER`, `RANK`, `DENSE_RANK`, `LAG`, `LEAD`, aggregates with `OVER (PARTITION BY … ORDER BY …)` and `ROWS`/`RANGE`/`GROUPS` frames |
-| Set operations | Alpha | `UNION [ALL]`, `INTERSECT`, `EXCEPT`, distributed (each side deduplicated on the workers) |
+| Set operations | Alpha | `UNION [ALL]`, `INTERSECT`, `EXCEPT`, `INTERSECT ALL`, and `EXCEPT ALL`; distributed exact duplicate-count semantics are covered by the differential sweep |
 | Date/time | Alpha | `EXTRACT`, `DATE_TRUNC`, `DATE_PART`, `TO_CHAR`, `NOW`, `CURRENT_DATE`, `CURRENT_TIMESTAMP`, `DATE '…'` literals, `date ± INTERVAL 'n' DAY`; `MONTH`/`YEAR` intervals only against a DATE literal |
 | Conditional, comparison and strings | Alpha | `CASE`, `COALESCE`, `BETWEEN`, `IN`, `LIKE`/`ILIKE` (Arrow kernels), `REGEXP_REPLACE`, `CAST`, concatenation, `UPPER`/`LOWER`/`LENGTH`/`TRIM`/`SUBSTR`/`REPEAT`/`REPLACE`/`LPAD`/`RPAD`; functions over dictionary columns run once per dictionary value the batch uses and keep a text result dictionary-encoded; `REGEXP_REPLACE` over plain text runs once per distinct value in the batch |
 | Literals against columns | Alpha | Integer literals push down to narrow integer and Date32 columns; integer and decimal literals meet double columns; text literals against Date32 columns are coerced on every reader |
@@ -98,8 +98,9 @@ unchanged; nothing is approximated unless the statement writes an
   `LIMIT`/set operations inside a correlated subquery, `EXISTS` correlated on
   more than one column, correlated `IN`; each is refused by name.
 - Non-equality join conditions (residual join filters) and `GROUPING SETS`/
-  `CUBE`/`ROLLUP`, recursive CTEs, array/map/JSON types (the one list-typed
-  result, `APPROX_PERCENTILE(col, ARRAY[…])`, is rendered, not operated on);
+  `CUBE`/`ROLLUP`, recursive CTEs, map/row/JSON types; typed numeric and text
+  `ARRAY[...]` literals support `CARDINALITY` and `CONTAINS`, while broader
+  array operators remain open;
   approximate aggregates beyond `APPROX_COUNT_DISTINCT` and
   `APPROX_PERCENTILE` — `APPROX_MOST_FREQUENT` has no heavy-hitter sketch in
   the statistics object yet.
@@ -110,8 +111,9 @@ unchanged; nothing is approximated unless the statement writes an
 - Scalar optimizer statistics beyond row count. Native `ANALYZE` persists the
   exact row count and an immutable statistics document, but histogram/selectivity
   planning is not yet implemented.
-- Dynamic filtering. Exchange output streams while a task runs; the consumer
-  still downloads a whole payload before decoding it.
+- Dynamic filtering. Exchange output streams while a task runs and the
+  consumer decodes through a bounded replayable spool, but build-side keys are
+  not yet propagated into probe scans at runtime.
 
 ## Transaction API boundary
 
