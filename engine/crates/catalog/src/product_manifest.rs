@@ -135,6 +135,18 @@ pub struct TypedRow {
     pub unique_keys: BTreeMap<String, String>,
 }
 
+/// One typed table's rows, stored as an immutable object outside the snapshot.
+///
+/// The object is named by the digest of its contents, which is what makes a
+/// commit cost the size of what it changed: a table whose rows are untouched
+/// keeps the reference it already had and is not written again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypedTableRef {
+    pub document: ImmutableFileRef,
+    /// Carried so a reader can report a table's size without fetching it.
+    pub rows: u64,
+}
+
 /// Rebuildable manifest indexes for typed rows. The index values identify the
 /// row revision, allowing validation to detect stale or mismatched index data.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -165,6 +177,22 @@ pub struct CatalogSnapshot {
     /// Revisioned typed rows owned by the same immutable catalog snapshot.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub typed_rows: BTreeMap<String, BTreeMap<String, TypedRow>>,
+    /// Where each typed table's rows live, one immutable object per table,
+    /// content-addressed.
+    ///
+    /// Typed rows used to be serialised into the snapshot itself, and a commit
+    /// republishes the whole snapshot — so the cost of any write was the size
+    /// of the entire catalog, and the snapshot had a ceiling it could reach. A
+    /// production installation stopped accepting writes with 5,650 rows of
+    /// query history filling 63% of an 8 MiB snapshot, while every dataset,
+    /// chart and dashboard it held came to 74 KB. Saving a favourite rewrote
+    /// all of it.
+    ///
+    /// Naming a table's object by the digest of its contents means a table
+    /// that did not change is not written again, and the snapshot stays a few
+    /// kilobytes of references however large the tables grow.
+    #[serde(default)]
+    pub typed_tables: BTreeMap<String, TypedTableRef>,
     /// Persistent, rebuildable typed-row primary and unique indexes.
     /// Older snapshots may omit this field and are accepted as legacy.
     #[serde(default)]
@@ -275,6 +303,7 @@ impl CatalogSnapshot {
             control_records: BTreeMap::new(),
             product_records: BTreeMap::new(),
             typed_rows: BTreeMap::new(),
+            typed_tables: BTreeMap::new(),
             typed_row_indexes: BTreeMap::new(),
             typed_schemas: BTreeMap::new(),
         })
@@ -557,6 +586,7 @@ impl CatalogSnapshot {
             control_records,
             product_records,
             typed_rows,
+            typed_tables: self.typed_tables.clone(),
             typed_row_indexes,
             typed_schemas,
         };
