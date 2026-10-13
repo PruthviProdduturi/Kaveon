@@ -1782,6 +1782,35 @@ fn arrays_overlap_utf8<L: OffsetSizeTrait>(
     Ok(Arc::new(rows))
 }
 
+fn array_position_nested<L: OffsetSizeTrait>(
+    list: &GenericListArray<L>,
+    needle: &ArrayRef,
+) -> Result<ArrayRef> {
+    let result = (0..list.len())
+        .map(|row| {
+            if list.is_null(row) {
+                return None;
+            }
+            let values = list.value(row);
+            let needle_is_null = needle.is_null(row);
+            let needle = (!needle_is_null).then(|| needle.slice(row, 1));
+            let position = (0..values.len()).find(|&index| {
+                if values.is_null(index) {
+                    return needle_is_null;
+                }
+                let Some(needle) = needle.as_ref() else {
+                    return false;
+                };
+                comparison(&values.slice(index, 1), needle, CompareKind::Eq)
+                    .map(|equal| !equal.is_null(0) && equal.value(0))
+                    .unwrap_or(false)
+            });
+            Some(position.map(|index| index as i64 + 1).unwrap_or(0))
+        })
+        .collect::<Vec<_>>();
+    Ok(Arc::new(Int64Array::from(result)))
+}
+
 fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
     let upper = name.to_uppercase();
     if upper.starts_with("ARRAY_ANY_") || upper.starts_with("ARRAY_ALL_") {
@@ -2986,6 +3015,21 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "ARRAY_POSITION" => {
             check_arity(name, args, 2)?;
+            if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
+                if matches!(
+                    list.value_type(),
+                    DataType::List(_)
+                        | DataType::LargeList(_)
+                        | DataType::Struct(_)
+                        | DataType::Map(_, _)
+                ) {
+                    return array_position_nested(list, &args[1]);
+                }
+                return Err(KaveonError::Execution(format!(
+                    "ARRAY_POSITION does not support list element type {}",
+                    list.value_type()
+                )));
+            }
             let list = args[0]
                 .as_any()
                 .downcast_ref::<arrow::array::ListArray>()
@@ -3001,29 +3045,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     | DataType::Struct(_)
                     | DataType::Map(_, _)
             ) {
-                let result = (0..num_rows)
-                    .map(|row| {
-                        if list.is_null(row) {
-                            return None;
-                        }
-                        let values = list.value(row);
-                        let needle_is_null = args[1].is_null(row);
-                        let needle = (!needle_is_null).then(|| args[1].slice(row, 1));
-                        let position = (0..values.len()).find(|&index| {
-                            if values.is_null(index) {
-                                return needle_is_null;
-                            }
-                            let Some(needle) = needle.as_ref() else {
-                                return false;
-                            };
-                            comparison(&values.slice(index, 1), needle, CompareKind::Eq)
-                                .map(|equal| !equal.is_null(0) && equal.value(0))
-                                .unwrap_or(false)
-                        });
-                        Some(position.map(|index| index as i64 + 1).unwrap_or(0))
-                    })
-                    .collect::<Vec<_>>();
-                return Ok(Arc::new(Int64Array::from(result)));
+                return array_position_nested(list, &args[1]);
             }
             macro_rules! position_primitive {
                 ($ty:ty, $data_type:expr) => {{
@@ -7086,6 +7108,26 @@ mod tests {
         )
         .unwrap();
         assert!(result.as_boolean().value(0));
+
+        let mut needle_builder = ListBuilder::new(Int64Builder::new());
+        needle_builder.values().append_value(2);
+        needle_builder.append(true);
+        let mut position_builder = LargeListBuilder::new(ListBuilder::new(Int64Builder::new()));
+        position_builder.values().values().append_value(1);
+        position_builder.values().append(true);
+        position_builder.values().values().append_value(2);
+        position_builder.values().append(true);
+        position_builder.append(true);
+        let result = eval_scalar_function(
+            "ARRAY_POSITION",
+            &[
+                Arc::new(position_builder.finish()) as ArrayRef,
+                Arc::new(needle_builder.finish()) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        assert_eq!(result.as_primitive::<Int64Type>().value(0), 2);
     }
 
     #[test]
