@@ -2118,7 +2118,7 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
             "{name} expressions are unsupported; complex map/row types are not yet supported"
         )));
     }
-    let args: Vec<Expr> = match &func.args {
+    let mut args: Vec<Expr> = match &func.args {
         ast::FunctionArguments::List(arg_list) => arg_list
             .args
             .iter()
@@ -2131,6 +2131,16 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         ast::FunctionArguments::None => Vec::new(),
         _ => return Err(sql_err(format!("unsupported function arguments in {name}"))),
     };
+
+    if let Some(filter) = &func.filter {
+        if !is_aggregate_function(&name) {
+            return Err(sql_err(format!(
+                "FILTER is only supported on aggregate functions, not {name}"
+            )));
+        }
+        let argument = args.first().cloned().unwrap_or(Expr::Star);
+        args = vec![aggregate_filter_expr(&name, argument, filter)?];
+    }
 
     if let Some(over) = &func.over {
         if func.null_treatment.is_some() || func.filter.is_some() || !func.within_group.is_empty() {
@@ -2193,6 +2203,26 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         args
     };
     Ok(Expr::Function { name, args })
+}
+
+/// Lower a supported aggregate `FILTER (WHERE predicate)` into the existing
+/// null-preserving CASE expression. This keeps aggregate execution and merge
+/// semantics unchanged: rows that fail the predicate contribute NULL, while
+/// COUNT(*) receives a non-null constant only when the predicate is true.
+fn aggregate_filter_expr(name: &str, argument: Expr, filter: &ast::Expr) -> Result<Expr> {
+    if name.starts_with("APPROX_") || name == "COLUMN_STATISTICS" {
+        return Err(sql_err(format!("FILTER is unsupported for {name}")));
+    }
+    let value = if matches!(argument, Expr::Star) {
+        Expr::Literal(ScalarValue::Int64(1))
+    } else {
+        argument
+    };
+    Ok(Expr::Case {
+        operand: None,
+        when_then: vec![(ast_expr_to_expr(filter)?, value)],
+        else_expr: Some(Box::new(Expr::Literal(ScalarValue::Null))),
+    })
 }
 
 /// A percentile as written (`0.5`, `1`, `ARRAY[0.9, 0.99]`) with its
@@ -2310,6 +2340,11 @@ fn collect_aggregates_from_ast_expr(expr: &ast::Expr, out: &mut Vec<AggregateExp
                 if distinct && (matches!(name.as_str(), "MIN" | "MAX") || approximate) {
                     return Err(sql_err(format!("DISTINCT is not supported for {name}")));
                 }
+                let arg = if let Some(filter) = &func.filter {
+                    aggregate_filter_expr(&name, arg, filter)?
+                } else {
+                    arg
+                };
                 let agg = match name.as_str() {
                     "COUNT" => AggregateExpr::Count {
                         expr: arg,
@@ -4106,6 +4141,19 @@ mod tests {
             aggregates.as_slice(),
             [AggregateExpr::Avg { distinct: true, .. }]
         ));
+    }
+
+    #[test]
+    fn lowers_aggregate_filter_to_null_preserving_case() {
+        let (_, aggregates) = aggregates_of(
+            "SELECT COUNT(*) FILTER (WHERE active), SUM(amount) FILTER (WHERE amount > 0) FROM events",
+        );
+        assert_eq!(aggregates.len(), 2);
+        let plan = sql_to_logical_plan(
+            "SELECT COUNT(*) FILTER (WHERE active), SUM(amount) FILTER (WHERE amount > 0) FROM events",
+        )
+        .unwrap();
+        assert!(format!("{plan:?}").contains("Case {"));
     }
 
     fn aggregates_of(sql: &str) -> (Vec<Expr>, Vec<AggregateExpr>) {

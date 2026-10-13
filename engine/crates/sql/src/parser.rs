@@ -3,11 +3,14 @@ use sqlparser::ast::Statement;
 use sqlparser::ast::{
     AssignmentTarget, BinaryOperator, Expr, FromTable, SetExpr, TableFactor, TableWithJoins, Value,
 };
-use sqlparser::dialect::GenericDialect;
+use sqlparser::dialect::DuckDbDialect;
 use sqlparser::parser::Parser;
 
 pub fn parse_sql(sql: &str) -> Result<Vec<Statement>> {
-    let dialect = GenericDialect {};
+    // DuckDB's grammar is close to the generic SQL surface while enabling
+    // standard aggregate FILTER (WHERE ...) clauses. Unsupported execution
+    // features are still rejected by the logical planner with typed errors.
+    let dialect = DuckDbDialect {};
     // Studio's completion inserts SQL Server-style bracketed identifiers
     // (`[year]`). sqlparser's generic dialect treats those brackets as an
     // array expression, which later reaches the executor as the unsupported
