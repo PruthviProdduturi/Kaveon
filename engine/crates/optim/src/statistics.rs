@@ -837,7 +837,11 @@ mod tests {
         }
         let (left, right, distribution) = find_join(&plan).expect("a join");
         assert_eq!(distribution, JoinDistribution::BroadcastRight);
-        assert!(matches!(left, LogicalPlan::Scan { table, .. } if table == "other"));
+        assert!(matches!(
+            left,
+            LogicalPlan::Filter { input, .. }
+                if matches!(input.as_ref(), LogicalPlan::Scan { table, .. } if table == "other")
+        ));
         assert!(matches!(right, LogicalPlan::Filter { .. }));
         // Without the table's statistics the filtered side is an upper
         // bound of equal size: no swap, no broadcast — the plan of today.
