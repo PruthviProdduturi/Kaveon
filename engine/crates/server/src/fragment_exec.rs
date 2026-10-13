@@ -807,17 +807,14 @@ fn compile_node(
             Ok(Box::new(UnionOperator::new(operators)))
         }
         FragmentOperator::HashJoin(join) => {
-            // A residual is a semi or anti join's: evaluated over the pairs
-            // sharing a key. Inner and outer fragment joins carry none.
+            // Residual predicates are evaluated over equality-key candidates
+            // by the hash join. Semi/anti joins already use their dedicated
+            // residual path; regular joins now preserve outer null-extension
+            // by marking a right row matched only after the residual is TRUE.
             let semi = matches!(
                 join.join_type,
                 kaveon_core::JoinType::Semi | kaveon_core::JoinType::Anti
             );
-            if join.residual.is_some() && !semi {
-                return Err(exec_err(
-                    "residual fragment join filters are only implemented for semi and anti joins",
-                ));
-            }
             if semi {
                 let (Some(left_key), Some(right_key)) =
                     (join.left_keys.first(), join.right_keys.first())
@@ -891,13 +888,14 @@ fn compile_node(
                 scan_metrics,
             )?;
             let keys = left_keys.into_iter().zip(right_keys).collect();
-            kaveon_exec::partitioned::hash_join(
+            kaveon_exec::partitioned::hash_join_with_residual(
                 left,
                 right,
                 join_type(join.join_type)?,
                 keys,
                 join.left_qualifier.as_deref(),
                 join.right_qualifier.as_deref(),
+                join.residual.clone(),
                 memory
                     .map(|memory| memory.operator("fragment-hash-join"))
                     .transpose()?,
@@ -976,10 +974,24 @@ fn compile_node(
         }
         FragmentOperator::IntersectAll => {
             let left = compile_input(
-                node, 0, nodes, catalog, exchanges, scan_partition, memory, scan_metrics,
+                node,
+                0,
+                nodes,
+                catalog,
+                exchanges,
+                scan_partition,
+                memory,
+                scan_metrics,
             )?;
             let right = compile_input(
-                node, 1, nodes, catalog, exchanges, scan_partition, memory, scan_metrics,
+                node,
+                1,
+                nodes,
+                catalog,
+                exchanges,
+                scan_partition,
+                memory,
+                scan_metrics,
             )?;
             let mut operator = SetOpOperator::new(left, right, SetOpMode::IntersectAll);
             if let Some(memory) = memory {
@@ -989,10 +1001,24 @@ fn compile_node(
         }
         FragmentOperator::ExceptAll => {
             let left = compile_input(
-                node, 0, nodes, catalog, exchanges, scan_partition, memory, scan_metrics,
+                node,
+                0,
+                nodes,
+                catalog,
+                exchanges,
+                scan_partition,
+                memory,
+                scan_metrics,
             )?;
             let right = compile_input(
-                node, 1, nodes, catalog, exchanges, scan_partition, memory, scan_metrics,
+                node,
+                1,
+                nodes,
+                catalog,
+                exchanges,
+                scan_partition,
+                memory,
+                scan_metrics,
             )?;
             let mut operator = SetOpOperator::new(left, right, SetOpMode::ExceptAll);
             if let Some(memory) = memory {
@@ -2870,17 +2896,28 @@ mod tests {
         .unwrap();
         let mut rows = HashMap::new();
         while let Some(batch) = output.next_batch().unwrap() {
-            let keys = batch.column(0).as_any().downcast_ref::<StringArray>().unwrap();
-            let counts = batch.column(1).as_any().downcast_ref::<UInt64Array>().unwrap();
+            let keys = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            let counts = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap();
             for row in 0..batch.num_rows() {
                 rows.insert(keys.value(row).to_owned(), counts.value(row));
             }
         }
-        assert_eq!(rows, HashMap::from([
-            ("Mobile".to_owned(), 36),
-            ("Desktop".to_owned(), 36),
-            ("Web".to_owned(), 36),
-        ]));
+        assert_eq!(
+            rows,
+            HashMap::from([
+                ("Mobile".to_owned(), 36),
+                ("Desktop".to_owned(), 36),
+                ("Web".to_owned(), 36),
+            ])
+        );
         assert_eq!(pool.snapshot().current_bytes, 0);
     }
 
@@ -3207,7 +3244,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_residual_and_unsupported_join_modes_explicitly() {
+    fn rejects_unsupported_join_modes_and_executes_regular_residuals() {
         let result = join_type(kaveon_core::JoinType::Semi);
         assert!(result.is_err());
         // An inner join carries no residual.
@@ -3245,18 +3282,20 @@ mod tests {
                 ),
             ],
         };
-        let error = execute_fragment(
+        let execution = execute_fragment(
             &fragment,
             &CatalogManager::new("test", "default"),
             &inputs(),
             first_partition(),
         )
-        .err()
-        .expect("an inner join with a residual is refused")
-        .to_string();
-        assert!(
-            error.contains("only implemented for semi and anti joins"),
-            "{error}"
+        .expect("regular equality joins may evaluate a residual predicate");
+        assert_eq!(
+            execution
+                .result_batches
+                .iter()
+                .map(RecordBatch::num_rows)
+                .sum::<usize>(),
+            6
         );
     }
 

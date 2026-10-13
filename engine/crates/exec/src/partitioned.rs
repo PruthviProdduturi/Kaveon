@@ -394,6 +394,29 @@ pub fn hash_join(
     right_qualifier: Option<&str>,
     memory: Option<OperatorMemoryAccount>,
 ) -> Result<Box<dyn BatchOperator>> {
+    hash_join_with_residual(
+        left,
+        right,
+        join_type,
+        keys,
+        left_qualifier,
+        right_qualifier,
+        None,
+        memory,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn hash_join_with_residual(
+    left: Box<dyn BatchOperator>,
+    right: Box<dyn BatchOperator>,
+    join_type: JoinType,
+    keys: Vec<(String, String)>,
+    left_qualifier: Option<&str>,
+    right_qualifier: Option<&str>,
+    residual: Option<kaveon_core::Expr>,
+    memory: Option<OperatorMemoryAccount>,
+) -> Result<Box<dyn BatchOperator>> {
     if let Some(memory) = memory {
         if let Some((spill, count)) = spill_from_environment(memory.query())? {
             return Ok(Box::new(PartitionedHashJoin::new(
@@ -406,7 +429,8 @@ pub fn hash_join(
                 memory,
                 spill,
                 count,
-            )?));
+            )?
+            .with_residual(residual)));
         }
         Ok(Box::new(HashJoin::try_new_qualified_with_memory(
             left,
@@ -416,7 +440,8 @@ pub fn hash_join(
             left_qualifier,
             right_qualifier,
             memory,
-        )?))
+        )?
+        .with_residual(residual)))
     } else {
         Ok(Box::new(HashJoin::try_new_qualified(
             left,
@@ -425,7 +450,8 @@ pub fn hash_join(
             keys,
             left_qualifier,
             right_qualifier,
-        )?))
+        )?
+        .with_residual(residual)))
     }
 }
 
@@ -1670,6 +1696,7 @@ pub struct PartitionedHashJoin {
     failed: bool,
     active: Option<HashJoin>,
     metrics: Arc<JoinSpillMetrics>,
+    residual: Option<kaveon_core::Expr>,
 }
 
 impl PartitionedHashJoin {
@@ -1730,7 +1757,13 @@ impl PartitionedHashJoin {
             failed: false,
             active: None,
             metrics,
+            residual: None,
         })
+    }
+
+    pub fn with_residual(mut self, residual: Option<kaveon_core::Expr>) -> Self {
+        self.residual = residual;
+        self
     }
 
     /// The build in memory, or what to partition.
@@ -1780,6 +1813,7 @@ impl PartitionedHashJoin {
             self.right_qualifier.as_deref(),
             Some(self.memory.clone()),
         )
+        .map(|join| join.with_residual(self.residual.clone()))
     }
 
     /// Both inputs to disk, partitioned by the keys under `depth`'s salt.
