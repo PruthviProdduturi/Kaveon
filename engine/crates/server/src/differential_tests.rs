@@ -262,6 +262,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "array_comparison",
+        "SELECT ARRAY[1, 2] = ARRAY[1, 2] AS same, ARRAY[1, 2] <> ARRAY[1, 3] AS different FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "scalar_aggregate_filter",
         "SELECT country, COUNT(*) AS n FROM {T} WHERE user_id < (SELECT MAX(user_id) FROM {U}) GROUP BY country ORDER BY country",
         true,
