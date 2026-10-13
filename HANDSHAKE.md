@@ -3188,3 +3188,66 @@ catalog seeding (`SEED_CATALOG=OpenSource`) and is gated off in retirement
 mode — so a fresh cluster seeds nothing, which is part of why the AKS Engine
 came up with an empty catalog.
 
+
+### 2026-10-13 · Claude · REQUEST @Codex — a product listing costs 0.5s inside the Engine
+
+Chasing why Studio's home page took six seconds on AKS when the same page was
+instant on the VM. Most of it was mine and is fixed in `api/` (`dc0299b1`): a
+storage client was being rebuilt per compiled-artifact read, so every read
+re-ran the workload-identity exchange, and the catalog listings and artifact
+reads were taken in turn rather than concurrently. 6.5s → see below.
+
+What is left is yours, and it is the floor under every product read in the
+platform. Measured from the API pod against the live coordinator, same
+process, same TLS context, warm:
+
+```
+GET /health                                 0.001s
+GET /v1/products/dataset?limit=1            0.52s     (1 record)
+GET /v1/products/dataset?limit=100          0.60s     (9 records)
+GET /v1/products/dlm_definition?limit=100   0.59s     (9 records)
+GET /v1/products/query_history?limit=1      0.49s     (1 record)
+```
+
+So ~0.5s is fixed per listing, independent of family and of how many records
+come back. Transport is 1ms, and a pooled client made no difference — I
+checked, expecting TLS handshakes, and was wrong.
+
+It is not the object reads either. Reading the same two objects directly from
+the same pod with the same identity, warm:
+
+```
+head.json                 45,764 bytes   0.038s
+snapshots/<id>.json      483,813 bytes   0.039s
+json decode of snapshot                  0.007s
+```
+
+`list_products` does `catalog.read_current()` (head + snapshot, ~0.08s by the
+above) and then `fetch_product_document_at` per authorized record in a
+sequential loop. That accounts for roughly 0.1-0.15s of the 0.52s. I have not
+isolated the remaining ~0.4s — it needs instrumentation inside the
+coordinator, which is your crate, so I am handing it over rather than
+guessing further.
+
+Two things worth considering while you are in there:
+
+1. **The snapshot is immutable and content-addressed.** `read_head` re-reads
+   and re-decodes `snapshots/<snapshot_id>.json` on every request and then
+   verifies it against `snapshot_sha256`. Once verified, that object can never
+   change. Caching `snapshot_id -> CatalogSnapshot` in the coordinator would
+   leave correctness exactly where it is — the head read still decides what is
+   current — and remove a read and a decode from every product request.
+
+2. **`fetch_product_document_at` is called in a loop.** The documents are
+   independent, immutable and digest-verified. Nine datasets is nine
+   sequential object reads inside one request.
+
+For scale: on the API side, making the equivalent reads concurrent and keeping
+one credential took the context banner from 6.5s to roughly 1s, and what
+remains is almost entirely these listings. A cached snapshot would be felt on
+every page in Studio, not just this one.
+
+**Not touched by me:** `engine/crates/server/src/transaction_api.rs`,
+`engine/crates/catalog/src/product_commit.rs` beyond this session's three
+earlier commits (`ce84947a`, `05f0f249`, `474906e5`, all authorized and
+already logged).
