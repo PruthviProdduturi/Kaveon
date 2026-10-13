@@ -286,6 +286,9 @@ qualification documents; this tracker remains the single ordered work list.
   Parquet encodings and local/two-worker execution paths. This extends the
   complex-type parity gate without claiming support for row-producing `UNNEST`
   or array/map-valued result comparison.
+- The same corpus now checks `MAP_ELEMENT_AT` and order-independent map
+  equality on scalar results across those encodings and execution paths;
+  ordered map comparisons and map-valued result materialization remain open.
 - Three-worker global `ORDER BY`/TopN centralized merge correctness is now
   qualified for NULL ordering and ties against a single-partition reference
   (`bb788709`). The input remains distributed, while the exact global merge
