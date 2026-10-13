@@ -44,8 +44,9 @@ foundations, but several operators are still centralized or narrow:
 - Exchange producers stream output, and HTTP consumers now pump each response
   into a bounded replayable append-only spool while Arrow decodes batches
   incrementally. The old second contiguous payload copy is gone; network
-  backpressure, pressure qualification, and sustained federated-exchange
-  evidence remain open.
+  backpressure is covered by a bounded-lane regression test (`8fe8fafb`), but
+  pressure qualification and sustained federated-exchange evidence remain
+  open.
 - Windows gather to one task. Set operations and final sort/TopN also have
   centralized merge stages. Compatible windows with a shared non-empty
   `PARTITION BY` are now hash-partitioned across workers; unpartitioned and
@@ -289,7 +290,7 @@ qualification documents; this tracker remains the single ordered work list.
 
 ### Current focused validation
 
-The latest focused validation passes 332 `kaveon-server` tests, 109
+The latest focused validation passes 333 `kaveon-server` tests, 109
 `kaveon-sql` tests, and 237 `kaveon-exec` tests (four executor benchmarks are
 ignored). The repository differential gate
 (`differential_tests::the_differential_sweep_matches_across_parquet_encodings_and_execution_paths`)
