@@ -2230,9 +2230,9 @@ fn ast_binop_to_binop(op: &ast::BinaryOperator) -> Option<BinaryOp> {
 
 fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
     let name = canonical_function_name(func);
-    if matches!(name.as_str(), "MAP" | "ROW") {
+    if name == "MAP" {
         return Err(sql_err(format!(
-            "{name} expressions are unsupported; complex map/row types are not yet supported"
+            "{name} expressions are unsupported; map types are not yet supported"
         )));
     }
     let mut args: Vec<Expr> = match &func.args {
@@ -3814,6 +3814,13 @@ mod tests {
     }
 
     #[test]
+    fn row_constructor_is_retained_as_a_typed_expression() {
+        let plan = sql_to_logical_plan("SELECT ROW(id, name) FROM t").unwrap();
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("Function { name: \"ROW\""));
+    }
+
+    #[test]
     fn binds_named_parameters_as_typed_ast_literals() {
         let mut named = HashMap::new();
         named.insert("region".to_owned(), ScalarValue::Utf8("EU".to_owned()));
@@ -4128,17 +4135,11 @@ mod tests {
     }
 
     #[test]
-    fn rejects_map_and_row_expressions_with_typed_diagnostics() {
-        for (sql, expected) in [
-            (
-                "SELECT ROW(1, 2) FROM t",
-                "ROW expressions are unsupported; complex map/row types are not yet supported",
-            ),
-            (
-                "SELECT MAP(ARRAY[1], ARRAY[2]) FROM t",
-                "MAP expressions are unsupported; complex map/row types are not yet supported",
-            ),
-        ] {
+    fn rejects_map_expressions_with_typed_diagnostics() {
+        for (sql, expected) in [(
+            "SELECT MAP(ARRAY[1], ARRAY[2]) FROM t",
+            "MAP expressions are unsupported; map types are not yet supported",
+        )] {
             let error = sql_to_logical_plan(sql).unwrap_err();
             assert_eq!(error.to_string(), format!("sql: {expected}"), "{sql}");
         }

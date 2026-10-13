@@ -1,6 +1,7 @@
 use arrow::array::{
     Array, ArrayRef, AsArray, BooleanArray, Decimal128Array, Float64Array, Float64Builder,
     Int32Array, Int32DictionaryArray, Int64Array, ListBuilder, StringArray, StringBuilder,
+    StructArray,
 };
 use arrow::compute;
 use arrow::datatypes::{DataType, Float64Type, Int32Type, Int64Type};
@@ -1237,6 +1238,21 @@ fn eval_cast(expr: &Expr, target: CastTarget, batch: &RecordBatch) -> Result<Arr
 
 fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
     let upper = name.to_uppercase();
+    if upper == "ROW" {
+        let fields = args
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                Arc::new(arrow::datatypes::Field::new(
+                    format!("field{index}"),
+                    value.data_type().clone(),
+                    true,
+                ))
+            })
+            .collect::<Vec<_>>()
+            .into();
+        return Ok(Arc::new(StructArray::new(fields, args.to_vec(), None)));
+    }
     if let Some(target) = upper.strip_prefix("TRY_CAST_") {
         check_arity(name, args, 1)?;
         let target = match target {
@@ -2430,6 +2446,39 @@ mod tests {
             values.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
             vec![Some(12), None, None, Some(-4)]
         );
+    }
+
+    #[test]
+    fn row_constructor_returns_a_struct_with_typed_fields() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", DataType::Int64, true),
+            arrow::datatypes::Field::new("name", DataType::Utf8, true),
+        ]));
+        let input = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![Some(1), None])),
+                Arc::new(StringArray::from(vec![Some("a"), Some("b")])),
+            ],
+        )
+        .unwrap();
+        let value = evaluate(
+            &Expr::Function {
+                name: "ROW".into(),
+                args: vec![
+                    Expr::Column("id".into()),
+                    Expr::Column("name".into()),
+                ],
+            },
+            &input,
+        )
+        .unwrap();
+        let row = value.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(row.len(), 2);
+        assert_eq!(row.num_columns(), 2);
+        assert_eq!(row.column(0).data_type(), &DataType::Int64);
+        assert_eq!(row.column(1).data_type(), &DataType::Utf8);
+        assert!(row.column(0).is_null(1));
     }
 
     #[test]
