@@ -249,6 +249,14 @@ def active_worker_nodes(kube, statefulset_name, worker_count, excluded_statefuls
         # when a scheduled job starts or finishes between phases.
         if any(owner.get("kind") in {"Job", "CronJob"} for owner in owners):
             continue
+        # AKS command invoke creates short-lived, unowned pods in the
+        # platform-managed aks-command namespace.  They can appear on a
+        # worker between the Trino and Kaveon phases without changing the
+        # workload's co-tenancy.  Treat that namespace like the other
+        # benchmark-control jobs rather than using its volatile pod name as
+        # a topology identity.
+        if pod.get("metadata", {}).get("namespace") == "aks-command":
+            continue
         # The benchmark namespace's API and portal Deployments may roll during
         # a long run. Their ReplicaSet pod names are implementation details,
         # not compute co-tenants; ignoring them prevents unrelated rollouts
