@@ -421,6 +421,16 @@ checks green. That sustained report is archived in
 the declared five-minute sustained-soak check; upgrade/rollback, storage fault
 injection, and longer endurance remain separate gates.
 
+Coordinator-loss behavior is now also qualified as fail-closed on 2026-10-13:
+a 504M-row scan was observed running, the coordinator was restarted, and the
+in-flight request terminated with a connection interruption rather than a
+partial result. A fresh post-restart connection returned an exact result, all
+three workers were Ready, and retained coordinator exchange files did not grow.
+Evidence is archived in
+`docs/qualification/engine-aks-coordinator-loss-2026-10-13.md`. This closes
+clean interruption and fresh-query recovery; in-flight query survival across
+coordinator loss remains intentionally unsupported and documented.
+
 The distributed/local join-mode differential now also includes an inner
 residual predicate (`key equality AND value inequality`); local and
 distributed result sets match and all reservations are released.
