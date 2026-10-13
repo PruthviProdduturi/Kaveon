@@ -295,9 +295,10 @@ qualification documents; this tracker remains the single ordered work list.
 - The same corpus now checks `MAP_ELEMENT_AT` and order-independent map
   equality on scalar results across those encodings and execution paths;
   ordered map comparisons and map-valued result materialization remain open.
-- Date-array construction, cardinality, and positional lookup are also covered
-  in the same differential paths. Timestamp and decimal arrays now have the
-  same cardinality/positional coverage. The differential row canonicalizer now
+- Date-array construction, cardinality, positional lookup, reverse, and
+  distinct operations are covered in the same differential paths. Timestamp
+  and decimal arrays now have the same cardinality/positional coverage. The
+  differential row canonicalizer now
   uses Arrow's type-aware formatter, so literal array/map-valued projections
   are compared across local and distributed paths instead of being silently
   excluded by an unsupported UTF-8 cast. Representative `ROW(...)` and
