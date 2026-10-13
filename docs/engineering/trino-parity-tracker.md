@@ -43,6 +43,11 @@ tests remain intentionally ignored). Documentation validation also passed for
 baseline; it does not replace the deployed three-worker qualification gates
 listed below.
 
+Temporal `ARRAY[...]` literals now preserve DATE32, DATE64, TIME32 second and
+millisecond, and TIMESTAMP microsecond element types, including null elements;
+the execution suite includes a timestamp-list regression. Other timestamp
+units and temporal array operations remain outside this slice.
+
 The initial repository audit confirms that the Engine has real distributed
 foundations, but several operators are still centralized or narrow:
 
