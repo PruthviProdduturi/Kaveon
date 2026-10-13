@@ -1,7 +1,7 @@
 """Append a day of events to the lake, and let the platform notice by itself.
 
 This is the incremental half of the events dataset. It adds one day of rows to
-`public.kaveon_events_enriched` as a Delta append and then stops: nothing
+`KaveonTelemetry.events.activity` as a Delta append and then stops: nothing
 downstream is told to refresh, because everything downstream already watches
 the table's source version.
 
@@ -29,8 +29,14 @@ after it, never half of it.
     python scripts/append-events.py --apply
     python scripts/append-events.py --apply --date 2026-08-01 --users 250000
 
-**The schema, the value domains and every metric distribution come from
-`build_kaveon_events_table`, not from this file.** An appended day that invented
+`--users` is the size of the user population the day is drawn from, not the
+number of rows: a user appears only on the surfaces they actually used, so the
+row count is a consequence of the presence draws and is reported, never
+assumed.
+
+**The schema, the value domains, the presence model, the identifiers and every
+metric distribution come from `build_kaveon_events_table`, not from this
+file.** An appended day that invented
 a region or a licence would widen a cube axis and change what the dashboards
 report, and an earlier version of this script held its own copies of the lists
 and had already drifted — it introduced an `industry` value ("Finance") the base
@@ -55,16 +61,17 @@ from deltalake import DeltaTable, write_deltalake
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_kaveon_events_table import (  # noqa: E402
-    DAYS, FIRST_DAY, SCHEMA, SURFACES, SURFACE_PROFILES, USER_DIMENSIONS,
-    build_user_attributes, chunk_rng, day_volume, surface_metrics)
+    DAYS, FIRST_DAY, METRIC_STREAM, SCHEMA, SURFACES, SURFACE_PROFILES,
+    USER_DIMENSIONS, build_user_attributes, chunk_rng, day_shape,
+    present_users, surface_metrics, user_ids)
 
 # The table's own copy on disk. Delta needs the existing log to append to it,
 # and building the commit locally means only the new objects are uploaded.
-TABLE = Path(__file__).resolve().parents[1] / "data" / "adls-mirror" / "opensource" / \
-    "kaveon" / "kaveon_product" / "kaveon_events_enriched_typed"
+TABLE = Path(__file__).resolve().parents[1] / "data" / "adls-mirror" / "telemetry" / \
+    "events" / "activity"
 ACCOUNT = "kaveonlake"
-CONTAINER = "opensource"
-REMOTE = "snapshots/2026-09-09-v1/public/kaveon_events_enriched"
+CONTAINER = "telemetry"
+REMOTE = "events/activity"
 
 AZ = shutil.which("az") or shutil.which("az.cmd") or "az.cmd"
 
@@ -78,36 +85,48 @@ def az(*args, timeout=3600):
 def build_day(day: date, users: int) -> pa.Table:
     """One day of events, drawn exactly as the base table's days are drawn.
 
-    The day's own offset from the table's first day carries into the weekday
-    and trend factors, so an appended Saturday is as quiet as a built one and
-    the series does not step at the join.
+    The day's own offset from the table's first day carries into the weekday,
+    trend and shock factors, so an appended Saturday is as quiet as a built one
+    and the series does not step at the join. Presence is drawn the same way
+    too: the rows are the user-surface pairs that were actually active, so an
+    appended day is not a block of `users x surfaces` rows while every built
+    day is a ragged one.
     """
     attributes = build_user_attributes(users)
     offset = (day - FIRST_DAY).days
-    scale = day_volume(day, offset, DAYS)
-    volume = attributes["intensity"] * scale
-    latency_factor = attributes["latency_factor"]
-    user_ids = pa.array(np.arange(1, users + 1, dtype=np.int64))
-    event_date = pa.array(
-        np.full(users, (day - date(1970, 1, 1)).days, dtype=np.int32)).cast(pa.date32())
+    shape = day_shape(day, offset, DAYS)
     # `build_user_attributes` draws from a fixed-seed stream per attribute, so
     # the first `users` draws are the first `users` draws of the full table: a
-    # user keeps the country and licence the built days gave them.
-    dimensions = {}
-    for name in USER_DIMENSIONS:
-        values, indices = attributes[name]
-        dimensions[name] = pa.DictionaryArray.from_arrays(
-            pa.array(indices), pa.array(values, type=pa.string())).dictionary_decode()
+    # user keeps the identifier, country and licence the built days gave them.
+    identifiers = user_ids(attributes["user_uuid"], 0, users)
+    epoch_day = (day - date(1970, 1, 1)).days
 
     blocks = []
     for surface_index, surface in enumerate(SURFACES):
-        metrics = surface_metrics(chunk_rng(offset, 0, surface_index),
-                                  SURFACE_PROFILES[surface], volume, latency_factor)
-        columns = {"event_date": event_date, "user_id": user_ids,
-                   "surface": pa.array([surface] * users, type=pa.string())}
+        selected = present_users(offset, 0, surface_index, attributes, 0, users, shape)
+        rows = selected.size
+        if not rows:
+            continue
+        volume = (attributes["intensity"][selected] * shape).astype(np.float64)
+        metrics = surface_metrics(
+            chunk_rng(offset, 0, surface_index, METRIC_STREAM),
+            SURFACE_PROFILES[surface], volume,
+            attributes["latency_factor"][selected].astype(np.float64))
+        columns = {
+            "event_date": pa.array(
+                np.full(rows, epoch_day, dtype=np.int32)).cast(pa.date32()),
+            "user_id": pa.array([identifiers[position] for position in selected],
+                                type=pa.string()),
+            "surface": pa.array([surface] * rows, type=pa.string()),
+        }
         columns.update({name: pa.array(values) for name, values in metrics.items()})
-        columns.update(dimensions)
+        for name in USER_DIMENSIONS:
+            values, indices = attributes[name]
+            columns[name] = pa.array(
+                [values[index] for index in indices[selected]], type=pa.string())
         blocks.append(pa.table(columns, schema=SCHEMA))
+    if not blocks:
+        raise SystemExit(f"{day} drew no rows at all; check --users")
     return pa.concat_tables(blocks)
 
 
@@ -154,7 +173,8 @@ def main():
     options.add_argument("--date", default=None,
                          help="the day to append; defaults to the day after the table's last")
     options.add_argument("--users", type=int, default=100_000,
-                         help="users active that day; 6 surface rows are written per user")
+                         help="the user population the day is drawn from; each user "
+                              "contributes a row only for the surfaces they used")
     args = options.parse_args()
 
     if not TABLE.is_dir():
@@ -168,16 +188,19 @@ def main():
         latest = last_day(table)
         day = (latest + timedelta(days=1)) if latest else FIRST_DAY + timedelta(days=DAYS)
 
-    rows = args.users * len(SURFACES)
     print(f"table is at Delta version {before}")
-    print(f"append {day}: {rows:,} rows ({args.users:,} users x {len(SURFACES)} surfaces)")
+    print(f"append {day}: drawn from a population of {args.users:,} users "
+          f"across {len(SURFACES)} surfaces")
     if already_present(table, day):
         sys.exit(f"{day} is already in the table; appending it again would double its cells")
+
+    batch = build_day(day, args.users)
+    print(f"{batch.num_rows:,} rows drew present "
+          f"({batch.num_rows / (args.users * len(SURFACES)) * 100:.1f}% of the "
+          f"user x surface grid)")
     if not args.apply:
         print("plan only; pass --apply to write")
         return
-
-    batch = build_day(day, args.users)
     if batch.schema != SCHEMA:
         sys.exit("generated batch does not match the table's schema")
     before_files = {path.name for path in TABLE.glob("*.parquet")}
