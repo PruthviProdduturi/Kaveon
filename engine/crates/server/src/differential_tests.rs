@@ -252,6 +252,16 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "is_distinct_from_nullable",
+        "SELECT COUNT(*) AS n FROM {T} WHERE industry IS DISTINCT FROM 'Retail'",
+        false,
+    ),
+    (
+        "is_not_distinct_from_nullable",
+        "SELECT COUNT(*) AS n FROM {T} WHERE industry IS NOT DISTINCT FROM 'Retail'",
+        false,
+    ),
+    (
         "like_prefix",
         "SELECT COUNT(*) AS n FROM {T} WHERE country LIKE 'United%'",
         false,

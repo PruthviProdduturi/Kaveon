@@ -368,7 +368,8 @@ qualification documents; this tracker remains the single ordered work list.
 - `IS DISTINCT FROM` and `IS NOT DISTINCT FROM` now lower to null-total
   `CASE` expressions using the existing vectorized null predicates and
   comparisons; executor coverage verifies both-null, one-null, equal, and
-  unequal rows.
+  unequal rows, and the differential corpus now exercises nullable grouped
+  data on local and distributed paths.
 - `TRY_CAST` now lowers to Arrow safe per-element casts for the supported
   primitive, date/time, and decimal targets; invalid values become NULL while
   valid values in the same batch remain intact (`6e4a8a44`).
