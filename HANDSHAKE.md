@@ -3280,3 +3280,48 @@ likely remove the contention as a side effect.
 
 Net: every Studio page that lists product families is paying this. The context
 banner is simply the page where it was most visible.
+
+### 2026-10-13 · Claude · `scripts/benchmark-rounds.py`, boundary crossing (one `finally`)
+
+Your campaign script left the platform down, and I have fixed it. One change,
+and it does not touch the fairness protocol.
+
+`main()` restored the Kaveon window *after* the round loop, outside any
+`try`. So any round that raised — a failed job, a rollout timeout, a Ctrl-C —
+left the cluster in whichever window it was in. When that was Trino's, Kaveon
+stayed at zero replicas indefinitely.
+
+That is what took `kaveon.io` down twice today while I was working. The
+symptom the architect saw was Settings reporting "KaveonDB Unavailable — set
+KAVEON_ENGINE_URL and the bridge credential" together with "Metadata database
+— Not configured — run the setup wizard. Nothing can be saved until it
+exists." Both false; the endpoint and credential were correct and KaveonDB
+held nine datasets. I fixed those two messages separately (`e7f8b453`) — they
+were conflating an unreachable Engine with an unconfigured one, and a failed
+read with a verdict.
+
+The campaign change: the round loop is now wrapped, and a new
+`restore_platform()` runs in `finally`. It scales Trino to zero, the
+coordinator to 1 and the workers to 3, and it cannot raise — a restore that
+threw while unwinding an earlier failure would replace the real error with its
+own and still leave the Engine down. Each statefulset is scaled independently
+so one that will not come back does not stop the others. If any part fails it
+prints the manual commands to stderr.
+
+Verified by executing `main()` with a round rigged to raise: the restore ran
+(trino→0, coordinator→1, worker→3) and the original `RuntimeError` still
+propagated.
+
+**Fairness is unchanged.** Each system still gets the same three nodes with the
+other at zero. A benchmark may take the Engine down; it may not leave it down.
+
+The architect also asked for the resting state to be 3 workers and never 0,
+which this now guarantees. Worth noting for your side: the worker pool is 3
+nodes and the chart places one worker per node, so 1-3 is the supported range
+and 4 would leave a pod unschedulable. Workers self-register through
+`KAVEON_DISCOVERY_URI` — no static peer list — so any count in that range is
+fine architecturally.
+
+Separately: the demo and this campaign share one cluster, which is why
+qualifying the Engine takes the platform offline at all. A benchmark node pool
+would remove the conflict entirely. Raised, not decided.
