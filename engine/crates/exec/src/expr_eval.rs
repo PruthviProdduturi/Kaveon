@@ -1926,6 +1926,71 @@ fn contains_utf8<L: OffsetSizeTrait>(
     Ok(Arc::new(result))
 }
 
+fn array_distinct_nested<L: OffsetSizeTrait>(
+    list: &GenericListArray<L>,
+) -> Result<ArrayRef> {
+    let mut selected = Vec::<ArrayRef>::new();
+    let mut offsets = vec![L::zero()];
+    let mut valid = Vec::with_capacity(list.len());
+    for row in 0..list.len() {
+        if list.is_null(row) {
+            valid.push(false);
+            offsets.push(L::from_usize(selected.len()).ok_or_else(|| {
+                KaveonError::Execution("ARRAY_DISTINCT result offset overflow".into())
+            })?);
+            continue;
+        }
+        valid.push(true);
+        let inner = list.value(row);
+        let row_start = selected.len();
+        let mut saw_null = false;
+        for index in 0..inner.len() {
+            if inner.is_null(index) {
+                if !saw_null {
+                    selected.push(arrow::array::new_null_array(inner.data_type(), 1));
+                    saw_null = true;
+                }
+                continue;
+            }
+            let candidate = inner.slice(index, 1);
+            let duplicate = selected[row_start..].iter().any(|previous| {
+                if previous.null_count() != 0 {
+                    return false;
+                }
+                comparison(&candidate, previous, CompareKind::Eq)
+                    .map(|equal| !equal.is_null(0) && equal.value(0))
+                    .unwrap_or(false)
+            });
+            if !duplicate {
+                selected.push(candidate);
+            }
+        }
+        offsets.push(L::from_usize(selected.len()).ok_or_else(|| {
+            KaveonError::Execution("ARRAY_DISTINCT result offset overflow".into())
+        })?);
+    }
+    let values = if selected.is_empty() {
+        arrow::array::new_empty_array(&list.value_type())
+    } else {
+        let chunks = selected
+            .iter()
+            .map(|value| value.as_ref() as &dyn Array)
+            .collect::<Vec<_>>();
+        compute::concat(&chunks)?
+    };
+    let field = Arc::new(arrow::datatypes::Field::new(
+        "item",
+        values.data_type().clone(),
+        true,
+    ));
+    Ok(Arc::new(GenericListArray::<L>::try_new(
+        field,
+        OffsetBuffer::new(ScalarBuffer::from(offsets)),
+        values,
+        Some(arrow::buffer::NullBuffer::from(valid)),
+    )?))
+}
+
 fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
     let upper = name.to_uppercase();
     if upper.starts_with("ARRAY_ANY_") || upper.starts_with("ARRAY_ALL_") {
@@ -3361,6 +3426,21 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "ARRAY_DISTINCT" => {
             check_arity(name, args, 1)?;
+            if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
+                if matches!(
+                    list.value_type(),
+                    DataType::List(_)
+                        | DataType::LargeList(_)
+                        | DataType::Struct(_)
+                        | DataType::Map(_, _)
+                ) {
+                    return array_distinct_nested(list);
+                }
+                return Err(KaveonError::Execution(format!(
+                    "ARRAY_DISTINCT does not support list element type {}",
+                    list.value_type()
+                )));
+            }
             let list = args[0]
                 .as_any()
                 .downcast_ref::<ListArray>()
@@ -3372,65 +3452,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     | DataType::Struct(_)
                     | DataType::Map(_, _)
             ) {
-                let mut selected = Vec::<ArrayRef>::new();
-                let mut offsets = vec![0_i32];
-                let mut valid = Vec::with_capacity(num_rows);
-                for row in 0..num_rows {
-                    if list.is_null(row) {
-                        valid.push(false);
-                        offsets.push(selected.len() as i32);
-                        continue;
-                    }
-                    valid.push(true);
-                    let inner = list.value(row);
-                    let row_start = selected.len();
-                    let mut saw_null = false;
-                    for index in 0..inner.len() {
-                        if inner.is_null(index) {
-                            if !saw_null {
-                                selected.push(arrow::array::new_null_array(
-                                    inner.data_type(),
-                                    1,
-                                ));
-                                saw_null = true;
-                            }
-                            continue;
-                        }
-                        let candidate = inner.slice(index, 1);
-                        let duplicate = selected[row_start..].iter().any(|previous| {
-                            if previous.null_count() != 0 {
-                                return false;
-                            }
-                            comparison(&candidate, previous, CompareKind::Eq)
-                                .map(|equal| equal.value(0))
-                                .unwrap_or(false)
-                        });
-                        if !duplicate {
-                            selected.push(candidate);
-                        }
-                    }
-                    offsets.push(selected.len() as i32);
-                }
-                let values = if selected.is_empty() {
-                    arrow::array::new_empty_array(&list.value_type())
-                } else {
-                    let chunks = selected
-                        .iter()
-                        .map(|value| value.as_ref() as &dyn Array)
-                        .collect::<Vec<_>>();
-                    compute::concat(&chunks)?
-                };
-                let field = Arc::new(arrow::datatypes::Field::new(
-                    "item",
-                    values.data_type().clone(),
-                    true,
-                ));
-                return Ok(Arc::new(ListArray::try_new(
-                    field,
-                    OffsetBuffer::new(ScalarBuffer::from(offsets)),
-                    values,
-                    Some(arrow::buffer::NullBuffer::from(valid)),
-                )?));
+                return array_distinct_nested(list);
             }
             macro_rules! distinct_primitive {
                 ($ty:ty, $builder:expr) => {{
@@ -7289,6 +7311,21 @@ mod tests {
         )
         .unwrap();
         assert!(result.as_boolean().value(0));
+
+        let mut distinct_builder = LargeListBuilder::new(ListBuilder::new(Int64Builder::new()));
+        for value in [1_i64, 1, 2] {
+            distinct_builder.values().values().append_value(value);
+            distinct_builder.values().append(true);
+        }
+        distinct_builder.append(true);
+        let result = eval_scalar_function(
+            "ARRAY_DISTINCT",
+            &[Arc::new(distinct_builder.finish()) as ArrayRef],
+            1,
+        )
+        .unwrap();
+        let result = result.as_any().downcast_ref::<LargeListArray>().unwrap();
+        assert_eq!(result.value(0).len(), 2);
     }
 
     #[test]
