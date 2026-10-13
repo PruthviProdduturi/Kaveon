@@ -2,7 +2,7 @@
 
 ## SQL compatibility track — October 12, 2026 · safe casts
 
-The next compatibility slice adds `TRY_CAST` (commit pending) for the
+The next compatibility slice adds `TRY_CAST` (`6e4a8a44`) for the
 supported primitive, date/time, and decimal targets. It uses Arrow's safe
 per-element cast behavior: invalid values become NULL without discarding valid
 values in the same batch. Standard `CAST` keeps its fail-fast behavior.
