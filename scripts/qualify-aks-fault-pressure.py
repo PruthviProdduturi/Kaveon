@@ -238,7 +238,14 @@ class Engine:
             response.raise_for_status()
             return response.json()
 
-    def submit(self, case: dict[str, Any], *, include_data: bool = True, timeout: int = 240) -> dict[str, Any]:
+    def submit(
+        self,
+        case: dict[str, Any],
+        *,
+        include_data: bool = True,
+        timeout: int = 240,
+        admission_retries: int = 0,
+    ) -> dict[str, Any]:
         started = time.monotonic()
         payload = {
             "query": case["sql"],
@@ -248,9 +255,20 @@ class Engine:
             "client": case.get("client", "aks-fault-pressure-qualification"),
             "settings": {"result_cache": False},
         }
-        with self.session() as session:
-            response = session.post(self.base + "/v1/statement", json=payload, verify=self.ca_path, timeout=timeout)
-            body = response.json()
+        admission_refusals = 0
+        while True:
+            with self.session() as session:
+                response = session.post(
+                    self.base + "/v1/statement",
+                    json=payload,
+                    verify=self.ca_path,
+                    timeout=timeout,
+                )
+                body = response.json()
+            if response.status_code != 429 or admission_refusals >= admission_retries:
+                break
+            admission_refusals += 1
+            time.sleep(min(5.0, 0.5 * (2 ** (admission_refusals - 1))))
         record: dict[str, Any] = {
             "name": case["name"],
             "sql": case["sql"],
@@ -262,6 +280,7 @@ class Engine:
             "client_elapsed_ms": round((time.monotonic() - started) * 1000, 2),
             "result_sha256": canonical_hash(body.get("data")),
             "row_count": len(body.get("data") or []),
+            "admission_refusals": admission_refusals,
         }
         if include_data:
             record["data"] = body.get("data")
@@ -784,7 +803,15 @@ def main() -> int:
                 for round_index in range(args.pressure_rounds):
                     cases = [dict(pressure_case, name=f"yellow_group_pressure_{index + 1}") for index in range(args.concurrency)]
                     with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
-                        futures = [executor.submit(engine.submit, case, include_data=False) for case in cases]
+                        futures = [
+                            executor.submit(
+                                engine.submit,
+                                case,
+                                include_data=False,
+                                admission_retries=3,
+                            )
+                            for case in cases
+                        ]
                         for future in as_completed(futures):
                             result = future.result()
                             result["round"] = round_index + 1
