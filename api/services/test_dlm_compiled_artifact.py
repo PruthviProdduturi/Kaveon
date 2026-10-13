@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -149,3 +150,118 @@ class CompiledArtifactTests(unittest.TestCase):
 
 
 if __name__ == "__main__": unittest.main()
+
+
+class TheStorageClientIsKeptRatherThanRebuilt(unittest.TestCase):
+    """A fresh client means a fresh credential, and so an empty token cache.
+
+    Measured in the cluster: 0.24s to obtain a storage token against 0.045s to
+    read the object it protects. Built per read, nine datasets on the home page
+    spent two seconds proving who we are to a service we had just finished
+    talking to.
+    """
+
+    def setUp(self):
+        artifact.reset_client()
+        self.addCleanup(artifact.reset_client)
+
+    def test_repeated_reads_share_one_client(self):
+        with patch.dict(os.environ, {"KAVEON_LOCAL_PRODUCT_MODE": ""}, clear=False),              patch.object(artifact.adls_artifact_client.AzureArtifactClient,
+                          "from_env", return_value=object()) as built:
+            first = artifact._client()
+            second = artifact._client()
+        self.assertIs(first, second)
+        built.assert_called_once()
+
+    def test_the_local_mode_client_is_not_shared_into_the_cloud_path(self):
+        # Local mode addresses a caller-owned directory, so it is built per
+        # call and must never be the object a cloud read gets handed.
+        with patch.dict(os.environ, {"KAVEON_LOCAL_PRODUCT_MODE": "true",
+                                     "KAVEON_LOCAL_DLM_ARTIFACT_PATH": self.enterContext(
+                                         tempfile.TemporaryDirectory())}):
+            local = artifact._client()
+        self.assertIsInstance(local, artifact.LocalArtifactClient)
+        with patch.dict(os.environ, {"KAVEON_LOCAL_PRODUCT_MODE": ""}, clear=False),              patch.object(artifact.adls_artifact_client.AzureArtifactClient,
+                          "from_env", return_value=object()):
+            self.assertIsNot(artifact._client(), local)
+
+
+class ListingsForOneBatchHappenTogether(unittest.TestCase):
+    """The three catalog listings are independent and cost the same each.
+
+    Each costs about half a second of catalog round trips however few records
+    it returns, so taken in turn they spent a second and a half waiting rather
+    than working. Nothing in the second depends on the first.
+    """
+
+    def test_the_three_families_are_listed_concurrently(self):
+        import threading
+        started = threading.Barrier(3, timeout=5)
+        seen = []
+
+        def _list(family, actor, role, *, max_records=1000):
+            seen.append(family)
+            # A sequential implementation deadlocks here.
+            started.wait()
+            return []
+
+        with patch.object(artifact.product_store, "list_records",
+                          side_effect=_list):
+            context = artifact.load_bulk_context("owner")
+        self.assertEqual(sorted(seen), ["dataset", "dlm_definition", "dlm_run"])
+        self.assertEqual((context.datasets, context.definitions, context.runs),
+                         ({}, {}, []))
+
+    def test_each_family_lands_in_its_own_field(self):
+        def _list(family, actor, role, *, max_records=1000):
+            return [{"id": family, "revision": 1, "document": {}}]
+
+        with patch.object(artifact.product_store, "list_records",
+                          side_effect=_list):
+            context = artifact.load_bulk_context("owner")
+        # Concurrency must not shuffle which listing is which.
+        self.assertEqual(list(context.datasets), ["dataset"])
+        self.assertEqual(list(context.definitions), ["dlm_definition"])
+        self.assertEqual([r["id"] for r in context.runs], ["dlm_run"])
+
+
+class TheCacheKeyTracksCompiledContentOnly(unittest.TestCase):
+    """What the key must and must not move for.
+
+    A key taken from the catalog's own snapshot identity would move on every
+    product write — and the platform records its query history in that same
+    catalog, so running one query would invalidate a banner that could not
+    have changed.
+    """
+
+    def _context(self, dataset_revision=1, definition_revision=1, run_status="ready"):
+        return artifact.BulkContext(
+            {"7": {"id": "7", "revision": dataset_revision}},
+            {"7": {"id": "7", "revision": definition_revision}},
+            [{"id": "7-v1", "revision": 1, "document": {"status": run_status}}],
+        )
+
+    def test_the_same_records_give_the_same_key(self):
+        self.assertEqual(artifact.context_identity(self._context()),
+                         artifact.context_identity(self._context()))
+
+    def test_a_new_dataset_revision_moves_the_key(self):
+        self.assertNotEqual(
+            artifact.context_identity(self._context()),
+            artifact.context_identity(self._context(dataset_revision=2)))
+
+    def test_a_new_definition_revision_moves_the_key(self):
+        self.assertNotEqual(
+            artifact.context_identity(self._context()),
+            artifact.context_identity(self._context(definition_revision=2)))
+
+    def test_a_run_changing_state_moves_the_key(self):
+        self.assertNotEqual(
+            artifact.context_identity(self._context()),
+            artifact.context_identity(self._context(run_status="failed")))
+
+    def test_a_new_run_moves_the_key(self):
+        later = self._context()
+        later.runs.append({"id": "7-v2", "revision": 1, "document": {"status": "ready"}})
+        self.assertNotEqual(artifact.context_identity(self._context()),
+                            artifact.context_identity(later))

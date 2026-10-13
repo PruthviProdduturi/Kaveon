@@ -4,6 +4,8 @@ import hashlib
 import json
 import os
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from services import adls_artifact_client, product_outbox, product_store
@@ -53,10 +55,34 @@ def _canonical(value: dict) -> bytes:
     return encoded
 
 
+# One storage client per process, built on first use.
+#
+# A fresh client means a fresh DefaultAzureCredential, and a fresh credential
+# has an empty token cache — so every compiled-artifact read re-ran the whole
+# workload-identity exchange before it could fetch anything. Measured in the
+# cluster: 0.24s to obtain the token against 0.045s to read the object. Nine
+# datasets on the home page paid that nine times, which is two seconds of the
+# banner spent proving who we are to a service we had just finished talking
+# to. The credential caches tokens and renews them itself once it is kept.
+_CLIENT_LOCK = threading.Lock()
+_CLIENT = None
+
+
 def _client():
     if os.getenv("KAVEON_LOCAL_PRODUCT_MODE", "").strip().lower() == "true":
         return LocalArtifactClient(os.environ["KAVEON_LOCAL_DLM_ARTIFACT_PATH"])
-    return adls_artifact_client.AzureArtifactClient.from_env()
+    global _CLIENT
+    with _CLIENT_LOCK:
+        if _CLIENT is None:
+            _CLIENT = adls_artifact_client.AzureArtifactClient.from_env()
+        return _CLIENT
+
+
+def reset_client() -> None:
+    """Drop the shared client. For tests, and for a credential rotation."""
+    global _CLIENT
+    with _CLIENT_LOCK:
+        _CLIENT = None
 
 
 class LocalArtifactClient:
@@ -169,23 +195,51 @@ class BulkContext:
 
 
 def load_bulk_context(actor: str) -> BulkContext:
-    """Read the dataset, definition and run records once, for a batch of reads."""
-    datasets = {
-        str(record.get("id")): record
-        for record in product_store.list_records("dataset", actor, "Admin", max_records=1000)
-        if isinstance(record, dict)
-    }
-    definitions = {
-        str(record.get("id")): record
-        for record in product_store.list_records("dlm_definition", actor, "Admin", max_records=1000)
-        if isinstance(record, dict)
-    }
-    runs = [
-        record
-        for record in product_store.list_records("dlm_run", actor, "Admin", max_records=1000)
-        if isinstance(record, dict)
-    ]
+    """Read the dataset, definition and run records once, for a batch of reads.
+
+    The three listings are independent, and each costs about half a second of
+    catalog round trips regardless of how few records it returns — so running
+    them one after another spent a second and a half waiting rather than
+    working. Nothing in the second listing depends on the first.
+    """
+    families = ("dataset", "dlm_definition", "dlm_run")
+    with ThreadPoolExecutor(max_workers=len(families),
+                            thread_name_prefix="dlm-bulk") as pool:
+        listed = list(pool.map(
+            lambda family: product_store.list_records(family, actor, "Admin",
+                                                      max_records=1000),
+            families,
+        ))
+    datasets = {str(record.get("id")): record
+                for record in listed[0] if isinstance(record, dict)}
+    definitions = {str(record.get("id")): record
+                   for record in listed[1] if isinstance(record, dict)}
+    runs = [record for record in listed[2] if isinstance(record, dict)]
     return BulkContext(datasets, definitions, runs)
+
+
+def context_identity(context: BulkContext) -> str:
+    """What the records in `context` say about compiled content, as a digest.
+
+    This is a cache key for anything derived from the compiled artifacts. The
+    catalog's own snapshot identity is not usable for that: it advances on
+    every product write, and the platform records its own query history in the
+    same catalog — so running one query would invalidate a cached answer that
+    could not possibly have changed. This moves only when a dataset's
+    revision, its definition's revision, or one of its runs does.
+    """
+    material = [
+        [(dataset_id, context.datasets[dataset_id].get("revision"))
+         for dataset_id in sorted(context.datasets)],
+        [(dataset_id, context.definitions[dataset_id].get("revision"))
+         for dataset_id in sorted(context.definitions)],
+        sorted((str(record.get("id") or ""), record.get("revision"),
+                (record.get("document") or {}).get("status"))
+               for record in context.runs),
+    ]
+    encoded = json.dumps(material, sort_keys=True, separators=(",", ":"),
+                         default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def read(dataset_id: str, actor: str, role: str,

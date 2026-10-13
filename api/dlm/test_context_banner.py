@@ -133,67 +133,145 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class BannerIsServedFromTheSnapshotItWasBuiltFrom(unittest.TestCase):
-    """The banner is recomputed when the catalog moves, and not otherwise.
+class BannerIsServedFromWhatTheCatalogSaysAboutCompiledContent(unittest.TestCase):
+    """The banner is recomputed when compiled content moves, and not otherwise.
 
-    Rebuilding it costs three catalog listings plus a read per dataset, and the
+    Rebuilding it means fetching every dataset's compiled artifact, and the
     home page paid that on every visit — including a reader who had just
-    loaded it. What the strip reports changes only when a context does, and
-    every context write advances the catalog's snapshot identity, so that
-    identity is what the answer is kept against: an exact invalidation rather
-    than a guess at how long an answer stays true.
+    loaded it. The dataset, definition and run listings are what say whether
+    anything compiled has changed, and they cost a fraction of the artifacts
+    they point at, so the answer is kept against a digest of them.
+
+    Deliberately not the catalog's own snapshot identity, which would have
+    been cheaper to ask for and wrong: it advances on every product write, and
+    the platform records its query history in that same catalog, so running
+    one query would have invalidated a banner that could not have changed.
     """
 
     def setUp(self):
         engine._COVERAGE_CACHE.clear()
         self.addCleanup(engine._COVERAGE_CACHE.clear)
 
-    def _coverage(self, snapshot, actor="owner", role="Admin"):
-        """Render the banner as `actor` against a named catalog snapshot."""
+    def _coverage(self, identity, actor="owner", role="Admin"):
+        """Render the banner as `actor`, with the catalog in a given state."""
         state = engine._RetirementServingState(actor, role)
+        state.identity = identity
+        state.context = object()  # already listed; nothing left to read for the key
         token = engine._RETIREMENT_SERVING.set(state)
         try:
-            with patch.object(engine, "ensure_tables"), \
-                 patch.object(engine, "_coverage_snapshot", return_value=snapshot), \
-                 patch.object(engine, "_serving_artifacts",
-                              return_value=ARTIFACTS) as artifacts, \
-                 patch.object(engine, "_bulk_value_index",
+            with patch.object(engine, "ensure_tables"),                  patch.object(engine, "_serving_artifacts",
+                              return_value=ARTIFACTS) as artifacts,                  patch.object(engine, "_bulk_value_index",
                               return_value=({}, {})) as values:
                 rows = engine.coverage()
             return rows, artifacts, values
         finally:
             engine._RETIREMENT_SERVING.reset(token)
 
-    def test_an_unchanged_snapshot_is_not_read_a_second_time(self):
-        first, artifacts, values = self._coverage("snapshot-9630")
+    def test_unchanged_compiled_content_is_not_fetched_a_second_time(self):
+        first, artifacts, values = self._coverage("digest-a")
         artifacts.assert_called_once()
         values.assert_called_once()
 
-        second, artifacts, values = self._coverage("snapshot-9630")
-        # Nothing was read: the previous answer still describes this snapshot.
+        second, artifacts, values = self._coverage("digest-a")
+        # Nothing was fetched: the previous answer still describes this state.
         artifacts.assert_not_called()
         values.assert_not_called()
         self.assertEqual(second, first)
 
-    def test_a_catalog_write_is_reflected_on_the_next_load(self):
-        self._coverage("snapshot-9630")
-        _, artifacts, _ = self._coverage("snapshot-9631")
-        # A new snapshot means a context may have changed, so the banner is
-        # rebuilt rather than served stale.
+    def test_a_recompiled_dataset_is_reflected_on_the_next_load(self):
+        self._coverage("digest-a")
+        _, artifacts, _ = self._coverage("digest-b")
         artifacts.assert_called_once()
 
-    def test_a_superseded_snapshot_does_not_keep_its_entry(self):
-        self._coverage("snapshot-9630")
-        self._coverage("snapshot-9631")
-        # One answer per snapshot, not one per commit for the life of the
-        # process: a catalog that commits on every transaction would otherwise
-        # grow this without bound.
-        self.assertEqual({key[0] for key in engine._COVERAGE_CACHE},
-                         {"snapshot-9631"})
+    def test_a_superseded_state_does_not_keep_its_entry(self):
+        self._coverage("digest-a")
+        self._coverage("digest-b")
+        # One answer per state of the catalog, not one per visit for the life
+        # of the process.
+        self.assertEqual({key[0] for key in engine._COVERAGE_CACHE}, {"digest-b"})
 
     def test_one_readers_banner_is_not_served_to_another(self):
-        self._coverage("snapshot-9630", actor="owner", role="Admin")
-        # Visibility is per caller, so a Viewer who shares a snapshot with an
-        # Admin must still be shown only what they may see.
-        _, artifacts, _ = self._coverage("snapshot-9630", actor="guest", role="Viewer")
+        self._coverage("digest-a", actor="owner", role="Admin")
+        # Visibility is per caller, so a Viewer who shares a catalog state with
+        # an Admin must still be shown only what they may see.
+        _, artifacts, _ = self._coverage("digest-a", actor="guest", role="Viewer")
         artifacts.assert_called_once()
+
+    def test_a_caller_that_cannot_list_is_answered_without_a_cache(self):
+        # No key means recomputed every time. Slower, never stale.
+        self._coverage(None)
+        _, artifacts, _ = self._coverage(None)
+        artifacts.assert_called_once()
+        self.assertEqual(engine._COVERAGE_CACHE, {})
+
+
+class CompiledArtifactsAreFetchedTogether(unittest.TestCase):
+    """Nine compiled artifacts are nine independent object reads.
+
+    Fetched one after another the page waited for each in turn, and the reads
+    themselves are a fraction of that wall time. Measured in the cluster:
+    0.045s to read an artifact, and nine of them cost the banner seconds.
+    """
+
+    def _serving(self, actor="owner", role="Admin"):
+        state = engine._RetirementServingState(actor, role)
+        return state, engine._RETIREMENT_SERVING.set(state)
+
+    def test_every_artifact_is_read_and_returned_in_order(self):
+        state, token = self._serving()
+        try:
+            with patch.object(engine, "get_dlm",
+                              side_effect=lambda did, *a, **k: {"dataset_id": did}):
+                read = engine._read_artifacts(["1", "2", "3"], context=None)
+        finally:
+            engine._RETIREMENT_SERVING.reset(token)
+        self.assertEqual([entry["dataset_id"] for entry in read], ["1", "2", "3"])
+
+    def test_reads_overlap_rather_than_waiting_in_turn(self):
+        import threading
+        state, token = self._serving()
+        started = threading.Barrier(3, timeout=5)
+
+        def _read(did, *args, **kwargs):
+            # Every read must be in flight before any may finish: a sequential
+            # implementation deadlocks here, which is the assertion.
+            started.wait()
+            return {"dataset_id": did}
+
+        try:
+            with patch.object(engine, "get_dlm", side_effect=_read):
+                read = engine._read_artifacts(["1", "2", "3"], context=None)
+        finally:
+            engine._RETIREMENT_SERVING.reset(token)
+        self.assertEqual(len(read), 3)
+
+    def test_one_unreadable_artifact_is_reported_against_its_own_dataset(self):
+        state, token = self._serving()
+        boom = RuntimeError("artifact is corrupt")
+
+        def _read(did, *args, **kwargs):
+            if did == "2":
+                raise boom
+            return {"dataset_id": did}
+
+        try:
+            with patch.object(engine, "get_dlm", side_effect=_read):
+                read = engine._read_artifacts(["1", "2", "3"], context=None)
+        finally:
+            engine._RETIREMENT_SERVING.reset(token)
+        # The batch is not lost: the failure arrives in the slot it belongs to.
+        self.assertEqual(read[0], {"dataset_id": "1"})
+        self.assertIs(read[1], boom)
+        self.assertEqual(read[2], {"dataset_id": "3"})
+
+    def test_concurrency_is_bounded(self):
+        state, token = self._serving()
+        try:
+            with patch.object(engine, "get_dlm", return_value=None),                  patch("dlm.engine.ThreadPoolExecutor") as pool:
+                pool.return_value.__enter__.return_value.map.return_value = []
+                engine._read_artifacts([str(n) for n in range(50)], context=None)
+        finally:
+            engine._RETIREMENT_SERVING.reset(token)
+        # The request path must not open a connection per dataset.
+        self.assertEqual(pool.call_args.kwargs["max_workers"],
+                         engine._ARTIFACT_READ_CONCURRENCY)
