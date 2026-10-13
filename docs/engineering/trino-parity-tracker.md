@@ -224,7 +224,7 @@ qualification documents; this tracker remains the single ordered work list.
 | Repartitioned hash joins | Partial | Correctness under skew, spill, retry, and worker loss |
 | Broadcast joins from exact source statistics | Partial | Small-side decision, stale-statistics fallback, and AKS result/latency comparison |
 | Global and grouped aggregates | Partial | Associative merge correctness, bounded memory, spill and cancellation |
-| Analytical result cache | Implemented, coordinator-local | Repeat-hit latency, source-version invalidation, bounded eviction, restart behavior, and multi-coordinator consistency |
+| Analytical result cache | Implemented locally; **Track 1 cache SLO pending** | One deployed, same-image cache evidence run: exact hit parity, p50/p95/p99/max hit latency, hit ratio, byte/entry eviction, TTL, source-version and product-commit invalidation, bypass/paging/admin-clear behavior, authorization isolation, and restart miss |
 | Windows, sort, TopN, set operations | Partial | Distributed result hashes and null/order semantics |
 | Snapshot pinning | Partial | Catalog mutation during an in-flight query never mixes generations |
 | Worker loss and exchange recovery | Partial | Mid-stage loss with no missing or double-counted partitions |
@@ -287,7 +287,10 @@ all of the following:
 This is a Track 1 execution SLO, not a claim that Trino has a built-in result
 cache. Trino deployments may add connector caches or materialized views, but
 the Trino engine itself does not provide this general coordinator result-cache
-contract.
+contract. The cache SLO is an independent Track 1 gate: the distributed
+execution SLO cannot be marked complete merely because cache unit tests pass,
+and the cache SLO cannot be marked complete from a latency sample without the
+invalidation, isolation, bounds, and restart evidence listed above.
 
 ### Completed implementation slices in the current cycle
 

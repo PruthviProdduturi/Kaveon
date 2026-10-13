@@ -251,6 +251,16 @@ can pass. It also does not claim coordinator-loss survival, sustained network-pr
 cloud-storage fault injection, longer endurance, or upgrade/rollback evidence;
 those remain explicit Track 1 blockers.
 
+The coordinator result-cache SLO is a separate Track 1 gate. It is not implied
+by the distributed execution SLO or by the local cache test suite. A cache
+qualification record must come from the deployed image under test and include
+exact warm-hit parity, hit p50/p95/p99/max, hit ratio, byte and entry
+evictions, TTL expiry, catalog/Delta/product-commit invalidation, bypass and
+paging exclusions, admin clear, authorization isolation, and restart-to-miss
+evidence. Until that record is archived, the Track 1 table reports the cache
+as implemented locally with its SLO pending; no shared cross-coordinator or
+cache-backed transactional-read claim is made.
+
 `transaction_compare.py` now produces the transaction input for the product SQL
 facade. It executes point read, insert, update, delete, conflicting update, and a
 three-record commit against identical logical records. PostgreSQL stores the
