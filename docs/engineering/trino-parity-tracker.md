@@ -294,7 +294,9 @@ qualification documents; this tracker remains the single ordered work list.
   or array/map-valued result comparison.
 - The same corpus now checks `MAP_ELEMENT_AT` and order-independent map
   equality on scalar results across those encodings and execution paths;
-  ordered map comparisons and map-valued result materialization remain open.
+  nullable map values are now covered as well, preserving equality when both
+  sides contain the same null entry. Ordered map comparisons and map-valued
+  result materialization remain open.
 - Date-array construction, cardinality, positional lookup, reverse, and
   distinct operations are covered in the same differential paths. Timestamp
   and decimal arrays now have the same cardinality/positional coverage. The
