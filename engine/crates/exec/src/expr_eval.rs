@@ -805,11 +805,6 @@ fn comparison(left: &ArrayRef, right: &ArrayRef, kind: CompareKind) -> Result<Bo
         left.as_any().downcast_ref::<ListArray>(),
         right.as_any().downcast_ref::<ListArray>(),
     ) {
-        if !matches!(kind, CompareKind::Eq | CompareKind::Ne) {
-            return Err(KaveonError::Execution(
-                "ordered comparison is not supported for ARRAY values".into(),
-            ));
-        }
         if left.len() != right.len() {
             return Err(KaveonError::Execution(
                 "ARRAY values must have matching row counts for comparison".into(),
@@ -823,11 +818,52 @@ fn comparison(left: &ArrayRef, right: &ArrayRef, kind: CompareKind) -> Result<Bo
             }
             let left_values = left.value(row);
             let right_values = right.value(row);
-            if left_values.len() != right_values.len() {
+            if left_values.len() != right_values.len()
+                && matches!(kind, CompareKind::Eq | CompareKind::Ne)
+            {
                 rows.push(Some(matches!(kind, CompareKind::Ne)));
                 continue;
             }
             let mut equal = Some(true);
+            if matches!(
+                kind,
+                CompareKind::Lt | CompareKind::Le | CompareKind::Gt | CompareKind::Ge
+            ) {
+                let mut ordered = None;
+                let mut decided = false;
+                for index in 0..left_values.len().min(right_values.len()) {
+                    let left_value = left_values.slice(index, 1);
+                    let right_value = right_values.slice(index, 1);
+                    let value_equal = comparison(&left_value, &right_value, CompareKind::Eq)?;
+                    if value_equal.is_null(0) {
+                        ordered = None;
+                        decided = true;
+                        break;
+                    }
+                    if value_equal.value(0) {
+                        continue;
+                    }
+                    ordered = comparison(&left_value, &right_value, kind)?
+                        .iter()
+                        .next()
+                        .flatten();
+                    decided = true;
+                    break;
+                }
+                if !decided {
+                    ordered = Some(match kind {
+                        CompareKind::Lt | CompareKind::Le => {
+                            left_values.len() < right_values.len()
+                        }
+                        CompareKind::Gt | CompareKind::Ge => {
+                            left_values.len() > right_values.len()
+                        }
+                        CompareKind::Eq | CompareKind::Ne => unreachable!(),
+                    });
+                }
+                rows.push(ordered);
+                continue;
+            }
             for index in 0..left_values.len() {
                 let value_equal = comparison(
                     &left_values.slice(index, 1),
@@ -6167,6 +6203,64 @@ mod tests {
                 right: Box::new(array(vec![
                     Expr::Literal(ScalarValue::Int64(1)),
                     Expr::Literal(ScalarValue::Null),
+                ])),
+            },
+            &batch,
+        )
+        .unwrap();
+        assert!(nullable.as_boolean().is_null(0));
+    }
+
+    #[test]
+    fn ordered_array_comparison_is_lexicographic_and_null_preserving() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        let array = |values: Vec<Expr>| Expr::Function {
+            name: "ARRAY".into(),
+            args: values,
+        };
+        let less = evaluate(
+            &Expr::BinaryOp {
+                left: Box::new(array(vec![
+                    Expr::Literal(ScalarValue::Int64(1)),
+                    Expr::Literal(ScalarValue::Int64(2)),
+                ])),
+                op: BinaryOp::Lt,
+                right: Box::new(array(vec![
+                    Expr::Literal(ScalarValue::Int64(1)),
+                    Expr::Literal(ScalarValue::Int64(3)),
+                ])),
+            },
+            &batch,
+        )
+        .unwrap();
+        assert!(less.as_boolean().value(0));
+        let prefix = evaluate(
+            &Expr::BinaryOp {
+                left: Box::new(array(vec![Expr::Literal(ScalarValue::Int64(1))])),
+                op: BinaryOp::Lt,
+                right: Box::new(array(vec![
+                    Expr::Literal(ScalarValue::Int64(1)),
+                    Expr::Literal(ScalarValue::Int64(2)),
+                ])),
+            },
+            &batch,
+        )
+        .unwrap();
+        assert!(prefix.as_boolean().value(0));
+        let nullable = evaluate(
+            &Expr::BinaryOp {
+                left: Box::new(array(vec![
+                    Expr::Literal(ScalarValue::Int64(1)),
+                    Expr::Literal(ScalarValue::Null),
+                ])),
+                op: BinaryOp::Lt,
+                right: Box::new(array(vec![
+                    Expr::Literal(ScalarValue::Int64(1)),
+                    Expr::Literal(ScalarValue::Int64(2)),
                 ])),
             },
             &batch,
