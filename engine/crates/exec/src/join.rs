@@ -3,7 +3,9 @@ use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, UInt64Array};
 use arrow::compute::{concat_batches, take};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
-use kaveon_core::{BatchOperator, KaveonError, MemoryReservation, OperatorMemoryAccount, Result};
+use kaveon_core::{
+    BatchOperator, Expr, KaveonError, MemoryReservation, OperatorMemoryAccount, Result,
+};
 use std::sync::Arc;
 
 const HASH_ROW_OVERHEAD_BYTES: u64 = 64;
@@ -25,6 +27,7 @@ pub struct HashJoin {
     right: Box<dyn BatchOperator>,
     join_type: JoinType,
     keys: Vec<(usize, usize)>,
+    residual: Option<Expr>,
     schema: SchemaRef,
     memory: Option<OperatorMemoryAccount>,
     emitted: bool,
@@ -129,6 +132,7 @@ struct JoinState {
     left: Option<RecordBatch>,
     left_row: usize,
     match_offset: usize,
+    match_rows: Vec<usize>,
     unmatched_right_row: usize,
     probe_finished: bool,
     _build_memory: Vec<MemoryReservation>,
@@ -175,6 +179,7 @@ impl HashJoin {
             right,
             join_type,
             keys: key_indices,
+            residual: None,
             schema: Arc::new(Schema::new(fields)),
             memory: None,
             emitted: false,
@@ -182,6 +187,15 @@ impl HashJoin {
             output_memory: None,
             prebuilt: None,
         })
+    }
+
+    /// Attach a residual predicate to an equality hash join. The predicate is
+    /// evaluated over candidate pairs after key matching and before outer-join
+    /// null extension, so an outer row is retained only when no candidate
+    /// satisfies the complete SQL `ON` condition.
+    pub fn with_residual(mut self, residual: Option<Expr>) -> Self {
+        self.residual = residual;
+        self
     }
 
     /// A join whose right side the caller built (`BuiltSide::build`): the
@@ -266,6 +280,59 @@ fn resolve_column(schema: &SchemaRef, name: &str, side: &str) -> Result<usize> {
     }
 }
 
+/// Evaluate a residual `ON` predicate over equality-key candidates. SQL join
+/// predicates keep only TRUE; FALSE and UNKNOWN both mean that the pair did
+/// not match. Candidates are evaluated in bounded chunks so a skewed key
+/// cannot allocate an unbounded temporary joined batch.
+fn residual_matches(
+    residual: Option<&Expr>,
+    left: &RecordBatch,
+    right: &RecordBatch,
+    left_row: usize,
+    candidates: &[usize],
+    output_schema: &SchemaRef,
+) -> Result<Vec<usize>> {
+    let Some(residual) = residual else {
+        return Ok(candidates.to_vec());
+    };
+    let mut accepted = Vec::new();
+    for chunk in candidates.chunks(OUTPUT_BATCH_ROWS) {
+        let left_indices = UInt64Array::from(vec![left_row as u64; chunk.len()]);
+        let right_indices = UInt64Array::from(
+            chunk
+                .iter()
+                .map(|row| *row as u64)
+                .collect::<Vec<_>>(),
+        );
+        let columns = left
+            .columns()
+            .iter()
+            .map(|column| take(column, &left_indices, None))
+            .chain(
+                right
+                    .columns()
+                    .iter()
+                    .map(|column| take(column, &right_indices, None)),
+            )
+            .collect::<std::result::Result<Vec<ArrayRef>, _>>()?;
+        let candidate_batch = RecordBatch::try_new(output_schema.clone(), columns)?;
+        let predicate = crate::expr_eval::evaluate(residual, &candidate_batch)?;
+        let predicate = predicate
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .ok_or_else(|| exec_err("join residual predicate must evaluate to BOOLEAN"))?;
+        accepted.extend(
+            chunk
+                .iter()
+                .enumerate()
+                .filter_map(|(index, right_row)| {
+                    (predicate.is_valid(index) && predicate.value(index)).then_some(*right_row)
+                }),
+        );
+    }
+    Ok(accepted)
+}
+
 impl BatchOperator for HashJoin {
     fn schema(&self) -> &SchemaRef {
         &self.schema
@@ -277,6 +344,7 @@ impl BatchOperator for HashJoin {
             return Ok(None);
         }
         let result = (|| {
+            let residual = self.residual.clone();
             if self.state.is_none() {
                 let built = match self.prebuilt.take() {
                     Some(built) => built,
@@ -301,6 +369,7 @@ impl BatchOperator for HashJoin {
                     left: None,
                     left_row: 0,
                     match_offset: 0,
+                    match_rows: Vec::new(),
                     unmatched_right_row: 0,
                     probe_finished: false,
                     _build_memory: built.reservations,
@@ -331,6 +400,7 @@ impl BatchOperator for HashJoin {
                             state.left = Some(batch);
                             state.left_row = 0;
                             state.match_offset = 0;
+                            state.match_rows.clear();
                         }
                         None => state.probe_finished = true,
                     }
@@ -344,17 +414,29 @@ impl BatchOperator for HashJoin {
                     if state.left_row.is_multiple_of(1024) {
                         check_cancelled(self.memory.as_ref())?;
                     }
-                    let matches = state
-                        .index
-                        .as_ref()
-                        .map(|index| index.matches(left, state.left_row, &self.keys))
-                        .transpose()?
-                        .flatten();
-                    let match_count = if self.join_type == JoinType::Cross {
-                        state.right.num_rows()
-                    } else {
-                        matches.map_or(0, <[usize]>::len)
-                    };
+                    if state.match_rows.is_empty() && state.match_offset == 0 {
+                        let candidates = if self.join_type == JoinType::Cross {
+                            (0..state.right.num_rows()).collect::<Vec<_>>()
+                        } else {
+                            state
+                                .index
+                                .as_ref()
+                                .map(|index| index.matches(left, state.left_row, &self.keys))
+                                .transpose()?
+                                .flatten()
+                                .unwrap_or_default()
+                                .to_vec()
+                        };
+                        state.match_rows = residual_matches(
+                            residual.as_ref(),
+                            left,
+                            &state.right,
+                            state.left_row,
+                            &candidates,
+                            &self.schema,
+                        )?;
+                    }
+                    let match_count = state.match_rows.len();
                     if match_count == 0 {
                         if matches!(self.join_type, JoinType::Left | JoinType::Full) {
                             push_output_pair(
@@ -368,14 +450,11 @@ impl BatchOperator for HashJoin {
                         }
                         state.left_row += 1;
                         state.match_offset = 0;
+                        state.match_rows.clear();
                         continue;
                     }
                     while state.match_offset < match_count && left_rows.len() < OUTPUT_BATCH_ROWS {
-                        let right_row = if self.join_type == JoinType::Cross {
-                            state.match_offset
-                        } else {
-                            matches.expect("matching rows")[state.match_offset]
-                        };
+                        let right_row = state.match_rows[state.match_offset];
                         push_output_pair(
                             &mut left_rows,
                             &mut right_rows,
@@ -392,6 +471,7 @@ impl BatchOperator for HashJoin {
                     if state.match_offset == match_count {
                         state.left_row += 1;
                         state.match_offset = 0;
+                        state.match_rows.clear();
                     }
                 }
                 if state.probe_finished
@@ -850,7 +930,7 @@ fn exec_err(message: impl Into<String>) -> KaveonError {
 mod tests {
     use super::*;
     use arrow::array::{
-        Date64Array, Decimal128Array, Decimal256Array, Int64Array, StringArray,
+        Date64Array, Decimal128Array, Decimal256Array, Int32Array, Int64Array, StringArray,
         Time32MillisecondArray, TimestampMillisecondArray,
     };
     use arrow::datatypes::i256;
@@ -1176,6 +1256,55 @@ mod tests {
         assert_eq!(result.num_rows(), 3);
         assert_eq!(result.column(0).null_count(), 1);
         assert_eq!(result.column(2).null_count(), 1);
+    }
+
+    #[test]
+    fn outer_join_residual_filters_pairs_before_null_extension() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("value", DataType::Int32, false),
+        ]));
+        let left = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(1), Some(1), Some(2)])),
+                Arc::new(Int32Array::from(vec![5, 1, 9])),
+            ],
+        )
+        .unwrap();
+        let right = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![Some(1), Some(1), Some(2)])),
+                Arc::new(Int32Array::from(vec![3, 7, 2])),
+            ],
+        )
+        .unwrap();
+        let residual = Expr::BinaryOp {
+            left: Box::new(Expr::Column("left.value".into())),
+            op: kaveon_core::BinaryOp::Gt,
+            right: Box::new(Expr::Column("right.value".into())),
+        };
+        let mut join = HashJoin::try_new_qualified(
+            Box::new(Input::new(left)),
+            Box::new(Input::new(right)),
+            JoinType::Left,
+            vec![("id".into(), "id".into())],
+            Some("left"),
+            Some("right"),
+        )
+        .unwrap()
+        .with_residual(Some(residual));
+        let batches = kaveon_core::collect_batches(&mut join).unwrap();
+        let result = concat_batches(join.schema(), &batches).unwrap();
+        assert_eq!(result.num_rows(), 3);
+        assert_eq!(result.column(2).null_count(), 1);
+        let right_values = result
+            .column(3)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(right_values.iter().collect::<Vec<_>>(), vec![Some(3), None, Some(2)]);
     }
 
     #[test]

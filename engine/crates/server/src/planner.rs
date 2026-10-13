@@ -1004,8 +1004,14 @@ impl ExecutableFragmentBuilder<'_> {
     ) -> Result<StageId> {
         let left_stage = self.build(left)?;
         let right_stage = self.build(right)?;
+        let (keys, residual) = join_keys_and_residual(condition)?;
+        if join_type != JoinType::Cross && keys.is_empty() {
+            return Err(KaveonError::Execution(
+                "outer and hash joins require at least one equality key; residual-only joins are not supported"
+                    .into(),
+            ));
+        }
         if distribution == JoinDistribution::BroadcastRight {
-            let keys = join_keys(condition)?;
             let (left_keys, right_keys): (Vec<_>, Vec<_>) = keys.into_iter().unzip();
             return self.attach_broadcast_join(
                 left_stage,
@@ -1016,7 +1022,7 @@ impl ExecutableFragmentBuilder<'_> {
                     right_qualifier: relation_qualifier(right),
                     left_keys: left_keys.into_iter().map(Expr::Column).collect(),
                     right_keys: right_keys.into_iter().map(Expr::Column).collect(),
-                    residual: None,
+                    residual,
                     broadcast: true,
                 },
             );
@@ -1049,7 +1055,6 @@ impl ExecutableFragmentBuilder<'_> {
                 exchange_id: right_exchange.id,
             }),
         });
-        let keys = join_keys(condition)?;
         let (left_keys, right_keys): (Vec<_>, Vec<_>) = keys.into_iter().unzip();
         target_draft.push(
             FragmentOperator::HashJoin(JoinSpec {
@@ -1058,7 +1063,7 @@ impl ExecutableFragmentBuilder<'_> {
                 right_qualifier: relation_qualifier(right),
                 left_keys: left_keys.into_iter().map(Expr::Column).collect(),
                 right_keys: right_keys.into_iter().map(Expr::Column).collect(),
-                residual: None,
+                residual,
                 broadcast: join_type == JoinType::Cross,
             }),
             vec![FragmentNodeId(0), right_input],
@@ -1472,7 +1477,7 @@ impl StageGraphBuilder {
                     );
                     self.add_exchange(right_stage, target, Partitioning::Broadcast);
                 } else {
-                    let keys = join_keys(condition.as_ref())?;
+                    let (keys, _residual) = join_keys_and_residual(condition.as_ref())?;
                     if keys.is_empty() {
                         return Err(KaveonError::Execution(
                             "distributed non-cross joins require equality keys".into(),
@@ -2112,17 +2117,18 @@ fn plan_query_with_predicate(
             let right_qualifier = relation_qualifier(right);
             let left = plan_query_inner(left, catalog, partition, memory, pins)?;
             let right = plan_query_inner(right, catalog, partition, memory, pins)?;
-            let keys = join_keys(condition.as_ref())?;
+            let (keys, residual) = join_keys_and_residual(condition.as_ref())?;
             let mut scan_metrics = left.scan_metrics;
             scan_metrics.extend(right.scan_metrics);
             Ok(PlannedQuery {
-                operator: kaveon_exec::partitioned::hash_join(
+                operator: kaveon_exec::partitioned::hash_join_with_residual(
                     left.operator,
                     right.operator,
                     physical_join_type(*join_type),
                     keys,
                     left_qualifier.as_deref(),
                     right_qualifier.as_deref(),
+                    residual,
                     memory
                         .map(|memory| memory.operator("hash-join"))
                         .transpose()?,
@@ -2549,31 +2555,44 @@ fn physical_join_type(join_type: JoinType) -> PhysicalJoinType {
     }
 }
 
-fn join_keys(condition: Option<&Expr>) -> Result<Vec<(String, String)>> {
-    match condition {
-        None => Ok(Vec::new()),
-        Some(Expr::BinaryOp {
-            left,
-            op: kaveon_core::BinaryOp::Eq,
-            right,
-        }) => match (left.as_ref(), right.as_ref()) {
-            // Keys keep their qualifiers: `n1.n_nationkey` beside
-            // `n2.n_nationkey` is only unambiguous with them, and each side
-            // resolves its key exactly or by bare name.
-            (Expr::Column(left), Expr::Column(right)) => Ok(vec![(left.clone(), right.clone())]),
-            _ => Err(KaveonError::Execution(
-                "join equality keys must be column references".into(),
-            )),
-        },
-        Some(Expr::And(left, right)) => {
-            let mut keys = join_keys(Some(left))?;
-            keys.extend(join_keys(Some(right))?);
-            Ok(keys)
+fn join_keys_and_residual(
+    condition: Option<&Expr>,
+) -> Result<(Vec<(String, String)>, Option<Expr>)> {
+    let mut terms = Vec::new();
+    fn flatten(expr: &Expr, terms: &mut Vec<Expr>) {
+        if let Expr::And(left, right) = expr {
+            flatten(left, terms);
+            flatten(right, terms);
+        } else {
+            terms.push(expr.clone());
         }
-        Some(_) => Err(KaveonError::Execution(
-            "only equality join conditions are supported".into(),
-        )),
     }
+    if let Some(condition) = condition {
+        flatten(condition, &mut terms);
+    }
+    let mut keys = Vec::new();
+    let mut residual = Vec::new();
+    for term in terms {
+        match term {
+            Expr::BinaryOp {
+                left,
+                op: kaveon_core::BinaryOp::Eq,
+                right,
+            } => match (*left, *right) {
+                (Expr::Column(left), Expr::Column(right)) => keys.push((left, right)),
+                other => residual.push(Expr::BinaryOp {
+                    left: Box::new(other.0),
+                    op: kaveon_core::BinaryOp::Eq,
+                    right: Box::new(other.1),
+                }),
+            },
+            term => residual.push(term),
+        }
+    }
+    let residual = residual
+        .into_iter()
+        .reduce(|left, right| Expr::And(Box::new(left), Box::new(right)));
+    Ok((keys, residual))
 }
 
 /// The output names a DISTINCT can hash-partition on: every projected
@@ -3286,6 +3305,21 @@ mod tests {
                 ));
             }
         }
+    }
+
+    #[test]
+    fn translates_outer_equi_join_residual_into_hash_join_spec() {
+        let fragments = executable_fragments(
+            "SELECT * FROM items i LEFT JOIN customers c ON i.id = c.id AND i.id > c.id",
+        );
+        let join = fragments[&StageId(2)].nodes.last().unwrap();
+        let FragmentOperator::HashJoin(spec) = &join.operator else {
+            panic!("expected an executable hash join");
+        };
+        assert_eq!(spec.join_type, FragmentJoinType::Left);
+        assert_eq!(spec.left_keys, vec![Expr::Column("i.id".into())]);
+        assert_eq!(spec.right_keys, vec![Expr::Column("c.id".into())]);
+        assert!(matches!(spec.residual, Some(Expr::BinaryOp { op: BinaryOp::Gt, .. })));
     }
 
     #[test]

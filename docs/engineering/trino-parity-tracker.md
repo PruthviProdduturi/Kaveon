@@ -343,6 +343,11 @@ latency evidence as the remaining qualification work.
   microsecond representations. The timestamp unit remains part of the list
   element type; timezone-bearing arrays still require the existing compatible
   timestamp path.
+- Equality-key `LEFT`, `RIGHT`, and `FULL` joins now carry residual `ON`
+  predicates through local and distributed hash joins. Candidate pairs are
+  evaluated in bounded batches with SQL TRUE-only matching; preserved rows and
+  the right-side match bitmap are updated only after that evaluation. Residual-
+  only outer joins remain rejected because they have no repartition key.
 - Three-worker global `ORDER BY`/TopN centralized merge correctness is now
   qualified for NULL ordering and ties against a single-partition reference
   (`bb788709`). The input remains distributed, while the exact global merge
@@ -609,10 +614,11 @@ deployed cancellation under those conditions remain open.
 Track 2 remains partial because prepared statements are now available through
 the Engine HTTP lifecycle and scalar `EXECUTE ... USING` is supported by the
 Trino adapter, but the adapter still lacks a wire-compatible full protocol;
-correlated non-aggregate and other unsupported scalar subqueries, residual outer joins,
-ordered map comparisons, broader array element types, and broader typed DML are
-not yet implemented. Inner residual joins are correctness-complete but use a
-cross-join fallback until a residual-aware hash join is available.
+correlated non-aggregate and other unsupported scalar subqueries, residual-only
+outer joins, ordered map comparisons, broader array element types, and broader
+typed DML are not yet implemented. Equality-key outer joins now carry residual
+`ON` predicates through the distributed hash join and apply null extension only
+after the complete predicate is evaluated.
 Multiset set operations are now implemented
 and covered end to end. Positional
  scalar parameters, including named placeholders, are supported through the
