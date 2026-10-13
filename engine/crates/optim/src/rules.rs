@@ -814,22 +814,19 @@ fn push_filter_into(predicate: Expr, input: LogicalPlan) -> LogicalPlan {
                     } else {
                         continue;
                     };
-                    if let Some(value) = equality_column_literal(&original_left_parts, &left_column)
-                    {
-                        right_parts.push(Expr::BinaryOp {
-                            left: Box::new(Expr::Column(right_column.clone())),
-                            op: BinaryOp::Eq,
-                            right: Box::new(Expr::Literal(value)),
-                        });
+                    if let Some(predicate) = propagated_column_predicate(
+                        &original_left_parts,
+                        &left_column,
+                        &right_column,
+                    ) {
+                        right_parts.push(predicate);
                     }
-                    if let Some(value) =
-                        equality_column_literal(&original_right_parts, &right_column)
-                    {
-                        left_parts.push(Expr::BinaryOp {
-                            left: Box::new(Expr::Column(left_column.clone())),
-                            op: BinaryOp::Eq,
-                            right: Box::new(Expr::Literal(value)),
-                        });
+                    if let Some(predicate) = propagated_column_predicate(
+                        &original_right_parts,
+                        &right_column,
+                        &left_column,
+                    ) {
+                        left_parts.push(predicate);
                     }
                 }
             }
@@ -929,6 +926,47 @@ fn equality_column_literal(parts: &[Expr], column: &str) -> Option<ScalarValue> 
             (Expr::Literal(value), Expr::Column(name)) if name == column => Some(value.clone()),
             _ => None,
         }
+    })
+}
+
+fn propagated_column_predicate(parts: &[Expr], source: &str, target: &str) -> Option<Expr> {
+    parts.iter().find_map(|part| {
+        if let Expr::And(left, right) = part {
+            return propagated_column_predicate(
+                &[left.as_ref().clone(), right.as_ref().clone()],
+                source,
+                target,
+            );
+        }
+        if let Some(value) = equality_column_literal(std::slice::from_ref(part), source) {
+            return Some(Expr::BinaryOp {
+                left: Box::new(Expr::Column(target.to_owned())),
+                op: BinaryOp::Eq,
+                right: Box::new(Expr::Literal(value)),
+            });
+        }
+        let Expr::InList {
+            expr,
+            list,
+            negated: false,
+        } = part
+        else {
+            return None;
+        };
+        let Expr::Column(column) = expr.as_ref() else {
+            return None;
+        };
+        if column != source || list.is_empty() || list.len() > 64 {
+            return None;
+        }
+        if !list.iter().all(|value| matches!(value, Expr::Literal(_))) {
+            return None;
+        }
+        Some(Expr::InList {
+            expr: Box::new(Expr::Column(target.to_owned())),
+            list: list.clone(),
+            negated: false,
+        })
     })
 }
 
@@ -1186,6 +1224,42 @@ mod tests {
             LogicalPlan::Filter { ref predicate, .. }
                 if equality_column_literal(std::slice::from_ref(predicate), "id")
                     == Some(ScalarValue::Int64(7))
+        ));
+    }
+
+    #[test]
+    fn propagates_bounded_inner_join_in_filter_across_equality_key() {
+        let join = LogicalPlan::Join {
+            left: Box::new(LogicalPlan::Scan {
+                table: "events".into(),
+                alias: Some("l".into()),
+                columns: None,
+            }),
+            right: Box::new(LogicalPlan::Scan {
+                table: "lookup".into(),
+                alias: Some("r".into()),
+                columns: None,
+            }),
+            join_type: JoinType::Inner,
+            condition: Some(compare(column("l.id"), BinaryOp::Eq, column("r.id"))),
+            distribution: kaveon_sql::logical_plan::JoinDistribution::Partitioned,
+        };
+        let plan = LogicalPlan::Filter {
+            input: Box::new(join),
+            predicate: Expr::InList {
+                expr: Box::new(column("l.id")),
+                list: vec![int(3), int(7), int(11)],
+                negated: false,
+            },
+        };
+        let LogicalPlan::Join { right, .. } = push_filter_down(plan) else {
+            panic!("filter should remain attached to the join inputs");
+        };
+        assert!(matches!(
+            *right,
+            LogicalPlan::Filter { predicate: Expr::InList { expr, list, negated: false }, .. }
+                if matches!(expr.as_ref(), Expr::Column(name) if name == "id")
+                    && list.len() == 3
         ));
     }
 

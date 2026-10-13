@@ -180,6 +180,9 @@ qualification documents; this tracker remains the single ordered work list.
   reduced build side before distribution selection; the optimizer qualification
   covers the propagated filters and the existing no-statistics partitioned
   fallback (`0ba56846`, `04c5d391`).
+- The same optimizer path now propagates bounded positive `IN (...)` literal
+  filters across inner equality keys (up to 64 values), preserving a safe
+  partition/build reduction without claiming runtime dynamic filtering.
 - A distributed self-join with grouped output now has exact worker-loss
   recovery coverage, including retries and moved exchange spools
   (`43a2f8f9`). AKS worker-loss qualification remains open.
