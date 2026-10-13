@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { API_BASE } from "../../config";
 import { msalFetch } from "../../utils/msalFetch";
 import { mmh3Hash64 } from "../../utils/mmh3";
+import { ReadOnlyChips } from "./ChartReadOnly";
 import { useChartBuilder, ChartFilterOption } from "./ChartBuilderContext";
 
 const FilterBuilder: React.FC = () => {
@@ -14,6 +15,7 @@ const FilterBuilder: React.FC = () => {
     setFilters,
     filterLogic,
     setFilterLogic,
+    readOnly,
   } = useChartBuilder();
 
   const [expandedFilterId, setExpandedFilterId] = useState<string | null>(null);
@@ -179,6 +181,10 @@ const FilterBuilder: React.FC = () => {
   // in parallel.
   useEffect(() => {
     if (!selectedDatasetId || !datasetDetail) return;
+    // The distinct-value lists exist to populate a value dropdown. A reader has
+    // no dropdown — each filter already carries the value it was saved with —
+    // so the round trip would buy nothing and is not made.
+    if (readOnly) return;
 
     // First, hydrate any filters that can use cached values so
     // they don't need to hit the backend again.
@@ -303,13 +309,6 @@ const FilterBuilder: React.FC = () => {
 
             const keyColumn = data.keyColumn || null;
 
-            console.log('[FilterBuilder] Loaded filter values:', {
-              column: f.column,
-              keyColumn,
-              sampleValues: values.slice(0, 3),
-              totalValues: values.length
-            });
-
             // Cache values + keyColumn per column so future filters on the same
             // column reuse this list (including keyColumn for tier 1/2 optimization).
             if (f.column) {
@@ -349,7 +348,48 @@ const FilterBuilder: React.FC = () => {
 
     void loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filtersNeedingLoad, selectedDatasetId, datasetDetail]);
+  }, [filtersNeedingLoad, selectedDatasetId, datasetDetail, readOnly]);
+
+  // ── Read-only filters ───────────────────────────────────────────────────
+  // The clauses the chart is filtered by, stated in the order they apply and
+  // joined by the operator they are joined by. No Add, no remove, and no chip
+  // that opens an editor — a reader who clicked one would be editing a chart
+  // the API will not let them save.
+  if (readOnly) {
+    const clauseText = (filter: (typeof filters)[number]) => {
+      const column = columnDisplayById.get(filter.column) ?? filter.columnLabel ?? filter.column;
+      return `${column} ${filter.operator} ${filter.value}`;
+    };
+    const primary = filters.filter(
+      (f) => !f.isPending && (f.groupKey ?? "primary") === "primary",
+    );
+    const secondary = filters.filter((f) => !f.isPending && f.groupKey === "secondary");
+
+    if (primary.length === 0 && secondary.length === 0) {
+      return (
+        <div className="muted" style={{ fontSize: 12.5 }}>
+          No filters. The chart covers every row the query returns.
+        </div>
+      );
+    }
+
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {primary.length > 0 && (
+          <ReadOnlyChips
+            items={primary.map(clauseText)}
+            leadingOperator={primary.length > 1 ? filterLogic : undefined}
+          />
+        )}
+        {secondary.length > 0 && (
+          <ReadOnlyChips
+            items={secondary.map(clauseText)}
+            leadingOperator={filterLogic === "AND" ? "Or group" : "And group"}
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div>

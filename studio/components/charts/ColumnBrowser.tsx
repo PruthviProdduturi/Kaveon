@@ -8,6 +8,7 @@ const ColumnBrowser: React.FC = () => {
     datasetColumns,
     datasetMetrics,
     datasetDetailError,
+    readOnly,
   } = useChartBuilder();
 
   const [search, setSearch] = useState("");
@@ -117,10 +118,17 @@ const ColumnBrowser: React.FC = () => {
   if (!selectedDatasetId) {
     return (
       <div className="chart-source-empty">
-        Select a dataset to browse its metrics and columns.
+        {readOnly
+          ? "This chart's dataset is not available to you, so its metrics and columns cannot be listed."
+          : "Select a dataset to browse its metrics and columns."}
       </div>
     );
   }
+
+  // Browsing the dataset is reading, so the list and its search stay for every
+  // caller. The grip is the one thing that does not: it reads as "drag this
+  // into the configuration", which is exactly what a reader cannot do.
+  const showDragHandle = !readOnly;
 
   return (
     <>
@@ -182,7 +190,9 @@ const ColumnBrowser: React.FC = () => {
                     <span className="chart-source-item-label">{m.label}</span>
                     <span className="chart-source-item-meta">{m.meta}</span>
                   </div>
-                  <div className="chart-source-item-handle">⋮⋮</div>
+                  {showDragHandle && (
+                    <div className="chart-source-item-handle">⋮⋮</div>
+                  )}
                 </div>
               ))
             )}
@@ -234,7 +244,9 @@ const ColumnBrowser: React.FC = () => {
                     <span className="chart-source-item-label">{c.label}</span>
                     <span className="chart-source-item-meta">{c.meta}</span>
                   </div>
-                  <div className="chart-source-item-handle">⋮⋮</div>
+                  {showDragHandle && (
+                    <div className="chart-source-item-handle">⋮⋮</div>
+                  )}
                 </div>
               ))
             )}

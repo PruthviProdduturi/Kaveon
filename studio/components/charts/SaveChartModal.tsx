@@ -7,10 +7,14 @@ interface SaveChartModalProps {
 }
 
 const SaveChartModal: React.FC<SaveChartModalProps> = ({ isOpen, onClose }) => {
-  const { name, setName, description, setDescription, canSave, isSaving, saveError, handleSave } =
+  const { name, setName, description, setDescription, canSave, isSaving, saveError, handleSave, readOnly } =
     useChartBuilder();
 
   if (!isOpen) return null;
+  // The Save control that opens this dialog is not rendered in a read-only
+  // builder. If anything else opens it, the dialog stays shut rather than
+  // taking a name and a description for a write the API would refuse.
+  if (readOnly) return null;
 
   const canConfirm = Boolean(name.trim()) && canSave;
 

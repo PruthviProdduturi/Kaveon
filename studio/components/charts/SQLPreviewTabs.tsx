@@ -5,7 +5,7 @@ import { useChartBuilder } from "./ChartBuilderContext";
 
 const SQLPreviewTabs: React.FC = () => {
   const [activeTab, setActiveTab] = useState<"sql" | "data" | "json">("sql");
-  const { sqlPreview, datasetColumns } = useChartBuilder();
+  const { sqlPreview, datasetColumns, readOnly } = useChartBuilder();
 
   const {
     lastSql,
@@ -39,6 +39,12 @@ const SQLPreviewTabs: React.FC = () => {
     return { hasMultiSemanticGroups, hasCoalesceInSql };
   }, [datasetColumns, lastSql]);
 
+  // These tabs only ever display, so they stay whole for a reader. Their copy
+  // does not: it points at "Update chart", which in a read-only builder is
+  // "Refresh data" — the same press, named for the only thing it can do.
+  const runningLabel = readOnly ? "Refreshing…" : "Updating chart...";
+  const runPrompt = readOnly ? "Refresh data" : "Update chart";
+
   const formatDurationMs = (ms?: number | null): string => {
     if (ms == null) return "";
     const seconds = ms / 1000;
@@ -65,9 +71,9 @@ const SQLPreviewTabs: React.FC = () => {
 
   const renderSql = () => {
     if (error) return <div style={{ color: "#f97373" }}>{error}</div>;
-    if (isRunning) return <div className="muted">Updating chart...</div>;
+    if (isRunning) return <div className="muted">{runningLabel}</div>;
     if (!lastSql)
-      return <div className="muted">Update chart to see generated SQL.</div>;
+      return <div className="muted">{runPrompt} to see the generated SQL.</div>;
 
     // Format SQL for better readability
     let formattedSql: string;
@@ -127,9 +133,9 @@ const SQLPreviewTabs: React.FC = () => {
 
   const renderData = () => {
     if (error) return <div style={{ color: "#f97373" }}>{error}</div>;
-    if (isRunning) return <div className="muted">Updating chart...</div>;
+    if (isRunning) return <div className="muted">{runningLabel}</div>;
     if (!dataColumns.length)
-      return <div className="muted">No data yet. Update chart to preview rows.</div>;
+      return <div className="muted">No data yet. {runPrompt} to preview rows.</div>;
 
     return (
       <div
@@ -172,7 +178,13 @@ const SQLPreviewTabs: React.FC = () => {
 
   const renderJson = () => {
     if (!lastConfigJson)
-      return <div className="muted">Config JSON will appear after updating the chart.</div>;
+      return (
+        <div className="muted">
+          {readOnly
+            ? "Config JSON will appear once the chart's query has run."
+            : "Config JSON will appear after updating the chart."}
+        </div>
+      );
     return (
       <pre
         style={{

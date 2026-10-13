@@ -1348,6 +1348,24 @@ export interface ChartBuilderContextValue {
   registerInitialSnapshot: () => void;
   /** ChartPreview calls this to register a thumbnail-capture fn (returns a JPEG data URI). */
   registerThumbnailCapture: (fn: (() => string | null | Promise<string | null>) | null) => void;
+  /**
+   * This reader may look at the chart but may not keep a change to it.
+   *
+   * The page that mounts the builder decides this — it is the only place that
+   * knows both the caller's role and the chart's owner, which together are
+   * what `can_write` on the API tests. The builder takes the answer rather
+   * than re-deriving it, so every panel asks one question instead of each
+   * reimplementing the rule.
+   *
+   * It is not the same as "is a Viewer": an Analyst looking at a colleague's
+   * chart is equally unable to save over it, and is equally read-only here,
+   * while still being free to run the query behind it.
+   *
+   * The configuration surfaces present the chart instead of offering to
+   * change it, and `canSave`/`handleSave`/`saveChartAs` refuse outright, so a
+   * write cannot be reached by a route the UI forgot to close.
+   */
+  readOnly: boolean;
 }
 
 const ChartBuilderContext = createContext<ChartBuilderContextValue | undefined>(undefined);
@@ -1358,6 +1376,8 @@ interface ChartBuilderProviderProps {
   initialChartId?: number | string;
   initialDatasetId?: number | string;
   initialTemplate?: string;
+  /** See `readOnly` on the context value. Defaults to a writable builder. */
+  readOnly?: boolean;
 }
 
 export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
@@ -1366,6 +1386,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
   initialChartId,
   initialDatasetId,
   initialTemplate,
+  readOnly = false,
 }) => {
   const { isAuthenticated, account } = useAuth();
 
@@ -1547,8 +1568,10 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
     [allTemplates],
   );
 
-  // Save button is always enabled (removed hasChanges check)
-  const canSave = Boolean(selectedTemplate && selectedDatasetId && !isSaving);
+  // Save button is always enabled (removed hasChanges check). A read-only
+  // builder can never save: the API would refuse the write, so the builder
+  // does not hold it out as possible.
+  const canSave = Boolean(selectedTemplate && selectedDatasetId && !isSaving && !readOnly);
 
   // Enhanced to support all UI date format options and robustly handle datetime strings
   // IMPORTANT: Parse dates without timezone conversion to keep the exact date from Fabric
@@ -3823,6 +3846,12 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
   };
 
   const handleSave = async () => {
+    // A read-only builder has no Save control, so this is a backstop rather
+    // than a path: it says why nothing happened instead of failing silently.
+    if (readOnly) {
+      setSaveError("This chart is open for reading only, so it cannot be saved.");
+      return;
+    }
     if (!canSave || !selectedTemplate || !selectedDatasetId) return;
 
     setIsSaving(true);
@@ -4060,6 +4089,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
     saveChartAs,
     registerInitialSnapshot,
     registerThumbnailCapture: useCallback((fn: (() => string | null | Promise<string | null>) | null) => { thumbnailCaptureRef.current = fn; }, []),
+    readOnly,
   };
 
   return <ChartBuilderContext.Provider value={value}>{children}</ChartBuilderContext.Provider>;
