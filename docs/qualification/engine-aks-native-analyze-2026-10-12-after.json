@@ -1,0 +1,19 @@
+{
+  "passed": true,
+  "phase": "restart",
+  "verified_at": "2026-10-13T04:18:09.326963+00:00",
+  "table": "OpenSource.ai_benchmarks.leaderboard",
+  "expected_rows": 34,
+  "query": null,
+  "statistic": {
+    "computed_at": "2026-10-13T04:17:28.425Z",
+    "current": true,
+    "depth": "metadata",
+    "row_count": 34,
+    "source_version": "delta v0 (8529532b77bf)",
+    "table": "OpenSource.ai_benchmarks.leaderboard",
+    "table_id": "table:OpenSource:ai_benchmarks:leaderboard"
+  },
+  "planner_check": "deferred-no-qualified-safe-join-pair",
+  "errors": []
+}
