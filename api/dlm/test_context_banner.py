@@ -131,3 +131,69 @@ class BulkValueIndex(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BannerIsServedFromTheSnapshotItWasBuiltFrom(unittest.TestCase):
+    """The banner is recomputed when the catalog moves, and not otherwise.
+
+    Rebuilding it costs three catalog listings plus a read per dataset, and the
+    home page paid that on every visit — including a reader who had just
+    loaded it. What the strip reports changes only when a context does, and
+    every context write advances the catalog's snapshot identity, so that
+    identity is what the answer is kept against: an exact invalidation rather
+    than a guess at how long an answer stays true.
+    """
+
+    def setUp(self):
+        engine._COVERAGE_CACHE.clear()
+        self.addCleanup(engine._COVERAGE_CACHE.clear)
+
+    def _coverage(self, snapshot, actor="owner", role="Admin"):
+        """Render the banner as `actor` against a named catalog snapshot."""
+        state = engine._RetirementServingState(actor, role)
+        token = engine._RETIREMENT_SERVING.set(state)
+        try:
+            with patch.object(engine, "ensure_tables"), \
+                 patch.object(engine, "_coverage_snapshot", return_value=snapshot), \
+                 patch.object(engine, "_serving_artifacts",
+                              return_value=ARTIFACTS) as artifacts, \
+                 patch.object(engine, "_bulk_value_index",
+                              return_value=({}, {})) as values:
+                rows = engine.coverage()
+            return rows, artifacts, values
+        finally:
+            engine._RETIREMENT_SERVING.reset(token)
+
+    def test_an_unchanged_snapshot_is_not_read_a_second_time(self):
+        first, artifacts, values = self._coverage("snapshot-9630")
+        artifacts.assert_called_once()
+        values.assert_called_once()
+
+        second, artifacts, values = self._coverage("snapshot-9630")
+        # Nothing was read: the previous answer still describes this snapshot.
+        artifacts.assert_not_called()
+        values.assert_not_called()
+        self.assertEqual(second, first)
+
+    def test_a_catalog_write_is_reflected_on_the_next_load(self):
+        self._coverage("snapshot-9630")
+        _, artifacts, _ = self._coverage("snapshot-9631")
+        # A new snapshot means a context may have changed, so the banner is
+        # rebuilt rather than served stale.
+        artifacts.assert_called_once()
+
+    def test_a_superseded_snapshot_does_not_keep_its_entry(self):
+        self._coverage("snapshot-9630")
+        self._coverage("snapshot-9631")
+        # One answer per snapshot, not one per commit for the life of the
+        # process: a catalog that commits on every transaction would otherwise
+        # grow this without bound.
+        self.assertEqual({key[0] for key in engine._COVERAGE_CACHE},
+                         {"snapshot-9631"})
+
+    def test_one_readers_banner_is_not_served_to_another(self):
+        self._coverage("snapshot-9630", actor="owner", role="Admin")
+        # Visibility is per caller, so a Viewer who shares a snapshot with an
+        # Admin must still be shown only what they may see.
+        _, artifacts, _ = self._coverage("snapshot-9630", actor="guest", role="Viewer")
+        artifacts.assert_called_once()
