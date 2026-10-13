@@ -221,6 +221,7 @@ qualification documents; this tracker remains the single ordered work list.
 | Repartitioned hash joins | Partial | Correctness under skew, spill, retry, and worker loss |
 | Broadcast joins from exact source statistics | Partial | Small-side decision, stale-statistics fallback, and AKS result/latency comparison |
 | Global and grouped aggregates | Partial | Associative merge correctness, bounded memory, spill and cancellation |
+| Analytical result cache | Implemented, coordinator-local | Repeat-hit latency, source-version invalidation, bounded eviction, restart behavior, and multi-coordinator consistency |
 | Windows, sort, TopN, set operations | Partial | Distributed result hashes and null/order semantics |
 | Snapshot pinning | Partial | Catalog mutation during an in-flight query never mixes generations |
 | Worker loss and exchange recovery | Partial | Mid-stage loss with no missing or double-counted partitions |
@@ -236,6 +237,24 @@ qualification documents; this tracker remains the single ordered work list.
 | Decimal, timestamp, interval, and casts | Partial | Overflow, timezone, precision, and implicit-cast cases |
 | `CASE`, `HAVING`, `FILTER`, `QUALIFY` | Partial | Exact-result and error semantics |
 | Native DML and prepared parameters | Partial | `BEGIN`/`COMMIT`/`ROLLBACK`, parameter binding, and transactional visibility |
+
+### Cache boundary and latency target
+
+Kaveon has a bounded analytical result cache. It normalizes statement text and
+keys a completed result by the catalog/schema snapshot, pinned Delta versions,
+and time zone. Entries are coordinator-local, byte-bounded, TTL-bounded, and
+LRU-evicted; paged responses are excluded. `result_cache = false` bypasses it,
+and administrators can clear it. This is the safe equivalent of a repeated
+analytical-result fast path, not a replacement for storage or transaction
+semantics.
+
+KaveonDB transactional records are deliberately never served from that cache.
+Revision/CAS visibility, commits, replay, and read-your-write behavior remain
+authoritative in the transactional store; writes invalidate affected analytical
+entries before the new state becomes visible. A shared cross-coordinator cache
+is not claimed yet. Track 1 therefore treats the cache as implemented locally
+and keeps distributed invalidation, restart warm-up, and deployed hit/miss
+latency evidence as the remaining qualification work.
 
 ### Completed implementation slices in the current cycle
 
