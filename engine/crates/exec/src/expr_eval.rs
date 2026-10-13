@@ -4,7 +4,7 @@ use arrow::array::{
     Decimal128Builder,
     Float64Array, Float64Builder,
     Int32Array, Int32Builder, Int32DictionaryArray, Int64Array, Int64Builder, LargeListArray,
-    ListArray,
+    ListArray, GenericListArray, OffsetSizeTrait,
     ListBuilder, MapArray,
     NullBuilder, PrimitiveArray, PrimitiveBuilder,
     StringArray,
@@ -1645,6 +1645,51 @@ fn quantified_compare_kind(suffix: &str) -> Result<CompareKind> {
             "unsupported quantified comparison operator: {suffix}"
         ))),
     }
+}
+
+fn arrays_overlap_nested<L: OffsetSizeTrait>(
+    left: &GenericListArray<L>,
+    right: &GenericListArray<L>,
+) -> Result<ArrayRef> {
+    if left.len() != right.len() || left.value_type() != right.value_type() {
+        return Err(KaveonError::Execution(
+            "ARRAYS_OVERLAP requires arrays with matching row counts and element types".into(),
+        ));
+    }
+    let rows = (0..left.len())
+        .map(|row| {
+            if left.is_null(row) || right.is_null(row) {
+                return None;
+            }
+            let left_values = left.value(row);
+            let right_values = right.value(row);
+            let mut saw_null = false;
+            for left_index in 0..left_values.len() {
+                if left_values.is_null(left_index) {
+                    saw_null = true;
+                    continue;
+                }
+                for right_index in 0..right_values.len() {
+                    if right_values.is_null(right_index) {
+                        saw_null = true;
+                        continue;
+                    }
+                    if comparison(
+                        &left_values.slice(left_index, 1),
+                        &right_values.slice(right_index, 1),
+                        CompareKind::Eq,
+                    )
+                    .map(|equal| !equal.is_null(0) && equal.value(0))
+                    .unwrap_or(false)
+                    {
+                        return Some(true);
+                    }
+                }
+            }
+            if saw_null { None } else { Some(false) }
+        })
+        .collect::<BooleanArray>();
+    Ok(Arc::new(rows))
 }
 
 fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
@@ -5028,6 +5073,29 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "ARRAYS_OVERLAP" => {
             check_arity(name, args, 2)?;
+            if let (Some(left), Some(right)) = (
+                args[0].as_any().downcast_ref::<LargeListArray>(),
+                args[1].as_any().downcast_ref::<LargeListArray>(),
+            ) {
+                if matches!(
+                    left.value_type(),
+                    DataType::List(_)
+                        | DataType::LargeList(_)
+                        | DataType::Struct(_)
+                        | DataType::Map(_, _)
+                ) {
+                    return arrays_overlap_nested(left, right);
+                }
+                if left.len() != right.len() || left.value_type() != right.value_type() {
+                    return Err(KaveonError::Execution(
+                        "ARRAYS_OVERLAP requires arrays with matching row counts and element types".into(),
+                    ));
+                }
+                return Err(KaveonError::Execution(format!(
+                    "ARRAYS_OVERLAP does not support list element type {}",
+                    left.value_type()
+                )));
+            }
             let left = args[0]
                 .as_any()
                 .downcast_ref::<ListArray>()
@@ -5048,40 +5116,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     | DataType::Struct(_)
                     | DataType::Map(_, _)
             ) {
-                let rows = (0..num_rows)
-                    .map(|row| {
-                        if left.is_null(row) || right.is_null(row) {
-                            return None;
-                        }
-                        let left_values = left.value(row);
-                        let right_values = right.value(row);
-                        let mut saw_null = false;
-                        for left_index in 0..left_values.len() {
-                            if left_values.is_null(left_index) {
-                                saw_null = true;
-                                continue;
-                            }
-                            for right_index in 0..right_values.len() {
-                                if right_values.is_null(right_index) {
-                                    saw_null = true;
-                                    continue;
-                                }
-                                if comparison(
-                                    &left_values.slice(left_index, 1),
-                                    &right_values.slice(right_index, 1),
-                                    CompareKind::Eq,
-                                )
-                                .map(|equal| !equal.is_null(0) && equal.value(0))
-                                .unwrap_or(false)
-                                {
-                                    return Some(true);
-                                }
-                            }
-                        }
-                        if saw_null { None } else { Some(false) }
-                    })
-                    .collect::<BooleanArray>();
-                return Ok(Arc::new(rows));
+                return arrays_overlap_nested(left, right);
             }
             macro_rules! overlap_primitive {
                 ($ty:ty) => {
@@ -6904,6 +6939,32 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.as_boolean().value(0), true);
+    }
+
+    #[test]
+    fn arrays_overlap_accepts_large_lists_of_nested_values() {
+        use arrow::array::{Int64Builder, LargeListBuilder, ListBuilder};
+
+        let mut left_builder =
+            LargeListBuilder::new(ListBuilder::new(Int64Builder::new()));
+        left_builder.values().values().append_value(1);
+        left_builder.values().append(true);
+        left_builder.values().values().append_value(2);
+        left_builder.values().append(true);
+        left_builder.append(true);
+        let left = Arc::new(left_builder.finish()) as ArrayRef;
+
+        let mut right_builder =
+            LargeListBuilder::new(ListBuilder::new(Int64Builder::new()));
+        right_builder.values().values().append_value(2);
+        right_builder.values().append(true);
+        right_builder.values().values().append_value(3);
+        right_builder.values().append(true);
+        right_builder.append(true);
+        let right = Arc::new(right_builder.finish()) as ArrayRef;
+
+        let result = eval_scalar_function("ARRAYS_OVERLAP", &[left, right], 1).unwrap();
+        assert!(result.as_boolean().value(0));
     }
 
     #[test]
