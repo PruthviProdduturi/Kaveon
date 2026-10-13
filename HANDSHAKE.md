@@ -2,7 +2,7 @@
 
 ## SQL compatibility track — October 12, 2026 · row constructors
 
-Commit `pending` adds executable `ROW(...)` constructors. The expression path
+Commit `12d44965` adds executable `ROW(...)` constructors. The expression path
 returns typed Arrow `StructArray` values and preserves nullable child fields.
 `MAP(...)`, row dereference, and row comparison remain explicit boundaries.
 
