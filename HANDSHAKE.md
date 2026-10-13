@@ -26,6 +26,9 @@ than being sent to execution.
 other array operations and complex types remain explicit unsupported
 boundaries. `ROW(...)` and `MAP(...)` now fail during planning with a typed
 complex-type diagnostic rather than reaching execution as unknown functions.
+Complex `CAST` targets such as `JSON` also fail during planning with a stable
+unsupported-target diagnostic; scalar, DATE, timestamp, and DECIMAL casts are
+the qualified cast surface today.
 The SQL front end now exposes a typed positional binding entry point for
 `$1`, `$2`, …; values become AST literals before planning and are never
 interpolated into SQL text. Missing positions and `?`/named placeholders fail
