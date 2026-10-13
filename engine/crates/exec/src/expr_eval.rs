@@ -2036,6 +2036,96 @@ fn array_reverse_generic<L: OffsetSizeTrait>(
     )?))
 }
 
+fn array_sort_generic<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<ArrayRef> {
+    let supported = matches!(
+        list.value_type(),
+        DataType::Int32
+            | DataType::Int64
+            | DataType::Float64
+            | DataType::Date32
+            | DataType::Date64
+            | DataType::Time32(TimeUnit::Second)
+            | DataType::Time32(TimeUnit::Millisecond)
+            | DataType::Timestamp(TimeUnit::Microsecond, _)
+            | DataType::Decimal128(_, _)
+            | DataType::Utf8
+            | DataType::Boolean
+    );
+    if !supported {
+        return Err(KaveonError::Execution(format!(
+            "ARRAY_SORT does not support list element type {}",
+            list.value_type()
+        )));
+    }
+    let mut selected = Vec::<ArrayRef>::new();
+    let mut offsets = vec![L::zero()];
+    let mut valid = Vec::with_capacity(list.len());
+    for row in 0..list.len() {
+        if list.is_null(row) {
+            valid.push(false);
+            offsets.push(L::from_usize(selected.len()).ok_or_else(|| {
+                KaveonError::Execution("ARRAY_SORT result offset overflow".into())
+            })?);
+            continue;
+        }
+        valid.push(true);
+        let inner = list.value(row);
+        let mut entries = (0..inner.len())
+            .map(|index| {
+                if inner.is_null(index) {
+                    None
+                } else {
+                    Some(inner.slice(index, 1))
+                }
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| match (left, right) {
+            (None, None) => std::cmp::Ordering::Equal,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (Some(left), Some(right)) => {
+                let less = comparison(left, right, CompareKind::Lt)
+                    .map(|value| !value.is_null(0) && value.value(0))
+                    .unwrap_or(false);
+                let greater = comparison(left, right, CompareKind::Gt)
+                    .map(|value| !value.is_null(0) && value.value(0))
+                    .unwrap_or(false);
+                if less {
+                    std::cmp::Ordering::Less
+                } else if greater {
+                    std::cmp::Ordering::Greater
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            }
+        });
+        selected.extend(entries.into_iter().flatten());
+        offsets.push(L::from_usize(selected.len()).ok_or_else(|| {
+            KaveonError::Execution("ARRAY_SORT result offset overflow".into())
+        })?);
+    }
+    let values = if selected.is_empty() {
+        arrow::array::new_empty_array(&list.value_type())
+    } else {
+        let chunks = selected
+            .iter()
+            .map(|value| value.as_ref() as &dyn Array)
+            .collect::<Vec<_>>();
+        compute::concat(&chunks)?
+    };
+    let field = Arc::new(arrow::datatypes::Field::new(
+        "item",
+        values.data_type().clone(),
+        true,
+    ));
+    Ok(Arc::new(GenericListArray::<L>::try_new(
+        field,
+        OffsetBuffer::new(ScalarBuffer::from(offsets)),
+        values,
+        Some(arrow::buffer::NullBuffer::from(valid)),
+    )?))
+}
+
 fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
     let upper = name.to_uppercase();
     if upper.starts_with("ARRAY_ANY_") || upper.starts_with("ARRAY_ALL_") {
@@ -3665,6 +3755,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "ARRAY_SORT" => {
             check_arity(name, args, 1)?;
+            if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
+                return array_sort_generic(list);
+            }
             let list = args[0]
                 .as_any()
                 .downcast_ref::<ListArray>()
@@ -7404,6 +7497,22 @@ mod tests {
             let value = reversed_values.value(index);
             assert_eq!(value.as_primitive::<Int64Type>().value(0), expected);
         }
+
+        let mut sort_builder = LargeListBuilder::new(Int64Builder::new());
+        for value in [3_i64, 1, 2] {
+            sort_builder.values().append_value(value);
+        }
+        sort_builder.append(true);
+        let result = eval_scalar_function(
+            "ARRAY_SORT",
+            &[Arc::new(sort_builder.finish()) as ArrayRef],
+            1,
+        )
+        .unwrap();
+        let result = result.as_any().downcast_ref::<LargeListArray>().unwrap();
+        let sorted_values = result.value(0);
+        let sorted = sorted_values.as_primitive::<Int64Type>();
+        assert_eq!(sorted.values(), &[1, 2, 3]);
     }
 
     #[test]
