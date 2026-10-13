@@ -32,6 +32,7 @@ import logging
 import os
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import time as _time_mod
 import unicodedata
 import uuid
@@ -77,6 +78,12 @@ class _RetirementServingState:
     role: str
     artifacts: Dict[str, tuple] = field(default_factory=dict)
     all_loaded: bool = False
+    # The dataset, definition and run records this request has already read,
+    # and the digest of what they say about compiled content. Held here so one
+    # request lists the catalog once, whether the answer comes from the
+    # artifacts or from a cache keyed on these records.
+    context: object = None
+    identity: Optional[str] = None
 
 
 _RETIREMENT_SERVING: ContextVar[Optional[_RetirementServingState]] = ContextVar(
@@ -121,6 +128,65 @@ def _serving_artifact(dataset_id: str) -> Optional[dict]:
     return artifact
 
 
+# How many compiled artifacts are fetched at once. Enough to cover a normal
+# installation in one round of reads, small enough that the request path never
+# opens an unreasonable number of connections.
+_ARTIFACT_READ_CONCURRENCY = 8
+
+
+def _read_artifacts(dataset_ids: List[str], context) -> List[object]:
+    """Fetch each dataset's compiled artifact, concurrently.
+
+    Returns one entry per id, in order: the artifact, None when the dataset
+    has none, or the exception raised trying to read it — so one failure is
+    reported against its own dataset rather than losing the whole batch.
+    """
+    state = _RETIREMENT_SERVING.get()
+    if state is None or not dataset_ids:
+        return []
+    if len(dataset_ids) == 1:
+        try:
+            return [get_dlm(dataset_ids[0], state.actor, state.role, context=context)]
+        except Exception as error:  # noqa: BLE001 - reported per dataset
+            return [error]
+
+    def _read(dataset_id: str):
+        # The identity is passed explicitly rather than read from the context
+        # variable, which a worker thread does not inherit.
+        try:
+            return get_dlm(dataset_id, state.actor, state.role, context=context)
+        except Exception as error:  # noqa: BLE001 - reported per dataset
+            return error
+
+    workers = min(_ARTIFACT_READ_CONCURRENCY, len(dataset_ids))
+    with ThreadPoolExecutor(max_workers=workers,
+                            thread_name_prefix="dlm-artifact") as pool:
+        return list(pool.map(_read, dataset_ids))
+
+
+def _loaded_identity() -> Optional[str]:
+    """List the catalog once for this request and digest what it says.
+
+    The listings are what establish whether anything compiled has changed, and
+    they cost a fraction of fetching the artifacts they point at — so they are
+    taken first, and their digest decides whether the artifacts are needed at
+    all. A caller that cannot list gets no key, and is answered the slow,
+    always-correct way.
+    """
+    state = _RETIREMENT_SERVING.get()
+    if state is None:
+        return None
+    if state.identity is None and state.context is None:
+        from services import dlm_compiled_artifact
+        try:
+            state.context = dlm_compiled_artifact.load_bulk_context(state.actor)
+            state.identity = dlm_compiled_artifact.context_identity(state.context)
+        except Exception:
+            logger.exception("compiled context listing failed for %s", state.actor)
+            state.context, state.identity = None, None
+    return state.identity
+
+
 def _serving_artifacts() -> List[dict]:
     state = _RETIREMENT_SERVING.get()
     if state is None:
@@ -139,7 +205,12 @@ def _serving_artifacts() -> List[dict]:
         # query. Restoring that shape is the point: three listings, then the
         # artifact content, which genuinely is per dataset.
         try:
-            context = dlm_compiled_artifact.load_bulk_context(state.actor)
+            # Reuses the listing this request may already have taken to decide
+            # whether it needed the artifacts at all.
+            _loaded_identity()
+            context = state.context
+            if context is None:
+                context = dlm_compiled_artifact.load_bulk_context(state.actor)
             dataset_ids = list(context.datasets)
         except Exception:
             # A caller that cannot list in bulk still gets the page, one read
@@ -149,12 +220,24 @@ def _serving_artifacts() -> List[dict]:
                 for record in __import__("services.product_store", fromlist=["x"])
                 .list_records("dataset", state.actor, "Admin", max_records=1000)
             ]
-        for dataset_id in dataset_ids:
-            if not dataset_id:
+        pending = [dataset_id for dataset_id in dataset_ids
+                   if dataset_id and dataset_id not in state.artifacts]
+        # Each artifact is one object fetched from storage and verified against
+        # the digest its run recorded. They are independent reads, and done one
+        # after another the page waited for all of them in turn — the reads
+        # themselves are a fraction of the wall time they cost.
+        #
+        # Bounded, because this is the request path: a page with many compiled
+        # datasets should not open an unbounded number of connections at once.
+        for dataset_id, artifact in zip(pending, _read_artifacts(pending, context)):
+            if isinstance(artifact, BaseException):
+                # One unreadable artifact is not the page. It is recorded as
+                # absent, exactly as a dataset with no compiled context is, and
+                # the reason goes to the log rather than to the reader.
+                logger.exception("compiled context unreadable for dataset %s",
+                                 dataset_id, exc_info=artifact)
+                state.artifacts[dataset_id] = ((0, "missing"), None)
                 continue
-            if dataset_id in state.artifacts:
-                continue
-            artifact = get_dlm(dataset_id, state.actor, state.role, context=context)
             if artifact is None:
                 state.artifacts[dataset_id] = ((0, "missing"), None)
                 continue
@@ -5321,16 +5404,19 @@ def _bulk_value_index(dataset_ids: List[str], *, serving: bool,
 _COVERAGE_CACHE: Dict[tuple, List[Dict[str, Any]]] = {}
 
 
-def _coverage_snapshot(actor: str) -> Optional[str]:
-    """The catalog snapshot the banner would be computed from, cheaply."""
-    try:
-        from services import product_store
-        identity = product_store.count_records("dataset", actor, "Admin").get("snapshotId")
-        return identity if isinstance(identity, str) and identity else None
-    except Exception:
-        # Without an identity there is nothing to key a cache on, so the
-        # banner is recomputed. Slower, never stale.
+def _coverage_identity() -> Optional[str]:
+    """What the loaded compiled artifacts say, as a digest — the cache key.
+
+    Taken from the records already read for this request, so it costs nothing
+    of its own. The catalog's snapshot identity would have been cheaper to ask
+    for and wrong to use: it advances on every product write, and the platform
+    records its own query history in that same catalog, so running a single
+    query would have invalidated a banner that could not have changed.
+    """
+    state = _RETIREMENT_SERVING.get()
+    if state is None or state.identity is None:
         return None
+    return state.identity
 
 
 def coverage(actor: Optional[str] = None, role: str = "Viewer") -> List[Dict[str, Any]]:
@@ -5346,12 +5432,17 @@ def coverage(actor: Optional[str] = None, role: str = "Viewer") -> List[Dict[str
         return _with_serving_identity(actor, role, lambda: coverage())
     state = _RETIREMENT_SERVING.get()
     cache_key = None
+    serving = None
     if state is not None:
-        snapshot_id = _coverage_snapshot(state.actor)
-        if snapshot_id:
-            # Keyed by role as well: what a reader may see is visibility
-            # filtered, so one person's banner is not another's.
-            cache_key = (snapshot_id, state.actor, state.role)
+        # The three catalog listings come first and are cheap next to the
+        # artifacts they point at. They are what says whether anything
+        # compiled has changed, so the key is taken from them and the
+        # artifacts are fetched only on a miss.
+        identity = _loaded_identity()
+        if identity:
+            # Keyed by caller and role as well: what a reader may see is
+            # visibility filtered, so one person's banner is not another's.
+            cache_key = (identity, state.actor, state.role)
             cached = _COVERAGE_CACHE.get(cache_key)
             if cached is not None:
                 return cached
