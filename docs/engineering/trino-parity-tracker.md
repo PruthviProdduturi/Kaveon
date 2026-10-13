@@ -90,8 +90,9 @@ foundations, but several operators are still centralized or narrow:
   Homogeneous integer array literals preserve `INT64` element types across
   `CONTAINS`, `ARRAY_POSITION`, `ARRAY_DISTINCT`, `ARRAY_SORT`,
   `ARRAY_REVERSE`, `ARRAY_SLICE`, and `ELEMENT_AT`; mixed integer/float arrays
-  retain the common `Float64` representation. Broader element types remain an
-  explicit boundary.
+  retain the common `Float64` representation. Homogeneous decimal arrays now
+  preserve their precision and scale through `ELEMENT_AT` (`3b35dc47`).
+  Broader element types remain an explicit boundary.
   Scalar, DATE, timestamp, and DECIMAL casts are supported; complex cast
   targets fail with typed planner diagnostics. Dereference, `UNNEST`, other
   array operations, and broad JSON operations remain open; scalar extraction
@@ -296,7 +297,7 @@ qualification documents; this tracker remains the single ordered work list.
 ### Current focused validation
 
 The latest focused validation passes 333 `kaveon-server` tests, 109
-`kaveon-sql` tests, and 239 `kaveon-exec` tests (four executor benchmarks are
+`kaveon-sql` tests, and 240 `kaveon-exec` tests (four executor benchmarks are
 ignored). The repository differential gate
 (`differential_tests::the_differential_sweep_matches_across_parquet_encodings_and_execution_paths`)
 also passes, comparing the same corpus across alternate Parquet encodings and
