@@ -127,6 +127,51 @@ def trino_window():
         wait_rollout(name)
 
 
+def restore_platform():
+    """Put the cluster back the way the platform needs it: Kaveon up, Trino down.
+
+    Called from `finally`, so it runs after a failed round and after a Ctrl-C
+    as well as after a clean campaign. It must therefore not raise: a restore
+    that throws while unwinding an earlier failure would replace the real error
+    with its own and still leave the Engine down. Each statefulset is scaled
+    independently for the same reason — one that will not come back must not
+    stop the others from trying.
+
+    Scaling is what matters and is reported as it happens; waiting for the
+    rollout is best-effort, because a worker that cannot schedule is a problem
+    to see rather than a reason to hold the campaign's exit.
+    """
+    print("restoring the platform: Kaveon up, Trino down", flush=True)
+    failures = []
+    for name in TRINO_STS:
+        try:
+            scale(name, 0)
+        except Exception as error:  # noqa: BLE001 - reported, never raised from finally
+            failures.append(f"{name} -> 0: {error}")
+    # One coordinator and the full three workers. Never zero: the Engine is
+    # also this cluster's system of record, and a demo left with no workers is
+    # indistinguishable to a reader from an installation that has no data.
+    for name, replicas in (("kaveon-coordinator", 1), ("kaveon-worker", 3)):
+        try:
+            scale(name, replicas)
+        except Exception as error:  # noqa: BLE001
+            failures.append(f"{name} -> {replicas}: {error}")
+    for name in KAVEON_STS:
+        try:
+            wait_rollout(name, timeout="600s")
+        except Exception as error:  # noqa: BLE001
+            failures.append(f"{name} rollout: {error}")
+    if failures:
+        # Loud, and on stderr, because the platform is the thing left wrong.
+        print("PLATFORM NOT FULLY RESTORED — scale it by hand:", file=sys.stderr, flush=True)
+        for failure in failures:
+            print(f"  {failure}", file=sys.stderr, flush=True)
+        print("  kubectl -n kaveon scale sts/kaveon-coordinator --replicas=1",
+              file=sys.stderr, flush=True)
+        print("  kubectl -n kaveon scale sts/kaveon-worker --replicas=3",
+              file=sys.stderr, flush=True)
+
+
 def apply_configmap(name, *files):
     manifest = kubectl("create", "configmap", name, *[f"--from-file={f}" for f in files],
                        "--dry-run=client", "-o", "yaml", capture=True)
@@ -237,25 +282,38 @@ def main():
     client_counts = [int(value) for value in args.throughput.split(",") if value.strip()]
     out = pathlib.Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    for round_index in range(args.start_round, args.rounds + 1):
-        print(f"round {round_index}: Kaveon window", flush=True)
-        kaveon_window(args.cold)
-        run_kaveon(args.suite, out / f"kaveon-round{round_index}.json", round_index)
-        for clients in client_counts:
-            print(f"round {round_index}: Kaveon throughput, {clients} clients", flush=True)
-            run_kaveon_throughput(args.suite, clients, args.throughput_duration, args.throughput_warmup,
-                                  out / f"kaveon-throughput-{clients}-round{round_index}.json", round_index)
-        if not args.skip_trino:
-            print(f"round {round_index}: Trino window", flush=True)
-            trino_window()
-            run_trino(args.suite, args.tables, out / f"trino-round{round_index}.json", round_index)
+    # The Kaveon window is restored in `finally`, not after the loop.
+    #
+    # This campaign gives each system the same three nodes by scaling the other
+    # to zero, which is what makes the comparison node-equal. The restore used
+    # to sit after the loop, so any round that raised — a failed job, a rollout
+    # timeout, a Ctrl-C — left the cluster in whichever window it was in. When
+    # that was Trino's, Kaveon stayed at zero replicas: the platform this
+    # cluster also serves went down and stayed down, reporting "KaveonDB
+    # unavailable" and, because Studio could not read its own configuration,
+    # claiming it had no system of record at all.
+    #
+    # A benchmark may take the Engine down. It may not leave it down.
+    try:
+        for round_index in range(args.start_round, args.rounds + 1):
+            print(f"round {round_index}: Kaveon window", flush=True)
+            kaveon_window(args.cold)
+            run_kaveon(args.suite, out / f"kaveon-round{round_index}.json", round_index)
             for clients in client_counts:
-                print(f"round {round_index}: Trino throughput, {clients} clients", flush=True)
-                run_trino_throughput(args.suite, args.tables, clients, args.throughput_duration,
-                                     args.throughput_warmup,
-                                     out / f"trino-throughput-{clients}-round{round_index}.json", round_index)
-    # Leave the cluster as the platform expects it: Kaveon up, Trino down.
-    kaveon_window(cold=False)
+                print(f"round {round_index}: Kaveon throughput, {clients} clients", flush=True)
+                run_kaveon_throughput(args.suite, clients, args.throughput_duration, args.throughput_warmup,
+                                      out / f"kaveon-throughput-{clients}-round{round_index}.json", round_index)
+            if not args.skip_trino:
+                print(f"round {round_index}: Trino window", flush=True)
+                trino_window()
+                run_trino(args.suite, args.tables, out / f"trino-round{round_index}.json", round_index)
+                for clients in client_counts:
+                    print(f"round {round_index}: Trino throughput, {clients} clients", flush=True)
+                    run_trino_throughput(args.suite, args.tables, clients, args.throughput_duration,
+                                         args.throughput_warmup,
+                                         out / f"trino-throughput-{clients}-round{round_index}.json", round_index)
+    finally:
+        restore_platform()
     subprocess.run([sys.executable, "scripts/benchmark-rounds-report.py", str(out)], check=True)
 
 
