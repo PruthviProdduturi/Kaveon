@@ -3,7 +3,7 @@ use crate::cluster::{NodeInfo, NodeRole};
 use crate::lifecycle::{CancellationToken, TaskClaim, TaskOutcome, TaskOwner};
 use crate::security::Identity;
 use crate::settings::QuerySettings;
-use axum::body::Body;
+use axum::body::{Body, Bytes, to_bytes};
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -658,6 +658,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .merge(crate::exchange::routes())
         .route("/v1/statement", post(submit_statement))
+        .route("/v1/trino/statement", post(submit_trino_statement))
         .route("/v1/prepare", post(prepare_statement))
         .route(
             "/v1/prepare/{statement_id}",
@@ -2710,6 +2711,107 @@ async fn submit_statement(
     Json(req): Json<StatementRequest>,
 ) -> impl IntoResponse {
     run_statement(state, identity, req, Uuid::new_v4().to_string()).await
+}
+
+/// A narrow Trino HTTP compatibility surface. Trino clients submit SQL as a
+/// raw request body and negotiate the session through `X-Trino-*` headers;
+/// the native Kaveon API intentionally remains JSON. Keeping this adapter on
+/// its own route makes the wire contract explicit while sharing identity,
+/// admission, planning, execution, and cancellation with the native path.
+async fn submit_trino_statement(
+    State(state): State<Arc<AppState>>,
+    Extension(identity): Extension<Identity>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let query = match String::from_utf8(body.to_vec()) {
+        Ok(query) if !query.trim().is_empty() => query,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "statement body must contain UTF-8 SQL",
+                    "errorName": "SYNTAX_ERROR"
+                })),
+            )
+                .into_response();
+        }
+    };
+    let request = StatementRequest {
+        query,
+        parameters: Vec::new(),
+        named_parameters: HashMap::new(),
+        catalog: trino_header(&headers, "x-trino-catalog"),
+        schema: trino_header(&headers, "x-trino-schema"),
+        source: trino_header(&headers, "x-trino-source"),
+        client: trino_header(&headers, "x-trino-client-info")
+            .or_else(|| trino_header(&headers, "x-trino-client")),
+        user: trino_header(&headers, "x-trino-user"),
+        time_zone: trino_header(&headers, "x-trino-time-zone"),
+        client_tags: trino_header(&headers, "x-trino-client-tags")
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|tag| !tag.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        result_delivery: Some("paged".to_owned()),
+        settings: None,
+    };
+    let response = run_statement(state, identity, request, Uuid::new_v4().to_string())
+        .await
+        .into_response();
+    trino_response_shape(response).await
+}
+
+fn trino_header(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+async fn trino_response_shape(response: Response) -> Response {
+    let status = response.status();
+    let bytes = match to_bytes(response.into_body(), 16 * 1024 * 1024).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("failed to encode Trino response: {error}"),
+                    "errorName": "INTERNAL_ERROR"
+                })),
+            )
+                .into_response();
+        }
+    };
+    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return (status, [(header::CONTENT_TYPE, "application/json")], bytes).into_response();
+    };
+    if let Some(object) = value.as_object_mut() {
+        if let Some(next_uri) = object.remove("next_uri") {
+            object.insert("nextUri".to_owned(), next_uri);
+        }
+        if let Some(elapsed_ms) = object.remove("elapsed_ms") {
+            object.insert(
+                "stats".to_owned(),
+                serde_json::json!({ "elapsedTimeMillis": elapsed_ms }),
+            );
+        }
+        if let Some(error) = object.remove("error") {
+            object.insert("error".to_owned(), serde_json::json!({
+                "message": error,
+                "errorName": "KAVEON_ERROR"
+            }));
+        }
+    }
+    (status, Json(value)).into_response()
 }
 
 #[derive(Deserialize)]
@@ -18347,5 +18449,44 @@ mod streamed_root_tests {
             server.abort();
         }
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn trino_headers_map_to_session_fields() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-trino-catalog", "OpenSource".parse().unwrap());
+        headers.insert("x-trino-schema", "public".parse().unwrap());
+        headers.insert("x-trino-client-tags", "dashboard,  ad-hoc".parse().unwrap());
+        assert_eq!(
+            trino_header(&headers, "x-trino-catalog").as_deref(),
+            Some("OpenSource")
+        );
+        assert_eq!(
+            trino_header(&headers, "x-trino-schema").as_deref(),
+            Some("public")
+        );
+        let tag_header = trino_header(&headers, "x-trino-client-tags").unwrap();
+        let tags = tag_header
+            .split(',')
+            .map(str::trim)
+            .filter(|tag| !tag.is_empty())
+            .collect::<Vec<_>>();
+        assert_eq!(tags, vec!["dashboard", "ad-hoc"]);
+    }
+
+    #[tokio::test]
+    async fn trino_response_shape_uses_camel_case_paging_and_stats() {
+        let response = Response::new(Body::from(
+            r#"{"id":"q1","next_uri":"/v1/query/q1/results/0","elapsed_ms":7,"data":[]}"#,
+        ));
+        let response = trino_response_shape(response).await;
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["nextUri"], "/v1/query/q1/results/0");
+        assert!(value.get("next_uri").is_none());
+        assert_eq!(value["stats"]["elapsedTimeMillis"], 7);
+        assert!(value.get("elapsed_ms").is_none());
     }
 }
