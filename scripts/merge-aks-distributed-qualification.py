@@ -53,6 +53,37 @@ def execution_metrics(comparison):
     return {"totals": totals, "peaks": peaks}
 
 
+def slo_evidence(comparison, pressure, base_gates):
+    """Evaluate the Track 1 SLO without treating missing evidence as success."""
+    requests = (pressure.get("concurrent_exact") or {}).get("requests") or []
+    successful = sum(
+        request.get("exact") is True and request.get("status") == 200
+        for request in requests
+    )
+    accepted_success_rate = successful / len(requests) if requests else None
+    latency = latency_summary(comparison)
+    preflight = comparison.get("preflight") or {}
+    checks = pressure.get("checks") or {}
+    requirements = {
+        "exact_results": base_gates["exact_results"],
+        "accepted_success_rate": accepted_success_rate is not None and accepted_success_rate >= 0.999,
+        "latency_samples": latency["samples"] > 0,
+        "image_binding": preflight.get("kaveon_image_pinned_and_expected") is True,
+        "worker_retry": base_gates["worker_retry"],
+        "cancellation_cleanup": checks.get("cancellation_cleanup") is True,
+        "bounded_memory": base_gates["memory_within_pod_limits"],
+        "temporary_file_cleanup": base_gates["coordinator_restart_cleanup"] and base_gates["worker_spill_cleanup"],
+    }
+    return {
+        "passed": all(requirements.values()),
+        "accepted_requests": len(requests),
+        "successful_accepted_requests": successful,
+        "accepted_success_rate": accepted_success_rate,
+        "requirements": requirements,
+        "latency": latency,
+    }
+
+
 def merge(comparison, pressure):
     concurrent = pressure.get("concurrent_exact", {})
     concurrent_requests = concurrent.get("requests", [])
@@ -82,11 +113,14 @@ def merge(comparison, pressure):
             pressure.get("pressure", {}).get("sampled_engine_memory_within_pod_limits")
         ),
     }
+    slo = slo_evidence(comparison, pressure, gates)
+    gates["distributed_execution_slo"] = slo["passed"]
     return {
         "schema_version": 1,
         "status": "passed" if all(gates.values()) else "pending",
         "passed": all(gates.values()),
         "gates": gates,
+        "slo": slo,
         "latency": latency_summary(comparison),
         "throughput": comparison.get("throughput", {}),
         "execution_metrics": metrics,

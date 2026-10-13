@@ -217,7 +217,10 @@ The merged schema has independent gates for exact results, concurrency, worker
 retry, worker spill cleanup, coordinator restart cleanup, and pod memory. It
 also carries p50/p95/p99 latency and measured CPU, memory, exchange, spill, and
 admission counters. Exit code 2 means diagnostics were produced but at least
-one release gate remains open.
+one release gate remains open. The output also contains a machine-checked
+`slo` object and `gates.distributed_execution_slo`; missing cancellation,
+image-binding, latency, or reliability evidence is deliberately false rather
+than inferred.
 
 ### Track 1 distributed execution SLO
 
