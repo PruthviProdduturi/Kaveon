@@ -256,15 +256,16 @@ qualification documents; this tracker remains the single ordered work list.
   positions; array slices remain an explicit boundary.
 - `ROW(...).field` now lowers to a typed `ROW_FIELD` projection over Arrow
   structs, and map subscript syntax lowers to `ELEMENT_AT` with typed key
-  lookup; row equality now compares typed struct fields with SQL null
-  semantics, while ordered row and map comparison remain open.
+  lookup; row equality and order-independent map equality now compare typed
+  values with SQL null semantics, while ordered row and map comparison remain
+  open.
 - `CARDINALITY` now returns map entry counts as well as array lengths, with
   null map rows preserved as null.
 
 ### Current focused validation
 
 The latest focused validation passes 330 `kaveon-server` tests, 107
-`kaveon-sql` tests, and 228 `kaveon-exec` tests (four executor benchmarks are
+`kaveon-sql` tests, and 229 `kaveon-exec` tests (four executor benchmarks are
 ignored). These counts are package-level validation snapshots; they do not
 close the broader multi-worker, AKS, or cross-connector qualification gates
 below.

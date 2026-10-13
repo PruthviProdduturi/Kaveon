@@ -749,6 +749,86 @@ enum CompareKind {
 fn comparison(left: &ArrayRef, right: &ArrayRef, kind: CompareKind) -> Result<BooleanArray> {
     use arrow::compute::kernels::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
     if let (Some(left), Some(right)) = (
+        left.as_any().downcast_ref::<MapArray>(),
+        right.as_any().downcast_ref::<MapArray>(),
+    ) {
+        if !matches!(kind, CompareKind::Eq | CompareKind::Ne) {
+            return Err(KaveonError::Execution(
+                "ordered comparison is not supported for MAP values".into(),
+            ));
+        }
+        if left.len() != right.len() {
+            return Err(KaveonError::Execution(
+                "MAP values must have matching row counts for comparison".into(),
+            ));
+        }
+        let mut rows = Vec::with_capacity(left.len());
+        for row in 0..left.len() {
+            if left.is_null(row) || right.is_null(row) {
+                rows.push(None);
+                continue;
+            }
+            let left_start = left.value_offsets()[row] as usize;
+            let left_end = left.value_offsets()[row + 1] as usize;
+            let right_start = right.value_offsets()[row] as usize;
+            let right_end = right.value_offsets()[row + 1] as usize;
+            if left_end - left_start != right_end - right_start {
+                rows.push(Some(matches!(kind, CompareKind::Ne)));
+                continue;
+            }
+            let mut equal = Some(true);
+            for left_index in left_start..left_end {
+                let left_key = compute::take(
+                    left.keys(),
+                    &Int64Array::from(vec![left_index as i64]),
+                    None,
+                )?;
+                let mut matched = None;
+                for right_index in right_start..right_end {
+                    let right_key = compute::take(
+                        right.keys(),
+                        &Int64Array::from(vec![right_index as i64]),
+                        None,
+                    )?;
+                    let key_equal = comparison(&left_key, &right_key, CompareKind::Eq)?;
+                    if key_equal.is_valid(0) && key_equal.value(0) {
+                        matched = Some(right_index);
+                        break;
+                    }
+                }
+                let Some(right_index) = matched else {
+                    equal = Some(false);
+                    break;
+                };
+                let left_value = compute::take(
+                    left.values(),
+                    &Int64Array::from(vec![left_index as i64]),
+                    None,
+                )?;
+                let right_value = compute::take(
+                    right.values(),
+                    &Int64Array::from(vec![right_index as i64]),
+                    None,
+                )?;
+                let value_equal = comparison(&left_value, &right_value, CompareKind::Eq)?;
+                if value_equal.is_null(0) {
+                    if equal != Some(false) {
+                        equal = None;
+                    }
+                } else if !value_equal.value(0) {
+                    equal = Some(false);
+                    break;
+                }
+            }
+            rows.push(if matches!(kind, CompareKind::Ne) {
+                equal.map(|value| !value)
+            } else {
+                equal
+            });
+        }
+        return Ok(BooleanArray::from(rows));
+    }
+    if let (Some(left), Some(right)) = (
         left.as_any().downcast_ref::<StructArray>(),
         right.as_any().downcast_ref::<StructArray>(),
     ) {
@@ -757,8 +837,7 @@ fn comparison(left: &ArrayRef, right: &ArrayRef, kind: CompareKind) -> Result<Bo
                 "ordered comparison is not supported for ROW values".into(),
             ));
         }
-        if left.num_columns() != right.num_columns()
-            || left.column_names() != right.column_names()
+        if left.num_columns() != right.num_columns() || left.column_names() != right.column_names()
         {
             return Err(KaveonError::Execution(
                 "ROW values must have matching fields for comparison".into(),
@@ -1273,7 +1352,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             .ok_or_else(|| KaveonError::Execution("ROW_FIELD requires a ROW value".into()))?;
         let field = as_string_array(&args[1])?;
         let field = if field.is_null(0) {
-            return Err(KaveonError::Execution("ROW_FIELD name cannot be NULL".into()));
+            return Err(KaveonError::Execution(
+                "ROW_FIELD name cannot be NULL".into(),
+            ));
         } else {
             field.value(0)
         };
@@ -1299,13 +1380,16 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
     }
     if upper == "MAP" {
         check_arity(name, args, 2)?;
-        let keys = args[0].as_any().downcast_ref::<ListArray>().ok_or_else(|| {
-            KaveonError::Execution("MAP keys must be an ARRAY/List value".into())
-        })?;
+        let keys = args[0]
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .ok_or_else(|| KaveonError::Execution("MAP keys must be an ARRAY/List value".into()))?;
         let values = args[1]
             .as_any()
             .downcast_ref::<ListArray>()
-            .ok_or_else(|| KaveonError::Execution("MAP values must be an ARRAY/List value".into()))?;
+            .ok_or_else(|| {
+                KaveonError::Execution("MAP values must be an ARRAY/List value".into())
+            })?;
         if keys.offsets().as_ref() != values.offsets().as_ref() {
             return Err(KaveonError::Execution(
                 "MAP keys and values must have matching list offsets".into(),
@@ -1354,14 +1438,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
     }
     if upper == "MAP_KEYS" || upper == "MAP_VALUES" {
         check_arity(name, args, 1)?;
-        let map = args[0]
-            .as_any()
-            .downcast_ref::<MapArray>()
-            .ok_or_else(|| {
-                KaveonError::Execution(
-                    format!("{upper} currently supports MAP values only"),
-                )
-            })?;
+        let map = args[0].as_any().downcast_ref::<MapArray>().ok_or_else(|| {
+            KaveonError::Execution(format!("{upper} currently supports MAP values only"))
+        })?;
         let values = if upper == "MAP_KEYS" {
             map.keys()
         } else {
@@ -1816,13 +1895,18 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let needle = needle.as_primitive::<Float64Type>();
                         let result: BooleanArray = (0..num_rows)
                             .map(|row| {
-                                if list.is_null(row) || needle.is_null(row) { return None; }
+                                if list.is_null(row) || needle.is_null(row) {
+                                    return None;
+                                }
                                 let values_array = list.value(row);
                                 let values = values_array.as_primitive::<Float64Type>();
                                 let mut saw_null = false;
                                 for index in 0..values.len() {
-                                    if values.is_null(index) { saw_null = true; }
-                                    else if values.value(index) == needle.value(row) { return Some(true); }
+                                    if values.is_null(index) {
+                                        saw_null = true;
+                                    } else if values.value(index) == needle.value(row) {
+                                        return Some(true);
+                                    }
                                 }
                                 if saw_null { None } else { Some(false) }
                             })
@@ -1834,13 +1918,18 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let needle = needle.as_string::<i32>();
                         let result: BooleanArray = (0..num_rows)
                             .map(|row| {
-                                if list.is_null(row) || needle.is_null(row) { return None; }
+                                if list.is_null(row) || needle.is_null(row) {
+                                    return None;
+                                }
                                 let values_array = list.value(row);
                                 let values = values_array.as_string::<i32>();
                                 let mut saw_null = false;
                                 for index in 0..values.len() {
-                                    if values.is_null(index) { saw_null = true; }
-                                    else if values.value(index) == needle.value(row) { return Some(true); }
+                                    if values.is_null(index) {
+                                        saw_null = true;
+                                    } else if values.value(index) == needle.value(row) {
+                                        return Some(true);
+                                    }
                                 }
                                 if saw_null { None } else { Some(false) }
                             })
@@ -2005,9 +2094,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 let end = list.value_offsets()[row + 1] as i64;
                 let length = end - start;
                 let offset = if index > 0 { index - 1 } else { length + index };
-                positions.push((0..length)
-                    .contains(&offset)
-                    .then_some(start + offset));
+                positions.push((0..length).contains(&offset).then_some(start + offset));
             }
             Ok(compute::take(
                 list.values().as_ref(),
@@ -2279,8 +2366,13 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         "ARRAY" => {
             let string_array = args.iter().any(|arg| arg.data_type() == &DataType::Utf8);
             if string_array {
-                if args.iter().any(|arg| !matches!(arg.data_type(), DataType::Utf8 | DataType::Null)) {
-                    return Err(KaveonError::Execution("ARRAY elements must share a type".into()));
+                if args
+                    .iter()
+                    .any(|arg| !matches!(arg.data_type(), DataType::Utf8 | DataType::Null))
+                {
+                    return Err(KaveonError::Execution(
+                        "ARRAY elements must share a type".into(),
+                    ));
                 }
                 let values = args
                     .iter()
@@ -2290,7 +2382,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 for row in 0..num_rows {
                     for value in &values {
                         let value = value.as_string::<i32>();
-                        builder.values().append_option(value.is_valid(row).then(|| value.value(row)));
+                        builder
+                            .values()
+                            .append_option(value.is_valid(row).then(|| value.value(row)));
                     }
                     builder.append(true);
                 }
@@ -2304,7 +2398,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 for row in 0..num_rows {
                     for value in &values {
                         let value = value.as_primitive::<Float64Type>();
-                        builder.values().append_option(value.is_valid(row).then(|| value.value(row)));
+                        builder
+                            .values()
+                            .append_option(value.is_valid(row).then(|| value.value(row)));
                     }
                     builder.append(true);
                 }
@@ -2729,7 +2825,11 @@ mod tests {
             ],
             else_expr: Some(Box::new(Expr::BinaryOp {
                 left: Box::new(Expr::Column("left".into())),
-                op: if not_distinct { BinaryOp::Eq } else { BinaryOp::Ne },
+                op: if not_distinct {
+                    BinaryOp::Eq
+                } else {
+                    BinaryOp::Ne
+                },
                 right: Box::new(Expr::Column("right".into())),
             })),
         };
@@ -2769,7 +2869,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            values.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+            values
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
             vec![Some(12), None, None, Some(-4)]
         );
     }
@@ -2791,10 +2894,7 @@ mod tests {
         let value = evaluate(
             &Expr::Function {
                 name: "ROW".into(),
-                args: vec![
-                    Expr::Column("id".into()),
-                    Expr::Column("name".into()),
-                ],
+                args: vec![Expr::Column("id".into()), Expr::Column("name".into())],
             },
             &input,
         )
@@ -2846,7 +2946,10 @@ mod tests {
         .unwrap();
         let row = |value| Expr::Function {
             name: "ROW".into(),
-            args: vec![Expr::Literal(ScalarValue::Int64(value)), Expr::Column("id".into())],
+            args: vec![
+                Expr::Literal(ScalarValue::Int64(value)),
+                Expr::Column("id".into()),
+            ],
         };
         let value = evaluate(
             &Expr::BinaryOp {
@@ -2898,7 +3001,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            value.as_primitive::<Float64Type>().iter().collect::<Vec<_>>(),
+            value
+                .as_primitive::<Float64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
             vec![Some(2.0), Some(2.0)]
         );
     }
@@ -2931,6 +3037,64 @@ mod tests {
         )
         .unwrap();
         assert_eq!(value.as_primitive::<Int64Type>().values(), &[1, 1]);
+    }
+
+    #[test]
+    fn map_equality_is_order_independent_and_null_safe() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+        )])
+        .unwrap();
+        let map = |keys: &[&str], values: &[Option<i64>]| Expr::Function {
+            name: "MAP".into(),
+            args: vec![
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: keys
+                        .iter()
+                        .map(|key| Expr::Literal(ScalarValue::Utf8((*key).into())))
+                        .collect(),
+                },
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: values
+                        .iter()
+                        .map(|value| match value {
+                            Some(value) => Expr::Literal(ScalarValue::Int64(*value)),
+                            None => Expr::Literal(ScalarValue::Null),
+                        })
+                        .collect(),
+                },
+            ],
+        };
+        let value = evaluate(
+            &Expr::BinaryOp {
+                left: Box::new(map(&["a", "b"], &[Some(1), Some(2)])),
+                op: BinaryOp::Eq,
+                right: Box::new(map(&["b", "a"], &[Some(2), Some(1)])),
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            value.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(true)]
+        );
+
+        let value = evaluate(
+            &Expr::BinaryOp {
+                left: Box::new(map(&["a"], &[None])),
+                op: BinaryOp::Eq,
+                right: Box::new(map(&["a"], &[None])),
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            value.as_boolean().iter().collect::<Vec<_>>(),
+            vec![None, None]
+        );
     }
 
     #[test]
@@ -2983,13 +3147,11 @@ mod tests {
 
     #[test]
     fn map_keys_and_values_preserve_map_offsets() {
-        let mut key_builder =
-            arrow::array::ListBuilder::new(arrow::array::StringBuilder::new());
+        let mut key_builder = arrow::array::ListBuilder::new(arrow::array::StringBuilder::new());
         key_builder.values().append_value("a");
         key_builder.append(true);
         key_builder.append(false);
-        let mut value_builder =
-            arrow::array::ListBuilder::new(arrow::array::Float64Builder::new());
+        let mut value_builder = arrow::array::ListBuilder::new(arrow::array::Float64Builder::new());
         value_builder.values().append_value(1.0);
         value_builder.append(true);
         value_builder.append(false);
@@ -3000,10 +3162,7 @@ mod tests {
         .unwrap();
         let map = Expr::Function {
             name: "MAP".into(),
-            args: vec![
-                Expr::Column("keys".into()),
-                Expr::Column("values".into()),
-            ],
+            args: vec![Expr::Column("keys".into()), Expr::Column("values".into())],
         };
         let keys = evaluate(
             &Expr::Function {
@@ -4285,7 +4444,10 @@ mod tests {
             ],
         };
         let result = evaluate(&expr, &batch).unwrap();
-        assert_eq!(result.as_boolean().iter().collect::<Vec<_>>(), vec![Some(true), Some(true)]);
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(true)]
+        );
     }
 
     #[test]
@@ -4311,7 +4473,10 @@ mod tests {
         };
         let numeric_result = evaluate(&numeric, &batch).unwrap();
         assert_eq!(
-            numeric_result.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+            numeric_result
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
             vec![Some(2), Some(2)]
         );
 
@@ -4330,18 +4495,19 @@ mod tests {
         };
         let string_result = evaluate(&string, &batch).unwrap();
         assert_eq!(
-            string_result.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+            string_result
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
             vec![Some(0), Some(0)]
         );
     }
 
     #[test]
     fn array_position_matches_null_elements() {
-        let batch = RecordBatch::try_from_iter([(
-            "id",
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-        )])
-        .unwrap();
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
         let expr = Expr::Function {
             name: "ARRAY_POSITION".into(),
             args: vec![
@@ -4356,7 +4522,13 @@ mod tests {
             ],
         };
         let result = evaluate(&expr, &batch).unwrap();
-        assert_eq!(result.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(), vec![Some(2)]);
+        assert_eq!(
+            result
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(2)]
+        );
     }
 
     #[test]
@@ -4383,7 +4555,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            first.as_primitive::<Float64Type>().iter().collect::<Vec<_>>(),
+            first
+                .as_primitive::<Float64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
             vec![Some(10.0), Some(10.0)]
         );
         let last = evaluate(
@@ -4395,26 +4570,28 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            last.as_primitive::<Float64Type>().iter().collect::<Vec<_>>(),
+            last.as_primitive::<Float64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
             vec![Some(30.0), Some(30.0)]
         );
     }
 
     #[test]
     fn cardinality_rejects_non_list_values_explicitly() {
-        let batch = RecordBatch::try_from_iter([(
-            "id",
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-        )])
-        .unwrap();
+        let batch =
+            RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
+                .unwrap();
         let expr = Expr::Function {
             name: "CARDINALITY".into(),
             args: vec![Expr::Column("id".into())],
         };
         let error = evaluate(&expr, &batch).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("CARDINALITY currently supports ARRAY/List values only"));
+        assert!(
+            error
+                .to_string()
+                .contains("CARDINALITY currently supports ARRAY/List values only")
+        );
     }
 
     #[test]
