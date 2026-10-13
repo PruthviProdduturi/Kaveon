@@ -2310,6 +2310,54 @@ mod tests {
     }
 
     #[test]
+    fn null_safe_comparison_case_semantics_are_total() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("left", DataType::Int64, true),
+            arrow::datatypes::Field::new("right", DataType::Int64, true),
+        ]));
+        let input = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![Some(1), None, Some(1), None])),
+                Arc::new(Int64Array::from(vec![Some(1), None, None, Some(2)])),
+            ],
+        )
+        .unwrap();
+        let distinct = |not_distinct| Expr::Case {
+            operand: None,
+            when_then: vec![
+                (
+                    Expr::IsNull(Box::new(Expr::Column("left".into()))),
+                    if not_distinct {
+                        Expr::IsNull(Box::new(Expr::Column("right".into())))
+                    } else {
+                        Expr::IsNotNull(Box::new(Expr::Column("right".into())))
+                    },
+                ),
+                (
+                    Expr::IsNull(Box::new(Expr::Column("right".into()))),
+                    Expr::Literal(ScalarValue::Bool(!not_distinct)),
+                ),
+            ],
+            else_expr: Some(Box::new(Expr::BinaryOp {
+                left: Box::new(Expr::Column("left".into())),
+                op: if not_distinct { BinaryOp::Eq } else { BinaryOp::Ne },
+                right: Box::new(Expr::Column("right".into())),
+            })),
+        };
+        let values = evaluate(&distinct(false), &input).unwrap();
+        assert_eq!(
+            values.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(false), Some(false), Some(true), Some(true)]
+        );
+        let values = evaluate(&distinct(true), &input).unwrap();
+        assert_eq!(
+            values.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(true), Some(false), Some(false)]
+        );
+    }
+
+    #[test]
     fn expanding_strings_check_overflow_caps_and_query_budget_before_allocation() {
         let batch =
             RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])

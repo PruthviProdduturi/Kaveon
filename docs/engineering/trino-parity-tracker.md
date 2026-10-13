@@ -229,11 +229,15 @@ qualification documents; this tracker remains the single ordered work list.
   names fail before planning (`in this cycle`). `QUALIFY`
   continues to fail closed with a stable planner diagnostic rather than being
   silently ignored.
+- `IS DISTINCT FROM` and `IS NOT DISTINCT FROM` now lower to null-total
+  `CASE` expressions using the existing vectorized null predicates and
+  comparisons; executor coverage verifies both-null, one-null, equal, and
+  unequal rows.
 
 ### Current focused validation
 
-The latest focused validation passes 330 `kaveon-server` tests, 100
-`kaveon-sql` tests, and 216 `kaveon-exec` tests. These counts are package-level
+The latest focused validation passes 330 `kaveon-server` tests, 101
+`kaveon-sql` tests, and 217 `kaveon-exec` tests. These counts are package-level
 validation snapshots; they do not close the broader multi-worker, AKS, or
 cross-connector qualification gates below.
 
