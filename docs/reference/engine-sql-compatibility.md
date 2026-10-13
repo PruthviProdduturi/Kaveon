@@ -33,7 +33,7 @@ by the selected database and Kaveon's API guardrails.
 | Set operations | Alpha | `UNION [ALL]`, `INTERSECT`, `EXCEPT`, `INTERSECT ALL`, and `EXCEPT ALL`; distributed exact duplicate-count semantics are covered by the differential sweep |
 | Date/time | Alpha | `EXTRACT`, `DATE_TRUNC`, `DATE_PART`, `TO_CHAR`, `NOW`, `CURRENT_DATE`, `CURRENT_TIMESTAMP`, `DATE '…'` literals, `date ± INTERVAL 'n' DAY`; `MONTH`/`YEAR` intervals only against a DATE literal |
 | Conditional, comparison and strings | Alpha | `CASE`, `COALESCE`, `BETWEEN`, `IN`, `IS DISTINCT FROM`, `IS NOT DISTINCT FROM`, `LIKE`/`ILIKE` (Arrow kernels), `REGEXP_REPLACE`, `CAST`, `TRY_CAST`, concatenation, `UPPER`/`LOWER`/`LENGTH`/`TRIM`/`SUBSTR`/`REPEAT`/`REPLACE`/`LPAD`/`RPAD`; functions over dictionary columns run once per dictionary value the batch uses and keep a text result dictionary-encoded; `REGEXP_REPLACE` over plain text runs once per distinct value in the batch |
-| `ROW(...)` and `MAP(...)` constructors | Alpha | Produces typed Arrow `StructArray`/`MapArray` values from list inputs with null-preserving child values; `ROW(...).field`, row equality and lexicographic ordering, null-preserving element-wise array equality/inequality, order-independent map equality, map subscript lookup, `MAP_KEYS`, and `MAP_VALUES` expose typed projections; ordered map and array comparison remains open |
+| `ROW(...)` and `MAP(...)` constructors | Alpha | Produces typed Arrow `StructArray`/`MapArray` values from list inputs with null-preserving child values; `ROW(...).field`, row equality and lexicographic ordering, null-preserving element-wise array equality/inequality and lexicographic ordering, order-independent map equality, map subscript lookup, `MAP_KEYS`, and `MAP_VALUES` expose typed projections; ordered map comparison remains open |
 | Array and map functions/subscripts | Alpha | Numeric, text, and boolean `ARRAY[...]` literals preserve typed elements; `CARDINALITY` over arrays and maps, `CONTAINS`, `ARRAY_POSITION`, `ARRAY_DISTINCT`, `ARRAY_SORT`, `ARRAY_REVERSE`, positive and negative-stride array slices, and one-based/negative `ELEMENT_AT` over numeric, text, and boolean lists/maps; date, timestamp, and decimal arrays have qualified `CARDINALITY`/`ARRAY_POSITION` coverage; broader element types and function combinations remain open |
 | Literals against columns | Alpha | Integer literals push down to narrow integer and Date32 columns; integer and decimal literals meet double columns; text literals against Date32 columns are coerced on every reader |
 | `SUM(DISTINCT)`, `AVG(DISTINCT)` | Alpha | Exact mergeable distinct state |
@@ -104,7 +104,7 @@ unchanged; nothing is approximated unless the statement writes an
   `LIMIT`/set operations inside a correlated subquery, `EXISTS` correlated on
   more than one column, correlated `IN`; each is refused by name.
 - Outer non-equality join conditions (residual join filters) and `GROUPING SETS`/
-  `CUBE`/`ROLLUP`, recursive CTEs, ordered map/array and JSON comparison;
+  `CUBE`/`ROLLUP`, recursive CTEs, ordered map and JSON comparison;
   typed numeric, text, and boolean `ARRAY[...]` literals support `CARDINALITY`,
   `CONTAINS`, `ARRAY_POSITION`, `ARRAY_DISTINCT`, `ARRAY_SORT`,
   `ARRAY_REVERSE`, `ELEMENT_AT`, and positive or negative-stride slices;
