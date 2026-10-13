@@ -94,9 +94,10 @@ foundations, but several operators are still centralized or narrow:
   bind/execute protocol remains open.
   A `/v1/trino/statement` adapter now accepts raw SQL with standard
   `X-Trino-*` session headers (including URL-decoded `X-Trino-Session`
-  properties), recognizes the encoded
-  `X-Trino-Prepared-Statement` SQL header, binds scalar `EXECUTE ... USING`
-  values through the typed binder, and emits `nextUri`/`stats`-shaped
+  properties), recognizes one or more encoded entries in the
+  `X-Trino-Prepared-Statement` SQL header, selects the named entry for
+  `EXECUTE name USING`, binds scalar values through the typed binder, and emits
+  `nextUri`/`stats`-shaped
   responses. Malformed prepared headers now fail closed with a structured
   `INVALID_PREPARED_STATEMENT` response rather than silently falling back to
   the request body. Compound prepared literals and the full
