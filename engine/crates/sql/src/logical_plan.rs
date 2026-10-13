@@ -3881,6 +3881,20 @@ mod tests {
     }
 
     #[test]
+    fn parses_cardinality_over_an_array_literal() {
+        let plan = sql_to_logical_plan("SELECT CARDINALITY(ARRAY[1, 2.5]) FROM t").unwrap();
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("projection");
+        };
+        assert!(matches!(
+            &columns[0],
+            Expr::Function { name, args }
+                if name == "CARDINALITY"
+                    && matches!(&args[0], Expr::Function { name, args } if name == "ARRAY" && args.len() == 2)
+        ));
+    }
+
+    #[test]
     fn rejects_invalid_decimal_precision_and_scale() {
         for (sql, expected) in [
             (

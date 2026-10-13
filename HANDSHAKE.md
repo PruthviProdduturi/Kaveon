@@ -19,9 +19,12 @@ current set-operation operator is distinct-oriented and does not retain row
 multiplicity. Projection scalar subqueries are now supported when they select
 one ungrouped aggregate column; the scalar relation is cross-joined after
 outer aggregation and its alias is preserved. Correlated subqueries, prepared
-client parameters, recursive CTEs, and complex array/map/row types remain
-unsupported. Multi-row and correlated projection forms return explicit
-diagnostics rather than being sent to execution.
+client parameters, recursive CTEs, and map/row types remain unsupported.
+Multi-row and correlated projection forms return explicit diagnostics rather
+than being sent to execution.
+`CARDINALITY(ARRAY[...])` now evaluates to a nullable `Int64` list length;
+other array operations and complex types remain explicit unsupported
+boundaries.
 The SQL front end now exposes a typed positional binding entry point for
 `$1`, `$2`, …; values become AST literals before planning and are never
 interpolated into SQL text. Missing positions and `?`/named placeholders fail
