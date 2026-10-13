@@ -268,6 +268,7 @@ qualification documents; this tracker remains the single ordered work list.
   numeric and text lists, including omitted bounds, positive or negative
   strides, and null elements. `ARRAY_DISTINCT` now preserves first occurrence
   order and keeps at most one NULL for numeric, text, and boolean lists;
+  `ARRAY_SORT` orders those same supported element types with NULL values last;
   broader element types remain an explicit boundary.
 - `ROW(...).field` now lowers to a typed `ROW_FIELD` projection over Arrow
   structs, and map subscript syntax lowers to `ELEMENT_AT` with typed key
