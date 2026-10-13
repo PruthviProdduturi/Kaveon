@@ -95,7 +95,8 @@ foundations, but several operators are still centralized or narrow:
   Scalar, DATE, timestamp, and DECIMAL casts are supported; complex cast
   targets fail with typed planner diagnostics. Dereference, `UNNEST`, other
   array operations, and broad JSON operations remain open; scalar extraction
-  via `JSON_EXTRACT_SCALAR` is implemented for dotted object paths.
+  via `JSON_EXTRACT_SCALAR` now supports dotted object paths and numeric array
+  subscripts (`abc671fc`).
 - There is no Trino-style cross-source federation yet. Registered SQL sources
   are API passthrough paths, while the strongest native Engine path is
   Parquet/Delta/Iceberg. The connector matrix now records S3 as implemented
@@ -295,7 +296,7 @@ qualification documents; this tracker remains the single ordered work list.
 ### Current focused validation
 
 The latest focused validation passes 333 `kaveon-server` tests, 109
-`kaveon-sql` tests, and 238 `kaveon-exec` tests (four executor benchmarks are
+`kaveon-sql` tests, and 239 `kaveon-exec` tests (four executor benchmarks are
 ignored). The repository differential gate
 (`differential_tests::the_differential_sweep_matches_across_parquet_encodings_and_execution_paths`)
 also passes, comparing the same corpus across alternate Parquet encodings and
