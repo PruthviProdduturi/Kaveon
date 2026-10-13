@@ -308,8 +308,15 @@ class Engine:
                 verify=self.ca_path,
                 timeout=timeout,
             )
-        response.raise_for_status()
-        return response.json()
+        body = response.json()
+        # The request may finish at the same time as DELETE /v1/query. The
+        # Engine intentionally returns 409 for that canceled statement; keep
+        # the response so the probe can verify the lifecycle rather than
+        # turning an expected cancellation into an unobserved exception.
+        if response.status_code not in {200, 409}:
+            response.raise_for_status()
+        body["_http_status"] = response.status_code
+        return body
 
     def cancel(self, query_id: str, *, timeout: int = 15) -> requests.Response:
         with self.session() as session:
@@ -650,13 +657,14 @@ def main() -> int:
             cancellation_ok = (
                 cancel_reply.status_code == 204
                 and cancel_response.get("id") == cancel_query_id
+                and cancel_response.get("_http_status") in {200, 409}
                 and canceled_record.get("state") == "CANCELED"
                 and cancellation_cleanup
             )
             report["cancellation"] = {
                 "query_id": cancel_query_id,
                 "delete_status": cancel_reply.status_code,
-                "statement_response_status": cancel_response.get("state"),
+                "statement_response_status": cancel_response.get("_http_status"),
                 "final_state": canceled_record.get("state"),
                 "retained_files_after": retained_after_cancel,
                 "cleanup": cancellation_cleanup,
