@@ -309,7 +309,8 @@ qualification documents; this tracker remains the single ordered work list.
 - Array equality and inequality now use null-preserving, element-wise
   semantics, including nested list values; ordered array comparisons fail with
   an explicit diagnostic. The executor unit test and differential corpus cover
-  equal, different, and NULL-containing arrays.
+  equal, different, and NULL-containing arrays, including the SQL UNKNOWN
+  result when equal arrays contain a null element.
 - Three-worker global `ORDER BY`/TopN centralized merge correctness is now
   qualified for NULL ordering and ties against a single-partition reference
   (`bb788709`). The input remains distributed, while the exact global merge
