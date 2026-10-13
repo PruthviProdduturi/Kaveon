@@ -2126,6 +2126,81 @@ fn array_sort_generic<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<
     )?))
 }
 
+fn array_slice_generic<L: OffsetSizeTrait>(
+    list: &GenericListArray<L>,
+    lower: &Int64Array,
+    upper: &Int64Array,
+    stride: &Int64Array,
+) -> Result<ArrayRef> {
+    let mut selected = Vec::<ArrayRef>::new();
+    let mut offsets = vec![L::zero()];
+    let mut valid = Vec::with_capacity(list.len());
+    for row in 0..list.len() {
+        if list.is_null(row) {
+            valid.push(false);
+            offsets.push(L::from_usize(selected.len()).ok_or_else(|| {
+                KaveonError::Execution("ARRAY_SLICE result offset overflow".into())
+            })?);
+            continue;
+        }
+        let inner = list.value(row);
+        let length = inner.len() as i64;
+        let step = stride.is_valid(row).then(|| stride.value(row)).unwrap_or(1);
+        if step == 0 {
+            return Err(KaveonError::Execution("ARRAY_SLICE stride cannot be zero".into()));
+        }
+        let start = lower
+            .is_valid(row)
+            .then(|| lower.value(row))
+            .unwrap_or(if step < 0 { length } else { 1 });
+        let end = upper
+            .is_valid(row)
+            .then(|| upper.value(row))
+            .unwrap_or(if step < 0 { 1 } else { length });
+        let first = if step > 0 {
+            start.max(1).min(length + 1)
+        } else {
+            start.max(1).min(length)
+        };
+        let last = if step > 0 {
+            end.max(0).min(length)
+        } else {
+            end.max(1).min(length)
+        };
+        if (step > 0 && first <= last) || (step < 0 && first >= last) {
+            let mut index = first;
+            while (step > 0 && index <= last) || (step < 0 && index >= last) {
+                selected.push(inner.slice((index - 1) as usize, 1));
+                index += step;
+            }
+        }
+        valid.push(true);
+        offsets.push(L::from_usize(selected.len()).ok_or_else(|| {
+            KaveonError::Execution("ARRAY_SLICE result offset overflow".into())
+        })?);
+    }
+    let values = if selected.is_empty() {
+        arrow::array::new_empty_array(&list.value_type())
+    } else {
+        let chunks = selected
+            .iter()
+            .map(|value| value.as_ref() as &dyn Array)
+            .collect::<Vec<_>>();
+        compute::concat(&chunks)?
+    };
+    let field = Arc::new(arrow::datatypes::Field::new(
+        "item",
+        values.data_type().clone(),
+        true,
+    ));
+    Ok(Arc::new(GenericListArray::<L>::try_new(
+        field,
+        OffsetBuffer::new(ScalarBuffer::from(offsets)),
+        values,
+        Some(arrow::buffer::NullBuffer::from(valid)),
+    )?))
+}
+
 fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
     let upper = name.to_uppercase();
     if upper.starts_with("ARRAY_ANY_") || upper.starts_with("ARRAY_ALL_") {
@@ -4099,16 +4174,28 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "ARRAY_SLICE" => {
             check_arity(name, args, 4)?;
-            let list = args[0]
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .ok_or_else(|| KaveonError::Execution("ARRAY_SLICE requires an ARRAY/List value".into()))?;
             let lower = compute::cast(&args[1], &DataType::Int64)?;
             let upper = compute::cast(&args[2], &DataType::Int64)?;
             let stride = compute::cast(&args[3], &DataType::Int64)?;
             let lower = lower.as_primitive::<Int64Type>();
             let upper = upper.as_primitive::<Int64Type>();
             let stride = stride.as_primitive::<Int64Type>();
+            if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
+                return array_slice_generic(list, lower, upper, stride);
+            }
+            let list = args[0]
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .ok_or_else(|| KaveonError::Execution("ARRAY_SLICE requires an ARRAY/List value".into()))?;
+            if matches!(
+                list.value_type(),
+                DataType::List(_)
+                    | DataType::LargeList(_)
+                    | DataType::Struct(_)
+                    | DataType::Map(_, _)
+            ) {
+                return array_slice_generic(list, lower, upper, stride);
+            }
             macro_rules! slice_primitive {
                 ($ty:ty, $builder:expr) => {{
                     let mut builder = ListBuilder::new($builder);
@@ -7513,6 +7600,30 @@ mod tests {
         let sorted_values = result.value(0);
         let sorted = sorted_values.as_primitive::<Int64Type>();
         assert_eq!(sorted.values(), &[1, 2, 3]);
+
+        let mut slice_builder = LargeListBuilder::new(ListBuilder::new(Int64Builder::new()));
+        for value in [1_i64, 2, 3] {
+            slice_builder.values().values().append_value(value);
+            slice_builder.values().append(true);
+        }
+        slice_builder.append(true);
+        let result = eval_scalar_function(
+            "ARRAY_SLICE",
+            &[
+                Arc::new(slice_builder.finish()) as ArrayRef,
+                Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![3])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![2])) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        let result = result.as_any().downcast_ref::<LargeListArray>().unwrap();
+        let sliced = result.value(0);
+        let sliced = sliced.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(sliced.len(), 2);
+        assert_eq!(sliced.value(0).as_primitive::<Int64Type>().value(0), 1);
+        assert_eq!(sliced.value(1).as_primitive::<Int64Type>().value(0), 3);
     }
 
     #[test]
