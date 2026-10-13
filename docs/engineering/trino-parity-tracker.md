@@ -110,7 +110,8 @@ foundations, but several operators are still centralized or narrow:
   array operations remain open. `JSON_EXTRACT` now preserves objects, arrays,
   and JSON nulls as serialized JSON text; `JSON_EXTRACT_SCALAR` supports dotted
   object paths and numeric array subscripts. Invalid JSON and missing paths
-  return NULL; `JSON_ARRAY_LENGTH` returns nullable lengths for JSON arrays.
+  return NULL; `JSON_ARRAY_LENGTH` returns nullable lengths for JSON arrays and
+  `JSON_SIZE` returns container sizes (or zero for scalar values).
   `REGEXP_LIKE` now reuses the bounded compiled-regex cache and
   preserves nullable boolean results. `MAP_CONCAT` now merges supported typed
   maps with later values winning duplicate keys.
