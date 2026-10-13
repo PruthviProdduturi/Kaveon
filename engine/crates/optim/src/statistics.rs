@@ -206,13 +206,15 @@ pub fn optimize_with_statistics(
                 .collect(),
             all,
         },
-        LogicalPlan::Intersect { left, right } => LogicalPlan::Intersect {
+        LogicalPlan::Intersect { left, right, all } => LogicalPlan::Intersect {
             left: Box::new(optimize_with_statistics(*left, statistics)),
             right: Box::new(optimize_with_statistics(*right, statistics)),
+            all,
         },
-        LogicalPlan::Except { left, right } => LogicalPlan::Except {
+        LogicalPlan::Except { left, right, all } => LogicalPlan::Except {
             left: Box::new(optimize_with_statistics(*left, statistics)),
             right: Box::new(optimize_with_statistics(*right, statistics)),
+            all,
         },
         LogicalPlan::SemiJoin {
             left,

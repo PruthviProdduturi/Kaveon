@@ -237,10 +237,12 @@ pub enum LogicalPlan {
     Intersect {
         left: Box<LogicalPlan>,
         right: Box<LogicalPlan>,
+        all: bool,
     },
     Except {
         left: Box<LogicalPlan>,
         right: Box<LogicalPlan>,
+        all: bool,
     },
     /// Rows of `left` with a match in `right` on the key. `residual`, when
     /// present, is evaluated over each (left row, right row) pair sharing
@@ -310,8 +312,8 @@ impl LogicalPlan {
             | LogicalPlan::Distinct { input }
             | LogicalPlan::Window { input, .. } => vec![input.as_ref()],
             LogicalPlan::Join { left, right, .. }
-            | LogicalPlan::Intersect { left, right }
-            | LogicalPlan::Except { left, right }
+            | LogicalPlan::Intersect { left, right, .. }
+            | LogicalPlan::Except { left, right, .. }
             | LogicalPlan::SemiJoin { left, right, .. }
             | LogicalPlan::AntiJoin { left, right, .. } => vec![left.as_ref(), right.as_ref()],
             LogicalPlan::Union { inputs, .. } => inputs.iter().collect(),
@@ -330,8 +332,8 @@ impl LogicalPlan {
             | LogicalPlan::Distinct { input }
             | LogicalPlan::Window { input, .. } => vec![input.as_mut()],
             LogicalPlan::Join { left, right, .. }
-            | LogicalPlan::Intersect { left, right }
-            | LogicalPlan::Except { left, right }
+            | LogicalPlan::Intersect { left, right, .. }
+            | LogicalPlan::Except { left, right, .. }
             | LogicalPlan::SemiJoin { left, right, .. }
             | LogicalPlan::AntiJoin { left, right, .. } => vec![left.as_mut(), right.as_mut()],
             LogicalPlan::Union { inputs, .. } => inputs.iter_mut().collect(),
@@ -599,35 +601,31 @@ fn set_expr_to_plan(body: &ast::SetExpr, ctes: &Lowering) -> Result<LogicalPlan>
                     }
                 }
                 ast::SetOperator::Intersect => {
-                    if matches!(set_quantifier, ast::SetQuantifier::All) {
-                        return Err(sql_err("INTERSECT ALL is unsupported"));
-                    }
                     let plan = LogicalPlan::Intersect {
                         left: Box::new(left_plan),
                         right: Box::new(right_plan),
+                        all: matches!(set_quantifier, ast::SetQuantifier::All),
                     };
-                    if matches!(set_quantifier, ast::SetQuantifier::All) {
-                        Ok(plan)
-                    } else {
+                    if !matches!(set_quantifier, ast::SetQuantifier::All) {
                         Ok(LogicalPlan::Distinct {
                             input: Box::new(plan),
                         })
+                    } else {
+                        Ok(plan)
                     }
                 }
                 ast::SetOperator::Except => {
-                    if matches!(set_quantifier, ast::SetQuantifier::All) {
-                        return Err(sql_err("EXCEPT ALL is unsupported"));
-                    }
                     let plan = LogicalPlan::Except {
                         left: Box::new(left_plan),
                         right: Box::new(right_plan),
+                        all: matches!(set_quantifier, ast::SetQuantifier::All),
                     };
-                    if matches!(set_quantifier, ast::SetQuantifier::All) {
-                        Ok(plan)
-                    } else {
+                    if !matches!(set_quantifier, ast::SetQuantifier::All) {
                         Ok(LogicalPlan::Distinct {
                             input: Box::new(plan),
                         })
+                    } else {
+                        Ok(plan)
                     }
                 }
             }
@@ -2661,7 +2659,7 @@ fn validate_uncorrelated(plan: &LogicalPlan) -> Result<()> {
                 visit(left, relations, expressions);
                 visit(right, relations, expressions);
             }
-            LogicalPlan::Intersect { left, right } | LogicalPlan::Except { left, right } => {
+            LogicalPlan::Intersect { left, right, .. } | LogicalPlan::Except { left, right, .. } => {
                 visit(left, relations, expressions);
                 visit(right, relations, expressions);
             }
@@ -2759,20 +2757,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn union_defaults_to_distinct_and_unsupported_multisets_fail() {
+    fn union_defaults_to_distinct_and_set_quantifiers_are_preserved() {
         assert!(matches!(
             sql_to_logical_plan("SELECT x FROM a UNION SELECT x FROM b").unwrap(),
             LogicalPlan::Distinct { .. }
         ));
-        let intersect_all = sql_to_logical_plan("SELECT x FROM a INTERSECT ALL SELECT x FROM b")
-            .expect_err("INTERSECT ALL must fail during lowering");
-        assert_eq!(
-            intersect_all.to_string(),
-            "sql: INTERSECT ALL is unsupported"
-        );
-        let except_all = sql_to_logical_plan("SELECT x FROM a EXCEPT ALL SELECT x FROM b")
-            .expect_err("EXCEPT ALL must fail during lowering");
-        assert_eq!(except_all.to_string(), "sql: EXCEPT ALL is unsupported");
+        assert!(matches!(
+            sql_to_logical_plan("SELECT x FROM a INTERSECT ALL SELECT x FROM b").unwrap(),
+            LogicalPlan::Intersect { all: true, .. }
+        ));
+        assert!(matches!(
+            sql_to_logical_plan("SELECT x FROM a EXCEPT ALL SELECT x FROM b").unwrap(),
+            LogicalPlan::Except { all: true, .. }
+        ));
     }
 
     #[test]

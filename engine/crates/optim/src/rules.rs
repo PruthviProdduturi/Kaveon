@@ -48,13 +48,15 @@ pub fn push_filter_down(plan: LogicalPlan) -> LogicalPlan {
             inputs: inputs.into_iter().map(push_filter_down).collect(),
             all,
         },
-        LogicalPlan::Intersect { left, right } => LogicalPlan::Intersect {
+        LogicalPlan::Intersect { left, right, all } => LogicalPlan::Intersect {
             left: Box::new(push_filter_down(*left)),
             right: Box::new(push_filter_down(*right)),
+            all,
         },
-        LogicalPlan::Except { left, right } => LogicalPlan::Except {
+        LogicalPlan::Except { left, right, all } => LogicalPlan::Except {
             left: Box::new(push_filter_down(*left)),
             right: Box::new(push_filter_down(*right)),
+            all,
         },
         LogicalPlan::Join {
             left,
@@ -207,13 +209,15 @@ fn prune_columns(plan: LogicalPlan, required: Option<HashSet<String>>) -> Logica
                 window_exprs,
             }
         }
-        LogicalPlan::Intersect { left, right } => LogicalPlan::Intersect {
+        LogicalPlan::Intersect { left, right, all } => LogicalPlan::Intersect {
             left: Box::new(prune_columns(*left, required.clone())),
             right: Box::new(prune_columns(*right, required)),
+            all,
         },
-        LogicalPlan::Except { left, right } => LogicalPlan::Except {
+        LogicalPlan::Except { left, right, all } => LogicalPlan::Except {
             left: Box::new(prune_columns(*left, required.clone())),
             right: Box::new(prune_columns(*right, required)),
+            all,
         },
         LogicalPlan::Union { inputs, all } => LogicalPlan::Union {
             inputs: inputs

@@ -433,7 +433,7 @@ impl Binder<'_> {
                     .collect::<Result<_>>()?;
                 Ok(Bound::plain(LogicalPlan::Union { inputs, all }))
             }
-            LogicalPlan::Intersect { left, right } => {
+            LogicalPlan::Intersect { left, right, all } => {
                 let left = self.bind(*left, outer)?;
                 let right = self.bind(*right, outer)?;
                 uncorrelated(&left, "INTERSECT")?;
@@ -441,9 +441,10 @@ impl Binder<'_> {
                 Ok(Bound::plain(LogicalPlan::Intersect {
                     left: Box::new(left.plan),
                     right: Box::new(right.plan),
+                    all,
                 }))
             }
-            LogicalPlan::Except { left, right } => {
+            LogicalPlan::Except { left, right, all } => {
                 let left = self.bind(*left, outer)?;
                 let right = self.bind(*right, outer)?;
                 uncorrelated(&left, "EXCEPT")?;
@@ -451,6 +452,7 @@ impl Binder<'_> {
                 Ok(Bound::plain(LogicalPlan::Except {
                     left: Box::new(left.plan),
                     right: Box::new(right.plan),
+                    all,
                 }))
             }
             LogicalPlan::Join {

@@ -11,14 +11,13 @@ single-column aggregate are now covered in `WHERE` by the
 `scalar_aggregate_filter` differential case; the existing `HAVING` path has
 the same lowering.
 
-The remaining high-value SQL gaps are unchanged: `INTERSECT ALL`/`EXCEPT ALL`
-need multiset-aware logical plans and fragment operators. The executor now has
-tested multiplicity-aware modes that emit `min(left,right)` for intersection
-and `max(left-right,0)` for exclusion; logical and distributed fragment wiring
-is still pending. Both SQL forms currently fail during lowering with the exact `sql: INTERSECT ALL is unsupported` or
-`sql: EXCEPT ALL is unsupported` diagnostic; this is intentional because the
-current set-operation operator is distinct-oriented and does not retain row
-multiplicity. Projection scalar subqueries are now supported when they select
+`INTERSECT ALL`/`EXCEPT ALL` now preserve multiset semantics end to end: the
+logical plan carries `all`, optimizer rewrites preserve it, local execution
+uses multiplicity-aware modes, and distributed fragments use dedicated
+`IntersectAll`/`ExceptAll` operators without pre-exchange deduplication. The
+executor emits `min(left,right)` for intersection and `max(left-right,0)` for
+exclusion; distinct forms retain their existing behavior. Projection scalar
+subqueries are now supported when they select
 one ungrouped aggregate column; the scalar relation is cross-joined after
 outer aggregation and its alias is preserved. Correlated subqueries, prepared
 client parameters, recursive CTEs, and map/row types remain unsupported.

@@ -974,6 +974,32 @@ fn compile_node(
             }
             Ok(Box::new(operator))
         }
+        FragmentOperator::IntersectAll => {
+            let left = compile_input(
+                node, 0, nodes, catalog, exchanges, scan_partition, memory, scan_metrics,
+            )?;
+            let right = compile_input(
+                node, 1, nodes, catalog, exchanges, scan_partition, memory, scan_metrics,
+            )?;
+            let mut operator = SetOpOperator::new(left, right, SetOpMode::IntersectAll);
+            if let Some(memory) = memory {
+                operator = operator.with_memory(memory.operator("fragment-set-operation")?);
+            }
+            Ok(Box::new(operator))
+        }
+        FragmentOperator::ExceptAll => {
+            let left = compile_input(
+                node, 0, nodes, catalog, exchanges, scan_partition, memory, scan_metrics,
+            )?;
+            let right = compile_input(
+                node, 1, nodes, catalog, exchanges, scan_partition, memory, scan_metrics,
+            )?;
+            let mut operator = SetOpOperator::new(left, right, SetOpMode::ExceptAll);
+            if let Some(memory) = memory {
+                operator = operator.with_memory(memory.operator("fragment-set-operation")?);
+            }
+            Ok(Box::new(operator))
+        }
         FragmentOperator::ExchangeOutput(_) => Err(exec_err(
             "ExchangeOutput is supported only as the fragment root",
         )),
