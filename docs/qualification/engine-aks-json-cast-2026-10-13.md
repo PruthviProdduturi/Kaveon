@@ -18,5 +18,6 @@ FROM OpenSource.public.kaveon_events_dashboard LIMIT 1;
 
 The first two results have type `Utf8` and value `{"x":1}`; the extraction
 returns type `Utf8` and value `1`. This is the declared Kaveon representation:
-JSON and JSONB casts preserve JSON text for the existing JSON functions. Binary
-JSON storage and full Trino JSON coercion semantics remain outside this slice.
+JSON and JSONB casts validate and preserve JSON text for the existing JSON
+functions. Binary JSON storage and full Trino JSON coercion semantics remain
+outside this slice.

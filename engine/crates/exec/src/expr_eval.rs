@@ -2131,6 +2131,29 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .collect();
             Ok(Arc::new(result))
         }
+        "JSON_PARSE" | "TRY_JSON_PARSE" => {
+            check_arity(name, args, 1)?;
+            let documents = as_string_array(&args[0])?;
+            let try_parse = upper == "TRY_JSON_PARSE";
+            let mut result = StringBuilder::new();
+            for row in 0..num_rows {
+                if documents.is_null(row) {
+                    result.append_null();
+                    continue;
+                }
+                let document = documents.value(row);
+                if serde_json::from_str::<serde_json::Value>(document).is_ok() {
+                    result.append_value(document);
+                } else if try_parse {
+                    result.append_null();
+                } else {
+                    return Err(KaveonError::Execution(format!(
+                        "invalid JSON value at row {row}"
+                    )));
+                }
+            }
+            Ok(Arc::new(result.finish()))
+        }
         "LTRIM" => {
             check_arity(name, args, 1)?;
             let arr = as_string_array(&args[0])?;
@@ -8615,6 +8638,35 @@ mod tests {
         let values = result.as_string::<i32>();
         assert_eq!(values.value(0), "A-17");
         assert!(values.is_null(1));
+    }
+
+    #[test]
+    fn json_parse_validates_documents_and_try_parse_returns_null() {
+        let batch = RecordBatch::try_from_iter([(
+            "document",
+            Arc::new(StringArray::from(vec![
+                Some(r#"{"x":1}"#),
+                Some("not-json"),
+                None,
+            ])) as ArrayRef,
+        )])
+        .unwrap();
+        let parse = Expr::Function {
+            name: "JSON_PARSE".into(),
+            args: vec![Expr::Column("document".into())],
+        };
+        let error = evaluate(&parse, &batch).unwrap_err();
+        assert!(error.to_string().contains("invalid JSON value at row 1"));
+
+        let try_parse = Expr::Function {
+            name: "TRY_JSON_PARSE".into(),
+            args: vec![Expr::Column("document".into())],
+        };
+        let result = evaluate(&try_parse, &batch).unwrap();
+        let values = result.as_string::<i32>();
+        assert_eq!(values.value(0), r#"{"x":1}"#);
+        assert!(values.is_null(1));
+        assert!(values.is_null(2));
     }
 
     #[test]

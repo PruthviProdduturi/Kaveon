@@ -2098,6 +2098,20 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
             ..
         } => {
             let inner = ast_expr_to_expr(expr)?;
+            // JSON is represented as validated UTF-8 text in Arrow.  Lower
+            // the cast to a dedicated function so invalid documents fail at
+            // execution (and TRY_CAST can preserve SQL's NULL-on-error rule)
+            // instead of being accepted as arbitrary strings.
+            if matches!(data_type, ast::DataType::JSON | ast::DataType::JSONB) {
+                return Ok(Expr::Function {
+                    name: if matches!(kind, ast::CastKind::TryCast | ast::CastKind::SafeCast) {
+                        "TRY_JSON_PARSE".into()
+                    } else {
+                        "JSON_PARSE".into()
+                    },
+                    args: vec![inner],
+                });
+            }
             let target = ast_data_type_to_cast_target(data_type)?;
             if matches!(kind, ast::CastKind::TryCast | ast::CastKind::SafeCast) {
                 Ok(Expr::Function {
@@ -4570,11 +4584,11 @@ mod tests {
     fn casts_json_as_utf8_for_json_functions() {
         let plan = sql_to_logical_plan("SELECT CAST(payload AS JSON) FROM events").unwrap();
         let debug = format!("{plan:?}");
-        assert!(debug.contains("CastTarget::Utf8") || debug.contains("Utf8"), "{debug}");
+        assert!(debug.contains("JSON_PARSE"), "{debug}");
 
-        let plan = sql_to_logical_plan("SELECT CAST(payload AS JSONB) FROM events").unwrap();
+        let plan = sql_to_logical_plan("SELECT TRY_CAST(payload AS JSONB) FROM events").unwrap();
         let debug = format!("{plan:?}");
-        assert!(debug.contains("CastTarget::Utf8") || debug.contains("Utf8"), "{debug}");
+        assert!(debug.contains("TRY_JSON_PARSE"), "{debug}");
     }
 
     #[test]

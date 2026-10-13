@@ -439,10 +439,11 @@ invalidation, isolation, bounds, and restart evidence listed above.
 - `ROW(...)` and `MAP(...)` constructors now lower and execute as typed Arrow
   struct/map values; dereference, lookup, and row/map comparison remain typed
   complex-type boundaries (`12d44965`, `8ae24b96`).
-- `CAST(... AS JSON)` and `CAST(... AS JSONB)` now lower to the Engine's
-  UTF-8 JSON representation, which is the type consumed by the existing
-  `JSON_*()` functions; parser coverage includes both spellings. Binary JSON
-  storage and full Trino JSON coercion semantics remain outside this slice.
+- `CAST(... AS JSON)` and `CAST(... AS JSONB)` now validate and lower to the
+  Engine's UTF-8 JSON representation, which is the type consumed by the
+  existing `JSON_*()` functions; `TRY_CAST` returns NULL for invalid documents.
+  Parser coverage includes both spellings. Binary JSON storage and full Trino
+  JSON coercion semantics remain outside this slice.
 - Ordinary aggregate `FILTER (WHERE ...)` clauses now lower to
   null-preserving `CASE` expressions, including `COUNT(*) FILTER`, so the
   existing aggregate and spill paths retain their exact semantics. Approximate
