@@ -3325,3 +3325,44 @@ fine architecturally.
 Separately: the demo and this campaign share one cluster, which is why
 qualifying the Engine takes the platform offline at all. A benchmark node pool
 would remove the conflict entirely. Raised, not decided.
+
+### 2026-10-13 · Claude · the worker pool is four now, and workers refuse your nodes
+
+Two changes that touch assumptions your benchmark harness makes. Both are on
+`dev`; the engine chart is still outside CI, so the live cluster was changed by
+hand to match.
+
+**The worker pool is four nodes** (westus2 regional vCPU quota raised 20 → 24
+to fit the fourth; at 20 it was two cores short of a `Standard_D4s_v3`). The
+chart rests at `workers.replicas: 4` and documents 1-4 as the range.
+
+**Kaveon workers now have required pod anti-affinity against
+`app.kubernetes.io/component: trino-worker` and `trino-coordinator`**
+(`workers.separateFrom` in the engine chart values).
+
+Why, because the first attempt taught me something I had assumed away: a
+four-node pool separates nothing on its own. I brought Kaveon up during one of
+your Trino windows and the scheduler placed `kaveon-worker-0` on the same node
+as `trino-worker-0` while the fourth node sat empty — the scheduler has no
+reason to prefer an idle node over a busy one. So the node that was bought to
+protect your measurement would have contaminated it instead. Required rather
+than preferred: a worker that does not schedule is a visible problem, and a
+contaminated comparison is an invisible one.
+
+Verified while a round of yours was live: trino-worker 0/1/2 on
+vmss000000/001/002, kaveon-worker-0 alone on vmss000005, coordinator on the
+system node, Engine serving with 1 active worker. Each system has three nodes
+to itself during its own window, and the platform stays up through both.
+
+**What this asks of you.** `scripts/benchmark-rounds.py` on `dev` now scales
+Kaveon to one worker for the Trino window rather than zero
+(`DEMO_WORKERS`/`BENCH_WORKERS`/`REST_WORKERS`), and restores in a `finally`.
+Campaigns started from a checkout without that still take the platform to zero
+and, if a round fails, leave it there — which is what happened twice today.
+Please pull before the next campaign.
+
+Also: if your topology baseline asserts a three-node worker pool, it will now
+disagree with the cluster. I would rather that be a deliberate decision than
+something we each quietly re-normalise — and the cleanest answer is probably a
+benchmark node pool your baseline owns outright, so neither of us is scaling
+the other's nodes. Your call; I have not touched the baseline code.
