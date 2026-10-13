@@ -71,6 +71,25 @@ class Kube:
             timeout=30,
         )
 
+    def drain_node(self, node: str) -> None:
+        """Evict workloads from one node for an active-query drain test."""
+        run([*self.prefix[:3], "cordon", node], timeout=30)
+        run(
+            [
+                *self.prefix[:3],
+                "drain",
+                node,
+                "--ignore-daemonsets",
+                "--delete-emptydir-data",
+                "--grace-period=30",
+                "--timeout=180s",
+            ],
+            timeout=240,
+        )
+
+    def uncordon_node(self, node: str) -> None:
+        run([*self.prefix[:3], "uncordon", node], timeout=30)
+
     def file_count(self, pod: str, root: str) -> int | None:
         command = [
             *self.prefix,
@@ -360,6 +379,12 @@ def main() -> int:
     parser.add_argument("--concurrent-rounds", type=int, default=3)
     parser.add_argument("--pressure-rounds", type=int, default=3)
     parser.add_argument(
+        "--failure-mode",
+        choices=("pod", "node-drain"),
+        default="pod",
+        help="failure injection for the distributed fault query",
+    )
+    parser.add_argument(
         "--profile",
         choices=("current", "nyc", "medallion"),
         default="current",
@@ -376,6 +401,7 @@ def main() -> int:
         "namespace": args.namespace,
         "credential_material_recorded": False,
         "subscription_policy_changed": False,
+        "failure_mode": args.failure_mode,
         "checks": {},
         "passed": False,
     }
@@ -573,8 +599,25 @@ def main() -> int:
                 if live_record.get("state") != "RUNNING":
                     raise AssertionError("Fault query left RUNNING before the worker-loss barrier")
                 old_uid = before_pods[target_pod]["uid"]
-                kube.delete_worker(target_pod)
-                fault_result = future.result(timeout=240)
+                drained_node = None
+                try:
+                    if args.failure_mode == "node-drain":
+                        drained_node = before_pods[target_pod]["node"]
+                        if not drained_node:
+                            raise AssertionError(f"{target_pod} has no node for drain qualification")
+                        kube.drain_node(drained_node)
+                        kube.uncordon_node(drained_node)
+                    else:
+                        kube.delete_worker(target_pod)
+                    fault_result = future.result(timeout=300)
+                finally:
+                    # A timeout or kubectl failure must never leave the target
+                    # node cordoned for the rest of the qualification run.
+                    if drained_node:
+                        try:
+                            kube.uncordon_node(drained_node)
+                        except subprocess.SubprocessError:
+                            pass
             replacement, recovered_cluster = wait_for_recovery(kube, engine, target_pod, old_uid, catalog_id)
             attempts = []
             for task_id in fault_result.get("task_ids", []):
@@ -587,6 +630,7 @@ def main() -> int:
             report["worker_loss"] = {
                 "target": target,
                 "target_pod": target_pod,
+                "target_node": before_pods[target_pod]["node"],
                 "old_uid": old_uid,
                 "replacement_uid": replacement["metadata"]["uid"],
                 "query_observed_running": live_record.get("state") == "RUNNING",
