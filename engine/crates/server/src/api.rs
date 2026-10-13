@@ -659,6 +659,14 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(crate::exchange::routes())
         .route("/v1/statement", post(submit_statement))
         .route("/v1/trino/statement", post(submit_trino_statement))
+        .route(
+            "/v1/trino/query/{query_id}",
+            get(get_trino_query).delete(cancel_trino_query),
+        )
+        .route(
+            "/v1/trino/query/{query_id}/results/{page}",
+            get(get_trino_result_page),
+        )
         .route("/v1/prepare", post(prepare_statement))
         .route(
             "/v1/prepare/{statement_id}",
@@ -2796,6 +2804,11 @@ async fn trino_response_shape(response: Response) -> Response {
     };
     if let Some(object) = value.as_object_mut() {
         if let Some(next_uri) = object.remove("next_uri") {
+            let next_uri = next_uri
+                .as_str()
+                .map(|uri| uri.replace("/v1/query/", "/v1/trino/query/"))
+                .map(serde_json::Value::String)
+                .unwrap_or(next_uri);
             object.insert("nextUri".to_owned(), next_uri);
         }
         if let Some(elapsed_ms) = object.remove("elapsed_ms") {
@@ -2812,6 +2825,34 @@ async fn trino_response_shape(response: Response) -> Response {
         }
     }
     (status, Json(value)).into_response()
+}
+
+async fn get_trino_query(
+    Path(query_id): Path<String>,
+    Extension(identity): Extension<Identity>,
+) -> Response {
+    trino_response_shape(get_query(Path(query_id), Extension(identity)).await.into_response()).await
+}
+
+async fn get_trino_result_page(
+    State(state): State<Arc<AppState>>,
+    Path((query_id, page)): Path<(String, usize)>,
+    Extension(identity): Extension<Identity>,
+) -> Response {
+    trino_response_shape(
+        get_result_page(State(state), Path((query_id, page)), Extension(identity)).await,
+    )
+    .await
+}
+
+async fn cancel_trino_query(
+    State(state): State<Arc<AppState>>,
+    Extension(identity): Extension<Identity>,
+    Path(query_id): Path<String>,
+) -> Response {
+    cancel_query(State(state), Extension(identity), Path(query_id))
+        .await
+        .into_response()
 }
 
 #[derive(Deserialize)]
@@ -18484,7 +18525,7 @@ mod streamed_root_tests {
             .await
             .unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["nextUri"], "/v1/query/q1/results/0");
+        assert_eq!(value["nextUri"], "/v1/trino/query/q1/results/0");
         assert!(value.get("next_uri").is_none());
         assert_eq!(value["stats"]["elapsedTimeMillis"], 7);
         assert!(value.get("elapsed_ms").is_none());
