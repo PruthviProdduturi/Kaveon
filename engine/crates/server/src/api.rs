@@ -12521,7 +12521,15 @@ mod tests {
             let state = state.clone();
             let analyst = analyst.clone();
             tokio::spawn(
-                async move { submit(&state, &analyst, sql, serde_json::Value::Null).await },
+                async move {
+                    submit(
+                        &state,
+                        &analyst,
+                        sql,
+                        serde_json::json!({"result_cache": false}),
+                    )
+                    .await
+                },
             )
         };
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -13104,7 +13112,11 @@ mod tests {
                         .queries
                         .values()
                         .filter(|record| record.sql == refused_sql)
-                        .max_by_key(|record| record.submitted_at_ms)
+                        .find(|record| {
+                            matches!(record.state, super::QueryState::Failed)
+                                && record.error_code.as_deref()
+                                    == Some(crate::resource_groups::RATE_LIMITED)
+                        })
                         .map(serde_json::to_value)
                         .transpose()
                         .unwrap()
