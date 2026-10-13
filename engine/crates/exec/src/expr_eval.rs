@@ -2286,6 +2286,12 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "CARDINALITY" => {
             check_arity(name, args, 1)?;
+            if let Some(map) = args[0].as_any().downcast_ref::<MapArray>() {
+                let values = (0..num_rows)
+                    .map(|row| (!map.is_null(row)).then(|| map.value_length(row) as i64))
+                    .collect::<Vec<_>>();
+                return Ok(Arc::new(Int64Array::from(values)));
+            }
             let list = args[0]
                 .as_any()
                 .downcast_ref::<arrow::array::ListArray>()
@@ -2842,6 +2848,36 @@ mod tests {
             value.as_primitive::<Float64Type>().iter().collect::<Vec<_>>(),
             vec![Some(2.0), Some(2.0)]
         );
+    }
+
+    #[test]
+    fn cardinality_counts_map_entries() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+        )])
+        .unwrap();
+        let value = evaluate(
+            &Expr::Function {
+                name: "CARDINALITY".into(),
+                args: vec![Expr::Function {
+                    name: "MAP".into(),
+                    args: vec![
+                        Expr::Function {
+                            name: "ARRAY".into(),
+                            args: vec![Expr::Literal(ScalarValue::Utf8("a".into()))],
+                        },
+                        Expr::Function {
+                            name: "ARRAY".into(),
+                            args: vec![Expr::Literal(ScalarValue::Int64(1))],
+                        },
+                    ],
+                }],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(value.as_primitive::<Int64Type>().values(), &[1, 1]);
     }
 
     #[test]
