@@ -9,13 +9,15 @@ use arrow::array::{
     StringArray,
     StringBuilder, StructArray,
     Time32MillisecondArray, Time32SecondArray,
-    TimestampMicrosecondArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute;
 use arrow::datatypes::{
     ArrowPrimitiveType, DataType, Date32Type, Date64Type, Float64Type, Int32Type, Int64Type,
-    Time32MillisecondType, Time32SecondType, TimestampMicrosecondType, TimeUnit,
+    Time32MillisecondType, Time32SecondType, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, TimeUnit,
 };
 use arrow::record_batch::RecordBatch;
 use kaveon_core::predicate::ScalarValue;
@@ -1627,6 +1629,21 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 PrimitiveBuilder::<TimestampMicrosecondType>::new(),
                 TimestampMicrosecondArray,
                 |values: &TimestampMicrosecondArray, row| values.value(row)
+            ),
+            DataType::Timestamp(TimeUnit::Second, _) => build_array!(
+                PrimitiveBuilder::<TimestampSecondType>::new(),
+                TimestampSecondArray,
+                |values: &TimestampSecondArray, row| values.value(row)
+            ),
+            DataType::Timestamp(TimeUnit::Millisecond, _) => build_array!(
+                PrimitiveBuilder::<TimestampMillisecondType>::new(),
+                TimestampMillisecondArray,
+                |values: &TimestampMillisecondArray, row| values.value(row)
+            ),
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => build_array!(
+                PrimitiveBuilder::<TimestampNanosecondType>::new(),
+                TimestampNanosecondArray,
+                |values: &TimestampNanosecondArray, row| values.value(row)
             ),
             DataType::Float64 => {
                 let mut builder = ListBuilder::new(Float64Builder::new());
@@ -5739,6 +5756,65 @@ mod tests {
         let inner = list.value(0);
         let values = inner.as_primitive::<Date32Type>();
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(10), Some(20)]);
+    }
+
+    #[test]
+    fn array_constructor_preserves_non_microsecond_timestamp_units() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "first_second",
+                Arc::new(TimestampSecondArray::from(vec![Some(10)])) as ArrayRef,
+            ),
+            (
+                "second_second",
+                Arc::new(TimestampSecondArray::from(vec![Some(20)])) as ArrayRef,
+            ),
+            (
+                "first_millis",
+                Arc::new(TimestampMillisecondArray::from(vec![Some(1000)])) as ArrayRef,
+            ),
+            (
+                "second_millis",
+                Arc::new(TimestampMillisecondArray::from(vec![Some(2000)])) as ArrayRef,
+            ),
+            (
+                "first_nanos",
+                Arc::new(TimestampNanosecondArray::from(vec![Some(1_000)])) as ArrayRef,
+            ),
+            (
+                "second_nanos",
+                Arc::new(TimestampNanosecondArray::from(vec![Some(2_000)])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+
+        for (left, right, expected) in [
+            ("first_second", "second_second", DataType::Timestamp(TimeUnit::Second, None)),
+            (
+                "first_millis",
+                "second_millis",
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+            ),
+            (
+                "first_nanos",
+                "second_nanos",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+            ),
+        ] {
+            let value = evaluate(
+                &Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![
+                        Expr::Column(left.into()),
+                        Expr::Column(right.into()),
+                    ],
+                },
+                &batch,
+            )
+            .unwrap();
+            let list = value.as_any().downcast_ref::<ListArray>().unwrap();
+            assert_eq!(list.value_type(), expected);
+        }
     }
 
     #[test]

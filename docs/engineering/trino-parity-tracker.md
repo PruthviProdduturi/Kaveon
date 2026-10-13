@@ -338,6 +338,11 @@ latency evidence as the remaining qualification work.
 - Scalar list functions receive the same normalization, so `LargeList` columns
   can use the supported `CARDINALITY` and array-function paths when their
   offsets fit the 32-bit execution representation.
+- `ARRAY[...]` now preserves Arrow `TIMESTAMP` values at second, millisecond,
+  microsecond, and nanosecond resolution instead of rejecting the non-
+  microsecond representations. The timestamp unit remains part of the list
+  element type; timezone-bearing arrays still require the existing compatible
+  timestamp path.
 - Three-worker global `ORDER BY`/TopN centralized merge correctness is now
   qualified for NULL ordering and ties against a single-partition reference
   (`bb788709`). The input remains distributed, while the exact global merge
