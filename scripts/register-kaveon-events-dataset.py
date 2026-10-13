@@ -1,14 +1,27 @@
-"""Register the 504M-row telemetry table as a Kaveon dataset and compile its DLM.
+"""Register the product-telemetry table as a Kaveon dataset and compile its DLM.
 
 Runs against a Studio port-forward the same way import-vercel-live-dashboards.py
 does: sign in as the caller's Entra identity, then use the authenticated
-/api/kaveon proxy. Idempotent — an existing dataset with the same name over the
-same table is updated, never duplicated. The existing "Kaveon Events" dataset
-(the compact dashboard projection) is left alone; this is a second dataset.
+/api/kaveon proxy. Idempotent: an existing dataset with the same name over the
+same table is updated, never duplicated.
 
-    kubectl --context kaveon-test-aks -n kaveon port-forward svc/kaveon-portal 13015:3000
+    kubectl --context kaveon-aks -n kaveon port-forward svc/kaveon-portal 13015:3000
+    python scripts/register-kaveon-events-dataset.py                 # reads only
     python scripts/register-kaveon-events-dataset.py --apply
     python scripts/register-kaveon-events-dataset.py --apply --generate --ask
+
+## The table this points at
+
+`KaveonTelemetry.events.activity`, which is what
+`scripts/build_kaveon_events_table.py` produces. The installation is currently
+reading `KaveonTelemetry.events.enriched` - the cross-product build with
+sequential integer identifiers - and the dataset that the charts bind to still
+points there until the migration in
+`docs/engineering/events-activity-rebuild.md` has been run. `--table` exists so
+this script can address either one deliberately rather than by accident.
+
+**Re-pointing a live dataset moves every chart that binds to it.** Run the
+preflight, which writes nothing, and read what it reports before `--apply`.
 """
 from __future__ import annotations
 
@@ -22,17 +35,25 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-DATASET_NAME = "Kaveon Telemetry"
-CATALOG = "Kaveon"
-SCHEMA = "usage"
-TABLE = "kaveon_events_enriched"
+# The dataset the installation already has, and the one its charts bind to.
+# Registering a differently named dataset over the same table would leave two
+# records describing one table, which is the shape of defects D-10 and D-20.
+DATASET_NAME = "Kaveon Events"
+CATALOG = "KaveonTelemetry"
+SCHEMA = "events"
+TABLE = "activity"
+# No row count and no user count in the description. They are properties of
+# whichever build is published, they change whenever the table is rebuilt, and
+# a stale headline figure in a published description is how "504M rows"
+# outlived the table it described.
 DESCRIPTION = (
-    "504M-row product telemetry served by KaveonDB: daily per-user engagement "
-    "across six surfaces (Chat, Dashboard, Chart Builder, SQL Lab, API, Export) "
-    "for 3M users over July 2026 — actions, sessions, duration, queries, charts, "
-    "errors, rows scanned, cache hits and latency, with platform, license, "
-    "segment, industry, region, country, deployment, acquisition channel and "
-    "team size. Deterministic demo data; not production telemetry."
+    "Kaveon product telemetry served by KaveonDB: one row per user, per "
+    "surface, per day they were active across Chat, Dashboard, Chart Builder, "
+    "SQL Lab, API and Export over July 2026 - actions, sessions, duration, "
+    "queries, charts, errors, rows scanned, cache hits and latency, with "
+    "platform, license, segment, industry, region, country, deployment, "
+    "acquisition channel and team size. Deterministic demo data; not "
+    "production telemetry."
 )
 
 DIMENSIONS = ("surface", "platform", "license", "segment", "industry", "region",
@@ -40,9 +61,12 @@ DIMENSIONS = ("surface", "platform", "license", "segment", "industry", "region",
 MEASURES = ("actions", "sessions", "duration_sec", "queries_run", "charts_created",
             "errors", "rows_scanned", "cache_hits", "latency_p75_ms")
 
+# `user_id` is a UUID v4 held as text, not a bigint. Declaring it as a number
+# would make every value fail to parse on its way into a filter, and the charts
+# that count distinct users would be counting nothing.
 COLUMNS = (
     [{"table_name": TABLE, "column_name": "event_date", "data_type": "date", "is_dimension": False, "is_metric": False, "semantic_type": "date"},
-     {"table_name": TABLE, "column_name": "user_id", "data_type": "bigint", "is_dimension": False, "is_metric": False}]
+     {"table_name": TABLE, "column_name": "user_id", "data_type": "varchar", "is_dimension": False, "is_metric": False}]
     + [{"table_name": TABLE, "column_name": m, "data_type": "bigint", "is_dimension": False, "is_metric": True} for m in MEASURES]
     + [{"table_name": TABLE, "column_name": d, "data_type": "varchar", "is_dimension": True, "is_metric": False} for d in DIMENSIONS]
 )
@@ -60,9 +84,12 @@ METRICS = [
     {"name": "Cache hits", "expression": "SUM(cache_hits)", "metric_type": "sum", "format": "#,##0"},
     {"name": "Average latency (ms)", "expression": "AVG(latency_p75_ms)", "metric_type": "avg", "format": "#,##0"},
 ]
-# "Active users" = COUNT(DISTINCT user_id) is deliberately absent: exact distinct
-# over 504M rows OOM-kills the 6 GiB Engine workers today (HANDSHAKE 2026-09-11,
-# REQUEST @Codex). Re-add when that is fixed.
+# "Active users" = COUNT(DISTINCT user_id) is deliberately absent as a declared
+# metric: exact distinct over a half-billion rows OOM-kills the 6 GiB Engine
+# workers today (HANDSHAKE 2026-09-11, REQUEST @Codex), and a 36-character text
+# key hashes more expensively than the int64 it replaces. The charts that count
+# distinct users read the cube's HLL sketch instead, which is unaffected by
+# either. Re-add the declared metric when exact distinct is fixed.
 
 QUESTIONS = [
     "What is current Kaveon usage?",
@@ -71,6 +98,18 @@ QUESTIONS = [
     "queries run by license in July 2026",
     "errors by platform",
 ]
+
+
+def rebind(table: str, dataset_name: str) -> None:
+    """Point this registration at one table and one dataset name.
+
+    Every entry in the column list carries `table_name`, so the table cannot be
+    changed in one place only; this rewrites all of them from the one argument.
+    """
+    global TABLE, DATASET_NAME
+    TABLE, DATASET_NAME = table, dataset_name
+    for column in COLUMNS:
+        column["table_name"] = table
 
 
 def dataset_body() -> dict[str, Any]:
@@ -102,7 +141,15 @@ def run(api, apply: bool, generate: bool, ask: bool, register: bool = True) -> d
     report: dict[str, Any] = {"dataset": DATASET_NAME, "table": f"{CATALOG}.{SCHEMA}.{TABLE}", "applied": apply}
     existing = find_existing(api)
     if not apply:
-        report["existing"] = existing and {"id": existing.get("id"), "name": existing.get("dataset_name") or existing.get("name")}
+        # What the dataset is bound to *now*, so a re-point is a visible change
+        # rather than a surprise: these charts follow whatever this says.
+        report["existing"] = existing and {
+            "id": existing.get("id"),
+            "name": existing.get("dataset_name") or existing.get("name"),
+            "bound_to": ".".join(str(existing.get(key) or "?") for key in
+                                 ("database_name", "schema_name", "table_name")),
+        }
+        report["would_bind_to"] = f"{CATALOG}.{SCHEMA}.{TABLE}"
         return report
     if existing:
         dataset_id = str(existing["id"])
@@ -161,10 +208,18 @@ def main() -> int:
     parser.add_argument("--ask", action="store_true", help="ask the qualification questions and time them")
     parser.add_argument("--no-register", action="store_true", help="with --apply: skip the dataset PUT/POST")
     parser.add_argument("--question", action="append", help="ask these instead of the built-in questions (repeatable)")
+    parser.add_argument("--table", default=TABLE,
+                        help=f"the table in {CATALOG}.{SCHEMA} to bind the dataset to "
+                             f"(default {TABLE}); pass 'enriched' to address the "
+                             "table published before the rebuild")
+    parser.add_argument("--dataset-name", default=DATASET_NAME,
+                        help=f"the dataset to create or update (default {DATASET_NAME!r})")
     parser.add_argument("--report", type=Path, default=ROOT / "tmp/kaveon-telemetry-dataset.json")
     args = parser.parse_args()
     if args.question:
         QUESTIONS[:] = args.question
+    rebind(args.table, args.dataset_name)
+    print(f"dataset {DATASET_NAME!r} -> {CATALOG}.{SCHEMA}.{TABLE}")
     from playwright.sync_api import sync_playwright
     with sync_playwright() as playwright:
         request = playwright.request.new_context(base_url=args.portal.rstrip("/"), timeout=1_800_000)
