@@ -41,6 +41,8 @@ verifies request JSON through typed conversion into the SQL logical plan.
 Ordinary aggregate `FILTER (WHERE ...)` clauses now lower to
 null-preserving `CASE` expressions, including `COUNT(*) FILTER`; window,
 sketch, and non-aggregate filters remain explicitly rejected.
+`QUALIFY` is parsed but now fails during planning with an explicit diagnostic;
+it is not silently dropped when window-aware filtering is requested.
 `CAST` now covers DATE and fixed-precision microsecond
 TIMESTAMP (with explicit UTC timezone metadata) in addition to the existing
 scalar and decimal targets. Decimal precision/scale bounds are validated before

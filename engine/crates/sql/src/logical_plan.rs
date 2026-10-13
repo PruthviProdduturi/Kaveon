@@ -645,6 +645,11 @@ fn select_to_plan_with_bindings(
     select: &ast::Select,
     ctes: &Lowering,
 ) -> Result<(LogicalPlan, ExpressionBindings)> {
+    if select.qualify.is_some() {
+        return Err(sql_err(
+            "QUALIFY is unsupported; window-aware filtering is not yet implemented",
+        ));
+    }
     // Projection scalar subqueries are lowered after the outer aggregation and
     // window stages.  That keeps their single-row relation available to the
     // final projection without making it a grouping key or aggregate input.
@@ -3981,6 +3986,18 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "sql: unsupported CAST target type: JSON"
+        );
+    }
+
+    #[test]
+    fn rejects_qualify_instead_of_dropping_the_window_filter() {
+        let error = sql_to_logical_plan(
+            "SELECT row_number() OVER (PARTITION BY region ORDER BY user_id) AS rn FROM events QUALIFY rn = 1",
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "sql: QUALIFY is unsupported; window-aware filtering is not yet implemented"
         );
     }
 
