@@ -414,6 +414,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "qualify_partitioned_nulls_first",
+        "SELECT country, region, industry, ROW_NUMBER() OVER (PARTITION BY region ORDER BY industry NULLS FIRST, country) AS rn FROM {T} QUALIFY rn <= 2 ORDER BY region, rn, country",
+        true,
+    ),
+    (
         "count_star_filter_only",
         "SELECT COUNT(*) AS n FROM {T} WHERE surface = 'Chat' AND country = 'India' AND event_date >= '2026-07-20'",
         false,
