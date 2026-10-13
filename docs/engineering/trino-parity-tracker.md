@@ -316,7 +316,7 @@ qualification documents; this tracker remains the single ordered work list.
 ### Current focused validation
 
 The latest focused validation passes 333 `kaveon-server` tests, 109
-`kaveon-sql` tests, and 240 `kaveon-exec` tests (four executor benchmarks are
+`kaveon-sql` tests, and 247 `kaveon-exec` tests (four executor benchmarks are
 ignored). The repository differential gate
 (`differential_tests::the_differential_sweep_matches_across_parquet_encodings_and_execution_paths`)
 also passes, comparing the same corpus across alternate Parquet encodings and
