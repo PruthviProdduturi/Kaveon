@@ -219,6 +219,11 @@ qualification documents; this tracker remains the single ordered work list.
 - A distributed self-join with grouped output now has exact worker-loss
   recovery coverage, including retries and moved exchange spools
   (`43a2f8f9`). AKS worker-loss qualification remains open.
+- A grouped aggregate followed by a global descending sort now has an exact
+  worker-loss recovery case: the final order, row multiplicity, and re-executed
+  stage are asserted after a producer-side worker disappears. This qualifies
+  the combined in-process path; deployed worker-loss qualification remains
+  open.
 - A three-worker high-cardinality grouped aggregate now has exact local versus
   distributed equivalence under 4 MiB spill pressure, with spill cleanup and
   zero reservation checks (`69d327e9`). Larger-scale and AKS spill gates remain.
@@ -315,7 +320,7 @@ qualification documents; this tracker remains the single ordered work list.
 
 ### Current focused validation
 
-The latest focused validation passes 333 `kaveon-server` tests, 109
+The latest focused validation passes 334 `kaveon-server` tests, 109
 `kaveon-sql` tests, and 247 `kaveon-exec` tests (four executor benchmarks are
 ignored). The repository differential gate
 (`differential_tests::the_differential_sweep_matches_across_parquet_encodings_and_execution_paths`)
