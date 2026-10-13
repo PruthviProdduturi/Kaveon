@@ -209,7 +209,13 @@ for table in tables:
     register('/v1/catalog/schemas/'+quote(schema_id, safe='')+'/tables',
              '/v1/catalog/tables/'+quote(table_id, safe=''),
              {'id': table_id, 'schema_id': schema_id, 'name': table['name'],
-              'location': table['location'], 'access': 'Shortcut', 'format': 'Parquet',
+              'location': table['location'], 'access': 'Shortcut',
+              # The manifest says what each table is. This read 'Parquet' for
+              # every table, so after the lake was converted to Delta a rebuild
+              # from this script would have registered sixteen Delta
+              # directories as single Parquet objects — and the manifest it
+              # reads carried no format field to contradict it.
+              'format': table['format'],
               'columns': table['columns'],
               **({'shape': table['shape']} if table.get('shape') else {})})
 
