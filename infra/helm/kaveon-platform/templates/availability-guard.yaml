@@ -1,0 +1,103 @@
+{{- if .Values.api.availabilityGuard.enabled }}
+{{- /*
+  Puts the Engine back when something has scaled it to nothing.
+
+  The reasoning is in `api/services/availability_guard.py` and in this chart's
+  values. In short: this cluster also hosts a benchmark campaign that scales
+  one query engine to zero so the other has the nodes to itself, and a
+  campaign that fails or is interrupted leaves the Engine down — after which
+  the platform reports itself unavailable, or reports its catalogs as empty.
+
+  Scales up only, and only to the floor, so a deliberate scale above it is
+  left alone.
+
+  It runs the API image because that is already on every node and has Python.
+  It gets its own service account with the smallest rule set that can do the
+  job: read two named statefulsets, and patch only their `scale` subresource —
+  deliberately not `patch` on the statefulsets themselves, which would permit
+  changing the image, the command or the service account.
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.api.availabilityGuard.serviceAccountName }}
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Values.api.availabilityGuard.serviceAccountName }}
+  namespace: {{ .Release.Namespace }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["statefulsets/scale"]
+    verbs: ["get", "patch"]
+    resourceNames: ["kaveon-coordinator", "kaveon-worker"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Values.api.availabilityGuard.serviceAccountName }}
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Values.api.availabilityGuard.serviceAccountName }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.api.availabilityGuard.serviceAccountName }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kaveon-availability-guard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: kaveon-availability-guard
+spec:
+  schedule: {{ .Values.api.availabilityGuard.schedule | quote }}
+  # A run that starts late is pointless; the next one is a minute away.
+  startingDeadlineSeconds: 30
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 90
+      template:
+        metadata:
+          labels:
+            app: kaveon-availability-guard
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ .Values.api.availabilityGuard.serviceAccountName }}
+          # Unlike every other job here, this one needs its token: the
+          # Kubernetes API is what it talks to.
+          automountServiceAccountToken: true
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: guard
+              image: {{ include "portal.image" (list .Values.images.api "api") }}
+              command: ["python", "-m", "services.availability_guard"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: [ALL]}
+              env:
+                - {name: KAVEON_GUARD_MIN_WORKERS, value: {{ .Values.api.availabilityGuard.minWorkers | quote }}}
+              volumeMounts:
+                - {name: tmp, mountPath: /tmp}
+              resources:
+                requests: {cpu: 10m, memory: 64Mi}
+                limits: {cpu: 250m, memory: 192Mi}
+          volumes:
+            - name: tmp
+              emptyDir: {}
+{{- end }}

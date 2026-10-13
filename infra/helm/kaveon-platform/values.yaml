@@ -193,6 +193,34 @@ api:
     resources:
       requests: {cpu: 250m, memory: 1Gi}
       limits: {cpu: "2", memory: 8Gi}
+  # Puts the Engine back when something has scaled it to nothing.
+  #
+  # This cluster serves the platform and also hosts a benchmark campaign that
+  # gives each query engine the nodes to itself by scaling the other to zero.
+  # A campaign that fails, is interrupted, or runs from a checkout without its
+  # restore fix leaves the Engine at zero — and the platform then reports
+  # itself unavailable or, worse, reports its catalogs as empty. That happened
+  # repeatedly across one day and was put back by hand each time.
+  #
+  # The guard only ever scales up, and only to the floor, so it does not fight
+  # a deliberate scale above it: a round measuring with three workers keeps
+  # three. It bounds an outage to about a minute rather than to whenever
+  # someone notices, and is neither high availability nor a substitute for the
+  # campaign restoring what it scaled.
+  #
+  # It runs the API image because that is already on every node and has
+  # Python. The alternative needed an image with both a shell and kubectl: the
+  # published kubectl image is distroless with no shell, and the Bitnami tags
+  # that had one are retired — a guard whose image cannot be pulled is a guard
+  # that does nothing, which is how that was found.
+  availabilityGuard:
+    enabled: true
+    schedule: "* * * * *"
+    # One worker, not the full set. A round measuring the other engine should
+    # keep the nodes it was given; the platform needs enough to answer. A
+    # floor below one is refused in code — it is the outage this prevents.
+    minWorkers: 1
+    serviceAccountName: kaveon-availability-guard
   systemAuthorityReplay:
     # One-shot operator job; never run this in the API web process.
     enabled: false
