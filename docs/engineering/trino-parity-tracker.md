@@ -414,6 +414,13 @@ or spill files before and after. Evidence is archived in
 declared bounded-soak check, but is not a multi-hour endurance or broad
 capacity claim.
 
+The same harness then ran for five minutes on the current image and completed
+416/416 exact-result requests with the same worker, restart, and retained-file
+checks green. That sustained report is archived in
+`docs/qualification/engine-aks-current-soak-2026-10-13-300s.md`. This closes
+the declared five-minute sustained-soak check; upgrade/rollback, storage fault
+injection, and longer endurance remain separate gates.
+
 The distributed/local join-mode differential now also includes an inner
 residual predicate (`key equality AND value inequality`); local and
 distributed result sets match and all reservations are released.
