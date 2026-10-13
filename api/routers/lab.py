@@ -23,9 +23,43 @@ import time
 router = APIRouter()
 
 
+# The product catalog answers to more than one name, and the three places that
+# named it did not agree. The Engine defines it as `kaveon`; the catalog source
+# record stores `KaveonDB`; this module matched the literal `Kaveon`. So the
+# intersection below compared a product name against an Engine identity and
+# dropped the catalog: SQL Lab listed two sources where three were registered,
+# and the fallback meant to cover exactly that case tested the same unmatched
+# spelling and never fired either.
+#
+# One place that knows the aliases, compared without regard to case, so a
+# fourth spelling cannot reintroduce this.
+PRODUCT_CATALOG_LABEL = "KaveonDB"
+_PRODUCT_CATALOG_ALIASES = {"kaveon", "kaveondb"}
+
+
+def _is_product_catalog(catalog: object) -> bool:
+    return str(catalog or "").strip().casefold() in _PRODUCT_CATALOG_ALIASES
+
+
 def _catalog_label(catalog: str) -> str:
     """Return the stable product name without changing Engine SQL identity."""
-    return "KaveonDB" if str(catalog) == "Kaveon" else catalog
+    return PRODUCT_CATALOG_LABEL if _is_product_catalog(catalog) else catalog
+
+
+def _granted(catalog: object, granted) -> bool:
+    """Whether the Engine authorized this catalog, by whichever name it used.
+
+    Catalog names are compared case-insensitively because the Engine, the
+    registry and this module each chose a different capitalization of the same
+    catalog, and a case difference is not an authorization decision.
+    """
+    name = str(catalog or "").strip().casefold()
+    if not name:
+        return False
+    names = {str(item or "").strip().casefold() for item in (granted or ())}
+    if name in names:
+        return True
+    return _is_product_catalog(name) and bool(names & _PRODUCT_CATALOG_ALIASES)
 
 MAX_SQL_BYTES = 65_536
 NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
@@ -293,12 +327,14 @@ def list_engine_sources(response: Response, ctx=Depends(require_min_role("Viewer
         ).get("rows") or []
     sources = [
         {"id": row["id"], "name": row["name"], "catalog": _catalog_label(row["engine_catalog"])}
-        for row in rows if row.get("engine_catalog") in granted
+        for row in rows if _granted(row.get("engine_catalog"), granted)
     ]
     # Always expose the built-in product catalog when the Engine authorizes
     # it, even when a local product-mode API has no legacy catalog_sources row.
-    if "KaveonDB" in granted and not any(item["catalog"] == "KaveonDB" for item in sources):
-        sources.insert(0, {"id": "kaveondb", "name": "KaveonDB", "catalog": "KaveonDB"})
+    if (_granted(PRODUCT_CATALOG_LABEL, granted)
+            and not any(_is_product_catalog(item["catalog"]) for item in sources)):
+        sources.insert(0, {"id": "kaveondb", "name": PRODUCT_CATALOG_LABEL,
+                           "catalog": PRODUCT_CATALOG_LABEL})
     return {"success": True, "sources": sources}
 
 
