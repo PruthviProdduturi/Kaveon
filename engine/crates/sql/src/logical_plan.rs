@@ -2345,7 +2345,7 @@ fn ast_binop_to_binop(op: &ast::BinaryOperator) -> Option<BinaryOp> {
 }
 
 fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
-    let name = canonical_function_name(func);
+    let mut name = canonical_function_name(func);
     if name == "MAP" {
         // MAP is lowered as a regular function. The executor validates that
         // both arguments are list values with matching offsets.
@@ -2363,6 +2363,27 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         ast::FunctionArguments::None => Vec::new(),
         _ => return Err(sql_err(format!("unsupported function arguments in {name}"))),
     };
+
+    // Trino's COUNT_IF(predicate) is COUNT(*) FILTER (WHERE predicate).
+    // Lower it to the existing null-preserving COUNT path so local,
+    // distributed, spill, and window execution retain one implementation.
+    if name == "COUNT_IF" {
+        if func.filter.is_some() {
+            return Err(sql_err("COUNT_IF cannot have a FILTER clause"));
+        }
+        let [predicate] = args.as_slice() else {
+            return Err(sql_err("COUNT_IF requires exactly one boolean argument"));
+        };
+        if matches!(predicate, Expr::Star) {
+            return Err(sql_err("COUNT_IF requires a boolean argument"));
+        }
+        args = vec![Expr::Case {
+            operand: None,
+            when_then: vec![(predicate.clone(), Expr::Literal(ScalarValue::Int64(1)))],
+            else_expr: Some(Box::new(Expr::Literal(ScalarValue::Null))),
+        }];
+        name = "COUNT".to_owned();
+    }
 
     if let Some(filter) = &func.filter {
         if !is_aggregate_function(&name) {
@@ -2572,13 +2593,28 @@ fn collect_aggregates_from_ast_expr(expr: &ast::Expr, out: &mut Vec<AggregateExp
                 if distinct && (matches!(name.as_str(), "MIN" | "MAX") || approximate) {
                     return Err(sql_err(format!("DISTINCT is not supported for {name}")));
                 }
-                let arg = if let Some(filter) = &func.filter {
+                let arg = if name == "COUNT_IF" {
+                    if func.filter.is_some() {
+                        return Err(sql_err("COUNT_IF cannot have a FILTER clause"));
+                    }
+                    if matches!(&arg, Expr::Star) {
+                        return Err(sql_err("COUNT_IF requires a boolean argument"));
+                    }
+                    Expr::Case {
+                        operand: None,
+                        when_then: vec![(
+                            arg,
+                            Expr::Literal(ScalarValue::Int64(1)),
+                        )],
+                        else_expr: Some(Box::new(Expr::Literal(ScalarValue::Null))),
+                    }
+                } else if let Some(filter) = &func.filter {
                     aggregate_filter_expr(&name, arg, filter)?
                 } else {
                     arg
                 };
                 let agg = match name.as_str() {
-                    "COUNT" => AggregateExpr::Count {
+                    "COUNT" | "COUNT_IF" => AggregateExpr::Count {
                         expr: arg,
                         distinct,
                     },
@@ -4541,6 +4577,37 @@ mod tests {
         )
         .unwrap();
         assert!(format!("{plan:?}").contains("Case {"));
+    }
+
+    #[test]
+    fn lowers_count_if_to_the_existing_filtered_count_state() {
+        let (columns, aggregates) = aggregates_of(
+            "SELECT region, COUNT_IF(actions > 5) AS active FROM events GROUP BY region",
+        );
+        assert!(matches!(
+            aggregates.as_slice(),
+            [AggregateExpr::Count {
+                expr: Expr::Column(name),
+                distinct: false
+            }] if name == "__kaveon_arg_0"
+        ));
+        assert!(format!("{:?}", columns[1]).contains("count___kaveon_arg_0"));
+        assert!(sql_to_logical_plan(
+            "SELECT COUNT_IF(actions > 5) OVER (PARTITION BY region) FROM events"
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn count_if_requires_one_predicate() {
+        for sql in [
+            "SELECT COUNT_IF() FROM events",
+            "SELECT COUNT_IF(actions > 5, errors = 0) FROM events",
+            "SELECT COUNT_IF(*) FROM events",
+        ] {
+            let error = sql_to_logical_plan(sql).unwrap_err().to_string();
+            assert!(!error.is_empty(), "{sql}");
+        }
     }
 
     fn aggregates_of(sql: &str) -> (Vec<Expr>, Vec<AggregateExpr>) {

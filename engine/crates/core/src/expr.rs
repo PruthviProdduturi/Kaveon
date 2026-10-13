@@ -155,6 +155,7 @@ pub enum BinaryOp {
 /// `APPROX_COUNT_DISTINCT` and is normalised to it when parsed.
 pub const AGGREGATE_FUNCTION_NAMES: &[&str] = &[
     "COUNT",
+    "COUNT_IF",
     "SUM",
     "AVG",
     "MIN",
