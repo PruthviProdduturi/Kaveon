@@ -73,6 +73,10 @@ foundations, but several operators are still centralized or narrow:
   Typed positional `$1`, sequential `?`, and named `:name` parameters are now
   validated and bound through the HTTP statement API; the full prepare/describe/
   bind/execute protocol remains open.
+  A `/v1/trino/statement` adapter now accepts raw SQL with standard
+  `X-Trino-*` session headers and emits `nextUri`/`stats`-shaped responses;
+  this is intentionally a submission-compatibility slice, not the full
+  prepared-statement wire protocol.
   Prepared-parameter discovery now also ignores PostgreSQL `::type` casts,
   so cast names cannot be mistaken for named bindings (`617b69f6`).
   Uncorrelated aggregate scalar subqueries in `WHERE` are now supported with
