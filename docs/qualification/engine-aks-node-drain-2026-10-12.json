@@ -1,0 +1,40 @@
+{
+  "passed": true,
+  "verified_at": "2026-10-13T04:20:46.6778854Z",
+  "cluster": "kaveon-aks",
+  "namespace": "kaveon",
+  "drained_node": "aks-workers-15909223-vmss000002",
+  "checks": {
+    "node_drained": true,
+    "worker_recreated_and_ready": true,
+    "three_workers_ready": true,
+    "node_uncordoned": true
+  },
+  "workers": [
+    {
+      "name": "kaveon-worker-0",
+      "node": "aks-workers-15909223-vmss000000",
+      "phase": "Running",
+      "ready": true,
+      "restarts": 0,
+      "uid": "c69e1fe3-51eb-43cb-95d2-a29886ffd0be"
+    },
+    {
+      "name": "kaveon-worker-1",
+      "node": "aks-workers-15909223-vmss000001",
+      "phase": "Running",
+      "ready": true,
+      "restarts": 0,
+      "uid": "d1c5144c-e4a9-430b-8066-d73888768729"
+    },
+    {
+      "name": "kaveon-worker-2",
+      "node": "aks-workers-15909223-vmss000002",
+      "phase": "Running",
+      "ready": true,
+      "restarts": 0,
+      "uid": "618aba1b-a754-4f8a-979e-573551c6c9ed"
+    }
+  ],
+  "scope": "Scheduling and StatefulSet recovery only; no active-query recovery claim."
+}

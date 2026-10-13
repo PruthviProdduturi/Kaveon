@@ -376,6 +376,14 @@ durable statistics persistence across a coordinator restart for the tested
 table and image; it does not prove exchange-spool cleanup or active-query
 recovery, so those coordinator gates remain open.
 
+On the same deployment, `aks-workers-15909223-vmss000002` was cordoned and
+drained. Its StatefulSet worker was evicted and recreated; after the node was
+uncordoned the replacement became Ready and all three workers reported zero
+container restarts. The credential-free result is archived in
+`docs/qualification/engine-aks-node-drain-2026-10-12.md`. This closes node
+scheduling and worker replacement evidence, but not an in-flight query
+surviving node loss; that active-query node-drain gate remains open.
+
 The distributed/local join-mode differential now also includes an inner
 residual predicate (`key equality AND value inequality`); local and
 distributed result sets match and all reservations are released.
