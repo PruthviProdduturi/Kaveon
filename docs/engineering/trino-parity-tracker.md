@@ -156,9 +156,9 @@ qualification documents; this tracker remains the single ordered work list.
 - Numeric `ARRAY[...]` literals now execute as null-preserving Arrow
   `List<Float64>` values with parser and executor coverage (`b1fe824f`).
 - Numeric, text, and boolean `ARRAY[...]` literals now execute as
-  null-preserving typed Arrow lists; `CONTAINS` supports numeric and text
-  elements with SQL three-valued null semantics (`b2054d10` plus the follow-up
-  execution coverage).
+  null-preserving typed Arrow lists; `CONTAINS`, `ARRAY_POSITION`, and slices
+  support all three element types with SQL three-valued null semantics
+  (`b2054d10` plus the follow-up execution coverage).
 - `CARDINALITY(ARRAY[...])` now parses and evaluates to a nullable `Int64`
   list length, with explicit rejection for non-list values (`1c0e29e5`).
 - Numeric-array `CONTAINS(array, value)` now preserves nullable SQL boolean
