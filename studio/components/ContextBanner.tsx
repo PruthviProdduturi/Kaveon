@@ -143,8 +143,6 @@ export function ContextBanner() {
         <i className="fas fa-database" /> Context ready
       </span>
       {ready.map((d) => {
-        const min = shortDate(d.date_range?.min);
-        const max = shortDate(d.date_range?.max);
         return (
           <span
             key={d.dataset_id}
@@ -156,10 +154,13 @@ export function ContextBanner() {
             onMouseLeave={() => setHover(null)}
           >
             <span style={dot(d.status === "ready")} />
+            {/* The strip says what can be asked about, in as few words as it
+                takes: the dataset, how much of it there is, and how much of it
+                is answerable by value. A date range is a property of the data
+                rather than of what you can ask, and it pushed the two numbers
+                that do matter off the end of the row. It is still on the
+                hover card for anyone who wants it. */}
             <b style={{ color: "var(--text-primary)" }}>{d.name ?? `#${d.dataset_id}`}</b>
-            {min && max && (
-              <span>{min} → {max}{d.date_range?.approx ? "~" : ""}</span>
-            )}
             <span>· {compact(d.row_count)} rows</span>
             {(d.values_indexed ?? 0) > 0 && <span>· {compact(d.values_indexed)} values</span>}
           </span>
