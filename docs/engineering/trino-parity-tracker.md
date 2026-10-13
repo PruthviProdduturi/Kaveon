@@ -291,8 +291,10 @@ qualification documents; this tracker remains the single ordered work list.
   ordered map comparisons and map-valued result materialization remain open.
 - Date-array construction, cardinality, and positional lookup are also covered
   in the same differential paths. Timestamp and decimal arrays now have the
-  same cardinality/positional coverage; complex-valued result materialization
-  still requires its own qualification.
+  same cardinality/positional coverage. The differential row canonicalizer now
+  uses Arrow's type-aware formatter, so literal array/map-valued projections
+  are compared across local and distributed paths instead of being silently
+  excluded by an unsupported UTF-8 cast; nested complex values remain open.
 - Three-worker global `ORDER BY`/TopN centralized merge correctness is now
   qualified for NULL ordering and ties against a single-partition reference
   (`bb788709`). The input remains distributed, while the exact global merge

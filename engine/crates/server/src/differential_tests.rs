@@ -252,6 +252,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "complex_value_projection",
+        "SELECT ARRAY[1, 2, NULL] AS values, MAP(ARRAY['a', 'b'], ARRAY[10, 20]) AS labels FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "scalar_aggregate_filter",
         "SELECT country, COUNT(*) AS n FROM {T} WHERE user_id < (SELECT MAX(user_id) FROM {U}) GROUP BY country ORDER BY country",
         true,
@@ -1005,20 +1010,16 @@ fn keys_last(batch: &RecordBatch, keys: &[&str]) -> RecordBatch {
 pub(crate) fn canonical_rows(batches: &[RecordBatch], ordered: bool) -> Vec<String> {
     let mut rows = Vec::new();
     for batch in batches {
-        let columns = batch
-            .columns()
-            .iter()
-            .map(|column| cast(column, &DataType::Utf8).unwrap())
-            .collect::<Vec<_>>();
         for row in 0..batch.num_rows() {
-            let cells = columns
+            let cells = batch
+                .columns()
                 .iter()
                 .map(|column| {
-                    let column = column.as_any().downcast_ref::<StringArray>().unwrap();
                     if column.is_null(row) {
                         "NULL".to_owned()
                     } else {
-                        column.value(row).to_owned()
+                        arrow::util::display::array_value_to_string(column, row)
+                            .expect("Arrow can display every differential result value")
                     }
                 })
                 .collect::<Vec<_>>();
