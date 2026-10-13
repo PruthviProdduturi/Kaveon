@@ -262,6 +262,16 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "try_cast_invalid_to_null",
+        "SELECT COUNT(*) AS n FROM {T} WHERE TRY_CAST(country AS BIGINT) IS NULL",
+        false,
+    ),
+    (
+        "try_cast_numeric_aggregate",
+        "SELECT SUM(TRY_CAST(actions AS BIGINT)) AS total FROM {T}",
+        false,
+    ),
+    (
         "like_prefix",
         "SELECT COUNT(*) AS n FROM {T} WHERE country LIKE 'United%'",
         false,

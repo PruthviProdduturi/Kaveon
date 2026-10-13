@@ -372,7 +372,9 @@ qualification documents; this tracker remains the single ordered work list.
   data on local and distributed paths.
 - `TRY_CAST` now lowers to Arrow safe per-element casts for the supported
   primitive, date/time, and decimal targets; invalid values become NULL while
-  valid values in the same batch remain intact (`6e4a8a44`).
+  valid values in the same batch remain intact (`6e4a8a44`). The distributed
+  differential corpus also covers invalid text-to-integer casts becoming NULL
+  and valid numeric casts remaining usable in aggregates.
 - `ROW(...)` constructors now produce typed Arrow `StructArray` values with
   null-preserving child fields. `MAP(...)` now produces Arrow `MapArray` values
   from matching list offsets and rejects NULL keys. `MAP_KEYS` and `MAP_VALUES`
