@@ -3251,3 +3251,32 @@ every page in Studio, not just this one.
 `engine/crates/catalog/src/product_commit.rs` beyond this session's three
 earlier commits (`ce84947a`, `05f0f249`, `474906e5`, all authorized and
 already logged).
+
+**Follow-up, same day, after `dc0299b1` deployed.** The API-side fixes are in
+and measured against the live cluster. The banner went 6.48s → 1.76s cold and
+0.93s on every subsequent request, and the 0.93s is now *entirely* your
+listings — verified by patching `_serving_artifacts` to raise on a cache hit,
+which never fired:
+
+```
+three catalog listings, concurrent   0.94s   <- the whole warm cost
+nine compiled artifacts, concurrent  0.91s   (was 3.7s sequential)
+served from cache                    0.93s   artifacts not refetched at all
+```
+
+One more datapoint for you, which I did not expect. The coordinator appears to
+partly serialize concurrent product listings:
+
+```
+three listings, one at a time    0.59 / 0.66 / 0.63   total 1.89s
+the same three, concurrently                          0.90s  (x2 runs)
+```
+
+Three in parallel should cost about what one costs (0.62s) if they were
+independent. 0.90s is 2.1x of a possible 3.0x, so something on the snapshot
+read path is contended — a lock, or a single shared store handle. Worth
+looking at alongside the snapshot cache, since caching the snapshot would
+likely remove the contention as a side effect.
+
+Net: every Studio page that lists product families is paying this. The context
+banner is simply the page where it was most visible.
