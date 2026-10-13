@@ -26,6 +26,7 @@ pub fn columns_of(schema: &Schema) -> Vec<(String, String)> {
 pub fn presented_type(data_type: &DataType) -> String {
     match data_type {
         DataType::Dictionary(_, values) => values.to_string(),
+        DataType::List(field) => format!("List({})", presented_type(field.data_type())),
         other => other.to_string(),
     }
 }
@@ -68,8 +69,52 @@ fn cell(array: &ArrayRef, row: usize) -> Value {
         DataType::Float64 => Value::from(array.as_primitive::<Float64Type>().value(row)),
         DataType::Utf8 => Value::String(array.as_string::<i32>().value(row).to_owned()),
         DataType::LargeUtf8 => Value::String(array.as_string::<i64>().value(row).to_owned()),
+        DataType::List(_) => array_list(array.as_list::<i32>().value(row)),
+        DataType::LargeList(_) => array_list(array.as_list::<i64>().value(row)),
+        DataType::FixedSizeList(_, _) => array_list(array.as_fixed_size_list().value(row)),
+        DataType::Struct(fields) => {
+            let value = array
+                .as_any()
+                .downcast_ref::<arrow::array::StructArray>()
+                .unwrap();
+            fields
+                .iter()
+                .enumerate()
+                .map(|(index, field)| (field.name().clone(), cell(value.column(index), 0)))
+                .collect::<serde_json::Map<_, _>>()
+                .into()
+        }
+        DataType::Map(_, _) => {
+            let value = array
+                .as_any()
+                .downcast_ref::<arrow::array::MapArray>()
+                .unwrap();
+            let entries = value.value(row);
+            let entries = entries
+                .as_any()
+                .downcast_ref::<arrow::array::StructArray>()
+                .unwrap();
+            let keys = entries.column(0);
+            let values = entries.column(1);
+            let mut object = serde_json::Map::new();
+            for index in 0..entries.len() {
+                let key = cell(keys, index);
+                let value = cell(values, index);
+                if let Some(key) = key.as_str() {
+                    object.insert(key.to_owned(), value);
+                }
+            }
+            object.into()
+        }
         _ => Value::String(format!("{:?}", array.slice(row, 1))),
     }
+}
+
+fn array_list(values: ArrayRef) -> Value {
+    (0..values.len())
+        .map(|index| cell(&values, index))
+        .collect::<Vec<_>>()
+        .into()
 }
 
 #[cfg(test)]

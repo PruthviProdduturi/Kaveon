@@ -172,6 +172,10 @@ foundations, but several operators are still centralized or narrow:
   preserves nullable boolean results. `MAP_CONCAT` now merges supported typed
   maps with later values winning duplicate keys, and `MAP_ENTRIES` exposes the
   typed key/value rows as an array.
+  HTTP and embedded-CLI result materialization now preserves supported nested
+  Arrow lists, structs, and UTF-8-keyed maps as JSON arrays/objects rather than
+  Arrow debug text; focused server coverage protects the wire shape. Nested
+  temporal/binary values and non-UTF-8 map keys remain outside this slice.
 - `QUALIFY` now has an exact-result distributed differential case using
   partitioned `ROW_NUMBER()` output. This qualifies the implemented
   row-number filter shape only; window `NULLS FIRST`/`NULLS LAST` ordering is
