@@ -155,6 +155,7 @@ class CoTenantFilteringTests(unittest.TestCase):
             _pod("kaveon-worker-1", "node-b", "StatefulSet", "kaveon-worker", ready=True, image_id=image),
             _pod("trino-worker-0", "node-a", "StatefulSet", "trino-worker"),
             _pod("metrics", "node-a", "Deployment", "metrics"),
+            _pod("archive-ephemeral", "node-a", "Job", "catalog-archive"),
         ])
         runtime = active_worker_nodes(kube, "kaveon-worker", 2,
                                       ("kaveon-worker", "trino-worker"))
