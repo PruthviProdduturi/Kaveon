@@ -182,6 +182,9 @@ qualification documents; this tracker remains the single ordered work list.
   existing aggregate and spill paths retain their exact semantics. Window
   filters, sketch filters, and non-aggregate filters remain explicit
   unsupported diagnostics (`0eac03cc`).
+- The filtered-aggregate corpus case now compares dictionary, plain, split,
+  clustered, partitioned, and two-worker distributed execution paths with
+  exact canonical rows (`56a07582`).
 - Bounded projection scalar subqueries now support an ungrouped, single-column
   aggregate and preserve its alias; correlated and multi-row projection forms
   remain explicitly rejected (`d7be5f9a`).
