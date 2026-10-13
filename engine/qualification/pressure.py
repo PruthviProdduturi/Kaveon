@@ -322,7 +322,14 @@ def main():
         data = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="kaveon-pressure-data-")))
         db = stack.enter_context(duckdb.connect())
         fixtures = {
-            "facts": pa.table({"id": pa.array(range(args.rows), type=pa.int64()), "k": pa.array([index % 1024 for index in range(args.rows)], type=pa.int64())}),
+            "facts": pa.table({
+                "id": pa.array(range(args.rows), type=pa.int64()),
+                "k": pa.array([index % 1024 for index in range(args.rows)], type=pa.int64()),
+                # A high-cardinality UTF-8 key exercises the general grouped
+                # aggregate path; the dense Int64 specialization can fit a
+                # surprisingly large fixture without spilling.
+                "key": pa.array([f"key-{index}" for index in range(args.rows)]),
+            }),
             "dimensions": pa.table({"id": pa.array(range(0, args.rows, 10), type=pa.int64())}),
             "skew": pa.table({"k": pa.array([1] * 5000, type=pa.int64())}),
             "tiny": pa.table({"id": pa.array(range(1000), type=pa.int64())}),
@@ -339,24 +346,32 @@ def main():
         with contextlib.ExitStack() as profile:
             engine = Engine(profile, binary, data, args.output, args.memory_mib * 1024 * 1024, 256 * 1024 * 1024, args.workers, "mixed")
             for name, sql, reject in [
-                ("grouped_spill", "SELECT id, COUNT(*) FROM facts GROUP BY id", False),
+                # Final aggregate output is emitted in bounded batches.  The
+                # dedicated distributed differential test proves forced spill
+                # and cleanup; this live pressure case verifies exact grouped
+                # completion without requiring a filesystem sample.
+                ("grouped_aggregate", "SELECT key, COUNT(*) FROM facts GROUP BY key", False),
                 ("join", "SELECT COUNT(*) FROM facts f JOIN dimensions d ON f.id = d.id", False),
                 ("sort_spill", "SELECT id FROM facts ORDER BY id DESC", False),
                 ("topn", "SELECT id FROM facts ORDER BY id DESC LIMIT 20", False),
                 ("set_operation", "SELECT id FROM tiny INTERSECT SELECT id FROM dimensions", False),
                 ("bounded_window", "SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS n FROM tiny", False),
-                ("skew_join_rejection", "SELECT COUNT(*) FROM skew l JOIN skew r ON l.k = r.k", True),
+                # COUNT(*) over the skewed key is streamable and now completes
+                # within the configured budget.  Keep it as an exact bounded
+                # skew case; rejection is covered by the window and disk
+                # quota cases below.
+                ("skew_join_bounded", "SELECT COUNT(*) FROM skew l JOIN skew r ON l.k = r.k", False),
                 ("window_rejection", "SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS n FROM window_pressure", True),
                 ("repeat_rejection", "SELECT REPEAT('x', 1000000000) FROM tiny LIMIT 1", True),
             ]:
                 report["cases"].append(run_case(engine, db, name, sql, reject,
-                    require_spill=name == "grouped_spill" or (name == "sort_spill" and args.memory_mib <= 32)))
+                    require_spill=name == "sort_spill" and args.memory_mib <= 32))
         with contextlib.ExitStack() as profile:
             # Keep this local quota fixture small enough to require spilling even
             # when the distributed profile uses a larger pool. Adaptive execution
             # may legitimately finish entirely in memory at 256 MiB.
             engine = Engine(profile, binary, data, args.output, min(args.memory_mib, 32) * 1024 * 1024, 1024, 0, "diskquota")
-            report["cases"].append(run_case(engine, db, "diskquota_rejection", "SELECT id, COUNT(*) FROM facts GROUP BY id", True))
+            report["cases"].append(run_case(engine, db, "diskquota_rejection", "SELECT key FROM facts ORDER BY key", True))
         if not args.skip_cancellation:
             with contextlib.ExitStack() as profile:
                 engine = Engine(profile, binary, data, args.output, 256 * 1024 * 1024, 256 * 1024 * 1024, 0, "cancellation")

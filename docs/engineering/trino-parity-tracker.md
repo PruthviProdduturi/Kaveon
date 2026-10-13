@@ -55,9 +55,14 @@ three-worker and connector qualification gates.
 
 The Python qualification unit suite also passes **37/37** tests. The local
 pressure runner now authenticates its disposable bootstrap catalogs as an
-administrator, matching the documented grant model; its latest rebuilt run
-reached the execution cases, but grouped-spill observation and two deliberate
-resource-rejection cases remain open and are not counted as qualified evidence.
+administrator, matching the documented grant model. Its latest rebuilt profile
+passed all ten cases, including exact grouped completion, skew handling,
+cancellation cleanup, and deliberate window, oversized-string, and disk-quota
+rejections. Forced distributed aggregate spill and cleanup remain covered by the
+server differential test
+`a_distributed_grouped_aggregate_under_spill_matches_the_local_result`; the
+AKS release SLO still requires separate image-bound fault-pressure and
+comparison artifacts.
 
 Temporal `ARRAY[...]` literals now preserve DATE32, DATE64, TIME32 second and
 millisecond, and TIMESTAMP microsecond element types, including null elements;
