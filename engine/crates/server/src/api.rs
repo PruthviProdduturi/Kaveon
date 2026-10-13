@@ -6294,10 +6294,7 @@ async fn analyze_read_placement(
     {
         return Err("no exchange token is configured".to_owned());
     }
-    let workers = {
-        let mut cluster = state.cluster.write().await;
-        workers_for_catalog_snapshot(&mut cluster, &context.catalog_snapshot_id)?
-    };
+    let workers = compatible_workers_with_wait(state, &context.catalog_snapshot_id).await?;
     if workers.len() < 2 {
         return Err(format!(
             "{} compatible worker(s); distributed execution needs two",
@@ -10084,6 +10081,36 @@ fn workers_for_catalog_snapshot(
     Ok(compatible)
 }
 
+/// Catalog publication is intentionally asynchronous: the coordinator can
+/// publish a new immutable snapshot while workers are still downloading it
+/// from the internal replica endpoint.  Do not turn that short convergence
+/// window into a user-visible 500.  Heartbeats run every ten seconds, so a
+/// bounded wait of three heartbeat periods covers normal propagation while
+/// still failing promptly when a worker is genuinely unhealthy.
+const CATALOG_SYNC_WAIT: Duration = Duration::from_secs(30);
+
+async fn compatible_workers_with_wait(
+    state: &Arc<AppState>,
+    required_snapshot_id: &str,
+) -> Result<Vec<NodeInfo>, String> {
+    let deadline = Instant::now() + CATALOG_SYNC_WAIT;
+    let mut last_error = None;
+    loop {
+        let selection = {
+            let mut cluster = state.cluster.write().await;
+            workers_for_catalog_snapshot(&mut cluster, required_snapshot_id)
+        };
+        match selection {
+            Ok(workers) => return Ok(workers),
+            Err(error) if Instant::now() < deadline => {
+                last_error = Some(error);
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+            Err(error) => return Err(last_error.unwrap_or(error)),
+        }
+    }
+}
+
 /// What a distributed run writes back besides its result: why the
 /// coordinator ran the statement instead, and the paged writer its root
 /// tasks stream into (`None` for inline delivery; taken once published).
@@ -10123,10 +10150,7 @@ async fn execute_distributed_fragments(
         *placement_reason = Some("shape has no distributed plan".to_owned());
         return None;
     }
-    let worker_selection = {
-        let mut cluster = state.cluster.write().await;
-        workers_for_catalog_snapshot(&mut cluster, &context.catalog_snapshot_id)
-    };
+    let worker_selection = compatible_workers_with_wait(state, &context.catalog_snapshot_id).await;
     let mut workers = match worker_selection {
         Ok(workers) => workers,
         Err(error) => return Some(Err(error)),
@@ -10687,10 +10711,7 @@ async fn execute_distributed_top_n(
     plan: &LogicalPlan,
 ) -> Option<Result<(TaskResponse, StageTelemetry), String>> {
     let (sort_exprs, limit) = top_n_merge_contract(plan)?;
-    let worker_selection = {
-        let mut cluster = state.cluster.write().await;
-        workers_for_catalog_snapshot(&mut cluster, &context.catalog_snapshot_id)
-    };
+    let worker_selection = compatible_workers_with_wait(state, &context.catalog_snapshot_id).await;
     let mut workers = match worker_selection {
         Ok(workers) => workers,
         Err(error) => return Some(Err(error)),
@@ -10874,10 +10895,7 @@ async fn execute_distributed_aggregate(
         return None;
     }
     let (group_count, operations) = aggregate_merge_contract(plan)?;
-    let worker_selection = {
-        let mut cluster = state.cluster.write().await;
-        workers_for_catalog_snapshot(&mut cluster, &context.catalog_snapshot_id)
-    };
+    let worker_selection = compatible_workers_with_wait(state, &context.catalog_snapshot_id).await;
     let mut workers = match worker_selection {
         Ok(workers) => workers,
         Err(error) => return Some(Err(error)),
