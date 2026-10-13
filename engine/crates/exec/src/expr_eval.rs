@@ -4081,6 +4081,41 @@ mod tests {
     }
 
     #[test]
+    fn ordered_map_comparison_fails_with_stable_diagnostic() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        let map = || Expr::Function {
+            name: "MAP".into(),
+            args: vec![
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![Expr::Literal(ScalarValue::Utf8("a".into()))],
+                },
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![Expr::Literal(ScalarValue::Int64(1))],
+                },
+            ],
+        };
+        let error = evaluate(
+            &Expr::BinaryOp {
+                left: Box::new(map()),
+                op: BinaryOp::Lt,
+                right: Box::new(map()),
+            },
+            &batch,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "execution: ordered comparison is not supported for MAP values"
+        );
+    }
+
+    #[test]
     fn expanding_strings_check_overflow_caps_and_query_budget_before_allocation() {
         let batch =
             RecordBatch::try_from_iter([("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef)])
