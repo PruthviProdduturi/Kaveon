@@ -1743,6 +1743,25 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .collect();
             Ok(Arc::new(result))
         }
+        "JSON_SIZE" => {
+            check_arity(name, args, 2)?;
+            let documents = as_string_array(&args[0])?;
+            let paths = as_string_array(&args[1])?;
+            let result: Int64Array = (0..num_rows)
+                .map(|row| {
+                    if documents.is_null(row) || paths.is_null(row) {
+                        return None;
+                    }
+                    let value = json_extract_value(documents.value(row), paths.value(row))?;
+                    Some(match value {
+                        serde_json::Value::Array(values) => values.len() as i64,
+                        serde_json::Value::Object(values) => values.len() as i64,
+                        _ => 0,
+                    })
+                })
+                .collect();
+            Ok(Arc::new(result))
+        }
         "JSON_EXTRACT" | "JSON_EXTRACT_SCALAR" => {
             check_arity(name, args, 2)?;
             let documents = as_string_array(&args[0])?;
@@ -7079,6 +7098,41 @@ mod tests {
         assert_eq!(
             result.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
             vec![Some(3), None, None, None]
+        );
+    }
+
+    #[test]
+    fn evaluates_json_size_for_containers_and_scalars() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "document",
+                Arc::new(StringArray::from(vec![
+                    Some(r#"{"items":[1,2],"name":"x"}"#),
+                    Some(r#"{"items":1}"#),
+                    Some("invalid"),
+                ])) as ArrayRef,
+            ),
+            (
+                "path",
+                Arc::new(StringArray::from(vec![
+                    Some("$.items"),
+                    Some("$.items"),
+                    Some("$.items"),
+                ])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "JSON_SIZE".into(),
+                args: vec![Expr::Column("document".into()), Expr::Column("path".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            result.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+            vec![Some(2), Some(0), None]
         );
     }
 
