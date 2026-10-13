@@ -639,6 +639,10 @@ fn select_to_plan_with_bindings(
     select: &ast::Select,
     ctes: &Lowering,
 ) -> Result<(LogicalPlan, ExpressionBindings)> {
+    // Projection scalar subqueries are lowered after the outer aggregation and
+    // window stages.  That keeps their single-row relation available to the
+    // final projection without making it a grouping key or aggregate input.
+    let (projection, projection_scalars) = replace_projection_scalars(select, ctes)?;
     let plan = build_from_clause(select, ctes)?;
     let plan = build_where(plan, select, ctes)?;
 
@@ -664,7 +668,8 @@ fn select_to_plan_with_bindings(
         }
     };
 
-    let plan = build_projection(plan, select, has_aggregates)?;
+    let plan = attach_projection_scalars(plan, projection_scalars);
+    let plan = build_projection(plan, &projection, has_aggregates)?;
 
     let plan = if matches!(select.distinct, Some(ast::Distinct::Distinct)) {
         LogicalPlan::Distinct {
@@ -683,6 +688,40 @@ fn select_to_plan_with_bindings(
     let force = !having_scalars.is_empty() || select.projection.iter().any(computes_with_aggregate);
     let (plan, bindings) = lower_aggregate_expressions(plan, force)?;
     Ok((attach_having_scalars(plan, having_scalars), bindings))
+}
+
+fn replace_projection_scalars(
+    select: &ast::Select,
+    ctes: &Lowering,
+) -> Result<(Vec<ast::SelectItem>, Vec<LogicalPlan>)> {
+    let mut projection = Vec::with_capacity(select.projection.len());
+    let mut scalars = Vec::new();
+    for item in &select.projection {
+        let item = match item {
+            ast::SelectItem::UnnamedExpr(expr) => ast::SelectItem::UnnamedExpr(
+                replace_scalar_subqueries(expr, ctes, &mut |scalar| scalars.push(scalar))?,
+            ),
+            ast::SelectItem::ExprWithAlias { expr, alias } => ast::SelectItem::ExprWithAlias {
+                expr: replace_scalar_subqueries(expr, ctes, &mut |scalar| scalars.push(scalar))?,
+                alias: alias.clone(),
+            },
+            other => other.clone(),
+        };
+        projection.push(item);
+    }
+    Ok((projection, scalars))
+}
+
+fn attach_projection_scalars(plan: LogicalPlan, scalars: Vec<LogicalPlan>) -> LogicalPlan {
+    scalars
+        .into_iter()
+        .fold(plan, |left, right| LogicalPlan::Join {
+            left: Box::new(left),
+            right: Box::new(right),
+            join_type: JoinType::Cross,
+            condition: None,
+            distribution: JoinDistribution::Partitioned,
+        })
 }
 
 /// A projected item that is an expression over an aggregate, rather than
@@ -1435,13 +1474,13 @@ fn replace_bound_expression(expr: Expr, bindings: &ExpressionBindings) -> Expr {
 
 fn build_projection(
     plan: LogicalPlan,
-    select: &ast::Select,
+    projection: &[ast::SelectItem],
     has_aggregates: bool,
 ) -> Result<LogicalPlan> {
     let mut columns = Vec::new();
     let mut is_star = false;
 
-    for item in &select.projection {
+    for item in projection {
         match item {
             ast::SelectItem::UnnamedExpr(expr) => {
                 columns.push(ast_expr_to_expr(expr)?);
@@ -3495,7 +3534,30 @@ mod tests {
         ] {
             assert!(sql_to_logical_plan(sql).is_err(), "{sql}");
         }
-        assert!(sql_to_logical_plan("SELECT (SELECT max(b) FROM t) FROM t").is_err());
+        let plan = sql_to_logical_plan("SELECT (SELECT max(b) FROM t) AS max_b FROM t")
+            .expect("single-row scalar projections are supported");
+        let LogicalPlan::Project { input, columns } = plan else {
+            panic!("projection");
+        };
+        assert_eq!(
+            columns,
+            vec![Expr::Alias {
+                expr: Box::new(Expr::Column("__kaveon_scalar_0".into())),
+                name: "max_b".into(),
+            }]
+        );
+        let LogicalPlan::Join {
+            left,
+            right,
+            join_type: JoinType::Cross,
+            condition: None,
+            ..
+        } = *input
+        else {
+            panic!("projection scalar should cross join its one-row relation");
+        };
+        assert!(matches!(*left, LogicalPlan::Scan { .. }));
+        assert!(matches!(*right, LogicalPlan::Project { .. }));
     }
 
     #[test]
@@ -3510,8 +3572,8 @@ mod tests {
                 "a scalar subquery must select exactly one column",
             ),
             (
-                "SELECT (SELECT max(b) FROM t) FROM t",
-                "scalar subqueries are not yet supported",
+                "SELECT (SELECT b FROM t) FROM t",
+                "a scalar subquery must be an ungrouped aggregate, so that it yields one row",
             ),
         ];
         for (sql, expected) in cases {
@@ -3867,6 +3929,7 @@ mod tests {
             "SELECT * FROM orders WHERE EXISTS (SELECT 1 FROM users WHERE users.id = orders.user_id)",
             "SELECT * FROM orders o WHERE o.id IN (SELECT u.id FROM users u WHERE u.id = o.id)",
             "SELECT * FROM orders o WHERE o.total > (SELECT avg(u.score) FROM users u WHERE u.id = o.id)",
+            "SELECT (SELECT avg(u.score) FROM users u WHERE u.id = o.id) FROM orders o",
         ] {
             assert!(
                 sql_to_logical_plan(sql)
