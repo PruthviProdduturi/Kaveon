@@ -297,6 +297,10 @@ qualification documents; this tracker remains the single ordered work list.
   excluded by an unsupported UTF-8 cast. Representative `ROW(...)` and
   `MAP_KEYS(...)` nested projections now pass the same gate; arbitrary nested
   element types and complex-valued ordering remain open.
+- Array equality and inequality now use null-preserving, element-wise
+  semantics, including nested list values; ordered array comparisons fail with
+  an explicit diagnostic. The executor unit test and differential corpus cover
+  equal, different, and NULL-containing arrays.
 - Three-worker global `ORDER BY`/TopN centralized merge correctness is now
   qualified for NULL ordering and ties against a single-partition reference
   (`bb788709`). The input remains distributed, while the exact global merge

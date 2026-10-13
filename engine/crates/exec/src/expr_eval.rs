@@ -802,6 +802,56 @@ enum CompareKind {
 fn comparison(left: &ArrayRef, right: &ArrayRef, kind: CompareKind) -> Result<BooleanArray> {
     use arrow::compute::kernels::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
     if let (Some(left), Some(right)) = (
+        left.as_any().downcast_ref::<ListArray>(),
+        right.as_any().downcast_ref::<ListArray>(),
+    ) {
+        if !matches!(kind, CompareKind::Eq | CompareKind::Ne) {
+            return Err(KaveonError::Execution(
+                "ordered comparison is not supported for ARRAY values".into(),
+            ));
+        }
+        if left.len() != right.len() {
+            return Err(KaveonError::Execution(
+                "ARRAY values must have matching row counts for comparison".into(),
+            ));
+        }
+        let mut rows = Vec::with_capacity(left.len());
+        for row in 0..left.len() {
+            if left.is_null(row) || right.is_null(row) {
+                rows.push(None);
+                continue;
+            }
+            let left_values = left.value(row);
+            let right_values = right.value(row);
+            if left_values.len() != right_values.len() {
+                rows.push(Some(matches!(kind, CompareKind::Ne)));
+                continue;
+            }
+            let mut equal = Some(true);
+            for index in 0..left_values.len() {
+                let value_equal = comparison(
+                    &left_values.slice(index, 1),
+                    &right_values.slice(index, 1),
+                    CompareKind::Eq,
+                )?;
+                if value_equal.is_null(0) {
+                    if equal != Some(false) {
+                        equal = None;
+                    }
+                } else if !value_equal.value(0) {
+                    equal = Some(false);
+                    break;
+                }
+            }
+            rows.push(if matches!(kind, CompareKind::Ne) {
+                equal.map(|value| !value)
+            } else {
+                equal
+            });
+        }
+        return Ok(BooleanArray::from(rows));
+    }
+    if let (Some(left), Some(right)) = (
         left.as_any().downcast_ref::<MapArray>(),
         right.as_any().downcast_ref::<MapArray>(),
     ) {
@@ -6068,6 +6118,61 @@ mod tests {
             error.to_string(),
             "execution: ordered comparison is not supported for MAP values"
         );
+    }
+
+    #[test]
+    fn array_equality_is_elementwise_and_null_preserving() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        let array = |values: Vec<Expr>| Expr::Function {
+            name: "ARRAY".into(),
+            args: values,
+        };
+        let equal = evaluate(
+            &Expr::BinaryOp {
+                left: Box::new(array(vec![
+                    Expr::Literal(ScalarValue::Int64(1)),
+                    Expr::Literal(ScalarValue::Int64(2)),
+                ])),
+                op: BinaryOp::Eq,
+                right: Box::new(array(vec![
+                    Expr::Literal(ScalarValue::Int64(1)),
+                    Expr::Literal(ScalarValue::Int64(2)),
+                ])),
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(equal.as_boolean().value(0), true);
+        let different = evaluate(
+            &Expr::BinaryOp {
+                left: Box::new(array(vec![Expr::Literal(ScalarValue::Int64(1))])),
+                op: BinaryOp::Ne,
+                right: Box::new(array(vec![Expr::Literal(ScalarValue::Int64(2))])),
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(different.as_boolean().value(0), true);
+        let nullable = evaluate(
+            &Expr::BinaryOp {
+                left: Box::new(array(vec![
+                    Expr::Literal(ScalarValue::Int64(1)),
+                    Expr::Literal(ScalarValue::Null),
+                ])),
+                op: BinaryOp::Eq,
+                right: Box::new(array(vec![
+                    Expr::Literal(ScalarValue::Int64(1)),
+                    Expr::Literal(ScalarValue::Null),
+                ])),
+            },
+            &batch,
+        )
+        .unwrap();
+        assert!(nullable.as_boolean().is_null(0));
     }
 
     #[test]
