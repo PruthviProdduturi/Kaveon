@@ -105,8 +105,8 @@ foundations, but several operators are still centralized or narrow:
   Prepared-parameter discovery now also ignores PostgreSQL `::type` casts,
   so cast names cannot be mistaken for named bindings (`617b69f6`).
   Uncorrelated aggregate scalar subqueries in `WHERE` are now supported with
-  exact-result differential coverage; projection, correlated, and multi-row
-  scalar forms remain explicitly rejected.
+  exact-result differential coverage; correlated and multi-row scalar forms
+  remain explicitly rejected while bounded projection forms are supported.
   `CAST(... AS DATE)` is now supported with nullable `Date32` execution and
   focused parser/executor coverage. `CAST(... AS TIMESTAMP)` and
   `TIMESTAMP WITH TIME ZONE` now map to Arrow microsecond timestamps with
