@@ -4,7 +4,7 @@ import hashlib
 import os
 from typing import Optional
 
-from services import product_store
+from services import product_reads, product_store
 
 
 ENVIRONMENT_KEY = "KAVEONDB_READ_AUTHORITY_FAMILIES"
@@ -51,21 +51,56 @@ def enabled(family: str) -> bool:
     return family in configured
 
 
+_FAVOURABLE_FAMILIES = {"datasets", "charts", "dashboards", "saved_queries"}
+
+
+def favorite_record_id(family: str, actor: str, record_id: str) -> str:
+    """The favorites record that would mark *record_id* for *actor*.
+
+    Derived from the reference alone — the same derivation the favorites
+    service uses when it writes one — so the favorite can be read alongside
+    the record it decorates instead of after it.
+    """
+    return hashlib.sha256(
+        f"{actor}\0{_KIND[family]}\0{record_id}".encode()
+    ).hexdigest()
+
+
 def read_document(
     family: str,
     record_id: str,
     actor: Optional[str],
     role: str,
+    *,
+    with_favorite: bool = True,
 ) -> Optional[dict]:
     """Read one cutover record without any PostgreSQL fallback.
 
     KaveonDB is queried with the caller identity and an admin bridge role so the
     API can apply product visibility rules consistently with the legacy query.
+
+    The record and the caller's favorite marker are two independent reads of
+    about half a second each, so they are taken together. The favorite is read
+    even when the record turns out to be absent or invisible, which costs one
+    concurrent read on a path that returns nothing and saves half a second on
+    every path that returns something.
+
+    ``with_favorite=False`` drops that read entirely, for a caller that wants
+    the record's content rather than a Library card — serving a stored preview,
+    say, where whether the viewer has favorited the chart cannot affect the
+    image. Such a caller gets ``favorite`` as False and must not publish it.
     """
     if not enabled(family):
         raise ProductReadAuthorityError(f"{family} has not moved to KaveonDB read authority")
     principal = actor or "kaveon-system"
-    target = product_store.read(_KIND[family], str(record_id), principal, "Admin")
+    wants_favorite = bool(with_favorite and actor and family in _FAVOURABLE_FAMILIES)
+    reads = [lambda: product_store.read(_KIND[family], str(record_id), principal, "Admin")]
+    if wants_favorite:
+        favorite_id = favorite_record_id(family, actor, str(record_id))
+        reads.append(lambda: product_store.read("favorite", favorite_id, actor, "Admin"))
+    results = product_reads.gather(*reads)
+    target = results[0]
+    favorited = results[1] is not None if wants_favorite else False
     if target is None:
         return None
     document = target.get("document") if isinstance(target, dict) else None
@@ -91,13 +126,14 @@ def read_document(
     if actor is not None and not permitted:
         return None
     result = dict(document)
-    if actor and family in {"datasets", "charts", "dashboards", "saved_queries"}:
-        favorite_id = hashlib.sha256(
-            f"{actor}\0{_KIND[family]}\0{result.get('id')}".encode()
-        ).hexdigest()
-        result["favorite"] = product_store.read("favorite", favorite_id, actor, "Admin") is not None
-    else:
-        result["favorite"] = False
+    # The favorite above was derived from the reference the caller asked for.
+    # A record whose document names a different identity than the key it was
+    # read under would make that derivation wrong, so it is read again against
+    # what the document actually says rather than reported from the wrong key.
+    if wants_favorite and str(document.get("id")) != str(record_id):
+        favorite_id = favorite_record_id(family, actor, str(document.get("id")))
+        favorited = product_store.read("favorite", favorite_id, actor, "Admin") is not None
+    result["favorite"] = favorited
     return result
 
 
@@ -107,10 +143,19 @@ def list_documents(family: str, actor: str, role: str) -> list[dict]:
         raise ProductReadAuthorityError(f"{family} has not moved to KaveonDB read authority")
     if family == "chat_history":
         raise ProductReadAuthorityError("chat history requires its typed session or message list")
-    records = product_store.list_records(_KIND[family], actor, "Admin")
-    favorites = product_store.list_records("favorite", actor, "Admin") if family in {
+    # The family and the caller's favorites are independent listings, each
+    # costing about half a second in the coordinator whatever it returns, so
+    # they are taken at once. Every Library tab is one of these, and taking
+    # them in turn was most of what the tab spent.
+    wants_favorites = family in {
         "datasets", "charts", "dashboards", "saved_queries", "sources"
-    } else []
+    }
+    reads = [lambda: product_store.list_records(_KIND[family], actor, "Admin")]
+    if wants_favorites:
+        reads.append(lambda: product_store.list_records("favorite", actor, "Admin"))
+    listed = product_reads.gather(*reads)
+    records = listed[0]
+    favorites = listed[1] if wants_favorites else []
     favorite_ids = {
         (str(document.get("object_type")), str(document.get("object_id")))
         for record in favorites

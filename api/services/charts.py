@@ -115,6 +115,10 @@ def _adapt(row: dict, layout: str) -> dict:
         "chart_type": row.get("chart_type") or "table",
         "thumbnail": row.get("thumbnail"),
         "has_thumbnail": bool(row.get("thumbnail")),
+        # The metadata tables carry no capture time, so a preview read from one
+        # reports none and the refresh pass treats it as current rather than
+        # guessing. Only a KaveonDB product record stamps it.
+        "thumbnail_updated_at": None,
         "config": config,
         "query_config": query_config,
         "viz_config": viz_config,
@@ -133,16 +137,34 @@ def _dataset_names(documents: list[dict], actor: str | None,
                    *, max_age_seconds: float = 0.0) -> dict[str, str]:
     """Resolve the dataset names a batch of chart records needs in one read.
 
-    A chart record names its dataset by identity only, and the Library groups
-    seventy charts by dataset name, so the names are resolved for the whole
-    batch in a single bounded index read rather than one read per chart. A
-    point read reuses a recent index instead of paying a round trip of its own.
+    A chart record names its dataset by identity only, and a card shows the
+    dataset's name, so the names are resolved for the whole batch in a single
+    bounded index read rather than one read per chart. A point read reuses a
+    recent index instead of paying a round trip of its own; the list path reads
+    a current one alongside the charts themselves.
     """
     from services import datasets
     if not any(document.get("dataset_id") for document in documents):
         return {}
     return datasets.dataset_name_index(actor or "kaveon-system",
                                        max_age_seconds=max_age_seconds)
+
+
+def _speculative_dataset_names(actor: str | None):
+    """The dataset-name index, or the exception raised reading it.
+
+    Read alongside the chart listing rather than after it, because the listing
+    is the only thing that decides whether the names are wanted and waiting for
+    that answer costs a round trip of its own. The failure is carried back
+    instead of raised so that a listing which turns out to need no names — no
+    chart in the deployment names a dataset — is still answered, exactly as it
+    was when the index was read on demand.
+    """
+    from services import datasets
+    try:
+        return datasets.dataset_name_index(actor or "kaveon-system")
+    except Exception as error:  # noqa: BLE001 - re-raised by a caller that needs it
+        return error
 
 
 def _adapt_product(document: dict, dataset_names: dict[str, str]) -> dict:
@@ -155,6 +177,7 @@ def _adapt_product(document: dict, dataset_names: dict[str, str]) -> dict:
         "dataset_name": dataset_names.get(str(document.get("dataset_id") or "")),
         "thumbnail": document.get("thumbnail"),
         "has_thumbnail": bool(document.get("thumbnail")),
+        "thumbnail_updated_at": document.get("thumbnail_updated_at"),
         "owner": document.get("created_by"), "favorite": bool(document.get("favorite", False)),
     }
 
@@ -188,15 +211,39 @@ def _product_document(data: dict, chart_id: str, actor: str, prior: dict | None 
         data["thumbnail"] if "thumbnail" in data else prior.get("thumbnail"),
         thumbnails.CHART_MAX_CHARS,
     )
+    # When the stored image was taken. The Library's refresh pass needs to tell
+    # a current preview from one the chart has since outgrown, and `updated_at`
+    # alone cannot say that. Stamped only when the image itself changes, so an
+    # edit that leaves the preview alone makes the preview look older than the
+    # record — which is exactly what makes it outstanding. A record whose
+    # preview predates this field carries no stamp and is read as "cannot
+    # tell", never as stale.
+    captured_at = prior.get("thumbnail_updated_at")
+    if not isinstance(captured_at, str) or not captured_at:
+        captured_at = None
+    if thumbnail and thumbnail != prior.get("thumbnail"):
+        captured_at = now
+    # Storing a preview is not an edit of the chart. It used to be written as
+    # one, which left `updated_at` ahead of the capture time the preview was
+    # stored with, so every stored preview immediately looked stale, and a
+    # chart jumped to the top of the Library's recently-modified order merely
+    # by being rendered. A write that carries nothing but the preview keeps the
+    # record's own modification identity.
+    preview_only = bool(prior) and bool(data) and set(data) <= {"thumbnail"}
+    prior_updated_at = prior.get("updated_at")
+    updated_at = prior_updated_at if preview_only and isinstance(prior_updated_at, str) and prior_updated_at else now
+    prior_modified_by = prior.get("modified_by")
+    modified_by = prior_modified_by if preview_only and isinstance(prior_modified_by, str) and prior_modified_by else actor
     return {
         **({"thumbnail": thumbnail} if thumbnail else {}),
+        **({"thumbnail_updated_at": captured_at} if thumbnail and captured_at else {}),
         "id": chart_id, "name": data.get("name", prior.get("name")),
         "description": data.get("description", prior.get("description")),
         "dataset_id": dataset_id, "dataset_revision": dataset_revision,
         "chart_type": chart_type, "query_config": query_config,
         "viz_config": viz_config, "visibility": visibility,
-        "created_at": prior.get("created_at") or now, "updated_at": now,
-        "created_by": owner, "modified_by": actor,
+        "created_at": prior.get("created_at") or now, "updated_at": updated_at,
+        "created_by": owner, "modified_by": modified_by,
     }
 
 
@@ -211,7 +258,20 @@ def _summary(chart: dict) -> dict:
 
 
 def get_chart_thumbnail(chart_id: str, user_email: str, role: str) -> Optional[str]:
-    """Return one chart's stored preview data URI, or None when it has none."""
+    """Return one chart's stored preview data URI, or None when it has none.
+
+    A cover needs the chart's bytes and the authority to serve them, and
+    nothing else. Reading it as a whole Library card also asked whether the
+    viewer had favorited the chart and what its dataset is called — two
+    independent product reads that cannot change the image — which turned a
+    single round trip into three. Seventy cards paid that per card.
+    """
+    from services import product_read_authority
+    if product_read_authority.enabled("charts"):
+        document = product_read_authority.read_document(
+            "charts", chart_id, user_email, role, with_favorite=False,
+        )
+        return (document or {}).get("thumbnail") or None
     chart = get_chart_by_id(chart_id, user_email, role, include_thumbnail=True)
     return (chart or {}).get("thumbnail") or None
 
@@ -226,10 +286,30 @@ def _vis_clause(role_idx: int, email_idx: int, alias: str = "c") -> str:
 
 
 def list_charts(user_email: str, role: str = "Viewer") -> List[dict]:
-    from services import product_read_authority
+    from services import product_read_authority, product_reads
     if product_read_authority.enabled("charts"):
-        documents = product_read_authority.list_documents("charts", user_email, role)
-        names = _dataset_names(documents, user_email)
+        # The chart listing and the dataset-name index are independent, and the
+        # index is what turns a chart's dataset identity into the name on its
+        # card. Reading it after the charts came back added its own half second
+        # to the tab, and the only thing the listing decided was whether the
+        # index was wanted at all.
+        #
+        # Only worth overlapping while the names come from the product store:
+        # a deployment whose datasets are still in PostgreSQL resolves them
+        # with a local query rather than a round trip, and must not be made to
+        # run that query speculatively for a chart list that needs no names.
+        if not product_read_authority.enabled("datasets"):
+            documents = product_read_authority.list_documents("charts", user_email, role)
+            names = _dataset_names(documents, user_email)
+            return [_summary(_adapt_product(item, names)) for item in documents]
+        documents, names = product_reads.gather(
+            lambda: product_read_authority.list_documents("charts", user_email, role),
+            lambda: _speculative_dataset_names(user_email),
+        )
+        if isinstance(names, BaseException):
+            if any(document.get("dataset_id") for document in documents):
+                raise names
+            names = {}
         return [_summary(_adapt_product(item, names)) for item in documents]
     layout = _chart_schema()
     if layout == "legacy":
