@@ -102,8 +102,8 @@ unchanged; nothing is approximated unless the statement writes an
 - Non-equality join conditions (residual join filters) and `GROUPING SETS`/
   `CUBE`/`ROLLUP`, recursive CTEs, ordered row/map and JSON comparison;
   typed numeric and text `ARRAY[...]` literals support `CARDINALITY`,
-  `CONTAINS`, `ARRAY_POSITION`, and `ELEMENT_AT`, while slices and broader
-  array operators remain open;
+  `CONTAINS`, `ARRAY_POSITION`, `ELEMENT_AT`, and positive or negative-stride
+  slices; broader array operators and element types remain open;
   approximate aggregates beyond `APPROX_COUNT_DISTINCT` and
   `APPROX_PERCENTILE` — `APPROX_MOST_FREQUENT` has no heavy-hitter sketch in
   the statistics object yet.
