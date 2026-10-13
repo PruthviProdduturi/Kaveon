@@ -1936,6 +1936,29 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             .collect();
                         return Ok(Arc::new(result));
                     }
+                    DataType::Boolean => {
+                        let needle = compute::cast(&args[1], &DataType::Boolean)?;
+                        let needle = needle.as_boolean();
+                        let result: BooleanArray = (0..num_rows)
+                            .map(|row| {
+                                if list.is_null(row) || needle.is_null(row) {
+                                    return None;
+                                }
+                                let values = list.value(row);
+                                let values = values.as_boolean();
+                                let mut saw_null = false;
+                                for index in 0..values.len() {
+                                    if values.is_null(index) {
+                                        saw_null = true;
+                                    } else if values.value(index) == needle.value(row) {
+                                        return Some(true);
+                                    }
+                                }
+                                if saw_null { None } else { Some(false) }
+                            })
+                            .collect();
+                        return Ok(Arc::new(result));
+                    }
                     other => {
                         return Err(KaveonError::Execution(format!(
                             "CONTAINS does not support list element type {other}"
@@ -2001,6 +2024,30 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             }
                             let values = list.value(row);
                             let values = values.as_string::<i32>();
+                            (0..values.len())
+                                .find(|&index| {
+                                    if needle.is_null(row) {
+                                        values.is_null(index)
+                                    } else {
+                                        !values.is_null(index)
+                                            && values.value(index) == needle.value(row)
+                                    }
+                                })
+                                .map(|index| index as i64 + 1)
+                                .or(Some(0))
+                        })
+                        .collect::<Vec<_>>()
+                }
+                DataType::Boolean => {
+                    let needle = compute::cast(&args[1], &DataType::Boolean)?;
+                    let needle = needle.as_boolean();
+                    (0..num_rows)
+                        .map(|row| {
+                            if list.is_null(row) {
+                                return None;
+                            }
+                            let values = list.value(row);
+                            let values = values.as_boolean();
                             (0..values.len())
                                 .find(|&index| {
                                     if needle.is_null(row) {
@@ -2112,6 +2159,36 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         } else {
                             end.max(1).min(length)
                         };
+                        if (step > 0 && first <= last) || (step < 0 && first >= last) {
+                            let mut index = first;
+                            while (step > 0 && index <= last) || (step < 0 && index >= last) {
+                                let offset = (index - 1) as usize;
+                                builder.values().append_option(values.is_valid(offset).then(|| values.value(offset)));
+                                index += step;
+                            }
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }
+                DataType::Boolean => {
+                    let mut builder = ListBuilder::new(BooleanBuilder::new());
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let values = list.value(row);
+                        let values = values.as_boolean();
+                        let length = values.len() as i64;
+                        let step = stride.is_valid(row).then(|| stride.value(row)).unwrap_or(1);
+                        let start = lower.is_valid(row).then(|| lower.value(row)).unwrap_or(if step < 0 { length } else { 1 });
+                        let end = upper.is_valid(row).then(|| upper.value(row)).unwrap_or(if step < 0 { 1 } else { length });
+                        if step == 0 {
+                            return Err(KaveonError::Execution("ARRAY_SLICE stride cannot be zero".into()));
+                        }
+                        let first = if step > 0 { start.max(1).min(length + 1) } else { start.max(1).min(length) };
+                        let last = if step > 0 { end.max(0).min(length) } else { end.max(1).min(length) };
                         if (step > 0 && first <= last) || (step < 0 && first >= last) {
                             let mut index = first;
                             while (step > 0 && index <= last) || (step < 0 && index >= last) {
@@ -3220,6 +3297,41 @@ mod tests {
         let list = value.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(list.value_type(), DataType::Boolean);
         assert_eq!(list.value(0).as_boolean().iter().collect::<Vec<_>>(), vec![Some(true), None, Some(false)]);
+
+        let contains = evaluate(
+            &Expr::Function {
+                name: "CONTAINS".into(),
+                args: vec![
+                    Expr::Function {
+                        name: "ARRAY".into(),
+                        args: vec![Expr::Literal(ScalarValue::Bool(true))],
+                    },
+                    Expr::Literal(ScalarValue::Bool(true)),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(contains.as_boolean().iter().collect::<Vec<_>>(), vec![Some(true), Some(true)]);
+
+        let position = evaluate(
+            &Expr::Function {
+                name: "ARRAY_POSITION".into(),
+                args: vec![
+                    Expr::Function {
+                        name: "ARRAY".into(),
+                        args: vec![
+                            Expr::Literal(ScalarValue::Bool(false)),
+                            Expr::Literal(ScalarValue::Bool(true)),
+                        ],
+                    },
+                    Expr::Literal(ScalarValue::Bool(true)),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(position.as_primitive::<Int64Type>().values(), &[2, 2]);
     }
 
     #[test]
