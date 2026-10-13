@@ -150,11 +150,14 @@ impl DiskExchangeStore {
                 .0
                 .join(format!("{}.chunk", uuid::Uuid::new_v4())),
             bytes,
-            query,
+            query: query.clone(),
             quota: self.quota.clone(),
             _directory: self.directory.clone(),
         });
-        fs::write(&file.path, encoded).map_err(|error| error.to_string())?;
+        if let Err(error) = fs::write(&file.path, encoded) {
+            drop(file);
+            return Err(error.to_string());
+        }
         let entry = state
             .entries
             .entry(chunk.identity)
@@ -407,6 +410,20 @@ mod tests {
         assert!(store.insert(chunk()).is_err());
         assert_eq!(store.quota.state.lock().unwrap().total, 0);
         assert_eq!(fs::read_dir(&store.directory.0).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn failed_chunk_write_refunds_quota() {
+        let root = std::env::temp_dir().join(format!("kaveon-write-failure-{}", uuid::Uuid::new_v4()));
+        let store = DiskExchangeStore::new(&root, 1024).unwrap();
+        fs::remove_dir_all(&store.directory.0).unwrap();
+        assert!(store.insert(chunk()).is_err());
+        let quota = store.quota.state.lock().unwrap();
+        assert_eq!(quota.total, 0);
+        assert!(quota.queries.is_empty());
+        drop(quota);
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
