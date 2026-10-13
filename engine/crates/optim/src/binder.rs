@@ -359,9 +359,9 @@ impl Binder<'_> {
                 let scope = self.scope_of(&input.plan);
                 let order_by = order_by
                     .into_iter()
-                    .map(|(key, ascending)| {
+                    .map(|(key, ascending, nulls_first)| {
                         self.bind_expr(key, &scope, input.aggregate_input.as_ref())
-                            .map(|key| (key, ascending))
+                            .map(|key| (key, ascending, nulls_first))
                     })
                     .collect::<Result<_>>()?;
                 Ok(Bound {
@@ -1830,7 +1830,7 @@ mod tests {
             panic!("sort");
         };
         // Above the projection nothing is rewritten.
-        assert_eq!(order_by, vec![(column("q"), false)]);
+        assert_eq!(order_by, vec![(column("q"), false, true)]);
         let LogicalPlan::Project { input, columns } = *input else {
             panic!("projection");
         };

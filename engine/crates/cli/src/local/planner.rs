@@ -198,7 +198,9 @@ fn plan_with_predicate(
             let source = plan_to_operator(input, catalog)?;
             let ordering = order_by
                 .iter()
-                .map(|(expr, ascending)| SortExpr::new(expr.clone(), *ascending))
+                .map(|(expr, ascending, nulls_first)| {
+                    SortExpr::new(expr.clone(), *ascending).with_nulls_first(*nulls_first)
+                })
                 .collect();
             Ok(Box::new(SortOperator::new(source, ordering)?))
         }
