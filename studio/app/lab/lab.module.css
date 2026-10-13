@@ -1,0 +1,79 @@
+/* ── The results pane's geometry ──────────────────────────────────────────
+   One rule governs this file: from the moment a statement is submitted, the
+   grid's top edge belongs to the pane, not to whatever the run happens to
+   be reporting at that instant.
+
+   The defect this replaces: the running panel sat in the pane's normal flow
+   and occupied 240px of it, while the column header rendered as soon as the
+   coordinator published the schema — which is one or more polls before the
+   first page of rows lands. So the header painted 240px down the pane,
+   under the panel, and jumped to the top the moment the first rows arrived
+   and the panel unmounted. Pagination had the same shape of fault: it
+   rendered above the grid and appeared mid-stream, pushing the grid down as
+   the hundred-and-first row landed.
+
+   The pane is therefore a column whose grid always takes the remaining
+   height, the running panel is lifted out of the flow, and pagination sits
+   under the grid where it can only change the grid's height, never its
+   origin. */
+
+.pane {
+  display: flex;
+  flex-direction: column;
+}
+
+/* The grid takes the pane's remaining height at every moment of a run, so
+   starting and finishing one never re-measures it. The global rule gives
+   the container a percentage height for the standalone cases; this is
+   scoped to the pane, so it wins there without reaching into that rule. */
+.pane :global(.results-table-container) {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+}
+
+/* Several statements at once: one scroller for the lot, inside the pane's
+   own height rather than clipped by it. */
+.pane :global(.lab-multi-results) {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* A statement in flight with nothing yet on screen to displace. Out of the
+   flow and filling the pane, the same treatment the idle state already
+   has, so the panel cannot hold a position that the result then has to
+   take back. */
+.running {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+}
+
+/* The columns are up and the first page has not landed. The header is
+   already in its final place; this reports the wait beneath it, inside the
+   grid's own scroller, so saying it costs the header nothing. */
+.awaitingRows {
+  margin: 0;
+  padding: 0.9rem 0.15rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+/* Pagination, under the grid. */
+.pager {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 1.25rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.pagerBtn {
+  padding: 0.15rem 0.5rem;
+  font-size: 0.72rem;
+}
