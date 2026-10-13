@@ -416,12 +416,15 @@ invalidation, isolation, bounds, and restart evidence listed above.
   partition/build reduction without claiming runtime dynamic filtering.
 - A distributed self-join with grouped output now has exact worker-loss
   recovery coverage, including retries and moved exchange spools
-  (`43a2f8f9`). AKS worker-loss qualification remains open.
+  (`43a2f8f9`). The deployed AKS worker-loss gate is now also green for the
+  declared three-worker workload; broader join-shape and cloud-fault coverage
+  remains open.
 - A grouped aggregate followed by a global descending sort now has an exact
   worker-loss recovery case: the final order, row multiplicity, and re-executed
   stage are asserted after a producer-side worker disappears. This qualifies
-  the combined in-process path; deployed worker-loss qualification remains
-  open.
+  the combined in-process path; the deployed AKS qualification covers the
+  declared scan/aggregate workload, while this exact grouped-sort shape still
+  needs a deployed differential run.
 - Trino `COUNT_IF(predicate)` now lowers to the existing null-preserving
   filtered-count state, including aggregate `FILTER` composition, window use,
   distributed partial/final merges, and explicit arity/wildcard diagnostics.
