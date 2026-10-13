@@ -19,6 +19,7 @@ by the selected database and Kaveon's API guardrails.
 | Qualified table names | Alpha | `catalog.schema.table` resolution is supported by the catalog |
 | `ORDER BY`, `NULLS FIRST/LAST`, TopN | Alpha | Local/distributed execution; Sort/TopN support bounded external merge runs |
 | Equi joins | Alpha | INNER/LEFT/RIGHT/FULL locally and distributed (hash repartition or broadcast of the small side from exact statistics); comma joins with WHERE equalities become hash joins through the binder; ON conditions route like WHERE and an outer join filters its non-preserved side by single-side conjuncts |
+| Inner residual joins | Alpha | Inner joins with non-equality predicates lower to a distributed cross join followed by the original filter, preserving three-valued results; outer residual joins remain unsupported until a residual-aware null-extension path exists |
 | Cross joins | Alpha | Local Cartesian semantics and distributed broadcast-build path |
 | Semi/anti joins | Alpha | `IN`/`NOT IN`/`EXISTS`/`NOT EXISTS` subqueries, locally and distributed (broadcast of the subquery side); correlated `EXISTS`/`NOT EXISTS` on one equality decorrelated by the binder |
 | Scalar subqueries | Alpha | Uncorrelated scalar subqueries in WHERE/HAVING (an ungrouped aggregate, as a single-row cross join); correlated scalar aggregates on one or two equalities decorrelated into a join on the grouped aggregate |
@@ -99,7 +100,7 @@ unchanged; nothing is approximated unless the statement writes an
   (TPC-H Q21's `l2.l_suppkey <> l1.l_suppkey`), `COUNT` in a correlated scalar,
   `LIMIT`/set operations inside a correlated subquery, `EXISTS` correlated on
   more than one column, correlated `IN`; each is refused by name.
-- Non-equality join conditions (residual join filters) and `GROUPING SETS`/
+- Outer non-equality join conditions (residual join filters) and `GROUPING SETS`/
   `CUBE`/`ROLLUP`, recursive CTEs, ordered map and JSON comparison;
   typed numeric and text `ARRAY[...]` literals support `CARDINALITY`,
   `CONTAINS`, `ARRAY_POSITION`, `ELEMENT_AT`, and positive or negative-stride
