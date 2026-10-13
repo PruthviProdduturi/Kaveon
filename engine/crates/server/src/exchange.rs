@@ -1307,6 +1307,59 @@ mod tests {
         assert!(decoded.is_empty());
     }
 
+    #[tokio::test]
+    async fn streamed_output_applies_backpressure_before_completing_a_write() {
+        // A bounded exchange lane must stop the blocking producer when the
+        // receiver has not drained it. This protects worker memory when an
+        // uploader or downstream task is slower than the encoder.
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int64Array::from_iter_values(0..400))],
+        )
+        .unwrap();
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        let (write_done, mut write_done_rx) = tokio::sync::oneshot::channel();
+        let written = tokio::task::spawn_blocking(move || {
+            let mut output = StreamingOutput::new(identity(), &schema, sender, limits()).unwrap();
+            output.write(&batch).unwrap();
+            let _ = write_done.send(());
+            output.finish().unwrap()
+        });
+
+        // The batch produces multiple 128-byte chunks. With one receiver
+        // slot, the producer cannot reach the completion signal until the
+        // first chunk is consumed.
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut write_done_rx)
+                .await
+                .is_err(),
+            "producer completed while the bounded lane was full"
+        );
+        let first = receiver.recv().await.unwrap();
+        assert_eq!(first.payload.len(), limits().max_chunk_bytes);
+        let mut chunks = vec![first];
+        loop {
+            tokio::select! {
+                result = &mut write_done_rx => {
+                    result.unwrap();
+                    break;
+                }
+                chunk = receiver.recv() => {
+                    chunks.push(chunk.expect("producer closed before write completed"));
+                }
+            }
+        }
+        while let Some(chunk) = receiver.recv().await {
+            chunks.push(chunk);
+        }
+        assert!(chunks.len() > 1);
+        assert_eq!(
+            written.await.unwrap(),
+            chunks.iter().map(|c| c.payload.len() as u64).sum::<u64>()
+        );
+    }
+
     #[test]
     fn envelope_round_trip_is_deterministic() {
         let chunk = ExchangeChunk {
