@@ -1680,6 +1680,58 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 "ARRAY elements must have one common type".into(),
             ));
         }
+        if matches!(data_type, DataType::List(_) | DataType::LargeList(_)) {
+            let mut child_chunks = Vec::with_capacity(num_rows.saturating_mul(args.len()));
+            let mut offsets = vec![0_i32];
+            for row in 0..num_rows {
+                for arg in args {
+                    let chunk = match arg.data_type() {
+                        DataType::List(_) | DataType::LargeList(_) => arg.slice(row, 1),
+                        DataType::Null => {
+                            let field = match &data_type {
+                                DataType::List(field) | DataType::LargeList(field) => field.clone(),
+                                _ => unreachable!(),
+                            };
+                            let empty = arrow::array::new_empty_array(field.data_type());
+                            let nulls = arrow::buffer::NullBuffer::from(vec![false]);
+                            Arc::new(ListArray::try_new(
+                                field,
+                                OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 0_i32])),
+                                empty,
+                                Some(nulls),
+                            )?) as ArrayRef
+                        }
+                        other => {
+                            return Err(KaveonError::Execution(format!(
+                                "ARRAY elements must have one common type, found {other}"
+                            )))
+                        }
+                    };
+                    child_chunks.push(chunk);
+                }
+                offsets.push(child_chunks.len() as i32);
+            }
+            let values = if child_chunks.is_empty() {
+                arrow::array::new_empty_array(&data_type)
+            } else {
+                let chunks = child_chunks
+                    .iter()
+                    .map(|chunk| chunk.as_ref() as &dyn Array)
+                    .collect::<Vec<_>>();
+                compute::concat(&chunks)?
+            };
+            let field = Arc::new(arrow::datatypes::Field::new(
+                "item",
+                values.data_type().clone(),
+                true,
+            ));
+            return Ok(Arc::new(ListArray::try_new(
+                field,
+                OffsetBuffer::new(ScalarBuffer::from(offsets)),
+                values,
+                None,
+            )?));
+        }
         macro_rules! build_array {
             ($builder:expr, $array_ty:ty, $value:expr) => {{
                 let mut builder = ListBuilder::new($builder);
@@ -6480,6 +6532,36 @@ mod tests {
             ScalarValue::Int64(2),
         );
         assert!(nullable.as_boolean().is_null(0));
+    }
+
+    #[test]
+    fn nested_array_literals_materialize_as_lists_of_lists() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        let array = |values: Vec<Expr>| Expr::Function {
+            name: "ARRAY".into(),
+            args: values,
+        };
+        let nested = evaluate(
+            &array(vec![
+                array(vec![
+                    Expr::Literal(ScalarValue::Int64(1)),
+                    Expr::Literal(ScalarValue::Int64(2)),
+                ]),
+                array(vec![Expr::Literal(ScalarValue::Int64(3))]),
+            ]),
+            &batch,
+        )
+        .unwrap();
+        let outer = nested.as_any().downcast_ref::<ListArray>().unwrap();
+        let inner_value = outer.value(0);
+        let inner = inner_value.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(inner.len(), 2);
+        assert_eq!(inner.value(0).as_primitive::<Int64Type>().values(), &[1, 2]);
+        assert_eq!(inner.value(1).as_primitive::<Int64Type>().values(), &[3]);
     }
 
     #[test]
