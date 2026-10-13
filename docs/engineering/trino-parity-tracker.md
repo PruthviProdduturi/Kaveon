@@ -235,7 +235,7 @@ qualification documents; this tracker remains the single ordered work list.
   unequal rows.
 - `TRY_CAST` now lowers to Arrow safe per-element casts for the supported
   primitive, date/time, and decimal targets; invalid values become NULL while
-  valid values in the same batch remain intact (`current cycle`).
+  valid values in the same batch remain intact (`6e4a8a44`).
 
 ### Current focused validation
 
