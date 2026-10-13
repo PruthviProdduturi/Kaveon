@@ -1595,11 +1595,25 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             false,
         )?));
     }
-    if upper == "MAP_KEYS" || upper == "MAP_VALUES" {
+    if upper == "MAP_KEYS" || upper == "MAP_VALUES" || upper == "MAP_ENTRIES" {
         check_arity(name, args, 1)?;
         let map = args[0].as_any().downcast_ref::<MapArray>().ok_or_else(|| {
             KaveonError::Execution(format!("{upper} currently supports MAP values only"))
         })?;
+        if upper == "MAP_ENTRIES" {
+            let values = Arc::new(map.entries().clone()) as ArrayRef;
+            let field = Arc::new(arrow::datatypes::Field::new(
+                "item",
+                values.data_type().clone(),
+                true,
+            ));
+            return Ok(Arc::new(ListArray::try_new(
+                field,
+                map.offsets().clone(),
+                values,
+                map.nulls().cloned(),
+            )?));
+        }
         let values = if upper == "MAP_KEYS" {
             map.keys()
         } else {
@@ -5265,6 +5279,54 @@ mod tests {
         let values = values.as_list::<i32>();
         assert_eq!(values.value(0).as_primitive::<Float64Type>().value(0), 1.0);
         assert!(values.is_null(1));
+    }
+
+    #[test]
+    fn map_entries_preserves_typed_key_value_structs() {
+        let input = RecordBatch::try_from_iter([(
+            "dummy",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "MAP_ENTRIES".into(),
+                args: vec![Expr::Function {
+                    name: "MAP".into(),
+                    args: vec![
+                        Expr::Function {
+                            name: "ARRAY".into(),
+                            args: vec![Expr::Literal(ScalarValue::Utf8("a".into()))],
+                        },
+                        Expr::Function {
+                            name: "ARRAY".into(),
+                            args: vec![Expr::Literal(ScalarValue::Int64(7))],
+                        },
+                    ],
+                }],
+            },
+            &input,
+        )
+        .unwrap();
+        let entries = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let entry_value = entries.value(0);
+        let entry = entry_value.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(
+            entry
+                .column_by_name("key")
+                .unwrap()
+                .as_string::<i32>()
+                .value(0),
+            "a"
+        );
+        assert_eq!(
+            entry
+                .column_by_name("value")
+                .unwrap()
+                .as_primitive::<Int64Type>()
+                .value(0),
+            7
+        );
     }
 
     #[test]
