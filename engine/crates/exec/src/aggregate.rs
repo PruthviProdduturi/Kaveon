@@ -353,7 +353,7 @@ pub fn aggregate_output_types(aggregates: &[AggExpr], input: &SchemaRef) -> Resu
                 if matches!(agg.func, AggFunc::Min | AggFunc::Max)
                     && matches!(
                         data_type,
-                        DataType::Utf8 | DataType::LargeUtf8 | DataType::Date32
+                        DataType::Utf8 | DataType::LargeUtf8 | DataType::Date32 | DataType::Timestamp(_, _)
                     )
                 {
                     return Ok(data_type.clone());
@@ -420,7 +420,7 @@ impl AggregateState {
         }
         if matches!(
             output_type,
-            DataType::Int32 | DataType::Int64 | DataType::Date32
+            DataType::Int32 | DataType::Int64 | DataType::Date32 | DataType::Timestamp(_, _)
         ) {
             return match (expression.func, expression.distinct) {
                 (AggFunc::Sum, false) => Self::IntegerSum { sum: 0, count: 0 },
@@ -1292,7 +1292,7 @@ fn validate_state_output_types(states: &[AggregateState], output_types: &[DataTy
                 AggregateState::IntegerMin(_) | AggregateState::IntegerMax(_)
                     if matches!(
                         data_type,
-                        DataType::Int32 | DataType::Int64 | DataType::Date32
+                        DataType::Int32 | DataType::Int64 | DataType::Date32 | DataType::Timestamp(_, _)
                     ) =>
                 {
                     data_type.clone()
@@ -2487,7 +2487,7 @@ impl HashAggregate {
                     && !(matches!(agg.func, AggFunc::Min | AggFunc::Max)
                         && matches!(
                             data_type,
-                            DataType::Utf8 | DataType::LargeUtf8 | DataType::Date32
+                            DataType::Utf8 | DataType::LargeUtf8 | DataType::Date32 | DataType::Timestamp(_, _)
                         ))
                 {
                     return Err(exec_err(format!(
@@ -4336,7 +4336,7 @@ impl BatchOperator for HashAggregate {
                         Arc::new(days)
                     });
                 }
-                DataType::Int64 => {
+                data_type @ (DataType::Int64 | DataType::Timestamp(_, _)) => {
                     let values = entries
                         .iter()
                         .map(|(_, states)| {
@@ -4348,7 +4348,12 @@ impl BatchOperator for HashAggregate {
                                 .transpose()
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    columns.push(Arc::new(Int64Array::from(values)));
+                    let values = Int64Array::from(values);
+                    columns.push(if matches!(data_type, DataType::Timestamp(_, _)) {
+                        arrow::compute::cast(&values, data_type)?
+                    } else {
+                        Arc::new(values)
+                    });
                 }
                 DataType::Decimal128(precision, scale) => {
                     let values = entries
@@ -4859,13 +4864,12 @@ fn extract_f64(arr: &ArrayRef, row: usize) -> Result<f64> {
     Ok(value)
 }
 
-/// An aggregate input as the integers it folds as: a day-number date
-/// column is viewed as Int32 (a reinterpretation, no copy); anything else
-/// is itself. MIN and MAX over dates come back as dates from the output
-/// type, so only the fold sees the numbers.
+/// Temporal aggregate inputs fold as their exact integer representations.
+/// MIN and MAX recover the date or timestamp type from the output schema.
 fn day_numbers(array: &ArrayRef) -> Result<ArrayRef> {
     Ok(match array.data_type() {
         DataType::Date32 => arrow::compute::cast(array, &DataType::Int32)?,
+        DataType::Timestamp(_, _) => arrow::compute::cast(array, &DataType::Int64)?,
         _ => Arc::clone(array),
     })
 }
@@ -5414,6 +5418,50 @@ mod tests {
         }
         fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
             Ok(self.batches.pop_front())
+        }
+    }
+
+    #[test]
+    fn timestamp_min_max_preserves_units_timezone_and_exact_values() {
+        use arrow::datatypes::TimeUnit;
+        for unit in [TimeUnit::Second, TimeUnit::Millisecond, TimeUnit::Microsecond, TimeUnit::Nanosecond] {
+            let data_type = DataType::Timestamp(unit, Some("UTC".into()));
+            // Adjacent values above f64's exact integer range must stay distinct.
+            let low = 9_007_199_254_740_992_i64;
+            let high = low + 1;
+            let timestamps = arrow::compute::cast(
+                &Int64Array::from(vec![Some(high), None, Some(low), None]),
+                &data_type,
+            ).unwrap();
+            let batch = RecordBatch::try_new(
+                Arc::new(Schema::new(vec![
+                    Field::new("g", DataType::Int64, false),
+                    Field::new("t", data_type.clone(), true),
+                ])),
+                vec![Arc::new(Int64Array::from(vec![1, 1, 1, 2])), timestamps],
+            ).unwrap();
+            for grouped in [false, true] {
+                let mut aggregate = HashAggregate::new(
+                    Box::new(Input::new(batch.clone())),
+                    if grouped { vec!["g".into()] } else { vec![] },
+                    vec![AggExpr::new(AggFunc::Min, "t"), AggExpr::new(AggFunc::Max, "t")],
+                ).unwrap();
+                let result = aggregate.next_batch().unwrap().unwrap();
+                let offset = usize::from(grouped);
+                assert_eq!(result.column(offset).data_type(), &data_type);
+                assert_eq!(result.column(offset + 1).data_type(), &data_type);
+                let min = arrow::compute::cast(result.column(offset), &DataType::Int64).unwrap();
+                let max = arrow::compute::cast(result.column(offset + 1), &DataType::Int64).unwrap();
+                for row in 0..result.num_rows() {
+                    if grouped && result.column(0).as_primitive::<Int64Type>().value(row) == 2 {
+                        assert!(min.is_null(row));
+                        assert!(max.is_null(row));
+                    } else {
+                        assert_eq!(min.as_primitive::<Int64Type>().value(row), low);
+                        assert_eq!(max.as_primitive::<Int64Type>().value(row), high);
+                    }
+                }
+            }
         }
     }
 
