@@ -49,7 +49,8 @@ the execution suite includes a timestamp-list regression. `ARRAY_CONCAT` also
 preserves those temporal element types, as do `ARRAY_APPEND`,
 `ARRAY_PREPEND`, `ARRAY_REMOVE`, `ARRAY_MIN`, `ARRAY_MAX`, and
 `ARRAY_REVERSE`, `ARRAY_SORT` (with nulls last), and `ARRAY_SLICE` with
-positive or negative stride. `ARRAY_POSITION` also preserves temporal values.
+positive or negative stride. `ARRAY_POSITION` and `ARRAY_DISTINCT` also
+preserve temporal values and element types.
 `CONTAINS` and `ARRAYS_OVERLAP` now do as well. Other timestamp units and
 temporal array operations remain outside this slice.
 
@@ -372,7 +373,9 @@ qualification documents; this tracker remains the single ordered work list.
   order and keeps at most one NULL for numeric, text, and boolean lists;
   `ARRAY_SORT` orders those same supported element types with NULL values last;
   `ARRAY_REVERSE` reverses those lists while preserving NULL elements;
-  broader element types remain an explicit boundary.
+  temporal DATE32, DATE64, TIME32 second/millisecond, and TIMESTAMP microsecond
+  lists are also supported for these operations; broader element types remain
+  an explicit boundary.
 - Array constructors now execute as typed Arrow lists for boolean, 32/64-bit integer,
   `DATE`/`DATE64`, `TIME32`, floating-point, UTF-8, decimal, and all-NULL elements. Mixed integer and
   floating-point literals are promoted to `DOUBLE`; null elements preserve the
