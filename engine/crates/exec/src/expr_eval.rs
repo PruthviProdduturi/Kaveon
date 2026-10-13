@@ -3736,6 +3736,20 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             match left.value_type() {
                 DataType::Int64 => concat_primitive!(Int64Type, Int64Builder::new()),
                 DataType::Float64 => concat_primitive!(Float64Type, Float64Builder::new()),
+                DataType::Date32 => concat_primitive!(Date32Type, PrimitiveBuilder::<Date32Type>::new()),
+                DataType::Date64 => concat_primitive!(Date64Type, PrimitiveBuilder::<Date64Type>::new()),
+                DataType::Time32(TimeUnit::Second) => concat_primitive!(
+                    Time32SecondType,
+                    PrimitiveBuilder::<Time32SecondType>::new()
+                ),
+                DataType::Time32(TimeUnit::Millisecond) => concat_primitive!(
+                    Time32MillisecondType,
+                    PrimitiveBuilder::<Time32MillisecondType>::new()
+                ),
+                DataType::Timestamp(TimeUnit::Microsecond, _) => concat_primitive!(
+                    TimestampMicrosecondType,
+                    PrimitiveBuilder::<TimestampMicrosecondType>::new()
+                ),
                 DataType::Decimal128(precision, scale) => {
                     let mut builder = ListBuilder::new(
                         Decimal128Builder::new()
@@ -7185,6 +7199,40 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![None]
         );
+    }
+
+    #[test]
+    fn concatenates_temporal_array_elements_without_coercion() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "left_day",
+                Arc::new(arrow::array::Date32Array::from(vec![Some(10)])) as ArrayRef,
+            ),
+            (
+                "right_day",
+                Arc::new(arrow::array::Date32Array::from(vec![Some(20)])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let array = |column: &str| Expr::Function {
+            name: "ARRAY".into(),
+            args: vec![Expr::Column(column.into())],
+        };
+        let result = evaluate(
+            &Expr::Function {
+                name: "ARRAY_CONCAT".into(),
+                args: vec![array("left_day"), array("right_day")],
+            },
+            &batch,
+        )
+        .unwrap();
+        let values = result
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap()
+            .value(0);
+        let values = values.as_primitive::<arrow::datatypes::Date32Type>();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(10), Some(20)]);
     }
 
     #[test]
