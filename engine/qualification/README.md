@@ -251,6 +251,12 @@ can pass. It also does not claim coordinator-loss survival, sustained network-pr
 cloud-storage fault injection, longer endurance, or upgrade/rollback evidence;
 those remain explicit Track 1 blockers.
 
+Long publication runs also write an atomic `<report>.progress.json` sidecar
+after startup and after each engine round. It contains only bounded progress
+metadata (current engine/round, completed rounds, and throughput counts); it is
+operational visibility, not claim evidence. The complete report remains the
+only artifact accepted by the claim gate.
+
 The coordinator result-cache SLO is a separate Track 1 gate. It is not implied
 by the distributed execution SLO or by the local cache test suite. A cache
 qualification record must come from the deployed image under test and include

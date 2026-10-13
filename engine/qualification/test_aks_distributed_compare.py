@@ -1,10 +1,34 @@
 import unittest
 import unittest.mock
 import sys
+import tempfile
+import json
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from aks_distributed_compare import active_worker_nodes, merge_stage_execution, summarize_successful_latencies
+from aks_distributed_compare import (active_worker_nodes, merge_stage_execution,
+                                     summarize_successful_latencies, write_progress_checkpoint)
+
+
+class ProgressCheckpointTests(unittest.TestCase):
+    def test_writes_bounded_atomic_sidecar(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "report.json"
+            progress = write_progress_checkpoint(
+                output,
+                started_at="2026-10-13T00:00:00+00:00",
+                engine="kaveon",
+                round_index=2,
+                completed_rounds=3,
+                cases_completed=12,
+                throughput_rounds={"kaveon": 2, "trino": 1},
+            )
+            self.assertEqual(progress, output.with_name("report.json.progress.json"))
+            payload = json.loads(progress.read_text())
+            self.assertEqual(payload["state"], "running")
+            self.assertEqual(payload["completed_rounds"], 3)
+            self.assertEqual(payload["throughput_rounds"]["trino"], 1)
+            self.assertFalse(progress.with_name(progress.name + ".tmp").exists())
 
 
 class ExecutionSummaryTests(unittest.TestCase):

@@ -21,6 +21,29 @@ def utcnow():
     return datetime.now(timezone.utc).isoformat()
 
 
+def write_progress_checkpoint(output, *, started_at, engine, round_index,
+                              completed_rounds, cases_completed, throughput_rounds):
+    """Atomically publish bounded progress for a long qualification run."""
+    output = Path(output)
+    progress = output.with_name(output.name + ".progress.json")
+    payload = {
+        "schema_version": 1,
+        "started_at": started_at,
+        "updated_at": utcnow(),
+        "state": "running",
+        "current_engine": engine,
+        "current_round": round_index,
+        "completed_rounds": completed_rounds,
+        "cases_completed": cases_completed,
+        "throughput_rounds": throughput_rounds,
+        "final_report": str(output),
+    }
+    temporary = progress.with_name(progress.name + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2) + "\n")
+    temporary.replace(progress)
+    return progress
+
+
 def canonical_hash(rows):
     return hashlib.sha256(json.dumps(rows, separators=(",", ":")).encode()).hexdigest()
 
@@ -492,6 +515,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     manifest = json.loads(args.manifest.read_text())
+    args.output.parent.mkdir(parents=True, exist_ok=True)
     policy = {"worker_count": int(os.environ["WORKER_COUNT"]), "warmups": int(os.environ["WARMUPS"]),
               "repetitions_per_round": int(os.environ["REPETITIONS_PER_ROUND"]),
               "rounds": int(os.environ["THROUGHPUT_ROUNDS"]), "throughput_repeats": int(os.environ["THROUGHPUT_REPEATS"]),
@@ -516,6 +540,15 @@ def main():
               "throughput": {"kaveon": [], "trino": [], "passed": True},
               "co_tenant_baseline": None, "co_tenant_observations": [],
               "security_boundaries": {"kaveon": False, "trino": False}, "claim_evidence": False}
+    progress_path = write_progress_checkpoint(
+        args.output,
+        started_at=report["started_at"],
+        engine=None,
+        round_index=0,
+        completed_rounds=0,
+        cases_completed=0,
+        throughput_rounds={"kaveon": 0, "trino": 0},
+    )
     try:
         report["preflight"] = validate_topology(kube, names, policy["worker_count"], os.environ["KAVEON_EXPECTED_IMAGE_DIGEST"])
         report["verified_blobs"] = verify_blobs(manifest)
@@ -619,6 +652,15 @@ def main():
                 if not passed:
                     raise RuntimeError(f"{engine} throughput result mismatch in round {round_index + 1}")
                 deactivate(engine)
+                write_progress_checkpoint(
+                    args.output,
+                    started_at=report["started_at"],
+                    engine=engine,
+                    round_index=round_index + 1,
+                    completed_rounds=round_index * len(order) + order.index(engine) + 1,
+                    cases_completed=len(report["cases"]),
+                    throughput_rounds={name: len(report["throughput"][name]) for name in ("kaveon", "trino")},
+                )
         report["cases"] = list(report["cases"].values())
         for case in report["cases"]:
             for engine in ("kaveon", "trino"):
@@ -689,6 +731,11 @@ def main():
         report["finished_at"] = utcnow()
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(report, indent=2) + "\n")
+        progress = json.loads(progress_path.read_text())
+        progress["state"] = "finished" if report["passed"] and not report["restoration"]["errors"] else "failed"
+        progress["passed"] = bool(report["passed"] and not report["restoration"]["errors"])
+        progress["updated_at"] = utcnow()
+        progress_path.write_text(json.dumps(progress, indent=2) + "\n")
     print("REPORT_JSON " + json.dumps(report, separators=(",", ":")))
     print(f"passed={str(report['passed']).lower()}; output={args.output}; restored={str(not report['restoration']['errors']).lower()}")
     return 0 if report["passed"] and not report["restoration"]["errors"] else 2
