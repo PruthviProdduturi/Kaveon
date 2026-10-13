@@ -1727,6 +1727,22 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let result: StringArray = arr.iter().map(|v| v.map(|s| s.trim().to_owned())).collect();
             Ok(Arc::new(result))
         }
+        "JSON_ARRAY_LENGTH" => {
+            check_arity(name, args, 1)?;
+            let documents = as_string_array(&args[0])?;
+            let result: Int64Array = (0..num_rows)
+                .map(|row| {
+                    if documents.is_null(row) {
+                        return None;
+                    }
+                    match serde_json::from_str::<serde_json::Value>(documents.value(row)).ok()? {
+                        serde_json::Value::Array(values) => Some(values.len() as i64),
+                        _ => None,
+                    }
+                })
+                .collect();
+            Ok(Arc::new(result))
+        }
         "JSON_EXTRACT" | "JSON_EXTRACT_SCALAR" => {
             check_arity(name, args, 2)?;
             let documents = as_string_array(&args[0])?;
@@ -7038,6 +7054,32 @@ mod tests {
         assert_eq!(values.value(1), "null");
         assert!(values.is_null(2));
         assert!(values.is_null(3));
+    }
+
+    #[test]
+    fn evaluates_json_array_length_with_non_arrays_as_null() {
+        let batch = RecordBatch::try_from_iter([(
+            "document",
+            Arc::new(StringArray::from(vec![
+                Some(r#"[1,2,3]"#),
+                Some(r#"{"a":1}"#),
+                Some("invalid"),
+                None,
+            ])) as ArrayRef,
+        )])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "JSON_ARRAY_LENGTH".into(),
+                args: vec![Expr::Column("document".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            result.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+            vec![Some(3), None, None, None]
+        );
     }
 
     #[test]
