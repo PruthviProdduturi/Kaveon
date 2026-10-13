@@ -692,6 +692,19 @@ leaves the SLO **pending**. The current three-worker evidence covers only the
 declared local qualification workload; sustained network pressure, cloud-store
 fault injection, coordinator-loss survival, longer endurance, and
 upgrade/rollback still block an SLO-complete claim.
+
+The 13 October 2026 AKS comparison (`a20`) completed all six alternating rounds
+on the pinned three-worker topology with all twelve exact-result cases passing,
+TLS and authentication enforced, stable co-tenant identities, and successful
+StatefulSet restoration. Kaveon measured 2.844 successful exact-result QPS
+against Trino's 1.577 QPS (1.8035x) on the immutable ADLS fixture. The run is
+therefore valid evidence that Kaveon is faster on this declared workload, but
+it does not meet the 1.90x objective. The claim gate remains closed, and the
+report is archived as `tmp/20261013-a15/report-a20.json` with its gate output in
+`tmp/20261013-a15/claim-gate-a20.json`. During this run the coordinator also
+waited through asynchronous catalog-snapshot publication instead of converting
+a transient worker-convergence window into an HTTP 500; that behavior is in
+`cf6615be` and covered by the server test suite (346 passed).
 Track 2 remains partial because prepared statements are now available through
 the Engine HTTP lifecycle and scalar `EXECUTE ... USING` is supported by the
 Trino adapter, but the adapter still lacks a wire-compatible full protocol;
