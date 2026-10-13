@@ -310,7 +310,7 @@ Track 1 remains partial because global ordering still uses a centralized merge
 and a full worker-loss/spill/cancellation corpus still needs a correctness
 gate. The
 current HTTP exchange spool is bounded, replayable, and incrementally decoded;
-network backpressure, sustained pressure evidence, and AKS cancellation
+network backpressure, sustained pressure evidence, and deployed cancellation
 qualification remain open.
 Track 2 remains partial because prepared statements are now available through
 the Engine HTTP lifecycle but still lack a wire-compatible Trino protocol;
@@ -321,8 +321,8 @@ cross-join fallback until a residual-aware hash join is available.
 Multiset set operations are now implemented
 and covered end to end. Positional
  scalar parameters, including named placeholders, are supported through the
-HTTP statement API; the full prepared-statement protocol remains an explicit
-unsupported case.
+HTTP statement API; wire-compatible Trino prepare/describe semantics remain
+an explicit unsupported case.
 
 These slices do not close Tracks 1 and 2's qualification gates; the broader
 three-worker corpus, complex types, correlated/unsupported scalar shapes,
