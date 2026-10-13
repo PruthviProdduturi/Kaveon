@@ -98,7 +98,8 @@ foundations, but several operators are still centralized or narrow:
   preserving list nullability; `ARRAY_REMOVE` removes matching values without
   dropping non-matching nulls; and `ARRAY_MIN` and `ARRAY_MAX` return typed extrema while
   ignoring null elements, and `ARRAYS_OVERLAP` follows Trino's true/false/NULL
-  intersection semantics (`3b35dc47`, `74ac62e3`, `d6e99cf2`, `c080f208`).
+  intersection semantics. `ARRAY_JOIN` now formats supported typed elements,
+  omits NULL elements by default, and accepts a NULL replacement policy.
   Broader element types remain an explicit boundary.
   Scalar, DATE, timestamp, and DECIMAL casts are supported; complex cast
   targets fail with typed planner diagnostics. Dereference, `UNNEST`, and other
