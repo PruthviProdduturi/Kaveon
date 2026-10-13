@@ -96,9 +96,10 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
 
-  // react-grid-layout's useContainerWidth only re-measures on *window* resize,
-  // not when the canvas column grows because the customize panel collapsed. Nudge
-  // it so the grid reflows to full width instead of staying at the old half width.
+  // Collapsing the customize panel widens the canvas column without a window
+  // resize. react-grid-layout v2 re-measures that itself (it observes the canvas
+  // element), but the ECharts instances inside the tiles only resize on a window
+  // resize event, so one is synthesised across the panel's transition.
   useEffect(() => {
     const fire = () => window.dispatchEvent(new Event("resize"));
     const timers = [0, 120, 300].map((ms) => setTimeout(fire, ms));

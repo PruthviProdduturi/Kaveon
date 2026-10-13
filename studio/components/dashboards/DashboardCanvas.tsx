@@ -13,6 +13,17 @@
  *
  * Legacy dashboards built with nested row/column containers fall back to the
  * original vertical stack so they keep rendering.
+ *
+ * Every state renders inside ONE `.dashboard-canvas` element, and that element
+ * carries react-grid-layout's measuring ref. It has to: `useContainerWidth`
+ * measures and installs its ResizeObserver in a single effect whose only
+ * dependency is its own callback, so the node held by the ref on the canvas's
+ * first mount is the only node it will ever see. Returning a different root for
+ * the empty state meant the ref was still null when that effect ran, `mounted`
+ * stayed false for the life of the component, and the `mounted && width > 0`
+ * guard below then withheld the grid *forever* — so on a brand-new dashboard
+ * the first chart added never appeared, and nothing could be dragged, moved or
+ * resized. See docs/engineering/OPEN-DEFECTS.md D-2.
  */
 'use client';
 
@@ -57,39 +68,9 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
 
   const rootItems = layout.filter((item) => !item.parentId);
   const hasContainers = rootItems.some((i) => i.type === 'row' || i.type === 'column');
-
-  // ── Empty state ──────────────────────────────────────────────────────────────
-  if (rootItems.length === 0) {
-    return (
-      <div className={`dashboard-canvas-empty ${className}`}>
-        <div className="dashboard-canvas-empty-icon"><i className="fas fa-th-large" /></div>
-        <div className="dashboard-canvas-empty-title">
-          {isEditMode ? 'Your dashboard is empty' : 'No content available'}
-        </div>
-        <div className="dashboard-canvas-empty-subtitle">
-          {isEditMode ? 'Add a chart to start building your dashboard' : 'This dashboard has no content to display'}
-        </div>
-        {isEditMode && (
-          <button onClick={() => addLayoutItem('chart')} style={addBtnStyle}>
-            <i className="fas fa-plus" /> Add Chart
-          </button>
-        )}
-      </div>
-    );
-  }
-
-  // ── Legacy nested-container dashboards: original vertical stack ───────────────
-  if (hasContainers) {
-    return (
-      <div className={`dashboard-canvas ${className}`} style={{ paddingBottom: 32 }}>
-        {rootItems.map((item) => (
-          <div key={item.i} style={{ marginBottom: 16 }}>
-            <DashboardItem item={item} isEditMode={isEditMode} />
-          </div>
-        ))}
-      </div>
-    );
-  }
+  const isEmpty = rootItems.length === 0;
+  // Legacy nested-container dashboards fall back to the original vertical stack.
+  const isFlatGrid = !isEmpty && !hasContainers;
 
   // ── Flat grid ────────────────────────────────────────────────────────────────
   const authored: GridPlacement[] = rootItems.map((it) => ({
@@ -125,8 +106,38 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
   const markUserMove = () => { userMovedTilesRef.current = true; };
 
   return (
-    <div ref={containerRef} className={`dashboard-canvas ${className}`} style={{ paddingBottom: 32 }}>
-      {mounted && width > 0 && (
+    <div
+      ref={containerRef}
+      // `dashboard-canvas-host-empty` only makes this a column flex container so
+      // the empty state's `flex: 1` still has a parent to stretch against now
+      // that it is nested here instead of replacing this element.
+      className={`dashboard-canvas${isEmpty ? ' dashboard-canvas-host-empty' : ''} ${className}`}
+      style={isEmpty ? undefined : { paddingBottom: 32 }}
+    >
+      {isEmpty && (
+        <div className="dashboard-canvas-empty">
+          <div className="dashboard-canvas-empty-icon"><i className="fas fa-th-large" /></div>
+          <div className="dashboard-canvas-empty-title">
+            {isEditMode ? 'Your dashboard is empty' : 'No content available'}
+          </div>
+          <div className="dashboard-canvas-empty-subtitle">
+            {isEditMode ? 'Add a chart to start building your dashboard' : 'This dashboard has no content to display'}
+          </div>
+          {isEditMode && (
+            <button onClick={() => addLayoutItem('chart')} style={addBtnStyle}>
+              <i className="fas fa-plus" /> Add Chart
+            </button>
+          )}
+        </div>
+      )}
+
+      {hasContainers && rootItems.map((item) => (
+        <div key={item.i} style={{ marginBottom: 16 }}>
+          <DashboardItem item={item} isEditMode={isEditMode} />
+        </div>
+      ))}
+
+      {isFlatGrid && mounted && width > 0 && (
         <GridLayout
           width={width}
           layout={placements}
@@ -145,7 +156,7 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
         </GridLayout>
       )}
 
-      {isEditMode && (
+      {isFlatGrid && isEditMode && (
         <div style={{ display: 'flex', justifyContent: 'center', padding: '12px 0 8px', gap: 10 }}>
           <button onClick={() => addLayoutItem('chart')} style={addBtnStyle}>
             <i className="fas fa-plus" /> Add Chart
