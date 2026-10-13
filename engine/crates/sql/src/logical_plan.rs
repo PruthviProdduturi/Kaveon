@@ -2066,6 +2066,25 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
             name: "CONTAINS".into(),
             args: vec![ast_expr_to_expr(right)?, ast_expr_to_expr(left)?],
         }),
+        ast::Expr::AnyOp {
+            left,
+            compare_op,
+            right,
+            ..
+        } => {
+            let suffix = match compare_op {
+                ast::BinaryOperator::NotEq => "NE",
+                ast::BinaryOperator::Lt => "LT",
+                ast::BinaryOperator::LtEq => "LE",
+                ast::BinaryOperator::Gt => "GT",
+                ast::BinaryOperator::GtEq => "GE",
+                other => return Err(sql_err(format!("unsupported quantified comparison: {other}"))),
+            };
+            Ok(Expr::Function {
+                name: format!("ARRAY_ANY_{suffix}"),
+                args: vec![ast_expr_to_expr(right)?, ast_expr_to_expr(left)?],
+            })
+        }
         ast::Expr::AllOp {
             left,
             compare_op: ast::BinaryOperator::NotEq,
@@ -2074,9 +2093,24 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
             name: "CONTAINS".into(),
             args: vec![ast_expr_to_expr(right)?, ast_expr_to_expr(left)?],
         }))),
-        ast::Expr::AnyOp { .. } | ast::Expr::AllOp { .. } => Err(sql_err(
-            "only = ANY(array) and <> ALL(array) are supported; other quantified comparisons are unsupported",
-        )),
+        ast::Expr::AllOp {
+            left,
+            compare_op,
+            right,
+        } => {
+            let suffix = match compare_op {
+                ast::BinaryOperator::Eq => "EQ",
+                ast::BinaryOperator::Lt => "LT",
+                ast::BinaryOperator::LtEq => "LE",
+                ast::BinaryOperator::Gt => "GT",
+                ast::BinaryOperator::GtEq => "GE",
+                other => return Err(sql_err(format!("unsupported quantified comparison: {other}"))),
+            };
+            Ok(Expr::Function {
+                name: format!("ARRAY_ALL_{suffix}"),
+                args: vec![ast_expr_to_expr(right)?, ast_expr_to_expr(left)?],
+            })
+        }
 
         // A DATE literal is its day number: the Engine's date columns are
         // days since the epoch, so `EventDate >= DATE '2013-07-01'` compares
@@ -4535,8 +4569,19 @@ mod tests {
             };
             assert!(matches!(expression, Expr::Function { name, .. } if name == "CONTAINS"));
         }
-        let error = sql_to_logical_plan("SELECT 2 > ANY(ARRAY[1, 2]) FROM t").unwrap_err();
-        assert!(error.to_string().contains("only = ANY(array)"));
+        for (sql, expected) in [
+            ("SELECT 2 > ANY(ARRAY[1, 2]) FROM t", "ARRAY_ANY_GT"),
+            ("SELECT 2 <= ANY(ARRAY[1, 2]) FROM t", "ARRAY_ANY_LE"),
+            ("SELECT 2 < ALL(ARRAY[1, 2]) FROM t", "ARRAY_ALL_LT"),
+            ("SELECT 2 >= ALL(ARRAY[1, 2]) FROM t", "ARRAY_ALL_GE"),
+            ("SELECT 2 <> ANY(ARRAY[1, 2]) FROM t", "ARRAY_ANY_NE"),
+        ] {
+            let plan = sql_to_logical_plan(sql).unwrap();
+            let LogicalPlan::Project { columns, .. } = plan else {
+                panic!("projection");
+            };
+            assert!(matches!(&columns[0], Expr::Function { name, .. } if name == expected));
+        }
     }
 
     #[test]

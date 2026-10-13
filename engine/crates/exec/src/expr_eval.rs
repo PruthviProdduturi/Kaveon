@@ -3,14 +3,15 @@ use arrow::array::{
     Decimal128Array,
     Decimal128Builder,
     Float64Array, Float64Builder,
-    Int32Array, Int32Builder, Int32DictionaryArray, Int64Array, Int64Builder, ListArray,
+    Int32Array, Int32Builder, Int32DictionaryArray, Int64Array, Int64Builder, LargeListArray,
+    ListArray,
     ListBuilder, MapArray,
     NullBuilder, PrimitiveArray, PrimitiveBuilder,
     StringArray,
     StringBuilder, StructArray,
     Time32MillisecondArray, Time32SecondArray,
     TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray,
+    TimestampSecondArray, UInt32Array,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute;
@@ -1536,8 +1537,121 @@ fn eval_cast(expr: &Expr, target: CastTarget, batch: &RecordBatch) -> Result<Arr
 
 // ── Scalar functions ────────────────────────────────────────────────────────
 
+/// Evaluate Trino's quantified array comparisons (`x < ANY (array)` and
+/// `x >= ALL (array)`).  The reduction is deliberately done after the normal
+/// vectorized comparison kernel so every supported Arrow scalar type keeps its
+/// existing coercion and NULL behavior.  ANY is true on one true element and
+/// otherwise NULL when a NULL element was observed; ALL is false on one false
+/// element and otherwise NULL when a NULL element was observed.  Empty arrays
+/// therefore yield false for ANY and true for ALL, as in Trino.
+fn eval_array_quantified_compare(
+    name: &str,
+    args: &[ArrayRef],
+    num_rows: usize,
+) -> Result<ArrayRef> {
+    check_arity(name, args, 2)?;
+    let (is_any, kind) = if let Some(suffix) = name.strip_prefix("ARRAY_ANY_") {
+        (true, quantified_compare_kind(suffix)?)
+    } else if let Some(suffix) = name.strip_prefix("ARRAY_ALL_") {
+        (false, quantified_compare_kind(suffix)?)
+    } else {
+        return Err(KaveonError::Execution(format!(
+            "unknown quantified array comparison: {name}"
+        )));
+    };
+
+    let mut result = BooleanBuilder::with_capacity(num_rows);
+    for row in 0..num_rows {
+        let inner = match args[0].data_type() {
+            DataType::List(_) => args[0]
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .expect("List data type must be ListArray")
+                .value(row),
+            DataType::LargeList(_) => args[0]
+                .as_any()
+                .downcast_ref::<LargeListArray>()
+                .expect("LargeList data type must be LargeListArray")
+                .value(row),
+            other => {
+                return Err(KaveonError::Execution(format!(
+                    "{name} requires an ARRAY/List value, found {other}"
+                )))
+            }
+        };
+        let list_is_null = match args[0].data_type() {
+            DataType::List(_) => args[0]
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .expect("List data type must be ListArray")
+                .is_null(row),
+            DataType::LargeList(_) => args[0]
+                .as_any()
+                .downcast_ref::<LargeListArray>()
+                .expect("LargeList data type must be LargeListArray")
+                .is_null(row),
+            _ => false,
+        };
+        if list_is_null {
+            result.append_null();
+            continue;
+        }
+        if inner.is_empty() {
+            result.append_value(!is_any);
+            continue;
+        }
+
+        let indices = UInt32Array::from(vec![0; inner.len()]);
+        let scalar = compute::take(&args[1].slice(row, 1), &indices, None)?;
+        let comparisons = comparison(&inner, &scalar, kind)?;
+        let mut saw_null = false;
+        let reduced = if is_any {
+            let mut matched = false;
+            for index in 0..comparisons.len() {
+                if comparisons.is_null(index) {
+                    saw_null = true;
+                } else if comparisons.value(index) {
+                    matched = true;
+                    break;
+                }
+            }
+            if matched { Some(true) } else if saw_null { None } else { Some(false) }
+        } else {
+            let mut failed = false;
+            for index in 0..comparisons.len() {
+                if comparisons.is_null(index) {
+                    saw_null = true;
+                } else if !comparisons.value(index) {
+                    failed = true;
+                    break;
+                }
+            }
+            if failed { Some(false) } else if saw_null { None } else { Some(true) }
+        };
+        result.append_option(reduced);
+    }
+    Ok(Arc::new(result.finish()))
+}
+
+fn quantified_compare_kind(suffix: &str) -> Result<CompareKind> {
+    match suffix {
+        "EQ" => Ok(CompareKind::Eq),
+        "NE" => Ok(CompareKind::Ne),
+        "LT" => Ok(CompareKind::Lt),
+        "LE" => Ok(CompareKind::Le),
+        "GT" => Ok(CompareKind::Gt),
+        "GE" => Ok(CompareKind::Ge),
+        _ => Err(KaveonError::Execution(format!(
+            "unsupported quantified comparison operator: {suffix}"
+        ))),
+    }
+}
+
 fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
     let upper = name.to_uppercase();
+    if upper.starts_with("ARRAY_ANY_") || upper.starts_with("ARRAY_ALL_") {
+        return eval_array_quantified_compare(&upper, args, num_rows);
+    }
     if upper == "ARRAY" {
         if args.is_empty() {
             return Err(KaveonError::Execution(
@@ -6288,6 +6402,84 @@ mod tests {
             error.to_string(),
             "execution: ordered comparison is not supported for MAP values"
         );
+    }
+
+    #[test]
+    fn quantified_array_comparisons_follow_any_all_and_empty_null_rules() {
+        let mut empty_values = ListBuilder::new(Int64Builder::new());
+        empty_values.append(true);
+        let empty_array = Arc::new(empty_values.finish()) as ArrayRef;
+        let batch = RecordBatch::try_from_iter([
+            (
+                "id",
+                Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+            ),
+            ("empty_values", empty_array),
+        ])
+        .unwrap();
+        let array = |values: Vec<Expr>| Expr::Function {
+            name: "ARRAY".into(),
+            args: values,
+        };
+        let evaluate_quantified = |name: &str, values: Vec<Expr>, needle| {
+            evaluate(
+                &Expr::Function {
+                    name: name.into(),
+                    args: vec![array(values), Expr::Literal(needle)],
+                },
+                &batch,
+            )
+            .unwrap()
+        };
+
+        let any = evaluate_quantified(
+            "ARRAY_ANY_GT",
+            vec![Expr::Literal(ScalarValue::Int64(1)), Expr::Literal(ScalarValue::Int64(3))],
+            ScalarValue::Int64(2),
+        );
+        assert_eq!(any.as_boolean().iter().collect::<Vec<_>>(), vec![Some(true)]);
+
+        let all = evaluate_quantified(
+            "ARRAY_ALL_LT",
+            vec![Expr::Literal(ScalarValue::Int64(1)), Expr::Literal(ScalarValue::Int64(2))],
+            ScalarValue::Int64(3),
+        );
+        assert_eq!(all.as_boolean().iter().collect::<Vec<_>>(), vec![Some(true)]);
+
+        let empty = evaluate(
+            &Expr::Function {
+                name: "ARRAY_ANY_GT".into(),
+                args: vec![
+                    Expr::Column("empty_values".into()),
+                    Expr::Literal(ScalarValue::Int64(2)),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(empty.as_boolean().iter().collect::<Vec<_>>(), vec![Some(false)]);
+        let empty_all = evaluate(
+            &Expr::Function {
+                name: "ARRAY_ALL_GT".into(),
+                args: vec![
+                    Expr::Column("empty_values".into()),
+                    Expr::Literal(ScalarValue::Int64(2)),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(empty_all.as_boolean().iter().collect::<Vec<_>>(), vec![Some(true)]);
+
+        let nullable = evaluate_quantified(
+            "ARRAY_ANY_GT",
+            vec![
+                Expr::Literal(ScalarValue::Null),
+                Expr::Literal(ScalarValue::Int64(1)),
+            ],
+            ScalarValue::Int64(2),
+        );
+        assert!(nullable.as_boolean().is_null(0));
     }
 
     #[test]
