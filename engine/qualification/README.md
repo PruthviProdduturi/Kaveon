@@ -229,7 +229,8 @@ workload. The release SLO is deliberately bounded rather than a claim about
 arbitrary data or hardware:
 
 * every accepted statement must return its expected typed result (100% exact
-  result success; admission refusals are counted separately);
+  result success; admission refusals are counted separately in the `slo`
+  object and excluded from the accepted-query denominator);
 * at least 99.9% of accepted statements in the five-minute mixed-workload
   window must complete successfully, with no silent mismatches;
 * p50, p95, p99, maximum latency, and successful exact-result QPS must be

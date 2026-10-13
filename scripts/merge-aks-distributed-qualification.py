@@ -56,11 +56,13 @@ def execution_metrics(comparison):
 def slo_evidence(comparison, pressure, base_gates):
     """Evaluate the Track 1 SLO without treating missing evidence as success."""
     requests = (pressure.get("concurrent_exact") or {}).get("requests") or []
+    admission_refusals = sum(request.get("status") == 429 for request in requests)
+    accepted_requests = [request for request in requests if request.get("status") != 429]
     successful = sum(
         request.get("exact") is True and request.get("status") == 200
-        for request in requests
+        for request in accepted_requests
     )
-    accepted_success_rate = successful / len(requests) if requests else None
+    accepted_success_rate = successful / len(accepted_requests) if accepted_requests else None
     latency = latency_summary(comparison)
     preflight = comparison.get("preflight") or {}
     checks = pressure.get("checks") or {}
@@ -76,8 +78,9 @@ def slo_evidence(comparison, pressure, base_gates):
     }
     return {
         "passed": all(requirements.values()),
-        "accepted_requests": len(requests),
+        "accepted_requests": len(accepted_requests),
         "successful_accepted_requests": successful,
+        "admission_refusals": admission_refusals,
         "accepted_success_rate": accepted_success_rate,
         "requirements": requirements,
         "latency": latency,
