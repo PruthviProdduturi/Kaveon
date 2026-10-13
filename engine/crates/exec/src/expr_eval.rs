@@ -2686,6 +2686,29 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .as_any()
                 .downcast_ref::<ListArray>()
                 .ok_or_else(|| KaveonError::Execution("ARRAY_DISTINCT requires an ARRAY/List value".into()))?;
+            macro_rules! distinct_primitive {
+                ($ty:ty, $builder:expr) => {{
+                    let mut builder = ListBuilder::new($builder);
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let inner = list.value(row);
+                        let values = inner.as_primitive::<$ty>();
+                        let mut seen = Vec::new();
+                        for index in 0..values.len() {
+                            let value = values.is_valid(index).then(|| values.value(index));
+                            if !seen.contains(&value) {
+                                seen.push(value);
+                                builder.values().append_option(value);
+                            }
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }};
+            }
             match list.value_type() {
                 DataType::Int64 => {
                     let mut builder = ListBuilder::new(Int64Builder::new());
@@ -2731,6 +2754,26 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     }
                     Ok(Arc::new(builder.finish()))
                 }
+                DataType::Date32 => distinct_primitive!(
+                    Date32Type,
+                    PrimitiveBuilder::<Date32Type>::new()
+                ),
+                DataType::Date64 => distinct_primitive!(
+                    Date64Type,
+                    PrimitiveBuilder::<Date64Type>::new()
+                ),
+                DataType::Time32(TimeUnit::Second) => distinct_primitive!(
+                    Time32SecondType,
+                    PrimitiveBuilder::<Time32SecondType>::new()
+                ),
+                DataType::Time32(TimeUnit::Millisecond) => distinct_primitive!(
+                    Time32MillisecondType,
+                    PrimitiveBuilder::<Time32MillisecondType>::new()
+                ),
+                DataType::Timestamp(TimeUnit::Microsecond, _) => distinct_primitive!(
+                    TimestampMicrosecondType,
+                    PrimitiveBuilder::<TimestampMicrosecondType>::new()
+                ),
                 DataType::Decimal128(precision, scale) => {
                     let mut builder = ListBuilder::new(
                         Decimal128Builder::new()
@@ -5536,6 +5579,41 @@ mod tests {
         let inner = list.value(0);
         let values = inner.as_string::<i32>();
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some("b"), Some("a")]);
+    }
+
+    #[test]
+    fn array_distinct_preserves_temporal_element_type() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "first_day",
+                Arc::new(arrow::array::Date32Array::from(vec![Some(10)])) as ArrayRef,
+            ),
+            (
+                "second_day",
+                Arc::new(arrow::array::Date32Array::from(vec![Some(20)])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let value = evaluate(
+            &Expr::Function {
+                name: "ARRAY_DISTINCT".into(),
+                args: vec![Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![
+                        Expr::Column("first_day".into()),
+                        Expr::Column("second_day".into()),
+                        Expr::Column("first_day".into()),
+                    ],
+                }],
+            },
+            &batch,
+        )
+        .unwrap();
+        let list = value.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(list.value_type(), DataType::Date32);
+        let inner = list.value(0);
+        let values = inner.as_primitive::<Date32Type>();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(10), Some(20)]);
     }
 
     #[test]
