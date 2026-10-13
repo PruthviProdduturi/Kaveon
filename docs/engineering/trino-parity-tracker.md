@@ -130,6 +130,10 @@ foundations, but several operators are still centralized or narrow:
   Parquet-encoding and local/distributed differential sweep; the focused
   join suites pass as well. This closes the date-key slice without claiming
   support for other unqualified complex join-key types.
+- Timestamp join keys now use their exact Arrow integer representation for all
+  four time units in hash and semi/anti joins. Duplicate and NULL behavior is
+  covered by an execution test; timestamp joins still require matching Arrow
+  units/timezones through the existing schema check.
 - There is no Trino-style cross-source federation yet. Registered SQL sources
   are API passthrough paths, while the strongest native Engine path is
   Parquet/Delta/Iceberg. The connector matrix now records S3 as implemented
