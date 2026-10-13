@@ -51,8 +51,10 @@ foundations, but several operators are still centralized or narrow:
   `PARTITION BY` are now hash-partitioned across workers; unpartitioned and
   mixed-key windows remain centralized for correctness. These are not yet
   Trino-class parallel plans across the full window corpus.
-- Dynamic filtering, general join reordering, skew mitigation, and qualified
-  coordinator failover are missing.
+- Static predicates are pushed into eligible build scans, including broadcast
+  joins; the build-side key set is not yet propagated to the probe scan at
+  runtime. General dynamic filtering, join reordering, skew mitigation, and
+  qualified coordinator failover remain open.
 - Ordinary distributed joins require equality keys; residual predicates are
   only partially supported. Semi/anti joins are not yet partitioned by default.
 - Non-recursive CTEs, derived tables, joins, aggregates, `HAVING`, `CASE`, and
@@ -156,6 +158,10 @@ qualification documents; this tracker remains the single ordered work list.
 - Correlated scalar subqueries now have explicit rejection and binder-boundary
   coverage; the preserved outer reference documents the remaining Apply/lateral
   runtime requirement (`72c7e302`).
+- Broadcast planning now has an explicit dynamic-filter boundary test: static
+  predicates reach the build scan, while runtime build-key propagation to the
+  probe scan remains refused until its correctness and exchange behavior are
+  qualified (`57db621d`).
 
 Track 1 remains partial because distributed global ordering and a full
 worker-loss/spill/cancellation corpus still need a correctness gate. The
