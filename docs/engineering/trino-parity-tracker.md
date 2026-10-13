@@ -73,11 +73,12 @@ foundations, but several operators are still centralized or narrow:
   focused parser/executor coverage. `CAST(... AS TIMESTAMP)` and
   `TIMESTAMP WITH TIME ZONE` now map to Arrow microsecond timestamps with
   nullable execution coverage.
-- Numeric array literals are supported as null-preserving Arrow lists; maps and
-  structs/row values are not yet represented as complete SQL expression types.
-  Complex casts, dereference, `UNNEST`, and broad JSON operations remain open;
-  scalar extraction via `JSON_EXTRACT_SCALAR` is implemented for dotted object
-  paths.
+- Numeric array literals are supported as null-preserving Arrow lists, and
+  `CARDINALITY` returns their nullable list length; maps and structs/row values
+  are not yet represented as complete SQL expression types. Complex casts,
+  dereference, `UNNEST`, other array operations, and broad JSON operations
+  remain open; scalar extraction via `JSON_EXTRACT_SCALAR` is implemented for
+  dotted object paths.
 - There is no Trino-style cross-source federation yet. Registered SQL sources
   are API passthrough paths, while the strongest native Engine path is
   Parquet/Delta/Iceberg. The connector matrix now records S3 as implemented
@@ -143,6 +144,8 @@ qualification documents; this tracker remains the single ordered work list.
   Decimal128 null/scale coverage (`81b610e2`).
 - Numeric `ARRAY[...]` literals now execute as null-preserving Arrow
   `List<Float64>` values with parser and executor coverage (`b1fe824f`).
+- `CARDINALITY(ARRAY[...])` now parses and evaluates to a nullable `Int64`
+  list length, with explicit rejection for non-list values (`1c0e29e5`).
 - Three-worker global `ORDER BY`/TopN centralized merge correctness is now
   qualified for NULL ordering and ties against a single-partition reference
   (`bb788709`). Parallel global merge performance remains open.
