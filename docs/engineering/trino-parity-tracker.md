@@ -300,6 +300,12 @@ The distributed/local join-mode differential now also includes an inner
 residual predicate (`key equality AND value inequality`); local and
 distributed result sets match and all reservations are released.
 
+The ordering subset is green in-process as well: eight planner, fragment, and
+API tests cover distributed scan inputs, TopN lowering, OFFSET retention,
+exchange execution, and spill-aware final merge. Global ORDER BY still ends in
+a coordinator merge by design; a fully parallel ordered result stream remains
+open.
+
 Track 1 remains partial because global ordering still uses a centralized merge
 and a full worker-loss/spill/cancellation corpus still needs a correctness
 gate. The
