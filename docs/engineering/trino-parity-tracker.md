@@ -58,7 +58,9 @@ foundations, but several operators are still centralized or narrow:
   qualified coordinator failover remain open.
 - Ordinary distributed joins use equality keys; inner residual predicates now
   lower to a correctness-first cross join plus filter, while residual outer
-  joins remain unsupported. Semi/anti joins are not yet partitioned by default.
+  joins remain unsupported. Semi/anti joins now hash-partition both inputs on
+  their keys; runtime build-key propagation and adaptive broadcast selection
+  remain open.
 - Non-recursive CTEs, derived tables, joins, aggregates, `HAVING`, `CASE`, and
   common set operations work. Uncorrelated aggregate scalar subqueries in
   `WHERE` and bounded projection scalar subqueries are supported when they
@@ -259,10 +261,9 @@ qualification documents; this tracker remains the single ordered work list.
   predicates reach the build scan, while runtime build-key propagation to the
   probe scan remains refused until its correctness and exchange behavior are
   qualified (`57db621d`).
-- Semi/anti join planning now explicitly qualifies the current distributed
-  boundary: the probe remains distributed across four tasks while the
-  subquery is broadcast, and runtime build-key propagation is not claimed
-  (`cc833eae`).
+- Semi/anti join planning now hash-partitions both inputs across the worker
+  set, with spill-safe execution and no runtime build-key propagation claim.
+  Adaptive broadcast selection remains open.
 - Streamed-root task metrics now have a stabilized eventual-read test: the
   metrics endpoint may report `202 Accepted` briefly and is polled until the
   completed metrics record is available (`6cd66cb4`).
