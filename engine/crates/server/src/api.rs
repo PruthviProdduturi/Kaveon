@@ -16484,7 +16484,7 @@ mod tests {
         let prepared = super::prepare_statement(
             axum::Extension(owner.clone()),
             axum::Json(super::PrepareRequest {
-                query: "SELECT * FROM events WHERE user_id = $1 AND region = :region".into(),
+                query: "SELECT COUNT(*) AS n FROM orders WHERE id = $1 AND id > :minimum".into(),
                 catalog: Some("lake".into()),
                 schema: Some("sales".into()),
             }),
@@ -16494,7 +16494,7 @@ mod tests {
         assert_eq!(prepared.status(), StatusCode::OK);
         let body = json_body(prepared).await;
         let id = body["id"].as_str().unwrap().to_owned();
-        assert_eq!(body["parameters"], serde_json::json!(["$1", ":region"]));
+        assert_eq!(body["parameters"], serde_json::json!(["$1", ":minimum"]));
 
         let described = super::describe_prepared_statement(
             axum::Extension(owner.clone()),
@@ -16516,6 +16516,29 @@ mod tests {
         .await
         .into_response();
         assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+
+        let (state, directory) = analyze_test_state().await;
+        let executed = super::execute_prepared_statement(
+            axum::extract::State(state),
+            axum::Extension(admin()),
+            axum::extract::Path(id.clone()),
+            axum::Json(super::PreparedExecuteRequest {
+                parameters: vec![serde_json::json!(2)],
+                named_parameters: std::collections::HashMap::from([(
+                    String::from("minimum"),
+                    serde_json::json!(0),
+                )]),
+                catalog: Some("lake".into()),
+                schema: Some("sales".into()),
+                ..Default::default()
+            }),
+        )
+        .await;
+        assert_eq!(executed.status(), StatusCode::OK);
+        let executed_body = json_body(executed).await;
+        assert!(matches!(executed_body["state"].as_str(), Some("FINISHED")));
+        assert_eq!(executed_body["data"][0][0], serde_json::json!(1));
+        let _ = std::fs::remove_dir_all(directory);
 
         let closed = super::close_prepared_statement(
             axum::Extension(owner),
