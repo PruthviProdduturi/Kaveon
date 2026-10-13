@@ -15,6 +15,7 @@ concurrency is pinned with a barrier.
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 from services import revalidating_cache
 
@@ -318,6 +319,120 @@ class OneKeyPerReader(_Fixture):
         validate = _Validations(("a again", "token-a2"))
         self.assertEqual(cache.serve("a", validate), "a again")
         self.assertEqual(validate.calls, [None])
+
+
+class WarmingPaysBeforeAReaderHasTo(_Fixture):
+    """`warm` is the same validation run by something that is not a reader.
+
+    So unlike `serve` it has no response to hide the work behind: it runs on
+    the calling thread, says what it did, and raises what it hit — because the
+    caller's whole job is to report what it could not fill.
+    """
+
+    def test_a_reader_after_a_warm_calls_nothing(self):
+        cache = self._cache()
+        validate = _Validations(("first", "token-1"))
+        self.assertEqual(cache.warm("k", validate), cache.WARM_VALIDATED)
+        boom = _Validations(RuntimeError("must not be consulted"))
+        self.assertEqual(cache.serve("k", boom), "first")
+        self.assertEqual(boom.calls, [])
+
+    def test_warming_what_is_already_fresh_does_nothing(self):
+        cache = self._cache()
+        cache.warm("k", _Validations(("first", "token-1")))
+        boom = _Validations(RuntimeError("must not be consulted"))
+        self.assertEqual(cache.warm("k", boom), cache.WARM_FRESH)
+        self.assertEqual(boom.calls, [])
+
+    def test_past_the_window_it_rechecks_and_can_keep_what_is_held(self):
+        cache = self._cache()
+        cache.warm("k", _Validations(("first", "token-1")))
+        self.clock.advance(11.0)
+        validate = _Validations("unchanged")
+        self.assertEqual(cache.warm("k", validate), cache.WARM_VALIDATED)
+        self.assertEqual(validate.calls, [("first", "token-1")])
+
+    def test_a_failure_reaches_the_warmer_and_leaves_the_entry_alone(self):
+        cache = self._cache()
+        cache.warm("k", _Validations(("first", "token-1")))
+        self.clock.advance(11.0)
+        with self.assertRaises(RuntimeError):
+            cache.warm("k", _Validations(RuntimeError("the Engine is not answering")))
+        # Nothing held was discarded, so the reader is still answered.
+        self.assertEqual(cache.serve("k", _Validations(("x", "x"))), "first")
+        self.spawner.join()
+
+    def test_a_failed_warm_is_not_also_logged_with_a_traceback(self):
+        cache = self._cache()
+        with patch.object(revalidating_cache.logger, "warning") as logged:
+            with self.assertRaises(RuntimeError):
+                cache.warm("k", _Validations(RuntimeError("not answering")))
+        # The warmer reports what it could not fill, once per cycle. A
+        # traceback here as well would mean one per read per principal per
+        # cycle for as long as the Engine is down, which is a steady state
+        # here rather than an incident.
+        logged.assert_not_called()
+
+    def test_an_answer_it_cannot_place_is_reported_and_not_remembered(self):
+        cache = self._cache()
+        self.assertEqual(cache.warm("k", _Validations(("built the slow way", None))),
+                         cache.WARM_UNVALIDATED)
+        self.assertEqual(cache.stats()["entries"], 0)
+
+    def test_a_warm_and_a_reader_arriving_together_cost_one_validation(self):
+        cache = self._cache()
+        entered = threading.Barrier(2, timeout=5)
+        release = threading.Event()
+        validate = _Validations(("first", "token-1"))
+
+        def _slow(previous):
+            result = validate(previous)
+            entered.wait()
+            release.wait(5)
+            return result
+
+        warmed, served = [], []
+        warmer = threading.Thread(
+            target=lambda: warmed.append(cache.warm("k", _slow)), daemon=True)
+        warmer.start()
+        entered.wait()
+        # The reader waits on the warm already in flight rather than starting
+        # a second one, which is what makes warming safe to run at any moment.
+        reader = threading.Thread(
+            target=lambda: served.append(cache.serve("k", _slow)), daemon=True)
+        reader.start()
+        deadline = time.monotonic() + 10
+        while cache.stats()["waited"] < 1 and time.monotonic() < deadline:
+            time.sleep(0.005)
+        self.assertEqual(cache.stats()["waited"], 1)
+        release.set()
+        warmer.join(timeout=10)
+        reader.join(timeout=10)
+        self.assertEqual(warmed, [cache.WARM_VALIDATED])
+        self.assertEqual(served, ["first"])
+        self.assertEqual(len(validate.calls), 1)
+
+    def test_a_warm_that_joins_a_reader_says_it_shared_the_recheck(self):
+        cache = self._cache()
+        cache.serve("k", _Validations(("first", "token-1")))
+        self.clock.advance(11.0)
+        entered = threading.Barrier(2, timeout=5)
+        release = threading.Event()
+
+        def _slow(previous):
+            entered.wait()
+            release.wait(5)
+            return ("second", "token-2")
+
+        cache.serve("k", _slow)      # the recheck is now behind the response
+        entered.wait()
+        shared = []
+        warmer = threading.Thread(
+            target=lambda: shared.append(cache.warm("k", _slow)), daemon=True)
+        warmer.start()
+        release.set()
+        warmer.join(timeout=10)
+        self.assertEqual(shared, [cache.WARM_SHARED])
 
 
 class ItsBoundsMustBeStated(_Fixture):

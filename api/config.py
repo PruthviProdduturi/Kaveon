@@ -40,6 +40,28 @@ class Settings(BaseSettings):
     # Off by default: a self-hosted install is unaffected.
     KAVEON_DEMO_MODE: bool = False
 
+    # ── Read warming ──────────────────────────────────────────────────────────
+    # Fills the caches behind the hot reads before a reader asks for them, on
+    # an interval, for the principals who are going to read them
+    # (services/warm_reads.py). On by default: with it off, the first visit
+    # after a restart and the first visit after any invalidation pay the full
+    # cost of every read the page makes, which is defect D-27.
+    #
+    # KAVEON_WARM_PRINCIPALS states who to warm for before anybody has been
+    # seen — "email:Role, email:Role"; a bare email is taken as Viewer. Leave
+    # it empty and only principals this replica has already served are warmed,
+    # so the very first visit after a restart is still cold.
+    KAVEON_READ_WARMER_ENABLED: bool = True
+    KAVEON_WARM_PRINCIPALS: str = ""
+    # Seconds after startup before the first cycle. Not zero: warming must not
+    # compete with the application's own startup, and readiness must never
+    # depend on the Engine being reachable.
+    KAVEON_WARM_START_DELAY_SECONDS: float = 5.0
+    # Seconds between cycles. Clamped to half the tightest staleness bound it
+    # is keeping an entry inside, so a longer value cannot silently let an
+    # entry age out between cycles.
+    KAVEON_WARM_INTERVAL_SECONDS: float = 60.0
+
     # ── Metadata database ─────────────────────────────────────────────────────
     # Supported types: fabric_sql | azure_sql | postgresql | mysql
     METADATA_DB_TYPE: str = ""

@@ -36,6 +36,11 @@ Writes this process performs do not wait for a recheck: ``invalidate`` drops
 the entry, and an in-flight recheck that started before the write is prevented
 from storing its result (it carries the epoch it began in). A write performed
 by *another* process is the case ``max_served_age`` exists to bound.
+
+All of that still leaves the *first* reader paying the full cost, which is why
+``warm`` exists: the same validation, run on the caller's own thread by
+something that is not a reader, reporting what it did so a warmer can say what
+it filled and what it could not (``services/warm_reads.py``).
 """
 
 from __future__ import annotations
@@ -169,6 +174,52 @@ class RevalidatingCache:
             self._validate(key, flight, validate)
         return flight.result(self._wait_timeout)
 
+    # ── warming ───────────────────────────────────────────────────────────── #
+
+    WARM_FRESH = "fresh"
+    WARM_VALIDATED = "validated"
+    WARM_UNVALIDATED = "unvalidated"
+    WARM_SHARED = "shared"
+
+    def warm(self, key: Hashable, validate: Validate) -> str:
+        """Bring `key` inside its freshness window now, and say what happened.
+
+        `serve` exists to answer somebody, so it puts the recheck behind the
+        response and lets the outcome reach only the log. A warmer has no
+        response to hide behind and nobody to answer: it is here precisely to
+        pay the cost before a reader does, so the work runs on the calling
+        thread and its outcome is returned rather than dropped — one of
+        ``WARM_FRESH`` (already inside the window, nothing done),
+        ``WARM_VALIDATED``, ``WARM_UNVALIDATED`` (computed, deliberately not
+        stored) or ``WARM_SHARED`` (a recheck was already running, waited on).
+        A failure is raised, so a warmer can report which read it could not
+        make rather than claiming the cache is full.
+
+        Single flight is shared with the readers: a recheck already in flight
+        for this key is waited on, never duplicated, so warming and a reader
+        arriving at the same moment still cost one validation between them.
+        """
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is not None and (self._clock() - entry.validated_at) < self._fresh_for:
+                return self.WARM_FRESH
+            flight = self._flights.get(key)
+            ours = flight is None
+            if ours:
+                flight = self._flights[key] = _Flight(self._epoch)
+                self._counts["started"] += 1
+        if not ours:
+            flight.result(self._wait_timeout)
+            return self.WARM_SHARED
+        # `report=False`: the failure is raised to the warmer, which reports it
+        # in its own one-line cycle summary. Logging a traceback here as well
+        # would mean one per read per principal per cycle for as long as the
+        # Engine is down, which is a steady state on this installation.
+        self._validate(key, flight, validate, report=False)
+        flight.result(self._wait_timeout)  # raises whatever the validation hit
+        return (self.WARM_UNVALIDATED if flight.token is None
+                else self.WARM_VALIDATED)
+
     def _behind_the_response(self, key: Hashable, flight: _Flight,
                              validate: Validate) -> None:
         try:
@@ -181,7 +232,8 @@ class RevalidatingCache:
             flight.fail(error)
             logger.warning("%s could not start a revalidation: %s", self.name, error)
 
-    def _validate(self, key: Hashable, flight: _Flight, validate: Validate) -> None:
+    def _validate(self, key: Hashable, flight: _Flight, validate: Validate,
+                  *, report: bool = True) -> None:
         try:
             with self._lock:
                 entry = self._entries.get(key)
@@ -207,8 +259,9 @@ class RevalidatingCache:
             # does not advance, so continued failure ages it past
             # `max_served_age` and the next caller is told rather than served.
             flight.fail(error)
-            logger.warning("%s revalidation failed for %r", self.name, key,
-                           exc_info=error)
+            if report:
+                logger.warning("%s revalidation failed for %r", self.name, key,
+                               exc_info=error)
 
     def _evict(self) -> None:
         while len(self._entries) > self._max_entries:

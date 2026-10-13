@@ -97,7 +97,7 @@ from routers import (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import os as _os
-    from services import postgresql_retirement_runtime
+    from services import postgresql_retirement_runtime, warm_reads
 
     if _os.getenv("KAVEON_ENGINE_METADATA_WARMUP_ON_START", "false").lower() == "true":
         _start_engine_metadata_warmup()
@@ -111,7 +111,13 @@ async def lifespan(app: FastAPI):
                     "METADATA_HOST", "METADATA_PORT", "METADATA_USER", "METADATA_PASSWORD"):
             _os.environ[key] = ""
         print("[API] PostgreSQL retirement mode verified; KaveonDB is authoritative.")
-        yield
+        warmer = warm_reads.start()
+        if warmer:
+            print("[API] Hot-read warming started.")
+        try:
+            yield
+        finally:
+            warm_reads.stop(warmer)
         return
 
     # Determine whether a metadata DB is configured by reading the .env file
@@ -163,9 +169,16 @@ async def lifespan(app: FastAPI):
         print("[API] No metadata database configured — starting in setup mode.")
         print("[API] Setup wizard is available. Configure an identity provider to continue.")
 
+    # Started last and after readiness: a cycle must never be something a
+    # starting revision waits on, and it tolerates an Engine that is not up.
+    warmer = warm_reads.start()
+    if warmer:
+        print("[API] Hot-read warming started.")
+
     try:
         yield
     finally:
+        warm_reads.stop(warmer)
         if replay_worker:
             stop, worker = replay_worker
             stop.set()
