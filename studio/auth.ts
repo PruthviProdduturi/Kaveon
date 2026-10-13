@@ -189,7 +189,15 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       return true;
     },
     // Attach a Kaveon role to the session token so the app can gate on it.
-    jwt({ token, profile, user }) {
+    jwt({ token, profile, user, account }) {
+      // Which provider signed this session in.
+      //
+      // An installation can accept GitHub, Google and Microsoft at once, and
+      // one person's address is often the same at more than one of them — so
+      // the address alone does not say which identity is in use, and the two
+      // can carry different roles. `account` is present only on the sign-in
+      // itself, so it is recorded then and carried by the token afterwards.
+      if (account?.provider) token.provider = account.provider;
       const upstreamExpiresAt = user && "upstreamExpiresAt" in user ? user.upstreamExpiresAt : undefined;
       if (typeof upstreamExpiresAt === "number") token.upstreamExpiresAt = upstreamExpiresAt;
       if (typeof token.upstreamExpiresAt === "number" && token.upstreamExpiresAt <= Date.now()) return null;
@@ -223,6 +231,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     session({ session, token }) {
       if (session.user) {
         (session.user as { role?: string }).role = (token.role as string) ?? "Viewer";
+        (session.user as { provider?: string }).provider = token.provider as string | undefined;
       }
       return session;
     },
