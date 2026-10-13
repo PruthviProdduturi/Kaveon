@@ -120,11 +120,23 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # Off unless an installation opts in with KAVEON_VERCEL_DEPLOY=true.
+  #
+  # Studio runs on AKS and is published through its own ingress. While this job
+  # ran unconditionally, every push to dev also republished a second, parallel
+  # Studio on Vercel — one whose AUTH_URL names a host of its own, so a visitor
+  # who reached it was redirected away from the installation they started on.
+  # Retiring the Vercel deployment is not possible while the pipeline keeps
+  # recreating it, and a deploy nobody asked for is worse than no deploy: it
+  # resurrects an endpoint that looks live, serves stale code, and holds its own
+  # copy of the auth configuration.
+  #
+  # Set the variable to true to put it back; nothing else has to change.
   deploy:
     name: Deploy to Vercel
     runs-on: ubuntu-latest
     needs: [web]
-    if: github.ref == 'refs/heads/dev' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/dev' && github.event_name == 'push' && vars.KAVEON_VERCEL_DEPLOY == 'true'
     env:
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
