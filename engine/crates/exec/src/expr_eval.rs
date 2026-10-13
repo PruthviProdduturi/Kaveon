@@ -1,6 +1,7 @@
 use arrow::array::{
     Array, ArrayRef, AsArray, BooleanArray, BooleanBuilder, Decimal128Array, Float64Array, Float64Builder,
-    Int32Array, Int32DictionaryArray, Int64Array, ListArray, ListBuilder, MapArray, StringArray,
+    Int32Array, Int32DictionaryArray, Int64Array, Int64Builder, ListArray, ListBuilder, MapArray,
+    StringArray,
     StringBuilder, StructArray,
 };
 use arrow::compute;
@@ -1909,6 +1910,29 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     .downcast_ref::<arrow::array::ListArray>()
                     .expect("list data type must be ListArray");
                 match list.value_type() {
+                    DataType::Int64 => {
+                        let needle = compute::cast(&args[1], &DataType::Int64)?;
+                        let needle = needle.as_primitive::<Int64Type>();
+                        let result: BooleanArray = (0..num_rows)
+                            .map(|row| {
+                                if list.is_null(row) || needle.is_null(row) {
+                                    return None;
+                                }
+                                let values_array = list.value(row);
+                                let values = values_array.as_primitive::<Int64Type>();
+                                let mut saw_null = false;
+                                for index in 0..values.len() {
+                                    if values.is_null(index) {
+                                        saw_null = true;
+                                    } else if values.value(index) == needle.value(row) {
+                                        return Some(true);
+                                    }
+                                }
+                                if saw_null { None } else { Some(false) }
+                            })
+                            .collect();
+                        return Ok(Arc::new(result));
+                    }
                     DataType::Float64 => {
                         let needle = compute::cast(&args[1], &DataType::Float64)?;
                         let needle = needle.as_primitive::<Float64Type>();
@@ -2009,6 +2033,30 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     )
                 })?;
             let result = match list.value_type() {
+                DataType::Int64 => {
+                    let needle = compute::cast(&args[1], &DataType::Int64)?;
+                    let needle = needle.as_primitive::<Int64Type>();
+                    (0..num_rows)
+                        .map(|row| {
+                            if list.is_null(row) {
+                                return None;
+                            }
+                            let values = list.value(row);
+                            let values = values.as_primitive::<Int64Type>();
+                            (0..values.len())
+                                .find(|&index| {
+                                    if needle.is_null(row) {
+                                        values.is_null(index)
+                                    } else {
+                                        !values.is_null(index)
+                                            && values.value(index) == needle.value(row)
+                                    }
+                                })
+                                .map(|index| index as i64 + 1)
+                                .or(Some(0))
+                        })
+                        .collect::<Vec<_>>()
+                }
                 DataType::Float64 => {
                     let needle = compute::cast(&args[1], &DataType::Float64)?;
                     let needle = needle.as_primitive::<Float64Type>();
@@ -2096,6 +2144,26 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .downcast_ref::<ListArray>()
                 .ok_or_else(|| KaveonError::Execution("ARRAY_DISTINCT requires an ARRAY/List value".into()))?;
             match list.value_type() {
+                DataType::Int64 => {
+                    let mut builder = ListBuilder::new(Int64Builder::new());
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let values = list.value(row).as_primitive::<Int64Type>().clone();
+                        let mut seen = Vec::<Option<i64>>::new();
+                        for index in 0..values.len() {
+                            let value = values.is_valid(index).then(|| values.value(index));
+                            if !seen.contains(&value) {
+                                seen.push(value);
+                                builder.values().append_option(value);
+                            }
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }
                 DataType::Float64 => {
                     let mut builder = ListBuilder::new(Float64Builder::new());
                     for row in 0..num_rows {
@@ -2172,6 +2240,31 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .downcast_ref::<ListArray>()
                 .ok_or_else(|| KaveonError::Execution("ARRAY_SORT requires an ARRAY/List value".into()))?;
             match list.value_type() {
+                DataType::Int64 => {
+                    let mut builder = ListBuilder::new(Int64Builder::new());
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let inner = list.value(row);
+                        let values = inner.as_primitive::<Int64Type>();
+                        let mut sorted = (0..values.len())
+                            .map(|index| values.is_valid(index).then(|| values.value(index)))
+                            .collect::<Vec<_>>();
+                        sorted.sort_by(|left, right| match (left, right) {
+                            (None, None) => std::cmp::Ordering::Equal,
+                            (None, Some(_)) => std::cmp::Ordering::Greater,
+                            (Some(_), None) => std::cmp::Ordering::Less,
+                            (Some(left), Some(right)) => left.cmp(right),
+                        });
+                        for value in sorted {
+                            builder.values().append_option(value);
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }
                 DataType::Float64 => {
                     let mut builder = ListBuilder::new(Float64Builder::new());
                     for row in 0..num_rows {
@@ -2261,6 +2354,24 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .downcast_ref::<ListArray>()
                 .ok_or_else(|| KaveonError::Execution("ARRAY_REVERSE requires an ARRAY/List value".into()))?;
             match list.value_type() {
+                DataType::Int64 => {
+                    let mut builder = ListBuilder::new(Int64Builder::new());
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let inner = list.value(row);
+                        let values = inner.as_primitive::<Int64Type>();
+                        for index in (0..values.len()).rev() {
+                            builder
+                                .values()
+                                .append_option(values.is_valid(index).then(|| values.value(index)));
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }
                 DataType::Float64 => {
                     let mut builder = ListBuilder::new(Float64Builder::new());
                     for row in 0..num_rows {
@@ -2327,6 +2438,42 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let upper = upper.as_primitive::<Int64Type>();
             let stride = stride.as_primitive::<Int64Type>();
             match list.value_type() {
+                DataType::Int64 => {
+                    let mut builder = ListBuilder::new(Int64Builder::new());
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let inner = list.value(row);
+                        let values = inner.as_primitive::<Int64Type>();
+                        let length = values.len() as i64;
+                        let step = stride.is_valid(row).then(|| stride.value(row)).unwrap_or(1);
+                        let start = lower
+                            .is_valid(row)
+                            .then(|| lower.value(row))
+                            .unwrap_or(if step < 0 { length } else { 1 });
+                        let end = upper
+                            .is_valid(row)
+                            .then(|| upper.value(row))
+                            .unwrap_or(if step < 0 { 1 } else { length });
+                        if step == 0 {
+                            return Err(KaveonError::Execution("ARRAY_SLICE stride cannot be zero".into()));
+                        }
+                        let first = if step > 0 { start.max(1).min(length + 1) } else { start.max(1).min(length) };
+                        let last = if step > 0 { end.max(0).min(length) } else { end.max(1).min(length) };
+                        if (step > 0 && first <= last) || (step < 0 && first >= last) {
+                            let mut index = first;
+                            while (step > 0 && index <= last) || (step < 0 && index >= last) {
+                                let offset = (index - 1) as usize;
+                                builder.values().append_option(values.is_valid(offset).then(|| values.value(offset)));
+                                index += step;
+                            }
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }
                 DataType::Float64 => {
                     let mut builder = ListBuilder::new(Float64Builder::new());
                     for row in 0..num_rows {
@@ -2785,12 +2932,14 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let fmt_arr = as_string_array(&args[1])?;
             eval_to_char(source, fmt_arr, num_rows)
         }
-        // ARRAY[...] is a typed list expression. Numeric arguments are
-        // promoted to Float64; boolean and string arguments retain their
-        // types. Null elements are preserved in every representation.
+        // ARRAY[...] is a typed list expression. Homogeneous integer
+        // arguments retain Int64; mixed numeric arguments promote to
+        // Float64. Boolean and string arguments retain their types.
         "ARRAY" => {
             let string_array = args.iter().any(|arg| arg.data_type() == &DataType::Utf8);
             let boolean_array = args.iter().any(|arg| arg.data_type() == &DataType::Boolean);
+            let integer_array = args.iter().any(|arg| arg.data_type() == &DataType::Int64);
+            let float_array = args.iter().any(|arg| arg.data_type() == &DataType::Float64);
             if string_array && boolean_array {
                 return Err(KaveonError::Execution("ARRAY elements must share a type".into()));
             }
@@ -2833,6 +2982,30 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 for row in 0..num_rows {
                     for value in &values {
                         let value = value.as_string::<i32>();
+                        builder
+                            .values()
+                            .append_option(value.is_valid(row).then(|| value.value(row)));
+                    }
+                    builder.append(true);
+                }
+                Ok(Arc::new(builder.finish()))
+            } else if integer_array && !float_array {
+                if args
+                    .iter()
+                    .any(|arg| !matches!(arg.data_type(), DataType::Int64 | DataType::Null))
+                {
+                    return Err(KaveonError::Execution(
+                        "ARRAY elements must share a type".into(),
+                    ));
+                }
+                let values = args
+                    .iter()
+                    .map(|arg| compute::cast(arg, &DataType::Int64))
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                let mut builder = ListBuilder::new(Int64Builder::new());
+                for row in 0..num_rows {
+                    for value in &values {
+                        let value = value.as_primitive::<Int64Type>();
                         builder
                             .values()
                             .append_option(value.is_valid(row).then(|| value.value(row)));
@@ -3493,10 +3666,10 @@ mod tests {
         .unwrap();
         assert_eq!(
             value
-                .as_primitive::<Float64Type>()
+                .as_primitive::<Int64Type>()
                 .iter()
                 .collect::<Vec<_>>(),
-            vec![Some(2.0), Some(2.0)]
+            vec![Some(2), Some(2)]
         );
     }
 
@@ -3530,8 +3703,8 @@ mod tests {
         .unwrap();
         let list = value.as_any().downcast_ref::<ListArray>().unwrap();
         let values = list.value(0);
-        let values = values.as_primitive::<Float64Type>();
-        assert_eq!(values.iter().collect::<Vec<_>>(), vec![None, Some(40.0)]);
+        let values = values.as_primitive::<Int64Type>();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![None, Some(40)]);
 
         let value = evaluate(
             &Expr::Function {
@@ -3555,8 +3728,8 @@ mod tests {
         )
         .unwrap();
         let list = value.as_any().downcast_ref::<ListArray>().unwrap();
-        let values = list.value(0).as_primitive::<Float64Type>().clone();
-        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(40.0), Some(20.0)]);
+        let values = list.value(0).as_primitive::<Int64Type>().clone();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(40), Some(20)]);
     }
 
     #[test]
@@ -3586,8 +3759,8 @@ mod tests {
         .unwrap();
         let list = value.as_any().downcast_ref::<ListArray>().unwrap();
         let inner = list.value(0);
-        let values = inner.as_primitive::<Float64Type>();
-        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(2.0), None, Some(1.0)]);
+        let values = inner.as_primitive::<Int64Type>();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(2), None, Some(1)]);
 
         let value = evaluate(
             &Expr::Function {
@@ -3635,8 +3808,8 @@ mod tests {
         .unwrap();
         let list = value.as_any().downcast_ref::<ListArray>().unwrap();
         let inner = list.value(0);
-        let values = inner.as_primitive::<Float64Type>();
-        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(1.0), Some(2.0), Some(3.0), None]);
+        let values = inner.as_primitive::<Int64Type>();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(1), Some(2), Some(3), None]);
     }
 
     #[test]
@@ -5093,6 +5266,32 @@ mod tests {
     }
 
     #[test]
+    fn evaluates_homogeneous_integer_array_literal_as_int64_list() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+        )])
+        .unwrap();
+        let expr = Expr::Function {
+            name: "ARRAY".into(),
+            args: vec![
+                Expr::Literal(ScalarValue::Int64(1)),
+                Expr::Literal(ScalarValue::Null),
+                Expr::Literal(ScalarValue::Int64(3)),
+            ],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        assert_eq!(
+            result.data_type(),
+            &DataType::List(Arc::new(Field::new("item", DataType::Int64, true)))
+        );
+        let lists = result.as_list::<i32>();
+        let inner = lists.value(0);
+        let values = inner.as_primitive::<Int64Type>();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(1), None, Some(3)]);
+    }
+
+    #[test]
     fn evaluates_cardinality_for_array_lists() {
         let batch = RecordBatch::try_from_iter([(
             "id",
@@ -5273,10 +5472,10 @@ mod tests {
         .unwrap();
         assert_eq!(
             first
-                .as_primitive::<Float64Type>()
+                .as_primitive::<Int64Type>()
                 .iter()
                 .collect::<Vec<_>>(),
-            vec![Some(10.0), Some(10.0)]
+            vec![Some(10), Some(10)]
         );
         let last = evaluate(
             &Expr::Function {
@@ -5287,10 +5486,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            last.as_primitive::<Float64Type>()
+            last.as_primitive::<Int64Type>()
                 .iter()
                 .collect::<Vec<_>>(),
-            vec![Some(30.0), Some(30.0)]
+            vec![Some(30), Some(30)]
         );
     }
 
