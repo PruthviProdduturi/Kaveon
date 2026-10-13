@@ -101,10 +101,11 @@ foundations, but several operators are still centralized or narrow:
   intersection semantics (`3b35dc47`, `74ac62e3`, `d6e99cf2`, `c080f208`).
   Broader element types remain an explicit boundary.
   Scalar, DATE, timestamp, and DECIMAL casts are supported; complex cast
-  targets fail with typed planner diagnostics. Dereference, `UNNEST`, other
-  array operations, and broad JSON operations remain open; scalar extraction
-  via `JSON_EXTRACT_SCALAR` now supports dotted object paths and numeric array
-  subscripts (`abc671fc`).
+  targets fail with typed planner diagnostics. Dereference, `UNNEST`, and other
+  array operations remain open. `JSON_EXTRACT` now preserves objects, arrays,
+  and JSON nulls as serialized JSON text; `JSON_EXTRACT_SCALAR` supports dotted
+  object paths and numeric array subscripts. Invalid JSON and missing paths
+  return NULL.
 - There is no Trino-style cross-source federation yet. Registered SQL sources
   are API passthrough paths, while the strongest native Engine path is
   Parquet/Delta/Iceberg. The connector matrix now records S3 as implemented
