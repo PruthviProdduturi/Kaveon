@@ -2113,6 +2113,11 @@ fn ast_binop_to_binop(op: &ast::BinaryOperator) -> Option<BinaryOp> {
 
 fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
     let name = canonical_function_name(func);
+    if matches!(name.as_str(), "MAP" | "ROW") {
+        return Err(sql_err(format!(
+            "{name} expressions are unsupported; complex map/row types are not yet supported"
+        )));
+    }
     let args: Vec<Expr> = match &func.args {
         ast::FunctionArguments::List(arg_list) => arg_list
             .args
@@ -3898,6 +3903,23 @@ mod tests {
                 if name == "CARDINALITY"
                     && matches!(&args[0], Expr::Function { name, args } if name == "ARRAY" && args.len() == 2)
         ));
+    }
+
+    #[test]
+    fn rejects_map_and_row_expressions_with_typed_diagnostics() {
+        for (sql, expected) in [
+            (
+                "SELECT ROW(1, 2) FROM t",
+                "ROW expressions are unsupported; complex map/row types are not yet supported",
+            ),
+            (
+                "SELECT MAP(ARRAY[1], ARRAY[2]) FROM t",
+                "MAP expressions are unsupported; complex map/row types are not yet supported",
+            ),
+        ] {
+            let error = sql_to_logical_plan(sql).unwrap_err();
+            assert_eq!(error.to_string(), format!("sql: {expected}"), "{sql}");
+        }
     }
 
     #[test]

@@ -24,7 +24,8 @@ Multi-row and correlated projection forms return explicit diagnostics rather
 than being sent to execution.
 `CARDINALITY(ARRAY[...])` now evaluates to a nullable `Int64` list length;
 other array operations and complex types remain explicit unsupported
-boundaries.
+boundaries. `ROW(...)` and `MAP(...)` now fail during planning with a typed
+complex-type diagnostic rather than reaching execution as unknown functions.
 The SQL front end now exposes a typed positional binding entry point for
 `$1`, `$2`, …; values become AST literals before planning and are never
 interpolated into SQL text. Missing positions and `?`/named placeholders fail
