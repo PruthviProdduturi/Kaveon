@@ -164,6 +164,11 @@ qualification documents; this tracker remains the single ordered work list.
   semantics for null arrays, search values, and elements, with planner and
   executor coverage (`b2054d10`). Broader element types and array operations
   remain outside the current typed expression model.
+- `ARRAY_POSITION(array, value)` now returns the first 1-based position, `0`
+  when a value is absent, and matches null elements for numeric and text lists;
+  null list inputs remain null. Unsupported list element types retain an
+  explicit execution diagnostic, with parser and executor coverage in this
+  slice.
 - Three-worker global `ORDER BY`/TopN centralized merge correctness is now
   qualified for NULL ordering and ties against a single-partition reference
   (`bb788709`). The input remains distributed, while the exact global merge

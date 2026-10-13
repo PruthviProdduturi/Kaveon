@@ -4134,6 +4134,23 @@ mod tests {
     }
 
     #[test]
+    fn parses_array_position_over_an_array_literal() {
+        let plan =
+            sql_to_logical_plan("SELECT array_position(ARRAY['red', 'blue'], 'blue') FROM t")
+                .unwrap();
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("projection");
+        };
+        assert!(matches!(
+            &columns[0],
+            Expr::Function { name, args }
+                if name == "ARRAY_POSITION"
+                    && args.len() == 2
+                    && matches!(&args[0], Expr::Function { name, args } if name == "ARRAY" && args.len() == 2)
+        ));
+    }
+
+    #[test]
     fn map_constructor_is_retained_as_a_typed_expression() {
         let plan = sql_to_logical_plan("SELECT MAP(ARRAY['a'], ARRAY[1]) FROM t").unwrap();
         let debug = format!("{plan:?}");
