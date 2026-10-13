@@ -406,6 +406,14 @@ workers after readiness. The report is archived in
 the zero-retained-file cleanup check for an idle restart; it does not claim
 active-query survival during coordinator loss.
 
+The current image then passed a bounded 60-second AKS mixed-workload soak on
+2026-10-13: four concurrent clients completed 88 exact-result requests, with
+all three workers Ready, zero unexpected restarts, and zero retained exchange
+or spill files before and after. Evidence is archived in
+`docs/qualification/engine-aks-current-soak-2026-10-13.md`. This closes the
+declared bounded-soak check, but is not a multi-hour endurance or broad
+capacity claim.
+
 The distributed/local join-mode differential now also includes an inner
 residual predicate (`key equality AND value inequality`); local and
 distributed result sets match and all reservations are released.
