@@ -131,20 +131,30 @@ spec:
                 matchLabels:
                   app.kubernetes.io/instance: {{ $.Release.Name }}
                   app.kubernetes.io/component: worker
+{{- if $.Values.workers.separateFrom }}
+          # Prefer a node the other query engine is not being measured on.
+          #
+          # Preferred rather than required, and the distinction is the point.
+          # The scheduler has no reason to favour an idle node over a busy one,
+          # so without this a worker lands beside the system under measurement
+          # and contaminates it. But this cluster also serves the platform, and
+          # the platform staying up outranks a clean measurement: a required
+          # rule left the worker Pending whenever no free node existed, which
+          # is the platform down — the outcome the rule was added to prevent.
+          #
+          # So: the free node when there is one, a shared node rather than
+          # none. A round measured with a co-tenant is a round to discard and
+          # its own evidence says so; a platform at zero workers is an outage
+          # nobody chose.
+          preferredDuringSchedulingIgnoredDuringExecution:
 {{- range $component := $.Values.workers.separateFrom }}
-            # Never a node shared with {{ $component }}.
-            #
-            # Without this, a four-node pool does not actually separate
-            # anything: the scheduler has no reason to prefer the free node, so
-            # a Kaveon worker brought up during a benchmark round landed beside
-            # a Trino worker while the spare node sat empty — contaminating the
-            # measurement the extra node was bought to protect. Required, not
-            # preferred, because a contaminated measurement is worse than a
-            # worker that does not schedule.
-            - topologyKey: kubernetes.io/hostname
-              labelSelector:
-                matchLabels:
-                  app.kubernetes.io/component: {{ $component }}
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/component: {{ $component }}
+{{- end }}
 {{- end }}
       {{- end }}
       containers:
