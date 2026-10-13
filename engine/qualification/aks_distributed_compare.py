@@ -220,6 +220,12 @@ def active_worker_nodes(kube, statefulset_name, worker_count, excluded_statefuls
         phase = pod.get("status", {}).get("phase")
         if phase in {"Succeeded", "Failed"} or any(owner.get("kind") == "DaemonSet" for owner in owners):
             continue
+        # Jobs are intentionally ephemeral (catalog archives, freshness sweeps,
+        # and other maintenance work).  Including their pod names in the
+        # co-tenant baseline makes an otherwise valid engine comparison fail
+        # when a scheduled job starts or finishes between phases.
+        if any(owner.get("kind") in {"Job", "CronJob"} for owner in owners):
+            continue
         if any(owner.get("kind") == "StatefulSet" and owner.get("name") in excluded_statefulsets
                for owner in owners):
             continue
