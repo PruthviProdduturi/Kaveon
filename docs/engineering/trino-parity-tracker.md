@@ -151,8 +151,9 @@ foundations, but several operators are still centralized or narrow:
   typed key/value rows as an array.
 - `QUALIFY` now has an exact-result distributed differential case using
   partitioned `ROW_NUMBER()` output. This qualifies the implemented
-  row-number filter shape only; other window frames and unsupported window
-  clauses remain subject to the broader corpus.
+  row-number filter shape only; window `NULLS FIRST`/`NULLS LAST` ordering is
+  preserved through planning and execution, while other window modifiers
+  remain subject to the broader corpus.
 - Hash and semi/anti joins now accept `DATE` (`Date32`) keys with the same
   exact day-number semantics as their integer representation. A correlated
   scalar aggregate whose correlation includes a date column now passes the

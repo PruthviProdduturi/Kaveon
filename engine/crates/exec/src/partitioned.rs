@@ -2357,7 +2357,7 @@ mod tests {
             name: "SUM".into(),
             args: vec![kaveon_core::Expr::Column("id".into())],
             partition_by: vec![],
-            order_by: vec![(kaveon_core::Expr::Column("id".into()), true)],
+            order_by: vec![(kaveon_core::Expr::Column("id".into()), true, false)],
             frame: None,
         };
         let mut window = crate::window::WindowOperator::new(
@@ -2572,7 +2572,10 @@ mod tests {
         let error = compact_spill_runs(&mut runs, &schema, &account, &disk).unwrap_err();
         assert!(matches!(error, KaveonError::MemoryLimit(_)), "{error}");
         assert_eq!(runs.len(), MAX_RUNS_PER_PARTITION);
-        assert_eq!(runs.iter().map(SpillRun::bytes).sum::<u64>(), original_bytes);
+        assert_eq!(
+            runs.iter().map(SpillRun::bytes).sum::<u64>(),
+            original_bytes
+        );
         assert_eq!(disk.snapshot().current_bytes, original_bytes);
         drop(runs);
         assert_eq!(disk.snapshot().current_bytes, 0);

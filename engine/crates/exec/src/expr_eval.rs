@@ -251,7 +251,7 @@ pub fn column_references(expr: &Expr, into: &mut Vec<String>) {
             for expr in args
                 .iter()
                 .chain(partition_by)
-                .chain(order_by.iter().map(|(expr, _)| expr))
+                .chain(order_by.iter().map(|(expr, _, _)| expr))
             {
                 column_references(expr, into);
             }
