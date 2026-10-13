@@ -94,7 +94,8 @@ foundations, but several operators are still centralized or narrow:
   preserve their precision and scale through `ELEMENT_AT`, `CONTAINS`,
   `ARRAY_POSITION`, `ARRAY_DISTINCT`, `ARRAY_SORT`, `ARRAY_REVERSE`, and
   `ARRAY_SLICE`; `ARRAY_MIN` and `ARRAY_MAX` now return typed extrema while
-  ignoring null elements (`3b35dc47`, `74ac62e3`, `d6e99cf2`, `c080f208`).
+  ignoring null elements, and `ARRAYS_OVERLAP` follows Trino's true/false/NULL
+  intersection semantics (`3b35dc47`, `74ac62e3`, `d6e99cf2`, `c080f208`).
   Broader element types remain an explicit boundary.
   Scalar, DATE, timestamp, and DECIMAL casts are supported; complex cast
   targets fail with typed planner diagnostics. Dereference, `UNNEST`, other
