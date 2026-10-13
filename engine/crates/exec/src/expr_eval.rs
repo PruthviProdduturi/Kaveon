@@ -1,5 +1,5 @@
 use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, Decimal128Array, Float64Array, Float64Builder,
+    Array, ArrayRef, AsArray, BooleanArray, BooleanBuilder, Decimal128Array, Float64Array, Float64Builder,
     Int32Array, Int32DictionaryArray, Int64Array, ListArray, ListBuilder, MapArray, StringArray,
     StringBuilder, StructArray,
 };
@@ -2465,11 +2465,37 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             eval_to_char(source, fmt_arr, num_rows)
         }
         // ARRAY[...] is a typed list expression. Numeric arguments are
-        // promoted to Float64; string arguments remain Utf8. Null elements
-        // are preserved in either representation.
+        // promoted to Float64; boolean and string arguments retain their
+        // types. Null elements are preserved in every representation.
         "ARRAY" => {
             let string_array = args.iter().any(|arg| arg.data_type() == &DataType::Utf8);
-            if string_array {
+            let boolean_array = args.iter().any(|arg| arg.data_type() == &DataType::Boolean);
+            if string_array && boolean_array {
+                return Err(KaveonError::Execution("ARRAY elements must share a type".into()));
+            }
+            if boolean_array {
+                if args
+                    .iter()
+                    .any(|arg| !matches!(arg.data_type(), DataType::Boolean | DataType::Null))
+                {
+                    return Err(KaveonError::Execution("ARRAY elements must share a type".into()));
+                }
+                let values = args
+                    .iter()
+                    .map(|arg| compute::cast(arg, &DataType::Boolean))
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                let mut builder = ListBuilder::new(BooleanBuilder::new());
+                for row in 0..num_rows {
+                    for value in &values {
+                        let value = value.as_boolean();
+                        builder
+                            .values()
+                            .append_option(value.is_valid(row).then(|| value.value(row)));
+                    }
+                    builder.append(true);
+                }
+                Ok(Arc::new(builder.finish()))
+            } else if string_array {
                 if args
                     .iter()
                     .any(|arg| !matches!(arg.data_type(), DataType::Utf8 | DataType::Null))
@@ -3170,6 +3196,30 @@ mod tests {
         let list = value.as_any().downcast_ref::<ListArray>().unwrap();
         let values = list.value(0).as_primitive::<Float64Type>().clone();
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(40.0), Some(20.0)]);
+    }
+
+    #[test]
+    fn boolean_array_literal_preserves_boolean_elements() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+        )])
+        .unwrap();
+        let value = evaluate(
+            &Expr::Function {
+                name: "ARRAY".into(),
+                args: vec![
+                    Expr::Literal(ScalarValue::Bool(true)),
+                    Expr::Literal(ScalarValue::Null),
+                    Expr::Literal(ScalarValue::Bool(false)),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        let list = value.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(list.value_type(), DataType::Boolean);
+        assert_eq!(list.value(0).as_boolean().iter().collect::<Vec<_>>(), vec![Some(true), None, Some(false)]);
     }
 
     #[test]
