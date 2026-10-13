@@ -53,6 +53,7 @@ import Link from "next/link";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRole } from "../../hooks/useRole";
 import { RegisterSheet, RemoveSchemaDialog } from "./CatalogEditor";
+import { useCatalogTree } from "./CatalogShell";
 import s from "./catalog.module.css";
 import {
   AnalyzeDepth, CatalogDefinition, CatalogError, EngineTable, Measurement, SchemaDefinition,
@@ -181,6 +182,16 @@ export function Inventory({ catalogName, schemaName, action }: {
   action?: React.ReactNode;
 }) {
   const { isAdmin, isEditor } = useRole();
+  // The registry decides what this list measures. The Engine's definitions
+  // decide how: they carry the ids the schema and inventory reads need, and
+  // they also carry whatever tooling has written straight into the Engine. A
+  // definition nobody registered is not part of the lake and no statement can
+  // reach it, so measuring it here would put rows and bytes into a total that
+  // nothing a reader can query accounts for.
+  const { catalogs: registry, error: registryError } = useCatalogTree();
+  const registered = useMemo(
+    () => registry && new Set(registry.map(source => source.catalog.toLowerCase())),
+    [registry]);
   const [catalogs, setCatalogs] = useState<CatalogDefinition[] | null>(null);
   const [error, setError] = useState<CatalogError | null>(null);
   const [groups, setGroups] = useState<Group[] | null>(null);
@@ -205,6 +216,7 @@ export function Inventory({ catalogName, schemaName, action }: {
 
   /** Definitions first, then the measurements that fill the cells they drew. */
   const load = useCallback(async (refresh: boolean) => {
+    if (!registered) return;
     try {
       // This list is the lake: the catalogs a reader registers tables into
       // and measures. KaveonDB is neither — it holds the platform's own
@@ -212,7 +224,7 @@ export function Inventory({ catalogName, schemaName, action }: {
       // would otherwise appear here under a header offering to add tables to
       // it. It is read beside this list instead, by SystemCatalog.
       const definitions = (await fetchDefinitions()).filter(
-        definition => !isSystemCatalog(definition.name));
+        definition => !isSystemCatalog(definition.name) && registered.has(definition.name.toLowerCase()));
       if (!live.current) return;
       setCatalogs(definitions);
       setError(null);
@@ -267,10 +279,17 @@ export function Inventory({ catalogName, schemaName, action }: {
         setError(e instanceof CatalogError ? e : new CatalogError(0, "The catalog could not be read."));
       }
     }
-  }, [catalogName, schemaName]);
+  }, [catalogName, schemaName, registered]);
 
-  // Render the catalog structure immediately; the measurements follow.
+  // Render the catalog structure immediately; the measurements follow. The
+  // registry resolves first, so the list is never drawn over a set of
+  // catalogs it then has to take rows back out of.
   useEffect(() => { void load(false); }, [load]);
+
+  // A registry that did not answer is the reason there is nothing to measure,
+  // and the page says so. Reading as a lake holding nothing would be the
+  // failure reported as a finding.
+  useEffect(() => { if (registryError && !registry) setError(registryError); }, [registryError, registry]);
 
   const refresh = async () => {
     await load(true);
