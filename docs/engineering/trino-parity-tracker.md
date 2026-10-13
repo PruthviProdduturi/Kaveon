@@ -341,6 +341,10 @@ invalidation, isolation, bounds, and restart evidence listed above.
   releases the reservation, and the retry can proceed (`70348885`). This
   qualifies the local quota lifecycle; sustained network-pressure and
   deployed-cluster evidence remain open.
+- Exchange chunk writes now refund their quota reservation when the disk write
+  itself fails, preventing a transient spool I/O error from poisoning query
+  capacity; the failure-injection test verifies zero residual bytes and query
+  reservations (`a12e7e76`).
 - The spool now exposes an incremental Arrow IPC reader with partial-write and
   later-batch coverage (`13f27d74`); HTTP exchange fetches use it through
   `5dd9d275`.
