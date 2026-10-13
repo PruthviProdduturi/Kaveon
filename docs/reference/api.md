@@ -218,8 +218,18 @@ The Rust server exposes these routes:
 
 Catalog mutations through `/v1/catalog/*` require the configured catalog-admin bearer token, an actor header, and optimistic `If-Match` revisions for replacement; the same definitions are also created and dropped by [catalog statements](#catalog-statements) on `/v1/statement` under the submitting principal's role. Internal task/exchange routes use a separate shared bearer token. Statement clients authenticate with a principal token from `KAVEON_SECURITY_JSON` (roles `reader`, `analyst`, `admin`), an Entra bearer token, or the API bridge token with delegated `x-kaveon-principal`/`x-kaveon-role` headers; the server serves native TLS, admits every statement through its resource group (concurrency, memory share, queue) and the memory admission pool, and scopes query records and paged results to their owner (`docs/engineering/engine-security-integration.md`). This is a credential boundary, not production identity federation: rotation without restart, tenant isolation and row/column policies remain gates, so keep the Engine on a private network during alpha.
 
-The statement JSON body requires `query`. Clients may also provide `source`,
-`client`, `time_zone`, `client_tags`, `result_delivery` and `settings`. `source`,
+The statement JSON body requires `query`. Clients may also provide `parameters`
+for typed positional (`$1`, `?`) values or `named_parameters` for typed named
+(`:name`) values, plus `source`, `client`, `time_zone`, `client_tags`,
+`result_delivery` and `settings`. For example:
+
+```json
+{"query":"SELECT * FROM sales WHERE region = :region",
+ "named_parameters":{"region":"EU"}}
+```
+
+Values are validated as scalar JSON and bound in the parsed AST before
+planning; they are never interpolated into SQL text. `source`,
 `client` and `client_tags` identify the submitting application and session; they
 are not trusted user identity. The record's `principal` comes from the
 authenticated identity; `client_address` is not recorded.
