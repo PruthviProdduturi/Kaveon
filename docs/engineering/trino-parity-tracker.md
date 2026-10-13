@@ -260,6 +260,35 @@ is not claimed yet. Track 1 therefore treats the cache as implemented locally
 and keeps distributed invalidation, restart warm-up, and deployed hit/miss
 latency evidence as the remaining qualification work.
 
+#### Track 1 cache SLO
+
+The cache is qualified only when one deployed, same-image evidence run proves
+all of the following:
+
+- a warm analytical hit returns the exact same columns, rows, ordering, and
+  result hash as an uncached execution;
+- hit latency is recorded separately from planning and execution, with p50,
+  p95, p99, and max, and the evidence reports hit ratio plus byte and entry
+  evictions;
+- the cache is bounded by its byte budget and TTL, and eviction or expiry
+  never changes the result or causes an unbounded memory or disk allocation;
+- catalog publish, Delta-version change, and committed KaveonDB product
+  transactions invalidate affected analytical entries before a subsequent
+  read can observe the new snapshot;
+- `result_cache = false` produces no hit and inserts no entry, paged results
+  remain uncached, and an administrator can clear the cache;
+- cache keys remain isolated by catalog, schema, snapshot/version, timezone,
+  and authorization view, with no cross-principal result exposure; and
+- a coordinator restart fails closed to a miss and rebuilds safely. A shared
+  cross-coordinator cache, restart warm-up, and cache-backed transactional
+  reads are outside the current claim until separately implemented and
+  qualified.
+
+This is a Track 1 execution SLO, not a claim that Trino has a built-in result
+cache. Trino deployments may add connector caches or materialized views, but
+the Trino engine itself does not provide this general coordinator result-cache
+contract.
+
 ### Completed implementation slices in the current cycle
 
 - Exchange decoding no longer assembles a second contiguous in-memory payload
