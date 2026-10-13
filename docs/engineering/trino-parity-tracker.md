@@ -157,7 +157,9 @@ foundations, but several operators are still centralized or narrow:
   omits NULL elements by default, and accepts a NULL replacement policy.
   Nested arrays and arrays of typed `ROW`/map values now materialize as typed
   Arrow containers with element nulls preserved; mixed or unsupported element
-  types remain explicit boundaries.
+  types remain explicit boundaries. `ARRAY_DISTINCT` now deduplicates nested
+  list, row, and map elements by typed equality while preserving order and one
+  NULL element.
   Scalar, DATE, timestamp, and DECIMAL casts are supported; complex cast
   targets fail with typed planner diagnostics. `value IN UNNEST(array)` and
   its `NOT IN` form lower to the existing nullable `CONTAINS` path; row-
