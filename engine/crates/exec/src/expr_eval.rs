@@ -1863,6 +1863,21 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             }
             Ok(Arc::new(builder.finish()))
         }
+        "CARDINALITY" => {
+            check_arity(name, args, 1)?;
+            let list = args[0]
+                .as_any()
+                .downcast_ref::<arrow::array::ListArray>()
+                .ok_or_else(|| {
+                    KaveonError::Execution(
+                        "CARDINALITY currently supports ARRAY/List values only".into(),
+                    )
+                })?;
+            let values = (0..num_rows)
+                .map(|row| (!list.is_null(row)).then(|| list.value_length(row) as i64))
+                .collect::<Vec<_>>();
+            Ok(Arc::new(Int64Array::from(values)))
+        }
         other => Err(KaveonError::Execution(format!(
             "unknown scalar function: {other}"
         ))),
@@ -3411,6 +3426,44 @@ mod tests {
             lists.value(1).as_primitive::<Float64Type>().values(),
             &[1.0, 2.5]
         );
+    }
+
+    #[test]
+    fn evaluates_cardinality_for_array_lists() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+        )])
+        .unwrap();
+        let expr = Expr::Function {
+            name: "CARDINALITY".into(),
+            args: vec![Expr::Function {
+                name: "ARRAY".into(),
+                args: vec![
+                    Expr::Literal(ScalarValue::Int64(1)),
+                    Expr::Literal(ScalarValue::Float64(2.5)),
+                ],
+            }],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        assert_eq!(result.as_primitive::<Int64Type>().values(), &[2, 2]);
+    }
+
+    #[test]
+    fn cardinality_rejects_non_list_values_explicitly() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        let expr = Expr::Function {
+            name: "CARDINALITY".into(),
+            args: vec![Expr::Column("id".into())],
+        };
+        let error = evaluate(&expr, &batch).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("CARDINALITY currently supports ARRAY/List values only"));
     }
 
     #[test]
