@@ -257,6 +257,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "nested_complex_value_projection",
+        "SELECT ROW(1, 'alpha') AS record, MAP_KEYS(MAP(ARRAY['a', 'b'], ARRAY[10, 20])) AS keys FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "scalar_aggregate_filter",
         "SELECT country, COUNT(*) AS n FROM {T} WHERE user_id < (SELECT MAX(user_id) FROM {U}) GROUP BY country ORDER BY country",
         true,

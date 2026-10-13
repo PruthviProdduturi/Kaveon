@@ -294,7 +294,9 @@ qualification documents; this tracker remains the single ordered work list.
   same cardinality/positional coverage. The differential row canonicalizer now
   uses Arrow's type-aware formatter, so literal array/map-valued projections
   are compared across local and distributed paths instead of being silently
-  excluded by an unsupported UTF-8 cast; nested complex values remain open.
+  excluded by an unsupported UTF-8 cast. Representative `ROW(...)` and
+  `MAP_KEYS(...)` nested projections now pass the same gate; arbitrary nested
+  element types and complex-valued ordering remain open.
 - Three-worker global `ORDER BY`/TopN centralized merge correctness is now
   qualified for NULL ordering and ties against a single-partition reference
   (`bb788709`). The input remains distributed, while the exact global merge
