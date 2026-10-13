@@ -130,7 +130,11 @@ class Engine:
                 "KAVEON_HASH_SPILL_BYTES": str(disk_bytes),
                 "KAVEON_HASH_SPILL_PARTITIONS": "16",
                 "KAVEON_SECURITY_JSON": json.dumps({"principals": [{
-                    "token": token, "principal": "pressure", "role": "analyst"}]}),
+                    # The disposable pressure fixture has no KaveonDB grant
+                    # authority.  Bootstrap catalogs are therefore visible
+                    # only to admins; this suite qualifies execution pressure,
+                    # not catalog-grant provisioning.
+                    "token": token, "principal": "pressure", "role": "admin"}]}),
             })
             log = stack.enter_context((output / f"{profile}-node-{index}.log").open("w", encoding="utf-8"))
             process = subprocess.Popen([str(binary), str(self.work / "absent.toml")], cwd=self.work,
