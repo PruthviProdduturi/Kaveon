@@ -140,6 +140,11 @@ qualification documents; this tracker remains the single ordered work list.
 - A bounded replayable append-only exchange spool foundation is implemented
   with partial-read, fork/retry, cancellation, and writer-failure tests
   (`79ddf443`).
+- Shared exchange spool byte quotas now have concurrent-pressure and retry
+  cleanup coverage: an over-quota retry is refused, failed-attempt cleanup
+  releases the reservation, and the retry can proceed (`70348885`). This
+  qualifies the local quota lifecycle; sustained network-pressure and
+  deployed-cluster evidence remain open.
 - The spool now exposes an incremental Arrow IPC reader with partial-write and
   later-batch coverage (`13f27d74`); HTTP exchange fetches use it through
   `5dd9d275`.
@@ -201,10 +206,14 @@ qualification documents; this tracker remains the single ordered work list.
 - Streamed-root task metrics now have a stabilized eventual-read test: the
   metrics endpoint may report `202 Accepted` briefly and is polled until the
   completed metrics record is available (`6cd66cb4`).
+- Named parameter placeholders now have exact unsupported coverage, while
+  sequential `?` and typed positional `$n` remain the supported parameter
+  forms (`c20173d7`). `QUALIFY` continues to fail closed with a stable
+  planner diagnostic rather than being silently ignored.
 
 ### Current focused validation
 
-The latest focused validation passes 328 `kaveon-server` tests, 97
+The latest focused validation passes 329 `kaveon-server` tests, 97
 `kaveon-sql` tests, and 213 `kaveon-exec` tests. These counts are package-level
 validation snapshots; they do not close the broader multi-worker, AKS, or
 cross-connector qualification gates below.
