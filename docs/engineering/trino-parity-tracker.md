@@ -313,9 +313,9 @@ qualification documents; this tracker remains the single ordered work list.
   and NULL-containing arrays, including the SQL UNKNOWN result when equal
   arrays contain a null element.
 - The same comparison path now normalizes Arrow 64-bit-offset `LargeList`
-  arrays before evaluation, so large-list storage uses the same lexicographic
-  and null semantics as ordinary `List` arrays; a focused executor regression
-  covers the path.
+  arrays before evaluation, including mixed `List`/`LargeList` operands, so
+  either storage representation uses the same lexicographic and null
+  semantics; a focused executor regression covers both paths.
 - Three-worker global `ORDER BY`/TopN centralized merge correctness is now
   qualified for NULL ordering and ties against a single-partition reference
   (`bb788709`). The input remains distributed, while the exact global merge
