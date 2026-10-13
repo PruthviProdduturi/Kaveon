@@ -2,7 +2,7 @@ use arrow::array::{
     Array, ArrayRef, AsArray, BooleanArray, BooleanBuilder, Decimal128Array, Decimal128Builder,
     Float64Array, Float64Builder,
     Int32Array, Int32DictionaryArray, Int64Array, Int64Builder, ListArray, ListBuilder, MapArray,
-    PrimitiveArray,
+    NullBuilder, PrimitiveArray,
     StringArray,
     StringBuilder, StructArray,
 };
@@ -1407,6 +1407,167 @@ fn eval_cast(expr: &Expr, target: CastTarget, batch: &RecordBatch) -> Result<Arr
 
 fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
     let upper = name.to_uppercase();
+    if upper == "ARRAY" {
+        if args.is_empty() {
+            return Err(KaveonError::Execution(
+                "ARRAY requires at least one element".into(),
+            ));
+        }
+        let mut data_type = args
+            .iter()
+            .map(|arg| arg.data_type())
+            .find(|data_type| **data_type != DataType::Null)
+            .cloned()
+            .unwrap_or(DataType::Null);
+        if data_type == DataType::Int64
+            && args
+                .iter()
+                .any(|arg| arg.data_type() == &DataType::Float64)
+        {
+            data_type = DataType::Float64;
+        }
+        if args.iter().any(|arg| {
+            arg.data_type() != &data_type
+                && arg.data_type() != &DataType::Null
+                && !(data_type == DataType::Float64 && arg.data_type() == &DataType::Int64)
+        }) {
+            return Err(KaveonError::Execution(
+                "ARRAY elements must have one common type".into(),
+            ));
+        }
+        macro_rules! build_array {
+            ($builder:expr, $array_ty:ty, $value:expr) => {{
+                let mut builder = ListBuilder::new($builder);
+                for row in 0..num_rows {
+                    for arg in args {
+                        if arg.data_type() == &DataType::Null {
+                            builder.values().append_null();
+                            continue;
+                        }
+                        let values = arg.as_any().downcast_ref::<$array_ty>().ok_or_else(|| {
+                            KaveonError::Execution("ARRAY element type could not be decoded".into())
+                        })?;
+                        if values.is_null(row) {
+                            builder.values().append_null();
+                        } else {
+                            builder.values().append_value($value(values, row));
+                        }
+                    }
+                    builder.append(true);
+                }
+                Ok(Arc::new(builder.finish()) as ArrayRef)
+            }};
+        }
+        return match data_type {
+            DataType::Boolean => build_array!(
+                BooleanBuilder::new(),
+                BooleanArray,
+                |values: &BooleanArray, row| values.value(row)
+            ),
+            DataType::Int64 => build_array!(
+                Int64Builder::new(),
+                Int64Array,
+                |values: &Int64Array, row| values.value(row)
+            ),
+            DataType::Float64 => {
+                let mut builder = ListBuilder::new(Float64Builder::new());
+                for row in 0..num_rows {
+                    for arg in args {
+                        if arg.data_type() == &DataType::Null {
+                            builder.values().append_null();
+                        } else if let Some(values) = arg.as_any().downcast_ref::<Float64Array>() {
+                            if values.is_null(row) {
+                                builder.values().append_null();
+                            } else {
+                                builder.values().append_value(values.value(row));
+                            }
+                        } else if let Some(values) = arg.as_any().downcast_ref::<Int64Array>() {
+                            if values.is_null(row) {
+                                builder.values().append_null();
+                            } else {
+                                builder.values().append_value(values.value(row) as f64);
+                            }
+                        } else {
+                            return Err(KaveonError::Execution(
+                                "ARRAY element type could not be decoded".into(),
+                            ));
+                        }
+                    }
+                    builder.append(true);
+                }
+                Ok(Arc::new(builder.finish()) as ArrayRef)
+            }
+            DataType::Utf8 => {
+                let mut builder = ListBuilder::new(StringBuilder::new());
+                for row in 0..num_rows {
+                    for arg in args {
+                        if arg.data_type() == &DataType::Null {
+                            builder.values().append_null();
+                            continue;
+                        }
+                        let values = arg
+                            .as_any()
+                            .downcast_ref::<StringArray>()
+                            .ok_or_else(|| {
+                                KaveonError::Execution(
+                                    "ARRAY element type could not be decoded".into(),
+                                )
+                            })?;
+                        if values.is_null(row) {
+                            builder.values().append_null();
+                        } else {
+                            builder.values().append_value(values.value(row));
+                        }
+                    }
+                    builder.append(true);
+                }
+                Ok(Arc::new(builder.finish()) as ArrayRef)
+            }
+            DataType::Decimal128(precision, scale) => {
+                let mut builder = ListBuilder::new(
+                    Decimal128Builder::new()
+                        .with_precision_and_scale(precision, scale)
+                        .map_err(|error| KaveonError::Execution(error.to_string()))?,
+                );
+                for row in 0..num_rows {
+                    for arg in args {
+                        if arg.data_type() == &DataType::Null {
+                            builder.values().append_null();
+                            continue;
+                        }
+                        let values = arg
+                            .as_any()
+                            .downcast_ref::<Decimal128Array>()
+                            .ok_or_else(|| {
+                                KaveonError::Execution(
+                                    "ARRAY element type could not be decoded".into(),
+                                )
+                            })?;
+                        if values.is_null(row) {
+                            builder.values().append_null();
+                        } else {
+                            builder.values().append_value(values.value(row));
+                        }
+                    }
+                    builder.append(true);
+                }
+                Ok(Arc::new(builder.finish()) as ArrayRef)
+            }
+            DataType::Null => {
+                let mut builder = ListBuilder::new(NullBuilder::new());
+                for _row in 0..num_rows {
+                    for _ in args {
+                        builder.values().append_null();
+                    }
+                    builder.append(true);
+                }
+                Ok(Arc::new(builder.finish()) as ArrayRef)
+            }
+            _ => Err(KaveonError::Execution(format!(
+                "ARRAY elements of type {data_type} are not supported"
+            ))),
+        };
+    }
     if upper == "ROW_FIELD" {
         check_arity(name, args, 2)?;
         let row = args[0]
@@ -1463,7 +1624,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 "MAP keys and values must have matching null rows".into(),
             ));
         }
-        if keys.values().null_count() > 0 {
+        if keys.values().data_type() == &DataType::Null || keys.values().null_count() > 0 {
             return Err(KaveonError::Execution(
                 "MAP keys cannot contain NULL values".into(),
             ));
