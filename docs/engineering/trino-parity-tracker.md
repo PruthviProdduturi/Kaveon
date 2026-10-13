@@ -35,13 +35,13 @@ the same acceptance contract rather than separate informal benchmarks.
 
 ## Audit snapshot — October 12, 2026
 
-The local parity baseline was rerun from commit `35e1d562` on October 12:
-`cargo test -p kaveon-server` passed **342/342** tests and
-`cargo test -p kaveon-exec` passed **268/268** non-ignored tests (four benchmark
-tests remain intentionally ignored). Documentation validation also passed for
-139 Markdown files, 39 routes, and 9 SVGs. This is an in-process regression
-baseline; it does not replace the deployed three-worker qualification gates
-listed below.
+The local parity baseline was rerun from commit `01cb2082` on October 12:
+`cargo test -p kaveon-server` passed **342/342** tests,
+`cargo test -p kaveon-sql` passed **113/113** tests, and
+`cargo test -p kaveon-exec --lib` passed **273** tests with four benchmark tests
+intentionally ignored. Documentation validation also passed for 139 Markdown
+files, 39 routes, and 9 SVGs. This is an in-process regression baseline; it
+does not replace the deployed three-worker qualification gates listed below.
 
 Temporal `ARRAY[...]` literals now preserve DATE32, DATE64, TIME32 second and
 millisecond, and TIMESTAMP microsecond element types, including null elements;
@@ -395,9 +395,9 @@ qualification documents; this tracker remains the single ordered work list.
 
 ### Current focused validation
 
-The latest focused validation passes 334 `kaveon-server` tests, 111
-`kaveon-sql` tests, and 247 `kaveon-exec` tests (four executor benchmarks are
-ignored). The repository differential gate
+The latest focused validation passes 342 `kaveon-server` tests, 113
+`kaveon-sql` tests, and 273 `kaveon-exec` library tests (four executor
+benchmarks are ignored). The repository differential gate
 (`differential_tests::the_differential_sweep_matches_across_parquet_encodings_and_execution_paths`)
 also passes, comparing the same corpus across alternate Parquet encodings and
 local/distributed execution paths. These are package-level and in-process
