@@ -58,11 +58,14 @@ foundations, but several operators are still centralized or narrow:
 - Ordinary distributed joins require equality keys; residual predicates are
   only partially supported. Semi/anti joins are not yet partitioned by default.
 - Non-recursive CTEs, derived tables, joins, aggregates, `HAVING`, `CASE`, and
-  common set operations work. Scalar subqueries, recursive CTEs, `INTERSECT ALL`,
-  `EXCEPT ALL`, the full prepared-statement protocol, and general lake-table
-  DML remain missing. Typed positional `$1` parameters are now validated and
-  bound through the HTTP statement API; named and `?` forms still fail with an
-  explicit binding diagnostic.
+  common set operations work. Uncorrelated aggregate scalar subqueries in
+  `WHERE` and bounded projection scalar subqueries are supported when they
+  return one ungrouped, single-column aggregate. Correlated, multi-row, and
+  other scalar forms, recursive CTEs, `INTERSECT ALL`, `EXCEPT ALL`, the full
+  prepared-statement protocol, and general lake-table DML remain missing.
+  Typed positional `$1` parameters are now validated and bound through the
+  HTTP statement API; named and `?` forms still fail with an explicit binding
+  diagnostic.
   Uncorrelated aggregate scalar subqueries in `WHERE` are now supported with
   exact-result differential coverage; projection, correlated, and multi-row
   scalar forms remain explicitly rejected.
@@ -158,6 +161,12 @@ qualification documents; this tracker remains the single ordered work list.
 - Correlated scalar subqueries now have explicit rejection and binder-boundary
   coverage; the preserved outer reference documents the remaining Apply/lateral
   runtime requirement (`72c7e302`).
+- Bounded projection scalar subqueries now support an ungrouped, single-column
+  aggregate and preserve its alias; correlated and multi-row projection forms
+  remain explicitly rejected (`d7be5f9a`).
+- `INTERSECT ALL` and `EXCEPT ALL` now have exact unsupported diagnostics that
+  preserve the distinction from the implemented distinct-oriented set
+  operators (`1c053837`).
 - Broadcast planning now has an explicit dynamic-filter boundary test: static
   predicates reach the build scan, while runtime build-key propagation to the
   probe scan remains refused until its correctness and exchange behavior are
@@ -169,14 +178,15 @@ current HTTP exchange spool is bounded, replayable, and incrementally decoded;
 network backpressure, sustained pressure evidence, and AKS cancellation
 qualification remain open.
 Track 2 remains partial because the full prepared-statement protocol,
-correlated/projection scalar subqueries, complex types, multiset set
-operations, and broader typed DML are not yet implemented. Positional scalar
-parameters are supported through the HTTP statement API; named and `?`
-placeholders remain explicit unsupported cases.
+correlated and other unsupported scalar subqueries, complex types, multiset
+set operations, and broader typed DML are not yet implemented. Positional
+scalar parameters are supported through the HTTP statement API; named and
+`?` placeholders remain explicit unsupported cases.
 
 These slices do not close Tracks 1 and 2's qualification gates; the broader
-three-worker corpus, complex types, scalar/prepared subqueries, worker-loss,
-and exact-result differential runs are still required.
+three-worker corpus, complex types, correlated/unsupported scalar shapes,
+prepared-statement coverage, worker-loss, and exact-result differential runs
+are still required.
 
 ## 9/10 exit gate
 
