@@ -38,8 +38,8 @@ the same acceptance contract rather than separate informal benchmarks.
 The local parity baseline was rerun from commit `01cb2082` on October 12:
 `cargo test -p kaveon-server` passed **342/342** tests,
 `cargo test -p kaveon-sql` passed **113/113** tests, and
-`cargo test -p kaveon-exec --lib` passed **273** tests with four benchmark tests
-intentionally ignored. Documentation validation also passed for 139 Markdown
+`cargo test -p kaveon-exec --lib` passed **269/269** non-ignored tests with four
+benchmark tests intentionally ignored. Documentation validation also passed for 139 Markdown
 files, 39 routes, and 9 SVGs. This is an in-process regression baseline; it
 does not replace the deployed three-worker qualification gates listed below.
 
@@ -396,7 +396,7 @@ qualification documents; this tracker remains the single ordered work list.
 ### Current focused validation
 
 The latest focused validation passes 342 `kaveon-server` tests, 113
-`kaveon-sql` tests, and 273 `kaveon-exec` library tests (four executor
+`kaveon-sql` tests, and 269 `kaveon-exec` library tests (four executor
 benchmarks are ignored). The repository differential gate
 (`differential_tests::the_differential_sweep_matches_across_parquet_encodings_and_execution_paths`)
 also passes, comparing the same corpus across alternate Parquet encodings and
