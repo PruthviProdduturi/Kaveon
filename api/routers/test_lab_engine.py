@@ -473,3 +473,41 @@ class EngineLabStreamTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProductCatalogAnswersToAllItsNames(unittest.TestCase):
+    """The Engine defines the product catalog as `kaveon`, the registry stores
+    `KaveonDB`, and this module used to match the literal `Kaveon`. So the
+    intersection compared a product name against an Engine identity, dropped
+    the catalog, and SQL Lab listed two sources where three were registered —
+    while the fallback written to cover exactly that case tested the same
+    unmatched spelling and never fired.
+    """
+
+    def test_every_spelling_is_the_same_catalog(self):
+        for spelling in ("kaveon", "Kaveon", "KaveonDB", "kaveondb", " KAVEONDB "):
+            self.assertTrue(lab._is_product_catalog(spelling), spelling)
+        for other in ("OpenSource", "KaveonTelemetry", "", None, "kaveon_other"):
+            self.assertFalse(lab._is_product_catalog(other), repr(other))
+
+    def test_a_label_is_the_product_name_whichever_name_arrived(self):
+        for spelling in ("kaveon", "Kaveon", "KaveonDB"):
+            self.assertEqual(lab._catalog_label(spelling), "KaveonDB")
+        # Any other catalog keeps the name it was given.
+        self.assertEqual(lab._catalog_label("OpenSource"), "OpenSource")
+
+    def test_a_registry_name_matches_an_engine_grant_of_the_same_catalog(self):
+        # The exact live mismatch: registry says KaveonDB, Engine granted kaveon.
+        self.assertTrue(lab._granted("KaveonDB", {"kaveon", "OpenSource"}))
+        self.assertTrue(lab._granted("kaveon", {"KaveonDB"}))
+
+    def test_case_alone_is_not_an_authorization_decision(self):
+        self.assertTrue(lab._granted("opensource", {"OpenSource"}))
+        self.assertTrue(lab._granted("OpenSource", {"opensource"}))
+
+    def test_a_catalog_that_was_not_granted_is_still_refused(self):
+        self.assertFalse(lab._granted("KaveonTelemetry", {"OpenSource", "kaveon"}))
+        self.assertFalse(lab._granted("", {"OpenSource"}))
+        self.assertFalse(lab._granted(None, {"OpenSource"}))
+        # An empty grant set authorizes nothing, product catalog included.
+        self.assertFalse(lab._granted("KaveonDB", set()))
