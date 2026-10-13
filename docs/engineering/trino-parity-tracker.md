@@ -724,6 +724,15 @@ three-worker corpus, complex types, correlated/unsupported scalar shapes,
 prepared-statement coverage, worker-loss, and exact-result differential runs
 are still required.
 
+The current local validation baseline is green on the same checkout: 275
+`kaveon-exec` tests passed (4 ignored), 118 `kaveon-sql` tests passed, and 346
+`kaveon-server` tests passed. The set-operation coverage includes `UNION ALL`, distinct and
+multiset `INTERSECT`/`EXCEPT`, dictionary-versus-plain values, duplicate
+counts, null handling, planner lowering, and exchange-input consumption. This
+is implementation and regression evidence for the covered shapes; it does not
+replace the deployed differential corpus or the remaining complex-type and
+wire-protocol gates.
+
 ## 9/10 exit gate
 
 Do not claim 9/10 until all of the following are true:
