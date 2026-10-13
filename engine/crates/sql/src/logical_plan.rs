@@ -925,7 +925,7 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
             // FROM as a table-shaped factor instead of exposing the generic
             // TableFactor::UNNEST variant. Refuse that shape explicitly so it
             // cannot silently become a scan of a table named UNNEST.
-            if table_name.eq_ignore_ascii_case("UNNEST") && alias_name.is_none() {
+            if table_name.eq_ignore_ascii_case("UNNEST") {
                 return Err(sql_err(
                     "row-producing UNNEST in FROM is not supported; use value IN UNNEST(array)",
                 ));
@@ -4474,11 +4474,16 @@ mod tests {
 
     #[test]
     fn rejects_row_producing_unnest_with_an_actionable_diagnostic() {
-        let error = sql_to_logical_plan("SELECT * FROM UNNEST(ARRAY[1, 2])").unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "sql: row-producing UNNEST in FROM is not supported; use value IN UNNEST(array)"
-        );
+        for sql in [
+            "SELECT * FROM UNNEST(ARRAY[1, 2])",
+            "SELECT * FROM UNNEST(ARRAY[1, 2]) AS t(value)",
+        ] {
+            let error = sql_to_logical_plan(sql).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "sql: row-producing UNNEST in FROM is not supported; use value IN UNNEST(array)"
+            );
+        }
     }
 
     #[test]
