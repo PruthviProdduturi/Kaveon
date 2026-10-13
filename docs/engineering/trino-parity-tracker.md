@@ -388,6 +388,11 @@ The distributed/local join-mode differential now also includes an inner
 residual predicate (`key equality AND value inequality`); local and
 distributed result sets match and all reservations are released.
 
+The same differential corpus now covers SQL Lab's SQL Server-style bracketed
+identifiers (`SELECT DISTINCT [region] ...`) across all Parquet encodings and
+execution paths. The parser normalizes identifier-shaped brackets before
+planning, preventing them from reaching workers as an `ARRAY` scalar call.
+
 The ordering subset is green in-process as well: eight planner, fragment, and
 API tests cover distributed scan inputs, TopN lowering, OFFSET retention,
 exchange execution, and spill-aware final merge. Global ORDER BY still ends in
