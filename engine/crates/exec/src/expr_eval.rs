@@ -1692,6 +1692,96 @@ fn arrays_overlap_nested<L: OffsetSizeTrait>(
     Ok(Arc::new(rows))
 }
 
+fn arrays_overlap_primitive<L, T>(
+    left: &GenericListArray<L>,
+    right: &GenericListArray<L>,
+) -> Result<ArrayRef>
+where
+    L: OffsetSizeTrait,
+    T: ArrowPrimitiveType,
+    T::Native: PartialEq,
+{
+    if left.len() != right.len() || left.value_type() != right.value_type() {
+        return Err(KaveonError::Execution(
+            "ARRAYS_OVERLAP requires arrays with matching row counts and element types".into(),
+        ));
+    }
+    let rows = (0..left.len())
+        .map(|row| {
+            if left.is_null(row) || right.is_null(row) {
+                None
+            } else {
+                primitive_arrays_overlap(
+                    left.value(row).as_primitive::<T>(),
+                    right.value(row).as_primitive::<T>(),
+                )
+            }
+        })
+        .collect::<BooleanArray>();
+    Ok(Arc::new(rows))
+}
+
+fn arrays_overlap_boolean<L: OffsetSizeTrait>(
+    left: &GenericListArray<L>,
+    right: &GenericListArray<L>,
+) -> Result<ArrayRef> {
+    if left.len() != right.len() || left.value_type() != right.value_type() {
+        return Err(KaveonError::Execution(
+            "ARRAYS_OVERLAP requires arrays with matching row counts and element types".into(),
+        ));
+    }
+    let rows = (0..left.len())
+        .map(|row| {
+            if left.is_null(row) || right.is_null(row) {
+                None
+            } else {
+                let left_values = left.value(row);
+                let right_values = right.value(row);
+                let saw_null = left_values.null_count() > 0 || right_values.null_count() > 0;
+                for left_index in 0..left_values.len() {
+                    if left_values.is_null(left_index) {
+                        continue;
+                    }
+                    for right_index in 0..right_values.len() {
+                        if !right_values.is_null(right_index)
+                            && left_values.as_boolean().value(left_index)
+                                == right_values.as_boolean().value(right_index)
+                        {
+                            return Some(true);
+                        }
+                    }
+                }
+                if saw_null { None } else { Some(false) }
+            }
+        })
+        .collect::<BooleanArray>();
+    Ok(Arc::new(rows))
+}
+
+fn arrays_overlap_utf8<L: OffsetSizeTrait>(
+    left: &GenericListArray<L>,
+    right: &GenericListArray<L>,
+) -> Result<ArrayRef> {
+    if left.len() != right.len() || left.value_type() != right.value_type() {
+        return Err(KaveonError::Execution(
+            "ARRAYS_OVERLAP requires arrays with matching row counts and element types".into(),
+        ));
+    }
+    let rows = (0..left.len())
+        .map(|row| {
+            if left.is_null(row) || right.is_null(row) {
+                None
+            } else {
+                string_arrays_overlap(
+                    left.value(row).as_string::<i32>(),
+                    right.value(row).as_string::<i32>(),
+                )
+            }
+        })
+        .collect::<BooleanArray>();
+    Ok(Arc::new(rows))
+}
+
 fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
     let upper = name.to_uppercase();
     if upper.starts_with("ARRAY_ANY_") || upper.starts_with("ARRAY_ALL_") {
@@ -5091,10 +5181,24 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         "ARRAYS_OVERLAP requires arrays with matching row counts and element types".into(),
                     ));
                 }
-                return Err(KaveonError::Execution(format!(
-                    "ARRAYS_OVERLAP does not support list element type {}",
-                    left.value_type()
-                )));
+                return match left.value_type() {
+                    DataType::Int32 => arrays_overlap_primitive::<_, Int32Type>(left, right),
+                    DataType::Int64 => arrays_overlap_primitive::<_, Int64Type>(left, right),
+                    DataType::Float64 => arrays_overlap_primitive::<_, Float64Type>(left, right),
+                    DataType::Date32 => arrays_overlap_primitive::<_, Date32Type>(left, right),
+                    DataType::Date64 => arrays_overlap_primitive::<_, Date64Type>(left, right),
+                    DataType::Time32(TimeUnit::Second) =>
+                        arrays_overlap_primitive::<_, Time32SecondType>(left, right),
+                    DataType::Time32(TimeUnit::Millisecond) =>
+                        arrays_overlap_primitive::<_, Time32MillisecondType>(left, right),
+                    DataType::Timestamp(TimeUnit::Microsecond, _) =>
+                        arrays_overlap_primitive::<_, TimestampMicrosecondType>(left, right),
+                    DataType::Boolean => arrays_overlap_boolean(left, right),
+                    DataType::Utf8 => arrays_overlap_utf8(left, right),
+                    other => Err(KaveonError::Execution(format!(
+                        "ARRAYS_OVERLAP does not support list element type {other}"
+                    ))),
+                };
             }
             let left = args[0]
                 .as_any()
@@ -6964,6 +7068,23 @@ mod tests {
         let right = Arc::new(right_builder.finish()) as ArrayRef;
 
         let result = eval_scalar_function("ARRAYS_OVERLAP", &[left, right], 1).unwrap();
+        assert!(result.as_boolean().value(0));
+
+        let mut primitive_left = LargeListBuilder::new(Int64Builder::new());
+        primitive_left.values().append_value(7);
+        primitive_left.append(true);
+        let mut primitive_right = LargeListBuilder::new(Int64Builder::new());
+        primitive_right.values().append_value(7);
+        primitive_right.append(true);
+        let result = eval_scalar_function(
+            "ARRAYS_OVERLAP",
+            &[
+                Arc::new(primitive_left.finish()) as ArrayRef,
+                Arc::new(primitive_right.finish()) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
         assert!(result.as_boolean().value(0));
     }
 
