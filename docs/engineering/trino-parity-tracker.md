@@ -280,13 +280,18 @@ qualification documents; this tracker remains the single ordered work list.
 ### Current focused validation
 
 The latest focused validation passes 330 `kaveon-server` tests, 108
-`kaveon-sql` tests, and 232 `kaveon-exec` tests (four executor benchmarks are
+`kaveon-sql` tests, and 233 `kaveon-exec` tests (four executor benchmarks are
 ignored). The repository differential gate
 (`differential_tests::the_differential_sweep_matches_across_parquet_encodings_and_execution_paths`)
 also passes, comparing the same corpus across alternate Parquet encodings and
 local/distributed execution paths. These are package-level and in-process
 qualification snapshots; they do not close the broader multi-worker, AKS, or
 cross-connector qualification gates below.
+
+The distributed failure subset is also green in-process: seven retry and
+worker-loss tests, six spill/recovery tests, and two cancellation tests passed.
+Those tests prove bounded local behavior and simulated worker failure; they do
+not substitute for a deployed multi-worker loss-and-recovery run.
 
 Track 1 remains partial because global ordering still uses a centralized merge
 and a full worker-loss/spill/cancellation corpus still needs a correctness
