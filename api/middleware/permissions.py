@@ -85,6 +85,17 @@ def can_write(owner_email: str, ctx: UserContext) -> bool:
     """
     if _level(ctx.role) >= _level("Editor"):
         return True
+    # A Viewer never writes, even to content it owns.
+    #
+    # The ownership test below had no role floor, so the rule this function
+    # documents — "Analysts can only touch their own" — did not hold: a Viewer
+    # could edit and delete anything it had created, and an account demoted to
+    # Viewer kept write access to everything it made before. Creating requires
+    # Analyst, so a Viewer cannot acquire owned content going forward; it is
+    # the demotion case that this closes, and a demotion that leaves write
+    # access behind is not a demotion.
+    if _level(ctx.role) < _level("Analyst"):
+        return False
     return ctx.email == owner_email
 
 

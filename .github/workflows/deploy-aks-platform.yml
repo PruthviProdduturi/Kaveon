@@ -56,6 +56,7 @@ env:
   GITHUB_ID: ${{ secrets.KAVEON_GITHUB_OAUTH_ID }}
   GITHUB_SECRET: ${{ secrets.KAVEON_GITHUB_OAUTH_SECRET }}
   AUTH_ADMIN_EMAILS: ${{ vars.AUTH_ADMIN_EMAILS }}
+  AUTH_ADMIN_USERNAMES: ${{ vars.AUTH_ADMIN_USERNAMES }}
   # The published host. Unset means no ingress is rendered at all.
   KAVEON_INGRESS_ENABLED: ${{ vars.KAVEON_INGRESS_HOST != '' }}
   KAVEON_INGRESS_HOST: ${{ vars.KAVEON_INGRESS_HOST }}

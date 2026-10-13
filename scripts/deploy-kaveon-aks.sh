@@ -104,6 +104,7 @@ kubectl -n "$NAMESPACE" create secret generic "$AUTH_SECRET_NAME" \
   --from-literal=GITHUB_ID="${GITHUB_ID:-}" \
   --from-literal=GITHUB_SECRET="${GITHUB_SECRET:-}" \
   --from-literal=AUTH_ADMIN_EMAILS="${AUTH_ADMIN_EMAILS:-}" \
+  --from-literal=AUTH_ADMIN_USERNAMES="${AUTH_ADMIN_USERNAMES:-}" \
   --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
 # Which Microsoft sign-in flow this installation runs. A registration that has

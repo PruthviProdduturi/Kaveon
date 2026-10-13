@@ -28,7 +28,18 @@ const adminEmails = (process.env.AUTH_ADMIN_EMAILS ?? "")
   .map((e) => e.trim().toLowerCase())
   .filter(Boolean);
 
-const adminUsernames = ["pruthviprodduturi"];
+// Administrators by provider username, for providers that have no object id
+// to match on — GitHub names an account by `login`, not by an address.
+//
+// This was the literal list `["pruthviprodduturi"]`, so one person's GitHub
+// handle granted Admin on every installation of Kaveon, including someone
+// else's. It also made the two providers indistinguishable for testing: the
+// same person signing in through GitHub and through Microsoft got Admin
+// either way, so a Viewer path could not be exercised at all.
+const adminUsernames = (process.env.AUTH_ADMIN_USERNAMES ?? "")
+  .split(",")
+  .map((name) => name.trim().toLowerCase())
+  .filter(Boolean);
 const githubConfigured = Boolean(process.env.GITHUB_ID && process.env.GITHUB_SECRET);
 const googleConfigured = Boolean(process.env.GOOGLE_ID && process.env.GOOGLE_SECRET);
 const microsoftConfigured = Boolean(process.env.AUTH_MICROSOFT_ENTRA_ID_ID && process.env.AUTH_MICROSOFT_ENTRA_ID_SECRET);
