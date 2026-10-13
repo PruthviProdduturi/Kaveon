@@ -310,6 +310,64 @@ class TheBannerIsServedFromMemoryWithNoEngineRoundTrip(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self._coverage(listing=self._unavailable, artifacts=self._unavailable)
 
+    def test_a_warm_cycle_leaves_the_first_reader_nothing_to_pay(self):
+        # The point of defect D-27: somebody always paid the 2.1s cold read.
+        # After a warm, the first reader pays nothing — no listing to establish
+        # the digest and no artifact read behind the answer.
+        with self._engine() as (listed, read):
+            self.assertEqual(engine.warm_coverage("owner", "Admin"),
+                             revalidating_cache.RevalidatingCache.WARM_VALIDATED)
+            listed.assert_called_once()
+            read.assert_called_once()
+        rows, listed, read = self._coverage(actor="owner", role="Admin")
+        listed.assert_not_called()
+        read.assert_not_called()
+        self.assertEqual([row["dataset_id"] for row in rows], ["136", "144"])
+
+    def test_warming_again_inside_the_window_asks_the_engine_for_nothing(self):
+        with self._engine() as (listed, read):
+            engine.warm_coverage("owner", "Admin")
+            listed.reset_mock()
+            self.assertEqual(engine.warm_coverage("owner", "Admin"),
+                             revalidating_cache.RevalidatingCache.WARM_FRESH)
+            listed.assert_not_called()
+            read.assert_called_once()
+
+    def test_warming_is_for_one_principal_and_is_not_served_to_another(self):
+        with self._engine() as (listed, read):
+            engine.warm_coverage("owner", "Admin")
+        # The payload is visibility filtered, so a Viewer nobody warmed for
+        # reads for themselves rather than being handed the Admin's banner.
+        _, listed, read = self._coverage(actor="guest", role="Viewer")
+        listed.assert_called_once()
+        read.assert_called_once()
+
+    def test_warming_during_an_outage_raises_and_keeps_what_was_held(self):
+        with self._engine() as (listed, read):
+            engine.warm_coverage("owner", "Admin")
+        self.clock.advance(engine.COVERAGE_FRESH_FOR + 1)
+        with self._engine(listing=self._unavailable, artifacts=self._unavailable):
+            with self.assertRaises(RuntimeError):
+                engine.warm_coverage("owner", "Admin")
+        # Reported to the warmer, and the entry it could not recheck is left
+        # exactly as it stands, so the reader is still answered from memory —
+        # the recheck the reader triggers runs behind their answer and, finding
+        # the digest where it left it, refetches no artifact.
+        rows, listed, read = self._coverage(actor="owner", role="Admin")
+        self.assertEqual([row["dataset_id"] for row in rows], ["136", "144"])
+        listed.assert_called_once()
+        read.assert_not_called()
+
+    def test_a_deployment_with_no_banner_cache_is_said_to_have_none(self):
+        with patch.object(_runtime, "requested", return_value=False):
+            self.assertEqual(engine.warm_coverage("owner", "Admin"),
+                             engine.COVERAGE_NOT_CACHED)
+        self.assertEqual(self.cache.stats()["entries"], 0)
+
+    def test_warming_without_a_principal_is_refused(self):
+        with self.assertRaises(ValueError):
+            engine.warm_coverage("")
+
     def test_one_recheck_runs_however_many_readers_arrive(self):
         self._coverage()
         self.clock.advance(engine.COVERAGE_FRESH_FOR + 1)

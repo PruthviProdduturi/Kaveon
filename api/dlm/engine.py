@@ -5476,6 +5476,31 @@ def _revalidated_coverage(actor: str, role: str,
         _RETIREMENT_SERVING.reset(token)
 
 
+COVERAGE_NOT_CACHED = "not cached"
+
+
+def warm_coverage(actor: str, role: str = "Viewer") -> str:
+    """Fill the banner's cache for one principal before that principal asks.
+
+    Same validation the reader's recheck runs, and the same key — ``(actor,
+    role)`` — so what is filled here can only ever be served back to the
+    principal it was computed for. Returns what the cache did (see
+    ``RevalidatingCache.warm``), or ``COVERAGE_NOT_CACHED`` on a deployment
+    whose banner comes from the legacy metadata DB, where the read is two
+    local queries and there is nothing to warm. Raises what the Engine raised,
+    so the warmer can report the read it could not make.
+    """
+    if not actor:
+        raise ValueError("warming the context banner requires a principal")
+    from services import postgresql_retirement_runtime
+    if not postgresql_retirement_runtime.requested():
+        return COVERAGE_NOT_CACHED
+    return _COVERAGE_CACHE.warm(
+        (actor, role),
+        lambda previous: _revalidated_coverage(actor, role, previous),
+    )
+
+
 def coverage(actor: Optional[str] = None, role: str = "Viewer") -> List[Dict[str, Any]]:
     """What context is available to test against — one row per compiled DLM, with
     the date range, row count, and value coverage. Drives the homepage banner.
@@ -5491,6 +5516,12 @@ def coverage(actor: Optional[str] = None, role: str = "Viewer") -> List[Dict[str
     if state is None:
         # The legacy metadata-DB path is two local reads and needs no cache.
         return _coverage_rows()
+    # This is the home page's first read, so it is also where the warmer
+    # learns who is reading: the principal is noted so the entry below is kept
+    # inside its freshness bound for as long as they are around, instead of
+    # ageing out between visits and being paid for again.
+    from services import warm_reads
+    warm_reads.note_principal(state.actor, state.role)
     # Keyed by caller and role: the payload is visibility filtered, so one
     # person's banner is never served to another.
     return _COVERAGE_CACHE.serve(
