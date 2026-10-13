@@ -11,6 +11,7 @@ import {
   CatalogError, Sample, TableDef, Usage,
   deleteTable, enc, fetchInventory, fetchSample, fetchTable, fetchUsage, labHref, shortLocation,
 } from "../../../lib";
+import { UnknownLine, UnknownPanel, reasonFromStatus } from "../../../../../components/Reading";
 
 const fmt = (n: number) => n.toLocaleString();
 const when = (iso: string | null) => iso ? new Date(iso).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }) : null;
@@ -42,6 +43,13 @@ export default function CatalogTablePage() {
   const [def, setDef] = useState<TableDef | null>(null);
   const [defError, setDefError] = useState<CatalogError | null>(null);
   const [usage, setUsage] = useState<Usage | null>(null);
+  /**
+   * The usage read did not answer. It used to be caught into an empty Usage,
+   * which draws "Nothing in the Library reads this table yet" — a statement
+   * about the Library made out of a request that failed, and the one sentence
+   * that would send somebody to rebuild what is already there.
+   */
+  const [usageUnread, setUsageUnread] = useState(false);
   const [sample, setSample] = useState<Sample | null>(null);
   const [sampleState, setSampleState] = useState<"idle" | "loading" | "done" | "failed">("idle");
   const [copied, setCopied] = useState(false);
@@ -61,7 +69,8 @@ export default function CatalogTablePage() {
 
   useEffect(() => {
     let cancelled = false;
-    setDef(null); setDefError(null); setUsage(null); setSample(null); setSampleState("idle");
+    setDef(null); setDefError(null); setUsage(null); setUsageUnread(false);
+    setSample(null); setSampleState("idle");
     if (!source) {
       if (catalogs) setDefError(new CatalogError(404, `${catalog} is not a registered catalog.`));
       return;
@@ -83,7 +92,7 @@ export default function CatalogTablePage() {
       .catch(e => { if (!cancelled) setDefError(e instanceof CatalogError ? e : new CatalogError(0, "The definition could not be read.")); });
     fetchUsage(source, schema, table)
       .then(u => { if (!cancelled) setUsage(u); })
-      .catch(() => { if (!cancelled) setUsage({ datasets: [], charts: [], dashboards: [], dlm: [] }); });
+      .catch(() => { if (!cancelled) setUsageUnread(true); });
     // The sample is part of reading a table, not a separate act: one bounded
     // SELECT … LIMIT 20 on the Engine, shown beside the columns it describes.
     if (isAnalyst) {
@@ -111,8 +120,16 @@ export default function CatalogTablePage() {
   const usedCount = usage ? usage.datasets.length + usage.charts.length + usage.dashboards.length : 0;
   const loc = useMemo(() => def?.location ? shortLocation(def.location) : null, [def]);
 
+  // A 404 is the catalog answering: this table is not in it, and that is a
+  // finding. Every other status is this page failing to ask, which is not.
   if (defError) {
-    return <>{crumbs}<div className={`${s.note} ${s.noteErr}`} role="alert"><b>{defError.status === 404 ? "Not in the catalog." : "Definition unavailable."}</b> {defError.message}</div></>;
+    if (defError.status === 404) {
+      return <>{crumbs}<div className={`${s.note} ${s.noteErr}`} role="alert"><b>Not in the catalog.</b> {defError.message}</div></>;
+    }
+    return <>{crumbs}<UnknownPanel
+      what={`The definition of ${fullName}`} says="what this table is"
+      reason={reasonFromStatus(defError.status)} detail={defError.message}
+    /></>;
   }
   if (!def) return <>{crumbs}<div className={s.note}>Reading definition…</div></>;
 
@@ -189,7 +206,14 @@ export default function CatalogTablePage() {
           <h2 className={s.sectionTitle}>Used by</h2>
           {usage && usedCount > 0 && <span className={s.sectionMeta}>{usage.datasets.length} dataset{usage.datasets.length === 1 ? "" : "s"} · {usage.charts.length} chart{usage.charts.length === 1 ? "" : "s"} · {usage.dashboards.length} dashboard{usage.dashboards.length === 1 ? "" : "s"}</span>}
         </div>
-        {!usage ? (
+        {usageUnread ? (
+          <p className={s.quiet}>
+            <UnknownLine
+              what="The Library" says="what reads this table"
+              detail="The table itself is unaffected."
+            />
+          </p>
+        ) : !usage ? (
           <p className={s.quiet}>Looking up datasets, charts and dashboards…</p>
         ) : usedCount === 0 ? (
           <p className={s.quiet}>

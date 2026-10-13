@@ -8,6 +8,7 @@ import {
   ApproximateNote, EngineUnavailable, PlanNode, QueryRecord,
   absoluteTime, bytes, clientLabel, fetchQuery, inProgress, ms, ns, rate, us, userLabel,
 } from "../../lib";
+import { LastKnown, UnknownPanel, reasonFromStatus } from "../../../../components/Reading";
 
 type Tab = "overview" | "plan" | "stages" | "results" | "raw";
 const TABS: { id: Tab; label: string }[] = [
@@ -159,12 +160,22 @@ export default function EngineQueryPage() {
     <div className={`page-shell ${s.root}`}>
       <Link href="/engine" className={s.back}><i className="fas fa-arrow-left" aria-hidden="true" /> All queries</Link>
 
-      {error && (
+      {/* A 404 is KaveonDB answering about this query — its history does not
+          survive a coordinator restart (D-25), and saying so is a finding.
+          Any other status is this page failing to ask, and while a record is
+          already in hand it is kept and labelled rather than replaced. */}
+      {error && error.status === 404 && (
         <div className={`${s.state} ${s.stateErr}`} role="alert">
-          <div className={s.stateTitle}>{error.status === 404 ? "Query not found" : "KaveonDB is unavailable"}</div>
+          <div className={s.stateTitle}>Query not found</div>
           <div className={s.stateBody}>{error.message}</div>
         </div>
       )}
+      {error && error.status !== 404 && (q
+        ? <LastKnown what="KaveonDB" detail={`${error.message} This record is the last one read.`} onRetry={load} />
+        : <UnknownPanel
+            what={`The record for ${queryId}`} says="how this query ran"
+            reason={reasonFromStatus(error.status)} detail={error.message} onRetry={load}
+          />)}
 
       {q && (
         <>

@@ -56,16 +56,27 @@ import { RegisterSheet, RemoveSchemaDialog } from "./CatalogEditor";
 import { useCatalogTree } from "./CatalogShell";
 import s from "./catalog.module.css";
 import {
-  AnalyzeDepth, CatalogDefinition, CatalogError, EngineTable, Measurement, SchemaDefinition,
+  AnalyzeDepth, CatalogDefinition, CatalogError, EngineTable, Measurement,
   SourceVersion, analyzeTable, bytes, count, deleteSchema, elapsed, enc, exactTime,
   fetchDefinitions, fetchInventory, fetchSchemaDefinitions, fetchTableDefinitions, formatLabel,
   labHref, since, versionDigest, versionLabel,
 } from "./lib";
+import { UnknownLine, UnknownPanel, reasonFromStatus } from "../../components/Reading";
 import { isSystemCatalog } from "../../utils/systemCatalog";
 
 type SortKey = "name" | "rows" | "bytes" | "changed" | "measured";
 type Sort = { key: SortKey; desc: boolean };
-type Group = { catalogId: string; catalog: string; schemaId: string; schema: string; revision: number; tables: EngineTable[] | null };
+type Group = {
+  catalogId: string; catalog: string; schemaId: string; schema: string; revision: number;
+  tables: EngineTable[] | null;
+  /**
+   * The table listing for this schema did not answer. Held apart from
+   * `tables: []`, which is a schema the Engine says is empty: the two were
+   * one value, so a coordinator that was scaled to zero produced "0 tables"
+   * and "No tables registered" over eighteen tables (D-26).
+   */
+  unread?: boolean;
+};
 interface Row { group: Group; table: EngineTable; measured: Measurement | undefined }
 
 /**
@@ -195,6 +206,8 @@ export function Inventory({ catalogName, schemaName, action }: {
   const [catalogs, setCatalogs] = useState<CatalogDefinition[] | null>(null);
   const [error, setError] = useState<CatalogError | null>(null);
   const [groups, setGroups] = useState<Group[] | null>(null);
+  /** Catalogs whose schema listing did not answer: unlisted, and named for it. */
+  const [unreadCatalogs, setUnreadCatalogs] = useState<string[]>([]);
   const [measured, setMeasured] = useState<Record<string, Record<string, Measurement>>>({});
   const [measuring, setMeasuring] = useState<Record<string, "loading" | "done" | "failed">>({});
   const [query, setQuery] = useState("");
@@ -228,8 +241,15 @@ export function Inventory({ catalogName, schemaName, action }: {
       if (!live.current) return;
       setCatalogs(definitions);
       setError(null);
+      // A schema listing that did not answer leaves its catalog unlisted and
+      // is named, rather than being folded into the same empty array an
+      // Engine that answered "no schemas" produces. Collapsing the two is how
+      // this page came to report a catalog as having nothing in it while the
+      // coordinator was simply not running.
+      const unread: string[] = [];
       const listed = await Promise.all(definitions.map(async catalog => {
-        const schemas = await fetchSchemaDefinitions(catalog.id).catch(() => [] as SchemaDefinition[]);
+        const schemas = await fetchSchemaDefinitions(catalog.id).catch(() => null);
+        if (schemas === null) { unread.push(catalog.name); return [] as Group[]; }
         return schemas
           .filter(schema => !schemaName || (catalog.name === catalogName && schema.name === schemaName))
           .map<Group>(schema => ({
@@ -239,11 +259,22 @@ export function Inventory({ catalogName, schemaName, action }: {
       }));
       const flat = listed.flat();
       if (!live.current) return;
+      setUnreadCatalogs(unread);
       setGroups(flat);
       if (refresh) setProgress({ done: 0, total: flat.length });
       const hydrate = async (group: Group) => {
-        const tables = await fetchTableDefinitions(group.schemaId).catch(() => [] as EngineTable[]);
+        const tables = await fetchTableDefinitions(group.schemaId).catch(() => null);
         if (!live.current) return;
+        if (tables === null) {
+          // Unknown, not empty. The band says so, the row count is withheld,
+          // and the schema's share of the totals is reported as missing
+          // rather than counted as zero.
+          setGroups(current => (current ?? []).map(g =>
+            g.schemaId === group.schemaId ? { ...g, tables: null, unread: true } : g));
+          setMeasuring(current => ({ ...current, [group.schemaId]: "failed" }));
+          if (refresh) setProgress(current => current && { ...current, done: current.done + 1 });
+          return;
+        }
         setGroups(current => (current ?? []).map(g => g.schemaId === group.schemaId ? { ...g, tables } : g));
         if (!tables.length) {
           setMeasuring(current => ({ ...current, [group.schemaId]: "done" }));
@@ -395,11 +426,19 @@ export function Inventory({ catalogName, schemaName, action }: {
   const resort = (key: SortKey) =>
     setSort(current => ({ key, desc: current.key === key ? !current.desc : key !== "name" }));
 
+  // A read that did not answer. Not "the catalog is unavailable" — the
+  // catalog is whatever it was; what is unavailable is this page's knowledge
+  // of it, and the status says whether the deployment was told where its
+  // Engine is at all.
   if (error) {
     return (
-      <div className={`${s.note} ${s.noteErr}`} role="alert">
-        <b>The catalog is unavailable.</b> {error.message}
-      </div>
+      <UnknownPanel
+        what="The data catalog"
+        says={schemaName ? `what ${schemaName} holds` : "which tables it holds"}
+        reason={reasonFromStatus(error.status)}
+        detail={error.message}
+        onRetry={() => { setError(null); void load(false); }}
+      />
     );
   }
 
@@ -423,7 +462,39 @@ export function Inventory({ catalogName, schemaName, action }: {
     );
   }
 
-  const reading = !groups || sections.some(section => section.group.tables === null);
+  // Still reading means a listing is in flight. A listing that came back
+  // without an answer is finished and unknown, so it must not hold the page
+  // in a permanent "reading" state either.
+  const reading = !groups || sections.some(section => section.group.tables === null && !section.group.unread);
+  const unreadSchemas = (groups ?? []).filter(group => group.unread);
+  // A schema whose tables are listed but whose measurements did not arrive.
+  // Its tables were being counted into "no measurement on record", which
+  // states that nothing has ever measured them — a claim about the lake made
+  // out of a request that failed.
+  const unmeasured = (groups ?? [])
+    .filter(group => !group.unread && measuring[group.schemaId] === "failed")
+    .reduce((sum, group) => sum + (group.tables?.length ?? 0), 0);
+  // Every figure on this page is a total over what answered. Where something
+  // did not, the total is short by whatever it holds, and it says so — the
+  // same rule the system catalog's own footer already follows.
+  const shortfall = (() => {
+    const parts = [
+      unreadCatalogs.length
+        ? `${count(unreadCatalogs.length)} ${plural(unreadCatalogs.length, "catalog", "catalogs")} did not answer when asked for schemas`
+        : null,
+      unreadSchemas.length
+        ? `${count(unreadSchemas.length)} ${plural(unreadSchemas.length, "schema", "schemas")} did not answer when asked for tables`
+        : null,
+      unmeasured
+        ? `${count(unmeasured)} ${plural(unmeasured, "table", "tables")} did not answer when asked for measurements`
+        : null,
+    ].filter(Boolean);
+    if (!parts.length) return null;
+    const listed = parts.length === 1
+      ? parts[0]
+      : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+    return `${listed}, so these figures are short by whatever they hold.`;
+  })();
   const measuringNow = progress !== null;
   // The denominator every row's mass bar is drawn against: the whole of what
   // the search left, in the measure the list is ranked by.
@@ -478,7 +549,9 @@ export function Inventory({ catalogName, schemaName, action }: {
           fastTables={totals.fast} baseTables={totals.baseTables} staleTables={totals.staleTables}
           tables={totals.tables} all={totals.all} narrowed={!!term}
           schemas={totals.schemas} bytes={totals.bytes} files={totals.files}
-          outstanding={totals.tables - totals.measured} reading={reading} schemaName={schemaName}
+          outstanding={Math.max(0, totals.tables - totals.measured - unmeasured)}
+          reading={reading} schemaName={schemaName}
+          shortfall={shortfall}
         />
 
         <Exception
@@ -487,7 +560,22 @@ export function Inventory({ catalogName, schemaName, action }: {
         />
       </header>
 
-      {!reading && sections.length === 0 && (
+      {/* Nothing listed because a listing did not answer is not "no schemas
+          yet", and must not offer to add the schemas that may already be
+          there. The invitation is kept for the case the Engine actually
+          reported: a catalog it listed, with nothing under it. */}
+      {!reading && sections.length === 0 && unreadCatalogs.length > 0 && (
+        <UnknownPanel
+          what={unreadCatalogs.length === 1
+            ? `The schemas in ${unreadCatalogs[0]}`
+            : `The schemas in ${count(unreadCatalogs.length)} catalogs`}
+          says="what they hold"
+          detail={`Nothing has been listed for ${unreadCatalogs.join(", ")}, so no count on this page is a count of them.`}
+          onRetry={() => void load(false)}
+        />
+      )}
+
+      {!reading && sections.length === 0 && unreadCatalogs.length === 0 && (
         <div className={s.empty}>
           <h2 className={s.emptyTitle}>
             {onlyAttention ? "Nothing needs measuring" : term ? "Nothing matches that" : "No schemas yet"}
@@ -550,7 +638,19 @@ export function Inventory({ catalogName, schemaName, action }: {
                     onRemove={() => setRemoveSchema({ group, busy: false, error: null })}
                   />
                 )}
-                {group.tables === null && [0, 1, 2].map(index => <SkeletonRow key={index} />)}
+                {group.tables === null && !group.unread && [0, 1, 2].map(index => <SkeletonRow key={index} />)}
+                {/* A listing that did not answer is finished, so the rows
+                    stop shimmering as though something were still coming. */}
+                {group.unread && (
+                  <tr className={s.invRow}>
+                    <td colSpan={8}>
+                      <UnknownLine
+                        what={`The tables in ${group.catalog}.${group.schema}`}
+                        says="what it holds"
+                      />
+                    </td>
+                  </tr>
+                )}
                 {sectionRows.map(row => (
                   <TableRow
                     key={row.table.id} row={row}
@@ -601,12 +701,14 @@ export function Inventory({ catalogName, schemaName, action }: {
  * lake physically is. The second is evidence, not finding, which is why it
  * follows rather than standing in the opposite corner competing.
  */
-function Lake({ fastRows, baseRows, staleRows, fastTables, baseTables, staleTables, tables, all, narrowed, schemas, bytes: stored, files, outstanding, reading, schemaName }: {
+function Lake({ fastRows, baseRows, staleRows, fastTables, baseTables, staleTables, tables, all, narrowed, schemas, bytes: stored, files, outstanding, reading, schemaName, shortfall }: {
   fastRows: number; baseRows: number; staleRows: number;
   fastTables: number; baseTables: number; staleTables: number;
   tables: number; all: number; narrowed: boolean;
   schemas: number; bytes: number; files: number;
   outstanding: number; reading: boolean; schemaName?: string;
+  /** What these totals are missing, where a listing did not answer. */
+  shortfall?: string | null;
 }) {
   const total = fastRows + baseRows + staleRows;
   const scanned = baseRows + staleRows;
@@ -639,7 +741,12 @@ function Lake({ fastRows, baseRows, staleRows, fastTables, baseTables, staleTabl
       )}
       <p className={s.lakeStanding}>
         {blank ? (
-          reading ? "Reading what has been measured." : "Nothing in view has been measured yet."
+          // "Nothing has been measured" is a claim about the lake. It is only
+          // made when the lake answered: where a listing did not, the figures
+          // are absent because nobody said, and the shortfall line says which.
+          reading ? "Reading what has been measured."
+            : shortfall ? "No measurement is in hand for what has been listed."
+            : "Nothing in view has been measured yet."
         ) : (
           <>
             <span className={s.nowrapPair}><b>{count(fastRows)}</b> rows</span> of{" "}
@@ -655,12 +762,22 @@ function Lake({ fastRows, baseRows, staleRows, fastTables, baseTables, staleTabl
         {reading && !blank && " Still reading."}
         {!reading && outstanding > 0 && ` ${count(outstanding)} ${plural(outstanding, "table has", "tables have")} no measurement on record.`}
       </p>
+      {/* "0 tables, 0 B in 0 files" is a measurement, and with nothing
+          listed and a listing that did not answer it is not one this page
+          took — it is the shape D-26 was reported as. The figures are
+          written when something was listed, and the shortfall alone when
+          nothing was. */}
       <p className={s.lakeFacts}>
-        <b>{narrowed ? `${count(tables)} of ${count(all)}` : count(tables)}</b>
-        {` ${plural(narrowed ? all : tables, "table", "tables")}`}
-        {!schemaName && <> across <b>{count(schemas)}</b> {plural(schemas, "schema", "schemas")}</>}
-        {", "}
-        <b>{bytes(stored)}</b> in <b>{count(files)}</b> {plural(files, "file", "files")}.
+        {tables === 0 && shortfall ? shortfall : (
+          <>
+            <b>{narrowed ? `${count(tables)} of ${count(all)}` : count(tables)}</b>
+            {` ${plural(narrowed ? all : tables, "table", "tables")}`}
+            {!schemaName && <> across <b>{count(schemas)}</b> {plural(schemas, "schema", "schemas")}</>}
+            {", "}
+            <b>{bytes(stored)}</b> in <b>{count(files)}</b> {plural(files, "file", "files")}.
+            {shortfall && ` ${shortfall}`}
+          </>
+        )}
       </p>
     </div>
   );
@@ -712,11 +829,17 @@ function SchemaBand({ group, rows, narrowed, isEditor, seen, rowTotal, byteTotal
   onRegister: () => void; onRemove: () => void;
 }) {
   const empty = group.tables !== null && group.tables.length === 0;
-  const held = group.tables === null
-    ? "Reading"
-    : empty
-      ? "No tables registered"
-      : `${narrowed ? `${count(rows.length)} of ${count(group.tables.length)}` : count(rows.length)} ${plural(narrowed ? group.tables.length : rows.length, "table", "tables")}`;
+  // Three states, not two. "No tables registered" is a statement about the
+  // schema and is only made when the Engine said so; a listing that did not
+  // answer leaves the count unknown and says that instead, because this band
+  // reading "No tables registered" over eighteen tables is what D-26 is.
+  const held = group.unread
+    ? "Tables could not be listed"
+    : group.tables === null
+      ? "Reading"
+      : empty
+        ? "No tables registered"
+        : `${narrowed ? `${count(rows.length)} of ${count(group.tables.length)}` : count(rows.length)} ${plural(narrowed ? group.tables.length : rows.length, "table", "tables")}`;
   return (
     <tr className={s.groupRow}>
       <th colSpan={2} scope="colgroup">

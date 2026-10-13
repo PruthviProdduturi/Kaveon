@@ -10,6 +10,7 @@ import type { UserRole } from "../../utils/permissions";
 import { useTheme } from "../../contexts/ThemeContext";
 import { KaveonLoading } from "../../components/KaveonLoading";
 import { LineageView } from "../../components/LineageView";
+import { unknownText } from "../../components/Reading";
 
 type TabKey = "lineage" | "dashboards" | "charts" | "datasets" | "queries";
 
@@ -380,7 +381,14 @@ export default function WorkspacePage() {
           return;
         }
       } catch {}
-      setError(`Failed to load ${tab.label.toLowerCase()}.`);
+      // The empty state below is already gated on this being null, so a
+      // failed read never draws "No charts yet" here. What it said instead —
+      // "Failed to load charts." — still left a reader to guess whether
+      // anything had been lost, so it now says what could not be reached and
+      // that nothing is known to be missing.
+      setError(unknownText({
+        what: `The ${tab.label.toLowerCase()} list`, says: "what the Library holds",
+      }));
     } finally {
       setLoading(false);
     }
