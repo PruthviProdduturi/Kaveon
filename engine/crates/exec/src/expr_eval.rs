@@ -6584,6 +6584,43 @@ mod tests {
     }
 
     #[test]
+    fn arrays_of_maps_materialize_typed_map_elements() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        let map = |key: &str, value: i64| Expr::Function {
+            name: "MAP".into(),
+            args: vec![
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![Expr::Literal(ScalarValue::Utf8(key.into()))],
+                },
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![Expr::Literal(ScalarValue::Int64(value))],
+                },
+            ],
+        };
+        let result = evaluate(
+            &Expr::Function {
+                name: "ARRAY".into(),
+                args: vec![map("a", 1), map("b", 2)],
+            },
+            &batch,
+        )
+        .unwrap();
+        let outer = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let maps = outer.value(0);
+        let maps = maps.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(maps.len(), 2);
+        let keys = maps.keys().as_string::<i32>();
+        assert_eq!((0..keys.len()).map(|i| keys.value(i)).collect::<Vec<_>>(), ["a", "b"]);
+        assert_eq!(maps.values().as_primitive::<Int64Type>().values(), &[1, 2]);
+    }
+
+    #[test]
     fn array_equality_is_elementwise_and_null_preserving() {
         let batch = RecordBatch::try_from_iter([(
             "id",
