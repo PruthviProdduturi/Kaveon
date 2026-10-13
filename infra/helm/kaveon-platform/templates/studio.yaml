@@ -82,6 +82,11 @@ spec:
             - {name: GITHUB_ID, valueFrom: {secretKeyRef: {name: {{ .Values.secrets.portalAuth }}, key: GITHUB_ID, optional: true}}}
             - {name: GITHUB_SECRET, valueFrom: {secretKeyRef: {name: {{ .Values.secrets.portalAuth }}, key: GITHUB_SECRET, optional: true}}}
             - {name: AUTH_ADMIN_EMAILS, valueFrom: {secretKeyRef: {name: {{ .Values.secrets.portalAuth }}, key: AUTH_ADMIN_EMAILS, optional: true}}}
+            # Administrators by provider username, for a provider with no
+            # object id to match on. Optional and empty by default: a username
+            # list that ships with a name in it grants that person Admin on
+            # every installation.
+            - {name: AUTH_ADMIN_USERNAMES, valueFrom: {secretKeyRef: {name: {{ .Values.secrets.portalAuth }}, key: AUTH_ADMIN_USERNAMES, optional: true}}}
             - {name: AUTH_ENTRA_ADMIN_OBJECT_IDS, valueFrom: {secretKeyRef: {name: {{ .Values.secrets.portalAuth }}, key: AUTH_ENTRA_ADMIN_OBJECT_IDS}}}
           readinessProbe:
             httpGet: {path: /login, port: http}
