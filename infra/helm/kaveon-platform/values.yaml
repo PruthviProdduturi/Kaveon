@@ -203,9 +203,19 @@ api:
     resources:
       requests: {cpu: 50m, memory: 96Mi}
       limits: {cpu: 250m, memory: 256Mi}
+  # Serving a request is cheap; compiling a DLM context is not, and both run in
+  # this process. Building the context for a 504-million-row table exceeded a
+  # 1 GiB limit and the kernel killed the pod mid-generation, which leaves the
+  # dataset with its old context already invalidated — a failure that removes
+  # context rather than declining to rebuild it.
+  #
+  # Raised to hold the largest table in the demo lake with room to spare. The
+  # better answer is for generation to run as a job rather than inside the API,
+  # so one heavy rebuild cannot take the request path down with it; that is
+  # recorded in HANDSHAKE rather than done here.
   resources:
     requests: {cpu: 250m, memory: 512Mi}
-    limits: {cpu: "1", memory: 1Gi}
+    limits: {cpu: "2", memory: 6Gi}
 studio:
   resources:
     requests: {cpu: 100m, memory: 256Mi}
