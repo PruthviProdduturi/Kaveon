@@ -1,0 +1,14 @@
+{
+  "passed": true,
+  "verified_at": "2026-10-13T05:07:00Z",
+  "context": "kaveon-aks",
+  "engine_digest": "sha256:fe468d403a53b82667427952db8121cd491b30238455c83a393b7e6cdfe63570",
+  "catalog": "OpenSource",
+  "schema": "public",
+  "table": "kaveon_events_dashboard",
+  "qualify_state": "FINISHED",
+  "derived_state": "FINISHED",
+  "same_result": true,
+  "rows": [["DE", "EU", 24, 1], ["US", "NA", 23, 1]],
+  "credential_material_recorded": false
+}

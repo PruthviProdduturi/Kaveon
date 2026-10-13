@@ -444,6 +444,16 @@ plain `year` forms over `OpenSource.climate_energy.energy_annual`; the live
 qualification is archived in
 `docs/qualification/engine-aks-bracketed-identifier-2026-10-13.md`.
 
+The AKS StatefulSets were subsequently rolled to the immutable Engine image
+`kaveonacr.azurecr.io/kaveon-engine@sha256:fe468d403a53b82667427952db8121cd491b30238455c83a393b7e6cdfe63570`,
+built from commit `3c4a943b`. On that image, a distributed `QUALIFY` query
+using `ROW_NUMBER()` returned the same rows as its equivalent derived-table
+filter, and the bracketed-identifier query again matched the plain form. This
+also verifies that the earlier live `QUALIFY` parse failure was stale-image
+drift rather than an implementation failure. Evidence is archived in
+`docs/qualification/engine-aks-qualify-latest-2026-10-13.md` and
+`docs/qualification/engine-aks-bracketed-latest-2026-10-13.md`.
+
 The ordering subset is green in-process as well: eight planner, fragment, and
 API tests cover distributed scan inputs, TopN lowering, OFFSET retention,
 exchange execution, and spill-aware final merge. Global ORDER BY still ends in
