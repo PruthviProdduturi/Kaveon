@@ -5314,11 +5314,47 @@ def _bulk_value_index(dataset_ids: List[str], *, serving: bool,
     return samples, counts
 
 
+# The banner's last answer, kept against the catalog snapshot it was computed
+# from. Every product write advances that snapshot, so an unchanged identity is
+# proof that nothing the banner reports has moved — which makes this an exact
+# invalidation rather than a guess about how long an answer stays true.
+_COVERAGE_CACHE: Dict[tuple, List[Dict[str, Any]]] = {}
+
+
+def _coverage_snapshot(actor: str) -> Optional[str]:
+    """The catalog snapshot the banner would be computed from, cheaply."""
+    try:
+        from services import product_store
+        identity = product_store.count_records("dataset", actor, "Admin").get("snapshotId")
+        return identity if isinstance(identity, str) and identity else None
+    except Exception:
+        # Without an identity there is nothing to key a cache on, so the
+        # banner is recomputed. Slower, never stale.
+        return None
+
+
 def coverage(actor: Optional[str] = None, role: str = "Viewer") -> List[Dict[str, Any]]:
     """What context is available to test against — one row per compiled DLM, with
-    the date range, row count, and value coverage. Drives the homepage banner."""
+    the date range, row count, and value coverage. Drives the homepage banner.
+
+    Served from the last answer while the catalog snapshot is unchanged. The
+    page was paying six seconds on every visit to rebuild a strip that only
+    changes when a context does — three catalog listings and a content fetch
+    per dataset, repeated for a reader who had just loaded it.
+    """
     if actor and _RETIREMENT_SERVING.get() is None:
         return _with_serving_identity(actor, role, lambda: coverage())
+    state = _RETIREMENT_SERVING.get()
+    cache_key = None
+    if state is not None:
+        snapshot_id = _coverage_snapshot(state.actor)
+        if snapshot_id:
+            # Keyed by role as well: what a reader may see is visibility
+            # filtered, so one person's banner is not another's.
+            cache_key = (snapshot_id, state.actor, state.role)
+            cached = _COVERAGE_CACHE.get(cache_key)
+            if cached is not None:
+                return cached
     ensure_tables()
     if _RETIREMENT_SERVING.get() is not None:
         res = {"rows_objects": _serving_artifacts()}
@@ -5372,6 +5408,13 @@ def coverage(actor: Optional[str] = None, role: str = "Viewer") -> List[Dict[str
             "status": r.get("status"),
             "built_at": r.get("built_at"),
         })
+    if cache_key is not None:
+        # One answer per snapshot, so a superseded snapshot's entries go rather
+        # than accumulating one per commit for the life of the process. Every
+        # reader of the current snapshot keeps theirs.
+        for stale in [key for key in _COVERAGE_CACHE if key[0] != cache_key[0]]:
+            _COVERAGE_CACHE.pop(stale, None)
+        _COVERAGE_CACHE[cache_key] = out
     return out
 
 
