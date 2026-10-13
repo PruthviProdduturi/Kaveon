@@ -2089,6 +2089,82 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             };
             Ok(Arc::new(Int64Array::from(result)))
         }
+        "ARRAY_DISTINCT" => {
+            check_arity(name, args, 1)?;
+            let list = args[0]
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .ok_or_else(|| KaveonError::Execution("ARRAY_DISTINCT requires an ARRAY/List value".into()))?;
+            match list.value_type() {
+                DataType::Float64 => {
+                    let mut builder = ListBuilder::new(Float64Builder::new());
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let values = list.value(row).as_primitive::<Float64Type>().clone();
+                        let mut seen = Vec::<Option<f64>>::new();
+                        for index in 0..values.len() {
+                            let value = values.is_valid(index).then(|| values.value(index));
+                            if !seen.iter().any(|existing| match (existing, value) {
+                                (None, None) => true,
+                                (Some(left), Some(right)) => left == &right,
+                                _ => false,
+                            }) {
+                                seen.push(value);
+                                builder.values().append_option(value);
+                            }
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }
+                DataType::Utf8 => {
+                    let mut builder = ListBuilder::new(StringBuilder::new());
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let values = list.value(row).as_string::<i32>().clone();
+                        let mut seen = Vec::<Option<String>>::new();
+                        for index in 0..values.len() {
+                            let value = values.is_valid(index).then(|| values.value(index).to_owned());
+                            if !seen.iter().any(|existing| existing == &value) {
+                                seen.push(value.clone());
+                                builder.values().append_option(value.as_deref());
+                            }
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }
+                DataType::Boolean => {
+                    let mut builder = ListBuilder::new(BooleanBuilder::new());
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let values = list.value(row).as_boolean().clone();
+                        let mut seen = Vec::<Option<bool>>::new();
+                        for index in 0..values.len() {
+                            let value = values.is_valid(index).then(|| values.value(index));
+                            if !seen.contains(&value) {
+                                seen.push(value);
+                                builder.values().append_option(value);
+                            }
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }
+                other => Err(KaveonError::Execution(format!(
+                    "ARRAY_DISTINCT does not support list element type {other}"
+                ))),
+            }
+        }
         "ARRAY_SLICE" => {
             check_arity(name, args, 4)?;
             let list = args[0]
@@ -3332,6 +3408,57 @@ mod tests {
         let list = value.as_any().downcast_ref::<ListArray>().unwrap();
         let values = list.value(0).as_primitive::<Float64Type>().clone();
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(40.0), Some(20.0)]);
+    }
+
+    #[test]
+    fn array_distinct_keeps_first_occurrence_and_one_null() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        let value = evaluate(
+            &Expr::Function {
+                name: "ARRAY_DISTINCT".into(),
+                args: vec![Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![
+                        Expr::Literal(ScalarValue::Int64(2)),
+                        Expr::Literal(ScalarValue::Null),
+                        Expr::Literal(ScalarValue::Int64(1)),
+                        Expr::Literal(ScalarValue::Int64(2)),
+                        Expr::Literal(ScalarValue::Null),
+                        Expr::Literal(ScalarValue::Int64(1)),
+                    ],
+                }],
+            },
+            &batch,
+        )
+        .unwrap();
+        let list = value.as_any().downcast_ref::<ListArray>().unwrap();
+        let inner = list.value(0);
+        let values = inner.as_primitive::<Float64Type>();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(2.0), None, Some(1.0)]);
+
+        let value = evaluate(
+            &Expr::Function {
+                name: "ARRAY_DISTINCT".into(),
+                args: vec![Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![
+                        Expr::Literal(ScalarValue::Utf8("b".into())),
+                        Expr::Literal(ScalarValue::Utf8("a".into())),
+                        Expr::Literal(ScalarValue::Utf8("b".into())),
+                    ],
+                }],
+            },
+            &batch,
+        )
+        .unwrap();
+        let list = value.as_any().downcast_ref::<ListArray>().unwrap();
+        let inner = list.value(0);
+        let values = inner.as_string::<i32>();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some("b"), Some("a")]);
     }
 
     #[test]
