@@ -1,0 +1,160 @@
+/*
+ * The chart builder's read-only presentation.
+ *
+ * When the caller cannot save over a chart, the configuration panels stop
+ * being editors and become a record of how the chart is built. These are the
+ * primitives that record is made of — one field row, one value, one group of
+ * values — so every panel reads as the same surface rather than each
+ * inventing its own flat look.
+ *
+ * Colour comes entirely from the app's tokens, so the panel follows the
+ * viewer's theme without a second definition.
+ */
+
+.field {
+  margin-bottom: 14px;
+}
+
+.label {
+  display: block;
+  margin-bottom: 4px;
+  font-family: Inter, -apple-system, sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  letter-spacing: normal;
+}
+
+.value {
+  margin: 0;
+  font-family: Inter, -apple-system, sans-serif;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+/* A configuration slot the chart leaves empty — "No time column", say. The
+   value is still the answer, so it keeps the value's size and only steps back
+   in weight and colour. */
+.valueEmpty {
+  font-weight: 400;
+  font-style: italic;
+  color: var(--text-muted);
+}
+
+/* Several values in one slot: dimensions, metrics, filters. */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-hover);
+  font-family: Inter, -apple-system, sans-serif;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+/* A filter group's logical operator — AND / OR — read rather than toggled. */
+.chipOperator {
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* The chart type, shown the way the picker's collapsed trigger shows it, but
+   as a statement instead of a button. */
+.typeRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-elevated);
+}
+
+.typeIcon {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+}
+
+.typeName {
+  flex: 1;
+  min-width: 0;
+  font-family: Inter, -apple-system, sans-serif;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+/* Why a panel is showing a record instead of an editor. Sits once at the top
+   of the panel, not on every field. */
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+}
+
+.noticeIcon {
+  flex-shrink: 0;
+  margin-top: 1px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.noticeText {
+  margin: 0;
+  font-family: Inter, -apple-system, sans-serif;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+/* A group heading inside the record, matching the editor's section rules. */
+.section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 18px 0 10px;
+}
+
+.sectionLabel {
+  font-family: Inter, -apple-system, sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.sectionRule {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}

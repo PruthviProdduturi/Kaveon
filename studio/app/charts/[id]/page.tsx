@@ -312,6 +312,7 @@ const ChartDetailPage: React.FC = () => {
   const router = useRouter();
   const params = useParams();
   const { isAuthenticated, account } = useAuth();
+  const { canWrite } = useRole();
   const { addRecent } = useRecents();
   const [accessToken, setAccessToken] = useState<string>("");
 
@@ -448,8 +449,12 @@ const ChartDetailPage: React.FC = () => {
         <LoadingOverlay />
       )}
 
+      {/* The builder below the header must agree with the header: where this
+          caller cannot save over the chart, the configuration is presented
+          rather than offered for editing. One signal, decided here because
+          this is where both the role and the chart's owner are known. */}
       {isAuthenticated && !error && !isLoading && chart && dataset && (
-        <ChartBuilderProvider>
+        <ChartBuilderProvider readOnly={!canWrite(chart.created_by)}>
           <ChartDetailBuilderView
             chart={chart}
             isFavorite={isFavorite}

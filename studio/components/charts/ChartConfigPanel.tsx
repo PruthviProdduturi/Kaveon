@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 
 import ChartTypePicker from "./ChartTypePicker";
 import FilterBuilder from "./FilterBuilder";
+import { ReadOnlyChips, ReadOnlyField, ReadOnlyNotice, ReadOnlySection } from "./ChartReadOnly";
 import { MetricConfig, useChartBuilder, TimeRangePreset } from "./ChartBuilderContext";
 
 // ── Shared sub-components (defined outside to avoid recreation on each render) ──
@@ -76,6 +77,7 @@ const ChartConfigPanel: React.FC = () => {
     chartType,
     advancedOptions,
     setAdvancedOptions,
+    readOnly,
   } = useChartBuilder();
 
   const [isTimeRangeEditorOpen, setIsTimeRangeEditorOpen] = useState(false);
@@ -243,8 +245,134 @@ const ChartConfigPanel: React.FC = () => {
       <div>
         <div className="chart-builder-panel-title">Chart configuration</div>
         <div className="muted" style={{ fontSize: 13 }}>
-          Select a dataset to configure metric, dimensions, time, and filters.
+          {readOnly
+            ? "This chart's dataset is not available to you, so its configuration cannot be shown."
+            : "Select a dataset to configure metric, dimensions, time, and filters."}
         </div>
+      </div>
+    );
+  }
+
+  // ── Read-only configuration ─────────────────────────────────────────────
+  // Everything the editor above would let a user change, stated instead. The
+  // reader gets the full account of how the chart is built — the aggregate on
+  // each metric, every dimension, the time window, the sort, the row cap and
+  // the filters — without a single control whose result the API would refuse
+  // to keep.
+  if (readOnly) {
+    const rollingCalcLabel = ((): string | null => {
+      switch (advancedOptions?.rollingCalc) {
+        case "rolling_avg":
+          return `Rolling average over ${advancedOptions?.rollingWindow || 3} periods`;
+        case "cumulative_sum":
+          return "Cumulative sum";
+        default:
+          return null;
+      }
+    })();
+
+    const columnName = (id: string) => {
+      const col = datasetColumns.find((c) => colId(c) === id);
+      return col ? colLabel(col) : id.split(".").pop() || id;
+    };
+
+    // A chart saved before the multi-metric config carries only the legacy
+    // `metricColumn`, so read it when `metrics` is empty rather than reporting
+    // a chart with no metric at all.
+    const metricChips = metrics.length > 0
+      ? metrics.map((m) => `${m.aggregate.replace("_", " ")}(${columnName(m.column)})`)
+      : metricColumn
+        ? [columnName(metricColumn)]
+        : [];
+
+    const timeGrainLabel = ({
+      none: "No grouping (raw)",
+      day: "Day",
+      week: "Week (Mon)",
+      month: "Month",
+      quarter: "Quarter",
+      year: "Year",
+    } as Record<string, string>)[timeGrain] ?? timeGrain;
+
+    const timeColumnLabel = timeColumn ? columnName(timeColumn) : "";
+
+    // `sortBy.column` is a column id for a dimension and a metric's label for
+    // a metric, so an id that matches no column is already its own name.
+    const sortLabel = sortBy
+      ? `${columnName(sortBy.column)} — ${sortBy.direction === "asc" ? "ascending" : "descending"}`
+      : "";
+
+    return (
+      <div>
+        <div className="chart-builder-panel-title">Chart configuration</div>
+
+        <ReadOnlyNotice>
+          View only. This is how the chart is built. Every setting is readable
+          and its query can be run again, but a change to this chart cannot be
+          saved.
+        </ReadOnlyNotice>
+
+        <ChartTypePicker />
+
+        {!isBigNumber && <ReadOnlySection>Query</ReadOnlySection>}
+
+        {!isBigNumber && (
+          <ReadOnlyField label="Query mode">
+            {queryMode === "aggregate" ? "Aggregate" : "Raw records"}
+          </ReadOnlyField>
+        )}
+
+        {queryMode === "aggregate" && (
+          <ReadOnlyField
+            label={isBigNumber ? "Metric" : "Metrics"}
+            emptyText="No metrics"
+          >
+            {metricChips.length > 0 ? <ReadOnlyChips items={metricChips} /> : null}
+          </ReadOnlyField>
+        )}
+
+        {queryMode === "aggregate" && !isBigNumber && (
+          <ReadOnlyField label="Dimensions" emptyText="No dimensions">
+            {groupByColumns.length > 0 ? (
+              <ReadOnlyChips items={groupByColumns.map(columnName)} />
+            ) : null}
+          </ReadOnlyField>
+        )}
+
+        <ReadOnlySection>Time</ReadOnlySection>
+
+        <ReadOnlyField label="Time column" emptyText="No time column">
+          {timeColumnLabel}
+        </ReadOnlyField>
+
+        {timeColumn && queryMode === "aggregate" && (
+          <ReadOnlyField label="Time grain">{timeGrainLabel}</ReadOnlyField>
+        )}
+
+        {timeColumn && (
+          <ReadOnlyField label="Rolling calculation" emptyText="None (raw values)">
+            {rollingCalcLabel ?? ""}
+          </ReadOnlyField>
+        )}
+
+        {timeColumn && (
+          <ReadOnlyField label="Time range">{currentTimeRangeLabel}</ReadOnlyField>
+        )}
+
+        <ReadOnlySection>Options</ReadOnlySection>
+
+        {queryMode === "aggregate" && !isBigNumber && (groupByColumns.length > 0 || timeColumn) && (
+          <ReadOnlyField label="Sort by" emptyText="Default order">
+            {sortLabel}
+          </ReadOnlyField>
+        )}
+
+        <ReadOnlyField label="Row limit">
+          {rowLimit === 0 ? "No limit" : rowLimit.toLocaleString()}
+        </ReadOnlyField>
+
+        <ReadOnlySection>Filters</ReadOnlySection>
+        <FilterBuilder />
       </div>
     );
   }

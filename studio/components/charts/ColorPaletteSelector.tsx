@@ -9,10 +9,42 @@ const DEFAULT_PALETTES = [
 export interface ColorPaletteSelectorProps {
   value: string[];
   onChange: (palette: string[]) => void;
+  /**
+   * Show the chart's palette without offering to change it. Set by the
+   * builder's read-only mode, where a new palette could not be saved.
+   */
+  readOnly?: boolean;
 }
 
-const ColorPaletteSelector: React.FC<ColorPaletteSelectorProps> = ({ value, onChange }) => {
+const ColorPaletteSelector: React.FC<ColorPaletteSelectorProps> = ({ value, onChange, readOnly = false }) => {
   const [custom, setCustom] = useState<string>("");
+
+  // A reader is shown the palette the chart actually uses — not the three it
+  // could be switched to, and not a field for a fourth.
+  if (readOnly) {
+    return (
+      <div
+        style={{ display: "flex", flexWrap: "wrap", gap: 3 }}
+        role="img"
+        aria-label={`Chart palette, ${value.length} ${value.length === 1 ? "colour" : "colours"}`}
+      >
+        {value.map((color, idx) => (
+          <span
+            key={`${color}-${idx}`}
+            title={color}
+            style={{
+              width: 16,
+              height: 16,
+              background: color,
+              borderRadius: 3,
+              display: "inline-block",
+              border: "1px solid var(--border)",
+            }}
+          />
+        ))}
+      </div>
+    );
+  }
 
   return (
     <div>

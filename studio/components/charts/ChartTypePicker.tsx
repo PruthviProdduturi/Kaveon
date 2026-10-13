@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
+import { ReadOnlyField, ReadOnlyTypeRow } from "./ChartReadOnly";
 import { useChartBuilder } from "./ChartBuilderContext";
 
 // ── Inline SVG mini-chart icons ──────────────────────────────────────────────
@@ -381,7 +382,7 @@ const DEFAULT_COLOR = "#0078d4";
 
 // ── Component ────────────────────────────────────────────────────────────────
 const ChartTypePicker: React.FC = () => {
-  const { categories, templates, chartType, setChartType } = useChartBuilder();
+  const { categories, templates, chartType, setChartType, readOnly } = useChartBuilder();
 
   // Derive all category IDs that actually have templates (including uncatalogued ones)
   const allCategories = useMemo(() => {
@@ -417,6 +418,23 @@ const ChartTypePicker: React.FC = () => {
     setChartType(id as any);
     setOpen(false);
   };
+
+  // A reader sees which type the chart is, drawn the way the picker draws it,
+  // but as a statement — there is no trigger, so no catalogue of 38 types
+  // that choosing from would lead nowhere.
+  if (readOnly) {
+    return (
+      <ReadOnlyField label="Chart type" emptyText="Not set">
+        {selectedTemplate ? (
+          <ReadOnlyTypeRow
+            icon={<ChartIcon id={selectedTemplate.id} color={selectedColor} />}
+            tint={selectedColor}
+            name={selectedTemplate.name}
+          />
+        ) : null}
+      </ReadOnlyField>
+    );
+  }
 
   return (
     <div className="chart-builder-field-group">

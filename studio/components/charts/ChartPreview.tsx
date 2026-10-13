@@ -1035,7 +1035,7 @@ interface ChartPreviewProps {
 }
 
 const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterExports }) => {
-  const { chartId, selectedTemplate, selectedDatasetId, previewOptions, sqlPreview, description, chartType, advancedOptions, cancelRunningQuery, runContext, runPreviewQuery, registerThumbnailCapture } = useChartBuilder();
+  const { chartId, selectedTemplate, selectedDatasetId, previewOptions, sqlPreview, description, chartType, advancedOptions, cancelRunningQuery, runContext, runPreviewQuery, registerThumbnailCapture, readOnly } = useChartBuilder();
   const { theme: appTheme } = useTheme();
   const isDark = appTheme === "dark";
   const echartsInstanceRef = useRef<any>(null);
@@ -1144,6 +1144,14 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
       } catch { /* the job falls back to its own timeout */ }
     };
 
+    // Storing a preview is `PATCH /charts/{id}`, which `can_write` governs, so
+    // a read-only caller's capture would be refused. The pass is told that now
+    // rather than after a round trip whose answer the builder already knows.
+    if (readOnly) {
+      report(false);
+      return;
+    }
+
     // Let the render settle (ECharts animates in) before snapshotting.
     const timer = window.setTimeout(() => {
       void (async () => {
@@ -1163,7 +1171,7 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
       })();
     }, 900);
     return () => clearTimeout(timer);
-  }, [chartId, previewOptions, sqlPreview.isRunning, sqlPreview.dataRows, captureThumbnail]);
+  }, [chartId, readOnly, previewOptions, sqlPreview.isRunning, sqlPreview.dataRows, captureThumbnail]);
 
   const hasOption = Boolean(previewOptions);
 

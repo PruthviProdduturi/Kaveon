@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 
 import ColorPaletteSelector from "./ColorPaletteSelector";
+import { ReadOnlyNotice } from "./ChartReadOnly";
 import styles from './AdvancedChartOptions.module.css'; // Import CSS Module
 import { useChartBuilder } from "./ChartBuilderContext";
 import { useTheme } from "../../contexts/ThemeContext";
@@ -861,7 +862,7 @@ function buildTooltipFormatter(
 // ─── Main component ───────────────────────────────────────────────────────────
 
 const AdvancedChartOptions: React.FC = () => {
-  const { advancedOptions, setAdvancedOptions, previewOptions, setPreviewOptions, selectedTemplate, runPreviewQuery, chartType, timeColumn } = useChartBuilder();
+  const { advancedOptions, setAdvancedOptions, previewOptions, setPreviewOptions, selectedTemplate, runPreviewQuery, chartType, timeColumn, readOnly } = useChartBuilder();
   const { theme } = useTheme();
   // Default title colour tracks the theme (white in dark, dark in light) until
   // the user explicitly picks one.
@@ -1191,6 +1192,24 @@ const AdvancedChartOptions: React.FC = () => {
       series: (prev?.series || []).map((s: any) => ({ ...s, smooth: enabled })),
     }));
   };
+  // Every control in this panel exists to restyle the chart, and a reader's
+  // restyling could not be saved. The tab that leads here is not offered in a
+  // read-only builder, so this is the backstop for a route that bypassed it —
+  // it says why there is nothing to adjust rather than showing an editor that
+  // discards its own work.
+  if (readOnly) {
+    return (
+      <div style={{ padding: '0 4px' }}>
+        <div className="chart-builder-panel-title" style={{ marginBottom: 20 }}>Customize</div>
+        <ReadOnlyNotice>
+          View only. The chart&apos;s appearance is shown in the preview. Styling
+          cannot be adjusted here, because a change to this chart cannot be
+          saved.
+        </ReadOnlyNotice>
+      </div>
+    );
+  }
+
   return (
     <div style={{ padding: '0 4px' }}>
       <div className="chart-builder-panel-title" style={{ marginBottom: 20 }}>Customize</div>
@@ -1552,7 +1571,7 @@ const AdvancedChartOptions: React.FC = () => {
                   />
                   <div style={{ fontSize:12, color:'var(--text-secondary)' }}>Base color — all series use shades of this.</div>
                 </div>
-                <ColorPaletteSelector value={palette} onChange={colors => { setAdvancedOptions((p:any) => ({...(p||{}), color:colors})); setPreviewOptions((p:any) => ({...(p||{}), color:colors})); }} />
+                <ColorPaletteSelector readOnly={readOnly} value={palette} onChange={colors => { setAdvancedOptions((p:any) => ({...(p||{}), color:colors})); setPreviewOptions((p:any) => ({...(p||{}), color:colors})); }} />
               </>
             )}
           </div>

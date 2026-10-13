@@ -7,12 +7,19 @@ import ColumnBrowser from "./ColumnBrowser";
 import DatasetSelector from "./DatasetSelector";
 import RunQueryButton from "./RunQueryButton";
 import SQLPreviewTabs from "./SQLPreviewTabs";
+import { useChartBuilder } from "./ChartBuilderContext";
 
 const CreateChartLayout: React.FC = () => {
+  const { readOnly } = useChartBuilder();
   const [isSourceCollapsed, setIsSourceCollapsed] = useState(true);
   const [activeCenterTab, setActiveCenterTab] = useState<"data" | "customize">(
     "data",
   );
+
+  // Customize holds nothing but controls that restyle the chart, so a reader
+  // is not given a tab that leads to an inert panel. Data stays, because the
+  // chart's configuration is worth reading whether or not it can be changed.
+  const centerTab = readOnly ? "data" : activeCenterTab;
 
   return (
     <div
@@ -88,7 +95,7 @@ const CreateChartLayout: React.FC = () => {
                 <button
                   type="button"
                   className={
-                    activeCenterTab === "data"
+                    centerTab === "data"
                       ? "chart-builder-tab chart-builder-tab-active"
                       : "chart-builder-tab"
                   }
@@ -96,21 +103,23 @@ const CreateChartLayout: React.FC = () => {
                 >
                   Data
                 </button>
-                <button
-                  type="button"
-                  className={
-                    activeCenterTab === "customize"
-                      ? "chart-builder-tab chart-builder-tab-active"
-                      : "chart-builder-tab"
-                  }
-                  onClick={() => setActiveCenterTab("customize")}
-                >
-                  Customize
-                </button>
+                {!readOnly && (
+                  <button
+                    type="button"
+                    className={
+                      centerTab === "customize"
+                        ? "chart-builder-tab chart-builder-tab-active"
+                        : "chart-builder-tab"
+                    }
+                    onClick={() => setActiveCenterTab("customize")}
+                  >
+                    Customize
+                  </button>
+                )}
               </div>
 
               <div className="chart-builder-tabs-body">
-                {activeCenterTab === "data" ? (
+                {centerTab === "data" ? (
                   <ChartConfigPanel />
                 ) : (
                   <AdvancedChartOptions />
