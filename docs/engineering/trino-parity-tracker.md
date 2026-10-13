@@ -75,9 +75,10 @@ foundations, but several operators are still centralized or narrow:
   bind/execute protocol remains open.
   A `/v1/trino/statement` adapter now accepts raw SQL with standard
   `X-Trino-*` session headers, recognizes the encoded
-  `X-Trino-Prepared-Statement` SQL header, and emits `nextUri`/`stats`-shaped
-  responses; parameter binding and the full prepared-statement wire protocol
-  remain open.
+  `X-Trino-Prepared-Statement` SQL header, binds scalar `EXECUTE ... USING`
+  values through the typed binder, and emits `nextUri`/`stats`-shaped
+  responses. Compound prepared literals and the full prepare/describe/bind
+  wire protocol remain open.
   Prepared-parameter discovery now also ignores PostgreSQL `::type` casts,
   so cast names cannot be mistaken for named bindings (`617b69f6`).
   Uncorrelated aggregate scalar subqueries in `WHERE` are now supported with
@@ -497,7 +498,8 @@ current HTTP exchange spool is bounded, replayable, and incrementally decoded;
 network backpressure, sustained pressure evidence, and deployed cancellation
 qualification remain open.
 Track 2 remains partial because prepared statements are now available through
-the Engine HTTP lifecycle but still lack a wire-compatible Trino protocol;
+the Engine HTTP lifecycle and scalar `EXECUTE ... USING` is supported by the
+Trino adapter, but the adapter still lacks a wire-compatible full protocol;
 correlated and other unsupported scalar subqueries, residual outer joins,
 ordered map comparisons, broader array element types, and broader typed DML are
 not yet implemented. Inner residual joins are correctness-complete but use a
