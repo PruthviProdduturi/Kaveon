@@ -359,9 +359,10 @@ invalidation, isolation, bounds, and restart evidence listed above.
   and map values, with planner and executor coverage (`b2054d10`). Unsupported
   element types retain explicit diagnostics.
 - `ARRAYS_OVERLAP(left, right)` now applies the same nullable intersection
-  semantics to nested list, row, and map elements using typed equality; a
-  matching non-null element returns `true`, while an unresolved null match
-  returns `NULL`. Unsupported element types retain explicit diagnostics.
+  semantics to nested list, row, and map elements using typed equality,
+  including `LargeList` containers; a matching non-null element returns
+  `true`, while an unresolved null match returns `NULL`. Unsupported element
+  types retain explicit diagnostics.
 - `ARRAY_POSITION(array, value)` now returns the first 1-based position, `0`
   when a value is absent, and matches null elements for numeric, text, nested
   list, row, and map values; null list inputs remain null. Unsupported list
