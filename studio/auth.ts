@@ -182,12 +182,31 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       const upstreamExpiresAt = user && "upstreamExpiresAt" in user ? user.upstreamExpiresAt : undefined;
       if (typeof upstreamExpiresAt === "number") token.upstreamExpiresAt = upstreamExpiresAt;
       if (typeof token.upstreamExpiresAt === "number" && token.upstreamExpiresAt <= Date.now()) return null;
-      const identityProfile = profile as { login?: string; email?: string; preferred_username?: string } | undefined;
+      const identityProfile = profile as {
+        login?: string; email?: string; preferred_username?: string; oid?: string;
+      } | undefined;
       const email = (token.email as string | undefined) ?? identityProfile?.email ?? identityProfile?.preferred_username;
       if (email) token.email = email;
       const username = identityProfile?.login ?? identityProfile?.preferred_username ?? (token.name as string | undefined);
-      if (profile) token.role = roleFor(email, username);
-      else if (user && "role" in user) token.role = user.role as string;
+      // An Entra object id is the stable identity of an account; an email claim
+      // is not. A guest in the tenant signs in with a `#EXT#` UPN rather than
+      // the address they are known by, so matching on email alone gave the one
+      // account AUTH_ENTRA_ADMIN_OBJECT_IDS names a Viewer role — and a Viewer
+      // is shown none of the datasets that account owns, which reads as an
+      // installation with no data in it rather than as a permissions problem.
+      //
+      // The credentials provider above has always honoured the object id. The
+      // confidential provider did not, so the two flows disagreed about who
+      // the same person was, and switching between them silently changed what
+      // they could see.
+      const entraObjectId = typeof identityProfile?.oid === "string" ? identityProfile.oid : undefined;
+      if (profile) {
+        token.role = entraObjectId && entraAdmins.has(entraObjectId)
+          ? "Admin"
+          : roleFor(email, username);
+      } else if (user && "role" in user) {
+        token.role = user.role as string;
+      }
       return token;
     },
     session({ session, token }) {
