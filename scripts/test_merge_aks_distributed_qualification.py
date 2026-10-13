@@ -80,6 +80,19 @@ class MergeQualificationTests(unittest.TestCase):
         self.assertFalse(result["slo"]["requirements"]["accepted_success_rate"])
         self.assertFalse(result["slo"]["passed"])
 
+    def test_slo_excludes_admission_refusals_from_accepted_rate(self):
+        pressure = self.pressure()
+        pressure["concurrent_exact"]["requests"] = [
+            {"exact": True, "status": 200},
+            {"exact": True, "status": 200},
+            {"exact": False, "status": 429},
+        ]
+        result = merge_aks.merge(self.comparison(), pressure)
+        self.assertEqual(result["slo"]["accepted_requests"], 2)
+        self.assertEqual(result["slo"]["admission_refusals"], 1)
+        self.assertEqual(result["slo"]["accepted_success_rate"], 1.0)
+        self.assertTrue(result["slo"]["requirements"]["accepted_success_rate"])
+
 
 if __name__ == "__main__":
     unittest.main()
