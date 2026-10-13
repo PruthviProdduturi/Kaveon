@@ -244,13 +244,18 @@ qualification documents; this tracker remains the single ordered work list.
   valid values in the same batch remain intact (`6e4a8a44`).
 - `ROW(...)` constructors now produce typed Arrow `StructArray` values with
   null-preserving child fields. `MAP(...)` now produces Arrow `MapArray` values
-  from matching list offsets and rejects NULL keys; dereference and lookup remain
-  explicit complex-type gaps.
+  from matching list offsets and rejects NULL keys. `MAP_KEYS` and `MAP_VALUES`
+  now expose the corresponding list views while preserving map offsets and null
+  rows; dereference and keyed lookup remain explicit complex-type gaps.
+- `ARRAY_POSITION(array, value)` now returns Trino-compatible one-based positions
+  for numeric and text lists, returns `0` when absent, preserves NULL list and
+  element semantics, and fails explicitly for unsupported element types
+  (`df3fa16a`).
 
 ### Current focused validation
 
 The latest focused validation passes 330 `kaveon-server` tests, 103
-`kaveon-sql` tests, and 220 `kaveon-exec` tests. These counts are package-level
+`kaveon-sql` tests, and 222 `kaveon-exec` tests. These counts are package-level
 validation snapshots; they do not close the broader multi-worker, AKS, or
 cross-connector qualification gates below.
 
