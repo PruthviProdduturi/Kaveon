@@ -8,11 +8,13 @@ use arrow::array::{
     NullBuilder, PrimitiveArray, PrimitiveBuilder,
     StringArray,
     StringBuilder, StructArray,
+    Time32MillisecondArray, Time32SecondArray,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute;
 use arrow::datatypes::{
     ArrowPrimitiveType, DataType, Date32Type, Date64Type, Float64Type, Int32Type, Int64Type,
+    Time32MillisecondType, Time32SecondType, TimeUnit,
 };
 use arrow::record_batch::RecordBatch;
 use kaveon_core::predicate::ScalarValue;
@@ -1488,6 +1490,16 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 PrimitiveBuilder::<arrow::datatypes::Date64Type>::new(),
                 Date64Array,
                 |values: &Date64Array, row| values.value(row)
+            ),
+            DataType::Time32(TimeUnit::Second) => build_array!(
+                PrimitiveBuilder::<Time32SecondType>::new(),
+                Time32SecondArray,
+                |values: &Time32SecondArray, row| values.value(row)
+            ),
+            DataType::Time32(TimeUnit::Millisecond) => build_array!(
+                PrimitiveBuilder::<Time32MillisecondType>::new(),
+                Time32MillisecondArray,
+                |values: &Time32MillisecondArray, row| values.value(row)
             ),
             DataType::Float64 => {
                 let mut builder = ListBuilder::new(Float64Builder::new());
@@ -7062,6 +7074,27 @@ mod tests {
         let lists = result.as_list::<i32>();
         assert_eq!(lists.value(0).as_primitive::<Date64Type>().iter().collect::<Vec<_>>(), vec![Some(86_400_000)]);
         assert_eq!(lists.value(1).as_primitive::<Date64Type>().iter().collect::<Vec<_>>(), vec![None]);
+    }
+
+    #[test]
+    fn evaluates_time32_array_elements() {
+        let batch = RecordBatch::try_from_iter([(
+            "time",
+            Arc::new(arrow::array::Time32SecondArray::from(vec![Some(42), None]))
+                as ArrayRef,
+        )])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "ARRAY".into(),
+                args: vec![Expr::Column("time".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        let lists = result.as_list::<i32>();
+        assert_eq!(lists.value(0).as_primitive::<Time32SecondType>().iter().collect::<Vec<_>>(), vec![Some(42)]);
+        assert_eq!(lists.value(1).as_primitive::<Time32SecondType>().iter().collect::<Vec<_>>(), vec![None]);
     }
 
     #[test]
