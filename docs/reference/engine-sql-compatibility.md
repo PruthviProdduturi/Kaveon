@@ -29,7 +29,7 @@ by the selected database and Kaveon's API guardrails.
 | Set operations | Alpha | `UNION [ALL]`, `INTERSECT`, `EXCEPT`, `INTERSECT ALL`, and `EXCEPT ALL`; distributed exact duplicate-count semantics are covered by the differential sweep |
 | Date/time | Alpha | `EXTRACT`, `DATE_TRUNC`, `DATE_PART`, `TO_CHAR`, `NOW`, `CURRENT_DATE`, `CURRENT_TIMESTAMP`, `DATE '…'` literals, `date ± INTERVAL 'n' DAY`; `MONTH`/`YEAR` intervals only against a DATE literal |
 | Conditional, comparison and strings | Alpha | `CASE`, `COALESCE`, `BETWEEN`, `IN`, `IS DISTINCT FROM`, `IS NOT DISTINCT FROM`, `LIKE`/`ILIKE` (Arrow kernels), `REGEXP_REPLACE`, `CAST`, `TRY_CAST`, concatenation, `UPPER`/`LOWER`/`LENGTH`/`TRIM`/`SUBSTR`/`REPEAT`/`REPLACE`/`LPAD`/`RPAD`; functions over dictionary columns run once per dictionary value the batch uses and keep a text result dictionary-encoded; `REGEXP_REPLACE` over plain text runs once per distinct value in the batch |
-| `ROW(...)` and `MAP(...)` constructors | Alpha | Produces typed Arrow `StructArray`/`MapArray` values from list inputs with null-preserving child values; `MAP_KEYS` and `MAP_VALUES` expose typed list views; field dereference, subscript lookup, and row/map comparison remain open |
+| `ROW(...)` and `MAP(...)` constructors | Alpha | Produces typed Arrow `StructArray`/`MapArray` values from list inputs with null-preserving child values; `ROW(...).field` plus `MAP_KEYS` and `MAP_VALUES` expose typed projections; map subscript lookup and row/map comparison remain open |
 | Array functions and subscripts | Alpha | `CARDINALITY`, `CONTAINS`, `ARRAY_POSITION`, and one-based/negative `ELEMENT_AT` over numeric and text lists; array slices and broader element types remain open |
 | Literals against columns | Alpha | Integer literals push down to narrow integer and Date32 columns; integer and decimal literals meet double columns; text literals against Date32 columns are coerced on every reader |
 | `SUM(DISTINCT)`, `AVG(DISTINCT)` | Alpha | Exact mergeable distinct state |
@@ -100,7 +100,8 @@ unchanged; nothing is approximated unless the statement writes an
   `LIMIT`/set operations inside a correlated subquery, `EXISTS` correlated on
   more than one column, correlated `IN`; each is refused by name.
 - Non-equality join conditions (residual join filters) and `GROUPING SETS`/
-  `CUBE`/`ROLLUP`, recursive CTEs, map/row/JSON dereference and comparison;
+  `CUBE`/`ROLLUP`, recursive CTEs, map subscript lookup and row/map/JSON
+  comparison;
   typed numeric and text `ARRAY[...]` literals support `CARDINALITY`,
   `CONTAINS`, `ARRAY_POSITION`, and `ELEMENT_AT`, while slices and broader
   array operators remain open;

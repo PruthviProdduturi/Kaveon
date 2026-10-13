@@ -1238,6 +1238,23 @@ fn eval_cast(expr: &Expr, target: CastTarget, batch: &RecordBatch) -> Result<Arr
 
 fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
     let upper = name.to_uppercase();
+    if upper == "ROW_FIELD" {
+        check_arity(name, args, 2)?;
+        let row = args[0]
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| KaveonError::Execution("ROW_FIELD requires a ROW value".into()))?;
+        let field = as_string_array(&args[1])?;
+        let field = if field.is_null(0) {
+            return Err(KaveonError::Execution("ROW_FIELD name cannot be NULL".into()));
+        } else {
+            field.value(0)
+        };
+        return row
+            .column_by_name(field)
+            .cloned()
+            .ok_or_else(|| KaveonError::Execution(format!("ROW_FIELD '{field}' not found")));
+    }
     if upper == "ROW" {
         let fields = args
             .iter()
@@ -2665,6 +2682,36 @@ mod tests {
         assert_eq!(row.column(0).data_type(), &DataType::Int64);
         assert_eq!(row.column(1).data_type(), &DataType::Utf8);
         assert!(row.column(0).is_null(1));
+    }
+
+    #[test]
+    fn row_field_returns_the_named_struct_child() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", DataType::Int64, true),
+        ]));
+        let input = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int64Array::from(vec![Some(7), Some(9)]))],
+        )
+        .unwrap();
+        let value = evaluate(
+            &Expr::Function {
+                name: "ROW_FIELD".into(),
+                args: vec![
+                    Expr::Function {
+                        name: "ROW".into(),
+                        args: vec![Expr::Column("id".into())],
+                    },
+                    Expr::Literal(ScalarValue::Utf8("field0".into())),
+                ],
+            },
+            &input,
+        )
+        .unwrap();
+        assert_eq!(
+            value.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+            vec![Some(7), Some(9)]
+        );
     }
 
     #[test]
