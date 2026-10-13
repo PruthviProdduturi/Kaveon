@@ -224,6 +224,11 @@ qualification documents; this tracker remains the single ordered work list.
   stage are asserted after a producer-side worker disappears. This qualifies
   the combined in-process path; deployed worker-loss qualification remains
   open.
+- Trino `COUNT_IF(predicate)` now lowers to the existing null-preserving
+  filtered-count state, including window use, distributed partial/final
+  merges, and explicit arity/wildcard diagnostics. The differential corpus
+  covers grouped `COUNT_IF` results across alternate encodings and execution
+  paths.
 - A three-worker high-cardinality grouped aggregate now has exact local versus
   distributed equivalence under 4 MiB spill pressure, with spill cleanup and
   zero reservation checks (`69d327e9`). Larger-scale and AKS spill gates remain.
@@ -320,7 +325,7 @@ qualification documents; this tracker remains the single ordered work list.
 
 ### Current focused validation
 
-The latest focused validation passes 334 `kaveon-server` tests, 109
+The latest focused validation passes 334 `kaveon-server` tests, 111
 `kaveon-sql` tests, and 247 `kaveon-exec` tests (four executor benchmarks are
 ignored). The repository differential gate
 (`differential_tests::the_differential_sweep_matches_across_parquet_encodings_and_execution_paths`)

@@ -456,6 +456,11 @@ const CASES: &[(&str, &str, bool)] = &[
         "SELECT industry, MIN(latency_p75_ms) AS lo FROM {T} WHERE region <> 'Africa' GROUP BY industry ORDER BY industry",
         true,
     ),
+    (
+        "count_if_grouped",
+        "SELECT region, COUNT_IF(actions > 5) AS active FROM {T} GROUP BY region ORDER BY region",
+        true,
+    ),
 ];
 
 /// Approximate cases: (name, statement, ordered, tolerance). Cells that
