@@ -114,7 +114,10 @@ spec:
             timeoutSeconds: 3
             failureThreshold: 12
           livenessProbe:
-            httpGet: {path: /api/health, port: http}
+            # Liveness must not depend on KaveonDB or the Engine. A transient
+            # authority/readiness failure should remove the pod from service,
+            # not restart a healthy API process in a loop.
+            httpGet: {path: /api/live, port: http}
             initialDelaySeconds: 20
             periodSeconds: 10
             timeoutSeconds: 3

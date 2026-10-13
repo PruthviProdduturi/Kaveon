@@ -11,6 +11,12 @@ from services import postgresql_retirement_runtime
 router = APIRouter()
 
 
+@router.get("/live")
+def live():
+    """Process liveness only; dependency readiness belongs to ``/health``."""
+    return {"status": "alive"}
+
+
 @router.get("/health")
 def health():
     now = datetime.now(timezone.utc).isoformat()

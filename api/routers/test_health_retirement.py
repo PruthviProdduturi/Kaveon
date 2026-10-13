@@ -7,6 +7,13 @@ from routers import health
 
 
 class RetirementHealthTests(unittest.TestCase):
+    def test_live_does_not_probe_authority(self):
+        with patch.object(health.postgresql_retirement_runtime, "probe") as probe, \
+             patch.object(health.db, "query") as postgres:
+            self.assertEqual(health.live(), {"status": "alive"})
+        probe.assert_not_called()
+        postgres.assert_not_called()
+
     def test_health_reports_kaveondb_as_authority_without_postgresql_probe(self):
         state = {"authority_family_count": 16}
         with patch.object(health.postgresql_retirement_runtime, "requested", return_value=True), \

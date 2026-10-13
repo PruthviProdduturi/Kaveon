@@ -5,7 +5,8 @@
 | Component | Check | Meaning |
 |---|---|---|
 | Studio | Open the configured Studio URL | Next.js is reachable; this alone does not prove API/database health |
-| FastAPI | `GET /api/health` | API process health |
+| FastAPI | `GET /api/live` | Process liveness only; does not require KaveonDB or the Engine |
+| FastAPI | `GET /api/health` | Dependency readiness and API health |
 | Engine | `GET /health` | Engine process health and version |
 | Engine | `GET /ready` | At least one Engine catalog is loaded |
 
