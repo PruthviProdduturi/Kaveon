@@ -198,6 +198,22 @@ class CoTenantFilteringTests(unittest.TestCase):
                                       ("kaveon-worker", "trino-worker"))
         self.assertEqual(runtime["co_tenants"], ["node-a/platform/ReplicaSet/api-abc"])
 
+    def test_aks_command_pods_are_not_co_tenants(self):
+        image = "docker-pullable://engine@sha256:" + "a" * 64
+        pods = [
+            _pod("kaveon-worker-0", "node-a", "StatefulSet", "kaveon-worker", ready=True, image_id=image),
+            _pod("kaveon-worker-1", "node-b", "StatefulSet", "kaveon-worker", ready=True, image_id=image),
+            {
+                "metadata": {"namespace": "aks-command", "name": "command-random", "uid": "command-uid",
+                              "ownerReferences": []},
+                "spec": {"nodeName": "node-a"},
+                "status": {"phase": "Running"},
+            },
+        ]
+        runtime = active_worker_nodes(FakeKube(pods), "kaveon-worker", 2,
+                                      ("kaveon-worker", "trino-worker"))
+        self.assertEqual(runtime["co_tenants"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
