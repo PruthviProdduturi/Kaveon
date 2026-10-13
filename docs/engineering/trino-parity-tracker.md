@@ -76,10 +76,11 @@ foundations, but several operators are still centralized or narrow:
 - Numeric array literals are supported as null-preserving Arrow lists, and
   `CARDINALITY` returns their nullable list length; maps and structs/row values
   are not yet represented as complete SQL expression types. `ROW(...)` and
-  `MAP(...)` now fail with typed planner diagnostics. Complex casts,
-  dereference, `UNNEST`, other array operations, and broad JSON operations
-  remain open; scalar extraction via `JSON_EXTRACT_SCALAR` is implemented for
-  dotted object paths.
+  `MAP(...)` now fail with typed planner diagnostics. Scalar, DATE, timestamp,
+  and DECIMAL casts are supported; complex cast targets fail with typed
+  planner diagnostics. Dereference, `UNNEST`, other array operations, and
+  broad JSON operations remain open; scalar extraction via
+  `JSON_EXTRACT_SCALAR` is implemented for dotted object paths.
 - There is no Trino-style cross-source federation yet. Registered SQL sources
   are API passthrough paths, while the strongest native Engine path is
   Parquet/Delta/Iceberg. The connector matrix now records S3 as implemented
@@ -150,7 +151,9 @@ qualification documents; this tracker remains the single ordered work list.
   list length, with explicit rejection for non-list values (`1c0e29e5`).
 - Three-worker global `ORDER BY`/TopN centralized merge correctness is now
   qualified for NULL ordering and ties against a single-partition reference
-  (`bb788709`). Parallel global merge performance remains open.
+  (`bb788709`). The input remains distributed, while the exact global merge
+  is explicitly finalized by one task; a range exchange for parallel global
+  ordering remains open (`7f32d854`).
 - A distributed self-join with grouped output now has exact worker-loss
   recovery coverage, including retries and moved exchange spools
   (`43a2f8f9`). AKS worker-loss qualification remains open.
@@ -171,6 +174,9 @@ qualification documents; this tracker remains the single ordered work list.
 - `ROW(...)` and `MAP(...)` expressions now fail during planning with typed
   complex-type diagnostics instead of reaching execution as unknown functions
   (`bd38251d`).
+- Unsupported complex `CAST` targets such as `JSON` now fail during planning
+  with a stable target-type diagnostic; scalar, DATE, timestamp, and DECIMAL
+  casts remain the qualified cast surface (`c259e5d1`).
 - Bounded projection scalar subqueries now support an ungrouped, single-column
   aggregate and preserve its alias; correlated and multi-row projection forms
   remain explicitly rejected (`d7be5f9a`).
@@ -189,8 +195,9 @@ The latest focused validation passes 327 `kaveon-server` tests, 94
 validation snapshots; they do not close the broader multi-worker, AKS, or
 cross-connector qualification gates below.
 
-Track 1 remains partial because distributed global ordering and a full
-worker-loss/spill/cancellation corpus still need a correctness gate. The
+Track 1 remains partial because global ordering still uses a centralized merge
+and a full worker-loss/spill/cancellation corpus still needs a correctness
+gate. The
 current HTTP exchange spool is bounded, replayable, and incrementally decoded;
 network backpressure, sustained pressure evidence, and AKS cancellation
 qualification remain open.
