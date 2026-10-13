@@ -400,16 +400,32 @@ impl ProductCatalogCommit {
         let attempt = self.metrics.begin();
         let head = match self.read_head().await {
             Ok(head) => head,
-            Err(_) => return (finish_indeterminate(attempt), false),
+            Err(error) => {
+                eprintln!(
+                    "[product-commit] indeterminate: head read failed ({:?})",
+                    error
+                );
+                return (finish_indeterminate(attempt), false);
+            }
         };
         let Some(index) = &head.operation_index else {
+            eprintln!(
+                "[product-commit] indeterminate: head carries no operation index, so a replay \
+cannot be told from a new operation"
+            );
             attempt.finish(TransactionOutcome::Indeterminate);
             return (CommitOutcome::Indeterminate, false);
         };
         let shard_key = digest(request.operation_id.as_bytes())[..2].to_owned();
         let mut shard = match self.read_shard(index.get(&shard_key)).await {
             Ok(value) => value,
-            Err(_) => return (finish_indeterminate(attempt), false),
+            Err(error) => {
+                eprintln!(
+                    "[product-commit] indeterminate: operation-index shard {} read failed ({:?})",
+                    shard_key, error
+                );
+                return (finish_indeterminate(attempt), false);
+            }
         };
         if let Some(existing) = shard.entries.get(&request.operation_id) {
             if existing.request_digest != request.request_digest {
@@ -440,7 +456,14 @@ impl ProductCatalogCommit {
         }
         let next = match head.snapshot.prepare(request.clone()) {
             Ok(snapshot) => snapshot,
-            Err(_) => {
+            Err(error) => {
+                // prepare() names the violation — a stale revision, a dangling
+                // reference, a duplicate key — and this is the only place that
+                // message existed before it was discarded.
+                eprintln!(
+                    "[product-commit] rejected by prepare: {error}; operation {}",
+                    request.operation_id
+                );
                 attempt.finish(TransactionOutcome::Rejected);
                 return (CommitOutcome::Rejected, false);
             }
@@ -482,12 +505,31 @@ impl ProductCatalogCommit {
         let bytes = match encode(&next) {
             Ok(bytes) => bytes,
             Err(()) => {
+                // The size is reported because the bound alone does not say how
+                // far over it is, and the difference between "one row too many"
+                // and "twice the limit" decides whether pruning or a structural
+                // change is the fix.
+                eprintln!(
+                    "[product-commit] rejected: encoded snapshot exceeds MAX_SNAPSHOT_BYTES ({} bytes); \
+operation {}",
+                    MAX_SNAPSHOT_BYTES, request.operation_id
+                );
                 attempt.finish(TransactionOutcome::Rejected);
                 return (CommitOutcome::Rejected, false);
             }
         };
         let snapshot_sha256 = digest(&bytes);
         if shard.entries.len() >= MAX_INDEX_SHARD_ENTRIES {
+            // Fails closed by design, and stays closed: the compaction this
+            // waits for is not implemented. Saying so is the difference between
+            // an operator retrying forever and knowing the catalog needs work.
+            eprintln!(
+                "[product-commit] indeterminate: operation-index shard {} holds {} entries, at the \
+{} limit; compaction into a new index format is required",
+                shard_key,
+                shard.entries.len(),
+                MAX_INDEX_SHARD_ENTRIES
+            );
             attempt.finish(TransactionOutcome::Indeterminate);
             return (CommitOutcome::Indeterminate, false);
         }
@@ -1012,6 +1054,9 @@ fn finish_storage(
     attempt: crate::product_metrics::TransactionAttempt<'_>,
     kind: CommitErrorKind,
 ) -> CommitOutcome {
+    // The kind is what separates a refusal from an unknown, and it was only
+    // ever used to pick an outcome — never reported.
+    eprintln!("[product-commit] storage outcome: {kind:?}");
     let (outcome, metric) = match kind {
         CommitErrorKind::Conflict => (CommitOutcome::Conflict, TransactionOutcome::Conflict),
         // A size limit is a decision, not an unknown. The snapshot either fits
