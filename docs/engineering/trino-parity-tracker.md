@@ -536,11 +536,14 @@ a coordinator merge by design; a fully parallel ordered result stream remains
 open.
 
 Track 1 remains partial because global ordering still uses a centralized merge
-and a full worker-loss/spill/cancellation corpus still needs a correctness
-gate. The
-current HTTP exchange spool is bounded, replayable, and incrementally decoded;
-network backpressure, sustained pressure evidence, and deployed cancellation
-qualification remain open.
+and coordinator-loss recovery is intentionally fail-closed rather than
+survivable for an in-flight query. Deployed worker-loss recovery, active-query
+node-drain recovery, bounded pressure, spill/retry, cancellation cleanup, and
+the five-minute mixed-workload soak are qualified for the declared three-worker
+image and workload. The current HTTP exchange spool is bounded, replayable,
+and incrementally decoded; network backpressure under sustained pressure,
+cloud-storage fault injection, longer endurance, upgrade/rollback, and
+deployed cancellation under those conditions remain open.
 Track 2 remains partial because prepared statements are now available through
 the Engine HTTP lifecycle and scalar `EXECUTE ... USING` is supported by the
 Trino adapter, but the adapter still lacks a wire-compatible full protocol;
