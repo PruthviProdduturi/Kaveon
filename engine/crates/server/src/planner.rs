@@ -869,9 +869,10 @@ impl ExecutableFragmentBuilder<'_> {
                 } else {
                     FragmentJoinType::Anti
                 };
-                let (Ok(left_column), Ok(right_column)) =
-                    (expression_column(left_key), expression_column(right_key))
-                else {
+                let (Some(left_column), Some(right_column)) = (
+                    semijoin_key_column(left, left_key),
+                    semijoin_key_column(right, right_key),
+                ) else {
                     return self.attach_broadcast_join(
                         left_stage,
                         right_stage,
@@ -886,21 +887,6 @@ impl ExecutableFragmentBuilder<'_> {
                         },
                     );
                 };
-                if left_column == "*" || right_column == "*" {
-                    return self.attach_broadcast_join(
-                        left_stage,
-                        right_stage,
-                        JoinSpec {
-                            join_type,
-                            left_qualifier: None,
-                            right_qualifier: None,
-                            left_keys: vec![left_key.clone()],
-                            right_keys: vec![right_key.clone()],
-                            residual: residual.clone(),
-                            broadcast: true,
-                        },
-                    );
-                }
                 let target = StageId(self.next_stage);
                 let left_exchange = self.exchange(left_stage, target)?.clone();
                 let right_exchange = self.exchange(right_stage, target)?.clone();
@@ -1637,18 +1623,14 @@ impl StageGraphBuilder {
                 let left_stage = self.build(left)?;
                 let right_stage = self.build(right)?;
                 let physical = physical_plan_tree(plan);
-                let (Ok(left_column), Ok(right_column)) =
-                    (expression_column(left_key), expression_column(right_key))
-                else {
+                let (Some(left_column), Some(right_column)) = (
+                    semijoin_key_column(left, left_key),
+                    semijoin_key_column(right, right_key),
+                ) else {
                     self.wrap_stage(left_stage, "BroadcastSemiJoin", physical.attributes);
                     self.add_exchange(right_stage, left_stage, Partitioning::Broadcast);
                     return Ok(left_stage);
                 };
-                if left_column == "*" || right_column == "*" {
-                    self.wrap_stage(left_stage, "BroadcastSemiJoin", physical.attributes);
-                    self.add_exchange(right_stage, left_stage, Partitioning::Broadcast);
-                    return Ok(left_stage);
-                }
                 let operator = if matches!(plan, LogicalPlan::SemiJoin { .. }) {
                     "PartitionedSemiJoin"
                 } else {
@@ -1748,6 +1730,28 @@ fn expression_column(expression: &Expr) -> Result<String> {
         _ => Err(KaveonError::Execution(
             "distributed partition keys must be column references".into(),
         )),
+    }
+}
+
+/// The binder uses `Column("*")` as a positional marker when a correlated
+/// EXISTS subquery projects its join key first. Resolve that marker before
+/// choosing a hash exchange; unresolved expressions retain the broadcast
+/// fallback rather than producing an invalid exchange key.
+fn semijoin_key_column(plan: &LogicalPlan, key: &Expr) -> Option<String> {
+    if !matches!(key, Expr::Column(name) if name == "*") {
+        return expression_column(key).ok();
+    }
+    match plan {
+        LogicalPlan::Project { input: _, columns } => columns.first().and_then(|column| match column {
+            Expr::Column(name) => Some(name.clone()),
+            Expr::Alias { expr, .. } => expression_column(expr).ok(),
+            _ => None,
+        }),
+        LogicalPlan::Filter { input, .. }
+        | LogicalPlan::Limit { input, .. }
+        | LogicalPlan::Offset { input, .. }
+        | LogicalPlan::Sort { input, .. } => semijoin_key_column(input, key),
+        _ => None,
     }
 }
 
