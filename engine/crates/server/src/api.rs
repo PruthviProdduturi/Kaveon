@@ -11389,6 +11389,20 @@ mod tests {
             debug.contains("Utf8(\"Europe\")"),
             "string did not reach planning"
         );
+        let question_request: super::StatementRequest = serde_json::from_value(serde_json::json!({
+            "query": "SELECT * FROM events WHERE user_id = ? AND region = ?",
+            "parameters": [42, "Europe"]
+        }))
+        .unwrap();
+        let values = super::request_parameters(&question_request.parameters).unwrap();
+        let plan = kaveon_sql::logical_plan::sql_to_logical_plan_for_binder_with_parameters(
+            &question_request.query,
+            &values,
+        )
+        .unwrap();
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("Int64(42)"));
+        assert!(debug.contains("Utf8(\"Europe\")"));
     }
 
     #[test]
