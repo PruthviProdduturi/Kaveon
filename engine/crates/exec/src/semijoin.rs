@@ -756,6 +756,44 @@ fn extract_value(array: &dyn Array, row: usize) -> Result<Key> {
                 .value(row) as i128,
             0,
         )),
+        arrow::datatypes::DataType::Date64 => Ok(Key::Number(
+            array
+                .as_primitive::<arrow::datatypes::Date64Type>()
+                .value(row) as i128,
+            0,
+        )),
+        arrow::datatypes::DataType::Time32(unit) => Ok(Key::Number(
+            match unit {
+                TimeUnit::Second => array
+                    .as_primitive::<arrow::datatypes::Time32SecondType>()
+                    .value(row),
+                TimeUnit::Millisecond => array
+                    .as_primitive::<arrow::datatypes::Time32MillisecondType>()
+                    .value(row),
+                _ => {
+                    return Err(KaveonError::Execution(
+                        "unsupported TIME32 unit".into(),
+                    ))
+                }
+            } as i128,
+            0,
+        )),
+        arrow::datatypes::DataType::Time64(unit) => Ok(Key::Number(
+            match unit {
+                TimeUnit::Microsecond => array
+                    .as_primitive::<arrow::datatypes::Time64MicrosecondType>()
+                    .value(row),
+                TimeUnit::Nanosecond => array
+                    .as_primitive::<arrow::datatypes::Time64NanosecondType>()
+                    .value(row),
+                _ => {
+                    return Err(KaveonError::Execution(
+                        "unsupported TIME64 unit".into(),
+                    ))
+                }
+            } as i128,
+            0,
+        )),
         arrow::datatypes::DataType::Timestamp(unit, _) => Ok(Key::Number(
             match unit {
                 TimeUnit::Second => array

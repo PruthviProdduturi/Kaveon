@@ -134,6 +134,10 @@ foundations, but several operators are still centralized or narrow:
   four time units in hash and semi/anti joins. Duplicate and NULL behavior is
   covered by an execution test; timestamp joins still require matching Arrow
   units/timezones through the existing schema check.
+- `Date64`, `TIME32`, and `TIME64` keys now use their exact Arrow integer
+  representation in hash and semi/anti joins. Date and millisecond-time
+  duplicate/NULL behavior is covered by an execution test; joins still require
+  identical Arrow logical types through the existing schema check.
 - Regular hash joins now support `DECIMAL(precision, scale)` keys using the
   exact unscaled integer plus scale, matching the existing semi/anti-join
   representation. Duplicate and NULL behavior is covered by execution tests;
