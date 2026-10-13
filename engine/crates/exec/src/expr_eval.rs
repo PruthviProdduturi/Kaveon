@@ -2201,6 +2201,67 @@ fn array_slice_generic<L: OffsetSizeTrait>(
     )?))
 }
 
+fn array_extrema_generic<L: OffsetSizeTrait>(
+    list: &GenericListArray<L>,
+    take_max: bool,
+    name: &str,
+) -> Result<ArrayRef> {
+    let supported = matches!(
+        list.value_type(),
+        DataType::Int32
+            | DataType::Int64
+            | DataType::Float64
+            | DataType::Date32
+            | DataType::Date64
+            | DataType::Time32(TimeUnit::Second)
+            | DataType::Time32(TimeUnit::Millisecond)
+            | DataType::Timestamp(TimeUnit::Microsecond, _)
+            | DataType::Decimal128(_, _)
+            | DataType::Utf8
+    );
+    if !supported {
+        return Err(KaveonError::Execution(format!(
+            "{name} does not support list element type {}",
+            list.value_type()
+        )));
+    }
+    let mut selected = Vec::<ArrayRef>::with_capacity(list.len());
+    for row in 0..list.len() {
+        if list.is_null(row) {
+            selected.push(arrow::array::new_null_array(&list.value_type(), 1));
+            continue;
+        }
+        let inner = list.value(row);
+        let mut best: Option<ArrayRef> = None;
+        for index in 0..inner.len() {
+            if inner.is_null(index) {
+                continue;
+            }
+            let candidate = inner.slice(index, 1);
+            let replace = match best.as_ref() {
+                None => true,
+                Some(current) => {
+                    let kind = if take_max { CompareKind::Gt } else { CompareKind::Lt };
+                    comparison(&candidate, current, kind)
+                        .map(|value| !value.is_null(0) && value.value(0))
+                        .unwrap_or(false)
+                }
+            };
+            if replace {
+                best = Some(candidate);
+            }
+        }
+        selected.push(
+            best.unwrap_or_else(|| arrow::array::new_null_array(&list.value_type(), 1)),
+        );
+    }
+    let chunks = selected
+        .iter()
+        .map(|value| value.as_ref() as &dyn Array)
+        .collect::<Vec<_>>();
+    Ok(compute::concat(&chunks)?)
+}
+
 fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
     let upper = name.to_uppercase();
     if upper.starts_with("ARRAY_ANY_") || upper.starts_with("ARRAY_ALL_") {
@@ -5429,6 +5490,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "ARRAY_MIN" | "ARRAY_MAX" => {
             check_arity(name, args, 1)?;
+            if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
+                return array_extrema_generic(list, name == "ARRAY_MAX", name);
+            }
             let list = args[0]
                 .as_any()
                 .downcast_ref::<ListArray>()
@@ -7624,6 +7688,24 @@ mod tests {
         assert_eq!(sliced.len(), 2);
         assert_eq!(sliced.value(0).as_primitive::<Int64Type>().value(0), 1);
         assert_eq!(sliced.value(1).as_primitive::<Int64Type>().value(0), 3);
+
+        let extrema = || {
+            let mut builder = LargeListBuilder::new(Int64Builder::new());
+            for value in [4_i64, 1, 9] {
+                builder.values().append_value(value);
+            }
+            builder.append(true);
+            Arc::new(builder.finish()) as ArrayRef
+        };
+        for (name, expected) in [("ARRAY_MIN", 1_i64), ("ARRAY_MAX", 9_i64)] {
+            let result = eval_scalar_function(
+                name,
+                &[extrema()],
+                1,
+            )
+            .unwrap();
+            assert_eq!(result.as_primitive::<Int64Type>().value(0), expected);
+        }
     }
 
     #[test]
