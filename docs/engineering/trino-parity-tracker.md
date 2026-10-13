@@ -355,6 +355,11 @@ qualification documents; this tracker remains the single ordered work list.
   `ARRAY_SORT` orders those same supported element types with NULL values last;
   `ARRAY_REVERSE` reverses those lists while preserving NULL elements;
   broader element types remain an explicit boundary.
+- Array constructors now execute as typed Arrow lists for boolean, integer,
+  floating-point, UTF-8, decimal, and all-NULL elements. Mixed integer and
+  floating-point literals are promoted to `DOUBLE`; null elements preserve the
+  list's inferred type. Compound and unsupported element types remain explicit
+  boundaries.
 - `ROW(...).field` now lowers to a typed `ROW_FIELD` projection over Arrow
   structs, and map subscript syntax lowers to `ELEMENT_AT` with typed key
   lookup; row equality and order-independent map equality now compare typed
