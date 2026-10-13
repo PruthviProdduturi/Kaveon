@@ -114,6 +114,16 @@
   box-sizing: border-box;
 }
 
+/* The canvas is react-grid-layout's measured container, so it is rendered in
+   every state — including the empty one, which is nested inside it rather than
+   replacing it (see DashboardCanvas.tsx). Flex only while empty, so the empty
+   state's `flex: 1` still has a column flex parent to stretch against and the
+   canvas keeps filling the builder's pane with no dead area below it. */
+.dashboard-canvas-host-empty {
+  display: flex;
+  flex-direction: column;
+}
+
 /* The empty canvas, in whichever theme is being read. This carried a white
    fill and slate text from before the dark theme existed, which the builder
    had to override locally once the state stretched to full height — so the
