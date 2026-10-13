@@ -187,10 +187,13 @@ qualification documents; this tracker remains the single ordered work list.
   predicates reach the build scan, while runtime build-key propagation to the
   probe scan remains refused until its correctness and exchange behavior are
   qualified (`57db621d`).
+- Streamed-root task metrics now have a stabilized eventual-read test: the
+  metrics endpoint may report `202 Accepted` briefly and is polled until the
+  completed metrics record is available (`6cd66cb4`).
 
 ### Current focused validation
 
-The latest focused validation passes 327 `kaveon-server` tests, 94
+The latest focused validation passes 328 `kaveon-server` tests, 94
 `kaveon-sql` tests, and 213 `kaveon-exec` tests. These counts are package-level
 validation snapshots; they do not close the broader multi-worker, AKS, or
 cross-connector qualification gates below.
