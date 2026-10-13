@@ -31,7 +31,13 @@ The page needs an Engine-catalog path — pick catalog → schema → table and 
 by table id. The API side already exists.
 
 ### D-2 · Dashboard builder: cannot drag or move items
-**fixed (unverified)** · `de3f76ec` · needs a click to verify.
+**fixed, browser-verified** · `de3f76ec` + `2285c465`. Two independent
+defects: the grid was never rendered (a measurement gate on a ref that was
+never attached), and then no tile had a drag surface — `DashboardItem` returns
+before the header carrying the handle, so only the tabs fallback ever had one.
+A grab strip is now rendered per grid child and declared to the grid, verified
+in a browser: the strip drags and reorders, the chart canvas does not, and
+resize works from all three handles.
 NOT caused by `794af12f` — `useContainerWidth` never saw a node, so the grid
 was never rendered. That commit was exonerated against the library source.
 
@@ -137,7 +143,9 @@ something that fills it before a reader asks, and that keeps the other hot
 reads (catalog listings, charts, dashboards, datasets) warm the same way.
 
 ### D-28 · Dashboard tabs pass v1 props to react-grid-layout v2
-**open** · 2026-10-13 · found while fixing D-2
+**open** · 2026-10-13 · found while fixing D-2. Note the v1 prop in question
+is `draggableHandle`, and the canvas now declares `dragConfig.handle`
+properly — the tabs grid should be brought to the same shape.
 
 `studio/components/dashboards/components/DashboardTabsComponent.tsx:19,711`
 loads the default export and passes `draggableHandle`, top-level `cols` and
@@ -164,6 +172,35 @@ Testing it live was right. Leaving Helm-unowned objects behind was not: for
 anything a chart also manages, the proof has to come from a `helm upgrade`.
 Resolved by deleting the four objects and redeploying; the guard is now
 `managed-by: Helm` and verified holding the floor.
+
+### D-31 · One Row or Column kills drag and resize for the whole dashboard
+**open** · 2026-10-13 · found while fixing the drag handle
+
+`DashboardCanvas.tsx:97,100,177-181`: if any root item is a `row` or `column`,
+`hasContainers` is true, `isFlatGrid` is false, and the canvas renders a plain
+vertical stack with no grid at all. So one click of Row or Column in the Items
+palette permanently disables dragging and resizing for every tile on that
+dashboard, with no indication that it has happened.
+
+The `de3f76ec` commit message noticed this in passing and did not pursue it.
+It is cheap now: with a drag handle declared, container items can live on the
+grid without their own internal handles competing for the gesture, because
+only the declared handle can start a tile drag.
+
+Cold at the moment — every seeded dashboard is flat — so it is reachable only
+by someone adding a Row or Column.
+
+### D-32 · The remove control was invisible, and the builder was light-only
+**fixed** · `aed9e6e8` · 2026-10-13
+
+"There is no way to remove a chart" — the duplicate and remove buttons were
+`opacity: 0` until the component was hovered: clickable, invisible, and on a
+touch device genuinely unreachable. Shown while building now.
+
+Underneath it, `dashboard.css` carried 121 literal colours with three behind
+tokens, predating the dark theme entirely — the same cause as the white
+empty-canvas slab and the light-only chart picker. Fifty-nine declarations
+tokenised by what the property does rather than by colour value.
 
 ### D-5 · 4,068 query-history rows belong to synthetic accounts
 **open, by decision** · 2026-10-13
