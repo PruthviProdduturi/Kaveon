@@ -29,7 +29,7 @@ class BridgeTimeoutTests(unittest.TestCase):
 
         with patch.dict("os.environ", {"KAVEON_ENGINE_BRIDGE_TOKEN": "t", "KAVEON_ENGINE_URL": "https://engine"}), \
              patch.object(engine_bridge, "_verify_context", lambda: False), \
-             patch.object(engine_bridge.httpx, "request", fake_request):
+             patch.object(engine_bridge, "_client", lambda: SimpleNamespace(request=fake_request)):
             kwargs = {"timeout": timeout} if timeout else {}
             return engine_bridge.execute("SELECT 1", "OpenSource", "kaveon-system", "Admin", "s", **kwargs), seen
 
@@ -68,7 +68,7 @@ class BridgeTimeoutTests(unittest.TestCase):
 
         with patch.dict("os.environ", {"KAVEON_ENGINE_BRIDGE_TOKEN": "t", "KAVEON_ENGINE_URL": "https://engine"}), \
              patch.object(engine_bridge, "_verify_context", lambda: False), \
-             patch.object(engine_bridge.httpx, "request", fake_request):
+             patch.object(engine_bridge, "_client", lambda: SimpleNamespace(request=fake_request)):
             with self.assertRaises(HTTPException) as ctx:
                 engine_bridge.execute("SELECT 1", "OpenSource", "kaveon-system", "Admin", "s", timeout=5)
         self.assertEqual(ctx.exception.status_code, 504)

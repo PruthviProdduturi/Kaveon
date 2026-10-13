@@ -544,6 +544,11 @@ async def cancel_lab_query(query_id: str, ctx=Depends(require_min_role("Analyst"
     return Response(status_code=204)
 
 
+async def _no_dataset():
+    """Stands in for the dataset read when the request carries its own schema."""
+    return None
+
+
 @router.post("/lab/query")
 @statement_route("query")
 async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_min_role("Analyst")),
@@ -567,16 +572,34 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
         # plane uses, and take the schema from the authorized dataset rather
         # than from anything the browser sent.
         from routers.sql import _engine_source_for_catalog
-        resolved_source = _engine_source_for_catalog(database)
-        if resolved_source:
-            if not engine_schema and data.datasetId is not None:
-                dataset = datasets_svc.get_dataset_by_id(str(data.datasetId), ctx.email, ctx.role)
-                if not dataset:
-                    raise HTTPException(404, "Dataset not found")
-                if (dataset.get("database_name") or "").casefold() != (
-                        resolved_source["engine_catalog"] or "").casefold():
-                    raise HTTPException(400, "Dataset is not bound to the selected Engine catalog")
-                engine_schema = dataset.get("schema_name") or None
+        # Two reads of the control plane that do not depend on each other: which
+        # catalog the named source resolves to, and the dataset this caller is
+        # authorized to preview. They ran one after the other, on the event
+        # loop, so the preview waited out both round trips in series and
+        # nothing else this process was serving advanced while it did. Overlap
+        # them on worker threads, and leave the dataset's verdict — its 404,
+        # its catalog check, the schema it contributes — exactly where it was.
+        needs_dataset = not engine_schema and data.datasetId is not None
+        resolved_source, dataset = await asyncio.gather(
+            asyncio.to_thread(_engine_source_for_catalog, database),
+            asyncio.to_thread(datasets_svc.get_dataset_by_id, str(data.datasetId), ctx.email, ctx.role)
+            if needs_dataset else _no_dataset(),
+            # A dataset read is only consulted once the catalog resolves, so a
+            # failure in the read the caller never needed must not surface in
+            # place of the legacy routing that would have happened instead.
+            return_exceptions=True,
+        )
+        if isinstance(resolved_source, BaseException):
+            raise resolved_source
+        if resolved_source and needs_dataset:
+            if isinstance(dataset, BaseException):
+                raise dataset
+            if not dataset:
+                raise HTTPException(404, "Dataset not found")
+            if (dataset.get("database_name") or "").casefold() != (
+                    resolved_source["engine_catalog"] or "").casefold():
+                raise HTTPException(400, "Dataset is not bound to the selected Engine catalog")
+            engine_schema = dataset.get("schema_name") or None
     if engine_source_id or resolved_source:
         from services import engine_bridge
         # The catalog is already resolved when it was found by name. Re-reading

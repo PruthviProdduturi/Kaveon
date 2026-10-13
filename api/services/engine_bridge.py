@@ -40,6 +40,52 @@ def _verify_context():
         raise HTTPException(503, "Engine CA certificate is unavailable or invalid") from None
 
 
+# ── The client every round trip shares ────────────────────────────────────────
+# `httpx.request` builds a client, uses it once and throws it away, so every
+# Engine round trip opened a fresh connection and completed a fresh TLS
+# handshake against the private CA.
+#
+# Be careful about what this does and does not buy, because the obvious
+# explanation is wrong here. Building the client is cheap on this path:
+# `_verify_context()` returns a prepared `ssl.SSLContext`, and
+# `httpx.Client(verify=<SSLContext>)` costs 0.1 ms. It is `verify=True` that
+# parses a trust store (42 ms here, and slower on a cold cache) and this code
+# never takes that path. Measured against the live coordinator, a pooled
+# client and a client per call answer a product listing in the same 0.6 s —
+# the listing cost is inside the Engine, not in front of it, and is recorded
+# in HANDSHAKE.md for its owner.
+#
+# So this is correctness-of-practice and a saved handshake per round trip, not
+# the fix for a slow page. One client per verification context: httpx clients
+# are safe to use from several threads, which is how the API reaches the
+# bridge (through `asyncio.to_thread`). Idle connections expire after five
+# seconds, so a burst of reads shares one connection while a connection the
+# Engine has since dropped is never handed to a later request.
+_CLIENT_LOCK = threading.Lock()
+_CLIENT: tuple[str, httpx.Client] | None = None
+_LIMITS = httpx.Limits(max_connections=100, max_keepalive_connections=20, keepalive_expiry=5.0)
+
+
+def _client():
+    """The shared client for the configured trust context, built on first use."""
+    global _CLIENT
+    key = os.getenv("KAVEON_ENGINE_CA_CERT") or ""
+    with _CLIENT_LOCK:
+        current = _CLIENT
+        if current is not None and current[0] == key:
+            return current[1]
+        # A changed CA path is a changed trust decision, so the client that
+        # carries the old one is retired rather than kept alongside.
+        client = httpx.Client(verify=_verify_context(), limits=_LIMITS)
+        _CLIENT = (key, client)
+    if current is not None:
+        try:
+            current[1].close()
+        except RuntimeError:
+            pass
+    return client
+
+
 def _send(method, path, token_name, actor, *, payload=None, revision=None, role=None, timeout=60):
     """One Engine round trip. Returns the raw response; only transport failures raise."""
     token = os.getenv(token_name)
@@ -50,9 +96,12 @@ def _send(method, path, token_name, actor, *, payload=None, revision=None, role=
         headers.update({"x-kaveon-principal": actor, "x-kaveon-role": role})
     if revision is not None:
         headers["If-Match"] = str(revision)
+    # The endpoint is resolved before the client so a missing or malformed
+    # `KAVEON_ENGINE_URL` is still reported as the configuration error it is.
+    url = _endpoint() + path
     try:
-        return httpx.request(method, _endpoint() + path, headers=headers, json=payload,
-                             timeout=timeout, follow_redirects=False, verify=_verify_context())
+        return _client().request(method, url, headers=headers, json=payload,
+                                 timeout=timeout, follow_redirects=False)
     except httpx.TimeoutException:
         # The statement may still be running on the Engine; the caller chose how
         # long it was prepared to wait, so say that rather than "unavailable".

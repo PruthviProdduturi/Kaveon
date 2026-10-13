@@ -85,6 +85,85 @@ class EngineLabQueryTests(unittest.IsolatedAsyncioTestCase):
         execute.assert_called_once_with("SELECT * FROM kavedb.silver.orders", "kavedb", "analyst@example.com", "Analyst", "silver")
 
 
+class DatasetPreviewResolutionTests(unittest.IsolatedAsyncioTestCase):
+    """The dataset page's preview names a catalog, not a source id, so the
+    server resolves the catalog and re-reads the dataset it is authorized to
+    preview. Neither read needs the other's answer."""
+
+    def setUp(self):
+        self.ctx = UserContext("analyst@example.com", "Analyst")
+
+    def _body(self):
+        return LabQueryBody(query="SELECT * FROM silver.orders LIMIT 100", datasetId=13,
+                            database="kavedb", rowLimit=100, runContext="dataset-detail")
+
+    def _preview(self, source, dataset, delay=0.0):
+        """The two control-plane reads the preview makes, each costing `delay`."""
+        def resolve(catalog):
+            time.sleep(delay)
+            return source
+
+        def read(dataset_id, actor, role):
+            time.sleep(delay)
+            self.assertEqual((dataset_id, actor, role), ("13", "analyst@example.com", "Analyst"))
+            return dataset
+
+        return (patch("routers.sql._engine_source_for_catalog", resolve),
+                patch.object(lab.datasets_svc, "get_dataset_by_id", read))
+
+    async def test_the_two_control_plane_reads_are_taken_at_once(self):
+        """Taken in turn, the preview waited out both round trips before the
+        statement was even submitted — and waited on the event loop, so
+        nothing else this process was serving moved either."""
+        resolve, read = self._preview({"engine_catalog": "kavedb"},
+                                      {"database_name": "kavedb", "schema_name": "silver"}, delay=0.2)
+        with resolve, read, patch.object(lab.sql_execute_limiter, "check"), \
+             patch("services.engine_bridge.execute", return_value={"columns": [{"name": "n"}], "data": [[1]]}) as execute, \
+             patch.object(lab.history_svc, "create_history"):
+            started = time.perf_counter()
+            response = await lab.run_query(None, self._body(), self.ctx)
+            elapsed = time.perf_counter() - started
+        self.assertEqual(response["rows"], [[1]])
+        self.assertGreaterEqual(elapsed, 0.2)   # both reads really were made
+        self.assertLess(elapsed, 0.35, "the catalog and dataset reads were taken in series")
+        # The schema is the authorized dataset's, never the browser's.
+        self.assertEqual(execute.call_args.args[4], "silver")
+
+    async def test_a_dataset_the_caller_cannot_read_is_not_previewed(self):
+        resolve, read = self._preview({"engine_catalog": "kavedb"}, None)
+        with resolve, read, patch.object(lab.sql_execute_limiter, "check"), \
+             patch("services.engine_bridge.execute") as execute:
+            with self.assertRaises(HTTPException) as error:
+                await lab.run_query(None, self._body(), self.ctx)
+        self.assertEqual(error.exception.status_code, 404)
+        execute.assert_not_called()
+
+    async def test_a_dataset_bound_to_another_catalog_is_refused(self):
+        resolve, read = self._preview({"engine_catalog": "kavedb"},
+                                      {"database_name": "other", "schema_name": "silver"})
+        with resolve, read, patch.object(lab.sql_execute_limiter, "check"), \
+             patch("services.engine_bridge.execute") as execute:
+            with self.assertRaises(HTTPException) as error:
+                await lab.run_query(None, self._body(), self.ctx)
+        self.assertEqual(error.exception.status_code, 400)
+        execute.assert_not_called()
+
+    async def test_an_unresolved_catalog_keeps_the_legacy_routing_it_had(self):
+        """The dataset read is started alongside the catalog resolution, so a
+        failure in it must not replace the routing the request would have
+        taken when no Engine catalog answers to that name."""
+        def read(dataset_id, actor, role):
+            raise RuntimeError("the control plane refused a read this request never needed")
+
+        with patch("routers.sql._engine_source_for_catalog", lambda catalog: None), \
+             patch.object(lab.datasets_svc, "get_dataset_by_id", read), \
+             patch.object(lab.sql_execute_limiter, "check"), \
+             patch.object(lab, "_require_legacy_data_plane", side_effect=HTTPException(503, "retired")):
+            with self.assertRaises(HTTPException) as error:
+                await lab.run_query(None, self._body(), self.ctx)
+        self.assertEqual(error.exception.status_code, 503)
+
+
 class FakeCoordinator:
     """Answers the bridge's `_send` calls for one paged statement. The
     statement stays RUNNING until `finish()` (or `fail()` / a DELETE)
