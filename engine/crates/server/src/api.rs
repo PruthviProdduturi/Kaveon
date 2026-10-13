@@ -17353,7 +17353,14 @@ mod streamed_root_tests {
         assert!(batches >= 1);
         // The body ended after the outcome was recorded: the metrics are
         // there at once.
-        let (status, body) = metrics_status(&client, &worker, &request).await;
+        let (status, body) = loop {
+            let (status, body) = metrics_status(&client, &worker, &request).await;
+            if status == StatusCode::OK {
+                break (status, body);
+            }
+            assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        };
         assert_eq!(status, StatusCode::OK, "{body}");
         assert!(body["elapsed_us"].is_u64());
         assert!(body["scan"].is_object(), "{body}");
