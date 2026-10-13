@@ -1,7 +1,10 @@
 import unittest
 import unittest.mock
+import sys
+from pathlib import Path
 
-from aks_distributed_compare import merge_stage_execution, summarize_successful_latencies
+sys.path.insert(0, str(Path(__file__).parent))
+from aks_distributed_compare import active_worker_nodes, merge_stage_execution, summarize_successful_latencies
 
 
 class ExecutionSummaryTests(unittest.TestCase):
@@ -122,6 +125,40 @@ class TrinoAuthenticatorWaitTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             engines.wait_trino_authenticators(timeout=60)
         self.assertEqual(len(engines.calls), 1)
+
+
+def _pod(name, node, owner_kind, owner_name, *, ready=False, image_id=None):
+    status = {"phase": "Running", "conditions":
+              ([{"type": "Ready", "status": "True"}] if ready else [])}
+    if image_id:
+        status["containerStatuses"] = [{"imageID": image_id}]
+    return {"metadata": {"namespace": "bench", "name": name, "uid": name + "-uid",
+                          "ownerReferences": [{"kind": owner_kind, "name": owner_name}]},
+            "spec": {"nodeName": node}, "status": status}
+
+
+class FakeKube:
+    namespace = "bench"
+
+    def __init__(self, pods):
+        self._pods = pods
+
+    def pods(self):
+        return self._pods
+
+
+class CoTenantFilteringTests(unittest.TestCase):
+    def test_both_engine_statefulsets_are_excluded_from_baseline(self):
+        image = "docker-pullable://engine@sha256:" + "a" * 64
+        kube = FakeKube([
+            _pod("kaveon-worker-0", "node-a", "StatefulSet", "kaveon-worker", ready=True, image_id=image),
+            _pod("kaveon-worker-1", "node-b", "StatefulSet", "kaveon-worker", ready=True, image_id=image),
+            _pod("trino-worker-0", "node-a", "StatefulSet", "trino-worker"),
+            _pod("metrics", "node-a", "Deployment", "metrics"),
+        ])
+        runtime = active_worker_nodes(kube, "kaveon-worker", 2,
+                                      ("kaveon-worker", "trino-worker"))
+        self.assertEqual(runtime["co_tenants"], ["node-a/bench/metrics"])
 
 
 if __name__ == "__main__":

@@ -192,7 +192,16 @@ def validate_topology(kube, names, worker_count, expected_kaveon_digest):
             "images": {key: image(value) for key, value in objects.items()}}
 
 
-def active_worker_nodes(kube, statefulset_name, worker_count):
+def active_worker_nodes(kube, statefulset_name, worker_count, excluded_statefulsets=()):
+    """Return active worker placement and stable non-engine co-tenants.
+
+    Both benchmark engines share the same worker nodes during the lease.  The
+    inactive engine's StatefulSet is expected to have zero replicas, but a
+    terminating pod can still be visible while the active engine is being
+    brought up.  Exclude both engine StatefulSets so the co-tenant baseline
+    measures unrelated workloads only.
+    """
+    excluded_statefulsets = set(excluded_statefulsets) | {statefulset_name}
     pods = [pod for pod in kube.pods() if pod["metadata"].get("namespace") == kube.namespace
             and any(owner.get("kind") == "StatefulSet" and owner.get("name") == statefulset_name
                     for owner in pod["metadata"].get("ownerReferences", []))]
@@ -210,6 +219,9 @@ def active_worker_nodes(kube, statefulset_name, worker_count):
         owners = pod["metadata"].get("ownerReferences", [])
         phase = pod.get("status", {}).get("phase")
         if phase in {"Succeeded", "Failed"} or any(owner.get("kind") == "DaemonSet" for owner in owners):
+            continue
+        if any(owner.get("kind") == "StatefulSet" and owner.get("name") in excluded_statefulsets
+               for owner in owners):
             continue
         contenders.append(
             f"{pod.get('spec', {}).get('nodeName')}/{pod['metadata'].get('namespace')}/{pod['metadata'].get('name')}"
@@ -516,7 +528,12 @@ def main():
             if not engines.unauthenticated_rejected(engine):
                 raise RuntimeError(f"{engine} accepted an unauthenticated statement")
             report["security_boundaries"][engine] = True
-            runtime = active_worker_nodes(kube, names[f"{engine}_worker"], policy["worker_count"])
+            runtime = active_worker_nodes(
+                kube,
+                names[f"{engine}_worker"],
+                policy["worker_count"],
+                (names["kaveon_worker"], names["trino_worker"]),
+            )
             if report["co_tenant_baseline"] is None:
                 report["co_tenant_baseline"] = runtime["co_tenants"]
             elif runtime["co_tenants"] != report["co_tenant_baseline"]:
