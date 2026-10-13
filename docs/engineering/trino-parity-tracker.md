@@ -256,7 +256,8 @@ qualification documents; this tracker remains the single ordered work list.
   positions; array slices remain an explicit boundary.
 - `ROW(...).field` now lowers to a typed `ROW_FIELD` projection over Arrow
   structs, and map subscript syntax lowers to `ELEMENT_AT` with typed key
-  lookup; row/map comparison remains open.
+  lookup; row equality now compares typed struct fields with SQL null
+  semantics, while ordered row and map comparison remain open.
 - `CARDINALITY` now returns map entry counts as well as array lengths, with
   null map rows preserved as null.
 
