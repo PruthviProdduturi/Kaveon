@@ -82,6 +82,10 @@ foundations, but several operators are still centralized or narrow:
   lexicographic ordering; `MAP(...)` builds Arrow maps with key lookup,
   order-independent equality, and typed key/value projections. Ordered map
   comparison remains open.
+  Numeric array literals currently use the executor's common `Float64`
+  representation so the shipped array operators share one type; preserving
+  Trino's narrower integer element types requires the dependent array operator
+  family to accept those Arrow types together.
   Scalar, DATE, timestamp, and DECIMAL casts are supported; complex cast
   targets fail with typed planner diagnostics. Dereference, `UNNEST`, other
   array operations, and broad JSON operations remain open; scalar extraction
