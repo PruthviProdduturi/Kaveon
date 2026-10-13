@@ -17957,6 +17957,21 @@ mod streamed_root_tests {
         assert_eq!(sum, n * (n - 1) / 2);
     }
 
+    fn assert_grouped_ordered_result_exact(response: &TaskResponse) {
+        assert_eq!(response.columns.len(), 2);
+        assert_eq!(response.data.len(), (ROW_GROUPS * ROWS_PER_GROUP) as usize);
+        let mut previous = None;
+        for row in &response.data {
+            let value = row[0].as_i64().expect("ordered group key");
+            assert_eq!(row[1].as_i64(), Some(1));
+            if let Some(previous) = previous {
+                assert!(previous > value, "rows are not globally ordered");
+            }
+            previous = Some(value);
+        }
+        assert_eq!(previous, Some(0));
+    }
+
     /// Stop `address` the first time a wave holds a task of `stage`.
     fn stop_worker_when_stage_dispatches(query_id: &str, stage: u32, address: String) {
         let probe: DispatchProbe = Arc::new(move |dispatches: &[TaskDispatch]| {
@@ -18079,6 +18094,35 @@ mod streamed_root_tests {
         retried.sort_unstable();
         assert_eq!(retried, vec![(0, 0, "worker-a", 1), (0, 1, "worker-a", 1)]);
         DISPATCH_PROBES.lock().unwrap().remove("q-loss-during");
+        for server in servers {
+            server.abort();
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_worker_loss_preserves_global_order_after_grouped_aggregate() {
+        let directory =
+            std::env::temp_dir().join(format!("kaveon-loss-ordered-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let (state, servers, workers) = cluster_with_stage_retry_limit(
+            &directory,
+            crate::orchestrator::DEFAULT_STAGE_RETRY_LIMIT,
+        )
+        .await;
+        stop_worker_when_stage_dispatches("q-loss-ordered", 1, workers[1].address.clone());
+        let (response, _, _, recovery) = run_inline_statement(
+            &state,
+            "q-loss-ordered",
+            "SELECT v, COUNT(*) AS c FROM numbers GROUP BY v ORDER BY v DESC",
+        )
+        .await
+        .expect("the ordered statement completes");
+        assert_grouped_ordered_result_exact(&response);
+        let recovery = recovery.expect("the loss is on the record");
+        assert_eq!(recovery.lost_workers, vec!["worker-b"]);
+        assert!(!recovery.reexecuted_stages.is_empty());
+        DISPATCH_PROBES.lock().unwrap().remove("q-loss-ordered");
         for server in servers {
             server.abort();
         }
