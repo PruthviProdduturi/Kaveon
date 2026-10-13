@@ -120,6 +120,10 @@ foundations, but several operators are still centralized or narrow:
   preserves nullable boolean results. `MAP_CONCAT` now merges supported typed
   maps with later values winning duplicate keys, and `MAP_ENTRIES` exposes the
   typed key/value rows as an array.
+- `QUALIFY` now has an exact-result distributed differential case using
+  partitioned `ROW_NUMBER()` output. This qualifies the implemented
+  row-number filter shape only; other window frames and unsupported window
+  clauses remain subject to the broader corpus.
 - There is no Trino-style cross-source federation yet. Registered SQL sources
   are API passthrough paths, while the strongest native Engine path is
   Parquet/Delta/Iceberg. The connector matrix now records S3 as implemented

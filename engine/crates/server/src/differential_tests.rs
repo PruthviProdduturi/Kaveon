@@ -404,6 +404,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "qualify_partitioned_row_number",
+        "SELECT country, region, actions, ROW_NUMBER() OVER (PARTITION BY region ORDER BY actions DESC, country) AS rn FROM {T} QUALIFY rn = 1 ORDER BY region, country",
+        true,
+    ),
+    (
         "count_star_filter_only",
         "SELECT COUNT(*) AS n FROM {T} WHERE surface = 'Chat' AND country = 'India' AND event_date >= '2026-07-20'",
         false,
