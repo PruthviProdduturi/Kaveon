@@ -208,6 +208,8 @@ qualification documents; this tracker remains the single ordered work list.
   runtime requirement (`72c7e302`).
 - Running exchange cancellation now marks all dependent stages terminal,
   drains queued work, and emits one idempotent cleanup intent (`c2ea4da2`).
+- Cancelled exchange spools now reject late producer appends with `Interrupted`,
+  preventing post-cancellation writes and quota charging (`b9b9c450`).
 - `ROW(...)` and `MAP(...)` constructors now lower and execute as typed Arrow
   struct/map values; dereference, lookup, and row/map comparison remain typed
   complex-type boundaries (`12d44965`, `8ae24b96`).
@@ -287,7 +289,7 @@ qualification documents; this tracker remains the single ordered work list.
 
 ### Current focused validation
 
-The latest focused validation passes 331 `kaveon-server` tests, 109
+The latest focused validation passes 332 `kaveon-server` tests, 109
 `kaveon-sql` tests, and 236 `kaveon-exec` tests (four executor benchmarks are
 ignored). The repository differential gate
 (`differential_tests::the_differential_sweep_matches_across_parquet_encodings_and_execution_paths`)
