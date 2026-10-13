@@ -33,7 +33,7 @@ Workstreams **1** and **2** begin in parallel. Workstreams **3**, **4**, and
 **7** are being audited in parallel so implementation work is measured against
 the same acceptance contract rather than separate informal benchmarks.
 
-## Audit snapshot — October 12, 2026
+## Audit snapshot — October 13, 2026
 
 The local parity baseline was rerun from commit `01cb2082` on October 12:
 `cargo test -p kaveon-server` passed **342/342** tests,
@@ -42,6 +42,13 @@ The local parity baseline was rerun from commit `01cb2082` on October 12:
 benchmark tests intentionally ignored. Documentation validation also passed for 139 Markdown
 files, 39 routes, and 9 SVGs. This is an in-process regression baseline; it
 does not replace the deployed three-worker qualification gates listed below.
+
+The complete `cargo test --workspace` run also passed on this tree, including
+catalog, CLI, core, executor, optimizer, server, SQL, and storage crates plus
+all doctests. The executor result is **269 passed, 4 ignored**; the ignored
+cases are explicitly marked release benchmarks. This workspace result is
+repository-wide regression evidence, not a substitute for the deployed
+three-worker and connector qualification gates.
 
 Temporal `ARRAY[...]` literals now preserve DATE32, DATE64, TIME32 second and
 millisecond, and TIMESTAMP microsecond element types, including null elements;
@@ -404,11 +411,6 @@ also passes, comparing the same corpus across alternate Parquet encodings and
 local/distributed execution paths. These are package-level and in-process
 qualification snapshots; they do not close the broader multi-worker, AKS, or
 cross-connector qualification gates below.
-
-The complete Rust workspace suite also passes from the current HEAD, including
-the storage, optimizer, planner, exchange, CLI, server, and SQL packages. This
-is repository-wide regression evidence, not a replacement for deployed cloud
-qualification.
 
 The distributed failure subset is also green in-process: seven retry and
 worker-loss tests, six spill/recovery tests, and two cancellation tests passed.
