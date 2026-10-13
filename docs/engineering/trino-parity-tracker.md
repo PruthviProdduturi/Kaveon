@@ -37,7 +37,7 @@ the same acceptance contract rather than separate informal benchmarks.
 
 The local parity baseline was rerun from commit `01cb2082` on October 12:
 `cargo test -p kaveon-server` passed **342/342** tests,
-`cargo test -p kaveon-sql` passed **114/114** tests, and
+`cargo test -p kaveon-sql` passed **115/115** tests, and
 `cargo test -p kaveon-exec --lib` passed **269/269** non-ignored tests with four
 benchmark tests intentionally ignored. Documentation validation also passed for 139 Markdown
 files, 39 routes, and 9 SVGs. This is an in-process regression baseline; it
@@ -149,7 +149,9 @@ foundations, but several operators are still centralized or narrow:
   targets fail with typed planner diagnostics. `value IN UNNEST(array)` and
   its `NOT IN` form lower to the existing nullable `CONTAINS` path; row-
   producing `UNNEST` in `FROM`, dereference, and other array operations remain
-  open. `JSON_EXTRACT` now preserves objects, arrays,
+  open. Equality quantified predicates `= ANY(array)` and `<> ALL(array)` use
+  the same exact membership path; other quantified comparisons fail explicitly.
+  `JSON_EXTRACT` now preserves objects, arrays,
   and JSON nulls as serialized JSON text; `JSON_EXTRACT_SCALAR` supports dotted
   object paths and numeric array subscripts. Invalid JSON and missing paths
   return NULL; `JSON_ARRAY_LENGTH` returns nullable lengths for JSON arrays and
@@ -405,7 +407,7 @@ qualification documents; this tracker remains the single ordered work list.
 
 ### Current focused validation
 
-The latest focused validation passes 342 `kaveon-server` tests, 114
+The latest focused validation passes 342 `kaveon-server` tests, 115
 `kaveon-sql` tests, and 269 `kaveon-exec` library tests (four executor
 benchmarks are ignored). The repository differential gate
 (`differential_tests::the_differential_sweep_matches_across_parquet_encodings_and_execution_paths`)

@@ -2039,6 +2039,32 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
             }
         }
 
+        // The equality forms of quantified array predicates are equivalent
+        // to membership and can use the same vectorized, nullable path.
+        // Other comparison operators need a reduction over every element
+        // (including Trino's empty-array and NULL rules), so reject them
+        // explicitly rather than silently changing their meaning.
+        ast::Expr::AnyOp {
+            left,
+            compare_op: ast::BinaryOperator::Eq,
+            right,
+            ..
+        } => Ok(Expr::Function {
+            name: "CONTAINS".into(),
+            args: vec![ast_expr_to_expr(right)?, ast_expr_to_expr(left)?],
+        }),
+        ast::Expr::AllOp {
+            left,
+            compare_op: ast::BinaryOperator::NotEq,
+            right,
+        } => Ok(Expr::Not(Box::new(Expr::Function {
+            name: "CONTAINS".into(),
+            args: vec![ast_expr_to_expr(right)?, ast_expr_to_expr(left)?],
+        }))),
+        ast::Expr::AnyOp { .. } | ast::Expr::AllOp { .. } => Err(sql_err(
+            "only = ANY(array) and <> ALL(array) are supported; other quantified comparisons are unsupported",
+        )),
+
         // A DATE literal is its day number: the Engine's date columns are
         // days since the epoch, so `EventDate >= DATE '2013-07-01'` compares
         // integers with integers.
@@ -4435,6 +4461,30 @@ mod tests {
             inner.as_ref(),
             Expr::Function { name, .. } if name == "CONTAINS"
         )));
+    }
+
+    #[test]
+    fn lowers_supported_quantified_array_comparisons() {
+        for (sql, negated) in [
+            ("SELECT 2 = ANY(ARRAY[1, 2]) FROM t", false),
+            ("SELECT 3 <> ALL(ARRAY[1, 2]) FROM t", true),
+        ] {
+            let plan = sql_to_logical_plan(sql).unwrap();
+            let LogicalPlan::Project { columns, .. } = plan else {
+                panic!("projection");
+            };
+            let expression = if negated {
+                match &columns[0] {
+                    Expr::Not(inner) => inner.as_ref(),
+                    other => panic!("expected NOT, got {other:?}"),
+                }
+            } else {
+                &columns[0]
+            };
+            assert!(matches!(expression, Expr::Function { name, .. } if name == "CONTAINS"));
+        }
+        let error = sql_to_logical_plan("SELECT 2 > ANY(ARRAY[1, 2]) FROM t").unwrap_err();
+        assert!(error.to_string().contains("only = ANY(array)"));
     }
 
     #[test]
