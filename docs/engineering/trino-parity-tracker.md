@@ -76,8 +76,8 @@ foundations, but several operators are still centralized or narrow:
   nullable execution coverage.
 - Numeric array literals are supported as null-preserving Arrow lists, and
   `CARDINALITY` returns their nullable list length; `ROW(...)` now produces
-  typed Arrow structs, while maps, field dereference, and row comparison remain
-  open. `MAP(...)` still fails with a typed planner diagnostic. Scalar, DATE,
+  typed Arrow structs; `MAP(...)` now builds Arrow maps from matching key/value
+  lists. Field dereference, lookup, and row/map comparison remain open. Scalar, DATE,
   timestamp,
   and DECIMAL casts are supported; complex cast targets fail with typed
   planner diagnostics. Dereference, `UNNEST`, other array operations, and
@@ -238,13 +238,14 @@ qualification documents; this tracker remains the single ordered work list.
   primitive, date/time, and decimal targets; invalid values become NULL while
   valid values in the same batch remain intact (`6e4a8a44`).
 - `ROW(...)` constructors now produce typed Arrow `StructArray` values with
-  null-preserving child fields; map construction and struct dereference remain
+  null-preserving child fields. `MAP(...)` now produces Arrow `MapArray` values
+  from matching list offsets and rejects NULL keys; dereference and lookup remain
   explicit complex-type gaps.
 
 ### Current focused validation
 
-The latest focused validation passes 330 `kaveon-server` tests, 103
-`kaveon-sql` tests, and 219 `kaveon-exec` tests. These counts are package-level
+The latest focused validation passes 330 `kaveon-server` tests, 104
+`kaveon-sql` tests, and 220 `kaveon-exec` tests. These counts are package-level
 validation snapshots; they do not close the broader multi-worker, AKS, or
 cross-connector qualification gates below.
 
