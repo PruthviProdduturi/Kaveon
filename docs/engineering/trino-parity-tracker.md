@@ -357,6 +357,16 @@ bounded RSS growth, and surviving-worker health all passed. The run recorded a
 snapshot, but it is not AKS evidence: it uses the local binary and fixture and
 does not qualify Azure storage, TLS, network policy, or node-drain behavior.
 
+The deployed AKS gate also passed on 2026-10-12 after scaling `kaveon-aks` to
+three user workers. Nine concurrent exact queries, twelve bounded-pressure
+requests, an intentional worker termination during a 504M-row distributed scan,
+replacement-worker catalog compatibility, retry identity, exact recovery, and
+post-recovery probing all passed on the immutable Engine image recorded in
+`docs/qualification/engine-aks-fault-pressure-2026-10-12.json`. This closes the
+deployed worker-loss and bounded-pressure gate for that image; node drain,
+coordinator restart, sustained soak, and cloud-storage fault injection remain
+open.
+
 The distributed/local join-mode differential now also includes an inner
 residual predicate (`key equality AND value inequality`); local and
 distributed result sets match and all reservations are released.

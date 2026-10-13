@@ -361,9 +361,9 @@ def main() -> int:
     parser.add_argument("--pressure-rounds", type=int, default=3)
     parser.add_argument(
         "--profile",
-        choices=("nyc", "medallion"),
-        default="nyc",
-        help="qualification dataset profile (nyc is the legacy OpenSource fixture)",
+        choices=("current", "nyc", "medallion"),
+        default="current",
+        help="qualification dataset profile (current is OpenSource.public)",
     )
     parser.add_argument("--fixture", type=Path, default=Path("tmp/aks-medallion"), help="medallion fixture used for exact expectations")
     args = parser.parse_args()
@@ -456,7 +456,7 @@ def main() -> int:
                     "sql": "SELECT status, COUNT(*), SUM(amount_cents) FROM orders GROUP BY status ORDER BY status",
                 }
                 known_input_rows = fixture_expectations["order_totals"][0][0]
-            else:
+            elif args.profile == "nyc":
                 catalog_name = "OpenSource"
                 schema_name = None
                 exact_cases = [
@@ -476,6 +476,48 @@ def main() -> int:
                     "sql": "SELECT PULocationID, COUNT(*), SUM(VendorID) FROM yellow_trips GROUP BY PULocationID ORDER BY PULocationID",
                 }
                 known_input_rows = YELLOW_ROWS
+            else:
+                # The current showcase catalog is OpenSource.public. Keep
+                # these counts tied to the immutable catalog evidence rather
+                # than deriving expectations from the same query under test.
+                # The 504M-row count is intentionally used as the fault case:
+                # it creates a real distributed scan window in which the
+                # harness can terminate one worker and verify stage recovery.
+                catalog_name = "OpenSource"
+                schema_name = "public"
+                exact_cases = [
+                    {
+                        "name": "dashboard_count",
+                        "schema": schema_name,
+                        "sql": "SELECT COUNT(*) FROM kaveon_events_dashboard",
+                        "expected": [[24]],
+                    },
+                    {
+                        "name": "borough_count",
+                        "schema": schema_name,
+                        "sql": "SELECT COUNT(*) FROM nyc_taxi_borough",
+                        "expected": [[5]],
+                    },
+                    {
+                        "name": "enriched_count",
+                        "schema": schema_name,
+                        "sql": "SELECT COUNT(*) FROM kaveon_events_enriched",
+                        "expected": [[504_000_000]],
+                    },
+                ]
+                fault_case = {
+                    "name": "enriched_scan_fault",
+                    "schema": schema_name,
+                    # The predicate prevents the statistics/context fast path
+                    # so the scan creates real worker tasks for loss recovery.
+                    "sql": "SELECT COUNT(*) FROM kaveon_events_enriched WHERE actions >= 0",
+                }
+                pressure_case = {
+                    "name": "enriched_group_pressure",
+                    "schema": schema_name,
+                    "sql": "SELECT region, COUNT(*), SUM(actions) FROM kaveon_events_enriched GROUP BY region ORDER BY region",
+                }
+                known_input_rows = 504_000_000
 
             for case in [*exact_cases, fault_case, pressure_case]:
                 case["catalog"] = catalog_name
@@ -496,7 +538,7 @@ def main() -> int:
             concurrent_ok = len(concurrent_results) == len(exact_cases) * args.concurrent_rounds and all(
                 item["exact"]
                 and (
-                    args.profile == "medallion"
+                    args.profile in {"medallion", "current"}
                     or (item.get("stage_count", 0) >= 2 and item.get("worker_ids"))
                 )
                 for item in concurrent_results

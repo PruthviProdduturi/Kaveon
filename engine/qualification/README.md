@@ -144,6 +144,17 @@ Expand qualification to typed numeric semantics, randomized/property cases,
 cloud snapshots, constrained memory, concurrency, skew, worker loss, retries,
 and cancellation before making production-readiness claims.
 
+The fault/pressure verifier's `current` profile targets the current
+`OpenSource.public` catalog and its documented showcase row counts. Use it for
+the current AKS deployment; `nyc` and `medallion` remain compatibility profiles
+for older fixtures:
+
+```powershell
+python scripts/qualify-aks-fault-pressure.py `
+  --context kaveon-aks --namespace kaveon --profile current `
+  --output tmp/aks-fault-pressure/report.json
+```
+
 ## Combined PostgreSQL and Trino publication gate
 
 `comparison_gate.py` combines two independent reports and fails closed. The
