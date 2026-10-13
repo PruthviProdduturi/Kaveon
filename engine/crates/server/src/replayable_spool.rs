@@ -156,6 +156,16 @@ impl ReplayableSpool {
 
 impl SpoolWriter {
     pub fn append(&mut self, bytes: &[u8]) -> io::Result<()> {
+        if self
+            .inner
+            .cancelled
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "spool is cancelled",
+            ));
+        }
         let mut state = self.inner.state.lock().expect("spool state poisoned");
         if state.finished {
             return Err(io::Error::new(
@@ -350,6 +360,17 @@ mod tests {
         thread::sleep(Duration::from_millis(20));
         spool.cancel();
         assert_eq!(task.join().unwrap(), io::ErrorKind::Interrupted);
+    }
+
+    #[test]
+    fn cancellation_stops_late_writer_appends_without_charging_bytes() {
+        let (spool, mut writer) = ReplayableSpool::new(32).unwrap();
+        spool.cancel();
+        assert_eq!(
+            writer.append(b"late payload").unwrap_err().kind(),
+            io::ErrorKind::Interrupted
+        );
+        assert_eq!(spool.bytes(), 0);
     }
 
     #[test]
