@@ -1750,6 +1750,73 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .collect();
             Ok(Arc::new(result))
         }
+        "ARRAY_POSITION" => {
+            check_arity(name, args, 2)?;
+            let list = args[0]
+                .as_any()
+                .downcast_ref::<arrow::array::ListArray>()
+                .ok_or_else(|| {
+                    KaveonError::Execution(
+                        "ARRAY_POSITION currently supports ARRAY/List values only".into(),
+                    )
+                })?;
+            let result = match list.value_type() {
+                DataType::Float64 => {
+                    let needle = compute::cast(&args[1], &DataType::Float64)?;
+                    let needle = needle.as_primitive::<Float64Type>();
+                    (0..num_rows)
+                        .map(|row| {
+                            if list.is_null(row) {
+                                return None;
+                            }
+                            let values = list.value(row);
+                            let values = values.as_primitive::<Float64Type>();
+                            (0..values.len())
+                                .find(|&index| {
+                                    if needle.is_null(row) {
+                                        values.is_null(index)
+                                    } else {
+                                        !values.is_null(index)
+                                            && values.value(index) == needle.value(row)
+                                    }
+                                })
+                                .map(|index| index as i64 + 1)
+                                .or(Some(0))
+                        })
+                        .collect::<Vec<_>>()
+                }
+                DataType::Utf8 => {
+                    let needle = compute::cast(&args[1], &DataType::Utf8)?;
+                    let needle = needle.as_string::<i32>();
+                    (0..num_rows)
+                        .map(|row| {
+                            if list.is_null(row) {
+                                return None;
+                            }
+                            let values = list.value(row);
+                            let values = values.as_string::<i32>();
+                            (0..values.len())
+                                .find(|&index| {
+                                    if needle.is_null(row) {
+                                        values.is_null(index)
+                                    } else {
+                                        !values.is_null(index)
+                                            && values.value(index) == needle.value(row)
+                                    }
+                                })
+                                .map(|index| index as i64 + 1)
+                                .or(Some(0))
+                        })
+                        .collect::<Vec<_>>()
+                }
+                other => {
+                    return Err(KaveonError::Execution(format!(
+                        "ARRAY_POSITION does not support list element type {other}"
+                    )));
+                }
+            };
+            Ok(Arc::new(Int64Array::from(result)))
+        }
         "STRPOS" | "POSITION" => {
             check_arity(name, args, 2)?;
             let arr = as_string_array(&args[0])?;
@@ -3839,6 +3906,77 @@ mod tests {
         };
         let result = evaluate(&expr, &batch).unwrap();
         assert_eq!(result.as_boolean().iter().collect::<Vec<_>>(), vec![Some(true), Some(true)]);
+    }
+
+    #[test]
+    fn evaluates_array_position_for_numeric_and_string_lists() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+        )])
+        .unwrap();
+        let numeric = Expr::Function {
+            name: "ARRAY_POSITION".into(),
+            args: vec![
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![
+                        Expr::Literal(ScalarValue::Int64(4)),
+                        Expr::Literal(ScalarValue::Float64(2.5)),
+                        Expr::Literal(ScalarValue::Int64(4)),
+                    ],
+                },
+                Expr::Literal(ScalarValue::Float64(2.5)),
+            ],
+        };
+        let numeric_result = evaluate(&numeric, &batch).unwrap();
+        assert_eq!(
+            numeric_result.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+            vec![Some(2), Some(2)]
+        );
+
+        let string = Expr::Function {
+            name: "ARRAY_POSITION".into(),
+            args: vec![
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![
+                        Expr::Literal(ScalarValue::Utf8("red".into())),
+                        Expr::Literal(ScalarValue::Utf8("blue".into())),
+                    ],
+                },
+                Expr::Literal(ScalarValue::Utf8("green".into())),
+            ],
+        };
+        let string_result = evaluate(&string, &batch).unwrap();
+        assert_eq!(
+            string_result.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+            vec![Some(0), Some(0)]
+        );
+    }
+
+    #[test]
+    fn array_position_matches_null_elements() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        let expr = Expr::Function {
+            name: "ARRAY_POSITION".into(),
+            args: vec![
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![
+                        Expr::Literal(ScalarValue::Int64(1)),
+                        Expr::Literal(ScalarValue::Null),
+                    ],
+                },
+                Expr::Literal(ScalarValue::Null),
+            ],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        assert_eq!(result.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(), vec![Some(2)]);
     }
 
     #[test]
