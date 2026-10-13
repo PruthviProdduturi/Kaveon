@@ -7064,7 +7064,11 @@ fn schedule_statistics_refresh(state: &Arc<AppState>, relation: &PlannedRelation
     let (Some(table_id), Some(statistics)) = (&relation.table_id, &relation.statistics) else {
         return;
     };
-    let key = table_id.as_str().to_owned();
+    // The refresh registry is process-global, while tests and embedded users
+    // can host independent catalog stores in one process. Table IDs are only
+    // unique within a catalog, so include the source location to prevent one
+    // store from suppressing another store's refresh.
+    let key = format!("{}:{}", table_id.as_str(), relation.location);
     if !STATISTICS_REFRESHES.lock().unwrap().insert(key.clone()) {
         return;
     }
@@ -7114,7 +7118,9 @@ fn schedule_cube_refresh(state: &Arc<AppState>, relation: &PlannedRelation) {
     let (Some(table_id), Some(cube)) = (&relation.table_id, &relation.cube) else {
         return;
     };
-    let key = table_id.as_str().to_owned();
+    // See `schedule_statistics_refresh`: catalog table IDs are scoped to a
+    // store, not globally unique across embedded AppState instances.
+    let key = format!("{}:{}", table_id.as_str(), relation.location);
     if !CUBE_REFRESHES.lock().unwrap().insert(key.clone()) {
         return;
     }

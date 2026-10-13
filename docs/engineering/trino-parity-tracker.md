@@ -84,6 +84,10 @@ foundations, but several operators are still centralized or narrow:
   nullable execution coverage. `MIN` and `MAX` over timestamp columns now
   preserve the input unit/timezone and exact integer values, including grouped
   and null-only groups (`178c3bdb`).
+- Background statistics and cube refresh deduplication now scopes its
+  process-local registry by table and source location. Independent embedded
+  catalog stores can no longer suppress one another's refresh, which removes a
+  parallel-test and multi-store stale-statistics race.
 - Numeric, text, and boolean array literals are supported as null-preserving
   typed Arrow lists. `CARDINALITY`, `CONTAINS`, `ARRAY_POSITION`,
   positive/negative-stride slices, and `ELEMENT_AT` cover those list types;
