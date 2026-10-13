@@ -97,8 +97,10 @@ foundations, but several operators are still centralized or narrow:
   properties), recognizes the encoded
   `X-Trino-Prepared-Statement` SQL header, binds scalar `EXECUTE ... USING`
   values through the typed binder, and emits `nextUri`/`stats`-shaped
-  responses. Compound prepared literals and the full prepare/describe/bind
-  wire protocol remain open.
+  responses. Malformed prepared headers now fail closed with a structured
+  `INVALID_PREPARED_STATEMENT` response rather than silently falling back to
+  the request body. Compound prepared literals and the full
+  prepare/describe/bind wire protocol remain open.
   Prepared-parameter discovery now also ignores PostgreSQL `::type` casts,
   so cast names cannot be mistaken for named bindings (`617b69f6`).
   Uncorrelated aggregate scalar subqueries in `WHERE` are now supported with
