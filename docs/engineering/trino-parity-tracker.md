@@ -354,10 +354,10 @@ invalidation, isolation, bounds, and restart evidence listed above.
   (`b2054d10` plus the follow-up execution coverage).
 - `CARDINALITY(ARRAY[...])` now parses and evaluates to a nullable `Int64`
   list length, with explicit rejection for non-list values (`1c0e29e5`).
-- Numeric-array `CONTAINS(array, value)` now preserves nullable SQL boolean
-  semantics for null arrays, search values, and elements, with planner and
-  executor coverage (`b2054d10`). Broader element types and array operations
-  remain outside the current typed expression model.
+- `CONTAINS(array, value)` now preserves nullable SQL boolean semantics for
+  null arrays, search values, and elements across numeric, nested list, row,
+  and map values, with planner and executor coverage (`b2054d10`). Unsupported
+  element types retain explicit diagnostics.
 - `ARRAY_POSITION(array, value)` now returns the first 1-based position, `0`
   when a value is absent, and matches null elements for numeric, text, nested
   list, row, and map values; null list inputs remain null. Unsupported list

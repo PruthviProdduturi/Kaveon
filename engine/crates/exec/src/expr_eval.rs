@@ -2638,6 +2638,38 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     .as_any()
                     .downcast_ref::<arrow::array::ListArray>()
                     .expect("list data type must be ListArray");
+                if matches!(
+                    list.value_type(),
+                    DataType::List(_)
+                        | DataType::LargeList(_)
+                        | DataType::Struct(_)
+                        | DataType::Map(_, _)
+                ) {
+                    let result = (0..num_rows)
+                        .map(|row| {
+                            if list.is_null(row) || args[1].is_null(row) {
+                                return None;
+                            }
+                            let values = list.value(row);
+                            let needle = args[1].slice(row, 1);
+                            let mut saw_null = false;
+                            for index in 0..values.len() {
+                                if values.is_null(index) {
+                                    saw_null = true;
+                                    continue;
+                                }
+                                if comparison(&values.slice(index, 1), &needle, CompareKind::Eq)
+                                    .map(|equal| !equal.is_null(0) && equal.value(0))
+                                    .unwrap_or(false)
+                                {
+                                    return Some(true);
+                                }
+                            }
+                            if saw_null { None } else { Some(false) }
+                        })
+                        .collect::<BooleanArray>();
+                    return Ok(Arc::new(result));
+                }
                 macro_rules! contains_primitive {
                     ($ty:ty, $data_type:expr) => {{
                         let needle = compute::cast(&args[1], &$data_type)?;
@@ -6776,6 +6808,34 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.as_primitive::<Int64Type>().value(0), 2);
+    }
+
+    #[test]
+    fn contains_matches_nested_row_elements_with_null_propagation() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        let row = |value: i64| Expr::Function {
+            name: "ROW".into(),
+            args: vec![Expr::Literal(ScalarValue::Int64(value))],
+        };
+        let result = evaluate(
+            &Expr::Function {
+                name: "CONTAINS".into(),
+                args: vec![
+                    Expr::Function {
+                        name: "ARRAY".into(),
+                        args: vec![row(4), row(9)],
+                    },
+                    row(9),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(result.as_boolean().value(0), true);
     }
 
     #[test]
