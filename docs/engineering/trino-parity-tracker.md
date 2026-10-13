@@ -289,6 +289,9 @@ qualification documents; this tracker remains the single ordered work list.
 - The same corpus now checks `MAP_ELEMENT_AT` and order-independent map
   equality on scalar results across those encodings and execution paths;
   ordered map comparisons and map-valued result materialization remain open.
+- Date-array construction, cardinality, and positional lookup are also covered
+  in the same differential paths; timestamp/decimal arrays and complex-valued
+  result materialization still require their own qualification.
 - Three-worker global `ORDER BY`/TopN centralized merge correctness is now
   qualified for NULL ordering and ties against a single-partition reference
   (`bb788709`). The input remains distributed, while the exact global merge
