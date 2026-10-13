@@ -1,4 +1,4 @@
-# Rebuilding the telemetry table: `events.enriched` → `events.activity`
+# Rebuilding the telemetry table: `events.enriched` → `events.daily_user_activity`
 
 **Status:** the generator change is **implemented and tested**. The live
 migration is **written, not run** — nothing in this change has touched the
@@ -121,7 +121,7 @@ construction, and `verify` asserted that product against a hardcoded
 10. **Constants point at the table's real home.** `ACCOUNT/CONTAINER/REMOTE`
     were still `opensource/snapshots/2026-09-09-v1/public/kaveon_events_enriched`,
     which the table left when `KaveonTelemetry` was registered. They are now
-    `kaveonlake / telemetry / events/activity`.
+    `kaveonlake / telemetry / events/daily_user_activity`.
 
 `scripts/append-events.py` — imports the presence model and the identifiers
 rather than holding its own copies, so an appended day is as ragged as a built
@@ -261,7 +261,7 @@ a text key costs no more than an integer did.
 
 ```
 python scripts/build_kaveon_events_table.py plan
-python scripts/build_kaveon_events_table.py build          # hours; writes data/adls-mirror/telemetry/events/activity
+python scripts/build_kaveon_events_table.py build          # hours; writes data/adls-mirror/telemetry/events/daily_user_activity
 python scripts/build_kaveon_events_table.py convert
 ```
 
@@ -277,7 +277,7 @@ az login
 python scripts/build_kaveon_events_table.py upload
 ```
 
-Publishes to `kaveonlake / telemetry / events/activity`. It **refuses** if that
+Publishes to `kaveonlake / telemetry / events/daily_user_activity`. It **refuses** if that
 location already holds a `_delta_log`, so it cannot overwrite
 `events/enriched`. Parts go up first, are listed back and confirmed
 byte-for-byte, and only then is the commit written — so the location is not a
@@ -295,7 +295,7 @@ python scripts/register-events-activity-table.py                   # preflight
 python scripts/register-events-activity-table.py --apply --shape
 ```
 
-Adds `KaveonTelemetry.events.activity` beside `enriched` and `dashboard`,
+Adds `KaveonTelemetry.events.daily_user_activity` beside `enriched` and `dashboard`,
 verifies it by registration probe *and* by `COUNT(*)` through the catalog
 against the manifest, and declares the cube shape. Reversible with
 `DELETE /api/v1/engine/catalog/tables/{table_id}`.
@@ -306,12 +306,12 @@ moves:
 
 ```sql
 SELECT COUNT(*), COUNT(DISTINCT user_id), MIN(event_date), MAX(event_date)
-FROM events.activity;
+FROM events.daily_user_activity;
 
-SELECT event_date, COUNT(*) FROM events.activity
+SELECT event_date, COUNT(*) FROM events.daily_user_activity
 GROUP BY event_date ORDER BY event_date;
 
-SELECT user_id, COUNT(*) FROM events.activity
+SELECT user_id, COUNT(*) FROM events.daily_user_activity
 GROUP BY user_id ORDER BY COUNT(*) DESC LIMIT 5;
 ```
 
@@ -321,7 +321,7 @@ Off the request path, inside the API container, with the host resized up first
 (`docs/engineering/lake-delta-and-cube.md` has the resize and the reasoning):
 
 ```python
-engine_bridge.analyze_table("KaveonTelemetry", "events", "activity",
+engine_bridge.analyze_table("KaveonTelemetry", "events", "daily_user_activity",
                             actor, "Admin", sketches=True, distinct=True,
                             cube=True, timeout=10_800)
 ```
@@ -367,7 +367,7 @@ kubectl -n kaveon get pod -l app=kaveon-api -w
 
 ### Step 6 — verify before retiring anything
 
-- The Data catalog page lists `events.activity` as measured, with its row count.
+- The Data catalog page lists `events.daily_user_activity` as measured, with its row count.
 - All 34 charts render, and the 9 user-count charts show ~14.6M rather than 3M.
 - The home page's ask path answers "total actions by surface" and "active users
   by region" from context, not from a full scan.
@@ -420,7 +420,7 @@ Out of this change's file scope; listed so they are not forgotten:
 | Shape gates in `plan`/`build` | ✓ | — |
 | `upload` refusing a non-empty destination | ✓ | — |
 | Table named `activity` | ✓ | register table, re-point dataset, retire old |
-| Dataset bound to `KaveonTelemetry.events.activity` | — | step 4 |
+| Dataset bound to `KaveonTelemetry.events.daily_user_activity` | — | step 4 |
 | `user_id` declared `varchar` | — | step 4 |
 | Cube and statistics | — | step 3 |
 | DLM context | — | step 5 |

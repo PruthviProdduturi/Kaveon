@@ -1,7 +1,7 @@
 """Append a day of events to the lake, and let the platform notice by itself.
 
 This is the incremental half of the events dataset. It adds one day of rows to
-`KaveonTelemetry.events.activity` as a Delta append and then stops: nothing
+`KaveonTelemetry.events.daily_user_activity` as a Delta append and then stops: nothing
 downstream is told to refresh, because everything downstream already watches
 the table's source version.
 
@@ -68,10 +68,10 @@ from build_kaveon_events_table import (  # noqa: E402
 # The table's own copy on disk. Delta needs the existing log to append to it,
 # and building the commit locally means only the new objects are uploaded.
 TABLE = Path(__file__).resolve().parents[1] / "data" / "adls-mirror" / "telemetry" / \
-    "events" / "activity"
+    "events" / "daily_user_activity"
 ACCOUNT = "kaveonlake"
 CONTAINER = "telemetry"
-REMOTE = "events/activity"
+REMOTE = "events/daily_user_activity"
 
 AZ = shutil.which("az") or shutil.which("az.cmd") or "az.cmd"
 
