@@ -154,6 +154,10 @@ qualification documents; this tracker remains the single ordered work list.
   `List<Float64>` values with parser and executor coverage (`b1fe824f`).
 - `CARDINALITY(ARRAY[...])` now parses and evaluates to a nullable `Int64`
   list length, with explicit rejection for non-list values (`1c0e29e5`).
+- Numeric-array `CONTAINS(array, value)` now preserves nullable SQL boolean
+  semantics for null arrays, search values, and elements, with planner and
+  executor coverage (`b2054d10`). Broader element types and array operations
+  remain outside the current typed expression model.
 - Three-worker global `ORDER BY`/TopN centralized merge correctness is now
   qualified for NULL ordering and ties against a single-partition reference
   (`bb788709`). The input remains distributed, while the exact global merge
