@@ -153,6 +153,43 @@ api:
     # one accident blob soft delete does not cover.
     container: backups
     timeoutSeconds: 600
+  # Scheduled recompile of DLM context whose source has changed.
+  #
+  # What Studio reports about a dataset — its row count, its date range, the
+  # values it can answer without a scan — is recorded when its context is
+  # compiled, not measured when it is read. A table taking a daily append
+  # therefore keeps reporting yesterday's numbers: the data moved, the product
+  # catalog did not, and nothing said the recorded figures were now wrong.
+  #
+  # `check_freshness` compares the source identity the artifact recorded
+  # against the table's current one, so staleness is a fact rather than an
+  # estimate. Nothing acted on it unattended, though: the in-process sweep
+  # thread returns immediately whenever the PostgreSQL-free runtime is
+  # requested, and it has no identity to read compiled artifacts with. This is
+  # what closes that loop.
+  #
+  # A compile that finds nothing stale reads the artifacts and exits, so the
+  # interval costs a freshness check per dataset and no writes. Hourly: a
+  # daily-append table is then at most an hour behind, and a source that has
+  # not moved is not recompiled at all.
+  dlmFreshness:
+    enabled: true
+    schedule: "17 * * * *"
+    # The principal the sweep reads and recompiles as. There is no ambient
+    # administrator, and a job with no principal refuses to run rather than
+    # checking nothing — which is what the disabled in-process sweep did.
+    actor: ""
+    # Bounds the whole sweep, so a dataset that cannot finish compiling does
+    # not hold the Forbid lock until the next schedule.
+    timeoutSeconds: 3000
+    # Extra settings for the sweep process only.
+    env: {}
+    # A context compile, not a request. The API's own limit is what a
+    # half-billion-row rebuild exceeded, and that pod has requests to serve;
+    # this one has nothing else to do with the memory.
+    resources:
+      requests: {cpu: 250m, memory: 1Gi}
+      limits: {cpu: "2", memory: 8Gi}
   systemAuthorityReplay:
     # One-shot operator job; never run this in the API web process.
     enabled: false
