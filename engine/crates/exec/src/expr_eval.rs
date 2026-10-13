@@ -2680,22 +2680,26 @@ mod tests {
 
     #[test]
     fn map_keys_and_values_preserve_map_offsets() {
-        let input = RecordBatch::try_from_iter([(
-            "dummy",
-            Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
-        )])
+        let mut key_builder =
+            arrow::array::ListBuilder::new(arrow::array::StringBuilder::new());
+        key_builder.values().append_value("a");
+        key_builder.append(true);
+        key_builder.append(false);
+        let mut value_builder =
+            arrow::array::ListBuilder::new(arrow::array::Float64Builder::new());
+        value_builder.values().append_value(1.0);
+        value_builder.append(true);
+        value_builder.append(false);
+        let input = RecordBatch::try_from_iter([
+            ("keys", Arc::new(key_builder.finish()) as ArrayRef),
+            ("values", Arc::new(value_builder.finish()) as ArrayRef),
+        ])
         .unwrap();
         let map = Expr::Function {
             name: "MAP".into(),
             args: vec![
-                Expr::Function {
-                    name: "ARRAY".into(),
-                    args: vec![Expr::Literal(ScalarValue::Utf8("a".into()))],
-                },
-                Expr::Function {
-                    name: "ARRAY".into(),
-                    args: vec![Expr::Literal(ScalarValue::Int64(1))],
-                },
+                Expr::Column("keys".into()),
+                Expr::Column("values".into()),
             ],
         };
         let keys = evaluate(
@@ -2709,7 +2713,7 @@ mod tests {
         let keys = keys.as_list::<i32>();
         assert_eq!(keys.len(), 2);
         assert_eq!(keys.value(0).as_string::<i32>().value(0), "a");
-        assert_eq!(keys.value(1).len(), 1);
+        assert!(keys.is_null(1));
 
         let values = evaluate(
             &Expr::Function {
@@ -2721,7 +2725,7 @@ mod tests {
         .unwrap();
         let values = values.as_list::<i32>();
         assert_eq!(values.value(0).as_primitive::<Float64Type>().value(0), 1.0);
-        assert_eq!(values.value(1).len(), 1);
+        assert!(values.is_null(1));
     }
 
     #[test]
