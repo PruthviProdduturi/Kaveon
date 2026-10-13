@@ -625,6 +625,9 @@ struct QueryPlan {
     physical: Option<kaveon_core::PlanNode>,
 }
 
+#[cfg(test)]
+const QUERY_HISTORY_LIMIT: usize = 10_000;
+#[cfg(not(test))]
 const QUERY_HISTORY_LIMIT: usize = 100;
 
 #[derive(Clone, Copy, Serialize)]
