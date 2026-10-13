@@ -12460,6 +12460,8 @@ mod tests {
         use futures::StreamExt;
         let metrics = super::TaskExecutionMetrics {
             exchange_input_bytes: 42,
+            exchange_copy_allocations: 7,
+            exchange_copied_bytes: 1234,
             spill_compactions: 3,
             ..Default::default()
         };
@@ -12484,6 +12486,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(observed.exchange_input_bytes, 42);
+        assert_eq!(observed.exchange_copy_allocations, 7);
+        assert_eq!(observed.exchange_copied_bytes, 1234);
         assert_eq!(observed.spill_compactions, 3);
         let mut stream = response.into_body().into_data_stream();
         assert_eq!(std::sync::Arc::strong_count(&cached), 2);
