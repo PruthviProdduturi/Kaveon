@@ -74,7 +74,7 @@ impl BuiltSide {
             batches => concat_batches(schema, batches)?,
         };
         reservations.extend(reserve_join_index(memory, &right, keys)?);
-        let index = if join_type == JoinType::Cross {
+        let index = if join_type == JoinType::Cross || keys.is_empty() {
             None
         } else {
             Some(JoinIndex::build(&right, keys, memory)?)
@@ -157,7 +157,27 @@ impl HashJoin {
         left_qualifier: Option<&str>,
         right_qualifier: Option<&str>,
     ) -> Result<Self> {
-        if join_type != JoinType::Cross && keys.is_empty() {
+        Self::try_new_qualified_with_residual(
+            left,
+            right,
+            join_type,
+            keys,
+            left_qualifier,
+            right_qualifier,
+            None,
+        )
+    }
+
+    pub fn try_new_qualified_with_residual(
+        left: Box<dyn BatchOperator>,
+        right: Box<dyn BatchOperator>,
+        join_type: JoinType,
+        keys: Vec<(String, String)>,
+        left_qualifier: Option<&str>,
+        right_qualifier: Option<&str>,
+        residual: Option<Expr>,
+    ) -> Result<Self> {
+        if join_type != JoinType::Cross && keys.is_empty() && residual.is_none() {
             return Err(exec_err("hash joins require at least one equality key"));
         }
         let left_schema = Arc::clone(left.schema());
@@ -179,7 +199,7 @@ impl HashJoin {
             right,
             join_type,
             keys: key_indices,
-            residual: None,
+            residual,
             schema: Arc::new(Schema::new(fields)),
             memory: None,
             emitted: false,
@@ -201,23 +221,25 @@ impl HashJoin {
     /// A join whose right side the caller built (`BuiltSide::build`): the
     /// right source is never read.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn try_new_built(
+    pub(crate) fn try_new_built_with_residual(
         left: Box<dyn BatchOperator>,
         right_schema: SchemaRef,
-        built: BuiltSide,
         join_type: JoinType,
         keys: Vec<(String, String)>,
         left_qualifier: Option<&str>,
         right_qualifier: Option<&str>,
         memory: Option<OperatorMemoryAccount>,
+        residual: Option<Expr>,
+        built: BuiltSide,
     ) -> Result<Self> {
-        let mut operator = Self::try_new_qualified(
+        let mut operator = Self::try_new_qualified_with_residual(
             left,
             Box::new(crate::local_parallel::EmptyInput(right_schema)),
             join_type,
             keys,
             left_qualifier,
             right_qualifier,
+            residual,
         )?;
         operator.memory = memory;
         operator.prebuilt = Some(built);
@@ -240,6 +262,29 @@ impl HashJoin {
             keys,
             left_qualifier,
             right_qualifier,
+        )?;
+        operator.memory = Some(memory);
+        Ok(operator)
+    }
+
+    pub fn try_new_qualified_with_memory_and_residual(
+        left: Box<dyn BatchOperator>,
+        right: Box<dyn BatchOperator>,
+        join_type: JoinType,
+        keys: Vec<(String, String)>,
+        left_qualifier: Option<&str>,
+        right_qualifier: Option<&str>,
+        memory: OperatorMemoryAccount,
+        residual: Option<Expr>,
+    ) -> Result<Self> {
+        let mut operator = Self::try_new_qualified_with_residual(
+            left,
+            right,
+            join_type,
+            keys,
+            left_qualifier,
+            right_qualifier,
+            residual,
         )?;
         operator.memory = Some(memory);
         Ok(operator)
@@ -415,7 +460,9 @@ impl BatchOperator for HashJoin {
                         check_cancelled(self.memory.as_ref())?;
                     }
                     if state.match_rows.is_empty() && state.match_offset == 0 {
-                        let candidates = if self.join_type == JoinType::Cross {
+                        let candidates = if self.join_type == JoinType::Cross
+                            || state.index.is_none()
+                        {
                             (0..state.right.num_rows()).collect::<Vec<_>>()
                         } else {
                             state
@@ -1305,6 +1352,49 @@ mod tests {
             .downcast_ref::<Int32Array>()
             .unwrap();
         assert_eq!(right_values.iter().collect::<Vec<_>>(), vec![Some(3), None, Some(2)]);
+    }
+
+    #[test]
+    fn residual_only_outer_join_uses_broadcast_candidate_pairs() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]));
+        let left = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![5, 1]))],
+        )
+        .unwrap();
+        let right = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int32Array::from(vec![3, 7]))],
+        )
+        .unwrap();
+        let residual = Expr::BinaryOp {
+            left: Box::new(Expr::Column("left.value".into())),
+            op: kaveon_core::BinaryOp::Gt,
+            right: Box::new(Expr::Column("right.value".into())),
+        };
+        let mut join = HashJoin::try_new_qualified_with_residual(
+            Box::new(Input::new(left)),
+            Box::new(Input::new(right)),
+            JoinType::Left,
+            Vec::new(),
+            Some("left"),
+            Some("right"),
+            Some(residual),
+        )
+        .unwrap();
+        let batches = kaveon_core::collect_batches(&mut join).unwrap();
+        let result = concat_batches(join.schema(), &batches).unwrap();
+        assert_eq!(result.num_rows(), 2);
+        let right_values = result
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(right_values.iter().collect::<Vec<_>>(), vec![Some(3), None]);
     }
 
     #[test]

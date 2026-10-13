@@ -1005,13 +1005,13 @@ impl ExecutableFragmentBuilder<'_> {
         let left_stage = self.build(left)?;
         let right_stage = self.build(right)?;
         let (keys, residual) = join_keys_and_residual(condition)?;
-        if join_type != JoinType::Cross && keys.is_empty() {
+        if join_type != JoinType::Cross && keys.is_empty() && residual.is_none() {
             return Err(KaveonError::Execution(
                 "outer and hash joins require at least one equality key; residual-only joins are not supported"
                     .into(),
             ));
         }
-        if distribution == JoinDistribution::BroadcastRight {
+        if distribution == JoinDistribution::BroadcastRight || (keys.is_empty() && residual.is_some()) {
             let (left_keys, right_keys): (Vec<_>, Vec<_>) = keys.into_iter().unzip();
             return self.attach_broadcast_join(
                 left_stage,
@@ -1457,13 +1457,13 @@ impl StageGraphBuilder {
                 let right_stage = self.build(right)?;
                 let join = physical_plan_tree(plan);
                 if *distribution == JoinDistribution::BroadcastRight {
-                    self.wrap_stage(left_stage, "BroadcastHashJoin", join.attributes);
+                    self.wrap_stage(left_stage, "BroadcastHashJoin", join.attributes.clone());
                     self.add_exchange(right_stage, left_stage, Partitioning::Broadcast);
                     return Ok(left_stage);
                 }
                 let target = self.add_exchange_stage(
                     "PartitionedHashJoin",
-                    join.attributes,
+                    join.attributes.clone(),
                     self.worker_count,
                     2,
                 );
@@ -1477,7 +1477,12 @@ impl StageGraphBuilder {
                     );
                     self.add_exchange(right_stage, target, Partitioning::Broadcast);
                 } else {
-                    let (keys, _residual) = join_keys_and_residual(condition.as_ref())?;
+                    let (keys, residual) = join_keys_and_residual(condition.as_ref())?;
+                    if keys.is_empty() && residual.is_some() {
+                        self.wrap_stage(left_stage, "BroadcastHashJoin", join.attributes);
+                        self.add_exchange(right_stage, left_stage, Partitioning::Broadcast);
+                        return Ok(left_stage);
+                    }
                     if keys.is_empty() {
                         return Err(KaveonError::Execution(
                             "distributed non-cross joins require equality keys".into(),
@@ -3320,6 +3325,15 @@ mod tests {
         assert_eq!(spec.left_keys, vec![Expr::Column("i.id".into())]);
         assert_eq!(spec.right_keys, vec![Expr::Column("c.id".into())]);
         assert!(matches!(spec.residual, Some(Expr::BinaryOp { op: BinaryOp::Gt, .. })));
+    }
+
+    #[test]
+    fn routes_residual_only_outer_join_to_broadcast_stage() {
+        let graph = graph("SELECT * FROM items i LEFT JOIN customers c ON i.id > c.id");
+        assert!(graph
+            .stages
+            .iter()
+            .any(|stage| stage.plan.operator == "BroadcastHashJoin"));
     }
 
     #[test]

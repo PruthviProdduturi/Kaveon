@@ -85,7 +85,8 @@ foundations, but several operators are still centralized or narrow:
 - Ordinary distributed joins use equality keys; inner residual predicates now
   lower to a correctness-first cross join plus filter, while equality-key
   residual predicates on outer joins are evaluated inside the hash join before
-  null extension. Residual-only outer joins remain unsupported. Semi/anti joins now hash-partition both inputs on
+  null extension. Residual-only outer joins use an explicit broadcast path.
+  Semi/anti joins now hash-partition both inputs on
   ordinary column keys, including positional keys projected by correlated
   EXISTS plans, and retain a deliberate broadcast fallback only when a key
   cannot be resolved; runtime build-key propagation and adaptive broadcast
@@ -348,7 +349,8 @@ latency evidence as the remaining qualification work.
   predicates through local and distributed hash joins. Candidate pairs are
   evaluated in bounded batches with SQL TRUE-only matching; preserved rows and
   the right-side match bitmap are updated only after that evaluation. Residual-
-  only outer joins remain rejected because they have no repartition key.
+  only outer joins use an explicit broadcast candidate path because they have no
+  safe repartition key; this is correctness-qualified, not a scalability claim.
 - Three-worker global `ORDER BY`/TopN centralized merge correctness is now
   qualified for NULL ordering and ties against a single-partition reference
   (`bb788709`). The input remains distributed, while the exact global merge
@@ -615,9 +617,9 @@ deployed cancellation under those conditions remain open.
 Track 2 remains partial because prepared statements are now available through
 the Engine HTTP lifecycle and scalar `EXECUTE ... USING` is supported by the
 Trino adapter, but the adapter still lacks a wire-compatible full protocol;
-correlated non-aggregate and other unsupported scalar subqueries, residual-only
-outer joins, ordered map comparisons, broader array element types, and broader
-typed DML are not yet implemented. Equality-key outer joins now carry residual
+correlated non-aggregate and other unsupported scalar subqueries, ordered map
+comparisons, broader array element types, and broader typed DML are not yet
+implemented. Equality-key outer joins now carry residual
 `ON` predicates through the distributed hash join and apply null extension only
 after the complete predicate is evaluated.
 Multiset set operations are now implemented

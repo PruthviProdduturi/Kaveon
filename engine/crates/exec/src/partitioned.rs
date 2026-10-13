@@ -418,7 +418,10 @@ pub fn hash_join_with_residual(
     memory: Option<OperatorMemoryAccount>,
 ) -> Result<Box<dyn BatchOperator>> {
     if let Some(memory) = memory {
-        if let Some((spill, count)) = spill_from_environment(memory.query())? {
+        let broadcast_residual = keys.is_empty() && residual.is_some();
+        if !broadcast_residual
+            && let Some((spill, count)) = spill_from_environment(memory.query())?
+        {
             return Ok(Box::new(PartitionedHashJoin::new(
                 left,
                 right,
@@ -432,7 +435,7 @@ pub fn hash_join_with_residual(
             )?
             .with_residual(residual)));
         }
-        Ok(Box::new(HashJoin::try_new_qualified_with_memory(
+        Ok(Box::new(HashJoin::try_new_qualified_with_memory_and_residual(
             left,
             right,
             join_type,
@@ -440,18 +443,18 @@ pub fn hash_join_with_residual(
             left_qualifier,
             right_qualifier,
             memory,
-        )?
-        .with_residual(residual)))
+            residual,
+        )?))
     } else {
-        Ok(Box::new(HashJoin::try_new_qualified(
+        Ok(Box::new(HashJoin::try_new_qualified_with_residual(
             left,
             right,
             join_type,
             keys,
             left_qualifier,
             right_qualifier,
-        )?
-        .with_residual(residual)))
+            residual,
+        )?))
     }
 }
 
@@ -1803,17 +1806,17 @@ impl PartitionedHashJoin {
     }
 
     fn probe(&self, left: Box<dyn BatchOperator>, built: BuiltSide) -> Result<HashJoin> {
-        HashJoin::try_new_built(
+        HashJoin::try_new_built_with_residual(
             left,
             Arc::clone(&self.right_schema),
-            built,
             self.join_type,
             self.keys.clone(),
             self.left_qualifier.as_deref(),
             self.right_qualifier.as_deref(),
             Some(self.memory.clone()),
+            self.residual.clone(),
+            built,
         )
-        .map(|join| join.with_residual(self.residual.clone()))
     }
 
     /// Both inputs to disk, partitioned by the keys under `depth`'s salt.
