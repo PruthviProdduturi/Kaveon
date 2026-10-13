@@ -3917,7 +3917,7 @@ async fn run_statement(
             &context.catalog,
             &context.schema,
             &context.catalog_snapshot_id,
-            &format!("{:?}:{}", identity.role, identity.principal),
+            &access_scope.cache_key(),
             &planning_source_pins.delta_versions,
             context.time_zone.as_deref(),
         )

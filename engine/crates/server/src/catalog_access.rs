@@ -306,6 +306,24 @@ impl Scope {
         self.role
     }
 
+    /// Stable fingerprint for result-cache authorization isolation. It uses
+    /// the effective grants rather than only the principal, so a grant or
+    /// revoke cannot reuse a result produced under the previous scope.
+    pub fn cache_key(&self) -> String {
+        let role = match self.role {
+            Role::Reader => "reader",
+            Role::Analyst => "analyst",
+            Role::Admin => "admin",
+        };
+        let grants = self
+            .levels
+            .iter()
+            .map(|(catalog, access)| format!("{catalog}={}", access.as_str()))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("{role}:{grants}")
+    }
+
     /// The names in `registered` this identity may see.
     pub fn visible<'a>(&self, registered: impl IntoIterator<Item = &'a str>) -> Vec<String> {
         registered
