@@ -2046,17 +2046,31 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let values = list.value(row);
                         let values = values.as_primitive::<Float64Type>();
                         let length = values.len() as i64;
-                        let start = lower.is_valid(row).then(|| lower.value(row)).unwrap_or(1);
-                        let end = upper.is_valid(row).then(|| upper.value(row)).unwrap_or(length);
                         let step = stride.is_valid(row).then(|| stride.value(row)).unwrap_or(1);
-                        if step <= 0 {
-                            return Err(KaveonError::Execution("ARRAY_SLICE requires a positive stride".into()));
+                        let start = lower
+                            .is_valid(row)
+                            .then(|| lower.value(row))
+                            .unwrap_or(if step < 0 { length } else { 1 });
+                        let end = upper
+                            .is_valid(row)
+                            .then(|| upper.value(row))
+                            .unwrap_or(if step < 0 { 1 } else { length });
+                        if step == 0 {
+                            return Err(KaveonError::Execution("ARRAY_SLICE stride cannot be zero".into()));
                         }
-                        let first = start.max(1).min(length + 1);
-                        let last = end.max(0).min(length);
-                        if first <= last {
+                        let first = if step > 0 {
+                            start.max(1).min(length + 1)
+                        } else {
+                            start.max(1).min(length)
+                        };
+                        let last = if step > 0 {
+                            end.max(0).min(length)
+                        } else {
+                            end.max(1).min(length)
+                        };
+                        if (step > 0 && first <= last) || (step < 0 && first >= last) {
                             let mut index = first;
-                            while index <= last {
+                            while (step > 0 && index <= last) || (step < 0 && index >= last) {
                                 let offset = (index - 1) as usize;
                                 builder.values().append_option(values.is_valid(offset).then(|| values.value(offset)));
                                 index += step;
@@ -2076,17 +2090,31 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let values = list.value(row);
                         let values = values.as_string::<i32>();
                         let length = values.len() as i64;
-                        let start = lower.is_valid(row).then(|| lower.value(row)).unwrap_or(1);
-                        let end = upper.is_valid(row).then(|| upper.value(row)).unwrap_or(length);
                         let step = stride.is_valid(row).then(|| stride.value(row)).unwrap_or(1);
-                        if step <= 0 {
-                            return Err(KaveonError::Execution("ARRAY_SLICE requires a positive stride".into()));
+                        let start = lower
+                            .is_valid(row)
+                            .then(|| lower.value(row))
+                            .unwrap_or(if step < 0 { length } else { 1 });
+                        let end = upper
+                            .is_valid(row)
+                            .then(|| upper.value(row))
+                            .unwrap_or(if step < 0 { 1 } else { length });
+                        if step == 0 {
+                            return Err(KaveonError::Execution("ARRAY_SLICE stride cannot be zero".into()));
                         }
-                        let first = start.max(1).min(length + 1);
-                        let last = end.max(0).min(length);
-                        if first <= last {
+                        let first = if step > 0 {
+                            start.max(1).min(length + 1)
+                        } else {
+                            start.max(1).min(length)
+                        };
+                        let last = if step > 0 {
+                            end.max(0).min(length)
+                        } else {
+                            end.max(1).min(length)
+                        };
+                        if (step > 0 && first <= last) || (step < 0 && first >= last) {
                             let mut index = first;
-                            while index <= last {
+                            while (step > 0 && index <= last) || (step < 0 && index >= last) {
                                 let offset = (index - 1) as usize;
                                 builder.values().append_option(values.is_valid(offset).then(|| values.value(offset)));
                                 index += step;
@@ -3117,6 +3145,31 @@ mod tests {
         let values = list.value(0);
         let values = values.as_primitive::<Float64Type>();
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![None, Some(40.0)]);
+
+        let value = evaluate(
+            &Expr::Function {
+                name: "ARRAY_SLICE".into(),
+                args: vec![
+                    Expr::Function {
+                        name: "ARRAY".into(),
+                        args: vec![
+                            Expr::Literal(ScalarValue::Int64(10)),
+                            Expr::Literal(ScalarValue::Int64(20)),
+                            Expr::Literal(ScalarValue::Int64(30)),
+                            Expr::Literal(ScalarValue::Int64(40)),
+                        ],
+                    },
+                    Expr::Literal(ScalarValue::Null),
+                    Expr::Literal(ScalarValue::Null),
+                    Expr::Literal(ScalarValue::Int64(-2)),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        let list = value.as_any().downcast_ref::<ListArray>().unwrap();
+        let values = list.value(0).as_primitive::<Float64Type>().clone();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(40.0), Some(20.0)]);
     }
 
     #[test]
