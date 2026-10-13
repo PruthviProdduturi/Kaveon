@@ -338,6 +338,11 @@ local/distributed execution paths. These are package-level and in-process
 qualification snapshots; they do not close the broader multi-worker, AKS, or
 cross-connector qualification gates below.
 
+The complete Rust workspace suite also passes from the current HEAD, including
+the storage, optimizer, planner, exchange, CLI, server, and SQL packages. This
+is repository-wide regression evidence, not a replacement for deployed cloud
+qualification.
+
 The distributed failure subset is also green in-process: seven retry and
 worker-loss tests, six spill/recovery tests, and two cancellation tests passed.
 Those tests prove bounded local behavior and simulated worker failure; they do
