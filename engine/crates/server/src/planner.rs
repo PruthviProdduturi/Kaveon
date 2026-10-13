@@ -3351,6 +3351,55 @@ mod tests {
     }
 
     #[test]
+    fn broadcast_join_does_not_derive_probe_scan_predicate_from_build_keys() {
+        let fixture = fixture();
+        let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(
+            "SELECT i.id FROM items i JOIN customers c ON i.id = c.id WHERE c.id = 2",
+        )
+        .unwrap();
+        qualify_tables(&mut plan, "test", "default");
+        let plan = kaveon_optim::rules::push_filter_down(plan);
+        let plan = kaveon_optim::statistics::optimize_with_statistics(plan, &mut |table| {
+            Some(kaveon_optim::statistics::RelationStatistics::exact(
+                if table.ends_with("customers") {
+                    10
+                } else {
+                    10_000
+                },
+                vec!["id".into()],
+            ))
+        });
+        let fragments =
+            build_executable_fragments("dynamic-filter-boundary", &plan, &fixture.catalog, 4)
+                .unwrap();
+
+        let probe = &fragments[&StageId(0)];
+        let probe_scan = probe
+            .nodes
+            .iter()
+            .find_map(|node| match &node.operator {
+                FragmentOperator::Scan(scan) if scan.table.table == "items" => Some(scan),
+                _ => None,
+            })
+            .expect("probe stage contains the items scan");
+        let build = &fragments[&StageId(1)];
+        let build_scan = build
+            .nodes
+            .iter()
+            .find_map(|node| match &node.operator {
+                FragmentOperator::Scan(scan) if scan.table.table == "customers" => Some(scan),
+                _ => None,
+            })
+            .expect("build stage contains the customers scan");
+
+        // Static predicates reach the build scan, but the build-side key set
+        // is not propagated back to the probe scan at runtime yet. This is
+        // the explicit qualification boundary for Track 1 dynamic filters.
+        assert!(build_scan.predicate.is_some());
+        assert!(probe_scan.predicate.is_none());
+    }
+
+    #[test]
     fn analyzed_delta_version_pins_fragments_across_add_remove_commit() {
         let mut fixture = fixture();
         let delta = fixture.directory.join("delta-events");
