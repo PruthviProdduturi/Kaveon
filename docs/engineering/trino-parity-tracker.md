@@ -114,7 +114,8 @@ foundations, but several operators are still centralized or narrow:
   `JSON_SIZE` returns container sizes (or zero for scalar values).
   `REGEXP_LIKE` now reuses the bounded compiled-regex cache and
   preserves nullable boolean results. `MAP_CONCAT` now merges supported typed
-  maps with later values winning duplicate keys.
+  maps with later values winning duplicate keys, and `MAP_ENTRIES` exposes the
+  typed key/value rows as an array.
 - There is no Trino-style cross-source federation yet. Registered SQL sources
   are API passthrough paths, while the strongest native Engine path is
   Parquet/Delta/Iceberg. The connector matrix now records S3 as implemented
