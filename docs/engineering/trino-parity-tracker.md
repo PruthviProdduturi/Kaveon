@@ -106,7 +106,8 @@ foundations, but several operators are still centralized or narrow:
   `X-Trino-*` session headers (including URL-decoded `X-Trino-Session`
   properties), recognizes one or more encoded entries in the
   `X-Trino-Prepared-Statement` SQL header, selects the named entry for
-  `EXECUTE name USING`, binds scalar values through the typed binder, and emits
+  `EXECUTE name USING`, binds scalar values (including typed `DATE` literals)
+  through the typed binder, and emits
   `nextUri`/`stats`-shaped
   responses. Malformed prepared headers now fail closed with a structured
   `INVALID_PREPARED_STATEMENT` response rather than silently falling back to

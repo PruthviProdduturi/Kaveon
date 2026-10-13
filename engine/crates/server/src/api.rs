@@ -2940,8 +2940,9 @@ fn trino_percent_decode(encoded: &str) -> Result<String, String> {
 /// Parse the scalar values from Trino's `EXECUTE name USING ...` request.
 /// The prepared SQL itself remains in the header; values are converted into
 /// typed request parameters and bound by the normal AST binder. This keeps
-/// values out of SQL text and deliberately rejects compound expressions until
-/// the wire protocol supports them end to end.
+/// values out of SQL text. Scalar typed literals whose value can be represented
+/// without losing information are normalized here; compound expressions remain
+/// rejected until the wire protocol supports them end to end.
 fn trino_execute_parameters(body: &str) -> Result<Vec<serde_json::Value>, String> {
     let trimmed = body.trim().trim_end_matches(';').trim();
     let mut words = trimmed.split_whitespace();
@@ -3007,6 +3008,25 @@ fn split_trino_arguments(input: &str) -> Vec<&str> {
 }
 
 fn trino_literal_to_json(value: &str) -> Result<serde_json::Value, String> {
+    // Trino's DATE literal is a typed scalar, but the Engine's parameter
+    // binder already performs the exact text-to-Date32 coercion against the
+    // target column. Preserve the ISO text rather than converting through a
+    // host date type (which could silently change the day around a timezone).
+    let trimmed = value.trim();
+    if trimmed.len() > 6
+        && trimmed
+            .get(..4)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("date"))
+        && trimmed.get(4..).is_some_and(|suffix| suffix.trim_start().starts_with('\''))
+        && trimmed.ends_with('\'')
+    {
+        let literal = trimmed.get(4..).expect("DATE prefix is four ASCII bytes").trim_start();
+        let text = literal[1..literal.len() - 1].replace("''", "'");
+        if kaveon_core::predicate::date_literal_days(&text).is_some() {
+            return Ok(serde_json::Value::String(text));
+        }
+        return Err(format!("invalid Trino DATE literal '{value}'"));
+    }
     if value.eq_ignore_ascii_case("null") {
         return Ok(serde_json::Value::Null);
     }
@@ -3016,8 +3036,8 @@ fn trino_literal_to_json(value: &str) -> Result<serde_json::Value, String> {
     if value.eq_ignore_ascii_case("false") {
         return Ok(serde_json::Value::Bool(false));
     }
-    if value.len() >= 2 && value.starts_with('\'') && value.ends_with('\'') {
-        let text = value[1..value.len() - 1].replace("''", "'");
+    if trimmed.len() >= 2 && trimmed.starts_with('\'') && trimmed.ends_with('\'') {
+        let text = trimmed[1..trimmed.len() - 1].replace("''", "'");
         return Ok(serde_json::Value::String(text));
     }
     if let Ok(integer) = value.parse::<i64>() {
@@ -18856,6 +18876,30 @@ mod streamed_root_tests {
         let error = trino_execute_parameters("EXECUTE statement USING ARRAY[1, 2]")
             .expect_err("compound literals must not be interpolated");
         assert!(error.contains("not a supported scalar literal"), "{error}");
+    }
+
+    #[test]
+    fn trino_execute_using_preserves_typed_date_literals() {
+        let values = trino_execute_parameters(
+            "EXECUTE statement USING DATE '2026-10-13', date '1970-01-01'",
+        )
+        .unwrap();
+        assert_eq!(
+            values,
+            vec![
+                serde_json::json!("2026-10-13"),
+                serde_json::json!("1970-01-01"),
+            ]
+        );
+        let typed = request_parameters(&values).unwrap();
+        assert_eq!(typed[0], ScalarValue::Utf8("2026-10-13".into()));
+    }
+
+    #[test]
+    fn trino_execute_using_rejects_invalid_typed_date_literals() {
+        let error = trino_execute_parameters("EXECUTE statement USING DATE '2026-99-99'")
+            .expect_err("invalid typed dates must fail closed");
+        assert!(error.contains("invalid Trino DATE literal"), "{error}");
     }
 
     #[tokio::test]

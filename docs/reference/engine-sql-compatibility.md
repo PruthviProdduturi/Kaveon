@@ -147,6 +147,11 @@ the supported product families. Multi-row values, `INSERT ... SELECT`,
 tables, and lake-table DML are rejected explicitly. Statement execution accepts
 typed positional (`$1`, `?`) and named (`:name`) scalar parameters through the
 HTTP API; values are bound before planning and are never interpolated into SQL.
+The Trino adapter also accepts scalar `EXECUTE name USING` values carried by
+`X-Trino-Prepared-Statement`, including validated `DATE 'YYYY-MM-DD'` literals
+that remain text until the target column's Date32 coercion. Compound values,
+timestamps, intervals, and the complete prepare/describe/bind wire lifecycle
+remain explicitly unsupported.
 The current product transaction contract
 does not provide PostgreSQL MVCC isolation, row-level indexes, foreign-key
 enforcement, or crash-recovery parity.
