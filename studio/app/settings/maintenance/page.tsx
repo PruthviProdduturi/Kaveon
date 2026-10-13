@@ -11,13 +11,20 @@ import {
 import g from "../governance/governance.module.css";
 import s from "../settings.module.css";
 
-/** One record as the pass needs to see it: whether it has a preview, and when it last changed. */
+/** One preview slot: whether it exists, and when it was captured. */
+interface PreviewSlot {
+	stored: boolean;
+	/** Null on a record whose preview predates the stored capture time. */
+	capturedAt: number | null;
+}
+
+/** One record as the pass needs to see it: its previews, and when it last changed. */
 interface PreviewRecord {
 	id: string;
 	name: string;
 	updatedAt: number | null;
-	light: boolean;
-	dark: boolean;
+	light: PreviewSlot;
+	dark: PreviewSlot;
 }
 
 interface PassCopy {
@@ -38,12 +45,13 @@ const COPY: Record<PassId, PassCopy> = {
 		plural: "dashboards",
 		scheduleHelp:
 			"When an administrator opens this page and the previews are older than the chosen interval, the outstanding ones are captured here. "
-			+ "A preview is read off a rendered chart, so there is no server-side schedule that can run it unattended.",
+			+ "A preview is read off a rendered chart, so there is no server-side schedule that can run it unattended. "
+			+ "Storing a preview needs permission to edit the dashboard, so a run driven by an account that cannot edit one reports it as unstored.",
 	},
 	charts: {
 		title: "Chart previews",
 		description:
-			"A chart's preview is captured when the chart is saved, so this pass covers charts that have not been re-saved since. "
+			"A chart's preview is captured when the chart is saved, so this pass covers charts with no preview and charts edited since theirs was taken. "
 			+ "Each capture runs the chart's query, so a full refresh takes several minutes.",
 		noun: "chart",
 		plural: "charts",
@@ -64,25 +72,44 @@ async function loadRecords(pass: PassId): Promise<PreviewRecord[]> {
 		id: String(row.id),
 		name: typeof row.name === "string" && row.name ? row.name : "Untitled",
 		updatedAt: parseTimestamp(row.updated_at),
-		light: Boolean(row.has_thumbnail),
-		dark: Boolean(row.has_thumbnail_dark),
+		light: { stored: Boolean(row.has_thumbnail), capturedAt: parseTimestamp(row.thumbnail_updated_at) },
+		dark: { stored: Boolean(row.has_thumbnail_dark), capturedAt: parseTimestamp(row.thumbnail_dark_updated_at) },
 	}));
 }
 
 /**
  * A preview is outstanding when there is none, or when the record it previews
- * changed after the last completed pass. Without a completed pass there is no
- * baseline against which to call an existing preview stale, so only the missing
- * ones count — the pass would rather do too little than re-capture the whole
- * Library on a timestamp it cannot interpret.
+ * changed after that preview was captured.
+ *
+ * The record's own capture time is the fact that decides it, so the answer is
+ * the same for every administrator and survives a cleared browser. A preview
+ * stored before the API recorded capture times carries none; that is read as
+ * "cannot tell" and the preview is left alone, so nothing is re-captured on a
+ * timestamp the pass cannot interpret.
+ *
+ * `baseline` — the finish time of a run this browser completed — is the older,
+ * weaker answer, kept only for a record whose capture time is unknown. It was
+ * the only answer, which is why a fresh browser could see a Library full of
+ * stale previews and still be told there was nothing outstanding.
  */
-function outstanding(hasPreview: boolean, updatedAt: number | null, baseline: number | null): boolean {
-	if (!hasPreview) return true;
-	return baseline !== null && updatedAt !== null && updatedAt > baseline;
+function outstanding(slot: PreviewSlot, updatedAt: number | null, baseline: number | null): boolean {
+	if (!slot.stored) return true;
+	if (updatedAt === null) return false;
+	if (slot.capturedAt !== null) return updatedAt > slot.capturedAt;
+	return baseline !== null && updatedAt > baseline;
 }
 
+/**
+ * The moment after which an existing preview can be called current.
+ *
+ * Only a run that stored everything it planned earns one. A run that captured
+ * nothing — every PUT refused, say — used to be recorded as completed, and its
+ * finish time then became the baseline that declared every stale preview
+ * current, so the pass had nothing left to offer and the Library stayed as it
+ * was. A run with unstored captures leaves the baseline alone.
+ */
 function baselineOf(run: PassRun | null): number | null {
-	return run && run.status === "completed" ? run.finishedAt : null;
+	return run && run.status === "completed" && !run.failed ? run.finishedAt : null;
 }
 
 function planSteps(
@@ -123,10 +150,14 @@ function outcomeOf(run: PassRun | null): string {
 	if (!run) return "No run recorded";
 	switch (run.status) {
 		case "running": return `In progress · ${run.done} of ${run.total || "?"}`;
-		case "completed": return run.total ? `Completed · ${run.total} captured` : "Completed · nothing outstanding";
+		case "completed":
+			if (!run.total) return "Completed · nothing outstanding";
+			return run.failed
+				? `Completed · ${run.total - run.failed} of ${run.total} captured`
+				: `Completed · ${run.total} captured`;
 		case "stopped": return `Stopped · ${run.done} of ${run.total}`;
 		case "interrupted": return `Interrupted · ${run.done} of ${run.total}`;
-		case "failed": return "Could not start";
+		case "failed": return run.total ? `Failed · none of ${run.total} could be stored` : "Could not start";
 	}
 }
 
@@ -196,10 +227,16 @@ function usePass(pass: PassId, blocked: boolean) {
 
 	useEffect(() => { void reload(); }, [reload]);
 
-	const begin = useCallback((scope: RunScope): Promise<boolean> => startPass(
-		pass, scope, async () =>
-			planSteps(pass, await loadRecords(pass), scope, baselineOf(runRef.current)),
-	), [pass]);
+	// The baseline is read once, before the run starts, and handed to the plan.
+	// Read inside `plan` it would come from the run already in flight — whose
+	// status is `running`, never `completed` — so the plan silently used no
+	// baseline at all and could come back empty for a button the page had just
+	// reported as having work to do.
+	const begin = useCallback((scope: RunScope): Promise<boolean> => {
+		const baseline = baselineOf(runRef.current);
+		return startPass(pass, scope, async () =>
+			planSteps(pass, await loadRecords(pass), scope, baseline));
+	}, [pass]);
 
 	// Coverage is re-read when a run ends rather than when the call that started
 	// it resolves: a run survives leaving the page, so the instance that pressed
@@ -218,7 +255,7 @@ function usePass(pass: PassId, blocked: boolean) {
 		[pass, records, baseline],
 	);
 	const stored = useMemo(
-		() => (records ?? []).filter((record) => record.light || record.dark).length,
+		() => (records ?? []).filter((record) => record.light.stored || record.dark.stored).length,
 		[records],
 	);
 
@@ -295,10 +332,20 @@ function statusLine(pass: Pass): string | null {
 		return `The last run was interrupted after ${run.done} of ${run.total} — the tab was closed or reloaded before it finished.`
 			+ (pending ? " Resume to capture what is left." : "");
 	}
-	if (run?.status === "failed") return run.detail ?? "The last run could not be started.";
+	if (run?.status === "failed") {
+		if (!run.total) return run.detail ?? "The last run could not be started.";
+		return `None of the ${run.total} captures in the last run could be stored.`
+			+ (run.detail ? ` ${run.detail}` : "");
+	}
 	if (run?.status === "stopped") {
 		return `The last run was stopped after ${run.done} of ${run.total}.`
 			+ (pending ? " Resume to capture what is left." : "");
+	}
+	// A completed run that could not store some of its captures says so, rather
+	// than reporting a refresh that changed nothing as a success.
+	if (run?.status === "completed" && run.failed) {
+		return `The last run captured ${run.total - run.failed} of ${run.total}; ${run.failed} could not be stored.`
+			+ (run.detail ? ` ${run.detail}` : "");
 	}
 	if (!ready) return "Reading the Library…";
 	if (!pass.total) return `There are no ${copy.plural} to preview.`;

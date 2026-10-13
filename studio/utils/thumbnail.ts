@@ -6,25 +6,60 @@
  * canvas snapshot, an html-to-image raster — is normalised here to one
  * deliberate geometry and one deliberate budget before it is stored:
  *
- *   geometry  longest edge 480px, source aspect preserved
- *             (the cover is 128px tall on cards 160-280px wide, so 480px still
- *              has headroom on a 2x display and nothing is spent beyond that)
+ *   geometry  longest edge capped, source aspect preserved
+ *             (the cover is 128px tall on cards 160-280px wide, so a few
+ *              hundred pixels still has headroom on a 2x display and nothing
+ *              is spent beyond that)
  *   format    JPEG — a chart is flat colour and text, and at this size JPEG is
  *             three to five times smaller than PNG with no visible difference.
  *             WebP would be smaller again, but a browser without it silently
  *             returns PNG from toDataURL, which would quietly make the payload
  *             bigger instead of smaller.
- *   budget    48KB of data URI, with one smaller retry, then give up
+ *   budget    a data-URI character cap, with one smaller retry, then give up
+ *
+ * The budget is the point of this module. The API refuses a preview that
+ * exceeds the record's stored-preview limit (`services/thumbnails.py`:
+ * 64,000 characters for a chart, 256,000 for a dashboard), and a refusal
+ * reaches the browser as a 422 that the capture has no way to retry. So every
+ * capture is normalised to a budget that is strictly below the one the API
+ * enforces, and a capture that cannot be brought under it is reported as
+ * having produced nothing rather than sent and rejected.
  *
  * Nothing here throws: a caller that cannot produce a thumbnail gets null and
  * the Library card draws its placeholder.
  */
 
-/** Largest data URI we are willing to store for one preview. */
-export const THUMBNAIL_MAX_CHARS = 48_000;
+/** One normalisation target: the geometry to aim for and the cap to stay under. */
+export interface ThumbnailBudget {
+	/** Largest data URI we are willing to store for one preview. */
+	maxChars: number;
+	primary: { maxEdge: number; quality: number };
+	/** Tried once when the primary encoding overruns the cap. */
+	fallback: { maxEdge: number; quality: number };
+}
 
-const PRIMARY = { maxEdge: 480, quality: 0.72 };
-const FALLBACK = { maxEdge: 320, quality: 0.55 };
+/**
+ * A chart preview is one plot, so a modest geometry is already generous for a
+ * 128px cover. Stays well under the API's 64,000-character chart limit.
+ */
+export const CHART_THUMBNAIL: ThumbnailBudget = {
+	maxChars: 48_000,
+	primary: { maxEdge: 480, quality: 0.72 },
+	fallback: { maxEdge: 320, quality: 0.55 },
+};
+
+/**
+ * A dashboard preview is a whole canvas rather than one plot — often several
+ * times taller than it is wide — so the cover crops it and a larger longest
+ * edge is what keeps the visible band from going soft. Stays under the API's
+ * 256,000-character dashboard limit with room for a differently proportioned
+ * capture.
+ */
+export const DASHBOARD_THUMBNAIL: ThumbnailBudget = {
+	maxChars: 160_000,
+	primary: { maxEdge: 960, quality: 0.72 },
+	fallback: { maxEdge: 640, quality: 0.55 },
+};
 
 /**
  * The colour a node is actually drawn against, walking up until something
@@ -82,15 +117,39 @@ function encode(
  * Normalise a rendered preview into a stored thumbnail. Returns null when the
  * source cannot be decoded or will not fit the budget.
  */
-export async function encodeThumbnail(source: string | null, background: string): Promise<string | null> {
+export async function encodeThumbnail(
+	source: string | null,
+	background: string,
+	budget: ThumbnailBudget = CHART_THUMBNAIL,
+): Promise<string | null> {
 	if (!source || !source.startsWith("data:")) return null;
 	try {
 		const image = await loadImage(source);
-		const primary = encode(image, background, PRIMARY);
-		if (primary && primary.length <= THUMBNAIL_MAX_CHARS) return primary;
-		const fallback = encode(image, background, FALLBACK);
-		return fallback && fallback.length <= THUMBNAIL_MAX_CHARS ? fallback : null;
+		const primary = encode(image, background, budget.primary);
+		if (primary && primary.length <= budget.maxChars) return primary;
+		const fallback = encode(image, background, budget.fallback);
+		return fallback && fallback.length <= budget.maxChars ? fallback : null;
 	} catch {
 		return null;
 	}
+}
+
+/**
+ * The device-pixel scale to rasterise a node at before normalisation.
+ *
+ * html-to-image allocates the whole raster at once, and a dashboard canvas can
+ * be several thousand pixels tall, so the source is captured no larger than it
+ * needs to be to survive the downscale: a little over the budget's longest
+ * edge, and never magnified past 1:1.
+ */
+export function capturePixelRatio(node: HTMLElement, budget: ThumbnailBudget): number {
+	// Scroll extent as well as box size: html-to-image rasterises the whole
+	// subtree, which for a dashboard canvas inside a scroller is taller than the
+	// box the layout gives it.
+	const longest = Math.max(
+		node.offsetWidth || 0, node.offsetHeight || 0,
+		node.scrollWidth || 0, node.scrollHeight || 0,
+	);
+	if (!longest) return 1;
+	return Math.min(1, (budget.primary.maxEdge * 1.25) / longest);
 }

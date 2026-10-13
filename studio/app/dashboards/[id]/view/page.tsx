@@ -8,9 +8,11 @@ import DashboardFilterBarReadOnly from "../../../../components/dashboards/Dashbo
 import { KaveonLoading } from "../../../../components/KaveonLoading";
 import { msalFetch } from "../../../../utils/msalFetch";
 import { useRecents } from "../../../../hooks/useRecents";
+import { useRole } from "../../../../hooks/useRole";
 import { resetQuerySemaphore, isQueryIdle } from "../../../../utils/querySemaphore";
 import { API_BASE } from "../../../../config";
 import { toJpeg } from "html-to-image";
+import { DASHBOARD_THUMBNAIL, capturePixelRatio, encodeThumbnail } from "../../../../utils/thumbnail";
 import { useTheme } from "../../../../contexts/ThemeContext";
 import { DASHBOARD_GRID_EDGE } from "../../../../utils/dashboardGrid";
 import styles from "./dashboardView.module.css";
@@ -33,11 +35,19 @@ const DashboardViewContent: React.FC<{
   isPublished: boolean;
   publishing: boolean;
   initialConfig: DashboardConfig | undefined;
+  /**
+   * `can_write(created_by, ctx)` on PUT /dashboards/{id} — the one rule behind
+   * both toolbar writes here: Edit opens the builder that saves through that
+   * route, and Publish is a PUT of `is_published` on the same route.
+   */
+  mayEdit: boolean;
+  /** Why those two are unavailable, for the read-only marker's tooltip. */
+  readOnlyReason: string;
   onFavoriteClick: () => void;
   onPublish: () => void;
   onEdit: () => void;
   onClose: () => void;
-}> = ({ isFavorite, isAnimating, isPublished, initialConfig, publishing, onFavoriteClick, onPublish, onEdit, onClose }) => {
+}> = ({ isFavorite, isAnimating, isPublished, initialConfig, publishing, mayEdit, readOnlyReason, onFavoriteClick, onPublish, onEdit, onClose }) => {
   const { preloadAllCharts, isPreloading, dashboardFilters, triggerGlobalRefresh } = useDashboard();
   const { theme } = useTheme();
   const isDark = theme === "dark";
@@ -51,6 +61,15 @@ const DashboardViewContent: React.FC<{
   // Capture a real full-dashboard thumbnail — but only AFTER the charts have
   // actually finished querying/rendering (else the thumbnail is just spinners),
   // and off the main thread (toJpeg is heavy and would block clicks mid-load).
+  //
+  // The raster is normalised before it is sent. A dashboard canvas is often
+  // thousands of pixels tall, and html-to-image hands back whatever that
+  // rasterises to — which for most dashboards is far past the stored-preview
+  // limit the API enforces (256,000 characters of data URI). Sending it anyway
+  // means a 422 the capture cannot retry, which is how a Library full of
+  // dashboards ended up showing previews only for the few small enough to slip
+  // under the limit. encodeThumbnail fixes the geometry, format and budget in
+  // one place, so what leaves here always fits — see utils/thumbnail.ts.
   useEffect(() => {
     if (!chartsReady || capturedRef.current || !dashId || !canvasRef.current) return;
     let cancelled = false;
@@ -60,41 +79,46 @@ const DashboardViewContent: React.FC<{
     const capture = async () => {
       if (cancelled || capturedRef.current) return;
       capturedRef.current = true;
+      // A preview is stored through PUT /dashboards/{id}, which is governed by
+      // can_write. A reader's capture could only ever be refused, so it is not
+      // attempted — and the refresh pass is told so rather than being left to
+      // record a capture that never happened.
+      if (!mayEdit) { notifyParentDone(false); return; }
+      let stored = false;
       try {
         const node = canvasRef.current;
         if (!node) return;
         const bg = isDark ? "#0b1220" : "#f8fafc";
-        let dataUrl = await toJpeg(node, {
-          quality: 0.55, pixelRatio: 0.4, backgroundColor: bg, cacheBust: true, skipFonts: true,
+        const raster = await toJpeg(node, {
+          quality: 0.92,
+          pixelRatio: capturePixelRatio(node, DASHBOARD_THUMBNAIL),
+          backgroundColor: bg, cacheBust: true, skipFonts: true,
         });
-        if (dataUrl && dataUrl.length > 3_500_000) {
-          dataUrl = await toJpeg(node, {
-            quality: 0.35, pixelRatio: 0.25, backgroundColor: bg, cacheBust: true, skipFonts: true,
-          });
-        }
-        if (!dataUrl || dataUrl.length > 3_500_000) {
-          notifyParentDone();
-          return;
-        }
+        const dataUrl = await encodeThumbnail(raster, bg, DASHBOARD_THUMBNAIL);
+        if (!dataUrl) return;
         // Save into the theme-specific slot so both a light and a dark preview
         // can coexist; the Library shows whichever matches the viewer's theme.
-        await msalFetch(`${API_BASE}/api/v1/dashboards/${dashId}`, {
+        const response = await msalFetch(`${API_BASE}/api/v1/dashboards/${dashId}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(isDark ? { thumbnail_dark: dataUrl } : { thumbnail: dataUrl }),
         });
+        stored = response.ok;
       } catch { /* best-effort */ }
-      finally { notifyParentDone(); }
+      finally { notifyParentDone(stored); }
     };
 
     // When rendered inside the thumbnail-refresh iframe (?capture=1), tell the
-    // parent this dashboard+theme is done so it can advance to the next one.
-    const notifyParentDone = () => {
+    // parent this dashboard+theme is done so it can advance to the next one,
+    // and whether a preview was actually stored — a pass that reported every
+    // refused capture as captured is a pass that cannot be trusted.
+    const notifyParentDone = (stored: boolean) => {
       try {
         const sp = new URLSearchParams(window.location.search);
         if (sp.get("capture") === "1" && window.parent && window.parent !== window) {
           window.parent.postMessage(
-            { type: "kaveon-thumb-done", id: dashId, theme: isDark ? "dark" : "light" }, "*",
+            { type: "kaveon-thumb-done", id: dashId, theme: isDark ? "dark" : "light", ok: stored },
+            window.location.origin,
           );
         }
       } catch { /* ignore */ }
@@ -119,7 +143,7 @@ const DashboardViewContent: React.FC<{
     };
     let poll = window.setTimeout(tick, 800);
     return () => { cancelled = true; clearTimeout(poll); };
-  }, [chartsReady, dashId, isDark]);
+  }, [chartsReady, dashId, isDark, mayEdit]);
 
   // If the user flips the theme while viewing, allow one fresh capture so the
   // stored thumbnail is re-shot to match the new theme.
@@ -316,8 +340,8 @@ const DashboardViewContent: React.FC<{
 
           <div className={styles.toolbarDivider} />
 
-          {/* Publish */}
-          {!isPublished && (
+          {/* Publish — a PUT on this dashboard, so it needs write access to it. */}
+          {!isPublished && mayEdit && (
             <button onClick={onPublish} disabled={publishing} style={{
               ...btnBase, flexShrink: 0, background: publishing ? 'var(--bg-hover)' : '#f0fdf4',
               borderColor: publishing ? 'var(--border)' : '#86efac', color: publishing ? 'var(--text-muted)' : '#15803d',
@@ -328,14 +352,32 @@ const DashboardViewContent: React.FC<{
             </button>
           )}
 
-          {/* Edit — icon-only */}
-          <button onClick={onEdit} title="Edit dashboard" aria-label="Edit dashboard"
-            style={{ ...btnBase, width: 34, padding: 0, justifyContent: 'center', flexShrink: 0, background: 'var(--accent)', borderColor: 'var(--accent)', color: '#ffffff' }}
-            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent-dark)'; }}
-            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent)'; }}
-          >
-            <i className="fas fa-edit" style={{ fontSize: 13 }} />
-          </button>
+          {/* Edit — icon-only. Offered only where the save it leads to would be
+              accepted; otherwise the toolbar carries a read-only marker that
+              states the reason, rather than a button that ends in a refusal. */}
+          {mayEdit ? (
+            <button onClick={onEdit} title="Edit dashboard" aria-label="Edit dashboard"
+              style={{ ...btnBase, width: 34, padding: 0, justifyContent: 'center', flexShrink: 0, background: 'var(--accent)', borderColor: 'var(--accent)', color: '#ffffff' }}
+              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent-dark)'; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent)'; }}
+            >
+              <i className="fas fa-edit" style={{ fontSize: 13 }} />
+            </button>
+          ) : (
+            <span
+              role="img"
+              title={readOnlyReason}
+              aria-label={`View only. ${readOnlyReason}`}
+              style={{
+                ...btnBase, flexShrink: 0, cursor: 'default',
+                background: 'var(--bg-elevated)', borderColor: 'var(--border)',
+                color: 'var(--text-muted)', fontWeight: 600,
+              }}
+            >
+              <i className="fas fa-lock" aria-hidden="true" style={{ fontSize: 11 }} />
+              View only
+            </span>
+          )}
         </div>
       </header>
 
@@ -376,7 +418,12 @@ const DashboardViewPage: React.FC = () => {
   const [isAnimating, setIsAnimating] = useState(false);
   const [isPublished, setIsPublished] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  // Who owns this dashboard — the identity `can_write` tests the caller
+  // against, so the toolbar can offer Edit and Publish only where the API
+  // would accept them.
+  const [ownerEmail, setOwnerEmail] = useState<string | null>(null);
   const { addRecent } = useRecents();
+  const { canWrite, whyNoWrite } = useRole();
 
   useEffect(() => {
     if (!id) return;
@@ -456,6 +503,7 @@ const DashboardViewPage: React.FC = () => {
         });
         setIsPublished(d.is_published || false);
         setIsFavorite(d.is_favorite || false);
+        setOwnerEmail(d.created_by ?? null);
         addRecent({ id: `dashboard-${d.id}`, label: d.name || "Untitled Dashboard", href: `/dashboards/${d.id}/view`, type: "dashboard" });
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load dashboard");
@@ -534,6 +582,8 @@ const DashboardViewPage: React.FC = () => {
         isPublished={isPublished}
         publishing={publishing}
         initialConfig={initialConfig}
+        mayEdit={canWrite(ownerEmail)}
+        readOnlyReason={whyNoWrite("dashboard")}
         onFavoriteClick={handleFavoriteClick}
         onPublish={handlePublish}
         onEdit={() => {

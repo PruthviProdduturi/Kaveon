@@ -16,11 +16,17 @@
  * reported as `interrupted`, never as finished.
  *
  * The record is per browser profile, which is the right scope for a fact about
- * what this browser did but not a shared one: how many previews actually exist
- * is read from the API instead (`has_thumbnail`), so coverage is always true
- * for every administrator while the run history is local to the tab that drove
- * it. A shared record would mean a new KaveonDB product family, and that
- * registry is a closed set mid-migration.
+ * what this browser did but not a shared one: which previews exist and when
+ * each was captured is read from the API instead (`has_thumbnail`,
+ * `thumbnail_updated_at`), so coverage and staleness are true for every
+ * administrator while the run history is local to the tab that drove it. A
+ * shared record would mean a new KaveonDB product family, and that registry is
+ * a closed set mid-migration.
+ *
+ * A step is only counted as a capture once the page it drove says it stored
+ * something. A capture the API refuses — an oversized image, a record the
+ * signed-in account cannot edit — is reported back as unstored, so a run that
+ * changed nothing is recorded as such rather than as a completed refresh.
  *
  * One capture runs at a time across both passes. Nothing here throws into a
  * caller: a preview is never worth failing a page on.
@@ -48,6 +54,18 @@ export interface PassRun {
 	scope: RunScope;
 	total: number;
 	done: number;
+	/**
+	 * Steps that finished without confirming a stored preview — a capture the
+	 * API refused, one the viewer had no permission to store, or one that never
+	 * reported back inside its timeout.
+	 *
+	 * A run used to report every step it advanced past as captured, which made
+	 * a pass that stored nothing indistinguishable from one that stored
+	 * everything: the Library stayed empty while Maintenance said the previews
+	 * were current. A step now says whether it stored anything, and a run that
+	 * could not store is reported as such instead of as a success.
+	 */
+	failed: number;
 	label: string;
 	startedAt: number;
 	finishedAt: number | null;
@@ -61,7 +79,7 @@ const STEP_TIMEOUT_MS: Record<PassId, number> = { dashboards: 25_000, charts: 35
 /** How often a live run refreshes its heartbeat, so a slow step is not mistaken for a dead tab. */
 const HEARTBEAT_MS = 5_000;
 
-const STORAGE_VERSION = 1;
+const STORAGE_VERSION = 2;
 
 /** Intervals offered for the automatic refresh, in days; 0 is off. */
 export const REFRESH_INTERVALS: { days: number; label: string }[] = [
@@ -81,7 +99,8 @@ interface StoredRun extends PassRun {
 
 interface LiveRun {
 	stopped: boolean;
-	pending: { step: CaptureStep; finish: () => void } | null;
+	/** `finish(stored)` — `stored` is false for a timeout, which confirms nothing. */
+	pending: { step: CaptureStep; finish: (stored: boolean) => void } | null;
 }
 
 const SESSION = newSession();
@@ -145,8 +164,8 @@ function writeStored(pass: PassId, run: StoredRun): void {
 function publicRun(run: StoredRun): PassRun {
 	return {
 		status: run.status, scope: run.scope, total: run.total, done: run.done,
-		label: run.label, startedAt: run.startedAt, finishedAt: run.finishedAt,
-		detail: run.detail,
+		failed: run.failed, label: run.label, startedAt: run.startedAt,
+		finishedAt: run.finishedAt, detail: run.detail,
 	};
 }
 
@@ -234,7 +253,7 @@ export function stopPass(pass: PassId): void {
 	const runner = live.get(pass);
 	if (!runner) return;
 	runner.stopped = true;
-	runner.pending?.finish();
+	runner.pending?.finish(false);
 }
 
 /**
@@ -258,7 +277,7 @@ export async function startPass(
 	const startedAt = Date.now();
 	let run: StoredRun = {
 		v: STORAGE_VERSION, session: SESSION, status: "running", scope,
-		total: 0, done: 0, label: "Reading the Library…",
+		total: 0, done: 0, failed: 0, label: "Reading the Library…",
 		startedAt, beatAt: startedAt, finishedAt: null, detail: null,
 	};
 	const commit = (patch: Partial<StoredRun>) => {
@@ -276,12 +295,12 @@ export async function startPass(
 		// Same-origin only, and matched to the capture actually in flight: a late
 		// message from the previous record must not advance the current one.
 		if (event.origin !== window.location.origin) return;
-		const data = event.data as { type?: string; id?: string; theme?: string } | null;
+		const data = event.data as { type?: string; id?: string; theme?: string; ok?: boolean } | null;
 		if (data?.type !== "kaveon-thumb-done" && data?.type !== "kaveon-chart-thumb-done") return;
 		const pending = runner.pending;
 		if (!pending || String(data.id) !== pending.step.id) return;
 		if (pending.step.theme && data.theme && data.theme !== pending.step.theme) return;
-		pending.finish();
+		pending.finish(data.ok === true);
 	};
 
 	try {
@@ -297,7 +316,7 @@ export async function startPass(
 			return true;
 		}
 		if (!steps.length) {
-			commit({ status: "completed", total: 0, done: 0, finishedAt: Date.now(), label: "Every preview was already current." });
+			commit({ status: "completed", total: 0, done: 0, failed: 0, finishedAt: Date.now(), label: "Every preview was already current." });
 			return true;
 		}
 
@@ -308,29 +327,44 @@ export async function startPass(
 		document.body.appendChild(frame);
 		window.addEventListener("message", onMessage);
 
+		let failed = 0;
 		for (let index = 0; index < steps.length; index++) {
 			if (runner.stopped) break;
 			const step = steps[index];
-			commit({ total: steps.length, done: index, label: step.label });
-			await new Promise<void>((resolve) => {
+			commit({ total: steps.length, done: index, failed, label: step.label });
+			const confirmed = await new Promise<boolean>((resolve) => {
 				let settled = false;
-				const finish = () => {
+				const finish = (confirmed: boolean) => {
 					if (settled) return;
 					settled = true;
 					window.clearTimeout(timer);
 					runner.pending = null;
-					resolve();
+					resolve(confirmed);
 				};
-				const timer = window.setTimeout(finish, STEP_TIMEOUT_MS[pass]);
+				const timer = window.setTimeout(() => finish(false), STEP_TIMEOUT_MS[pass]);
 				runner.pending = { step, finish };
 				if (frame) frame.src = step.src;
 			});
+			// A step abandoned by Stop is not a failure: the run reports how far
+			// it got, and nothing was expected of the step it was cut off in.
+			if (!confirmed && !runner.stopped) failed += 1;
 		}
 
 		const done = runner.stopped ? run.done : steps.length;
+		const stored = steps.length - failed;
 		commit(runner.stopped
-			? { status: "stopped", done, finishedAt: Date.now(), label: `Stopped after ${done} of ${steps.length}.` }
-			: { status: "completed", done, total: steps.length, finishedAt: Date.now(), label: `Captured ${steps.length}.` });
+			? { status: "stopped", done, failed, finishedAt: Date.now(), label: `Stopped after ${done} of ${steps.length}.` }
+			: {
+				status: failed === steps.length ? "failed" : "completed",
+				done, failed, total: steps.length, finishedAt: Date.now(),
+				label: failed
+					? `Captured ${stored} of ${steps.length}; ${failed} could not be stored.`
+					: `Captured ${steps.length}.`,
+				detail: failed
+					? "A capture that could not be stored was refused by the API, or the"
+						+ " signed-in account cannot edit that record."
+					: null,
+			});
 	} finally {
 		window.clearInterval(heartbeat);
 		window.removeEventListener("message", onMessage);
