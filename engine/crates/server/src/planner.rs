@@ -862,9 +862,6 @@ impl ExecutableFragmentBuilder<'_> {
                 right_key,
                 residual,
             } => {
-                // The subquery side is its keys, beside the columns a
-                // residual reads; it broadcasts into every probe task like
-                // a small build side, and the residual rides in the spec.
                 let left_stage = self.build(left)?;
                 let right_stage = self.build(right)?;
                 let join_type = if matches!(plan, LogicalPlan::SemiJoin { .. }) {
@@ -872,19 +869,48 @@ impl ExecutableFragmentBuilder<'_> {
                 } else {
                     FragmentJoinType::Anti
                 };
-                self.attach_broadcast_join(
-                    left_stage,
-                    right_stage,
-                    JoinSpec {
+                let target = StageId(self.next_stage);
+                let left_exchange = self.exchange(left_stage, target)?.clone();
+                let right_exchange = self.exchange(right_stage, target)?.clone();
+                for (stage, exchange) in [
+                    (left_stage, left_exchange.clone()),
+                    (right_stage, right_exchange.clone()),
+                ] {
+                    let mut draft = self.draft_mut(stage)?;
+                    draft.push(
+                        FragmentOperator::ExchangeOutput(ExchangeOutput {
+                            exchange_id: exchange.id,
+                            partitioning: exchange.partitioning,
+                        }),
+                        vec![draft.root],
+                    );
+                }
+                let mut target_draft = FragmentDraft::leaf(FragmentOperator::ExchangeInput(
+                    ExchangeInput {
+                        exchange_id: left_exchange.id,
+                    },
+                ));
+                let right_input = FragmentNodeId(1);
+                target_draft.nodes.push(FragmentNode {
+                    id: right_input,
+                    inputs: Vec::new(),
+                    operator: FragmentOperator::ExchangeInput(ExchangeInput {
+                        exchange_id: right_exchange.id,
+                    }),
+                });
+                target_draft.push(
+                    FragmentOperator::HashJoin(JoinSpec {
                         join_type,
                         left_qualifier: None,
                         right_qualifier: None,
                         left_keys: vec![left_key.clone()],
                         right_keys: vec![right_key.clone()],
                         residual: residual.clone(),
-                        broadcast: true,
-                    },
-                )
+                        broadcast: false,
+                    }),
+                    vec![FragmentNodeId(0), right_input],
+                );
+                Ok(self.add_fragment(target_draft))
             }
         }
     }
@@ -1562,14 +1588,51 @@ impl StageGraphBuilder {
                 Ok(stage)
             }
             LogicalPlan::Scan { .. } => Ok(self.add_stage(plan, self.worker_count)),
-            LogicalPlan::SemiJoin { left, right, .. }
-            | LogicalPlan::AntiJoin { left, right, .. } => {
+            LogicalPlan::SemiJoin {
+                left,
+                right,
+                left_key,
+                right_key,
+                ..
+            }
+            | LogicalPlan::AntiJoin {
+                left,
+                right,
+                left_key,
+                right_key,
+                ..
+            } => {
                 let left_stage = self.build(left)?;
                 let right_stage = self.build(right)?;
                 let physical = physical_plan_tree(plan);
-                self.wrap_stage(left_stage, "BroadcastSemiJoin", physical.attributes);
-                self.add_exchange(right_stage, left_stage, Partitioning::Broadcast);
-                Ok(left_stage)
+                let operator = if matches!(plan, LogicalPlan::SemiJoin { .. }) {
+                    "PartitionedSemiJoin"
+                } else {
+                    "PartitionedAntiJoin"
+                };
+                let target = self.add_exchange_stage(
+                    operator,
+                    physical.attributes,
+                    self.exchange_partition_count,
+                    2,
+                );
+                self.add_exchange(
+                    left_stage,
+                    target,
+                    Partitioning::Hash {
+                        columns: vec![expression_column(left_key)?],
+                        partition_count: self.exchange_partition_count,
+                    },
+                );
+                self.add_exchange(
+                    right_stage,
+                    target,
+                    Partitioning::Hash {
+                        columns: vec![expression_column(right_key)?],
+                        partition_count: self.exchange_partition_count,
+                    },
+                );
+                Ok(target)
             }
         }
     }
@@ -3280,7 +3343,7 @@ mod tests {
     }
 
     #[test]
-    fn semi_and_anti_joins_broadcast_the_subquery_into_the_probe_stage() {
+    fn semi_and_anti_joins_hash_partition_both_sides() {
         for (sql, expected_type) in [
             (
                 "SELECT COUNT(*) FROM items WHERE id IN (SELECT id FROM customers WHERE id > 1)",
@@ -3297,36 +3360,56 @@ mod tests {
             let plan = kaveon_optim::rules::push_projection_down(plan);
             let fixture = fixture();
             let graph = build_stage_graph("query-1", &plan, 4).unwrap();
-            // The probe remains distributed while the subquery is broadcast;
-            // dynamic key filtering into the probe scan is not part of this
-            // protocol yet, so exact qualification stops at this boundary.
-            assert!(graph.stages.iter().any(|stage| stage.task_count == 4));
-            assert!(graph.exchanges.iter().any(|exchange| {
-                exchange.target_stage == StageId(0)
-                    && matches!(exchange.partitioning, Partitioning::Broadcast)
-            }));
+            let target = graph
+                .stages
+                .iter()
+                .find(|stage| {
+                    stage.plan.children.iter().any(|child| {
+                        child.operator == "PartitionedSemiJoin"
+                            || child.operator == "PartitionedAntiJoin"
+                    })
+                })
+                .expect("partitioned semijoin target stage");
+            assert_eq!(target.task_count, 4);
+            assert_eq!(
+                graph
+                    .exchanges
+                    .iter()
+                    .filter(|exchange| exchange.target_stage == target.id)
+                    .filter(|exchange| matches!(exchange.partitioning, Partitioning::Hash { .. }))
+                    .count(),
+                2
+            );
             let fragments =
                 build_executable_fragments("query-1", &plan, &fixture.catalog, 4).unwrap();
-            let probe = &fragments[&StageId(0)];
+            let probe = fragments
+                .values()
+                .find(|fragment| {
+                    fragment.nodes.iter().any(|node| {
+                        matches!(node.operator, FragmentOperator::HashJoin(_))
+                    })
+                })
+                .expect("partitioned semijoin fragment");
             let join = probe
                 .nodes
                 .iter()
                 .find(|node| matches!(node.operator, FragmentOperator::HashJoin(_)))
-                .expect("probe stage carries the semi join");
+                .expect("target stage carries the semi join");
             let FragmentOperator::HashJoin(spec) = &join.operator else {
                 unreachable!()
             };
             assert_eq!(spec.join_type, expected_type);
-            assert!(spec.broadcast);
+            assert!(!spec.broadcast);
             assert_eq!(spec.left_keys, vec![Expr::Column("id".into())]);
             assert!(matches!(
                 probe.nodes[join.inputs[1].0 as usize].operator,
                 FragmentOperator::ExchangeInput(_)
             ));
-            assert!(matches!(
-                probe.nodes.first().unwrap().operator,
-                FragmentOperator::Scan(_)
-            ));
+            assert_eq!(
+                join.inputs.len(),
+                2,
+                "both semijoin inputs arrive through exchanges"
+            );
         }
     }
 
