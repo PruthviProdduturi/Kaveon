@@ -1129,11 +1129,16 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
     if (window.location.pathname !== `/charts/${chartId}`) return;
     backfilledRef.current = true;
 
-    const report = () => {
+    // `ok` says whether a preview was actually stored. Without it the pass
+    // counts a refused capture as a capture, reports the run as complete and
+    // leaves the operator with a Library that is still missing previews and a
+    // Maintenance page insisting everything is current.
+    const report = (stored: boolean) => {
       try {
         if (window.parent && window.parent !== window) {
           window.parent.postMessage(
-            { type: "kaveon-chart-thumb-done", id: String(chartId) }, window.location.origin,
+            { type: "kaveon-chart-thumb-done", id: String(chartId), ok: stored },
+            window.location.origin,
           );
         }
       } catch { /* the job falls back to its own timeout */ }
@@ -1142,17 +1147,19 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
     // Let the render settle (ECharts animates in) before snapshotting.
     const timer = window.setTimeout(() => {
       void (async () => {
+        let stored = false;
         try {
           const thumb = await captureThumbnail();
           if (thumb) {
-            await msalFetch(`${API_BASE}/api/v1/charts/${chartId}`, {
+            const response = await msalFetch(`${API_BASE}/api/v1/charts/${chartId}`, {
               method: "PATCH",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ thumbnail: thumb }),
             });
+            stored = response.ok;
           }
         } catch { /* a preview is never worth failing on */ }
-        report();
+        report(stored);
       })();
     }, 900);
     return () => clearTimeout(timer);

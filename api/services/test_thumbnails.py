@@ -66,6 +66,13 @@ class ChartThumbnailTests(unittest.TestCase):
                 {"dataset_id": "7", **data}, "chart-1", "owner@example.test", prior,
             )
 
+    def _preview_write(self, thumbnail, prior):
+        """A write carrying nothing but the preview, as the capture sends it."""
+        with patch.object(charts.product_store, "read", return_value={"revision": 3}):
+            return charts._product_document(
+                {"thumbnail": thumbnail}, "chart-1", "owner@example.test", prior,
+            )
+
     def test_a_captured_preview_reaches_the_kaveondb_document(self):
         self.assertEqual(self._document({"thumbnail": JPEG})["thumbnail"], JPEG)
 
@@ -89,9 +96,47 @@ class ChartThumbnailTests(unittest.TestCase):
         adapted = charts._adapt_product({
             "id": "chart-1", "created_by": "owner@example.test",
             "query_config": {}, "viz_config": {}, "thumbnail": JPEG,
+            "thumbnail_updated_at": "2026-02-02T00:00:00Z",
         }, {})
         self.assertEqual(adapted["thumbnail"], JPEG)
         self.assertTrue(adapted["has_thumbnail"])
+        self.assertEqual(adapted["thumbnail_updated_at"], "2026-02-02T00:00:00Z")
+
+    def test_a_captured_preview_records_when_it_was_captured(self):
+        document = self._document({"thumbnail": JPEG})
+        self.assertEqual(document["thumbnail_updated_at"], document["updated_at"])
+
+    def test_storing_a_preview_is_not_an_edit_of_the_chart(self):
+        # A preview write that moved `updated_at` would leave the record newer
+        # than the preview it had just stored, so the refresh pass would call
+        # that preview stale the instant it was taken and never settle.
+        prior = {
+            "created_by": "owner@example.test", "dataset_id": "7",
+            "updated_at": "2026-01-01T00:00:00Z", "modified_by": "editor@example.test",
+        }
+        document = self._preview_write(JPEG, prior)
+        self.assertEqual(document["updated_at"], "2026-01-01T00:00:00Z")
+        self.assertEqual(document["modified_by"], "editor@example.test")
+        self.assertGreater(document["thumbnail_updated_at"], document["updated_at"])
+
+    def test_an_edit_leaves_the_record_newer_than_its_preview(self):
+        prior = {
+            "created_by": "owner@example.test", "dataset_id": "7", "thumbnail": JPEG,
+            "thumbnail_updated_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        }
+        document = self._document({"name": "Renamed"}, prior)
+        self.assertEqual(document["thumbnail_updated_at"], "2026-01-01T00:00:00Z")
+        self.assertGreater(document["updated_at"], document["thumbnail_updated_at"])
+
+    def test_a_preview_stored_before_capture_times_existed_claims_none(self):
+        # Nothing to backfill from, so the record reports no capture time and
+        # the refresh pass leaves that preview alone rather than guessing.
+        prior = {
+            "created_by": "owner@example.test", "dataset_id": "7", "thumbnail": JPEG,
+            "updated_at": "2026-01-01T00:00:00Z",
+        }
+        self.assertNotIn("thumbnail_updated_at", self._document({"name": "Renamed"}, prior))
 
     def test_a_list_entry_reports_the_preview_without_carrying_it(self):
         records = [{"document": {
@@ -137,12 +182,45 @@ class DashboardThumbnailTests(unittest.TestCase):
         document = self._document({"name": "Ops", "charts": []})
         self.assertNotIn("thumbnail", document)
         self.assertNotIn("thumbnail_dark", document)
+        self.assertNotIn("thumbnail_updated_at", document)
+        self.assertNotIn("thumbnail_dark_updated_at", document)
+
+    def test_both_themes_can_be_current_at_once(self):
+        # Each theme is captured in its own pass, and a capture that moved
+        # `updated_at` pushed the record past the other theme's capture time —
+        # so whichever was captured first was stale again by the time the
+        # second finished and the pass could never report the pair as done.
+        prior = {
+            "created_by": "owner@example.test", "charts": [],
+            "updated_at": "2026-01-01T00:00:00Z",
+        }
+        after_light = self._document({"thumbnail": JPEG}, prior)
+        self.assertEqual(after_light["updated_at"], "2026-01-01T00:00:00Z")
+        after_dark = self._document({"thumbnail_dark": PNG}, after_light)
+        self.assertEqual(after_dark["updated_at"], "2026-01-01T00:00:00Z")
+        self.assertEqual(after_dark["thumbnail_updated_at"], after_light["thumbnail_updated_at"])
+        self.assertGreater(after_dark["thumbnail_updated_at"], after_dark["updated_at"])
+        self.assertGreater(after_dark["thumbnail_dark_updated_at"], after_dark["updated_at"])
+
+    def test_an_edit_leaves_the_record_newer_than_both_previews(self):
+        prior = {
+            "created_by": "owner@example.test", "charts": [],
+            "thumbnail": JPEG, "thumbnail_dark": PNG,
+            "thumbnail_updated_at": "2026-01-01T00:00:00Z",
+            "thumbnail_dark_updated_at": "2026-01-01T00:00:01Z",
+            "updated_at": "2026-01-01T00:00:01Z",
+        }
+        document = self._document({"name": "Renamed"}, prior)
+        self.assertEqual(document["thumbnail_updated_at"], "2026-01-01T00:00:00Z")
+        self.assertEqual(document["thumbnail_dark_updated_at"], "2026-01-01T00:00:01Z")
+        self.assertGreater(document["updated_at"], document["thumbnail_dark_updated_at"])
 
     def test_a_list_entry_reports_both_slots_without_carrying_either(self):
         records = [{"document": {
             "id": "dash-1", "name": "Ops", "visibility": "published",
             "created_by": "owner@example.test", "updated_at": "2026-01-01T00:00:00Z",
             "layout": [], "charts": [], "filters": [], "thumbnail": JPEG,
+            "thumbnail_updated_at": "2026-02-02T00:00:00Z",
         }}]
         with patch.dict("os.environ", {"KAVEONDB_READ_AUTHORITY_FAMILIES": "dashboards"}, clear=True), \
              patch.object(dashboards.product_store, "list_records",
@@ -151,6 +229,11 @@ class DashboardThumbnailTests(unittest.TestCase):
         self.assertIsNone(items[0]["thumbnail"])
         self.assertTrue(items[0]["has_thumbnail"])
         self.assertFalse(items[0]["has_thumbnail_dark"])
+        # The refresh pass decides what is outstanding from these, so a list
+        # entry has to carry each slot's capture time even though it withholds
+        # the image: without them the pass can only see what is missing.
+        self.assertEqual(items[0]["thumbnail_updated_at"], "2026-02-02T00:00:00Z")
+        self.assertIsNone(items[0]["thumbnail_dark_updated_at"])
 
     def test_one_capture_is_served_for_both_themes(self):
         document = {
