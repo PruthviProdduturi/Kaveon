@@ -146,8 +146,10 @@ foundations, but several operators are still centralized or narrow:
   omits NULL elements by default, and accepts a NULL replacement policy.
   Broader element types remain an explicit boundary.
   Scalar, DATE, timestamp, and DECIMAL casts are supported; complex cast
-  targets fail with typed planner diagnostics. Dereference, `UNNEST`, and other
-  array operations remain open. `JSON_EXTRACT` now preserves objects, arrays,
+  targets fail with typed planner diagnostics. `value IN UNNEST(array)` and
+  its `NOT IN` form lower to the existing nullable `CONTAINS` path; row-
+  producing `UNNEST` in `FROM`, dereference, and other array operations remain
+  open. `JSON_EXTRACT` now preserves objects, arrays,
   and JSON nulls as serialized JSON text; `JSON_EXTRACT_SCALAR` supports dotted
   object paths and numeric array subscripts. Invalid JSON and missing paths
   return NULL; `JSON_ARRAY_LENGTH` returns nullable lengths for JSON arrays and

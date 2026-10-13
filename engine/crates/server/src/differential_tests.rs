@@ -217,6 +217,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "in_unnest_array",
+        "SELECT country, COUNT(*) AS n FROM {T} WHERE country IN UNNEST(ARRAY['Japan', 'Brazil', 'Kenya']) GROUP BY country ORDER BY country",
+        true,
+    ),
+    (
         "scalar_aggregate_filter",
         "SELECT country, COUNT(*) AS n FROM {T} WHERE user_id < (SELECT MAX(user_id) FROM {U}) GROUP BY country ORDER BY country",
         true,
