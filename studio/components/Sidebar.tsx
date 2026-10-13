@@ -149,6 +149,20 @@ function NewBadge() {
   );
 }
 
+/** What a person calls the service they signed in with. `entra-public` and
+ *  `microsoft-entra-id` are two ways of reaching the same Microsoft account and
+ *  read as one; an installation's own development identity says so plainly. */
+function providerLabel(provider: string | null): string {
+  switch (provider) {
+    case "github": return "GitHub";
+    case "google": return "Google";
+    case "microsoft-entra-id":
+    case "entra-public": return "Microsoft";
+    case "local-dev": return "Local identity";
+    default: return "";
+  }
+}
+
 function getInitials(name: string | undefined): string {
   if (!name) return "U";
   const parts = name.trim().split(" ");
@@ -163,6 +177,7 @@ interface SidebarProps {
 /* ─── User Menu Popup ─── */
 function UserMenu({
   account,
+  provider,
   collapsed,
   theme,
   toggleTheme,
@@ -171,6 +186,10 @@ function UserMenu({
   isAdmin,
 }: {
   account: { name?: string; email?: string } | null;
+  /** Which provider signed this session in. An installation can accept several
+   *  at once and one person's address is often the same at more than one, so
+   *  the address alone does not say which identity is in use. */
+  provider: string | null;
   collapsed: boolean;
   theme: string;
   toggleTheme: () => void;
@@ -273,6 +292,7 @@ function UserMenu({
             )}
             <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>
               {isAdmin ? "Admin" : "Viewer"}
+              {providerLabel(provider) && ` · ${providerLabel(provider)}`}
             </div>
           </div>
 
@@ -389,7 +409,7 @@ const RECENT_TYPES: { key: RecentItem["type"] | "all"; label: string }[] = [
 ];
 
 export function Sidebar({ children }: SidebarProps) {
-  const { account, logout } = useAuth();
+  const { account, logout, provider } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const { recents, addRecent, removeRecent, clearRecents, conversationsClearedBy } = useRecents();
   // Clearing is destructive now: a conversation is only listed here, so
@@ -848,6 +868,7 @@ export function Sidebar({ children }: SidebarProps) {
         {/* Footer — User card */}
         <UserMenu
           account={account}
+          provider={provider}
           collapsed={collapsed}
           theme={theme}
           toggleTheme={toggleTheme}

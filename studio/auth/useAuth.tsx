@@ -12,7 +12,12 @@ import React, { createContext, useCallback, useContext } from "react";
 import { SessionProvider as NextAuthSessionProvider, useSession, signIn, signOut } from "next-auth/react";
 import { signInDestination } from "../components/AuthScreen";
 
-export type AuthProvider = "github" | "google" | "microsoft-entra-id";
+export type AuthProvider =
+	| "github"
+	| "google"
+	| "microsoft-entra-id"
+	| "entra-public"
+	| "local-dev";
 export type UserRole = "Viewer" | "Analyst" | "Editor" | "Admin";
 
 interface SimpleAccount {
@@ -63,7 +68,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 			? { name: user.name ?? undefined, username: user.email ?? undefined, email: user.email ?? undefined }
 			: null,
 		role: (user as { role?: UserRole } | null)?.role ?? (user ? "Viewer" : null),
-		provider: null,
+		provider: (user as { provider?: AuthProvider } | null)?.provider ?? null,
 	};
 
 	return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
