@@ -300,7 +300,17 @@ def update_catalog_source(cs_id: str, data: dict, ctx: UserContext = Depends(req
             if source in data:
                 changes[target] = _validate_json(json.dumps(data[source]) if isinstance(data[source],dict) else data[source], source)
         if not changes: raise HTTPException(400, "No fields to update")
-        if "credential_ref" in changes and changes["credential_ref"]:
+        # A managed or workload identity has no secret to point at — the
+        # platform supplies the credential and the reference is a label for
+        # operators. The create path has exempted those two kinds since the
+        # read path did; this one did not, so a source could be created in a
+        # shape it could not then be updated into, and correcting a
+        # workload-identity catalog failed with "source secret reference is
+        # invalid" for a reference it never needed. The kind being set now is
+        # what decides, falling back to the kind already stored.
+        credential_kind = changes.get("credential_kind", current.get("credential_kind"))
+        if ("credential_ref" in changes and changes["credential_ref"]
+                and credential_kind not in {"managed_identity", "workload_identity"}):
             try: source_secret_store.validate_reference(str(changes["credential_ref"]))
             except source_secret_store.SourceSecretError as error: raise HTTPException(400,str(error)) from None
         storage_type = changes.get("source_type", current.get("source_type"))
