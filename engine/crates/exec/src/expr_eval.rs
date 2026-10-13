@@ -3273,6 +3273,135 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 Ok(Arc::new(builder.finish()))
             }
         }
+        "ARRAY_CONCAT" => {
+            check_arity(name, args, 2)?;
+            let left = args[0]
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .ok_or_else(|| KaveonError::Execution("ARRAY_CONCAT requires ARRAY/List values".into()))?;
+            let right = args[1]
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .ok_or_else(|| KaveonError::Execution("ARRAY_CONCAT requires ARRAY/List values".into()))?;
+            if left.len() != right.len() || left.value_type() != right.value_type() {
+                return Err(KaveonError::Execution(
+                    "ARRAY_CONCAT requires arrays with matching row counts and element types".into(),
+                ));
+            }
+            macro_rules! concat_primitive {
+                ($ty:ty, $builder:expr) => {{
+                    let mut builder = ListBuilder::new($builder);
+                    for row in 0..num_rows {
+                        if left.is_null(row) || right.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let left_inner = left.value(row);
+                        let right_inner = right.value(row);
+                        let left_values = left_inner.as_primitive::<$ty>();
+                        let right_values = right_inner.as_primitive::<$ty>();
+                        for index in 0..left_values.len() {
+                            builder.values().append_option(
+                                left_values.is_valid(index).then(|| left_values.value(index)),
+                            );
+                        }
+                        for index in 0..right_values.len() {
+                            builder.values().append_option(
+                                right_values.is_valid(index).then(|| right_values.value(index)),
+                            );
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }};
+            }
+            match left.value_type() {
+                DataType::Int64 => concat_primitive!(Int64Type, Int64Builder::new()),
+                DataType::Float64 => concat_primitive!(Float64Type, Float64Builder::new()),
+                DataType::Decimal128(precision, scale) => {
+                    let mut builder = ListBuilder::new(
+                        Decimal128Builder::new()
+                            .with_precision_and_scale(precision, scale)
+                            .map_err(|error| KaveonError::Execution(error.to_string()))?,
+                    );
+                    for row in 0..num_rows {
+                        if left.is_null(row) || right.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let left_inner = left.value(row);
+                        let right_inner = right.value(row);
+                        let left_values = left_inner.as_primitive::<arrow::datatypes::Decimal128Type>();
+                        let right_values = right_inner.as_primitive::<arrow::datatypes::Decimal128Type>();
+                        for index in 0..left_values.len() {
+                            builder.values().append_option(
+                                left_values.is_valid(index).then(|| left_values.value(index)),
+                            );
+                        }
+                        for index in 0..right_values.len() {
+                            builder.values().append_option(
+                                right_values.is_valid(index).then(|| right_values.value(index)),
+                            );
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }
+                DataType::Utf8 => {
+                    let mut builder = ListBuilder::new(StringBuilder::new());
+                    for row in 0..num_rows {
+                        if left.is_null(row) || right.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let left_inner = left.value(row);
+                        let right_inner = right.value(row);
+                        let left_values = left_inner.as_string::<i32>();
+                        let right_values = right_inner.as_string::<i32>();
+                        for index in 0..left_values.len() {
+                            builder.values().append_option(
+                                left_values.is_valid(index).then(|| left_values.value(index)),
+                            );
+                        }
+                        for index in 0..right_values.len() {
+                            builder.values().append_option(
+                                right_values.is_valid(index).then(|| right_values.value(index)),
+                            );
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }
+                DataType::Boolean => {
+                    let mut builder = ListBuilder::new(BooleanBuilder::new());
+                    for row in 0..num_rows {
+                        if left.is_null(row) || right.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let left_inner = left.value(row);
+                        let right_inner = right.value(row);
+                        let left_values = left_inner.as_boolean();
+                        let right_values = right_inner.as_boolean();
+                        for index in 0..left_values.len() {
+                            builder.values().append_option(
+                                left_values.is_valid(index).then(|| left_values.value(index)),
+                            );
+                        }
+                        for index in 0..right_values.len() {
+                            builder.values().append_option(
+                                right_values.is_valid(index).then(|| right_values.value(index)),
+                            );
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }
+                other => Err(KaveonError::Execution(format!(
+                    "ARRAY_CONCAT does not support list element type {other}"
+                ))),
+            }
+        }
         "ARRAY_MIN" | "ARRAY_MAX" => {
             check_arity(name, args, 1)?;
             let list = args[0]
@@ -5785,6 +5914,31 @@ mod tests {
             ],
         };
         assert!(evaluate(&null_overlap, &batch).unwrap().as_boolean().is_null(0));
+
+        let concat = Expr::Function {
+            name: "ARRAY_CONCAT".into(),
+            args: vec![
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![decimal(1), Expr::Literal(ScalarValue::Null)],
+                },
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![decimal(2)],
+                },
+            ],
+        };
+        let concat = evaluate(&concat, &batch).unwrap();
+        let concat = concat
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap()
+            .value(0);
+        let concat = concat.as_primitive::<arrow::datatypes::Decimal128Type>();
+        assert_eq!(concat.data_type(), &DataType::Decimal128(20, 2));
+        assert_eq!(concat.value(0), 1);
+        assert!(concat.is_null(1));
+        assert_eq!(concat.value(2), 2);
     }
 
     #[test]
