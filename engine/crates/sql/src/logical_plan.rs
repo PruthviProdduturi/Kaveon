@@ -1793,6 +1793,16 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
         }
         ast::Expr::IsNull(expr) => Ok(Expr::IsNull(Box::new(ast_expr_to_expr(expr)?))),
         ast::Expr::IsNotNull(expr) => Ok(Expr::IsNotNull(Box::new(ast_expr_to_expr(expr)?))),
+        ast::Expr::IsDistinctFrom(left, right) => {
+            let left = ast_expr_to_expr(left)?;
+            let right = ast_expr_to_expr(right)?;
+            Ok(null_safe_comparison(left, right, false))
+        }
+        ast::Expr::IsNotDistinctFrom(left, right) => {
+            let left = ast_expr_to_expr(left)?;
+            let right = ast_expr_to_expr(right)?;
+            Ok(null_safe_comparison(left, right, true))
+        }
         ast::Expr::Nested(inner) => ast_expr_to_expr(inner),
         ast::Expr::Function(func) => ast_function_to_expr(func),
         // `ARRAY[…]` is carried as a call named ARRAY. The executor evaluates
@@ -1935,6 +1945,44 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
         )),
 
         _ => Err(sql_err(format!("unsupported expression: {expr}"))),
+    }
+}
+
+/// Lower SQL's null-safe comparisons into the existing CASE/null predicate
+/// expression model. `IS DISTINCT FROM` is always boolean: two NULLs compare
+/// equal, and a NULL compares different from every non-NULL value.
+fn null_safe_comparison(left: Expr, right: Expr, not_distinct: bool) -> Expr {
+    let left_is_null = Expr::IsNull(Box::new(left.clone()));
+    let right_is_null = Expr::IsNull(Box::new(right.clone()));
+    let right_is_not_null = Expr::IsNotNull(Box::new(right.clone()));
+    let equal = Expr::BinaryOp {
+        left: Box::new(left.clone()),
+        op: BinaryOp::Eq,
+        right: Box::new(right.clone()),
+    };
+    let different = Expr::BinaryOp {
+        left: Box::new(left),
+        op: BinaryOp::Ne,
+        right: Box::new(right),
+    };
+    if not_distinct {
+        Expr::Case {
+            operand: None,
+            when_then: vec![
+                (left_is_null, right_is_null.clone()),
+                (right_is_null, Expr::Literal(ScalarValue::Bool(false))),
+            ],
+            else_expr: Some(Box::new(equal)),
+        }
+    } else {
+        Expr::Case {
+            operand: None,
+            when_then: vec![
+                (left_is_null, right_is_not_null),
+                (right_is_null, Expr::Literal(ScalarValue::Bool(true))),
+            ],
+            else_expr: Some(Box::new(different)),
+        }
     }
 }
 
@@ -3719,6 +3767,19 @@ mod tests {
         assert!(named
             .to_string()
             .contains("unsupported parameter placeholder ':region'"));
+    }
+
+    #[test]
+    fn null_safe_comparisons_lower_to_null_total_case_expressions() {
+        for (sql, expected) in [
+            ("SELECT * FROM t WHERE a IS DISTINCT FROM b", "Ne"),
+            ("SELECT * FROM t WHERE a IS NOT DISTINCT FROM b", "Eq"),
+        ] {
+            let plan = sql_to_logical_plan(sql).unwrap();
+            let debug = format!("{plan:?}");
+            assert!(debug.contains("Case"), "{sql} did not lower to CASE");
+            assert!(debug.contains(expected), "{sql} lost its comparison");
+        }
     }
 
     #[test]
