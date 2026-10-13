@@ -13,7 +13,7 @@ use arrow::array::{
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute;
 use arrow::datatypes::{
-    ArrowPrimitiveType, DataType, Date32Type, Date64Type, Float64Type, Int32Type, Int64Type,
+    ArrowPrimitiveType, DataType, Float64Type, Int32Type, Int64Type,
     Time32MillisecondType, Time32SecondType, TimeUnit,
 };
 use arrow::record_batch::RecordBatch;
@@ -7051,8 +7051,8 @@ mod tests {
         )
         .unwrap();
         let lists = result.as_list::<i32>();
-        assert_eq!(lists.value(0).as_primitive::<Date32Type>().iter().collect::<Vec<_>>(), vec![Some(10)]);
-        assert_eq!(lists.value(1).as_primitive::<Date32Type>().iter().collect::<Vec<_>>(), vec![None]);
+        assert_eq!(lists.value(0).as_primitive::<arrow::datatypes::Date32Type>().iter().collect::<Vec<_>>(), vec![Some(10)]);
+        assert_eq!(lists.value(1).as_primitive::<arrow::datatypes::Date32Type>().iter().collect::<Vec<_>>(), vec![None]);
     }
 
     #[test]
@@ -7072,8 +7072,8 @@ mod tests {
         )
         .unwrap();
         let lists = result.as_list::<i32>();
-        assert_eq!(lists.value(0).as_primitive::<Date64Type>().iter().collect::<Vec<_>>(), vec![Some(86_400_000)]);
-        assert_eq!(lists.value(1).as_primitive::<Date64Type>().iter().collect::<Vec<_>>(), vec![None]);
+        assert_eq!(lists.value(0).as_primitive::<arrow::datatypes::Date64Type>().iter().collect::<Vec<_>>(), vec![Some(86_400_000)]);
+        assert_eq!(lists.value(1).as_primitive::<arrow::datatypes::Date64Type>().iter().collect::<Vec<_>>(), vec![None]);
     }
 
     #[test]
