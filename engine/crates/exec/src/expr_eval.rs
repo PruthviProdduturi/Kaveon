@@ -2873,6 +2873,26 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .as_any()
                 .downcast_ref::<ListArray>()
                 .ok_or_else(|| KaveonError::Execution("ARRAY_REVERSE requires an ARRAY/List value".into()))?;
+            macro_rules! reverse_primitive {
+                ($ty:ty, $builder:expr) => {{
+                    let mut builder = ListBuilder::new($builder);
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let inner = list.value(row);
+                        let values = inner.as_primitive::<$ty>();
+                        for index in (0..values.len()).rev() {
+                            builder
+                                .values()
+                                .append_option(values.is_valid(index).then(|| values.value(index)));
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }};
+            }
             match list.value_type() {
                 DataType::Int64 => {
                     let mut builder = ListBuilder::new(Int64Builder::new());
@@ -2908,6 +2928,26 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     }
                     Ok(Arc::new(builder.finish()))
                 }
+                DataType::Date32 => reverse_primitive!(
+                    Date32Type,
+                    PrimitiveBuilder::<Date32Type>::new()
+                ),
+                DataType::Date64 => reverse_primitive!(
+                    Date64Type,
+                    PrimitiveBuilder::<Date64Type>::new()
+                ),
+                DataType::Time32(TimeUnit::Second) => reverse_primitive!(
+                    Time32SecondType,
+                    PrimitiveBuilder::<Time32SecondType>::new()
+                ),
+                DataType::Time32(TimeUnit::Millisecond) => reverse_primitive!(
+                    Time32MillisecondType,
+                    PrimitiveBuilder::<Time32MillisecondType>::new()
+                ),
+                DataType::Timestamp(TimeUnit::Microsecond, _) => reverse_primitive!(
+                    TimestampMicrosecondType,
+                    PrimitiveBuilder::<TimestampMicrosecondType>::new()
+                ),
                 DataType::Decimal128(precision, scale) => {
                     let values_builder = Decimal128Builder::new()
                         .with_precision_and_scale(precision, scale)
@@ -7404,6 +7444,42 @@ mod tests {
             assert_eq!(result.data_type(), &DataType::Date32);
             assert_eq!(result.as_primitive::<arrow::datatypes::Date32Type>().value(0), expected);
         }
+    }
+
+    #[test]
+    fn reverses_temporal_array_elements_without_coercion() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "first_day",
+                Arc::new(arrow::array::Date32Array::from(vec![Some(10)])) as ArrayRef,
+            ),
+            (
+                "second_day",
+                Arc::new(arrow::array::Date32Array::from(vec![Some(20)])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "ARRAY_REVERSE".into(),
+                args: vec![Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![
+                        Expr::Column("first_day".into()),
+                        Expr::Column("second_day".into()),
+                    ],
+                }],
+            },
+            &batch,
+        )
+        .unwrap();
+        let inner = result
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap()
+            .value(0);
+        let values = inner.as_primitive::<arrow::datatypes::Date32Type>();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(20), Some(10)]);
     }
 
     #[test]

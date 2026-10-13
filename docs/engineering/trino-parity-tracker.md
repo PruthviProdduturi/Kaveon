@@ -47,8 +47,9 @@ Temporal `ARRAY[...]` literals now preserve DATE32, DATE64, TIME32 second and
 millisecond, and TIMESTAMP microsecond element types, including null elements;
 the execution suite includes a timestamp-list regression. `ARRAY_CONCAT` also
 preserves those temporal element types, as do `ARRAY_APPEND`,
-`ARRAY_PREPEND`, `ARRAY_REMOVE`, `ARRAY_MIN`, and `ARRAY_MAX`. Other timestamp
-units and temporal array operations remain outside this slice.
+`ARRAY_PREPEND`, `ARRAY_REMOVE`, `ARRAY_MIN`, `ARRAY_MAX`, and
+`ARRAY_REVERSE`. Other timestamp units and temporal array operations remain
+outside this slice.
 
 The initial repository audit confirms that the Engine has real distributed
 foundations, but several operators are still centralized or narrow:
