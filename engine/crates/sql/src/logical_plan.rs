@@ -3940,6 +3940,16 @@ mod tests {
     }
 
     #[test]
+    fn rejects_unsupported_complex_cast_targets_with_stable_diagnostics() {
+        let error = sql_to_logical_plan("SELECT CAST(payload AS JSON) FROM events")
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "sql: unsupported CAST target type: JSON"
+        );
+    }
+
+    #[test]
     fn parses_in_subquery() {
         let plan = sql_to_logical_plan(
             "SELECT * FROM orders WHERE user_id IN (SELECT id FROM users WHERE active = true)",
