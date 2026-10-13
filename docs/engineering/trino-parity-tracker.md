@@ -305,7 +305,8 @@ gate. The
 current HTTP exchange spool is bounded, replayable, and incrementally decoded;
 network backpressure, sustained pressure evidence, and AKS cancellation
 qualification remain open.
-Track 2 remains partial because the full prepared-statement protocol,
+Track 2 remains partial because prepared statements are now available through
+the Engine HTTP lifecycle but still lack a wire-compatible Trino protocol;
 correlated and other unsupported scalar subqueries, residual outer joins,
 ordered map comparisons, broader array element types, and broader typed DML are
 not yet implemented. Inner residual joins are correctness-complete but use a

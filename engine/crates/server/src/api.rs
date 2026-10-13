@@ -12,20 +12,20 @@ use axum::{Extension, Json, Router};
 use futures::StreamExt;
 use kaveon_catalog::CascadePolicy;
 use kaveon_core::collect_batches;
+use kaveon_core::predicate::ScalarValue;
 use kaveon_core::{
     AdmittedQueryMemory, CatalogDefinition, CatalogId, CatalogLifecycle, CatalogRevision,
     ColumnDefinition, ExchangeId, ExecutableFragment, MemoryAdmissionController, SchemaDefinition,
     SchemaId, StageId, TableDefinition, TableId, TaskId,
 };
-use kaveon_core::predicate::ScalarValue;
 use kaveon_exec::sort::SortExpr;
 use kaveon_exec::topn::merge_top_n;
+use kaveon_sql::logical_plan::{AggregateExpr, LogicalPlan};
 use kaveon_sql::logical_plan::{
     sql_to_logical_plan_for_binder,
     sql_to_logical_plan_for_binder_approximate_with_parameter_bindings,
     sql_to_logical_plan_for_binder_with_parameter_bindings,
 };
-use kaveon_sql::logical_plan::{AggregateExpr, LogicalPlan};
 use kaveon_sql::parser::{
     NativeTransactionalStatement, adapt_product_dml, parse_native_transactional,
 };
@@ -53,6 +53,18 @@ use crate::planner::SourcePins;
 struct QueryStore {
     queries: HashMap<String, QueryRecord>,
 }
+
+#[derive(Clone)]
+struct PreparedStatement {
+    query: String,
+    catalog: Option<String>,
+    schema: Option<String>,
+    owner: String,
+    parameters: Vec<String>,
+}
+
+static PREPARED_STATEMENTS: std::sync::LazyLock<RwLock<HashMap<String, PreparedStatement>>> =
+    std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
 
 /// Number of scan partitions scheduled per compatible worker. Splitting a
 /// large Parquet file by row groups keeps decoder and partial-aggregate work
@@ -643,6 +655,15 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .merge(crate::exchange::routes())
         .route("/v1/statement", post(submit_statement))
+        .route("/v1/prepare", post(prepare_statement))
+        .route(
+            "/v1/prepare/{statement_id}",
+            get(describe_prepared_statement).delete(close_prepared_statement),
+        )
+        .route(
+            "/v1/prepare/{statement_id}/execute",
+            post(execute_prepared_statement),
+        )
         .merge(crate::transaction_api::routes())
         .route("/v1/task", post(execute_task))
         .route(
@@ -827,7 +848,9 @@ fn request_named_parameters(
                 } else if let Some(float) = value.as_f64() {
                     ScalarValue::Float64(float)
                 } else {
-                    return Err(format!("named parameter '{name}' is not a supported number"));
+                    return Err(format!(
+                        "named parameter '{name}' is not a supported number"
+                    ));
                 }
             }
             serde_json::Value::String(value) => ScalarValue::Utf8(value.clone()),
@@ -2686,6 +2709,187 @@ async fn submit_statement(
     run_statement(state, identity, req, Uuid::new_v4().to_string()).await
 }
 
+#[derive(Deserialize)]
+struct PrepareRequest {
+    query: String,
+    #[serde(default)]
+    catalog: Option<String>,
+    #[serde(default)]
+    schema: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct PreparedExecuteRequest {
+    #[serde(default)]
+    parameters: Vec<serde_json::Value>,
+    #[serde(default)]
+    named_parameters: HashMap<String, serde_json::Value>,
+    #[serde(default)]
+    catalog: Option<String>,
+    #[serde(default)]
+    schema: Option<String>,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    client: Option<String>,
+    #[serde(default)]
+    time_zone: Option<String>,
+    #[serde(default)]
+    client_tags: Vec<String>,
+    #[serde(default)]
+    result_delivery: Option<String>,
+    #[serde(default)]
+    settings: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+#[derive(Serialize)]
+struct PreparedStatementResponse {
+    id: String,
+    query: String,
+    parameters: Vec<String>,
+}
+
+fn prepared_parameter_names(query: &str) -> Vec<String> {
+    let chars = query.chars().collect::<Vec<_>>();
+    let mut names = Vec::new();
+    let mut index = 0;
+    while index < chars.len() {
+        match chars[index] {
+            '$' => {
+                let start = index;
+                index += 1;
+                while index < chars.len() && chars[index].is_ascii_digit() {
+                    index += 1;
+                }
+                if index > start + 1 {
+                    names.push(chars[start..index].iter().collect::<String>());
+                    continue;
+                }
+            }
+            ':' if index + 1 < chars.len() && chars[index + 1] != ':' => {
+                let start = index;
+                index += 1;
+                if index < chars.len()
+                    && (chars[index] == '_' || chars[index].is_ascii_alphabetic())
+                {
+                    index += 1;
+                    while index < chars.len()
+                        && (chars[index] == '_' || chars[index].is_ascii_alphanumeric())
+                    {
+                        index += 1;
+                    }
+                    names.push(chars[start..index].iter().collect::<String>());
+                    continue;
+                }
+            }
+            '?' => names.push("?".to_owned()),
+            _ => {}
+        }
+        index += 1;
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
+async fn prepare_statement(
+    Extension(identity): Extension<Identity>,
+    Json(req): Json<PrepareRequest>,
+) -> impl IntoResponse {
+    let query = req.query.trim().trim_end_matches(';').trim().to_owned();
+    if query.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "query must not be empty", "code": "SYNTAX_ERROR"})),
+        )
+            .into_response();
+    }
+    if let Err(error) = kaveon_sql::parser::parse_sql(&query) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": error.to_string(), "code": "SYNTAX_ERROR"})),
+        )
+            .into_response();
+    }
+    let id = Uuid::new_v4().to_string();
+    let parameters = prepared_parameter_names(&query);
+    PREPARED_STATEMENTS.write().await.insert(
+        id.clone(),
+        PreparedStatement {
+            query: query.clone(),
+            catalog: req.catalog,
+            schema: req.schema,
+            owner: identity.principal,
+            parameters: parameters.clone(),
+        },
+    );
+    Json(PreparedStatementResponse { id, query, parameters }).into_response()
+}
+
+async fn describe_prepared_statement(
+    Extension(identity): Extension<Identity>,
+    Path(statement_id): Path<String>,
+) -> impl IntoResponse {
+    let statement = PREPARED_STATEMENTS.read().await.get(&statement_id).cloned();
+    match statement {
+        Some(statement) if identity.role == crate::security::Role::Admin || statement.owner == identity.principal => {
+            Json(PreparedStatementResponse {
+                id: statement_id,
+                query: statement.query,
+                parameters: statement.parameters,
+            })
+            .into_response()
+        }
+        Some(_) => StatusCode::FORBIDDEN.into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn close_prepared_statement(
+    Extension(identity): Extension<Identity>,
+    Path(statement_id): Path<String>,
+) -> impl IntoResponse {
+    let mut statements = PREPARED_STATEMENTS.write().await;
+    match statements.get(&statement_id) {
+        Some(statement) if identity.role == crate::security::Role::Admin || statement.owner == identity.principal => {
+            statements.remove(&statement_id);
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Some(_) => StatusCode::FORBIDDEN.into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn execute_prepared_statement(
+    State(state): State<Arc<AppState>>,
+    Extension(identity): Extension<Identity>,
+    Path(statement_id): Path<String>,
+    Json(req): Json<PreparedExecuteRequest>,
+) -> Response {
+    let statement = PREPARED_STATEMENTS.read().await.get(&statement_id).cloned();
+    let Some(statement) = statement else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if identity.role != crate::security::Role::Admin && statement.owner != identity.principal {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let request = StatementRequest {
+        query: statement.query,
+        parameters: req.parameters,
+        named_parameters: req.named_parameters,
+        catalog: req.catalog.or(statement.catalog),
+        schema: req.schema.or(statement.schema),
+        source: req.source,
+        client: req.client,
+        user: None,
+        time_zone: req.time_zone,
+        client_tags: req.client_tags,
+        result_delivery: req.result_delivery,
+        settings: req.settings,
+    };
+    run_statement(state, identity, request, Uuid::new_v4().to_string()).await
+}
+
 /// Runs one statement under `query_id` exactly as `POST /v1/statement`
 /// does — settings, admission, the record, cancellation, planning and
 /// execution — and answers with the response the client would get. The
@@ -3172,11 +3376,7 @@ async fn run_statement(
             &named_parameters,
         )
     } else {
-        sql_to_logical_plan_for_binder_with_parameter_bindings(
-            &sql,
-            &parameters,
-            &named_parameters,
-        )
+        sql_to_logical_plan_for_binder_with_parameter_bindings(&sql, &parameters, &named_parameters)
     };
     let mut plan = match lowered {
         Ok(p) => p,
@@ -11383,7 +11583,7 @@ mod tests {
         super::StatementRequest {
             query: query.into(),
             parameters: vec![],
-        named_parameters: std::collections::HashMap::new(),
+            named_parameters: std::collections::HashMap::new(),
             catalog: None,
             schema: None,
             source: None,
@@ -11414,8 +11614,8 @@ mod tests {
                 super::ScalarValue::Null,
             ]
         );
-        let error = super::request_parameters(&[serde_json::json!({"unsafe": "object"})])
-            .unwrap_err();
+        let error =
+            super::request_parameters(&[serde_json::json!({"unsafe": "object"})]).unwrap_err();
         assert!(error.contains("parameter $1 must be null, boolean, number, or string"));
         let request: super::StatementRequest = serde_json::from_value(serde_json::json!({
             "query": "SELECT * FROM t WHERE id = $1",
@@ -11439,7 +11639,10 @@ mod tests {
         )
         .unwrap();
         let debug = format!("{plan:?}");
-        assert!(debug.contains("Int64(42)"), "integer did not reach planning");
+        assert!(
+            debug.contains("Int64(42)"),
+            "integer did not reach planning"
+        );
         assert!(
             debug.contains("Utf8(\"Europe\")"),
             "string did not reach planning"
@@ -11468,12 +11671,13 @@ mod tests {
         }))
         .unwrap();
         let values = super::request_named_parameters(&request.named_parameters).unwrap();
-        let plan = kaveon_sql::logical_plan::sql_to_logical_plan_for_binder_with_parameter_bindings(
-            &request.query,
-            &[],
-            &values,
-        )
-        .unwrap();
+        let plan =
+            kaveon_sql::logical_plan::sql_to_logical_plan_for_binder_with_parameter_bindings(
+                &request.query,
+                &[],
+                &values,
+            )
+            .unwrap();
         let debug = format!("{plan:?}");
         assert!(debug.contains("Utf8(\"Europe\")"));
         assert!(debug.contains("Bool(true)"));
@@ -12608,17 +12812,15 @@ mod tests {
         let submitting = {
             let state = state.clone();
             let analyst = analyst.clone();
-            tokio::spawn(
-                async move {
-                    submit(
-                        &state,
-                        &analyst,
-                        sql,
-                        serde_json::json!({"result_cache": false}),
-                    )
-                    .await
-                },
-            )
+            tokio::spawn(async move {
+                submit(
+                    &state,
+                    &analyst,
+                    sql,
+                    serde_json::json!({"result_cache": false}),
+                )
+                .await
+            })
         };
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         let queued = {
@@ -13737,7 +13939,7 @@ mod tests {
             axum::Json(super::StatementRequest {
                 query: query.into(),
                 parameters: vec![],
-        named_parameters: std::collections::HashMap::new(),
+                named_parameters: std::collections::HashMap::new(),
                 catalog: Some("lake".into()),
                 schema: Some("sales".into()),
                 source: None,
@@ -14656,7 +14858,7 @@ mod tests {
                     super::StatementRequest {
                         query: "ANALYZE orders WITH (distinct = true)".into(),
                         parameters: vec![],
-        named_parameters: std::collections::HashMap::new(),
+                        named_parameters: std::collections::HashMap::new(),
                         catalog: Some("lake".into()),
                         schema: Some("sales".into()),
                         source: None,
@@ -15882,7 +16084,7 @@ mod tests {
                     super::StatementRequest {
                         query: "ANALYZE events WITH (cube = true)".into(),
                         parameters: vec![],
-        named_parameters: std::collections::HashMap::new(),
+                        named_parameters: std::collections::HashMap::new(),
                         catalog: Some("lake".into()),
                         schema: Some("sales".into()),
                         source: None,
@@ -16236,6 +16438,61 @@ mod tests {
         assert_eq!(development["role"], "admin");
         assert_eq!(development["auth"], "development");
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn prepared_statement_lifecycle_is_owner_scoped() {
+        let owner = admin();
+        let prepared = super::prepare_statement(
+            axum::Extension(owner.clone()),
+            axum::Json(super::PrepareRequest {
+                query: "SELECT * FROM events WHERE user_id = $1 AND region = :region".into(),
+                catalog: Some("lake".into()),
+                schema: Some("sales".into()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(prepared.status(), StatusCode::OK);
+        let body = json_body(prepared).await;
+        let id = body["id"].as_str().unwrap().to_owned();
+        assert_eq!(body["parameters"], serde_json::json!(["$1", ":region"]));
+
+        let described = super::describe_prepared_statement(
+            axum::Extension(owner.clone()),
+            axum::extract::Path(id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(described.status(), StatusCode::OK);
+
+        let other = crate::security::Identity {
+            principal: "other-user".into(),
+            display_identity: None,
+            role: crate::security::Role::Analyst,
+        };
+        let forbidden = super::describe_prepared_statement(
+            axum::Extension(other),
+            axum::extract::Path(id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+
+        let closed = super::close_prepared_statement(
+            axum::Extension(owner),
+            axum::extract::Path(id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(closed.status(), StatusCode::NO_CONTENT);
+        let missing = super::describe_prepared_statement(
+            axum::Extension(admin()),
+            axum::extract::Path(id),
+        )
+        .await
+        .into_response();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
