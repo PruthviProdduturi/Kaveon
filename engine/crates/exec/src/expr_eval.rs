@@ -737,6 +737,7 @@ fn cast_to_string(arr: &ArrayRef) -> Result<StringArray> {
     }
 }
 
+#[derive(Clone, Copy)]
 enum CompareKind {
     Eq,
     Ne,
@@ -832,16 +833,34 @@ fn comparison(left: &ArrayRef, right: &ArrayRef, kind: CompareKind) -> Result<Bo
         left.as_any().downcast_ref::<StructArray>(),
         right.as_any().downcast_ref::<StructArray>(),
     ) {
-        if !matches!(kind, CompareKind::Eq | CompareKind::Ne) {
-            return Err(KaveonError::Execution(
-                "ordered comparison is not supported for ROW values".into(),
-            ));
-        }
         if left.num_columns() != right.num_columns() || left.column_names() != right.column_names()
         {
             return Err(KaveonError::Execution(
                 "ROW values must have matching fields for comparison".into(),
             ));
+        }
+        if matches!(kind, CompareKind::Lt | CompareKind::Le | CompareKind::Gt | CompareKind::Ge) {
+            let mut rows = Vec::with_capacity(left.len());
+            for row in 0..left.len() {
+                let mut result = Some(false);
+                for (left_field, right_field) in left.columns().iter().zip(right.columns()) {
+                    let left_value = left_field.slice(row, 1);
+                    let right_value = right_field.slice(row, 1);
+                    let equal = comparison(&left_value, &right_value, CompareKind::Eq)?;
+                    if equal.is_null(0) {
+                        result = None;
+                        break;
+                    }
+                    if equal.value(0) {
+                        continue;
+                    }
+                    let ordered = comparison(&left_value, &right_value, kind)?;
+                    result = ordered.iter().next().flatten();
+                    break;
+                }
+                rows.push(result);
+            }
+            return Ok(BooleanArray::from(rows));
         }
         let mut result = BooleanArray::from(vec![true; left.len()]);
         for (left_field, right_field) in left.columns().iter().zip(right.columns()) {
@@ -3171,6 +3190,46 @@ mod tests {
             value.as_boolean().iter().collect::<Vec<_>>(),
             vec![Some(true), Some(true)]
         );
+    }
+
+    #[test]
+    fn row_ordering_is_lexicographic_with_null_propagation() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef,
+        )])
+        .unwrap();
+        let row = |first: i64, second: Option<i64>| Expr::Function {
+            name: "ROW".into(),
+            args: vec![
+                Expr::Literal(ScalarValue::Int64(first)),
+                second
+                    .map(ScalarValue::Int64)
+                    .map(Expr::Literal)
+                    .unwrap_or(Expr::Literal(ScalarValue::Null)),
+            ],
+        };
+        let value = evaluate(
+            &Expr::BinaryOp {
+                left: Box::new(row(1, Some(5))),
+                op: BinaryOp::Lt,
+                right: Box::new(row(2, Some(0))),
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(value.as_boolean().iter().collect::<Vec<_>>(), vec![Some(true); 3]);
+
+        let value = evaluate(
+            &Expr::BinaryOp {
+                left: Box::new(row(1, None)),
+                op: BinaryOp::Lt,
+                right: Box::new(row(1, Some(2))),
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(value.as_boolean().iter().collect::<Vec<_>>(), vec![None; 3]);
     }
 
     #[test]

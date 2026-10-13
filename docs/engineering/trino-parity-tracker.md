@@ -77,9 +77,10 @@ foundations, but several operators are still centralized or narrow:
 - Numeric, text, and boolean array literals are supported as null-preserving
   typed Arrow lists. `CARDINALITY`, `CONTAINS`, `ARRAY_POSITION`,
   positive/negative-stride slices, and `ELEMENT_AT` cover those list types;
-  `ROW(...)` produces typed Arrow structs with field projection and equality;
-  `MAP(...)` builds Arrow maps with key lookup, order-independent equality,
-  and typed key/value projections. Ordered row/map comparison remains open.
+  `ROW(...)` produces typed Arrow structs with field projection, equality, and
+  lexicographic ordering; `MAP(...)` builds Arrow maps with key lookup,
+  order-independent equality, and typed key/value projections. Ordered map
+  comparison remains open.
   Scalar, DATE, timestamp, and DECIMAL casts are supported; complex cast
   targets fail with typed planner diagnostics. Dereference, `UNNEST`, other
   array operations, and broad JSON operations remain open; scalar extraction
@@ -278,7 +279,7 @@ qualification documents; this tracker remains the single ordered work list.
 ### Current focused validation
 
 The latest focused validation passes 330 `kaveon-server` tests, 108
-`kaveon-sql` tests, and 231 `kaveon-exec` tests (four executor benchmarks are
+`kaveon-sql` tests, and 232 `kaveon-exec` tests (four executor benchmarks are
 ignored). These counts are package-level validation snapshots; they do not
 close the broader multi-worker, AKS, or cross-connector qualification gates
 below.
@@ -290,7 +291,7 @@ current HTTP exchange spool is bounded, replayable, and incrementally decoded;
 network backpressure, sustained pressure evidence, and AKS cancellation
 qualification remain open.
 Track 2 remains partial because the full prepared-statement protocol,
-correlated and other unsupported scalar subqueries, ordered/map comparisons,
+correlated and other unsupported scalar subqueries, ordered map comparisons,
 non-numeric/text array slices, and broader typed DML are not yet implemented.
 Multiset set operations are now implemented
 and covered end to end. Positional
