@@ -125,6 +125,10 @@ def main() -> int:
     make "nothing to do" indistinguishable from "never ran".
     """
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
+    # httpx logs a line per request at INFO, and a sweep makes one request per
+    # table it checks — which buried the one line the job exists to print under
+    # a page of round trips. The transport's failures still surface.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     actor = sweep_identity()
     if not actor:
         print("KAVEON_DLM_SWEEP_ACTOR is not set; refusing to sweep as nobody")
