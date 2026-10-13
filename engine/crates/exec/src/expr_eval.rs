@@ -1957,6 +1957,33 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             .collect();
                         return Ok(Arc::new(result));
                     }
+                    DataType::Decimal128(precision, scale) => {
+                        let needle = compute::cast(
+                            &args[1],
+                            &DataType::Decimal128(precision, scale),
+                        )?;
+                        let needle = needle.as_primitive::<arrow::datatypes::Decimal128Type>();
+                        let result: BooleanArray = (0..num_rows)
+                            .map(|row| {
+                                if list.is_null(row) || needle.is_null(row) {
+                                    return None;
+                                }
+                                let values = list.value(row);
+                                let values = values
+                                    .as_primitive::<arrow::datatypes::Decimal128Type>();
+                                let mut saw_null = false;
+                                for index in 0..values.len() {
+                                    if values.is_null(index) {
+                                        saw_null = true;
+                                    } else if values.value(index) == needle.value(row) {
+                                        return Some(true);
+                                    }
+                                }
+                                if saw_null { None } else { Some(false) }
+                            })
+                            .collect();
+                        return Ok(Arc::new(result));
+                    }
                     DataType::Utf8 => {
                         let needle = compute::cast(&args[1], &DataType::Utf8)?;
                         let needle = needle.as_string::<i32>();
@@ -2068,6 +2095,34 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             }
                             let values = list.value(row);
                             let values = values.as_primitive::<Float64Type>();
+                            (0..values.len())
+                                .find(|&index| {
+                                    if needle.is_null(row) {
+                                        values.is_null(index)
+                                    } else {
+                                        !values.is_null(index)
+                                            && values.value(index) == needle.value(row)
+                                    }
+                                })
+                                .map(|index| index as i64 + 1)
+                                .or(Some(0))
+                        })
+                        .collect::<Vec<_>>()
+                }
+                DataType::Decimal128(precision, scale) => {
+                    let needle = compute::cast(
+                        &args[1],
+                        &DataType::Decimal128(precision, scale),
+                    )?;
+                    let needle = needle.as_primitive::<arrow::datatypes::Decimal128Type>();
+                    (0..num_rows)
+                        .map(|row| {
+                            if list.is_null(row) {
+                                return None;
+                            }
+                            let values = list.value(row);
+                            let values = values
+                                .as_primitive::<arrow::datatypes::Decimal128Type>();
                             (0..values.len())
                                 .find(|&index| {
                                     if needle.is_null(row) {
@@ -5216,13 +5271,13 @@ mod tests {
                 scale: 2,
             })
         };
-        let array = Expr::Function {
+        let array = || Expr::Function {
             name: "ARRAY".into(),
             args: vec![decimal(9007199254740992), decimal(1)],
         };
         let element = Expr::Function {
             name: "ELEMENT_AT".into(),
-            args: vec![array, Expr::Literal(ScalarValue::Int64(1))],
+            args: vec![array(), Expr::Literal(ScalarValue::Int64(1))],
         };
         let result = evaluate(&element, &batch).unwrap();
         assert_eq!(result.data_type(), &DataType::Decimal128(20, 2));
@@ -5231,6 +5286,22 @@ mod tests {
                 .as_primitive::<arrow::datatypes::Decimal128Type>()
                 .value(0),
             9007199254740992
+        );
+        let contains = Expr::Function {
+            name: "CONTAINS".into(),
+            args: vec![array(), decimal(1)],
+        };
+        assert!(evaluate(&contains, &batch).unwrap().as_boolean().value(0));
+        let position = Expr::Function {
+            name: "ARRAY_POSITION".into(),
+            args: vec![array(), decimal(1)],
+        };
+        assert_eq!(
+            evaluate(&position, &batch)
+                .unwrap()
+                .as_primitive::<Int64Type>()
+                .value(0),
+            2
         );
     }
 
