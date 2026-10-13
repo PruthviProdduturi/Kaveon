@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use arrow::array::{Array, AsArray, RecordBatch};
 use arrow::datatypes::{DataType, Int32Type, SchemaRef};
@@ -9,6 +9,8 @@ use crate::aggregate::AggregateValue;
 pub enum SetOpMode {
     Intersect,
     Except,
+    IntersectAll,
+    ExceptAll,
 }
 
 pub struct SetOpOperator {
@@ -16,6 +18,7 @@ pub struct SetOpOperator {
     right: Box<dyn BatchOperator>,
     mode: SetOpMode,
     right_set: Option<HashSet<Vec<AggregateValue>>>,
+    right_counts: Option<HashMap<Vec<AggregateValue>, usize>>,
     emitted: HashSet<Vec<AggregateValue>>,
     memory: Option<OperatorMemoryAccount>,
     reservations: ReservationSlab,
@@ -32,6 +35,7 @@ impl SetOpOperator {
             right,
             mode,
             right_set: None,
+            right_counts: None,
             emitted: HashSet::new(),
             memory: None,
             reservations: ReservationSlab::default(),
@@ -74,6 +78,7 @@ impl SetOpOperator {
             ));
         }
         let mut set = HashSet::new();
+        let mut counts = HashMap::new();
         while let Some(batch) = self.right.next_batch()? {
             let _workspace = self
                 .memory
@@ -91,6 +96,7 @@ impl SetOpOperator {
                 let key: Vec<AggregateValue> = (0..num_cols)
                     .map(|col| extract_value(batch.column(col), row))
                     .collect::<Result<_>>()?;
+                *counts.entry(key.clone()).or_insert(0) += 1;
                 if !set.contains(&key) {
                     self.reserve_key(&key)?;
                     set.insert(key);
@@ -98,6 +104,7 @@ impl SetOpOperator {
             }
         }
         self.right_set = Some(set);
+        self.right_counts = Some(counts);
         Ok(())
     }
 }
@@ -114,6 +121,7 @@ impl BatchOperator for SetOpOperator {
         loop {
             let Some(batch) = self.left.next_batch()? else {
                 self.right_set = Some(HashSet::new());
+                self.right_counts = Some(HashMap::new());
                 self.emitted = HashSet::new();
                 self.reservations.clear();
                 return Ok(None);
@@ -137,15 +145,37 @@ impl BatchOperator for SetOpOperator {
                 let key: Vec<AggregateValue> = (0..num_cols)
                     .map(|col| extract_value(batch.column(col), row))
                     .collect::<Result<_>>()?;
-                let in_right = self.right_set.as_ref().unwrap().contains(&key);
-                let emit = match self.mode {
-                    SetOpMode::Intersect => in_right,
-                    SetOpMode::Except => !in_right,
-                };
-                if emit && !self.emitted.contains(&key) {
-                    self.reserve_key(&key)?;
-                    self.emitted.insert(key);
-                    keep.push(row as u32);
+                match self.mode {
+                    SetOpMode::Intersect | SetOpMode::Except => {
+                        let in_right = self.right_set.as_ref().unwrap().contains(&key);
+                        let emit = match self.mode {
+                            SetOpMode::Intersect => in_right,
+                            SetOpMode::Except => !in_right,
+                            SetOpMode::IntersectAll | SetOpMode::ExceptAll => unreachable!(),
+                        };
+                        if emit && !self.emitted.contains(&key) {
+                            self.reserve_key(&key)?;
+                            self.emitted.insert(key);
+                            keep.push(row as u32);
+                        }
+                    }
+                    SetOpMode::IntersectAll => {
+                        if let Some(remaining) = self.right_counts.as_mut().unwrap().get_mut(&key)
+                        {
+                            if *remaining > 0 {
+                                *remaining -= 1;
+                                keep.push(row as u32);
+                            }
+                        }
+                    }
+                    SetOpMode::ExceptAll => {
+                        let remaining = self.right_counts.as_mut().unwrap().entry(key).or_insert(0);
+                        if *remaining > 0 {
+                            *remaining -= 1;
+                        } else {
+                            keep.push(row as u32);
+                        }
+                    }
                 }
             }
 
@@ -292,6 +322,38 @@ mod tests {
             (SetOpMode::Except, vec![Some("jp".to_owned())]),
         ] {
             let mut operator = SetOpOperator::new(side(dictionary()), side(plain()), mode);
+            let mut batches = Vec::new();
+            while let Some(batch) = operator.next_batch().unwrap() {
+                batches.push(batch);
+            }
+            assert_eq!(strings(batches), expected);
+        }
+    }
+
+    #[test]
+    fn multiset_modes_preserve_duplicate_counts() {
+        let left = || -> ArrayRef {
+            Arc::new(StringArray::from(vec![
+                Some("a"),
+                Some("a"),
+                Some("a"),
+                Some("b"),
+            ]))
+        };
+        let right = || -> ArrayRef {
+            Arc::new(StringArray::from(vec![Some("a"), Some("a"), Some("c")]))
+        };
+        for (mode, expected) in [
+            (
+                SetOpMode::IntersectAll,
+                vec![Some("a".to_owned()), Some("a".to_owned())],
+            ),
+            (
+                SetOpMode::ExceptAll,
+                vec![Some("a".to_owned()), Some("b".to_owned())],
+            ),
+        ] {
+            let mut operator = SetOpOperator::new(side(left()), side(right()), mode);
             let mut batches = Vec::new();
             while let Some(batch) = operator.next_batch().unwrap() {
                 batches.push(batch);
