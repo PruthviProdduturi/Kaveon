@@ -247,6 +247,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "timestamp_decimal_array_functions",
+        "SELECT CARDINALITY(ARRAY[CAST('2026-01-01 00:00:00.000000' AS TIMESTAMP), CAST('2026-02-01 00:00:00.000000' AS TIMESTAMP)]) AS timestamp_card, ARRAY_POSITION(ARRAY[CAST('2026-01-01 00:00:00.000000' AS TIMESTAMP), CAST('2026-02-01 00:00:00.000000' AS TIMESTAMP)], CAST('2026-02-01 00:00:00.000000' AS TIMESTAMP)) AS timestamp_pos, CARDINALITY(ARRAY[CAST(1.20 AS DECIMAL(10, 2)), CAST(2.30 AS DECIMAL(10, 2))]) AS decimal_card, ARRAY_POSITION(ARRAY[CAST(1.20 AS DECIMAL(10, 2)), CAST(2.30 AS DECIMAL(10, 2))], CAST(2.30 AS DECIMAL(10, 2))) AS decimal_pos FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "scalar_aggregate_filter",
         "SELECT country, COUNT(*) AS n FROM {T} WHERE user_id < (SELECT MAX(user_id) FROM {U}) GROUP BY country ORDER BY country",
         true,
