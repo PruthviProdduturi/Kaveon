@@ -197,7 +197,11 @@ pub fn evaluate(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
             }
             let evaluated_args: Vec<ArrayRef> = args
                 .iter()
-                .map(|a| evaluate(a, batch).and_then(|array| decode_dictionary(&array)))
+                .map(|a| {
+                    evaluate(a, batch)
+                        .and_then(|array| decode_dictionary(&array))
+                        .and_then(|array| normalize_large_list(&array))
+                })
                 .collect::<Result<_>>()?;
             eval_scalar_function(name, &evaluated_args, batch.num_rows())
         }
@@ -210,6 +214,13 @@ pub fn evaluate(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
             "star (*) cannot be evaluated as an expression".into(),
         )),
     }
+}
+
+fn normalize_large_list(array: &ArrayRef) -> Result<ArrayRef> {
+    let DataType::LargeList(field) = array.data_type() else {
+        return Ok(Arc::clone(array));
+    };
+    Ok(compute::cast(array, &DataType::List(field.clone()))?)
 }
 
 pub fn evaluate_predicate(expr: &Expr, batch: &RecordBatch) -> Result<BooleanArray> {
@@ -6319,6 +6330,17 @@ mod tests {
         let small = Arc::new(small_builder.finish()) as ArrayRef;
         let mixed = comparison(&small, &right, CompareKind::Lt).unwrap();
         assert!(mixed.value(0));
+
+        let batch = RecordBatch::try_from_iter([("arr", right.clone())]).unwrap();
+        let cardinality = evaluate(
+            &Expr::Function {
+                name: "CARDINALITY".into(),
+                args: vec![Expr::Column("arr".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(cardinality.as_primitive::<Int64Type>().value(0), 2);
     }
 
     #[test]

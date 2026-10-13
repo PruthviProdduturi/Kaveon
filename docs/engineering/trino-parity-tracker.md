@@ -316,6 +316,9 @@ qualification documents; this tracker remains the single ordered work list.
   arrays before evaluation, including mixed `List`/`LargeList` operands, so
   either storage representation uses the same lexicographic and null
   semantics; a focused executor regression covers both paths.
+- Scalar list functions receive the same normalization, so `LargeList` columns
+  can use the supported `CARDINALITY` and array-function paths when their
+  offsets fit the 32-bit execution representation.
 - Three-worker global `ORDER BY`/TopN centralized merge correctness is now
   qualified for NULL ordering and ties against a single-partition reference
   (`bb788709`). The input remains distributed, while the exact global merge
