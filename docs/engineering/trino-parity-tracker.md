@@ -126,6 +126,12 @@ foundations, but several operators are still centralized or narrow:
   process-local registry by table and source location. Independent embedded
   catalog stores can no longer suppress one another's refresh, which removes a
   parallel-test and multi-store stale-statistics race.
+- The analytical coordinator result cache is now explicitly qualified: it
+  normalizes statement text, keys entries by catalog/schema snapshot, pinned
+  Delta versions, and time zone, applies byte/TTL/LRU bounds, excludes paged
+  results, and supports an admin clear endpoint. `result_cache = false` is a
+  per-statement bypass. KaveonDB transactional state is not served from this
+  cache; revision/CAS visibility remains authoritative after writes.
 - Numeric, text, and boolean array literals are supported as null-preserving
   typed Arrow lists. `CARDINALITY`, `CONTAINS`, `ARRAY_POSITION`,
   positive/negative-stride slices, and `ELEMENT_AT` cover those list types;
