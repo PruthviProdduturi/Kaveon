@@ -27,6 +27,24 @@ pub fn presented_type(data_type: &DataType) -> String {
     match data_type {
         DataType::Dictionary(_, values) => values.to_string(),
         DataType::List(field) => format!("List({})", presented_type(field.data_type())),
+        DataType::LargeList(field) => format!("List({})", presented_type(field.data_type())),
+        DataType::FixedSizeList(field, _) => format!("List({})", presented_type(field.data_type())),
+        DataType::Struct(fields) => format!(
+            "Row({})",
+            fields
+                .iter()
+                .map(|field| format!("{} {}", field.name(), presented_type(field.data_type())))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        DataType::Map(field, _) => match field.data_type() {
+            DataType::Struct(fields) if fields.len() == 2 => format!(
+                "Map({}, {})",
+                presented_type(fields[0].data_type()),
+                presented_type(fields[1].data_type())
+            ),
+            _ => "Map".to_owned(),
+        },
         other => other.to_string(),
     }
 }
@@ -200,5 +218,22 @@ mod tests {
             batches_to_rows(&[batch]),
             vec![vec![json!("x")], vec![Value::Null], vec![json!("y")]]
         );
+    }
+
+    #[test]
+    fn nested_types_use_client_facing_names() {
+        let map = DataType::Map(
+            Field::new(
+                "entries",
+                DataType::Struct(vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::Int64, true),
+                ].into()),
+                false,
+            )
+            .into(),
+            false,
+        );
+        assert_eq!(presented_type(&map), "Map(Utf8, Int64)");
     }
 }

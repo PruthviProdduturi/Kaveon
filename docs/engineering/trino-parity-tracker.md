@@ -176,6 +176,8 @@ foundations, but several operators are still centralized or narrow:
   Arrow lists, structs, and UTF-8-keyed maps as JSON arrays/objects rather than
   Arrow debug text; focused server coverage protects the wire shape. Nested
   temporal/binary values and non-UTF-8 map keys remain outside this slice.
+  Result column metadata uses the corresponding client-facing `List`, `Row`,
+  and `Map(key, value)` spellings instead of Arrow's internal field dump.
 - `QUALIFY` now has an exact-result distributed differential case using
   partitioned `ROW_NUMBER()` output. This qualifies the implemented
   row-number filter shape only; window `NULLS FIRST`/`NULLS LAST` ordering is
@@ -363,8 +365,9 @@ invalidation, isolation, bounds, and restart evidence listed above.
 - The same corpus now checks `MAP_ELEMENT_AT` and order-independent map
   equality on scalar results across those encodings and execution paths;
   nullable map values are now covered as well, preserving equality when both
-  sides contain the same null entry. Ordered map comparisons and map-valued
-  result materialization remain open.
+  sides contain the same null entry. Ordered map comparisons and differential
+  comparison of complex-valued result sets remain open; API materialization of
+  supported map values is qualified separately below.
 - Date-array construction, cardinality, positional lookup, reverse, and
   distinct operations are covered in the same differential paths. Timestamp
   and decimal arrays now have the same cardinality/positional coverage. The
