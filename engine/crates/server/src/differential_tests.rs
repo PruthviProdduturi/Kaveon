@@ -351,6 +351,16 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "intersect_all",
+        "SELECT region FROM {T} WHERE user_id < 3 INTERSECT ALL SELECT region FROM {T} WHERE user_id < 5 ORDER BY region",
+        true,
+    ),
+    (
+        "except_all",
+        "SELECT region FROM {T} WHERE user_id < 5 EXCEPT ALL SELECT region FROM {T} WHERE user_id < 3 ORDER BY region",
+        true,
+    ),
+    (
         "cte_aggregate_projection",
         "WITH regional AS (SELECT region, SUM(actions) AS actions FROM {T} GROUP BY region) SELECT region, actions FROM regional ORDER BY region",
         true,
@@ -1730,11 +1740,19 @@ fn distributed_outer_and_cross_joins_match_the_local_result() {
             .unwrap_or_else(|error| panic!("{statement}: {error}"));
         let local = canonical_rows(&drain(local_plan.operator.as_mut()), ordered);
         drop(local_plan);
-        assert_eq!(pool.snapshot().current_bytes, 0, "{statement} leaked locally");
+        assert_eq!(
+            pool.snapshot().current_bytes,
+            0,
+            "{statement} leaked locally"
+        );
         let pool = QueryMemoryPool::new("join-modes", 256 << 20).unwrap();
         let distributed = execute_distributed("join-modes", &plan, &manager, 2, &pool)
             .unwrap_or_else(|error| panic!("{statement} (distributed): {error}"));
-        assert_eq!(pool.snapshot().current_bytes, 0, "{statement} leaked distributed");
+        assert_eq!(
+            pool.snapshot().current_bytes,
+            0,
+            "{statement} leaked distributed"
+        );
         assert_eq!(canonical_rows(&distributed, ordered), local, "{statement}");
         assert!(!local.is_empty(), "{statement}");
     }

@@ -61,8 +61,9 @@ foundations, but several operators are still centralized or narrow:
   common set operations work. Uncorrelated aggregate scalar subqueries in
   `WHERE` and bounded projection scalar subqueries are supported when they
   return one ungrouped, single-column aggregate. Correlated, multi-row, and
-  other scalar forms, recursive CTEs, `INTERSECT ALL`, `EXCEPT ALL`, the full
-  prepared-statement protocol, and general lake-table DML remain missing.
+  other scalar forms, recursive CTEs, the full prepared-statement protocol,
+  and general lake-table DML remain missing. `INTERSECT ALL` and `EXCEPT ALL`
+  now preserve multiplicity through local and distributed execution.
   Typed positional `$1` and sequential `?` parameters are now validated and
   bound through the HTTP statement API; named placeholders still fail with an
   explicit binding diagnostic.
