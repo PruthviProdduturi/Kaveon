@@ -3129,17 +3129,44 @@ fn eval_extract(field: DateField, expr: &Expr, batch: &RecordBatch) -> Result<Ar
 }
 
 /// Extract a scalar at a conservative SQL/JSON path. The supported path is
-/// `$` followed by dot-separated object keys (for example `$.customer.id`).
-/// Arrays and objects are deliberately rejected by the scalar function rather
-/// than being silently stringified.
+/// `$` followed by dot-separated object keys and numeric array subscripts (for
+/// example `$.customer.orders[0].id`). Arrays and objects are deliberately
+/// rejected by the scalar function rather than being silently stringified.
 fn json_extract_scalar(document: &str, path: &str) -> Option<String> {
-    let keys = path
-        .strip_prefix("$")?
-        .split('.')
-        .filter(|key| !key.is_empty());
+    enum Segment {
+        Key(String),
+        Index(usize),
+    }
+    let mut remainder = path.strip_prefix('$')?;
+    let mut segments = Vec::new();
+    while !remainder.is_empty() {
+        if let Some(after_dot) = remainder.strip_prefix('.') {
+            let end = after_dot
+                .find(['.', '['])
+                .unwrap_or(after_dot.len());
+            let key = &after_dot[..end];
+            if key.is_empty() {
+                return None;
+            }
+            segments.push(Segment::Key(key.to_owned()));
+            remainder = &after_dot[end..];
+            continue;
+        }
+        if let Some(after_open) = remainder.strip_prefix('[') {
+            let close = after_open.find(']')?;
+            let index = after_open[..close].parse::<usize>().ok()?;
+            segments.push(Segment::Index(index));
+            remainder = &after_open[close + 1..];
+            continue;
+        }
+        return None;
+    }
     let mut value = serde_json::from_str::<serde_json::Value>(document).ok()?;
-    for key in keys {
-        value = value.get(key)?.clone();
+    for segment in segments {
+        value = match segment {
+            Segment::Key(key) => value.get(key)?.clone(),
+            Segment::Index(index) => value.get(index)?.clone(),
+        };
     }
     match value {
         serde_json::Value::Null | serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
@@ -5575,5 +5602,34 @@ mod tests {
         assert_eq!(values.value(0), "42");
         assert!(values.is_null(1));
         assert!(values.is_null(2));
+    }
+
+    #[test]
+    fn evaluates_json_extract_scalar_with_array_subscripts() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "document",
+                Arc::new(StringArray::from(vec![
+                    Some(r#"{"orders":[{"id":"A-17"}]}"#),
+                    Some(r#"{"orders":[]}"#),
+                ])) as ArrayRef,
+            ),
+            (
+                "path",
+                Arc::new(StringArray::from(vec![
+                    Some("$.orders[0].id"),
+                    Some("$.orders[0].id"),
+                ])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let expr = Expr::Function {
+            name: "JSON_EXTRACT_SCALAR".into(),
+            args: vec![Expr::Column("document".into()), Expr::Column("path".into())],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        let values = result.as_string::<i32>();
+        assert_eq!(values.value(0), "A-17");
+        assert!(values.is_null(1));
     }
 }
