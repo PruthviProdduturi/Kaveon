@@ -35,6 +35,14 @@ the same acceptance contract rather than separate informal benchmarks.
 
 ## Audit snapshot — October 12, 2026
 
+The local parity baseline was rerun from commit `6b4c5c4f` on October 12:
+`cargo test -p kaveon-server` passed **340/340** tests and
+`cargo test -p kaveon-exec` passed **256/256** non-ignored tests (four benchmark
+tests remain intentionally ignored). Documentation validation also passed for
+139 Markdown files, 39 routes, and 9 SVGs. This is an in-process regression
+baseline; it does not replace the deployed three-worker qualification gates
+listed below.
+
 The initial repository audit confirms that the Engine has real distributed
 foundations, but several operators are still centralized or narrow:
 
