@@ -251,6 +251,9 @@ qualification documents; this tracker remains the single ordered work list.
   for numeric and text lists, returns `0` when absent, preserves NULL list and
   element semantics, and fails explicitly for unsupported element types
   (`df3fa16a`).
+- Array subscripts now lower to `ELEMENT_AT(array, index)` with one-based and
+  negative-index semantics, null list/index handling, and null for out-of-range
+  positions; array slices remain an explicit boundary.
 
 ### Current focused validation
 

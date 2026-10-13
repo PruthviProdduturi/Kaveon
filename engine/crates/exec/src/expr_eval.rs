@@ -1844,6 +1844,43 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             };
             Ok(Arc::new(Int64Array::from(result)))
         }
+        "ELEMENT_AT" => {
+            check_arity(name, args, 2)?;
+            let list = args[0]
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .ok_or_else(|| {
+                    KaveonError::Execution(
+                        "ELEMENT_AT currently supports ARRAY/List values only".into(),
+                    )
+                })?;
+            let indices = compute::cast(&args[1], &DataType::Int64)?;
+            let indices = indices.as_primitive::<Int64Type>();
+            let mut positions = Vec::with_capacity(num_rows);
+            for row in 0..num_rows {
+                if indices.is_null(row) {
+                    positions.push(None);
+                    continue;
+                }
+                let index = indices.value(row);
+                if list.is_null(row) || index == 0 {
+                    positions.push(None);
+                    continue;
+                }
+                let start = list.value_offsets()[row] as i64;
+                let end = list.value_offsets()[row + 1] as i64;
+                let length = end - start;
+                let offset = if index > 0 { index - 1 } else { length + index };
+                positions.push((0..length)
+                    .contains(&offset)
+                    .then_some(start + offset));
+            }
+            Ok(compute::take(
+                list.values().as_ref(),
+                &Int64Array::from(positions),
+                None,
+            )?)
+        }
         "STRPOS" | "POSITION" => {
             check_arity(name, args, 2)?;
             let arr = as_string_array(&args[0])?;
@@ -4054,6 +4091,47 @@ mod tests {
         };
         let result = evaluate(&expr, &batch).unwrap();
         assert_eq!(result.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(), vec![Some(2)]);
+    }
+
+    #[test]
+    fn element_at_uses_one_based_and_negative_indexes() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+        )])
+        .unwrap();
+        let array = Expr::Function {
+            name: "ARRAY".into(),
+            args: vec![
+                Expr::Literal(ScalarValue::Int64(10)),
+                Expr::Literal(ScalarValue::Int64(20)),
+                Expr::Literal(ScalarValue::Int64(30)),
+            ],
+        };
+        let first = evaluate(
+            &Expr::Function {
+                name: "ELEMENT_AT".into(),
+                args: vec![array.clone(), Expr::Literal(ScalarValue::Int64(1))],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            first.as_primitive::<Float64Type>().iter().collect::<Vec<_>>(),
+            vec![Some(10.0), Some(10.0)]
+        );
+        let last = evaluate(
+            &Expr::Function {
+                name: "ELEMENT_AT".into(),
+                args: vec![array, Expr::Literal(ScalarValue::Int64(-1))],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            last.as_primitive::<Float64Type>().iter().collect::<Vec<_>>(),
+            vec![Some(30.0), Some(30.0)]
+        );
     }
 
     #[test]
