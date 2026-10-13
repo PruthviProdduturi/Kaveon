@@ -28,6 +28,20 @@ use crate::{
 const MAX_HEAD_BYTES: usize = 64 * 1024;
 const MAX_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_INDEX_SHARD_ENTRIES: usize = 1_024;
+/// The byte ceiling for one operation-index shard, honoured identically where a
+/// shard is written and where it is read.
+///
+/// Those two were different: shards were encoded under MAX_SNAPSHOT_BYTES and
+/// read under MAX_HEAD_BYTES, so the Engine could publish a shard it could never
+/// read back, and the operations hashing to it failed from then on. A single
+/// constant used on both sides is what makes that impossible rather than
+/// unlikely.
+///
+/// The entry cap above cannot do this job. An OperationRecord carries the whole
+/// change set of its operation, so a count says nothing about size. This is
+/// generous enough that eviction is rare in ordinary use and small enough that a
+/// shard read stays a single bounded object read.
+const MAX_INDEX_SHARD_BYTES: usize = 512 * 1024;
 /// A commit that loses the race for the head is rebased and retried this many
 /// times before the conflict is handed back.
 ///
@@ -519,20 +533,6 @@ operation {}",
             }
         };
         let snapshot_sha256 = digest(&bytes);
-        if shard.entries.len() >= MAX_INDEX_SHARD_ENTRIES {
-            // Fails closed by design, and stays closed: the compaction this
-            // waits for is not implemented. Saying so is the difference between
-            // an operator retrying forever and knowing the catalog needs work.
-            eprintln!(
-                "[product-commit] indeterminate: operation-index shard {} holds {} entries, at the \
-{} limit; compaction into a new index format is required",
-                shard_key,
-                shard.entries.len(),
-                MAX_INDEX_SHARD_ENTRIES
-            );
-            attempt.finish(TransactionOutcome::Indeterminate);
-            return (CommitOutcome::Indeterminate, false);
-        }
         shard.entries.insert(
             request.operation_id.clone(),
             OperationRecord {
@@ -546,6 +546,20 @@ operation {}",
                 outcome: JournalOutcome::Prepared,
             },
         );
+        // Keep the shard inside the bound its reader enforces. A shard that
+        // outgrew that bound became unreadable, and every operation hashing to
+        // it then failed permanently — the state this installation was found
+        // in, with one shard at 227 KB against a 64 KiB read.
+        let before = shard.entries.len();
+        trim_shard(&mut shard, &request.operation_id);
+        if shard.entries.len() != before {
+            eprintln!(
+                "[product-commit] operation-index shard {} trimmed {} settled entries to stay within {} bytes",
+                shard_key,
+                before - shard.entries.len(),
+                MAX_INDEX_SHARD_BYTES
+            );
+        }
         let mut next_index = index.clone();
         let shard_ref = match self.publish_shard(&shard).await {
             Ok(value) => value,
@@ -889,7 +903,7 @@ operation {}",
             .storage
             .read_bounded(
                 &format!("{}/{}", self.prefix, reference.path),
-                MAX_HEAD_BYTES,
+                MAX_INDEX_SHARD_BYTES,
             )
             .await
             .map_err(|error| error.kind)?
@@ -898,7 +912,7 @@ operation {}",
             return Err(CommitErrorKind::Invalid);
         }
         let shard: OperationShard =
-            decode(&bytes, MAX_HEAD_BYTES).ok_or(CommitErrorKind::Invalid)?;
+            decode(&bytes, MAX_INDEX_SHARD_BYTES).ok_or(CommitErrorKind::Invalid)?;
         if shard.entries.len() > MAX_INDEX_SHARD_ENTRIES {
             return Err(CommitErrorKind::Invalid);
         }
@@ -908,7 +922,12 @@ operation {}",
         &self,
         shard: &OperationShard,
     ) -> Result<ImmutableIndexRef, CommitErrorKind> {
-        let bytes = encode(shard).map_err(|_| CommitErrorKind::Invalid)?;
+        // Encoded under the shard's own bound, so a shard that would be
+        // unreadable is never published in the first place. `trim_shard` has
+        // already brought it inside the bound; this is the assertion that it
+        // did, not a second attempt at it.
+        let bytes =
+            encode_bounded(shard, MAX_INDEX_SHARD_BYTES).map_err(|_| CommitErrorKind::Invalid)?;
         let sha256 = digest(&bytes);
         let path = format!("{}/operation-index/{sha256}.json", self.prefix);
         match self.storage.create_immutable(&path, bytes.clone()).await {
@@ -940,11 +959,48 @@ operation {}",
 }
 
 fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, ()> {
+    encode_bounded(value, MAX_SNAPSHOT_BYTES)
+}
+
+/// Encode under an explicit ceiling. Every object this module publishes has a
+/// bound that its reader enforces; passing that bound in is what keeps the two
+/// from drifting apart.
+fn encode_bounded<T: Serialize>(value: &T, max_bytes: usize) -> Result<Vec<u8>, ()> {
     let bytes = serde_json::to_vec(value).map_err(|_| ())?;
-    if bytes.len() > MAX_SNAPSHOT_BYTES {
+    if bytes.len() > max_bytes {
         return Err(());
     }
     Ok(bytes)
+}
+
+/// Drop the oldest entries until the shard encodes within its bound.
+///
+/// The index exists to recognise a retry of an operation whose outcome the
+/// caller is unsure of, and a retry follows its original by seconds. So the
+/// useful content is a recent window, and holding every operation a shard has
+/// ever seen buys nothing while growing without limit.
+///
+/// Oldest is lowest snapshot generation: the operations whose outcome has been
+/// settled longest. `keep` is the entry being recorded now and is never
+/// evicted — evicting it would discard the very fact the commit is writing.
+fn trim_shard(shard: &mut OperationShard, keep: &str) {
+    while encode_bounded(shard, MAX_INDEX_SHARD_BYTES).is_err()
+        || shard.entries.len() > MAX_INDEX_SHARD_ENTRIES
+    {
+        let Some(oldest) = shard
+            .entries
+            .iter()
+            .filter(|(id, _)| id.as_str() != keep)
+            .min_by_key(|(id, record)| (record.snapshot.generation, (*id).clone()))
+            .map(|(id, _)| id.clone())
+        else {
+            // Only the entry being recorded is left. Nothing further can be
+            // given up, and publishing will fail on its own bound rather than
+            // this loop spinning.
+            return;
+        };
+        shard.entries.remove(&oldest);
+    }
 }
 
 fn required_documents(request: &PrepareChange) -> Result<BTreeMap<String, ImmutableFileRef>, ()> {
@@ -1954,6 +2010,78 @@ mod tests {
             CommitOutcome::Indeterminate
         ));
         assert_eq!(catalog.read_current().await.unwrap(), before);
+    }
+
+    /// An operation ID whose digest lands on `shard_key`, so a test can pile
+    /// entries into one shard instead of spreading them over 256.
+    fn id_on_shard(shard_key: &str, nonce: usize) -> String {
+        for attempt in 0.. {
+            let candidate = format!("op-{nonce}-{attempt}");
+            if digest(candidate.as_bytes())[..2] == *shard_key {
+                return candidate;
+            }
+        }
+        unreachable!()
+    }
+
+    #[tokio::test]
+    async fn a_shard_that_outgrows_its_bound_stays_readable() {
+        // The defect this reproduces: shards were encoded under
+        // MAX_SNAPSHOT_BYTES (8 MiB) and read under MAX_HEAD_BYTES (64 KiB), so
+        // the Engine could publish a shard its own reader refused. Every
+        // operation hashing to that shard then failed with Indeterminate,
+        // permanently. A production catalog was found in exactly that state,
+        // with one shard at 227 KB, and stopped accepting writes entirely.
+        //
+        // Every operation here is forced onto one shard so the entries
+        // accumulate in a single object, which is what makes it outgrow a
+        // bound at all. An entry carries its operation's whole change set, so
+        // the shard passes 64 KiB well before its 1,024-entry cap — the count
+        // bound never could have prevented this.
+        let catalog = catalog();
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        catalog.initialize(genesis.clone()).await;
+
+        let mut current = genesis;
+        let mut published: Option<ImmutableIndexRef> = None;
+        for nonce in 0..260 {
+            let id = id_on_shard("b4", nonce);
+            current = match catalog
+                .commit(request(current.reference(), &id, "bronze.orders"))
+                .await
+            {
+                CommitOutcome::Committed(value) => value,
+                outcome => panic!("commit {nonce} did not succeed: {outcome:?}"),
+            };
+            let head = catalog.read_head().await.expect("head");
+            published = head
+                .operation_index
+                .as_ref()
+                .and_then(|index| index.get("b4"))
+                .cloned();
+        }
+
+        // What was published must be readable. This is the invariant the two
+        // mismatched bounds broke, and reading it back is the whole test.
+        let reference = published.expect("shard b4 was never published");
+        let shard = catalog
+            .read_shard(Some(&reference))
+            .await
+            .expect("a published shard must be readable");
+        assert!(
+            encode_bounded(&shard, MAX_INDEX_SHARD_BYTES).is_ok(),
+            "a readable shard must also be publishable under the same bound"
+        );
+
+        // And the catalog still takes writes on that shard afterwards, which it
+        // did not before: a wedged shard stayed wedged forever.
+        let id = id_on_shard("b4", 9_999);
+        assert!(matches!(
+            catalog
+                .commit(request(current.reference(), &id, "bronze.orders"))
+                .await,
+            CommitOutcome::Committed(_)
+        ));
     }
 
     #[tokio::test]
