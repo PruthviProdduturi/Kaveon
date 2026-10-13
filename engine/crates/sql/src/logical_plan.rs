@@ -1830,9 +1830,31 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
                 name: "ELEMENT_AT".into(),
                 args: vec![ast_expr_to_expr(expr)?, ast_expr_to_expr(index)?],
             }),
-            ast::Subscript::Slice { .. } => {
-                Err(sql_err("array slices are not supported; use ELEMENT_AT(array, index)"))
-            }
+            ast::Subscript::Slice {
+                lower_bound,
+                upper_bound,
+                stride,
+            } => Ok(Expr::Function {
+                name: "ARRAY_SLICE".into(),
+                args: vec![
+                    ast_expr_to_expr(expr)?,
+                    lower_bound
+                        .as_ref()
+                        .map(ast_expr_to_expr)
+                        .transpose()?
+                        .unwrap_or(Expr::Literal(ScalarValue::Null)),
+                    upper_bound
+                        .as_ref()
+                        .map(ast_expr_to_expr)
+                        .transpose()?
+                        .unwrap_or(Expr::Literal(ScalarValue::Null)),
+                    stride
+                        .as_ref()
+                        .map(ast_expr_to_expr)
+                        .transpose()?
+                        .unwrap_or(Expr::Literal(ScalarValue::Int64(1))),
+                ],
+            }),
         },
         // `ARRAY[…]` is carried as a call named ARRAY. The executor evaluates
         // numeric array literals as Arrow List<Float64> values; aggregate
@@ -2033,8 +2055,12 @@ fn cast_target_name(target: CastTarget) -> String {
         CastTarget::Float64 => "FLOAT64".into(),
         CastTarget::Utf8 => "UTF8".into(),
         CastTarget::Date32 => "DATE32".into(),
-        CastTarget::TimestampMicros { with_timezone: false } => "TIMESTAMP".into(),
-        CastTarget::TimestampMicros { with_timezone: true } => "TIMESTAMP_TZ".into(),
+        CastTarget::TimestampMicros {
+            with_timezone: false,
+        } => "TIMESTAMP".into(),
+        CastTarget::TimestampMicros {
+            with_timezone: true,
+        } => "TIMESTAMP_TZ".into(),
         CastTarget::Decimal128 { precision, scale } => format!("DECIMAL_{precision}_{scale}"),
     }
 }
@@ -2801,7 +2827,8 @@ fn validate_uncorrelated(plan: &LogicalPlan) -> Result<()> {
                 visit(left, relations, expressions);
                 visit(right, relations, expressions);
             }
-            LogicalPlan::Intersect { left, right, .. } | LogicalPlan::Except { left, right, .. } => {
+            LogicalPlan::Intersect { left, right, .. }
+            | LogicalPlan::Except { left, right, .. } => {
                 visit(left, relations, expressions);
                 visit(right, relations, expressions);
             }
@@ -3791,8 +3818,14 @@ mod tests {
         )
         .unwrap();
         let text = format!("{plan:?}");
-        assert!(text.contains("Int64(42)"), "integer parameter was not bound");
-        assert!(text.contains("Bool(true)"), "boolean parameter was not bound");
+        assert!(
+            text.contains("Int64(42)"),
+            "integer parameter was not bound"
+        );
+        assert!(
+            text.contains("Bool(true)"),
+            "boolean parameter was not bound"
+        );
     }
 
     #[test]
@@ -3816,9 +3849,11 @@ mod tests {
             &[ScalarValue::Utf8("EU".into())],
         )
         .unwrap_err();
-        assert!(named
-            .to_string()
-            .contains("unsupported parameter placeholder ':region'"));
+        assert!(
+            named
+                .to_string()
+                .contains("unsupported parameter placeholder ':region'")
+        );
     }
 
     #[test]
@@ -3867,6 +3902,13 @@ mod tests {
         let plan = sql_to_logical_plan("SELECT ARRAY[10, 20][2] FROM t").unwrap();
         let debug = format!("{plan:?}");
         assert!(debug.contains("Function { name: \"ELEMENT_AT\""));
+    }
+
+    #[test]
+    fn array_slice_lowers_to_array_slice_function() {
+        let plan = sql_to_logical_plan("SELECT ARRAY[10, 20, 30][2:3] FROM t").unwrap();
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("Function { name: \"ARRAY_SLICE\""), "{debug}");
     }
 
     #[test]
@@ -4226,12 +4268,8 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_complex_cast_targets_with_stable_diagnostics() {
-        let error = sql_to_logical_plan("SELECT CAST(payload AS JSON) FROM events")
-            .unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "sql: unsupported CAST target type: JSON"
-        );
+        let error = sql_to_logical_plan("SELECT CAST(payload AS JSON) FROM events").unwrap_err();
+        assert_eq!(error.to_string(), "sql: unsupported CAST target type: JSON");
     }
 
     #[test]
