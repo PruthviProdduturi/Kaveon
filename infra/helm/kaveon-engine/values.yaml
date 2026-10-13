@@ -41,19 +41,28 @@ coordinator:
     kubernetes.azure.com/agentpool: system
   storageClass: managed-csi
   storageSize: 32Gi
+  # Sized against the node this actually runs on rather than a default. The
+  # pool is 4 vCPU and 14.5 GiB allocatable per node, and the coordinator had
+  # a 2 vCPU / 4 GiB ceiling — so most of a machine already paid for sat idle
+  # while queries spilled to disk inside the limit.
+  #
+  # Requests stay modest so the node still schedules the jobs beside it;
+  # limits are what let a query use the machine when one is running.
   resources:
-    requests: {cpu: "500m", memory: 1Gi, ephemeral-storage: 2Gi}
-    limits: {cpu: "2", memory: 4Gi, ephemeral-storage: 8Gi}
+    requests: {cpu: "1", memory: 2Gi, ephemeral-storage: 2Gi}
+    limits: {cpu: "3", memory: 11Gi, ephemeral-storage: 8Gi}
   # Query memory on the coordinator. It plans, admits and merges final
   # results; workers carry the fragments, so its budgets stay small. The
   # admission limit must not exceed the container memory limit less the
   # Engine's headroom (max(256 MiB, 15 %)); the Engine reads the cgroup limit
   # itself, so KAVEON_PROCESS_MEMORY_LIMIT_BYTES is deliberately not set.
   memory:
-    # KAVEON_QUERY_MEMORY_LIMIT_BYTES: 512 MiB per admitted query.
-    queryLimitBytes: "536870912"
-    # KAVEON_MEMORY_ADMISSION_LIMIT_BYTES: 2 GiB across admitted queries.
-    admissionLimitBytes: "2147483648"
+    # KAVEON_QUERY_MEMORY_LIMIT_BYTES: 4 GiB per admitted query.
+    queryLimitBytes: "4294967296"
+    # KAVEON_MEMORY_ADMISSION_LIMIT_BYTES: 8 GiB across admitted queries,
+    # inside the 11 GiB container limit less the Engine's headroom of
+    # max(256 MiB, 15 %) — 1.65 GiB here.
+    admissionLimitBytes: "8589934592"
   # Coordinator-hosted exchange spool (KAVEON_COORDINATOR_EXCHANGE_SPOOL).
   # Off: workers spool exchanges on their own disk (workers.exchange.spool)
   # and the coordinator relays no exchange traffic. The limits stay sized for
@@ -68,17 +77,21 @@ workers:
   replicas: 3
   nodeSelector:
     workload: kaveon-worker
+  # One worker per node, so the node is close to theirs alone. A 6 GiB ceiling
+  # on a 14.5 GiB machine meant fragments spilled to disk while memory that
+  # was already paid for went unused.
   resources:
-    requests: {cpu: "1", memory: 2Gi, ephemeral-storage: 4Gi}
-    limits: {cpu: "3", memory: 6Gi, ephemeral-storage: 24Gi}
-  # Query memory on a worker, inside the 6 GiB container limit less the
+    requests: {cpu: "1", memory: 3Gi, ephemeral-storage: 4Gi}
+    limits: {cpu: "3200m", memory: 11Gi, ephemeral-storage: 24Gi}
+  # Query memory on a worker, inside the 11 GiB container limit less the
   # Engine's headroom. KAVEON_PROCESS_MEMORY_LIMIT_BYTES is not set: the
   # Engine reads its cgroup limit.
   memory:
-    # KAVEON_QUERY_MEMORY_LIMIT_BYTES: 3 GiB per query per worker.
-    queryLimitBytes: "3221225472"
-    # KAVEON_MEMORY_ADMISSION_LIMIT_BYTES: 4 GiB across admitted fragments.
-    admissionLimitBytes: "4294967296"
+    # KAVEON_QUERY_MEMORY_LIMIT_BYTES: 6 GiB per query per worker.
+    queryLimitBytes: "6442450944"
+    # KAVEON_MEMORY_ADMISSION_LIMIT_BYTES: 8 GiB across admitted fragments,
+    # inside the 11 GiB container limit less the Engine's headroom.
+    admissionLimitBytes: "8589934592"
   # Worker-hosted exchange spool (KAVEON_WORKER_EXCHANGE_SPOOL). On, a worker
   # keeps the exchange partitions addressed to it on its own disk under
   # /state/exchange, so producers upload straight to the consuming worker.

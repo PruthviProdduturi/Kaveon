@@ -217,7 +217,9 @@ api:
     requests: {cpu: 250m, memory: 512Mi}
     limits: {cpu: "2", memory: 6Gi}
 studio:
+  # Studio renders server-side and proxies every API call, so half a core is
+  # what a page wait is made of on a four-core node that is otherwise idle.
   resources:
-    requests: {cpu: 100m, memory: 256Mi}
-    limits: {cpu: 500m, memory: 512Mi}
+    requests: {cpu: 200m, memory: 512Mi}
+    limits: {cpu: "2", memory: 3Gi}
 
