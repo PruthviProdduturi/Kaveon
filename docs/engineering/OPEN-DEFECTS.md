@@ -15,7 +15,7 @@ Status values: **open** · **in progress** · **fixed (unverified)** · **verifi
 ## Open
 
 ### D-1 · New dataset offers no source on a lake-backed installation
-**open** · reported twice (2026-10-12 evening, 2026-10-13)
+**fixed (unverified)** · `81f26b1d` · needs a click to verify
 
 `studio/app/datasets/new/page.tsx:334` reads `/api/v1/data-sources/active`,
 which is the family for external database connections (Fabric SQL, Azure SQL,
@@ -31,7 +31,9 @@ The page needs an Engine-catalog path — pick catalog → schema → table and 
 by table id. The API side already exists.
 
 ### D-2 · Dashboard builder: cannot drag or move items
-**open** · reported 2026-10-13 · possible regression from `794af12f`
+**fixed (unverified)** · `de3f76ec` · needs a click to verify.
+NOT caused by `794af12f` — `useContainerWidth` never saw a node, so the grid
+was never rendered. That commit was exonerated against the library source.
 
 That commit gave the builder shell `height: 100dvh` + `overflow: hidden` and
 made the canvas pane a scroll container. Putting a drag surface inside a new
@@ -49,7 +51,11 @@ sequential loop. Concurrent listings also partially serialize (~0.15s per
 added reader). This is the floor under every page in Studio.
 
 ### D-4 · Synthetic data does not look like real data
-**open** · reported 2026-10-13
+**generator fixed, live data unchanged** · `c9a4cb90` · the cause was a
+complete user x day x surface cross product. Rebuilt: 506,542,814 rows,
+14.6M UUID users, no two days equal, 20.6% grid fill, and the shape report is
+now a build gate. Migration in docs/engineering/events-activity-rebuild.md,
+not yet run.
 
 `KaveonTelemetry.events.enriched` holds exactly 504,000,000 rows — 3,000,000
 users x 28 days x exactly 18,000,000 rows per day, every day identical. And
@@ -59,7 +65,7 @@ demo whose point is credibility. `enriched` is also an ETL stage name, not a
 description of content.
 
 ### D-23 · Benchmark scratch catalogs are shown to users as registered catalogs
-**open** · 2026-10-13
+**fixed** · `0519cf33` · 11 catalogs -> 2; measured inventory 36 tables -> 18
 
 The Data catalog page lists 11 catalogs, 8 of them `bench_0dedb97f97ae`,
 `bench_2166e3120b2f` and so on — scratch catalogs a benchmark run registers in
@@ -71,7 +77,9 @@ the harness should remove what it registers when a campaign ends. The second
 is Codex's; the first is ours.
 
 ### D-24 · The Data catalog page and SQL Lab disagree about what exists
-**open** · 2026-10-13
+**fixed** · `0519cf33` + `1f0fdbf8` + `81f26b1d` · all three surfaces now read
+the same grant-filtered registry; the product catalog's three spellings
+resolve to one catalog
 
 The Data catalog page reads **Engine catalog definitions** (11 right now). SQL
 Lab reads **catalog source records** (3 active). So a catalog can be
@@ -83,6 +91,52 @@ This is the same shape as D-10 and D-20: two representations of one fact, with
 different surfaces reading different ones and no reconciliation. Worth fixing
 as a rule rather than per page — one surface should be derived from the other,
 or the two should be reported with their difference made visible.
+
+### D-25 · The Engine's query log does not survive a coordinator restart
+**open** · 2026-10-13 · Codex owns the Engine side
+
+`GET /v1/queries` returned 0 rows with a coordinator uptime of 107 seconds,
+having returned rows before the restart. So the Engine console's "No queries
+yet" is not an empty history, it is a lost one — and the coordinator has been
+restarted a dozen times today by benchmark campaigns.
+
+The platform's own `query_history` is unaffected and durable: 1,000 records in
+KaveonDB, verified at the same moment. Two different histories, one of which
+reads as the other's absence, which is why it was reported as data loss.
+
+### D-26 · An unavailable Engine is reported as an empty catalog
+**open** · 2026-10-13
+
+With the Engine scaled to zero, the catalog page reported "0 tables" and "No
+tables found". That is the D-10 shape again on a third surface: a failed read
+rendered as a verdict. The page should serve the last answer it had and say it
+is stale, or say it could not reach the Engine — never claim a catalog is
+empty because nobody answered.
+
+### D-27 · Nothing is warmed before the first reader arrives
+**open** · 2026-10-13 · the strategy asked for
+
+Every hot read is computed on the first request that needs it, so the first
+visit after a restart pays the full cost, and so does the first visit after
+anything invalidates. `services/revalidating_cache.py` now exists and serves
+the context banner from memory with no Engine round trip; what is missing is
+something that fills it before a reader asks, and that keeps the other hot
+reads (catalog listings, charts, dashboards, datasets) warm the same way.
+
+### D-28 · Dashboard tabs pass v1 props to react-grid-layout v2
+**open** · 2026-10-13 · found while fixing D-2
+
+`studio/components/dashboards/components/DashboardTabsComponent.tsx:19,711`
+loads the default export and passes `draggableHandle`, top-level `cols` and
+`rowHeight` — v1 props that v2 ignores. A grid nested inside a Tabs component
+therefore runs with library defaults and no drag handle.
+
+### D-29 · Inventory ignores the catalog unless a schema is also given
+**open** · 2026-10-13 · pre-existing, found while fixing D-24
+
+`/catalog/OpenSource` lists every registered catalog's schemas rather than
+that catalog's. Confined to registered catalogs by the D-24 fix, so it is no
+longer showing benchmark scratch, but it still shows the wrong scope.
 
 ### D-5 · 4,068 query-history rows belong to synthetic accounts
 **open, by decision** · 2026-10-13
