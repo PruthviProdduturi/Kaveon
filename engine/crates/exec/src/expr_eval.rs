@@ -1576,27 +1576,49 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     .as_any()
                     .downcast_ref::<arrow::array::ListArray>()
                     .expect("list data type must be ListArray");
-                let needle = compute::cast(&args[1], &DataType::Float64)?;
-                let needle = needle.as_primitive::<Float64Type>();
-                let result: BooleanArray = (0..num_rows)
-                    .map(|row| {
-                        if list.is_null(row) || needle.is_null(row) {
-                            return None;
-                        }
-                        let values = list.value(row);
-                        let values = values.as_primitive::<Float64Type>();
-                        let mut saw_null = false;
-                        for index in 0..values.len() {
-                            if values.is_null(index) {
-                                saw_null = true;
-                            } else if values.value(index) == needle.value(row) {
-                                return Some(true);
-                            }
-                        }
-                        if saw_null { None } else { Some(false) }
-                    })
-                    .collect();
-                return Ok(Arc::new(result));
+                match list.value_type() {
+                    DataType::Float64 => {
+                        let needle = compute::cast(&args[1], &DataType::Float64)?;
+                        let needle = needle.as_primitive::<Float64Type>();
+                        let result: BooleanArray = (0..num_rows)
+                            .map(|row| {
+                                if list.is_null(row) || needle.is_null(row) { return None; }
+                                let values_array = list.value(row);
+                                let values = values_array.as_primitive::<Float64Type>();
+                                let mut saw_null = false;
+                                for index in 0..values.len() {
+                                    if values.is_null(index) { saw_null = true; }
+                                    else if values.value(index) == needle.value(row) { return Some(true); }
+                                }
+                                if saw_null { None } else { Some(false) }
+                            })
+                            .collect();
+                        return Ok(Arc::new(result));
+                    }
+                    DataType::Utf8 => {
+                        let needle = compute::cast(&args[1], &DataType::Utf8)?;
+                        let needle = needle.as_string::<i32>();
+                        let result: BooleanArray = (0..num_rows)
+                            .map(|row| {
+                                if list.is_null(row) || needle.is_null(row) { return None; }
+                                let values_array = list.value(row);
+                                let values = values_array.as_string::<i32>();
+                                let mut saw_null = false;
+                                for index in 0..values.len() {
+                                    if values.is_null(index) { saw_null = true; }
+                                    else if values.value(index) == needle.value(row) { return Some(true); }
+                                }
+                                if saw_null { None } else { Some(false) }
+                            })
+                            .collect();
+                        return Ok(Arc::new(result));
+                    }
+                    other => {
+                        return Err(KaveonError::Execution(format!(
+                            "CONTAINS does not support list element type {other}"
+                        )));
+                    }
+                }
             }
             let arr = as_string_array(&args[0])?;
             let needle = as_string_array(&args[1])?;
@@ -1869,28 +1891,43 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let fmt_arr = as_string_array(&args[1])?;
             eval_to_char(source, fmt_arr, num_rows)
         }
-        // ARRAY[...] is a typed numeric list expression. Numeric arguments are
-        // promoted to Float64 so mixed integer/decimal literals have one
-        // stable Arrow type; null elements are preserved.
+        // ARRAY[...] is a typed list expression. Numeric arguments are
+        // promoted to Float64; string arguments remain Utf8. Null elements
+        // are preserved in either representation.
         "ARRAY" => {
-            let values = args
-                .iter()
-                .map(|arg| compute::cast(arg, &DataType::Float64))
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            let mut builder = ListBuilder::new(Float64Builder::new());
-            for row in 0..num_rows {
-                for value in &values {
-                    let value = value
-                        .as_any()
-                        .downcast_ref::<Float64Array>()
-                        .expect("ARRAY numeric cast");
-                    builder
-                        .values()
-                        .append_option(value.is_valid(row).then(|| value.value(row)));
+            let string_array = args.iter().any(|arg| arg.data_type() == &DataType::Utf8);
+            if string_array {
+                if args.iter().any(|arg| !matches!(arg.data_type(), DataType::Utf8 | DataType::Null)) {
+                    return Err(KaveonError::Execution("ARRAY elements must share a type".into()));
                 }
-                builder.append(true);
+                let values = args
+                    .iter()
+                    .map(|arg| compute::cast(arg, &DataType::Utf8))
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                let mut builder = ListBuilder::new(StringBuilder::new());
+                for row in 0..num_rows {
+                    for value in &values {
+                        let value = value.as_string::<i32>();
+                        builder.values().append_option(value.is_valid(row).then(|| value.value(row)));
+                    }
+                    builder.append(true);
+                }
+                Ok(Arc::new(builder.finish()))
+            } else {
+                let values = args
+                    .iter()
+                    .map(|arg| compute::cast(arg, &DataType::Float64))
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                let mut builder = ListBuilder::new(Float64Builder::new());
+                for row in 0..num_rows {
+                    for value in &values {
+                        let value = value.as_primitive::<Float64Type>();
+                        builder.values().append_option(value.is_valid(row).then(|| value.value(row)));
+                    }
+                    builder.append(true);
+                }
+                Ok(Arc::new(builder.finish()))
             }
-            Ok(Arc::new(builder.finish()))
         }
         "CARDINALITY" => {
             check_arity(name, args, 1)?;
@@ -3503,6 +3540,30 @@ mod tests {
             result.as_boolean().iter().collect::<Vec<_>>(),
             vec![Some(true), Some(true), Some(true)]
         );
+    }
+
+    #[test]
+    fn evaluates_contains_for_string_array_lists() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+        )])
+        .unwrap();
+        let expr = Expr::Function {
+            name: "CONTAINS".into(),
+            args: vec![
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![
+                        Expr::Literal(ScalarValue::Utf8("red".into())),
+                        Expr::Literal(ScalarValue::Utf8("blue".into())),
+                    ],
+                },
+                Expr::Literal(ScalarValue::Utf8("blue".into())),
+            ],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        assert_eq!(result.as_boolean().iter().collect::<Vec<_>>(), vec![Some(true), Some(true)]);
     }
 
     #[test]
