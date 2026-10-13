@@ -356,8 +356,8 @@ invalidation, isolation, bounds, and restart evidence listed above.
   list length, with explicit rejection for non-list values (`1c0e29e5`).
 - `CONTAINS(array, value)` now preserves nullable SQL boolean semantics for
   null arrays, search values, and elements across numeric, nested list, row,
-  and map values, with planner and executor coverage (`b2054d10`). Unsupported
-  element types retain explicit diagnostics.
+  and map values, including `LargeList` containers, with planner and executor
+  coverage (`b2054d10`). Unsupported element types retain explicit diagnostics.
 - `ARRAYS_OVERLAP(left, right)` now applies the same nullable intersection
   semantics to nested list, row, and map elements using typed equality,
   including `LargeList` containers; a matching non-null element returns

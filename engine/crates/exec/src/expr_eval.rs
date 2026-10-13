@@ -1811,6 +1811,121 @@ fn array_position_nested<L: OffsetSizeTrait>(
     Ok(Arc::new(Int64Array::from(result)))
 }
 
+fn contains_nested<L: OffsetSizeTrait>(
+    list: &GenericListArray<L>,
+    needle: &ArrayRef,
+) -> Result<ArrayRef> {
+    let result = (0..list.len())
+        .map(|row| {
+            if list.is_null(row) || needle.is_null(row) {
+                return None;
+            }
+            let values = list.value(row);
+            let needle = needle.slice(row, 1);
+            let mut saw_null = false;
+            for index in 0..values.len() {
+                if values.is_null(index) {
+                    saw_null = true;
+                    continue;
+                }
+                if comparison(&values.slice(index, 1), &needle, CompareKind::Eq)
+                    .map(|equal| !equal.is_null(0) && equal.value(0))
+                    .unwrap_or(false)
+                {
+                    return Some(true);
+                }
+            }
+            if saw_null { None } else { Some(false) }
+        })
+        .collect::<BooleanArray>();
+    Ok(Arc::new(result))
+}
+
+fn contains_primitive<L, T>(
+    list: &GenericListArray<L>,
+    needle: &ArrayRef,
+) -> Result<ArrayRef>
+where
+    L: OffsetSizeTrait,
+    T: ArrowPrimitiveType,
+    T::Native: PartialEq,
+{
+    let needle = compute::cast(needle, &list.value_type())?;
+    let needle = needle.as_primitive::<T>();
+    let result = (0..list.len())
+        .map(|row| {
+            if list.is_null(row) || needle.is_null(row) {
+                return None;
+            }
+            let values = list.value(row);
+            let values = values.as_primitive::<T>();
+            let mut saw_null = false;
+            for index in 0..values.len() {
+                if values.is_null(index) {
+                    saw_null = true;
+                } else if values.value(index) == needle.value(row) {
+                    return Some(true);
+                }
+            }
+            if saw_null { None } else { Some(false) }
+        })
+        .collect::<BooleanArray>();
+    Ok(Arc::new(result))
+}
+
+fn contains_boolean<L: OffsetSizeTrait>(
+    list: &GenericListArray<L>,
+    needle: &ArrayRef,
+) -> Result<ArrayRef> {
+    let needle = compute::cast(needle, &DataType::Boolean)?;
+    let needle = needle.as_boolean();
+    let result = (0..list.len())
+        .map(|row| {
+            if list.is_null(row) || needle.is_null(row) {
+                return None;
+            }
+            let values = list.value(row).as_boolean().clone();
+            let mut saw_null = false;
+            for index in 0..values.len() {
+                if values.is_null(index) {
+                    saw_null = true;
+                } else if values.value(index) == needle.value(row) {
+                    return Some(true);
+                }
+            }
+            if saw_null { None } else { Some(false) }
+        })
+        .collect::<BooleanArray>();
+    Ok(Arc::new(result))
+}
+
+fn contains_utf8<L: OffsetSizeTrait>(
+    list: &GenericListArray<L>,
+    needle: &ArrayRef,
+) -> Result<ArrayRef> {
+    let needle = compute::cast(needle, &DataType::Utf8)?;
+    let needle = needle.as_string::<i32>();
+    let result = (0..list.len())
+        .map(|row| {
+            if list.is_null(row) || needle.is_null(row) {
+                return None;
+            }
+            let values_array = list.value(row);
+            let values = values_array.as_string::<i32>();
+            let mut saw_null = false;
+            for index in 0..values.len() {
+                if values.is_null(index) {
+                    saw_null = true;
+                } else if values.value(index) == needle.value(row) {
+                    return Some(true);
+                }
+            }
+            if saw_null { None } else { Some(false) }
+        })
+        .collect::<BooleanArray>();
+    Ok(Arc::new(result))
+}
+
 fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
     let upper = name.to_uppercase();
     if upper.starts_with("ARRAY_ANY_") || upper.starts_with("ARRAY_ALL_") {
@@ -2797,6 +2912,30 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "CONTAINS" => {
             check_arity(name, args, 2)?;
+            if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
+                return match list.value_type() {
+                    DataType::List(_)
+                    | DataType::LargeList(_)
+                    | DataType::Struct(_)
+                    | DataType::Map(_, _) => contains_nested(list, &args[1]),
+                    DataType::Int32 => contains_primitive::<_, Int32Type>(list, &args[1]),
+                    DataType::Int64 => contains_primitive::<_, Int64Type>(list, &args[1]),
+                    DataType::Float64 => contains_primitive::<_, Float64Type>(list, &args[1]),
+                    DataType::Date32 => contains_primitive::<_, Date32Type>(list, &args[1]),
+                    DataType::Date64 => contains_primitive::<_, Date64Type>(list, &args[1]),
+                    DataType::Time32(TimeUnit::Second) =>
+                        contains_primitive::<_, Time32SecondType>(list, &args[1]),
+                    DataType::Time32(TimeUnit::Millisecond) =>
+                        contains_primitive::<_, Time32MillisecondType>(list, &args[1]),
+                    DataType::Timestamp(TimeUnit::Microsecond, _) =>
+                        contains_primitive::<_, TimestampMicrosecondType>(list, &args[1]),
+                    DataType::Boolean => contains_boolean(list, &args[1]),
+                    DataType::Utf8 => contains_utf8(list, &args[1]),
+                    other => Err(KaveonError::Execution(format!(
+                        "CONTAINS does not support list element type {other}"
+                    ))),
+                };
+            }
             if matches!(args[0].data_type(), DataType::List(_)) {
                 let list = args[0]
                     .as_any()
@@ -7128,6 +7267,28 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.as_primitive::<Int64Type>().value(0), 2);
+
+        let mut contains_needle = ListBuilder::new(Int64Builder::new());
+        contains_needle.values().append_value(2);
+        contains_needle.append(true);
+        let result = eval_scalar_function(
+            "CONTAINS",
+            &[
+                Arc::new({
+                    let mut builder = LargeListBuilder::new(ListBuilder::new(Int64Builder::new()));
+                    builder.values().values().append_value(1);
+                    builder.values().append(true);
+                    builder.values().values().append_value(2);
+                    builder.values().append(true);
+                    builder.append(true);
+                    builder.finish()
+                }) as ArrayRef,
+                Arc::new(contains_needle.finish()) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        assert!(result.as_boolean().value(0));
     }
 
     #[test]
