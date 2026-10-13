@@ -367,6 +367,15 @@ deployed worker-loss and bounded-pressure gate for that image; node drain,
 coordinator restart, sustained soak, and cloud-storage fault injection remain
 open.
 
+The same cluster also passed a two-phase native `ANALYZE` durability check on
+2026-10-12. `OpenSource.ai_benchmarks.leaderboard` reported its exact 34-row
+current statistic before and after a coordinator StatefulSet restart; the new
+pod became Ready in 13 seconds. The credential-safe reports are archived in
+`docs/qualification/engine-aks-native-analyze-2026-10-12.md`. This proves
+durable statistics persistence across a coordinator restart for the tested
+table and image; it does not prove exchange-spool cleanup or active-query
+recovery, so those coordinator gates remain open.
+
 The distributed/local join-mode differential now also includes an inner
 residual predicate (`key equality AND value inequality`); local and
 distributed result sets match and all reservations are released.

@@ -1,0 +1,22 @@
+{
+  "passed": true,
+  "phase": "analyze",
+  "verified_at": "2026-10-13T04:17:38.012295+00:00",
+  "table": "OpenSource.ai_benchmarks.leaderboard",
+  "expected_rows": 34,
+  "query": {
+    "id": "2ec911be-8201-474d-ac62-b0e8484d0fbd",
+    "state": "FINISHED"
+  },
+  "statistic": {
+    "computed_at": "2026-10-13T04:17:28.425Z",
+    "current": true,
+    "depth": "metadata",
+    "row_count": 34,
+    "source_version": "delta v0 (8529532b77bf)",
+    "table": "OpenSource.ai_benchmarks.leaderboard",
+    "table_id": "table:OpenSource:ai_benchmarks:leaderboard"
+  },
+  "planner_check": "deferred-no-qualified-safe-join-pair",
+  "errors": []
+}

@@ -44,7 +44,17 @@ def main(argv=None):
             if query.get("state") != "FINISHED" or not query.get("id"):
                 errors.append("ANALYZE did not return a finished query ID")
             data = query.get("data") or []
-            if not data or data[0][-1] != ROWS:
+            # The native ANALYZE result includes the table name, row count,
+            # and additional statistics columns.  Do not depend on column
+            # order or assume the count is the final value in the row.
+            matching_rows = any(
+                isinstance(row, list)
+                and len(row) >= 2
+                and row[0] == TABLE
+                and row[1] == ROWS
+                for row in data
+            )
+            if not matching_rows:
                 errors.append(f"ANALYZE did not report exact {ROWS} rows")
         stats = request(base, "GET", token, secret, args.user_email)
         item = diagnostic(stats)
