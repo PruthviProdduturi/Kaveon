@@ -622,6 +622,15 @@ records `checks.cancellation_cleanup`; the merged SLO artifact consumes that
 field rather than inferring cleanup from a successful query response
 (`097e2084`, `b90b067e`).
 
+The live pod-loss qualification on 13 October 2026 passed its declared
+three-worker workload: concurrent exact results, active cancellation cleanup,
+worker termination and exact retry, replacement-worker compatibility, bounded
+pressure, and a post-recovery probe. The complete report is archived in
+`docs/qualification/engine-aks-fault-pressure-2026-10-13.md` and its adjacent
+JSON evidence file. Admission refusals are recorded separately and retried with
+bounded backoff; they are not counted as successful statements. This is a
+positive Track 1 evidence slice, not the release SLO completion artifact.
+
 ### Track 1 distributed execution SLO
 
 The SLO is scoped to a declared qualification workload and image; it is not a
