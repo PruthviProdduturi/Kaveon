@@ -200,9 +200,11 @@ qualification documents; this tracker remains the single ordered work list.
 - Bounded projection scalar subqueries now support an ungrouped, single-column
   aggregate and preserve its alias; correlated and multi-row projection forms
   remain explicitly rejected (`d7be5f9a`).
-- `INTERSECT ALL` and `EXCEPT ALL` now have exact unsupported diagnostics that
-  preserve the distinction from the implemented distinct-oriented set
-  operators (`1c053837`).
+- `INTERSECT ALL` and `EXCEPT ALL` previously had exact unsupported
+  diagnostics (`1c053837`). The multiset forms now carry their quantifier
+  through logical planning, optimizer rewrites, local execution, and
+  distributed fragments; duplicate counts follow the SQL multiset rules
+  (`88a96207`).
 - Broadcast planning now has an explicit dynamic-filter boundary test: static
   predicates reach the build scan, while runtime build-key propagation to the
   probe scan remains refused until its correctness and exchange behavior are
@@ -221,8 +223,8 @@ qualification documents; this tracker remains the single ordered work list.
 
 ### Current focused validation
 
-The latest focused validation passes 329 `kaveon-server` tests, 97
-`kaveon-sql` tests, and 213 `kaveon-exec` tests. These counts are package-level
+The latest focused validation passes 329 `kaveon-server` tests, 98
+`kaveon-sql` tests, and 218 `kaveon-exec` tests. These counts are package-level
 validation snapshots; they do not close the broader multi-worker, AKS, or
 cross-connector qualification gates below.
 
