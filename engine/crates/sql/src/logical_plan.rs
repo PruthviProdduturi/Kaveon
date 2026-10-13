@@ -3954,6 +3954,20 @@ mod tests {
     }
 
     #[test]
+    fn parses_contains_over_an_array_literal() {
+        let plan = sql_to_logical_plan("SELECT contains(ARRAY[1, 2], 2) FROM t").unwrap();
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("projection");
+        };
+        assert!(matches!(
+            &columns[0],
+            Expr::Function { name, args }
+                if name == "CONTAINS"
+                    && matches!(&args[0], Expr::Function { name, args } if name == "ARRAY" && args.len() == 2)
+        ));
+    }
+
+    #[test]
     fn rejects_map_and_row_expressions_with_typed_diagnostics() {
         for (sql, expected) in [
             (

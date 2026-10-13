@@ -23,8 +23,9 @@ client parameters, recursive CTEs, and map/row types remain unsupported.
 Multi-row and correlated projection forms return explicit diagnostics rather
 than being sent to execution.
 `CARDINALITY(ARRAY[...])` now evaluates to a nullable `Int64` list length;
-other array operations and complex types remain explicit unsupported
-boundaries. `ROW(...)` and `MAP(...)` now fail during planning with a typed
+`CONTAINS(ARRAY[...], value)` now returns nullable Boolean membership for
+numeric lists; other array operations and complex types remain explicit
+unsupported boundaries. `ROW(...)` and `MAP(...)` now fail during planning with a typed
 complex-type diagnostic rather than reaching execution as unknown functions.
 Complex `CAST` targets such as `JSON` also fail during planning with a stable
 unsupported-target diagnostic; scalar, DATE, timestamp, and DECIMAL casts are
