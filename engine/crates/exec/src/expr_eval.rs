@@ -801,6 +801,19 @@ enum CompareKind {
 
 fn comparison(left: &ArrayRef, right: &ArrayRef, kind: CompareKind) -> Result<BooleanArray> {
     use arrow::compute::kernels::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
+    if let (DataType::LargeList(left_field), DataType::LargeList(right_field)) =
+        (left.data_type(), right.data_type())
+    {
+        if left_field.data_type() != right_field.data_type() {
+            return Err(KaveonError::Execution(
+                "ARRAY values must have matching element types for comparison".into(),
+            ));
+        }
+        let list_type = DataType::List(left_field.clone());
+        let left = compute::cast(left, &list_type)?;
+        let right = compute::cast(right, &list_type)?;
+        return comparison(&left, &right, kind);
+    }
     if let (Some(left), Some(right)) = (
         left.as_any().downcast_ref::<ListArray>(),
         right.as_any().downcast_ref::<ListArray>(),
@@ -6267,6 +6280,26 @@ mod tests {
         )
         .unwrap();
         assert!(nullable.as_boolean().is_null(0));
+    }
+
+    #[test]
+    fn large_list_array_comparison_uses_the_same_semantics() {
+        use arrow::array::{Int64Builder, LargeListBuilder};
+
+        let mut left_builder = LargeListBuilder::new(Int64Builder::new());
+        left_builder.values().append_value(1);
+        left_builder.values().append_value(2);
+        left_builder.append(true);
+        let left = Arc::new(left_builder.finish()) as ArrayRef;
+
+        let mut right_builder = LargeListBuilder::new(Int64Builder::new());
+        right_builder.values().append_value(1);
+        right_builder.values().append_value(3);
+        right_builder.append(true);
+        let right = Arc::new(right_builder.finish()) as ArrayRef;
+
+        let result = comparison(&left, &right, CompareKind::Lt).unwrap();
+        assert!(result.value(0));
     }
 
     #[test]
