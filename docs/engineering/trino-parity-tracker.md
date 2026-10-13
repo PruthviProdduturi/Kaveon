@@ -91,9 +91,9 @@ foundations, but several operators are still centralized or narrow:
   `CONTAINS`, `ARRAY_POSITION`, `ARRAY_DISTINCT`, `ARRAY_SORT`,
   `ARRAY_REVERSE`, `ARRAY_SLICE`, and `ELEMENT_AT`; mixed integer/float arrays
   retain the common `Float64` representation. Homogeneous decimal arrays now
-  preserve their precision and scale through `ELEMENT_AT`, `CONTAINS`, and
-  `ARRAY_POSITION`, `ARRAY_DISTINCT`, and `ARRAY_SORT` (`3b35dc47`,
-  `74ac62e3`, `d6e99cf2`, `c080f208`).
+  preserve their precision and scale through `ELEMENT_AT`, `CONTAINS`,
+  `ARRAY_POSITION`, `ARRAY_DISTINCT`, `ARRAY_SORT`, `ARRAY_REVERSE`, and
+  `ARRAY_SLICE` (`3b35dc47`, `74ac62e3`, `d6e99cf2`, `c080f208`).
   Broader element types remain an explicit boundary.
   Scalar, DATE, timestamp, and DECIMAL casts are supported; complex cast
   targets fail with typed planner diagnostics. Dereference, `UNNEST`, other

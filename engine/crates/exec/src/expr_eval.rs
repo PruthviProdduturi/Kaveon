@@ -2500,6 +2500,27 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     }
                     Ok(Arc::new(builder.finish()))
                 }
+                DataType::Decimal128(precision, scale) => {
+                    let values_builder = Decimal128Builder::new()
+                        .with_precision_and_scale(precision, scale)
+                        .map_err(|error| KaveonError::Execution(error.to_string()))?;
+                    let mut builder = ListBuilder::new(values_builder);
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let inner = list.value(row);
+                        let values = inner.as_primitive::<arrow::datatypes::Decimal128Type>();
+                        for index in (0..values.len()).rev() {
+                            builder.values().append_option(
+                                values.is_valid(index).then(|| values.value(index)),
+                            );
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }
                 DataType::Utf8 => {
                     let mut builder = ListBuilder::new(StringBuilder::new());
                     for row in 0..num_rows {
@@ -2623,6 +2644,47 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             while (step > 0 && index <= last) || (step < 0 && index >= last) {
                                 let offset = (index - 1) as usize;
                                 builder.values().append_option(values.is_valid(offset).then(|| values.value(offset)));
+                                index += step;
+                            }
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }
+                DataType::Decimal128(precision, scale) => {
+                    let values_builder = Decimal128Builder::new()
+                        .with_precision_and_scale(precision, scale)
+                        .map_err(|error| KaveonError::Execution(error.to_string()))?;
+                    let mut builder = ListBuilder::new(values_builder);
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let inner = list.value(row);
+                        let values = inner.as_primitive::<arrow::datatypes::Decimal128Type>();
+                        let length = values.len() as i64;
+                        let step = stride.is_valid(row).then(|| stride.value(row)).unwrap_or(1);
+                        let start = lower
+                            .is_valid(row)
+                            .then(|| lower.value(row))
+                            .unwrap_or(if step < 0 { length } else { 1 });
+                        let end = upper
+                            .is_valid(row)
+                            .then(|| upper.value(row))
+                            .unwrap_or(if step < 0 { 1 } else { length });
+                        if step == 0 {
+                            return Err(KaveonError::Execution("ARRAY_SLICE stride cannot be zero".into()));
+                        }
+                        let first = if step > 0 { start.max(1).min(length + 1) } else { start.max(1).min(length) };
+                        let last = if step > 0 { end.max(0).min(length) } else { end.max(1).min(length) };
+                        if (step > 0 && first <= last) || (step < 0 && first >= last) {
+                            let mut index = first;
+                            while (step > 0 && index <= last) || (step < 0 && index >= last) {
+                                let offset = (index - 1) as usize;
+                                builder.values().append_option(
+                                    values.is_valid(offset).then(|| values.value(offset)),
+                                );
                                 index += step;
                             }
                         }
@@ -5396,6 +5458,47 @@ mod tests {
         assert_eq!(sorted.value(0), 1);
         assert_eq!(sorted.value(1), 2);
         assert!(sorted.is_null(2));
+
+        let reversed = Expr::Function {
+            name: "ARRAY_REVERSE".into(),
+            args: vec![Expr::Function {
+                name: "ARRAY".into(),
+                args: vec![decimal(2), decimal(1), Expr::Literal(ScalarValue::Null)],
+            }],
+        };
+        let reversed = evaluate(&reversed, &batch).unwrap();
+        let reversed = reversed
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap()
+            .value(0);
+        let reversed = reversed.as_primitive::<arrow::datatypes::Decimal128Type>();
+        assert!(reversed.is_null(0));
+        assert_eq!(reversed.value(1), 1);
+        assert_eq!(reversed.value(2), 2);
+
+        let sliced = Expr::Function {
+            name: "ARRAY_SLICE".into(),
+            args: vec![
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![decimal(1), decimal(2), decimal(3)],
+                },
+                Expr::Literal(ScalarValue::Int64(2)),
+                Expr::Literal(ScalarValue::Int64(3)),
+                Expr::Literal(ScalarValue::Int64(1)),
+            ],
+        };
+        let sliced = evaluate(&sliced, &batch).unwrap();
+        let sliced = sliced
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap()
+            .value(0);
+        let sliced = sliced.as_primitive::<arrow::datatypes::Decimal128Type>();
+        assert_eq!(sliced.len(), 2);
+        assert_eq!(sliced.value(0), 2);
+        assert_eq!(sliced.value(1), 3);
     }
 
     #[test]
