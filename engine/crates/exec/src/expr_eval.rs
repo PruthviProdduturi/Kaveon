@@ -1308,6 +1308,33 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             false,
         )?));
     }
+    if upper == "MAP_KEYS" || upper == "MAP_VALUES" {
+        check_arity(name, args, 1)?;
+        let map = args[0]
+            .as_any()
+            .downcast_ref::<MapArray>()
+            .ok_or_else(|| {
+                KaveonError::Execution(
+                    format!("{upper} currently supports MAP values only"),
+                )
+            })?;
+        let values = if upper == "MAP_KEYS" {
+            map.keys()
+        } else {
+            map.values()
+        };
+        let field = Arc::new(arrow::datatypes::Field::new(
+            "item",
+            values.data_type().clone(),
+            true,
+        ));
+        return Ok(Arc::new(ListArray::try_new(
+            field,
+            map.offsets().clone(),
+            Arc::clone(values),
+            map.nulls().cloned(),
+        )?));
+    }
     if let Some(target) = upper.strip_prefix("TRY_CAST_") {
         check_arity(name, args, 1)?;
         let target = match target {
@@ -2649,6 +2676,52 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("MAP keys cannot contain NULL"));
+    }
+
+    #[test]
+    fn map_keys_and_values_preserve_map_offsets() {
+        let input = RecordBatch::try_from_iter([(
+            "dummy",
+            Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+        )])
+        .unwrap();
+        let map = Expr::Function {
+            name: "MAP".into(),
+            args: vec![
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![Expr::Literal(ScalarValue::Utf8("a".into()))],
+                },
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![Expr::Literal(ScalarValue::Int64(1))],
+                },
+            ],
+        };
+        let keys = evaluate(
+            &Expr::Function {
+                name: "MAP_KEYS".into(),
+                args: vec![map.clone()],
+            },
+            &input,
+        )
+        .unwrap();
+        let keys = keys.as_list::<i32>();
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys.value(0).as_string::<i32>().value(0), "a");
+        assert_eq!(keys.value(1).len(), 1);
+
+        let values = evaluate(
+            &Expr::Function {
+                name: "MAP_VALUES".into(),
+                args: vec![map],
+            },
+            &input,
+        )
+        .unwrap();
+        let values = values.as_list::<i32>();
+        assert_eq!(values.value(0).as_primitive::<Float64Type>().value(0), 1.0);
+        assert_eq!(values.value(1).len(), 1);
     }
 
     #[test]
