@@ -1,6 +1,6 @@
 "use client";
 
-import React, { FormEvent, useEffect, useMemo, useState } from "react";
+import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { API_BASE } from "../../../config";
 import { msalFetch } from "../../../utils/msalFetch";
@@ -9,8 +9,20 @@ import { useRole } from "../../../hooks/useRole";
 import { useRouter, useSearchParams } from "next/navigation";
 import { DataSourceSelector } from "../../../components/DataSourceSelector";
 import { useTheme } from "../../../contexts/ThemeContext";
+import {
+  EngineCatalog,
+  EngineTable,
+  fetchEngineTable,
+  fetchRegisteredCatalogs,
+} from "../../../utils/engineCatalog";
+import { EngineBinding, EngineBindingPanel, EngineTablePicker } from "./EngineSource";
+import es from "./engineSource.module.css";
 
 const PRIMARY_DB_NAME = process.env.NEXT_PUBLIC_PRIMARY_DATABASE_NAME || "";
+
+// One identity for "no catalogs", so the picker's props do not change on every
+// render of the page while the listing is still in flight.
+const NO_CATALOGS: EngineCatalog[] = [];
 
 interface DatabaseConfig {
   database: string;
@@ -103,6 +115,8 @@ interface DatasetDetailDTO {
   date_column?: string | null;
   schema_name?: string | null;
   database_name?: string | null;
+  /** `{kind: "engine", table_id}` for a dataset bound to an Engine catalog table. */
+  source?: { kind: string; table_id: string } | null;
   dimensions?: DatasetDimensionDTO[];
   filters?: DatasetFilterDTO[];
   metrics?: DatasetMetricDTO[];
@@ -211,6 +225,7 @@ export default function NewDatasetPage() {
   const searchParams = useSearchParams();
 
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
+  const [dataSourcesLoaded, setDataSourcesLoaded] = useState(false);
   const [currentDataSourceId, setCurrentDataSourceId] = useState<number | null>(null);
   const [databases, setDatabases] = useState<DatabaseConfig[]>([]);
   const [currentDatabase, setCurrentDatabase] = useState<string | null>(null);
@@ -243,6 +258,38 @@ export default function NewDatasetPage() {
   const [hasSeededFromDataset, setHasSeededFromDataset] = useState(false);
   const [dimensionSchema, setDimensionSchema] = useState<string | null>(null);
 
+  // ── Where the dataset reads from ───────────────────────────────────────────
+  // Two kinds of source exist and they are not interchangeable. A `database`
+  // dataset reads an external connection (Fabric SQL, Azure SQL, PostgreSQL,
+  // MySQL) through the Lab's metadata endpoints. An `engine` dataset binds to
+  // one table of a registered catalog by the id the Engine keeps for it, and
+  // the API resolves its names, columns, metrics and date column from the
+  // Engine's definition. A lake-backed installation has only the second kind,
+  // so the form cannot assume the first: the path is chosen from what is
+  // actually registered, and said plainly when neither kind is.
+  const [sourceKind, setSourceKind] = useState<"engine" | "database" | null>(null);
+  const [engineCatalogs, setEngineCatalogs] = useState<EngineCatalog[] | null>(null);
+  const [engineUnsynchronized, setEngineUnsynchronized] = useState<string[]>([]);
+  const [engineCatalogError, setEngineCatalogError] = useState<string | null>(null);
+  const [engineBinding, setEngineBinding] = useState<EngineBinding | null>(null);
+  const [boundEngineTable, setBoundEngineTable] = useState<EngineTable | null>(null);
+  const lastEngineTableId = useRef<string | null>(null);
+
+  // The picker emits on every change of its resolved binding, so the callback
+  // it is given has to be stable. A different table also invalidates a date
+  // column chosen for the previous one.
+  const handleEngineBinding = useCallback((binding: EngineBinding | null) => {
+    setEngineBinding(binding);
+    const tableId = binding?.table.id ?? null;
+    if (lastEngineTableId.current !== null && lastEngineTableId.current !== tableId) {
+      setDateColumn("");
+    }
+    lastEngineTableId.current = tableId;
+    // A dataset named after the table it binds is the sane default; anything
+    // the reader has typed is left alone.
+    if (binding) setName(current => (current.trim() ? current : binding.table.name));
+  }, []);
+
   const schemaOptions = useMemo(() => {
     const unique = new Set<string>();
     for (const t of tables) {
@@ -269,6 +316,44 @@ export default function NewDatasetPage() {
     if (!Number.isFinite(idNum)) return;
     setEditingDatasetId(idNum);
   }, [searchParams]);
+
+  // The catalogs a dataset may be bound to. Derived from the platform's
+  // catalog *source* records and resolved to the Engine's definitions by
+  // name, rather than read from the Engine's definitions directly: a
+  // benchmark campaign registers scratch catalogs straight against the
+  // Engine, and those are not a source anybody means to build a dataset on.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    let cancelled = false;
+    setEngineCatalogError(null);
+    fetchRegisteredCatalogs()
+      .then(({ catalogs, unsynchronized }) => {
+        if (cancelled) return;
+        setEngineCatalogs(catalogs);
+        setEngineUnsynchronized(unsynchronized);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setEngineCatalogs([]);
+        setEngineCatalogError(
+          error instanceof Error ? error.message : "The registered catalogs could not be read.",
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated]);
+
+  // Which path the form takes. One kind of source registered decides it; both
+  // registered is a question for the reader; neither is reported rather than
+  // drawn as an empty picker. An existing dataset decides it by its binding.
+  useEffect(() => {
+    if (sourceKind) return;
+    if (editingDatasetId) return;
+    if (engineCatalogs === null || !dataSourcesLoaded) return;
+    if (engineCatalogs.length > 0 && dataSources.length === 0) setSourceKind("engine");
+    else if (dataSources.length > 0 && engineCatalogs.length === 0) setSourceKind("database");
+  }, [sourceKind, editingDatasetId, engineCatalogs, dataSourcesLoaded, dataSources.length]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -354,6 +439,9 @@ export default function NewDatasetPage() {
         const message = e instanceof Error ? e.message : "Unknown error";
         setLoadError(message);
       } finally {
+        // Read, successfully or not: the source-kind decision waits on this
+        // answer and must not be held up by a failed one.
+        setDataSourcesLoaded(true);
         setIsLoadingDatabases(false);
       }
     };
@@ -475,6 +563,22 @@ export default function NewDatasetPage() {
         if (seedMetrics.length > 0) {
           setMetrics(seedMetrics);
         }
+
+        // An Engine-backed dataset has no external connection to switch to:
+        // its names live in the Engine's catalog, so the Lab's metadata
+        // endpoints would be asked about a database that does not exist.
+        // Read the bound table's definition instead — it is what the date
+        // column is chosen from.
+        const engineTableId =
+          data.source && data.source.kind === "engine" ? data.source.table_id : null;
+        if (engineTableId) {
+          setSourceKind("engine");
+          void fetchEngineTable(engineTableId)
+            .then(setBoundEngineTable)
+            .catch(() => setBoundEngineTable(null));
+          return;
+        }
+        setSourceKind("database");
 
         // Load database/tables in parallel (non-blocking)
         // Dimensions will populate once this completes via the other useEffect
@@ -822,6 +926,85 @@ export default function NewDatasetPage() {
     }
   };
 
+  /**
+   * Create or change an Engine-backed dataset.
+   *
+   * The payload names the table by the Engine's id and says nothing else
+   * about it: `services/engine_datasets.apply_binding` resolves the catalog,
+   * schema and table names, the column list, the metrics and the date column
+   * from the Engine's own definition. That is the point of binding by id — a
+   * dataset cannot name one table and read another — so nothing here is
+   * typed, and a date column the reader chose is the one field that travels.
+   *
+   * An existing dataset's binding is not changed here. Its stored columns and
+   * metrics were derived from the table it is bound to, and rebinding would
+   * leave them describing a different one.
+   */
+  const submitEngineDataset = async () => {
+    const tableId = engineBinding?.table.id ?? null;
+    if (!editingDatasetId && !tableId) {
+      setSubmitError("Choose a catalog, a schema and a table for this dataset to read.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    setSubmitError(null);
+
+    try {
+      const payload: Record<string, unknown> = {
+        name: name.trim(),
+        description: description.trim() || null,
+        date_column: dateColumn || null,
+      };
+      if (!editingDatasetId && tableId) {
+        payload.source = { kind: "engine", table_id: tableId };
+      }
+
+      const url = editingDatasetId
+        ? `${API_BASE}/api/v1/datasets/${editingDatasetId}`
+        : `${API_BASE}/api/v1/datasets`;
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      const userEmail = account?.email || account?.username || null;
+      if (userEmail) {
+        headers["x-user-email"] = userEmail;
+      }
+
+      const res = await msalFetch(url, {
+        method: editingDatasetId ? "PATCH" : "POST",
+        headers,
+        body: JSON.stringify(payload),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        const detail = (body as { detail?: unknown } | null)?.detail;
+        const detailMessage =
+          typeof detail === "string"
+            ? detail
+            : detail && typeof detail === "object"
+            ? String((detail as { message?: unknown }).message ?? "")
+            : "";
+        throw new Error(
+          detailMessage ||
+            (body as { error?: string } | null)?.error ||
+            `Failed to save dataset (${res.status})`,
+        );
+      }
+
+      const created = (body as { id?: string | number } | null)?.id;
+      const datasetId =
+        typeof created === "string" || typeof created === "number"
+          ? String(created)
+          : editingDatasetId
+          ? String(editingDatasetId)
+          : null;
+      void router.push(datasetId ? `/datasets/${datasetId}` : "/datasets");
+    } catch (e: unknown) {
+      setSubmitError(e instanceof Error ? e.message : "Failed to save dataset");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!isAuthenticated) return;
@@ -829,6 +1012,10 @@ export default function NewDatasetPage() {
     // Validate required fields
     if (!name.trim()) {
       setSubmitError("Dataset name is required");
+      return;
+    }
+    if (sourceKind === "engine") {
+      await submitEngineDataset();
       return;
     }
     if (!selectedTable) {
@@ -1208,13 +1395,17 @@ export default function NewDatasetPage() {
     });
   }, [mode, factKeyOptions, dimensionTables]);
 
+  // An Engine-backed dataset needs a name and a bound table and nothing else;
+  // an existing one keeps the binding it has.
   const canSubmit =
-    isAuthenticated &&
-    !!name.trim() &&
-    !!selectedTable &&
-    !!currentDatabase &&
-    !isSubmitting &&
-    (mode !== "semantic" || !hasSemanticKeyIssues);
+    sourceKind === "engine"
+      ? isAuthenticated && !!name.trim() && !isSubmitting && (!!engineBinding || !!editingDatasetId)
+      : isAuthenticated &&
+        !!name.trim() &&
+        !!selectedTable &&
+        !!currentDatabase &&
+        !isSubmitting &&
+        (mode !== "semantic" || !hasSemanticKeyIssues);
 
   if (isAuthenticated && !canCreate) {
     return (
@@ -1240,6 +1431,21 @@ export default function NewDatasetPage() {
     );
   }
 
+  // What this installation can actually read, and therefore which path the
+  // form offers. `engineCatalogs === null` means the answer is still in
+  // flight; an empty array means there are none.
+  const catalogCount = engineCatalogs?.length ?? 0;
+  const availabilityKnown = engineCatalogs !== null && dataSourcesLoaded;
+  const bothRegistered = catalogCount > 0 && dataSources.length > 0;
+  const nothingRegistered = availabilityKnown && catalogCount === 0 && dataSources.length === 0;
+  const engineQualifiedName = engineBinding
+    ? `${engineBinding.catalog.name}.${engineBinding.schema.name}.${engineBinding.table.name}`
+    : editingDataset && sourceKind === "engine"
+    ? [editingDataset.database_name, editingDataset.schema_name, editingDataset.table_name]
+        .filter(Boolean)
+        .join(".")
+    : null;
+
   return (
     <div className="page-shell page-shell-wide">
       <header className="page-header">
@@ -1247,7 +1453,11 @@ export default function NewDatasetPage() {
           {editingDatasetId ? "Edit dataset" : "New dataset"}
         </h1>
         <p className="page-header-subtitle">
-          Start from a Fabric SQL table as a flat dataset or build a semantic model with dimensions.
+          {sourceKind === "engine"
+            ? "Bind a dataset to one table of a registered catalog. Its columns, metrics and date column are read from the Engine's definition."
+            : sourceKind === "database"
+            ? "Start from a table of a registered database connection as a flat dataset, or build a semantic model with dimensions."
+            : "A dataset reads one table — either of a registered catalog, or of a database connection."}
         </p>
       </header>
 
@@ -1255,14 +1465,96 @@ export default function NewDatasetPage() {
         <p className="muted">Sign in to create datasets.</p>
       )}
 
-      {loadError && (
+      {isAuthenticated && !sourceKind && (editingDatasetId ? !editingDataset : !availabilityKnown) && (
+        <div className="card page-empty-card">
+          <p className="page-empty-title">
+            {editingDatasetId ? "Reading the dataset" : "Reading what is registered"}
+          </p>
+          <p className="page-empty-body">
+            {editingDatasetId
+              ? "Its definition and the source it reads."
+              : "The catalogs and database connections this installation can read."}
+          </p>
+        </div>
+      )}
+
+      {isAuthenticated && !editingDatasetId && nothingRegistered && (
+        <div className="card page-empty-card">
+          <p className="page-empty-title">Nothing is registered for a dataset to read</p>
+          <p className="page-empty-body">
+            A dataset reads one table: either a table of a catalog registered against the Engine,
+            or a table of an external database connection. This installation has neither. Register
+            a catalog source under Settings &rarr; Storage, or a database connection under
+            Settings &rarr; Data sources; both are administrator settings.
+            {engineUnsynchronized.length > 0 && (
+              <>
+                {" "}
+                {engineUnsynchronized.length === 1
+                  ? `The catalog source ${engineUnsynchronized[0]} is registered, but the Engine returned no definition for it`
+                  : `${engineUnsynchronized.length} catalog sources are registered, but the Engine returned no definition for them`}
+                : either they have not been synchronized, or your account has not been granted
+                them.
+              </>
+            )}
+          </p>
+          {engineCatalogError && (
+            <p className="page-empty-body" style={{ color: "var(--error)" }}>
+              The registered catalogs could not be read: {engineCatalogError}
+            </p>
+          )}
+        </div>
+      )}
+
+      {isAuthenticated && !sourceKind && bothRegistered && (
+        <div className={es.chooser}>
+          <button type="button" className={es.choice} onClick={() => setSourceKind("engine")}>
+            <span className={es.choiceTitle}>A table of a registered catalog</span>
+            <p className={es.choiceBody}>
+              The Engine reads the lake in place. The dataset binds to one table by its catalog id
+              and takes its columns and metrics from the Engine&rsquo;s definition.
+            </p>
+            <p className={es.choiceCount}>
+              {catalogCount === 1 ? "1 catalog" : `${catalogCount} catalogs`}
+            </p>
+          </button>
+          <button type="button" className={es.choice} onClick={() => setSourceKind("database")}>
+            <span className={es.choiceTitle}>A table of a database connection</span>
+            <p className={es.choiceBody}>
+              An external database — Fabric SQL, Azure SQL, PostgreSQL or MySQL. Flat, or a
+              semantic model with dimension joins.
+            </p>
+            <p className={es.choiceCount}>
+              {dataSources.length === 1 ? "1 connection" : `${dataSources.length} connections`}
+            </p>
+          </button>
+        </div>
+      )}
+
+      {isAuthenticated && sourceKind && bothRegistered && !editingDatasetId && (
+        <p className={es.switcher}>
+          {sourceKind === "engine"
+            ? "Reading a table of a registered catalog."
+            : "Reading a table of a database connection."}
+          <button
+            type="button"
+            className={es.switcherAction}
+            onClick={() => setSourceKind(sourceKind === "engine" ? "database" : "engine")}
+          >
+            {sourceKind === "engine"
+              ? "Use a database connection instead"
+              : "Use a registered catalog instead"}
+          </button>
+        </p>
+      )}
+
+      {loadError && sourceKind !== "engine" && (
         <div className="card page-empty-card">
           <p className="page-empty-title">Problem loading database metadata</p>
           <p className="page-empty-body">{loadError}</p>
         </div>
       )}
 
-      {isAuthenticated && !loadError && (
+      {isAuthenticated && !!sourceKind && (sourceKind === "engine" || !loadError) && (
         <form onSubmit={handleSubmit} className="card" style={{ padding: 0, overflow: "hidden" }}>
           {/* Sticky Header with Action Buttons */}
           <div style={{
@@ -1370,6 +1662,24 @@ export default function NewDatasetPage() {
           {/* Form Content */}
           <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 24, minHeight: 360, padding: 24 }}>
           <div style={{ borderRight: "1px solid var(--border)", paddingRight: 16 }}>
+            {sourceKind === "engine" ? (
+              editingDatasetId ? (
+                <div className={es.field}>
+                  <span className={es.label}>Source</span>
+                  <p className={es.hint}>
+                    This dataset is bound to one table of the Engine&rsquo;s catalog, shown beside.
+                    Create a new dataset to read a different table.
+                  </p>
+                </div>
+              ) : (
+                <EngineTablePicker
+                  catalogs={engineCatalogs ?? NO_CATALOGS}
+                  unsynchronized={engineUnsynchronized}
+                  onChange={handleEngineBinding}
+                />
+              )
+            ) : (
+              <>
             <div style={{ marginBottom: 16 }}>
               <DataSourceSelector
                 value={currentDataSourceId}
@@ -1467,6 +1777,8 @@ export default function NewDatasetPage() {
                 </button>
               </div>
             </div>
+              </>
+            )}
           </div>
 
           <div style={{ display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
@@ -1498,6 +1810,24 @@ export default function NewDatasetPage() {
                 />
               </div>
 
+              {sourceKind === "engine" && (
+                <EngineBindingPanel
+                  qualifiedName={engineQualifiedName}
+                  table={engineBinding?.table ?? boundEngineTable}
+                  measurement={engineBinding?.measurement ?? null}
+                  bound={!!editingDatasetId}
+                  dateColumn={dateColumn}
+                  onDateColumn={setDateColumn}
+                />
+              )}
+
+              {/* Filters, metrics and dimension joins are built on the Lab's
+                  metadata endpoints, which answer for a database connection.
+                  An Engine-backed dataset takes its columns and metrics from
+                  the Engine's definition and is refined on the dataset's own
+                  page, so none of this is offered on that path. */}
+              {sourceKind !== "engine" && (
+              <>
               <div style={{ marginBottom: 16 }}>
                 <label className="save-query-field-label" htmlFor="dataset-date-column">
                   Date column (optional)
@@ -2274,6 +2604,8 @@ export default function NewDatasetPage() {
                     </p>
                   )}
                 </div>
+              )}
+              </>
               )}
 
               {submitError && (
