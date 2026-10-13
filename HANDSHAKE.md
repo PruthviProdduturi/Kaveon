@@ -31,8 +31,8 @@ unsupported-target diagnostic; scalar, DATE, timestamp, and DECIMAL casts are
 the qualified cast surface today.
 The SQL front end now exposes a typed positional binding entry point for
 `$1`, `$2`, …; values become AST literals before planning and are never
-interpolated into SQL text. Missing positions and `?`/named placeholders fail
-before planning. `StatementRequest.parameters` now accepts the same JSON
+interpolated into SQL text. Missing positional indexes and named placeholders
+fail before planning; sequential `?` placeholders are supported. `StatementRequest.parameters` now accepts the same JSON
 scalar values and runs them through the typed binder before planning; invalid
 arrays/objects and unbound positions fail with HTTP 400. Workers receive the
 compiled fragment, so parameter values never cross the worker boundary.
