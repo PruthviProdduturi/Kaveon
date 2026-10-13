@@ -1,5 +1,12 @@
 # Kaveon — Engineer Coordination
 
+## SQL compatibility track — October 12, 2026 · safe casts
+
+The next compatibility slice adds `TRY_CAST` (commit pending) for the
+supported primitive, date/time, and decimal targets. It uses Arrow's safe
+per-element cast behavior: invalid values become NULL without discarding valid
+values in the same batch. Standard `CAST` keeps its fail-fast behavior.
+
 ## SQL compatibility track — October 12, 2026 · null-safe comparisons
 
 Commits `bd4dd218` and `fe526fb8` add and record `IS DISTINCT FROM` and

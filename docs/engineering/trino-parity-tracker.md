@@ -233,11 +233,14 @@ qualification documents; this tracker remains the single ordered work list.
   `CASE` expressions using the existing vectorized null predicates and
   comparisons; executor coverage verifies both-null, one-null, equal, and
   unequal rows.
+- `TRY_CAST` now lowers to Arrow safe per-element casts for the supported
+  primitive, date/time, and decimal targets; invalid values become NULL while
+  valid values in the same batch remain intact (`current cycle`).
 
 ### Current focused validation
 
-The latest focused validation passes 330 `kaveon-server` tests, 101
-`kaveon-sql` tests, and 217 `kaveon-exec` tests. These counts are package-level
+The latest focused validation passes 330 `kaveon-server` tests, 102
+`kaveon-sql` tests, and 218 `kaveon-exec` tests. These counts are package-level
 validation snapshots; they do not close the broader multi-worker, AKS, or
 cross-connector qualification gates below.
 
