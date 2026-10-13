@@ -2254,6 +2254,66 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 ))),
             }
         }
+        "ARRAY_REVERSE" => {
+            check_arity(name, args, 1)?;
+            let list = args[0]
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .ok_or_else(|| KaveonError::Execution("ARRAY_REVERSE requires an ARRAY/List value".into()))?;
+            match list.value_type() {
+                DataType::Float64 => {
+                    let mut builder = ListBuilder::new(Float64Builder::new());
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let inner = list.value(row);
+                        let values = inner.as_primitive::<Float64Type>();
+                        for index in (0..values.len()).rev() {
+                            builder.values().append_option(values.is_valid(index).then(|| values.value(index)));
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }
+                DataType::Utf8 => {
+                    let mut builder = ListBuilder::new(StringBuilder::new());
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let inner = list.value(row);
+                        let values = inner.as_string::<i32>();
+                        for index in (0..values.len()).rev() {
+                            builder.values().append_option(values.is_valid(index).then(|| values.value(index)));
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }
+                DataType::Boolean => {
+                    let mut builder = ListBuilder::new(BooleanBuilder::new());
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let inner = list.value(row);
+                        let values = inner.as_boolean();
+                        for index in (0..values.len()).rev() {
+                            builder.values().append_option(values.is_valid(index).then(|| values.value(index)));
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }
+                other => Err(KaveonError::Execution(format!(
+                    "ARRAY_REVERSE does not support list element type {other}"
+                ))),
+            }
+        }
         "ARRAY_SLICE" => {
             check_arity(name, args, 4)?;
             let list = args[0]
@@ -3577,6 +3637,34 @@ mod tests {
         let inner = list.value(0);
         let values = inner.as_primitive::<Float64Type>();
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(1.0), Some(2.0), Some(3.0), None]);
+    }
+
+    #[test]
+    fn array_reverse_preserves_null_elements_and_reverses_order() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        let value = evaluate(
+            &Expr::Function {
+                name: "ARRAY_REVERSE".into(),
+                args: vec![Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![
+                        Expr::Literal(ScalarValue::Utf8("a".into())),
+                        Expr::Literal(ScalarValue::Null),
+                        Expr::Literal(ScalarValue::Utf8("b".into())),
+                    ],
+                }],
+            },
+            &batch,
+        )
+        .unwrap();
+        let list = value.as_any().downcast_ref::<ListArray>().unwrap();
+        let inner = list.value(0);
+        let values = inner.as_string::<i32>();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some("b"), None, Some("a")]);
     }
 
     #[test]

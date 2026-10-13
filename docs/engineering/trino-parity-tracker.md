@@ -270,6 +270,7 @@ qualification documents; this tracker remains the single ordered work list.
   strides, and null elements. `ARRAY_DISTINCT` now preserves first occurrence
   order and keeps at most one NULL for numeric, text, and boolean lists;
   `ARRAY_SORT` orders those same supported element types with NULL values last;
+  `ARRAY_REVERSE` reverses those lists while preserving NULL elements;
   broader element types remain an explicit boundary.
 - `ROW(...).field` now lowers to a typed `ROW_FIELD` projection over Arrow
   structs, and map subscript syntax lowers to `ELEMENT_AT` with typed key
@@ -282,7 +283,7 @@ qualification documents; this tracker remains the single ordered work list.
 ### Current focused validation
 
 The latest focused validation passes 331 `kaveon-server` tests, 108
-`kaveon-sql` tests, and 233 `kaveon-exec` tests (four executor benchmarks are
+`kaveon-sql` tests, and 235 `kaveon-exec` tests (four executor benchmarks are
 ignored). The repository differential gate
 (`differential_tests::the_differential_sweep_matches_across_parquet_encodings_and_execution_paths`)
 also passes, comparing the same corpus across alternate Parquet encodings and
