@@ -2316,7 +2316,13 @@ fn ast_data_type_to_cast_target(dt: &ast::DataType) -> Result<CastTarget> {
         | ast::DataType::Text
         | ast::DataType::String(_)
         | ast::DataType::Char(_)
-        | ast::DataType::CharVarying(_) => Ok(CastTarget::Utf8),
+        | ast::DataType::CharVarying(_)
+        // Arrow has no JSON scalar type.  Kaveon carries JSON as UTF-8 JSON
+        // text, which is also the representation consumed by the JSON_*()
+        // functions.  Keeping JSON textual preserves exact bytes and avoids
+        // silently inventing a binary encoding at the SQL boundary.
+        | ast::DataType::JSON
+        | ast::DataType::JSONB => Ok(CastTarget::Utf8),
         ast::DataType::Date => Ok(CastTarget::Date32),
         ast::DataType::Timestamp(_, timezone) => Ok(CastTarget::TimestampMicros {
             with_timezone: matches!(
@@ -4561,9 +4567,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unsupported_complex_cast_targets_with_stable_diagnostics() {
-        let error = sql_to_logical_plan("SELECT CAST(payload AS JSON) FROM events").unwrap_err();
-        assert_eq!(error.to_string(), "sql: unsupported CAST target type: JSON");
+    fn casts_json_as_utf8_for_json_functions() {
+        let plan = sql_to_logical_plan("SELECT CAST(payload AS JSON) FROM events").unwrap();
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("CastTarget::Utf8") || debug.contains("Utf8"), "{debug}");
+
+        let plan = sql_to_logical_plan("SELECT CAST(payload AS JSONB) FROM events").unwrap();
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("CastTarget::Utf8") || debug.contains("Utf8"), "{debug}");
     }
 
     #[test]

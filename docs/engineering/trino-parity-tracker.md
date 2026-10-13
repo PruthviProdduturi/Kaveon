@@ -237,7 +237,7 @@ qualification documents; this tracker remains the single ordered work list.
 | Joins, filters, grouping, ordering | Partial | Differential corpus with typed result hashes |
 | CTEs and subqueries | Partial | Nested and correlated cases, including empty and NULL inputs |
 | Windows and set operators | Partial | `OVER`, frames, `UNION`, `INTERSECT`, and `EXCEPT` corpus |
-| Arrays, maps, structs, JSON | Partial | Parse, plan, execute, and explicit unsupported diagnostics |
+| Arrays, maps, structs, JSON | Partial — JSON/JSONB casts now use the Engine's UTF-8 JSON representation | Parse, plan, execute, and explicit unsupported diagnostics; broader typed JSON semantics remain to be qualified |
 | Decimal, timestamp, interval, and casts | Partial | Overflow, timezone, precision, and implicit-cast cases |
 | `CASE`, `HAVING`, `FILTER`, `QUALIFY` | Partial | Exact-result and error semantics |
 | Native DML and prepared parameters | Partial | `BEGIN`/`COMMIT`/`ROLLBACK`, parameter binding, and transactional visibility |
@@ -439,9 +439,10 @@ invalidation, isolation, bounds, and restart evidence listed above.
 - `ROW(...)` and `MAP(...)` constructors now lower and execute as typed Arrow
   struct/map values; dereference, lookup, and row/map comparison remain typed
   complex-type boundaries (`12d44965`, `8ae24b96`).
-- Unsupported complex `CAST` targets such as `JSON` now fail during planning
-  with a stable target-type diagnostic; scalar, DATE, timestamp, and DECIMAL
-  casts remain the qualified cast surface (`c259e5d1`).
+- `CAST(... AS JSON)` and `CAST(... AS JSONB)` now lower to the Engine's
+  UTF-8 JSON representation, which is the type consumed by the existing
+  `JSON_*()` functions; parser coverage includes both spellings. Binary JSON
+  storage and full Trino JSON coercion semantics remain outside this slice.
 - Ordinary aggregate `FILTER (WHERE ...)` clauses now lower to
   null-preserving `CASE` expressions, including `COUNT(*) FILTER`, so the
   existing aggregate and spill paths retain their exact semantics. Approximate
