@@ -1,0 +1,197 @@
+/* The Engine-catalog path through the new-dataset form: a catalog, a schema
+   and a table on the left, and what that binding will produce on the right.
+
+   Same vocabulary as the Catalog itself — Inter for prose, mono for anything
+   the Engine named, 13px for rows and controls, 11px for labels and counts,
+   and colour only where it carries meaning. */
+
+.field {
+  margin-bottom: 16px;
+}
+
+.label {
+  display: block;
+  margin-bottom: 6px;
+  font: 600 11px/1.4 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.hint {
+  margin: 6px 0 0;
+  font: 400 11px/1.5 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--text-muted);
+}
+
+/* A listing in flight. The three catalog calls cost roughly half a second
+   each, so the row says which one is running rather than leaving a control
+   that looks merely empty. */
+.working {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 0;
+  font: 400 11px/1.5 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--text-secondary);
+}
+
+.spinner {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border: 1.5px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 2.4s; }
+}
+
+.problem {
+  margin: 6px 0 0;
+  font: 400 11px/1.5 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--error);
+}
+
+.retry {
+  margin-left: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* ── The binding, once a table is chosen ──────────────────────────────────── */
+
+.summary {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  padding: 14px 16px;
+}
+
+.summaryName {
+  margin: 0;
+  font: 600 14px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.summaryKind {
+  margin: 4px 0 0;
+  font: 400 11px/1.5 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--text-muted);
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 12px 18px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.factLabel {
+  font: 600 11px/1.4 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.factValue {
+  margin-top: 3px;
+  font: 500 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.location {
+  margin: 12px 0 0;
+  font: 400 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.unreadable {
+  margin: 12px 0 0;
+  font: 400 11px/1.5 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--error);
+}
+
+/* ── Choosing between the two kinds of source ─────────────────────────────── */
+
+.chooser {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.choice {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-surface);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.choice:hover {
+  border-color: var(--border-hover);
+  background: var(--bg-elevated);
+}
+
+.choiceTitle {
+  font: 600 14px/1.4 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--text-primary);
+}
+
+.choiceBody {
+  margin: 4px 0 0;
+  font: 400 12px/1.5 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--text-secondary);
+}
+
+.choiceCount {
+  margin: 8px 0 0;
+  font: 500 11px/1.4 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* The line under the picker that says which source kind is in use, and offers
+   the other one when both exist. */
+.switcher {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 0 0 16px;
+  font: 400 11px/1.5 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--text-muted);
+}
+
+.switcherAction {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
