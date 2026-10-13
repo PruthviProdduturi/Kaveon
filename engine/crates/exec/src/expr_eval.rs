@@ -748,6 +748,33 @@ enum CompareKind {
 
 fn comparison(left: &ArrayRef, right: &ArrayRef, kind: CompareKind) -> Result<BooleanArray> {
     use arrow::compute::kernels::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
+    if let (Some(left), Some(right)) = (
+        left.as_any().downcast_ref::<StructArray>(),
+        right.as_any().downcast_ref::<StructArray>(),
+    ) {
+        if !matches!(kind, CompareKind::Eq | CompareKind::Ne) {
+            return Err(KaveonError::Execution(
+                "ordered comparison is not supported for ROW values".into(),
+            ));
+        }
+        if left.num_columns() != right.num_columns()
+            || left.column_names() != right.column_names()
+        {
+            return Err(KaveonError::Execution(
+                "ROW values must have matching fields for comparison".into(),
+            ));
+        }
+        let mut result = BooleanArray::from(vec![true; left.len()]);
+        for (left_field, right_field) in left.columns().iter().zip(right.columns()) {
+            let field_equal = comparison(left_field, right_field, CompareKind::Eq)?;
+            result = compute::and_kleene(&result, &field_equal)?;
+        }
+        return if matches!(kind, CompareKind::Ne) {
+            Ok(compute::not(&result)?)
+        } else {
+            Ok(result)
+        };
+    }
     let (left, right) = coerce_numeric_pair(left, right)?;
     let result = match kind {
         CompareKind::Eq => eq(&left, &right)?,
@@ -2807,6 +2834,32 @@ mod tests {
         assert_eq!(
             value.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
             vec![Some(7), Some(9)]
+        );
+    }
+
+    #[test]
+    fn row_equality_compares_struct_fields_with_null_semantics() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+        )])
+        .unwrap();
+        let row = |value| Expr::Function {
+            name: "ROW".into(),
+            args: vec![Expr::Literal(ScalarValue::Int64(value)), Expr::Column("id".into())],
+        };
+        let value = evaluate(
+            &Expr::BinaryOp {
+                left: Box::new(row(7)),
+                op: BinaryOp::Eq,
+                right: Box::new(row(7)),
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            value.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(true)]
         );
     }
 
