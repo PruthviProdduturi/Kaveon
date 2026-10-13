@@ -172,12 +172,15 @@ api:
   # interval costs a freshness check per dataset and no writes. Hourly: a
   # daily-append table is then at most an hour behind, and a source that has
   # not moved is not recompiled at all.
+  #
+  # Off until the installation names the principal below, because compiled
+  # context is owned content: there is no ambient administrator to sweep as,
+  # and a schedule that ran as nobody would check nothing and report success.
   dlmFreshness:
-    enabled: true
+    enabled: false
     schedule: "17 * * * *"
-    # The principal the sweep reads and recompiles as. There is no ambient
-    # administrator, and a job with no principal refuses to run rather than
-    # checking nothing — which is what the disabled in-process sweep did.
+    # The principal the sweep reads and recompiles as. Naming one is what
+    # turns the schedule on.
     actor: ""
     # Bounds the whole sweep, so a dataset that cannot finish compiling does
     # not hold the Forbid lock until the next schedule.

@@ -112,6 +112,7 @@ kubectl -n "$NAMESPACE" create secret generic "$AUTH_SECRET_NAME" \
 # blocker can stop; only a registration without one needs the browser pop-up.
 ENTRA_PUBLIC_CLIENT=$( [[ -n "$ENTRA_CLIENT_SECRET" ]] && echo false || echo true )
 RETIREMENT=$( [[ "$MODE" == retirement ]] && echo true || echo false )
+DLM_SWEEP=$( [[ -n "${KAVEON_DLM_SWEEP_ACTOR:-}" ]] && echo true || echo false )
 REHEARSAL=$( [[ "$MODE" == rehearsal ]] && echo true || echo false )
 cat > "$tmp/values.yaml" <<EOF
 namespace: $NAMESPACE
@@ -157,6 +158,12 @@ api:
     artifactContainer: $KAVEON_ADLS_CONTAINER
   workloadIdentity: {clientId: $KAVEON_API_WORKLOAD_IDENTITY_CLIENT_ID}
   keyVaultUrl: $KAVEON_KEY_VAULT_URL
+  # Recompiles the context of any dataset whose source table has changed, so a
+  # table taking a daily append stops reporting the row count it had when it
+  # was last compiled. Compiled context is owned content, so the sweep needs a
+  # principal: naming one turns the schedule on, and without one the schedule
+  # is not rendered rather than running as nobody and checking nothing.
+  dlmFreshness: {enabled: $DLM_SWEEP, actor: "${KAVEON_DLM_SWEEP_ACTOR:-}"}
 EOF
 
 echo "Rendering and validating PostgreSQL-free release..."
