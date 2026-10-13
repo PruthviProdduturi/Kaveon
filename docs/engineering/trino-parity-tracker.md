@@ -69,6 +69,8 @@ foundations, but several operators are still centralized or narrow:
   Typed positional `$1`, sequential `?`, and named `:name` parameters are now
   validated and bound through the HTTP statement API; the full prepare/describe/
   bind/execute protocol remains open.
+  Prepared-parameter discovery now also ignores PostgreSQL `::type` casts,
+  so cast names cannot be mistaken for named bindings (`617b69f6`).
   Uncorrelated aggregate scalar subqueries in `WHERE` are now supported with
   exact-result differential coverage; projection, correlated, and multi-row
   scalar forms remain explicitly rejected.
