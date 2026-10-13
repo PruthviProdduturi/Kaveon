@@ -75,7 +75,8 @@ foundations, but several operators are still centralized or narrow:
   nullable execution coverage.
 - Numeric array literals are supported as null-preserving Arrow lists, and
   `CARDINALITY` returns their nullable list length; maps and structs/row values
-  are not yet represented as complete SQL expression types. Complex casts,
+  are not yet represented as complete SQL expression types. `ROW(...)` and
+  `MAP(...)` now fail with typed planner diagnostics. Complex casts,
   dereference, `UNNEST`, other array operations, and broad JSON operations
   remain open; scalar extraction via `JSON_EXTRACT_SCALAR` is implemented for
   dotted object paths.
@@ -165,6 +166,11 @@ qualification documents; this tracker remains the single ordered work list.
 - Correlated scalar subqueries now have explicit rejection and binder-boundary
   coverage; the preserved outer reference documents the remaining Apply/lateral
   runtime requirement (`72c7e302`).
+- Running exchange cancellation now marks all dependent stages terminal,
+  drains queued work, and emits one idempotent cleanup intent (`c2ea4da2`).
+- `ROW(...)` and `MAP(...)` expressions now fail during planning with typed
+  complex-type diagnostics instead of reaching execution as unknown functions
+  (`bd38251d`).
 - Bounded projection scalar subqueries now support an ungrouped, single-column
   aggregate and preserve its alias; correlated and multi-row projection forms
   remain explicitly rejected (`d7be5f9a`).
@@ -175,6 +181,13 @@ qualification documents; this tracker remains the single ordered work list.
   predicates reach the build scan, while runtime build-key propagation to the
   probe scan remains refused until its correctness and exchange behavior are
   qualified (`57db621d`).
+
+### Current focused validation
+
+The latest focused validation passes 327 `kaveon-server` tests, 94
+`kaveon-sql` tests, and 213 `kaveon-exec` tests. These counts are package-level
+validation snapshots; they do not close the broader multi-worker, AKS, or
+cross-connector qualification gates below.
 
 Track 1 remains partial because distributed global ordering and a full
 worker-loss/spill/cancellation corpus still need a correctness gate. The
