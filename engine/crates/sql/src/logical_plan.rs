@@ -1805,6 +1805,15 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
         }
         ast::Expr::Nested(inner) => ast_expr_to_expr(inner),
         ast::Expr::Function(func) => ast_function_to_expr(func),
+        ast::Expr::Subscript { expr, subscript } => match subscript.as_ref() {
+            ast::Subscript::Index { index } => Ok(Expr::Function {
+                name: "ELEMENT_AT".into(),
+                args: vec![ast_expr_to_expr(expr)?, ast_expr_to_expr(index)?],
+            }),
+            ast::Subscript::Slice { .. } => {
+                Err(sql_err("array slices are not supported; use ELEMENT_AT(array, index)"))
+            }
+        },
         // `ARRAY[…]` is carried as a call named ARRAY. The executor evaluates
         // numeric array literals as Arrow List<Float64> values; aggregate
         // lowering also consumes constant percentile lists here.
@@ -3817,6 +3826,13 @@ mod tests {
         let plan = sql_to_logical_plan("SELECT ROW(id, name) FROM t").unwrap();
         let debug = format!("{plan:?}");
         assert!(debug.contains("Function { name: \"ROW\""));
+    }
+
+    #[test]
+    fn array_subscript_lowers_to_element_at() {
+        let plan = sql_to_logical_plan("SELECT ARRAY[10, 20][2] FROM t").unwrap();
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("Function { name: \"ELEMENT_AT\""));
     }
 
     #[test]
