@@ -155,7 +155,9 @@ foundations, but several operators are still centralized or narrow:
   ignoring null elements, and `ARRAYS_OVERLAP` follows Trino's true/false/NULL
   intersection semantics. `ARRAY_JOIN` now formats supported typed elements,
   omits NULL elements by default, and accepts a NULL replacement policy.
-  Broader element types remain an explicit boundary.
+  Nested arrays now materialize as typed lists of lists with element nulls
+  preserved; structs and other mixed or unsupported element types remain
+  explicit boundaries.
   Scalar, DATE, timestamp, and DECIMAL casts are supported; complex cast
   targets fail with typed planner diagnostics. `value IN UNNEST(array)` and
   its `NOT IN` form lower to the existing nullable `CONTAINS` path; row-
@@ -737,7 +739,8 @@ Trino adapter, but the adapter still lacks a wire-compatible full protocol;
 correlated non-aggregate and other unsupported scalar subqueries, ordered map
 comparisons, broader array element types, and broader typed DML are not yet
 implemented. Quantified array comparisons now cover all scalar comparison
-operators with NULL and empty-array tests. Equality-key outer joins now carry residual
+operators with NULL and empty-array tests; nested array literals now materialize
+as typed list-of-list results. Equality-key outer joins now carry residual
 `ON` predicates through the distributed hash join and apply null extension only
 after the complete predicate is evaluated.
 Multiset set operations are now implemented
