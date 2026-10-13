@@ -353,6 +353,27 @@ mod tests {
     }
 
     #[test]
+    fn quota_bounds_concurrent_spools_and_releases_after_retry_cleanup() {
+        static USED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        USED.store(0, std::sync::atomic::Ordering::Release);
+
+        let (spool, mut writer) = ReplayableSpool::new_with_quota(8, &USED, 8).unwrap();
+        writer.append(b"12345678").unwrap();
+        let (blocked, mut blocked_writer) = ReplayableSpool::new_with_quota(8, &USED, 8).unwrap();
+        assert_eq!(
+            blocked_writer.append(b"retry").unwrap_err().kind(),
+            io::ErrorKind::StorageFull
+        );
+        drop(blocked_writer);
+        drop(blocked);
+        drop(writer);
+        drop(spool);
+
+        let (_retry, mut retry_writer) = ReplayableSpool::new_with_quota(8, &USED, 8).unwrap();
+        retry_writer.append(b"retry").unwrap();
+    }
+
+    #[test]
     fn arrow_reader_waits_for_later_ipc_batches() {
         use arrow::array::{Int64Array, RecordBatch};
         use arrow::datatypes::{DataType, Field, Schema};
