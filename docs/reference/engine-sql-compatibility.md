@@ -27,7 +27,9 @@ by the selected database and Kaveon's API guardrails.
 | CTEs and derived tables | Alpha | Non-recursive CTEs; derived tables in FROM and joined with commas |
 | Arithmetic expressions | Alpha | Compatible numeric coercion for supported primitive numeric types |
 | `HAVING` | Alpha | Post-aggregation filter |
+| Aggregate `FILTER (WHERE ...)` | Alpha | Supported on aggregate functions, including `COUNT`, `SUM`, and `COUNT_IF`; the predicate is evaluated with SQL three-valued semantics before the aggregate state is updated |
 | Window functions | Alpha | `ROW_NUMBER`, `RANK`, `DENSE_RANK`, `LAG`, `LEAD`, aggregates with `OVER (PARTITION BY … ORDER BY …)` and `ROWS`/`RANGE`/`GROUPS` frames |
+| `QUALIFY` | Alpha | Filters supported window results after window evaluation; partitioned `ROW_NUMBER` shapes are qualified across local and distributed execution |
 | Set operations | Alpha | `UNION [ALL]`, `INTERSECT`, `EXCEPT`, `INTERSECT ALL`, and `EXCEPT ALL`; distributed exact duplicate-count semantics are covered by the differential sweep |
 | Date/time | Alpha | `EXTRACT`, `DATE_TRUNC`, `DATE_PART`, `TO_CHAR`, `NOW`, `CURRENT_DATE`, `CURRENT_TIMESTAMP`, `DATE '…'` literals, `date ± INTERVAL 'n' DAY`; `MONTH`/`YEAR` intervals only against a DATE literal |
 | Conditional, comparison and strings | Alpha | `CASE`, `COALESCE`, `BETWEEN`, `IN`, `IS DISTINCT FROM`, `IS NOT DISTINCT FROM`, `LIKE`/`ILIKE` (Arrow kernels), `REGEXP_REPLACE`, `CAST`, `TRY_CAST`, concatenation, `UPPER`/`LOWER`/`LENGTH`/`TRIM`/`SUBSTR`/`REPEAT`/`REPLACE`/`LPAD`/`RPAD`; functions over dictionary columns run once per dictionary value the batch uses and keep a text result dictionary-encoded; `REGEXP_REPLACE` over plain text runs once per distinct value in the batch |
