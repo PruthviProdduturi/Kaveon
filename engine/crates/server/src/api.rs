@@ -3922,10 +3922,14 @@ async fn run_statement(
             context.time_zone.as_deref(),
         )
     });
+    let cache_lookup_start = Instant::now();
     if let Some(hit) = cache_key
         .as_ref()
         .and_then(|key| state.result_cache.get(key))
     {
+        state
+            .result_cache
+            .record_hit_latency(cache_lookup_start.elapsed());
         let mut data = (*hit.rows).clone();
         let next_uri = if paged {
             match spool_rows(&state, &query_id, result_writer.take(), &mut data) {
