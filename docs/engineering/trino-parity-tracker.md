@@ -235,8 +235,9 @@ current HTTP exchange spool is bounded, replayable, and incrementally decoded;
 network backpressure, sustained pressure evidence, and AKS cancellation
 qualification remain open.
 Track 2 remains partial because the full prepared-statement protocol,
-correlated and other unsupported scalar subqueries, complex types, multiset
-set operations, and broader typed DML are not yet implemented. Positional
+correlated and other unsupported scalar subqueries, complex types, and broader
+typed DML are not yet implemented. Multiset set operations are now implemented
+and covered end to end. Positional
 scalar parameters are supported through the HTTP statement API; named
 placeholders and the full prepared-statement protocol remain explicit
 unsupported cases.
