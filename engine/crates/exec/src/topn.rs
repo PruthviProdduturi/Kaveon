@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use arrow::array::{Array, Int64Array, UInt32Array, UInt64Array};
 use arrow::compute::{SortColumn, SortOptions, concat_batches, lexsort_to_indices, take};
@@ -218,6 +218,16 @@ pub fn merge_top_n(
         ));
     }
 
+    // Distributed aggregate TopN commonly orders by one integer COUNT/SUM
+    // column. Keep only row references while ranking those batches so the
+    // final merge does not concatenate every payload column before selecting
+    // the result. Unsupported expressions retain the general Arrow path.
+    if sort_exprs.len() == 1 {
+        if let Some(result) = try_integer_batch_top_n(schema, batches, &sort_exprs[0], limit)? {
+            return Ok(Some(result));
+        }
+    }
+
     let non_empty = batches
         .iter()
         .filter(|batch| batch.num_rows() > 0)
@@ -249,6 +259,108 @@ pub fn merge_top_n(
         .map(|column| take(column.as_ref(), &indices, None))
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(Some(RecordBatch::try_new(schema.clone(), output_columns)?))
+}
+
+fn try_integer_batch_top_n(
+    schema: &SchemaRef,
+    batches: &[RecordBatch],
+    sort_expr: &SortExpr,
+    limit: usize,
+) -> Result<Option<RecordBatch>> {
+    let mut keys = Vec::with_capacity(batches.len());
+    for batch in batches {
+        let values = evaluate(&sort_expr.expr, batch)?;
+        let values = if let Some(values) = values.as_any().downcast_ref::<Int64Array>() {
+            values
+                .iter()
+                .map(|value| value.map(i128::from))
+                .collect::<Vec<_>>()
+        } else if let Some(values) = values.as_any().downcast_ref::<UInt64Array>() {
+            values
+                .iter()
+                .map(|value| value.map(i128::from))
+                .collect::<Vec<_>>()
+        } else {
+            return Ok(None);
+        };
+        keys.push(values);
+    }
+
+    let mut references = keys
+        .iter()
+        .enumerate()
+        .flat_map(|(batch, values)| (0..values.len()).map(move |row| (batch, row)))
+        .collect::<Vec<_>>();
+    references.sort_by(|left, right| {
+        let left_key = keys[left.0][left.1];
+        let right_key = keys[right.0][right.1];
+        match (left_key, right_key) {
+            (None, None) => std::cmp::Ordering::Equal,
+            (None, Some(_)) => {
+                if sort_expr.nulls_first {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Greater
+                }
+            }
+            (Some(_), None) => {
+                if sort_expr.nulls_first {
+                    std::cmp::Ordering::Greater
+                } else {
+                    std::cmp::Ordering::Less
+                }
+            }
+            (Some(left), Some(right)) => {
+                let ordering = left.cmp(&right);
+                if sort_expr.ascending {
+                    ordering
+                } else {
+                    ordering.reverse()
+                }
+            }
+        }
+    });
+    references.truncate(limit);
+
+    let mut selected = Vec::with_capacity(references.len());
+    let mut offsets = vec![0u32; batches.len()];
+    let mut positions = HashMap::with_capacity(references.len());
+    let mut selected_rows = 0u32;
+    for (batch_index, batch) in batches.iter().enumerate() {
+        let rows = references
+            .iter()
+            .filter_map(|(candidate_batch, row)| {
+                (*candidate_batch == batch_index).then_some(*row as u32)
+            })
+            .collect::<Vec<_>>();
+        if rows.is_empty() {
+            continue;
+        }
+        offsets[batch_index] = selected_rows;
+        for (local_index, row) in rows.iter().enumerate() {
+            positions.insert((batch_index, *row as usize), local_index as u32);
+        }
+        selected_rows += rows.len() as u32;
+        let indices = UInt32Array::from(rows);
+        let columns = batch
+            .columns()
+            .iter()
+            .map(|column| take(column.as_ref(), &indices, None))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        selected.push(RecordBatch::try_new(schema.clone(), columns)?);
+    }
+    let selected = concat_batches(schema, &selected)?;
+    let order = references
+        .iter()
+        .map(|(batch, row)| offsets[*batch] + positions[&(*batch, *row)])
+        .collect::<Vec<_>>();
+    let order = UInt32Array::from(order);
+    let columns = selected
+        .columns()
+        .iter()
+        .map(|column| take(column.as_ref(), &order, None))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(Some(RecordBatch::try_new(schema.clone(), columns)?))
 }
 
 // Common integer ORDER BY keys can compare typed values directly. Other types
@@ -579,6 +691,21 @@ mod tests {
         assert_eq!(
             values(&operator.next_batch().unwrap().unwrap()),
             vec![None, Some(1)]
+        );
+    }
+
+    #[test]
+    fn integer_fast_path_keeps_nulls_first_when_descending() {
+        let source = MockOperator::new(vec![vec![Some(2), None, Some(1)]]);
+        let mut operator = TopNOperator::new(
+            Box::new(source),
+            vec![SortExpr::new(Expr::Column("id".into()), false).with_nulls_first(true)],
+            2,
+        )
+        .unwrap();
+        assert_eq!(
+            values(&operator.next_batch().unwrap().unwrap()),
+            vec![None, Some(2)]
         );
     }
 
