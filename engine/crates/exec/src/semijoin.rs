@@ -882,7 +882,7 @@ mod tests {
     use super::*;
     use arrow::{
         array::Int64Array,
-        datatypes::{DataType, Field, Schema},
+        datatypes::{i256, DataType, Field, Schema},
     };
     use std::sync::Arc;
     struct Source {
@@ -1026,6 +1026,56 @@ mod tests {
             extract_value(&arrow::array::Float64Array::from(vec![-0.0]), 0).unwrap(),
             extract_value(&arrow::array::Float64Array::from(vec![0.0]), 0).unwrap()
         );
+    }
+
+    #[test]
+    fn decimal256_semi_join_keeps_exact_matching_rows() {
+        let data_type = DataType::Decimal256(40, 2);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "key",
+            data_type.clone(),
+            true,
+        )]));
+        let array = |values: Vec<Option<i256>>| {
+            Arc::new(
+                arrow::array::Decimal256Array::from(values)
+                    .with_precision_and_scale(40, 2)
+                    .unwrap(),
+            ) as ArrayRef
+        };
+        let left = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![array(vec![
+                Some(i256::from_i128(125)),
+                Some(i256::from_i128(200)),
+                None,
+            ])],
+        )
+        .unwrap();
+        let right = RecordBatch::try_new(
+            schema,
+            vec![array(vec![Some(i256::from_i128(125)), None])],
+        )
+        .unwrap();
+        let mut op = SemiJoinOperator::new(
+            Box::new(Source {
+                schema: left.schema(),
+                batches: vec![left].into_iter(),
+            }),
+            Box::new(Source {
+                schema: right.schema(),
+                batches: vec![right].into_iter(),
+            }),
+            Expr::Column("key".into()),
+            Expr::Column("key".into()),
+            false,
+        )
+        .unwrap();
+        let mut rows = 0;
+        while let Some(batch) = op.next_batch().unwrap() {
+            rows += batch.num_rows();
+        }
+        assert_eq!(rows, 1);
     }
 
     /// Two-column integer rows, `rows_per_batch` at a time.
