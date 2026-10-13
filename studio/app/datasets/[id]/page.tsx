@@ -9,6 +9,7 @@ import { DatasetContextEditor } from "../../../components/DatasetContextEditor";
 import { useAuth } from "../../../auth/useAuth";
 import { useRouter, useParams } from "next/navigation";
 import { useRecents } from "../../../hooks/useRecents";
+import { useRole } from "../../../hooks/useRole";
 import { useDlmArtifact } from "../../../hooks/useDlmArtifact";
 import s from "./dataset.module.css";
 
@@ -59,6 +60,8 @@ interface DatasetDetail {
   columns?: DatasetColumn[];
   metrics?: DatasetMetric[];
   filters?: DatasetFilter[];
+  /** Owner identity — what `can_write` on the API tests this caller against. */
+  created_by?: string | null;
   /** Which SQL this dataset takes, resolved by the server from the registered
    *  catalog sources. `engine` means double-quoted identifiers and LIMIT. */
   sql_dialect?: "engine" | "tsql";
@@ -379,18 +382,24 @@ function buildDatasetPreviewSql(dataset: DatasetDetail, rowLimit: number = 100):
   return base;
 }
 
-/** The grid's own frame and row rhythm, with a bar per column. */
-function PreviewSkeleton({ columns, rows }: { columns: number; rows: number }) {
+/** The grid's own frame and row rhythm, with a bar per column.
+ *
+ *  It stands in exactly the place the rows will take, so nothing moves when
+ *  they arrive — and it is never read as a result that came back empty: the
+ *  card's own line says what is being read while this region carries the same
+ *  sentence for a screen reader, and both are present from the first frame. */
+function PreviewSkeleton({ columns, rows, status }: { columns: number; rows: number; status: string }) {
   const widths = [72, 54, 86, 44, 64, 50, 78];
   return (
-    <div className={s.skelGrid} style={{ ["--cols" as string]: columns }} aria-hidden="true">
-      <div className={`${s.skelRow} ${s.skelHead}`}>
+    <div className={s.skelGrid} style={{ ["--cols" as string]: columns }} aria-busy="true">
+      <span className="sr-only" role="status">{status}</span>
+      <div className={`${s.skelRow} ${s.skelHead}`} aria-hidden="true">
         {Array.from({ length: columns }, (_, i) => (
           <span key={i} className={s.skel} style={{ width: 56 + (i % 3) * 14 }} />
         ))}
       </div>
       {Array.from({ length: rows }, (_, r) => (
-        <div key={r} className={s.skelRow}>
+        <div key={r} className={s.skelRow} aria-hidden="true">
           {Array.from({ length: columns }, (_, c) => (
             <span key={c} className={s.skel} style={{ width: widths[(r + c) % widths.length] }} />
           ))}
@@ -404,6 +413,7 @@ export default function DatasetDetailPage() {
   const router = useRouter();
   const params = useParams();
   const { isAuthenticated, account } = useAuth();
+  const { canCreate, canWrite, whyNoWrite } = useRole();
 
   const [dataset, setDataset] = useState<DatasetDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -421,6 +431,7 @@ export default function DatasetDetailPage() {
   const [previewSortColumnIndex, setPreviewSortColumnIndex] = useState<number | null>(null);
   const [previewSortDirection, setPreviewSortDirection] = useState<"asc" | "desc">("asc");
   const [previewSql, setPreviewSql] = useState<string>("");
+  const [previewSeconds, setPreviewSeconds] = useState(0);
   const [sqlCopied, setSqlCopied] = useState(false);
 
   const datasetId = params?.id as string | undefined;
@@ -451,7 +462,15 @@ export default function DatasetDetailPage() {
     });
   }, [dataset]);
 
+  // What this role may do to this dataset, taken from the API's own rules:
+  // renaming and editing are `can_write(created_by, ctx)` on PATCH/PUT
+  // /datasets/{id}; creating a chart and curating the DLM context are the
+  // Analyst floor on their own routes.
+  const mayEdit = canWrite(dataset?.created_by);
+  const readOnlyReason = whyNoWrite("dataset");
+
   const startEditingName = () => {
+    if (!mayEdit) return;
     setEditNameValue(dataset?.name ?? "");
     setIsEditingName(true);
     setTimeout(() => nameInputRef.current?.select(), 0);
@@ -637,6 +656,22 @@ export default function DatasetDetailPage() {
     void runPreview();
   }, [isAuthenticated, dataset, userEmail]);
 
+  // How long the preview has been working, counted only while it is. A
+  // statement against a cold source takes seconds, and a progress line that
+  // stands still for that long is indistinguishable from one that has stopped.
+  useEffect(() => {
+    if (!isLoading && !isLoadingPreview) {
+      setPreviewSeconds(0);
+      return;
+    }
+    const startedAt = Date.now();
+    const tick = window.setInterval(
+      () => setPreviewSeconds(Math.floor((Date.now() - startedAt) / 1000)),
+      1000,
+    );
+    return () => window.clearInterval(tick);
+  }, [isLoading, isLoadingPreview]);
+
   const sortedPreviewRows = useMemo(() => {
     if (!previewRows || previewRows.length === 0) return previewRows;
     if (previewSortColumnIndex === null) return previewRows;
@@ -728,6 +763,16 @@ export default function DatasetDetailPage() {
   // once it is known, so the grid does not change shape when the rows arrive.
   const skeletonColumns = Math.max(3, Math.min(schemaColumns.length || 5, 7));
 
+  // What the preview says about itself while it is still working. Rows that
+  // have not arrived are not an empty result, and the card says which of the
+  // two the reader is looking at — the dataset definition is read first, then
+  // the statement runs — and how long it has been at it, so a slow source
+  // reads as a slow source rather than as a dataset with nothing in it.
+  const previewBusy = isLoading || isLoadingPreview;
+  const previewStatus =
+    (isLoading ? "Reading the dataset definition" : "Running the preview query")
+    + (previewSeconds >= 1 ? ` · ${previewSeconds}s` : "");
+
   return (
     <div className={`page-shell ${s.page}`}>
       <nav className={s.crumbs}>
@@ -740,15 +785,19 @@ export default function DatasetDetailPage() {
       <header className={`${s.card} ${s.header}`}>
         <div className={s.identity}>
           {!isEditingName ? (
+            // Click-to-rename is a PATCH. Where that would be refused the
+            // title is plain text with no click affordance, rather than an
+            // input whose first keystroke is already lost.
             <h1
               className={s.title}
-              tabIndex={dataset ? 0 : undefined}
-              onClick={() => { if (dataset) startEditingName(); }}
+              tabIndex={dataset && mayEdit ? 0 : undefined}
+              onClick={() => { if (dataset && mayEdit) startEditingName(); }}
               onKeyDown={(e) => {
-                if (!dataset) return;
+                if (!dataset || !mayEdit) return;
                 if (e.key === "Enter" || e.key === " ") { e.preventDefault(); startEditingName(); }
               }}
-              title={dataset ? "Click to rename" : undefined}
+              title={dataset && mayEdit ? "Click to rename" : undefined}
+              style={dataset && mayEdit ? undefined : { cursor: "default" }}
             >
               {dataset?.name ?? "Dataset"}
             </h1>
@@ -797,23 +846,40 @@ export default function DatasetDetailPage() {
 
         {dataset && (
           <div className={s.actions}>
-            <button
-              type="button"
-              className={s.primary}
-              onClick={() => router.push(`/charts?datasetId=${dataset.id}`)}
-            >
-              <i className="fas fa-chart-bar" aria-hidden="true" />
-              Create chart
-            </button>
-            <button
-              type="button"
-              className={s.iconBtn}
-              onClick={() => router.push(`/datasets/new?datasetId=${dataset.id}`)}
-              title="Edit dataset"
-            >
-              <i className="fas fa-pen" aria-hidden="true" />
-              <span className="sr-only">Edit dataset</span>
-            </button>
+            {/* Create chart and Edit dataset both end in a write the API may
+                refuse, so each is offered only where it would be accepted.
+                Reading the dataset — reload, favourite, preview — stays. */}
+            {canCreate && (
+              <button
+                type="button"
+                className={s.primary}
+                onClick={() => router.push(`/charts?datasetId=${dataset.id}`)}
+              >
+                <i className="fas fa-chart-bar" aria-hidden="true" />
+                Create chart
+              </button>
+            )}
+            {mayEdit ? (
+              <button
+                type="button"
+                className={s.iconBtn}
+                onClick={() => router.push(`/datasets/new?datasetId=${dataset.id}`)}
+                title="Edit dataset"
+              >
+                <i className="fas fa-pen" aria-hidden="true" />
+                <span className="sr-only">Edit dataset</span>
+              </button>
+            ) : (
+              <span
+                className={s.iconBtn}
+                role="img"
+                title={readOnlyReason}
+                aria-label={`Read-only. ${readOnlyReason}`}
+                style={{ cursor: "default" }}
+              >
+                <i className="fas fa-lock" aria-hidden="true" />
+              </span>
+            )}
             <button
               type="button"
               className={s.iconBtn}
@@ -855,7 +921,13 @@ export default function DatasetDetailPage() {
               render as soon as that one read lands rather than waiting for the
               dataset document and then fetching it again themselves. */}
           <DatasetContextPanel datasetId={datasetId} dlm={dlm} className={s.card} />
-          <DatasetContextEditor datasetId={datasetId} dlm={dlm} className={s.card} />
+          {/* The context card above reads the artifact; the editor below saves
+              curation through PUT /datasets/{id}/dlm/context, which carries
+              the Analyst floor. A read-only role keeps the card and is not
+              shown the editor. */}
+          {canCreate && (
+            <DatasetContextEditor datasetId={datasetId} dlm={dlm} className={s.card} />
+          )}
 
           <section className={`${s.card} ${s.preview}`}>
             <div className={s.bar}>
@@ -867,7 +939,21 @@ export default function DatasetDetailPage() {
               >
                 <i className={`fas fa-table ${s.barIcon}`} aria-hidden="true" />
                 <span className={s.barName}>Data preview</span>
-                <span className={s.barNote}>top 100 rows</span>
+                {/* The card's one note line: what the preview is doing while
+                    it works, what it holds once it has. It is the line that
+                    was already there, so saying either costs no movement. */}
+                <span className={`${s.barNote} ${previewBusy ? s.barNoteBusy : ""}`}>
+                  {previewBusy ? (
+                    <>
+                      <span className={s.pulse} aria-hidden="true" />
+                      {previewStatus}
+                    </>
+                  ) : previewColumns.length > 0 ? (
+                    `${previewRows.length} ${previewRows.length === 1 ? "row" : "rows"} · ${previewColumns.length} ${previewColumns.length === 1 ? "column" : "columns"}`
+                  ) : (
+                    "top 100 rows"
+                  )}
+                </span>
                 <i className={`fas fa-chevron-down ${s.chev} ${previewOpen ? s.chevOpen : ""}`} aria-hidden="true" />
               </button>
               {previewSql && (
@@ -907,16 +993,18 @@ export default function DatasetDetailPage() {
               )}
             </div>
 
-            {previewOpen && (isLoading || isLoadingPreview) && (
-              <PreviewSkeleton columns={skeletonColumns} rows={6} />
+            {previewOpen && previewBusy && (
+              <PreviewSkeleton columns={skeletonColumns} rows={6} status={previewStatus} />
             )}
-            {previewOpen && previewError && !isLoadingPreview && (
+            {previewOpen && !previewBusy && previewError && (
               <p className={`${s.note} ${s.noteError}`}>{previewError}</p>
             )}
-            {previewOpen && !isLoading && !isLoadingPreview && !previewError && previewColumns.length === 0 && (
+            {/* Only ever said once the answer is known: a preview still in
+                flight is told apart from one that came back with nothing. */}
+            {previewOpen && !previewBusy && !previewError && previewColumns.length === 0 && (
               <p className={s.note}>No rows returned.</p>
             )}
-            {previewOpen && !isLoadingPreview && !previewError && previewColumns.length > 0 && (
+            {previewOpen && !previewBusy && !previewError && previewColumns.length > 0 && (
               <div className={s.grid}>
                 <table className="results-table">
                   <thead>

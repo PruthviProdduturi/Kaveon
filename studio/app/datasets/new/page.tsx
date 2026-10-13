@@ -5,6 +5,7 @@ import React, { FormEvent, useEffect, useMemo, useState } from "react";
 import { API_BASE } from "../../../config";
 import { msalFetch } from "../../../utils/msalFetch";
 import { useAuth } from "../../../auth/useAuth";
+import { useRole } from "../../../hooks/useRole";
 import { useRouter, useSearchParams } from "next/navigation";
 import { DataSourceSelector } from "../../../components/DataSourceSelector";
 import { useTheme } from "../../../contexts/ThemeContext";
@@ -200,6 +201,11 @@ function guessDimensionTableForFactKey(
 
 export default function NewDatasetPage() {
   const { isAuthenticated, account } = useAuth();
+  // This form POSTs a dataset, or PATCHes one when ?datasetId= is present.
+  // Both routes sit above a Viewer: the create floor is Analyst and the
+  // update is `can_write`, which is false for every Viewer. So a read-only
+  // role is told here rather than at the end of the form.
+  const { canCreate, whyNoCreate } = useRole();
   const { primaryColor } = useTheme();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -1209,6 +1215,30 @@ export default function NewDatasetPage() {
     !!currentDatabase &&
     !isSubmitting &&
     (mode !== "semantic" || !hasSemanticKeyIssues);
+
+  if (isAuthenticated && !canCreate) {
+    return (
+      <div className="page-shell page-shell-wide">
+        <div className="card page-empty-card">
+          <p className="page-empty-title">
+            {editingDatasetId ? "You cannot change a dataset" : "You cannot create a dataset"}
+          </p>
+          <p className="page-empty-body">{whyNoCreate("dataset")}</p>
+          <button
+            type="button"
+            onClick={() => router.push("/workspace?tab=datasets")}
+            style={{
+              marginTop: 16, padding: "9px 18px", fontSize: 13, fontWeight: 500,
+              background: "var(--accent)", color: "#fff", border: "none",
+              borderRadius: 10, cursor: "pointer",
+            }}
+          >
+            Browse datasets
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="page-shell page-shell-wide">

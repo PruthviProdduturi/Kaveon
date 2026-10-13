@@ -5,6 +5,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "../../auth/useAuth";
 import { msalFetch } from "../../utils/msalFetch";
 import { useRecents } from "../../hooks/useRecents";
+import { useRole } from "../../hooks/useRole";
+import type { UserRole } from "../../utils/permissions";
 import { useTheme } from "../../contexts/ThemeContext";
 import { KaveonLoading } from "../../components/KaveonLoading";
 import { LineageView } from "../../components/LineageView";
@@ -106,12 +108,33 @@ function LineageIcon({ size = 16, color = "currentColor" }: { size?: number; col
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="5" cy="6" r="3"/><circle cx="19" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><path d="M7.5 7.5L10.5 15.5"/><path d="M16.5 7.5L13.5 15.5"/></svg>;
 }
 
-const TABS: { key: TabKey; label: string; endpoint: string; newRoute: string; Icon: typeof DashboardIcon }[] = [
-  { key: "lineage", label: "Lineage", endpoint: "", newRoute: "", Icon: LineageIcon },
-  { key: "dashboards", label: "Dashboards", endpoint: "/api/v1/dashboards", newRoute: "/dashboards/new", Icon: DashboardIcon },
-  { key: "charts", label: "Charts", endpoint: "/api/v1/charts", newRoute: "/charts/new", Icon: ChartIcon },
-  { key: "datasets", label: "Datasets", endpoint: "/api/v1/datasets", newRoute: "/datasets/new", Icon: DatasetIcon },
-  { key: "queries", label: "Saved Queries", endpoint: "/api/v1/lab/saved-queries", newRoute: "/lab", Icon: QueryIcon },
+/**
+ * A tab, and the role its write routes actually require.
+ *
+ * `createRole` is the floor on the tab's create route, so the New affordance
+ * is offered exactly when the API would accept it:
+ *   POST /charts, /dashboards, /datasets  →  require_min_role("Analyst")
+ *   POST /lab/saved-queries               →  require_auth only, no role floor
+ *
+ * `ownedWrites` says whether the tab's items are edited and deleted through
+ * `can_write` — ownership plus role — so the per-item delete control is
+ * decided per item rather than per tab. Saved queries are scoped to their
+ * owner by the store itself, so every row the list returns is the caller's own.
+ */
+const TABS: {
+  key: TabKey;
+  label: string;
+  endpoint: string;
+  newRoute: string;
+  createRole: UserRole | null;
+  ownedWrites: boolean;
+  Icon: typeof DashboardIcon;
+}[] = [
+  { key: "lineage", label: "Lineage", endpoint: "", newRoute: "", createRole: null, ownedWrites: false, Icon: LineageIcon },
+  { key: "dashboards", label: "Dashboards", endpoint: "/api/v1/dashboards", newRoute: "/dashboards/new", createRole: "Analyst", ownedWrites: true, Icon: DashboardIcon },
+  { key: "charts", label: "Charts", endpoint: "/api/v1/charts", newRoute: "/charts/new", createRole: "Analyst", ownedWrites: true, Icon: ChartIcon },
+  { key: "datasets", label: "Datasets", endpoint: "/api/v1/datasets", newRoute: "/datasets/new", createRole: "Analyst", ownedWrites: true, Icon: DatasetIcon },
+  { key: "queries", label: "Saved Queries", endpoint: "/api/v1/lab/saved-queries", newRoute: "/lab", createRole: null, ownedWrites: false, Icon: QueryIcon },
 ];
 
 function itemNav(tab: TabKey, id: string | number): string {
@@ -229,6 +252,7 @@ export default function WorkspacePage() {
   const { isAuthenticated, account } = useAuth();
   const { recents } = useRecents();
   const { theme } = useTheme();
+  const { canCreate, canWrite } = useRole();
   const isDark = theme === "dark";
 
   const rawTab = searchParams.get("tab") as TabKey | null;
@@ -267,6 +291,13 @@ export default function WorkspacePage() {
 
   const tab = TABS.find((t) => t.key === activeTab)!;
   const TabItemIcon = tab.Icon;
+  // The New affordance is offered only where this role's create would be
+  // accepted: a tab with no role floor on its create route is always offered,
+  // a tab that requires Analyst only to an Analyst and above.
+  const mayCreateHere = tab.createRole === null || canCreate;
+  /** May this role edit or delete this item? Owned writes answer per item. */
+  const mayWriteItem = (item: WorkspaceItem) =>
+    tab.ownedWrites ? canWrite(item.created_by) : true;
 
   const switchTab = (key: TabKey) => {
     if (key === activeTab) return;
@@ -561,7 +592,9 @@ export default function WorkspacePage() {
             <i className={item.favorite ? "fas fa-thumbtack" : "fas fa-thumbtack"} style={{ fontSize: 12 }} />
           </button>
 
-          {/* Delete — reveals on card hover */}
+          {/* Delete — reveals on card hover. Offered only to a role the API
+              would let delete this item; a Viewer never sees it. */}
+          {mayWriteItem(item) && (
           <button
             type="button"
             title={`Delete ${tab.label.toLowerCase().replace(/s$/, "")}`}
@@ -586,6 +619,7 @@ export default function WorkspacePage() {
               </svg>
             )}
           </button>
+          )}
         </CardCover>
 
         {/* Body */}
@@ -714,6 +748,8 @@ export default function WorkspacePage() {
           <i className="fas fa-thumbtack" style={{ fontSize: 12 }} />
         </button>
 
+        {/* Delete — offered only to a role the API would let delete this item. */}
+        {mayWriteItem(item) && (
         <button
           type="button"
           title={`Delete ${tab.label.toLowerCase().replace(/s$/, "")}`}
@@ -737,6 +773,7 @@ export default function WorkspacePage() {
             </svg>
           )}
         </button>
+        )}
       </div>
     );
   };
@@ -854,14 +891,16 @@ export default function WorkspacePage() {
           </svg>
         </button>
 
-        {/* New */}
-        <button type="button" onClick={() => router.push(tab.newRoute)} style={{
-          padding: "9px 20px", fontSize: 13, fontWeight: 500,
-          background: "var(--accent)", color: "#fff", border: "none",
-          borderRadius: 10, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap",
-        }}>
-          + New
-        </button>
+        {/* New — not rendered for a role whose create the API would refuse. */}
+        {mayCreateHere && (
+          <button type="button" onClick={() => router.push(tab.newRoute)} style={{
+            padding: "9px 20px", fontSize: 13, fontWeight: 500,
+            background: "var(--accent)", color: "#fff", border: "none",
+            borderRadius: 10, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap",
+          }}>
+            + New
+          </button>
+        )}
         </>)}
       </div>
 
@@ -891,13 +930,26 @@ export default function WorkspacePage() {
       {/* Empty */}
       {activeTab !== "lineage" && ready && !error && filtered.length === 0 && (
         <div style={{ textAlign: "center", padding: "80px 0", color: "var(--text-muted)" }}>
-          <p style={{ fontSize: 15, marginBottom: 16 }}>No {tab.label.toLowerCase()} yet</p>
-          <button type="button" onClick={() => router.push(tab.newRoute)} style={{
-            padding: "9px 22px", fontSize: 13, fontWeight: 500,
-            background: "var(--accent)", color: "#fff", border: "none", borderRadius: 10, cursor: "pointer",
-          }}>
-            Create your first {tab.label.toLowerCase().replace(/s$/, "")}
-          </button>
+          <p style={{ fontSize: 15, marginBottom: 16 }}>
+            {mayCreateHere
+              ? `No ${tab.label.toLowerCase()} yet`
+              : `No ${tab.label.toLowerCase()} are shared with you yet`}
+          </p>
+          {/* The empty state invites a create only where one would be accepted;
+              a read-only role is told what it is looking at, not offered a
+              form the API will refuse. */}
+          {mayCreateHere ? (
+            <button type="button" onClick={() => router.push(tab.newRoute)} style={{
+              padding: "9px 22px", fontSize: 13, fontWeight: 500,
+              background: "var(--accent)", color: "#fff", border: "none", borderRadius: 10, cursor: "pointer",
+            }}>
+              Create your first {tab.label.toLowerCase().replace(/s$/, "")}
+            </button>
+          ) : (
+            <p style={{ fontSize: 13 }}>
+              Your role has read-only access. The Analyst role or higher is required to create one.
+            </p>
+          )}
         </div>
       )}
 

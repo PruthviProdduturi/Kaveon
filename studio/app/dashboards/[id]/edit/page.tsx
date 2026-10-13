@@ -6,6 +6,7 @@ import { DashboardProvider, DashboardConfig } from "../../../../components/dashb
 import DashboardBuilder from "../../../../components/dashboards/DashboardBuilder";
 import { LoadingOverlay } from "../../../../components/LoadingOverlay";
 import { msalFetch } from "../../../../utils/msalFetch";
+import { useRole } from "../../../../hooks/useRole";
 import { API_BASE } from "../../../../config";
 
 export const dynamic = 'force-dynamic';
@@ -18,6 +19,11 @@ const DashboardEditPage: React.FC = () => {
   const [initialConfig, setInitialConfig] = useState<DashboardConfig | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // The builder exists to save, and the save is `can_write(created_by, ctx)`.
+  // A caller the API would refuse is told so instead of being handed a canvas
+  // whose only exit is a 403 — this also covers arriving by URL.
+  const [ownerEmail, setOwnerEmail] = useState<string | null>(null);
+  const { canWrite, whyNoWrite } = useRole();
 
   /**
    * Load dashboard data
@@ -49,6 +55,7 @@ const DashboardEditPage: React.FC = () => {
         };
 
         setInitialConfig(config);
+        setOwnerEmail(dashboard.created_by ?? null);
         setError(null);
       } catch (err) {
         console.error("Error loading dashboard:", err);
@@ -157,6 +164,30 @@ const DashboardEditPage: React.FC = () => {
             }}
           >
             Back to Dashboards
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // The dashboard read, but this caller may not write it: say so, and offer
+  // the way to read it instead of the builder it cannot save from.
+  if (!canWrite(ownerEmail)) {
+    return (
+      <div className="page-shell page-shell-wide">
+        <div className="card page-empty-card">
+          <p className="page-empty-title">This dashboard is read-only for you</p>
+          <p className="page-empty-body">{whyNoWrite("dashboard")}</p>
+          <button
+            type="button"
+            onClick={() => router.push(`/dashboards/${id}/view`)}
+            style={{
+              marginTop: 16, padding: "9px 18px", fontSize: 13, fontWeight: 500,
+              background: "var(--accent)", color: "#fff", border: "none",
+              borderRadius: 10, cursor: "pointer",
+            }}
+          >
+            Open the dashboard
           </button>
         </div>
       </div>
