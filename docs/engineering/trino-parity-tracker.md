@@ -206,6 +206,9 @@ qualification documents; this tracker remains the single ordered work list.
   through logical planning, optimizer rewrites, local execution, and
   distributed fragments; duplicate counts follow the SQL multiset rules
   (`88a96207`).
+- The differential sweep now includes `INTERSECT ALL` and `EXCEPT ALL` over
+  repeated keys across dictionary, plain, split, clustered, partitioned, and
+  two-worker paths (`f7e164ef`).
 - Broadcast planning now has an explicit dynamic-filter boundary test: static
   predicates reach the build scan, while runtime build-key propagation to the
   probe scan remains refused until its correctness and exchange behavior are
