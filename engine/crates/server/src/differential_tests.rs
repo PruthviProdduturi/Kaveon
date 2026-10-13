@@ -242,6 +242,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "map_nullable_equality",
+        "SELECT MAP(ARRAY['a', 'b'], ARRAY[10, NULL]) = MAP(ARRAY['b', 'a'], ARRAY[NULL, 10]) AS same, MAP(ARRAY['a', 'b'], ARRAY[10, NULL]) = MAP(ARRAY['a', 'b'], ARRAY[11, NULL]) AS different FROM {T} LIMIT 1",
+        false,
+    ),
+    (
         "date_array_functions",
         "SELECT CARDINALITY(ARRAY[DATE '2026-01-01', DATE '2026-02-01']) AS card, ARRAY_POSITION(ARRAY[DATE '2026-01-01', DATE '2026-02-01'], DATE '2026-02-01') AS pos, ARRAY_REVERSE(ARRAY[DATE '2026-01-01', DATE '2026-02-01']) AS reversed, ARRAY_DISTINCT(ARRAY[DATE '2026-01-01', DATE '2026-01-01']) AS distinct_dates FROM {T} LIMIT 1",
         false,
