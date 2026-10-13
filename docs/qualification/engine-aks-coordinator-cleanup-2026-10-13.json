@@ -1,0 +1,18 @@
+{
+  "passed": true,
+  "verified_at": "2026-10-13T04:33:58.0307121Z",
+  "restart_started_at": "2026-10-13T04:33:33.176817Z",
+  "retained_exchange_before": 0,
+  "retained_exchange_after": 0,
+  "coordinator_ready": true,
+  "active_workers": 3,
+  "compatible_workers": 3,
+  "worker_uids": [
+    "64d9c8f4-b1bd-47d3-973b-8179b5c843ca",
+    "d1c5144c-e4a9-430b-8066-d73888768729",
+    "618aba1b-a754-4f8a-979e-573551c6c9ed"
+  ],
+  "scope": "Coordinator restart cleanup and post-restart worker compatibility; no active-query recovery claim.",
+  "required_catalog_snapshot_id": "sha256:e3025334a4d5476c701c10c70c2d51b170118af13bfd91b3e4c4d0f3a842c7cb",
+  "catalog_compatibility_verified": true
+}

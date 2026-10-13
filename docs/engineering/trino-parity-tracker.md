@@ -399,6 +399,13 @@ This closes active-query worker recovery during node drain for that image and
 workload. Coordinator exchange-spool cleanup and coordinator active-query
 restart recovery remain separate gates.
 
+An idle coordinator restart on 2026-10-13 also found zero retained exchange
+files both before and after restart, with three active and catalog-compatible
+workers after readiness. The report is archived in
+`docs/qualification/engine-aks-coordinator-cleanup-2026-10-13.md`. This closes
+the zero-retained-file cleanup check for an idle restart; it does not claim
+active-query survival during coordinator loss.
+
 The distributed/local join-mode differential now also includes an inner
 residual predicate (`key equality AND value inequality`); local and
 distributed result sets match and all reservations are released.
