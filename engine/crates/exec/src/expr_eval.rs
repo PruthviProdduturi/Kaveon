@@ -1569,38 +1569,67 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .collect();
             Ok(Arc::new(result))
         }
-        "CONTAINS" | "STRPOS" | "POSITION" => {
+        "CONTAINS" => {
+            check_arity(name, args, 2)?;
+            if matches!(args[0].data_type(), DataType::List(_)) {
+                let list = args[0]
+                    .as_any()
+                    .downcast_ref::<arrow::array::ListArray>()
+                    .expect("list data type must be ListArray");
+                let needle = compute::cast(&args[1], &DataType::Float64)?;
+                let needle = needle.as_primitive::<Float64Type>();
+                let result: BooleanArray = (0..num_rows)
+                    .map(|row| {
+                        if list.is_null(row) || needle.is_null(row) {
+                            return None;
+                        }
+                        let values = list.value(row);
+                        let values = values.as_primitive::<Float64Type>();
+                        let mut saw_null = false;
+                        for index in 0..values.len() {
+                            if values.is_null(index) {
+                                saw_null = true;
+                            } else if values.value(index) == needle.value(row) {
+                                return Some(true);
+                            }
+                        }
+                        if saw_null { None } else { Some(false) }
+                    })
+                    .collect();
+                return Ok(Arc::new(result));
+            }
+            let arr = as_string_array(&args[0])?;
+            let needle = as_string_array(&args[1])?;
+            let result: BooleanArray = (0..num_rows)
+                .map(|i| {
+                    if arr.is_null(i) || needle.is_null(i) {
+                        None
+                    } else {
+                        Some(arr.value(i).contains(needle.value(i)))
+                    }
+                })
+                .collect();
+            Ok(Arc::new(result))
+        }
+        "STRPOS" | "POSITION" => {
             check_arity(name, args, 2)?;
             let arr = as_string_array(&args[0])?;
             let needle = as_string_array(&args[1])?;
-            if name.eq_ignore_ascii_case("CONTAINS") {
-                let result: BooleanArray = (0..num_rows)
-                    .map(|i| {
-                        if arr.is_null(i) || needle.is_null(i) {
-                            None
-                        } else {
-                            Some(arr.value(i).contains(needle.value(i)))
-                        }
-                    })
-                    .collect();
-                Ok(Arc::new(result))
-            } else {
-                let result: Int64Array = (0..num_rows)
-                    .map(|i| {
-                        if arr.is_null(i) || needle.is_null(i) {
-                            None
-                        } else {
-                            Some(
-                                arr.value(i)
-                                    .find(needle.value(i))
-                                    .map(|p| p as i64 + 1)
-                                    .unwrap_or(0),
-                            )
-                        }
-                    })
-                    .collect();
-                Ok(Arc::new(result))
-            }
+            let result: Int64Array = (0..num_rows)
+                .map(|i| {
+                    if arr.is_null(i) || needle.is_null(i) {
+                        None
+                    } else {
+                        Some(
+                            arr.value(i)
+                                .find(needle.value(i))
+                                .map(|p| p as i64 + 1)
+                                .unwrap_or(0),
+                        )
+                    }
+                })
+                .collect();
+            Ok(Arc::new(result))
         }
         "REVERSE" => {
             check_arity(name, args, 1)?;
@@ -3447,6 +3476,33 @@ mod tests {
         };
         let result = evaluate(&expr, &batch).unwrap();
         assert_eq!(result.as_primitive::<Int64Type>().values(), &[2, 2]);
+    }
+
+    #[test]
+    fn evaluates_contains_for_numeric_array_lists() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef,
+        )])
+        .unwrap();
+        let expr = Expr::Function {
+            name: "CONTAINS".into(),
+            args: vec![
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![
+                        Expr::Literal(ScalarValue::Int64(1)),
+                        Expr::Literal(ScalarValue::Float64(2.5)),
+                    ],
+                },
+                Expr::Literal(ScalarValue::Float64(2.5)),
+            ],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true), Some(true), Some(true)]
+        );
     }
 
     #[test]
