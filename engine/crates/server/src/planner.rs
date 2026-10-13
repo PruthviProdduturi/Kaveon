@@ -789,7 +789,11 @@ impl ExecutableFragmentBuilder<'_> {
                     }),
                 });
                 target_draft.push(
-                    if *all { FragmentOperator::IntersectAll } else { FragmentOperator::Intersect },
+                    if *all {
+                        FragmentOperator::IntersectAll
+                    } else {
+                        FragmentOperator::Intersect
+                    },
                     vec![FragmentNodeId(0), FragmentNodeId(1)],
                 );
                 Ok(self.add_fragment(target_draft))
@@ -828,7 +832,11 @@ impl ExecutableFragmentBuilder<'_> {
                     }),
                 });
                 target_draft.push(
-                    if *all { FragmentOperator::ExceptAll } else { FragmentOperator::Except },
+                    if *all {
+                        FragmentOperator::ExceptAll
+                    } else {
+                        FragmentOperator::Except
+                    },
                     vec![FragmentNodeId(0), FragmentNodeId(1)],
                 );
                 Ok(self.add_fragment(target_draft))
@@ -1526,13 +1534,13 @@ impl StageGraphBuilder {
                     );
                     Ok(target)
                 } else {
-                    let target =
-                        self.add_exchange_stage("FinalWindow", physical.attributes, 1, 1);
+                    let target = self.add_exchange_stage("FinalWindow", physical.attributes, 1, 1);
                     self.add_exchange(source, target, Partitioning::Single);
                     Ok(target)
                 }
             }
-            LogicalPlan::Intersect { left, right, .. } | LogicalPlan::Except { left, right, .. } => {
+            LogicalPlan::Intersect { left, right, .. }
+            | LogicalPlan::Except { left, right, .. } => {
                 let left_stage = self.build(left)?;
                 let right_stage = self.build(right)?;
                 let physical = physical_plan_tree(plan);
@@ -2287,7 +2295,11 @@ fn plan_query_with_predicate(
             let mut operator = SetOpOperator::new(
                 left_planned.operator,
                 right_planned.operator,
-                if *all { SetOpMode::IntersectAll } else { SetOpMode::Intersect },
+                if *all {
+                    SetOpMode::IntersectAll
+                } else {
+                    SetOpMode::Intersect
+                },
             );
             if let Some(memory) = memory {
                 operator = operator.with_memory(memory.operator("set-operation")?);
@@ -2306,7 +2318,11 @@ fn plan_query_with_predicate(
             let mut operator = SetOpOperator::new(
                 left_planned.operator,
                 right_planned.operator,
-                if *all { SetOpMode::ExceptAll } else { SetOpMode::Except },
+                if *all {
+                    SetOpMode::ExceptAll
+                } else {
+                    SetOpMode::Except
+                },
             );
             if let Some(memory) = memory {
                 operator = operator.with_memory(memory.operator("set-operation")?);
@@ -3361,7 +3377,7 @@ mod tests {
     }
 
     #[test]
-    fn broadcast_join_does_not_derive_probe_scan_predicate_from_build_keys() {
+    fn broadcast_join_propagates_safe_probe_scan_predicate_from_build_filter() {
         let fixture = fixture();
         let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(
             "SELECT i.id FROM items i JOIN customers c ON i.id = c.id WHERE c.id = 2",
@@ -3402,11 +3418,11 @@ mod tests {
             })
             .expect("build stage contains the customers scan");
 
-        // Static predicates reach the build scan, but the build-side key set
-        // is not propagated back to the probe scan at runtime yet. This is
-        // the explicit qualification boundary for Track 1 dynamic filters.
+        // The safe literal predicate is propagated to both sides during
+        // planning. Runtime build-key dynamic filtering remains a separate
+        // qualification boundary for Track 1.
         assert!(build_scan.predicate.is_some());
-        assert!(probe_scan.predicate.is_none());
+        assert!(probe_scan.predicate.is_some());
     }
 
     #[test]
@@ -3913,7 +3929,10 @@ mod tests {
             order_by: vec![],
             frame: None,
         };
-        assert_eq!(window_partition_columns(&[expr]), Some(vec!["category".into()]));
+        assert_eq!(
+            window_partition_columns(&[expr]),
+            Some(vec!["category".into()])
+        );
     }
 
     #[test]
@@ -3925,7 +3944,10 @@ mod tests {
             order_by: vec![],
             frame: None,
         };
-        assert_eq!(window_partition_columns(&[expr("category"), expr("region")]), None);
+        assert_eq!(
+            window_partition_columns(&[expr("category"), expr("region")]),
+            None
+        );
     }
 
     #[test]
