@@ -1,20 +1,22 @@
 # Codex continuation brief
 
 **Written:** 2026-09-04 America/Los_Angeles (the "latest delivered state", Azure and validation sections below are that day's record)  
-**Gate status revised:** 2026-09-17, see "Honest open gates"  
+**Gate status revised:** 2026-10-12, see "Honest open gates"
 **Branch:** `dev`  
 **Repository:** `PruthviProdduturi/Kaveon`
 
 ## Current handoff - 2026-10-05
 
-### Performance lane update — 2026-10-06
+### Performance lane update — 2026-10-12
 
 Codex owns the Kaveon-versus-Trino qualification lane while Claude owns the
-PostgreSQL retirement lane. The local Engine is healthy and the current release
-test evidence is 313 server tests, 199 execution tests, and 30 qualification
-gate tests with zero failures. Release operator diagnostics are recorded in
-`docs/qualification/engine-microbenchmarks-2026-10-06.md` and pushed in
-`31ff8fae`.
+PostgreSQL retirement lane. The local Engine is healthy and the current
+release evidence is 334 server tests, 247 execution tests (four ignored by
+design), 111 SQL tests, and a five-worker native soak with 696 exact-result
+queries and zero failures. The soak report is
+`docs/qualification/engine-soak-2026-10-12.md`. These are local qualification
+results; AKS storage, TLS, network policy, node-drain and cloud resource
+limits remain separate gates.
 
 The personal subscription currently has Container Apps, ACR, Key Vault,
 storage, and PostgreSQL in `kaveon-rg`, but no AKS cluster and no Trino
@@ -33,7 +35,9 @@ it is not evidence that the personal Azure deployment has been cut over.
 Local evidence on `dev`:
 
 - `fc92e13f` documents the PostgreSQL-free native local profile.
-- `cargo test -p kaveon-server --bin kaveon-server --no-fail-fast`: 313 passed.
+- `cargo test -p kaveon-server --bin kaveon-server --no-fail-fast`: 334 passed.
+- `cargo test -p kaveon-exec --lib`: 247 passed, 4 ignored.
+- `cargo test -p kaveon-sql --lib`: 111 passed.
 - `python -m unittest scripts.test_local_kavedb -v`: 4 passed.
 - `node scripts/validate-docs.mjs` and `git diff --check` passed.
 
