@@ -164,6 +164,10 @@ pub struct ResultCacheStats {
     pub expirations: u64,
     /// Results refused because they exceed the per-entry ceiling.
     pub refused: u64,
+    /// Coordinator-side lookup latency for hits, excluding query execution.
+    pub hit_latency_samples: u64,
+    pub hit_latency_ns_total: u64,
+    pub hit_latency_ns_max: u64,
 }
 
 pub struct ResultCache {
@@ -175,6 +179,9 @@ pub struct ResultCache {
     evictions: AtomicU64,
     expirations: AtomicU64,
     refused: AtomicU64,
+    hit_latency_samples: AtomicU64,
+    hit_latency_ns_total: AtomicU64,
+    hit_latency_ns_max: AtomicU64,
 }
 
 impl ResultCache {
@@ -188,6 +195,9 @@ impl ResultCache {
             evictions: AtomicU64::new(0),
             expirations: AtomicU64::new(0),
             refused: AtomicU64::new(0),
+            hit_latency_samples: AtomicU64::new(0),
+            hit_latency_ns_total: AtomicU64::new(0),
+            hit_latency_ns_max: AtomicU64::new(0),
         }
     }
 
@@ -318,7 +328,20 @@ impl ResultCache {
             evictions: self.evictions.load(Ordering::Relaxed),
             expirations: self.expirations.load(Ordering::Relaxed),
             refused: self.refused.load(Ordering::Relaxed),
+            hit_latency_samples: self.hit_latency_samples.load(Ordering::Relaxed),
+            hit_latency_ns_total: self.hit_latency_ns_total.load(Ordering::Relaxed),
+            hit_latency_ns_max: self.hit_latency_ns_max.load(Ordering::Relaxed),
         }
+    }
+
+    /// Records only a cache hit lookup. The API measures this around `get`
+    /// so query execution and serialization are not mixed into the metric.
+    pub(crate) fn record_hit_latency(&self, elapsed: Duration) {
+        let nanos = elapsed.as_nanos().min(u128::from(u64::MAX)) as u64;
+        self.hit_latency_samples.fetch_add(1, Ordering::Relaxed);
+        self.hit_latency_ns_total
+            .fetch_add(nanos, Ordering::Relaxed);
+        self.hit_latency_ns_max.fetch_max(nanos, Ordering::Relaxed);
     }
 
     fn remove(inner: &mut Inner, key: &Arc<ResultCacheKey>) {
@@ -440,6 +463,7 @@ mod tests {
         assert!(cache.get(&key("SELECT 1")).is_none());
         assert!(cache.insert(key("SELECT 1"), &columns(), &rows(3, 4), 1234, "query-a"));
         let hit = cache.get(&key("select   1")).expect("hit");
+        cache.record_hit_latency(Duration::from_nanos(100));
         assert_eq!(hit.query_id, "query-a");
         assert_eq!(hit.elapsed_ms, 1234);
         assert_eq!(hit.rows.len(), 3);
@@ -447,6 +471,14 @@ mod tests {
         let stats = cache.stats();
         assert_eq!((stats.hits, stats.misses, stats.entries), (1, 1, 1));
         assert_eq!(stats.bytes, hit.bytes);
+        assert_eq!(
+            (
+                stats.hit_latency_samples,
+                stats.hit_latency_ns_total,
+                stats.hit_latency_ns_max
+            ),
+            (1, 100, 100)
+        );
     }
 
     #[test]

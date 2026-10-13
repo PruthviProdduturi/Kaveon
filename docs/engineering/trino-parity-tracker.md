@@ -269,7 +269,9 @@ all of the following:
   result hash as an uncached execution;
 - hit latency is recorded separately from planning and execution, with p50,
   p95, p99, and max, and the evidence reports hit ratio plus byte and entry
-  evictions;
+  evictions. The Engine now also exports coordinator-side hit sample count,
+  total nanoseconds, and maximum lookup nanoseconds; percentile publication
+  remains a qualification-run responsibility;
 - the cache is bounded by its byte budget and TTL, and eviction or expiry
   never changes the result or causes an unbounded memory or disk allocation;
 - catalog publish, Delta-version change, and committed KaveonDB product
