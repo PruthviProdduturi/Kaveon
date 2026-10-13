@@ -211,7 +211,9 @@ fn plan_with_predicate(
                 let ordering = top_n
                     .order_by
                     .iter()
-                    .map(|(expr, ascending)| SortExpr::new(expr.clone(), *ascending))
+                    .map(|(expr, ascending, nulls_first)| {
+                        SortExpr::new(expr.clone(), *ascending).with_nulls_first(*nulls_first)
+                    })
                     .collect();
                 let retained = TopNOperator::new(source, ordering, top_n.retained())?;
                 return Ok(if top_n.skip > 0 {
