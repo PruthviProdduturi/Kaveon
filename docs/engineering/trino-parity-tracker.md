@@ -381,6 +381,8 @@ invalidation, isolation, bounds, and restart evidence listed above.
 - `ARRAY_SLICE` now preserves nested values, negative/positive strides, null
   elements, and `List`/`LargeList` container width through the same bound
   normalization path.
+- `ARRAY_MIN` and `ARRAY_MAX` now support the existing scalar element set in
+  `LargeList` containers, preserving null results for null or empty arrays.
 - The differential corpus now exercises scalar `CARDINALITY`,
   `ARRAY_POSITION`, `ARRAY_JOIN`, and `ARRAYS_OVERLAP` results across alternate
   Parquet encodings and local/two-worker execution paths. This extends the
