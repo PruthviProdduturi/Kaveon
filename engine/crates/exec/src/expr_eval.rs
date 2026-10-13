@@ -3882,6 +3882,47 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             };
             Ok(Arc::new(BooleanArray::from(rows)))
         }
+        "ARRAY_JOIN" => {
+            if args.len() != 2 && args.len() != 3 {
+                return Err(KaveonError::Execution(
+                    "ARRAY_JOIN requires 2 or 3 arguments".into(),
+                ));
+            }
+            let list = args[0]
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .ok_or_else(|| KaveonError::Execution("ARRAY_JOIN requires an ARRAY/List value".into()))?;
+            let delimiters = as_string_array(&args[1])?;
+            let replacements = if args.len() == 3 {
+                Some(as_string_array(&args[2])?)
+            } else {
+                None
+            };
+            let result: StringArray = (0..num_rows)
+                .map(|row| {
+                    if list.is_null(row) || delimiters.is_null(row) {
+                        return Ok(None);
+                    }
+                    let replacement = replacements.as_ref().and_then(|values| {
+                        (!values.is_null(row)).then(|| values.value(row))
+                    });
+                    let values = list.value(row);
+                    let mut parts = Vec::with_capacity(values.len());
+                    for index in 0..values.len() {
+                        if values.is_null(index) {
+                            if let Some(replacement) = replacement {
+                                parts.push(replacement.to_owned());
+                            }
+                        } else {
+                            parts.push(array_join_value(&values, index)?);
+                        }
+                    }
+                    Ok(Some(parts.join(delimiters.value(row))))
+                })
+                .collect::<Result<Vec<_>>>()?
+                .into();
+            Ok(Arc::new(result))
+        }
         "CARDINALITY" => {
             check_arity(name, args, 1)?;
             if let Some(map) = args[0].as_any().downcast_ref::<MapArray>() {
@@ -4040,6 +4081,37 @@ fn json_extract_value(document: &str, path: &str) -> Option<serde_json::Value> {
         };
     }
     Some(value)
+}
+
+fn array_join_value(array: &ArrayRef, index: usize) -> Result<String> {
+    Ok(match array.data_type() {
+        DataType::Boolean => array.as_any().downcast_ref::<BooleanArray>().expect("boolean list values").value(index).to_string(),
+        DataType::Int64 => array.as_any().downcast_ref::<Int64Array>().expect("int64 list values").value(index).to_string(),
+        DataType::Float64 => array.as_any().downcast_ref::<Float64Array>().expect("float64 list values").value(index).to_string(),
+        DataType::Utf8 => array.as_any().downcast_ref::<StringArray>().expect("utf8 list values").value(index).to_owned(),
+        DataType::LargeUtf8 => array.as_any().downcast_ref::<arrow::array::LargeStringArray>().expect("large utf8 list values").value(index).to_owned(),
+        DataType::Decimal128(_, scale) => {
+            let value = array.as_any().downcast_ref::<Decimal128Array>().expect("decimal list values").value(index);
+            format_decimal_for_array_join(value, *scale)
+        }
+        other => return Err(KaveonError::Execution(format!("ARRAY_JOIN does not support list element type {other}"))),
+    })
+}
+
+fn format_decimal_for_array_join(value: i128, scale: i8) -> String {
+    if scale <= 0 {
+        return value.checked_mul(10_i128.pow((-scale) as u32)).map(|value| value.to_string()).unwrap_or_else(|| value.to_string());
+    }
+    let negative = value < 0;
+    let digits = value.unsigned_abs().to_string();
+    let scale = scale as usize;
+    let body = if digits.len() <= scale {
+        format!("0.{}{}", "0".repeat(scale - digits.len()), digits)
+    } else {
+        let split = digits.len() - scale;
+        format!("{}.{}", &digits[..split], &digits[split..])
+    };
+    if negative { format!("-{body}") } else { body }
 }
 
 fn extract_from_micros(micros: i64, field: DateField) -> i64 {
@@ -6777,5 +6849,36 @@ mod tests {
         assert_eq!(values.value(1), "null");
         assert!(values.is_null(2));
         assert!(values.is_null(3));
+    }
+
+    #[test]
+    fn evaluates_array_join_with_null_replacement() {
+        let mut items = ListBuilder::new(Int64Builder::new());
+        items.values().append_value(1);
+        items.values().append_null();
+        items.values().append_value(3);
+        items.append(true);
+        items.append(false);
+        let batch = RecordBatch::try_from_iter([
+            ("items", Arc::new(items.finish()) as ArrayRef),
+            ("delimiter", Arc::new(StringArray::from(vec![",", ";"])) as ArrayRef),
+            (
+                "replacement",
+                Arc::new(StringArray::from(vec![Some("?"), Some("-")])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let expr = Expr::Function {
+            name: "ARRAY_JOIN".into(),
+            args: vec![
+                Expr::Column("items".into()),
+                Expr::Column("delimiter".into()),
+                Expr::Column("replacement".into()),
+            ],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        let values = result.as_string::<i32>();
+        assert_eq!(values.value(0), "1,?,3");
+        assert_eq!(values.value(1), "");
     }
 }
