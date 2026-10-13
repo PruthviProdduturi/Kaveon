@@ -2019,6 +2019,26 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
             })
         }
 
+        // Trino's `value [NOT] IN UNNEST(array)` has the same three-valued
+        // membership semantics as CONTAINS for the typed list values the
+        // executor supports. Keep the lowering explicit so this does not
+        // imply row-producing UNNEST support in FROM.
+        ast::Expr::InUnnest {
+            expr,
+            array_expr,
+            negated,
+        } => {
+            let contains = Expr::Function {
+                name: "CONTAINS".into(),
+                args: vec![ast_expr_to_expr(array_expr)?, ast_expr_to_expr(expr)?],
+            };
+            if *negated {
+                Ok(Expr::Not(Box::new(contains)))
+            } else {
+                Ok(contains)
+            }
+        }
+
         // A DATE literal is its day number: the Engine's date columns are
         // days since the epoch, so `EventDate >= DATE '2013-07-01'` compares
         // integers with integers.
@@ -4391,6 +4411,30 @@ mod tests {
                 if name == "CONTAINS"
                     && matches!(&args[0], Expr::Function { name, args } if name == "ARRAY" && args.len() == 2)
         ));
+    }
+
+    #[test]
+    fn lowers_in_unnest_to_nullable_contains() {
+        let plan = sql_to_logical_plan("SELECT 2 IN UNNEST(ARRAY[1, 2]) FROM t").unwrap();
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("projection");
+        };
+        assert!(matches!(
+            &columns[0],
+            Expr::Function { name, args }
+                if name == "CONTAINS"
+                    && args.len() == 2
+                    && matches!(&args[0], Expr::Function { name, .. } if name == "ARRAY")
+        ));
+
+        let negated = sql_to_logical_plan("SELECT 3 NOT IN UNNEST(ARRAY[1, 2]) FROM t").unwrap();
+        let LogicalPlan::Project { columns, .. } = negated else {
+            panic!("projection");
+        };
+        assert!(matches!(&columns[0], Expr::Not(inner) if matches!(
+            inner.as_ref(),
+            Expr::Function { name, .. } if name == "CONTAINS"
+        )));
     }
 
     #[test]
