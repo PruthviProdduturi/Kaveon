@@ -20,6 +20,7 @@ import { CatalogPicker } from "../../components/lab/CatalogPicker";
 import { SystemCatalogList } from "../../components/lab/SystemCatalogList";
 import { useRole } from "../../hooks/useRole";
 import { catalogLabel, isSystemCatalog } from "../../utils/systemCatalog";
+import styles from "./lab.module.css";
 // using same-origin relative API calls
 const PRIMARY_DB_NAME = process.env.NEXT_PUBLIC_PRIMARY_DATABASE_NAME || "";
 
@@ -2183,12 +2184,18 @@ return;
   };
 
   const rowCount = results?.rowCount ?? results?.rows?.length ?? 0;
-  // The running state owns the results pane until the first rows land; from
-  // there the grid is the thing worth looking at and the one-line ticker
-  // above it carries the rest.
-  const hasLandedRows = (results?.rows?.length ?? 0) > 0;
-  const showLanePanel = isExecuting && !hasLandedRows && !resultError;
-  const showStreamLine = isExecuting && streamProgress != null && hasLandedRows;
+  // The results pane holds one position from the moment a statement is
+  // submitted. The running panel owns the pane only while the pane has
+  // nothing of the result in it, and it is lifted out of the flow even then,
+  // so the first thing the result paints — its column header, which the
+  // coordinator publishes polls before the first page of rows — paints where
+  // it stays. From the header on, progress is a line painted over the pane's
+  // top edge, which occupies no height and so moves nothing when it goes.
+  const hasResultContent = (results != null || multiResults != null) && !resultError;
+  const showRunningPanel = isExecuting && !hasResultContent && !resultError;
+  const showProgressLine = isExecuting && hasResultContent;
+  // The columns are up and the first page has not landed yet.
+  const awaitingRows = isExecuting && results != null && results.rows.length === 0;
   // What the running mark reports. While the statement is being executed
   // that is the cluster's completed tasks; once the coordinator has finished
   // and the Studio is still reading pages it is the rows retrieved against
@@ -3057,23 +3064,26 @@ return;
                 </div>
               </div>
 
-              <div id="resultsContainer" className={`results-container${showStreamLine ? " results-container--streaming" : ""}`}>
+              <div id="resultsContainer" className={`results-container ${styles.pane}`}>
                 {/* Two different moments, and they must not look the same.
-                    With nothing on screen yet the pane is empty and the
-                    loader can hold it — that is the same moment as a page
-                    opening. With rows already shown, anything that takes
-                    height here pushes the grid down and lets it jump back
-                    when the statement ends, which is the column glitch: the
-                    bar is painted over the pane's top edge instead, and the
-                    grid never moves. Cancel stays on the toolbar either way. */}
-                {showLanePanel && (
-                  <QueryProgress progress={runningProgress} onCancel={cancelQuery} centered />
+                    With nothing of the result on screen the pane is empty
+                    and the panel can hold it — that is the same moment as a
+                    page opening — but it holds it out of the flow, so the
+                    header the coordinator publishes next paints at the top
+                    of the pane and not under the panel. Once anything of the
+                    result is up, progress is the bar painted over the pane's
+                    top edge, which takes no height. Cancel stays on the
+                    toolbar either way. */}
+                {showRunningPanel && (
+                  <div className={styles.running}>
+                    <QueryProgress progress={runningProgress} onCancel={cancelQuery} centered />
+                  </div>
                 )}
-                {showStreamLine && <QueryProgress progress={runningProgress} overlay />}
+                {showProgressLine && <QueryProgress progress={runningProgress} overlay />}
 
                 {/* ── Multiple-statement results ── */}
                 {multiResults && !isExecuting && (
-                  <div>
+                  <div className="lab-multi-results">
                     {multiResults.map((item, idx) => (
                       <div key={idx} style={{ marginBottom: "1rem", border: "1px solid var(--border)", borderRadius: 4 }}>
                         <div style={{ padding: "0.4rem 0.8rem", background: "var(--bg-primary)", borderBottom: "1px solid var(--border)", fontSize: "0.75rem", fontFamily: "monospace", color: "var(--text-secondary)" }}>
@@ -3142,32 +3152,6 @@ return;
                     <i className="fas fa-exclamation-triangle" />
                     <h3>Error</h3>
                     <p>{resultError}</p>
-                  </div>
-                )}
-
-                {!multiResults && results && !resultError && filteredRows.length > PAGE_SIZE && (
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.3rem 0.75rem", borderBottom: "1px solid var(--border)", fontSize: "0.75rem", color: "var(--text-secondary)" }}>
-                    <button
-                      type="button"
-                      className="template-btn"
-                      style={{ padding: "0.15rem 0.5rem", fontSize: "0.72rem" }}
-                      disabled={safePage === 0}
-                      onClick={() => setCurrentPage((p) => Math.max(0, p - 1))}
-                    >
-                      <i className="fas fa-chevron-left" />
-                    </button>
-                    <span>
-                      {(safePage * PAGE_SIZE + 1).toLocaleString()}–{Math.min((safePage + 1) * PAGE_SIZE, filteredRows.length).toLocaleString()} of {filteredRows.length.toLocaleString()} rows
-                    </span>
-                    <button
-                      type="button"
-                      className="template-btn"
-                      style={{ padding: "0.15rem 0.5rem", fontSize: "0.72rem" }}
-                      disabled={safePage >= totalPages - 1}
-                      onClick={() => setCurrentPage((p) => Math.min(totalPages - 1, p + 1))}
-                    >
-                      <i className="fas fa-chevron-right" />
-                    </button>
                   </div>
                 )}
 
@@ -3251,6 +3235,44 @@ return;
                         ))}
                       </tbody>
                     </table>
+                    {/* The header is up and the first page is still being
+                        written. Said here, inside the grid's own scroller,
+                        it reports the wait without moving the header. */}
+                    {awaitingRows && (
+                      <p className={styles.awaitingRows} role="status">
+                        Running. Rows land here as the coordinator writes them.
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Pagination sits under the grid. Above it, it appeared
+                    mid-stream as the hundred-and-first row landed and pushed
+                    the grid down; under it, it can only change the grid's
+                    height. */}
+                {!multiResults && results && !resultError && filteredRows.length > PAGE_SIZE && (
+                  <div className={styles.pager}>
+                    <button
+                      type="button"
+                      className={`template-btn ${styles.pagerBtn}`}
+                      disabled={safePage === 0}
+                      onClick={() => setCurrentPage((p) => Math.max(0, p - 1))}
+                      aria-label="Previous page"
+                    >
+                      <i className="fas fa-chevron-left" />
+                    </button>
+                    <span>
+                      {(safePage * PAGE_SIZE + 1).toLocaleString()}–{Math.min((safePage + 1) * PAGE_SIZE, filteredRows.length).toLocaleString()} of {filteredRows.length.toLocaleString()} rows
+                    </span>
+                    <button
+                      type="button"
+                      className={`template-btn ${styles.pagerBtn}`}
+                      disabled={safePage >= totalPages - 1}
+                      onClick={() => setCurrentPage((p) => Math.min(totalPages - 1, p + 1))}
+                      aria-label="Next page"
+                    >
+                      <i className="fas fa-chevron-right" />
+                    </button>
                   </div>
                 )}
               </div>

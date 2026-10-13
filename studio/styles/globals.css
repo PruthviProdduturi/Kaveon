@@ -4752,18 +4752,6 @@ main.main-wide {
   position: relative;
 }
 
-/* A KaveonDB statement streaming its rows: the running line sits above the
-   grid and the grid takes the rest of the height while pages land. */
-.results-container--streaming {
-  display: flex;
-  flex-direction: column;
-}
-
-.results-container--streaming .results-table-container {
-  flex: 1;
-  min-height: 0;
-  height: auto;
-}
 
 
 
