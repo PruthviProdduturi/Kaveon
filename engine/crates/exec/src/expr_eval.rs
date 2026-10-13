@@ -4158,6 +4158,31 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     KaveonError::Execution(format!("{name} requires an ARRAY/List value"))
                 })?;
             let take_max = name == "ARRAY_MAX";
+            macro_rules! temporal_extrema {
+                ($ty:ty, $builder:expr) => {{
+                    let mut result = $builder;
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            result.append_null();
+                            continue;
+                        }
+                        let inner = list.value(row);
+                        let values = inner.as_primitive::<$ty>();
+                        let best = (0..values.len())
+                            .filter(|&index| values.is_valid(index))
+                            .map(|index| values.value(index))
+                            .reduce(|left, right| {
+                                if (take_max && right > left) || (!take_max && right < left) {
+                                    right
+                                } else {
+                                    left
+                                }
+                            });
+                        result.append_option(best);
+                    }
+                    Ok(Arc::new(result.finish()))
+                }};
+            }
             match list.value_type() {
                 DataType::Int64 => {
                     let mut result = Int64Builder::new();
@@ -4205,6 +4230,26 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     }
                     Ok(Arc::new(result.finish()))
                 }
+                DataType::Date32 => temporal_extrema!(
+                    Date32Type,
+                    PrimitiveBuilder::<Date32Type>::new()
+                ),
+                DataType::Date64 => temporal_extrema!(
+                    Date64Type,
+                    PrimitiveBuilder::<Date64Type>::new()
+                ),
+                DataType::Time32(TimeUnit::Second) => temporal_extrema!(
+                    Time32SecondType,
+                    PrimitiveBuilder::<Time32SecondType>::new()
+                ),
+                DataType::Time32(TimeUnit::Millisecond) => temporal_extrema!(
+                    Time32MillisecondType,
+                    PrimitiveBuilder::<Time32MillisecondType>::new()
+                ),
+                DataType::Timestamp(TimeUnit::Microsecond, _) => temporal_extrema!(
+                    TimestampMicrosecondType,
+                    PrimitiveBuilder::<TimestampMicrosecondType>::new()
+                ),
                 DataType::Decimal128(precision, scale) => {
                     let mut result = Decimal128Builder::new()
                         .with_precision_and_scale(precision, scale)
@@ -7277,10 +7322,16 @@ mod tests {
 
     #[test]
     fn appends_and_removes_temporal_array_elements_without_coercion() {
-        let batch = RecordBatch::try_from_iter([(
-            "day",
-            Arc::new(arrow::array::Date32Array::from(vec![Some(10)])) as ArrayRef,
-        )])
+        let batch = RecordBatch::try_from_iter([
+            (
+                "day",
+                Arc::new(arrow::array::Date32Array::from(vec![Some(10)])) as ArrayRef,
+            ),
+            (
+                "later_day",
+                Arc::new(arrow::array::Date32Array::from(vec![Some(20)])) as ArrayRef,
+            ),
+        ])
         .unwrap();
         let array = Expr::Function {
             name: "ARRAY".into(),
@@ -7319,6 +7370,40 @@ mod tests {
             .value(0);
         assert_eq!(values.len(), 0);
         assert_eq!(values.data_type(), &DataType::Date32);
+    }
+
+    #[test]
+    fn finds_temporal_array_extrema_without_coercion() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "day",
+                Arc::new(arrow::array::Date32Array::from(vec![Some(10)])) as ArrayRef,
+            ),
+            (
+                "later_day",
+                Arc::new(arrow::array::Date32Array::from(vec![Some(20)])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let array = Expr::Function {
+            name: "ARRAY".into(),
+            args: vec![
+                Expr::Column("day".into()),
+                Expr::Column("later_day".into()),
+            ],
+        };
+        for (name, expected) in [("ARRAY_MIN", 10), ("ARRAY_MAX", 20)] {
+            let result = evaluate(
+                &Expr::Function {
+                    name: name.into(),
+                    args: vec![array.clone()],
+                },
+                &batch,
+            )
+            .unwrap();
+            assert_eq!(result.data_type(), &DataType::Date32);
+            assert_eq!(result.as_primitive::<arrow::datatypes::Date32Type>().value(0), expected);
+        }
     }
 
     #[test]
