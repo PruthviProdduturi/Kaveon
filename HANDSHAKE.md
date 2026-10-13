@@ -1,5 +1,13 @@
 # Kaveon — Engineer Coordination
 
+## SQL compatibility track — October 12, 2026 · null-safe comparisons
+
+Commits `bd4dd218` and `fe526fb8` add and record `IS DISTINCT FROM` and
+`IS NOT DISTINCT FROM`. The SQL front end lowers both forms to a null-total
+`CASE` expression over existing vectorized predicates, with coverage for equal,
+unequal, one-NULL, and both-NULL rows. This closes that comparison slice without
+introducing a separate execution operator.
+
 ## SQL compatibility track — October 12, 2026 · named parameters
 
 Commit `080c9ace` adds typed named SQL parameters to the HTTP statement API.
