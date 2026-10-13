@@ -2746,7 +2746,19 @@ async fn submit_trino_statement(
         }
     };
     let body_text = String::from_utf8(body.to_vec()).ok();
-    let prepared_query = trino_prepared_query(&headers);
+    let prepared_query = match trino_prepared_query(&headers) {
+        Ok(query) => query,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": error,
+                    "errorName": "INVALID_PREPARED_STATEMENT"
+                })),
+            )
+                .into_response();
+        }
+    };
     let (query, parameters) = match (prepared_query, body_text) {
         (Some(query), Some(body)) => match trino_execute_parameters(&body) {
             Ok(parameters) => (query, parameters),
@@ -2837,10 +2849,21 @@ fn trino_session_settings(
 /// Trino encodes prepared statements as `name=<url-encoded SQL>` in a
 /// request header. Decode only this header value; SQL in the request body is
 /// otherwise left byte-for-byte intact.
-fn trino_prepared_query(headers: &HeaderMap) -> Option<String> {
-    let value = trino_header(headers, "x-trino-prepared-statement")?;
-    let encoded = value.split_once('=')?.1;
-    trino_percent_decode(encoded).ok()
+fn trino_prepared_query(headers: &HeaderMap) -> Result<Option<String>, String> {
+    let Some(value) = trino_header(headers, "x-trino-prepared-statement") else {
+        return Ok(None);
+    };
+    let Some((name, encoded)) = value.split_once('=') else {
+        return Err("X-Trino-Prepared-Statement entry must use name=encoded_sql".to_owned());
+    };
+    if name.trim().is_empty() || encoded.trim().is_empty() {
+        return Err("X-Trino-Prepared-Statement name and SQL must be non-empty".to_owned());
+    }
+    let query = trino_percent_decode(encoded)?;
+    if query.trim().is_empty() {
+        return Err("X-Trino-Prepared-Statement SQL must be non-empty".to_owned());
+    }
+    Ok(Some(query))
 }
 
 fn trino_percent_decode(encoded: &str) -> Result<String, String> {
@@ -18712,7 +18735,7 @@ mod streamed_root_tests {
             .collect::<Vec<_>>();
         assert_eq!(tags, vec!["dashboard", "ad-hoc"]);
         assert_eq!(
-            trino_prepared_query(&headers).as_deref(),
+            trino_prepared_query(&headers).unwrap().as_deref(),
             Some("SELECT 1 AS n")
         );
         headers.insert(
@@ -18729,6 +18752,18 @@ mod streamed_root_tests {
         headers.insert("x-trino-session", "result_cache".parse().unwrap());
         let error = trino_session_settings(&headers).expect_err("missing equals");
         assert!(error.contains("key=value"), "{error}");
+    }
+
+    #[test]
+    fn trino_prepared_statement_rejects_malformed_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-trino-prepared-statement", "missing_equals".parse().unwrap());
+        let error = trino_prepared_query(&headers).expect_err("missing equals");
+        assert!(error.contains("name=encoded_sql"), "{error}");
+
+        headers.insert("x-trino-prepared-statement", "name=%ZZ".parse().unwrap());
+        let error = trino_prepared_query(&headers).expect_err("invalid encoding");
+        assert!(error.contains("percent-encoded"), "{error}");
     }
 
     #[test]
