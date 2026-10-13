@@ -3546,6 +3546,137 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 ))),
             }
         }
+        "ARRAY_REMOVE" => {
+            check_arity(name, args, 2)?;
+            let list = args[0]
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .ok_or_else(|| KaveonError::Execution("ARRAY_REMOVE requires an ARRAY/List value".into()))?;
+            if args[1].len() != num_rows {
+                return Err(KaveonError::Execution("ARRAY_REMOVE requires one value per row".into()));
+            }
+            macro_rules! remove_primitive {
+                ($ty:ty, $builder:expr) => {{
+                    let target = compute::cast(&args[1], &list.value_type())?;
+                    let target = target.as_primitive::<$ty>();
+                    let mut builder = ListBuilder::new($builder);
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let inner = list.value(row);
+                        let values = inner.as_primitive::<$ty>();
+                        for index in 0..values.len() {
+                            let keep = if values.is_null(index) {
+                                !target.is_null(row)
+                            } else {
+                                target.is_null(row) || values.value(index) != target.value(row)
+                            };
+                            if keep {
+                                builder.values().append_option(
+                                    values.is_valid(index).then(|| values.value(index)),
+                                );
+                            }
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }};
+            }
+            match list.value_type() {
+                DataType::Int64 => remove_primitive!(Int64Type, Int64Builder::new()),
+                DataType::Float64 => remove_primitive!(Float64Type, Float64Builder::new()),
+                DataType::Decimal128(precision, scale) => {
+                    let target = compute::cast(&args[1], &list.value_type())?;
+                    let target = target.as_primitive::<arrow::datatypes::Decimal128Type>();
+                    let mut builder = ListBuilder::new(
+                        Decimal128Builder::new()
+                            .with_precision_and_scale(precision, scale)
+                            .map_err(|error| KaveonError::Execution(error.to_string()))?,
+                    );
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let inner = list.value(row);
+                        let values = inner.as_primitive::<arrow::datatypes::Decimal128Type>();
+                        for index in 0..values.len() {
+                            let keep = if values.is_null(index) {
+                                !target.is_null(row)
+                            } else {
+                                target.is_null(row) || values.value(index) != target.value(row)
+                            };
+                            if keep {
+                                builder.values().append_option(
+                                    values.is_valid(index).then(|| values.value(index)),
+                                );
+                            }
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }
+                DataType::Utf8 => {
+                    let target = compute::cast(&args[1], &DataType::Utf8)?;
+                    let target = target.as_string::<i32>();
+                    let mut builder = ListBuilder::new(StringBuilder::new());
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let inner = list.value(row);
+                        let values = inner.as_string::<i32>();
+                        for index in 0..values.len() {
+                            let keep = if values.is_null(index) {
+                                !target.is_null(row)
+                            } else {
+                                target.is_null(row) || values.value(index) != target.value(row)
+                            };
+                            if keep {
+                                builder.values().append_option(
+                                    values.is_valid(index).then(|| values.value(index)),
+                                );
+                            }
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }
+                DataType::Boolean => {
+                    let target = compute::cast(&args[1], &DataType::Boolean)?;
+                    let target = target.as_boolean();
+                    let mut builder = ListBuilder::new(BooleanBuilder::new());
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let inner = list.value(row);
+                        let values = inner.as_boolean();
+                        for index in 0..values.len() {
+                            let keep = if values.is_null(index) {
+                                !target.is_null(row)
+                            } else {
+                                target.is_null(row) || values.value(index) != target.value(row)
+                            };
+                            if keep {
+                                builder.values().append_option(
+                                    values.is_valid(index).then(|| values.value(index)),
+                                );
+                            }
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }
+                other => Err(KaveonError::Execution(format!(
+                    "ARRAY_REMOVE does not support list element type {other}"
+                ))),
+            }
+        }
         "ARRAY_MIN" | "ARRAY_MAX" => {
             check_arity(name, args, 1)?;
             let list = args[0]
@@ -6110,6 +6241,27 @@ mod tests {
                 expected
             );
         }
+
+        let removed = Expr::Function {
+            name: "ARRAY_REMOVE".into(),
+            args: vec![
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![decimal(1), decimal(2), decimal(1), Expr::Literal(ScalarValue::Null)],
+                },
+                decimal(1),
+            ],
+        };
+        let removed = evaluate(&removed, &batch).unwrap();
+        let removed = removed
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap()
+            .value(0);
+        let removed = removed.as_primitive::<arrow::datatypes::Decimal128Type>();
+        assert_eq!(removed.len(), 2);
+        assert_eq!(removed.value(0), 2);
+        assert!(removed.is_null(1));
     }
 
     #[test]
