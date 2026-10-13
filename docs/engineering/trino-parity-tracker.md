@@ -676,7 +676,10 @@ field rather than inferring cleanup from a successful query response
 The live pod-loss qualification on 13 October 2026 passed its declared
 three-worker workload: concurrent exact results, active cancellation cleanup,
 worker termination and exact retry, replacement-worker compatibility, bounded
-pressure, and a post-recovery probe. The complete report is archived in
+pressure, and a post-recovery probe. The run terminated worker `kaveon-worker-2`
+after task execution began; the retry returned the same `504,000,000` result
+and SHA-256 as baseline, and the replacement rejoined with the same catalog
+snapshot. The complete credential-safe report is archived in
 `docs/qualification/engine-aks-fault-pressure-2026-10-13.md` and its adjacent
 JSON evidence file. Admission refusals are recorded separately and retried with
 bounded backoff; they are not counted as successful statements. This is a

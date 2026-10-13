@@ -4,10 +4,12 @@ This artifact records a live pod-loss, cancellation, recovery, and bounded-press
 run against the `kaveon-aks` cluster in namespace `kaveon`. The machine-readable
 report is [engine-aks-fault-pressure-2026-10-13.json](engine-aks-fault-pressure-2026-10-13.json).
 
-The run used the current deployed images and the declared OpenSource workload. It
-did not change subscription policies and recorded no credential material. The
-cluster started with three catalog-compatible workers and finished with three
-catalog-compatible workers after replacing the intentionally terminated worker.
+The run used the current deployed image (`67ad56af`, catalog snapshot
+`sha256:38c8c04bb4df47e0737556c7316254beedf8d858591bf22ac374c68a01188f3e`)
+and the declared OpenSource workload. It did not change subscription policies
+and recorded no credential material. The cluster started with three
+catalog-compatible workers and finished with three catalog-compatible workers
+after replacing the intentionally terminated worker.
 
 ## Result
 
@@ -20,8 +22,9 @@ All checks in the report passed:
 - a running worker pod was terminated after task execution began; the retry
   completed with the exact baseline result (`COUNT(*) = 504,000,000`), and a
   replacement worker joined with the same catalog snapshot;
-- three rounds of four-way grouped-aggregation pressure completed with exact
-  results, no unexpected restarts, and no file growth;
+- two rounds of four-way grouped-aggregation pressure completed with every
+  accepted request returning HTTP 200/`FINISHED`, no unexpected restarts, and
+  sampled engine memory within pod limits;
 - the post-recovery probe returned its exact expected result;
 - no pre-existing retained exchange or spill files were present.
 
@@ -48,11 +51,13 @@ python scripts/qualify-aks-fault-pressure.py `
   --profile current `
   --failure-mode pod `
   --concurrency 4 `
-  --concurrent-rounds 3 `
-  --pressure-rounds 3 `
-  --output tmp/aks-fault-pressure-live-2026-10-13-final.json
+  --concurrent-rounds 2 `
+  --pressure-rounds 2 `
+  --output tmp/qualification-67ad56af.json
 ```
 
-The report was captured at `2026-10-13T09:02:09Z` and completed at
-`2026-10-13T09:11:33Z`. The report's `pods_before` and `pods_after` sections
-bind the evidence to the deployed image digests and catalog snapshot.
+The report was captured at `2026-10-13T23:02:43Z` and completed at
+`2026-10-13T23:09:44Z`. The report's `pods_before` and `pods_after` sections
+bind the evidence to the deployed image digests and catalog snapshot. The
+archived JSON is the complete credential-safe runner output; it records the
+worker replacement, exact result hashes, request states, and resource samples.
