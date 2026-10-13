@@ -93,6 +93,12 @@ def main(argv=None):
     parser.add_argument("--sql", required=True)
     parser.add_argument("--warm-hits", type=int, default=20)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--ca-cert", type=Path, help="CA bundle for an HTTPS coordinator")
+    parser.add_argument(
+        "--insecure",
+        action="store_true",
+        help="disable TLS verification for a loopback port-forward only",
+    )
     parser.add_argument(
         "--restart-evidence",
         type=Path,
@@ -113,6 +119,10 @@ def main(argv=None):
         "checks": {},
     }
     session = requests.Session()
+    if args.ca_cert:
+        session.verify = str(args.ca_cert)
+    elif args.insecure:
+        session.verify = False
     try:
         report["clear_before"] = clear_cache(session, base, headers)
         uncached = execute(session, base, headers, args.sql, {"result_cache": False})
