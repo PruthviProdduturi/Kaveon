@@ -12,7 +12,7 @@ same table is updated, never duplicated.
 
 ## The table this points at
 
-`KaveonTelemetry.events.activity`, which is what
+`KaveonTelemetry.events.daily_user_activity`, which is what
 `scripts/build_kaveon_events_table.py` produces. The installation is currently
 reading `KaveonTelemetry.events.enriched` - the cross-product build with
 sequential integer identifiers - and the dataset that the charts bind to still
@@ -41,7 +41,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DATASET_NAME = "Kaveon Events"
 CATALOG = "KaveonTelemetry"
 SCHEMA = "events"
-TABLE = "activity"
+TABLE = "daily_user_activity"
 # No row count and no user count in the description. They are properties of
 # whichever build is published, they change whenever the table is rebuilt, and
 # a stale headline figure in a published description is how "504M rows"

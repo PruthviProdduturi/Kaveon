@@ -149,7 +149,7 @@ class BuildTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls._directory = tempfile.TemporaryDirectory()
-        cls.output = Path(cls._directory.name) / "activity"
+        cls.output = Path(cls._directory.name) / "daily_user_activity"
         builder.build(cls.output, DAYS, FILES, USERS)
         cls.parts = sorted(cls.output.glob("*.parquet"))
         cls.manifest = json.loads(
@@ -253,7 +253,7 @@ class BuildTests(unittest.TestCase):
 
     def test_the_build_is_reproducible(self):
         with tempfile.TemporaryDirectory() as other:
-            again = Path(other) / "activity"
+            again = Path(other) / "daily_user_activity"
             builder.build(again, DAYS, FILES, USERS)
             for first in self.parts:
                 second = again / first.name
@@ -293,7 +293,7 @@ class BuildTests(unittest.TestCase):
         # is below the population and the population is not recoverable from it.
         self.assertLess(self.manifest["distinct_users"], USERS)
         self.assertGreater(self.manifest["distinct_users"], USERS * 0.8)
-        self.assertEqual(self.manifest["table"], "KaveonTelemetry.events.activity")
+        self.assertEqual(self.manifest["table"], "KaveonTelemetry.events.daily_user_activity")
         self.assertEqual(len(self.manifest["rows_per_day"]), DAYS)
         self.assertEqual(sum(self.manifest["rows_per_day"].values()),
                          self.manifest["row_count"])
@@ -301,7 +301,7 @@ class BuildTests(unittest.TestCase):
 
     def test_a_truncated_part_is_refused_rather_than_published(self):
         with tempfile.TemporaryDirectory() as other:
-            copy = Path(other) / "activity"
+            copy = Path(other) / "daily_user_activity"
             copy.mkdir()
             for part in self.parts:
                 (copy / part.name).write_bytes(part.read_bytes())
@@ -312,7 +312,7 @@ class BuildTests(unittest.TestCase):
 
     def test_a_part_outside_the_plan_is_refused(self):
         with tempfile.TemporaryDirectory() as other:
-            copy = Path(other) / "activity"
+            copy = Path(other) / "daily_user_activity"
             copy.mkdir()
             for part in self.parts:
                 (copy / part.name).write_bytes(part.read_bytes())
@@ -387,3 +387,45 @@ class AppenderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DimensionsAreNotFlat(unittest.TestCase):
+    """A breakdown chart is only worth drawing if the values differ.
+
+    These weights were small integers, and small integers over a dozen values
+    give identical shares: eleven industries at exactly 7.1%, Mobile and Web
+    both at 31.2%, two team sizes at 22.2% and two more at 11.1%. A chart then
+    draws one tall bar and a row of bars the same height, which is the same
+    tell as a table whose every day held exactly 18,000,000 rows.
+    """
+
+    def test_no_two_values_in_a_dimension_share_a_weight(self):
+        for name, weighted in builder.WEIGHTED_DIMENSIONS.items():
+            weights = [weight for _, weight in weighted]
+            self.assertEqual(len(weights), len(set(weights)),
+                             f"{name} has values of equal weight, so its chart has equal bars")
+
+    def test_every_value_is_reachable(self):
+        # A zero weight is a value that exists in the vocabulary and never in
+        # the data, which is worse than not offering it.
+        for name, weighted in builder.WEIGHTED_DIMENSIONS.items():
+            for value, weight in weighted:
+                self.assertGreater(weight, 0, f"{name}.{value} can never be drawn")
+
+    def test_no_dimension_is_dominated_by_one_value(self):
+        # One value holding nearly everything makes every other bar noise. The
+        # bound is loose on purpose: Cloud deployment genuinely does dominate.
+        for name, weighted in builder.WEIGHTED_DIMENSIONS.items():
+            total = sum(weight for _, weight in weighted)
+            largest = max(weight for _, weight in weighted)
+            self.assertLess(largest / total, 0.80,
+                            f"{name} is {largest / total:.0%} one value")
+
+    def test_the_tail_is_a_tail_and_not_a_plateau(self):
+        # Past the leader, a real distribution keeps declining. Checked on the
+        # dimensions with enough values for a plateau to be visible.
+        for name in ("industry", "acquisition_channel", "team_size"):
+            weights = sorted((weight for _, weight in builder.WEIGHTED_DIMENSIONS[name]),
+                             reverse=True)
+            self.assertEqual(weights, sorted(set(weights), reverse=True),
+                             f"{name} repeats a weight in its tail")

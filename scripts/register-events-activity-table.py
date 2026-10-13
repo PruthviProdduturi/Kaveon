@@ -1,4 +1,4 @@
-"""Register `KaveonTelemetry.events.activity` and declare its cube shape.
+"""Register `KaveonTelemetry.events.daily_user_activity` and declare its cube shape.
 
 This is step 2 of the rebuild migration in
 `docs/engineering/events-activity-rebuild.md`. The catalog, the schema and the
@@ -53,7 +53,7 @@ from build_kaveon_events_table import (  # noqa: E402
 BASE = os.environ.get("KAVEON_PORTAL_URL", "http://127.0.0.1:13015").rstrip("/")
 
 # The table's location inside the catalog's root path, which is `events` — so
-# the objects live at `telemetry/events/activity`. Same shape as the two tables
+# the objects live at `telemetry/events/daily_user_activity`. Same shape as the two tables
 # already registered: the location is the directory name, nothing more.
 LOCATION = TABLE_NAME
 

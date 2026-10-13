@@ -68,7 +68,8 @@ Two earlier fixes are kept:
 
 `enriched` is an ETL stage name — bronze/silver/gold vocabulary — and says
 nothing about content. The catalog is already `KaveonTelemetry` and the schema
-already `events`, so the table carries neither word again: it is `activity`,
+already `events`, so the table does not repeat either: a row is one user's
+activity on one surface on one day, which is what `daily_user_activity` says,
 which is what the rows are — one row per user per surface per day they were
 active. **Renaming the live table is not this script's job**; see
 `docs/engineering/events-activity-rebuild.md` for the migration.
@@ -135,28 +136,33 @@ SEED = 20260704
 N_USERS = 14_627_893
 
 FIRST_DAY = date(2026, 7, 4)
-DAYS = 28
+# Eight weeks, not four. The target is about a billion rows, and the honest way
+# to get there is a longer window rather than more users: doubling the user
+# count would double how many people are in the product without changing how
+# any of them behave, while eight weeks gives a trend chart something to show
+# and keeps the per-day volumes where they were.
+DAYS = 56
 
 # One day never spans two files' worth of days, and the busiest file stays near
 # the per-task cost the published table had. `user_id` as text is ~3x the width
 # of an int64, so the same row count is a larger file than before: more files,
 # not bigger ones.
-FILES = 252
+FILES = 504
 
 REPO = Path(__file__).resolve().parents[1]
-DEFAULT_OUTPUT = REPO / "data" / "adls-mirror" / "telemetry" / "events" / "activity"
+DEFAULT_OUTPUT = REPO / "data" / "adls-mirror" / "telemetry" / "events" / "daily_user_activity"
 
 # Where a fresh build publishes. The telemetry container, under the table's own
 # name — never over `events/enriched`, which is what the installation is
 # reading right now.
 ACCOUNT = "kaveonlake"
 CONTAINER = "telemetry"
-REMOTE = "events/activity"
+REMOTE = "events/daily_user_activity"
 COMMIT = "00000000000000000000.json"
 
 CATALOG = "KaveonTelemetry"
 SCHEMA_NAME = "events"
-TABLE_NAME = "activity"
+TABLE_NAME = "daily_user_activity"
 
 DISCLAIMER = "Deterministic demo telemetry; not production data."
 
@@ -166,18 +172,44 @@ DISCLAIMER = "Deterministic demo telemetry; not production data."
 # keeps an appended day from widening a cube axis — the previous appender held
 # its own copy of the lists and had already drifted, adding an "industry" value
 # ("Finance") the base table does not use.
+# Each dimension's share of users, in basis points of its own total.
+#
+# These were small integers — 1, 2, 3 — and small integers over a dozen values
+# produce identical shares: eleven industries at exactly 7.1% each, Mobile and
+# Web both at 31.2%, two team sizes at 22.2% and two more at 11.1%. A breakdown
+# chart then draws one tall bar and a row of bars the same height, which is the
+# same tell as a table whose every day held exactly 18,000,000 rows. Nothing in
+# the world distributes itself that evenly.
+#
+# So the weights are differentiated and roughly defensible, and no two values
+# within a dimension are equal. They are approximations of a plausible
+# software-buying population rather than measurements, and are labelled as such
+# — the point is a credible shape, not a sourced statistic.
+#
+# `test_build_kaveon_events_table` asserts no two weights in a dimension match,
+# so a future edit cannot quietly reintroduce the flat tail.
 WEIGHTED_DIMENSIONS: dict[str, tuple[tuple[str, int], ...]] = {
-    "platform": (("Desktop", 6), ("Mobile", 5), ("Web", 5)),
-    "license": (("Free", 3), ("Standard", 2), ("Professional", 2), ("Enterprise", 1)),
-    "segment": (("Mid-Market", 3), ("Enterprise", 2), ("SMB", 2), ("Startup", 2)),
-    "industry": (("Technology", 3), ("Healthcare", 1), ("Financial Services", 1),
-                 ("Manufacturing", 1), ("Retail", 1), ("Education", 1), ("Media", 1),
-                 ("Energy", 1), ("Government", 1), ("Logistics", 1),
-                 ("Real Estate", 1), ("Professional Services", 1)),
-    "deployment": (("Cloud", 4), ("Hybrid", 1), ("On-Premise", 1)),
-    "acquisition_channel": (("Organic", 3), ("Referral", 2), ("Paid", 2),
-                            ("Partner", 1), ("Direct", 1)),
-    "team_size": (("Small", 3), ("Medium", 2), ("Solo", 2), ("Large", 1), ("Enterprise", 1)),
+    # A data product is used at a desk. Mobile is real but light: reading a
+    # dashboard on a phone, not building one.
+    "platform": (("Desktop", 4600), ("Web", 3300), ("Mobile", 2100)),
+    # A freemium funnel: most accounts never pay, and the paid tiers thin out
+    # as they get more expensive.
+    "license": (("Free", 5200), ("Standard", 2400), ("Professional", 1600),
+                ("Enterprise", 800)),
+    "segment": (("SMB", 3400), ("Mid-Market", 2800), ("Startup", 2300),
+                ("Enterprise", 1500)),
+    # Weighted towards where analytics is actually bought — technology and
+    # financial services lead, and the tail is a tail rather than a plateau.
+    "industry": (("Technology", 1900), ("Financial Services", 1300),
+                 ("Healthcare", 1000), ("Manufacturing", 900), ("Retail", 800),
+                 ("Professional Services", 750), ("Education", 700),
+                 ("Government", 600), ("Media", 500), ("Logistics", 450),
+                 ("Energy", 400), ("Real Estate", 300)),
+    "deployment": (("Cloud", 7100), ("Hybrid", 1900), ("On-Premise", 1000)),
+    "acquisition_channel": (("Organic", 3700), ("Paid", 2300), ("Referral", 1800),
+                            ("Partner", 1300), ("Direct", 900)),
+    "team_size": (("Small", 3100), ("Solo", 2900), ("Medium", 2200),
+                  ("Large", 1200), ("Enterprise", 600)),
 }
 
 USER_DIMENSIONS = ("platform", "license", "segment", "industry", "region", "country",
@@ -366,7 +398,7 @@ def file_plan(days: int = DAYS, files: int = FILES,
 
 
 def part_name(day: date, block: int) -> str:
-    return f"activity-{day.isoformat()}-{block:03d}.parquet"
+    return f"daily-user-activity-{day.isoformat()}-{block:03d}.parquet"
 
 
 # ── user attributes ──────────────────────────────────────────────────────────
