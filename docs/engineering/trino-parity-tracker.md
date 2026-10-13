@@ -743,11 +743,13 @@ is implementation and regression evidence for the covered shapes; it does not
 replace the deployed differential corpus or the remaining complex-type and
 wire-protocol gates.
 
-The deployed cache evidence harness is now checked in at
-`engine/qualification/cache_slo.py`. It fails closed until the operator supplies
-coordinator-restart evidence, and reports warm-hit percentiles, exact hashes,
-bypass behavior, cache bounds/counters, and administrator clear behavior. No
-deployment has been marked cache-SLO complete yet.
+The deployed cache evidence harness is checked in at
+`engine/qualification/cache_slo.py`. The AKS qualification is archived at
+`docs/qualification/cache-slo-aks-2026-10-13.json`; it reports warm-hit
+percentiles, exact hashes, bypass behavior, cache bounds/counters,
+administrator clear behavior, authorization isolation, and coordinator
+restart-to-miss. Shared cross-coordinator invalidation, TTL-expiry evidence,
+and cache-backed transactional reads remain outside that qualification.
 
 ## 9/10 exit gate
 
