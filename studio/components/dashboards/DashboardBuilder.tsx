@@ -5,14 +5,13 @@
  * Integrates with DashboardContext for state management.
  */
 
-import React, { useCallback, useEffect, useState, useRef } from "react";
+import React, { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useDashboard } from "./DashboardContext";
 import { BuilderContext } from "./BuilderContext";
 import DashboardCanvas from "./DashboardCanvas";
-import DashboardSidebar from "./DashboardSidebar";
-import DashboardProperties from "./DashboardProperties";
 import DashboardFilterBarEnhanced from "./DashboardFilterBarEnhanced";
+import styles from "./DashboardBuilder.module.css";
 import { msalFetch } from "../../utils/msalFetch";
 import { API_BASE } from "../../config";
 import { DASHBOARD_THEMES } from "../../types/dashboard";
@@ -24,6 +23,7 @@ interface Chart {
   id: string | number;
   name: string;
   chart_type?: string;
+  dataset_id?: string | number | null;
   dataset_name?: string | null;
   updated_at?: string | null;
   created_by?: string | null;
@@ -33,6 +33,15 @@ interface Chart {
 interface DashboardBuilderProps {
   dashboardId?: string;
 }
+
+/**
+ * Sentinel for the dataset filter's "no dataset" bucket.
+ *
+ * A chart record always names its dataset (`/charts/summary` resolves
+ * `dataset_name` for every row), but a chart whose dataset has since been
+ * removed resolves to null, and those still have to be reachable.
+ */
+const UNASSIGNED_DATASET = "__kaveon_no_dataset__";
 
 /** Shared field styling for the builder's dialogs, driven by the theme tokens. */
 const dialogFieldStyle: React.CSSProperties = {
@@ -112,6 +121,8 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
   const [isPublished, setIsPublished] = useState(false);
   const [showChartPicker, setShowChartPicker] = useState(false);
   const [chartSearch, setChartSearch] = useState("");
+  // "" = every dataset; otherwise a dataset name, or UNASSIGNED_DATASET.
+  const [datasetFilter, setDatasetFilter] = useState("");
   // null = add to root canvas; string = add to this container id
   const [chartPickerTarget, setChartPickerTarget] = useState<string | null>(null);
 
@@ -173,6 +184,41 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
     ? charts.filter((c) => (c as any).created_by === userEmail || (c as any).owner === userEmail)
     : charts;
   const chartsForScope = chartScope === "mine" ? myCharts : charts;
+
+  /**
+   * The datasets represented in the palette, with how many charts each holds.
+   *
+   * Dataset identity comes off the chart record itself — `/charts/summary`
+   * already resolves `dataset_name` for every chart — so nothing new is asked
+   * of the API. Charts are grouped by that name because that is the identity a
+   * builder recognises; charts whose dataset no longer resolves collect in one
+   * explicit bucket rather than disappearing.
+   */
+  const datasetOptions = useMemo(() => {
+    const counts = new Map<string, { value: string; label: string; count: number }>();
+    for (const chart of chartsForScope) {
+      const name = (chart.dataset_name || "").trim();
+      const value = name || UNASSIGNED_DATASET;
+      const existing = counts.get(value);
+      if (existing) existing.count += 1;
+      else counts.set(value, { value, label: name || "No dataset", count: 1 });
+    }
+    return Array.from(counts.values()).sort((a, b) => {
+      // The "no dataset" bucket always sits last; real names sort naturally.
+      if (a.value === UNASSIGNED_DATASET) return 1;
+      if (b.value === UNASSIGNED_DATASET) return -1;
+      return a.label.localeCompare(b.label);
+    });
+  }, [chartsForScope]);
+
+  // Narrowing the scope (or reloading the charts) can retire the selected
+  // dataset. Leaving it selected would show an empty list with no visible
+  // reason, so the filter falls back to every dataset.
+  useEffect(() => {
+    if (datasetFilter && !datasetOptions.some((o) => o.value === datasetFilter)) {
+      setDatasetFilter("");
+    }
+  }, [datasetFilter, datasetOptions]);
 
   /**
    * Open chart picker targeting a specific container (or root canvas when null)
@@ -459,11 +505,43 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
   };
 
   const chartQuery = chartSearch.toLowerCase().trim();
-  const filteredCharts = chartsForScope.filter((c) =>
-    !chartQuery ||
-    c.name.toLowerCase().includes(chartQuery) ||
-    (c.chart_type || "").toLowerCase().includes(chartQuery) ||
-    (c.dataset_name || "").toLowerCase().includes(chartQuery)
+  const filteredCharts = chartsForScope.filter((c) => {
+    if (datasetFilter) {
+      const name = (c.dataset_name || "").trim();
+      if ((name || UNASSIGNED_DATASET) !== datasetFilter) return false;
+    }
+    return (
+      !chartQuery ||
+      c.name.toLowerCase().includes(chartQuery) ||
+      (c.chart_type || "").toLowerCase().includes(chartQuery) ||
+      (c.dataset_name || "").toLowerCase().includes(chartQuery)
+    );
+  });
+
+  /**
+   * The dataset picker, shared by the palette and the chart-picker dialog.
+   *
+   * Both surfaces read the same `filteredCharts`, so both have to carry the
+   * control: a dataset chosen in the palette must never narrow the dialog
+   * invisibly.
+   */
+  const renderDatasetFilter = (ariaLabel: string, className = styles.datasetSelect) => (
+    <select
+      className={className}
+      value={datasetFilter}
+      onChange={(e) => setDatasetFilter(e.target.value)}
+      aria-label={ariaLabel}
+      title={ariaLabel}
+    >
+      <option value="">
+        All datasets ({chartsForScope.length})
+      </option>
+      {datasetOptions.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label} ({option.count})
+        </option>
+      ))}
+    </select>
   );
 
   const builderContextValue = React.useMemo(
@@ -473,9 +551,9 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
 
   return (
     <BuilderContext.Provider value={builderContextValue}>
-    <div className="page-shell page-shell-wide">
+    <div className={styles.shell}>
       {/* Top Header Bar */}
-      <header className="page-header page-header-with-actions">
+      <header className={`page-header page-header-with-actions ${styles.header}`}>
         <div className="page-header-main" style={{ display: "flex", flexDirection: 'row', alignItems: "center", gap: 8, flexWrap: 'nowrap' }}>
           {!isEditingName ? (
             <h1
@@ -751,88 +829,37 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
         </div>
       </header>
 
-      {/* Builder Interface */}
-      <div
-        style={{
-          flex: 1,
-          display: 'grid',
-          gridTemplateColumns: sidebarCollapsed
-            ? "auto minmax(0, 1fr)"
-            : "minmax(0, 360px) minmax(0, 1fr)",
-          overflow: 'hidden',
-        }}
-      >
+      {/* Builder Interface — a fixed-height split, never a scrolling page */}
+      <div className={sidebarCollapsed ? `${styles.body} ${styles.bodyCollapsed}` : styles.body}>
         {/* Left Sidebar - Dashboard Settings */}
-        <div
-          style={{
-            background: sidebarCollapsed ? 'transparent' : 'var(--bg-surface)',
-            borderRight: sidebarCollapsed ? 'none' : '1px solid var(--border)',
-            display: 'flex',
-            flexDirection: 'column',
-            overflow: 'hidden',
-            width: sidebarCollapsed ? 'auto' : undefined,
-          }}
-        >
+        <div className={sidebarCollapsed ? `${styles.settings} ${styles.settingsCollapsed}` : styles.settings}>
           {sidebarCollapsed ? (
-            <div style={{
-              background: 'var(--bg-elevated)',
-              borderRight: '1px solid var(--border)',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              height: '100%',
-            }}>
+            <>
               <button
+                type="button"
                 onClick={() => setSidebarCollapsed(false)}
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  padding: '12px 8px',
-                  cursor: 'pointer',
-                  color: 'var(--text-secondary)',
-                  fontSize: 18,
-                  fontWeight: 600,
-                }}
+                className={styles.railButton}
                 aria-label="Expand dashboard settings"
               >
                 ❯
               </button>
-              <div style={{
-                writingMode: 'vertical-rl',
-                transform: 'rotate(180deg)',
-                fontSize: 12,
-                fontWeight: 600,
-                color: 'var(--text-muted)',
-                letterSpacing: '0.5px',
-                padding: '16px 0',
-                textTransform: 'uppercase',
-              }}>
-                Dashboard Settings
-              </div>
-            </div>
+              <div className={styles.railLabel}>Dashboard Settings</div>
+            </>
           ) : (
             <>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
-                <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>Dashboard Settings</span>
+              <div className={styles.settingsHeader}>
+                <span className={styles.settingsTitle}>Dashboard Settings</span>
                 <button
+                  type="button"
                   onClick={() => setSidebarCollapsed(true)}
-                  style={{
-                    background: 'transparent',
-                    border: 'none',
-                    padding: '4px 8px',
-                    cursor: 'pointer',
-                    color: 'var(--text-muted)',
-                    fontSize: 14,
-                  }}
+                  className={styles.railButton}
                   aria-label="Collapse dashboard settings"
                 >
                   ❮
                 </button>
               </div>
-              <div style={{ flex: 1, overflow: 'auto', padding: '16px' }}>
-              {/* Sidebar Tabs */}
-              <div style={{ borderBottom: "1px solid var(--border)", marginBottom: 20 }}>
-                <div style={{ display: "flex", gap: 0 }}>
+              {/* Sidebar Tabs — pinned; only the panel below them scrolls */}
+              <div className={styles.tabs}>
                   <button
                     onClick={() => setSidebarTab("items")}
                     style={{
@@ -884,66 +911,60 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                   >
                     Filters
                   </button>
-                </div>
               </div>
 
               {/* Items Tab Content */}
               {sidebarTab === "items" && (
-                <div>
-                  {/* Search */}
-                  <div style={{ position: "relative", marginBottom: 8 }}>
-                    <i className="fas fa-search" style={{
-                      position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)",
-                      color: "var(--text-muted)", fontSize: 12, pointerEvents: "none",
-                    }} />
-                    <input
-                      type="text"
-                      placeholder="Search charts…"
-                      value={chartSearch}
-                      onChange={(e) => setChartSearch(e.target.value)}
-                      style={{
-                        width: "100%", padding: "7px 10px 7px 30px",
-                        border: "1px solid var(--border)", borderRadius: 6,
-                        fontSize: 12, outline: "none", boxSizing: "border-box",
-                        background: "var(--bg-surface)", color: "var(--text-primary)",
-                      }}
-                      onFocus={(e) => { e.target.style.borderColor = "#2563eb"; }}
-                      onBlur={(e) => { e.target.style.borderColor = "var(--border)"; }}
-                    />
-                  </div>
-                  {/* Toolbar: count + mine toggle */}
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                    <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                      {filteredCharts.length} chart{filteredCharts.length !== 1 ? "s" : ""}
-                    </span>
-                    <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none" }}>
-                      <span
-                        onClick={() => setChartScope(chartScope === "mine" ? "all" : "mine")}
-                        style={{
-                          display: "inline-block", width: 30, height: 16,
-                          background: chartScope === "mine" ? "#2563eb" : "var(--border)",
-                          borderRadius: 8, position: "relative",
-                          transition: "background 0.2s ease", cursor: "pointer", flexShrink: 0,
-                        }}
-                      >
-                        <span style={{
-                          position: "absolute", top: 2,
-                          left: chartScope === "mine" ? 14 : 2,
-                          width: 12, height: 12, background: "var(--bg-surface)",
-                          borderRadius: "50%", transition: "left 0.2s ease",
-                          boxShadow: "0 1px 2px rgba(0,0,0,0.2)",
-                        }} />
+                <div className={styles.panel}>
+                  {/* Controls stay pinned above the list */}
+                  <div className={styles.itemsControls}>
+                    {/* Search */}
+                    <div className={styles.search}>
+                      <i className={`fas fa-search ${styles.searchIcon}`} />
+                      <input
+                        type="text"
+                        className={styles.searchInput}
+                        placeholder="Search charts…"
+                        value={chartSearch}
+                        onChange={(e) => setChartSearch(e.target.value)}
+                      />
+                    </div>
+                    {/* Dataset filter — narrows the palette to one dataset */}
+                    {renderDatasetFilter("Filter charts by dataset")}
+                    {/* Toolbar: count + mine toggle */}
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                        {filteredCharts.length} chart{filteredCharts.length !== 1 ? "s" : ""}
                       </span>
-                      <span
-                        onClick={() => setChartScope(chartScope === "mine" ? "all" : "mine")}
-                        style={{ fontSize: 11, color: "var(--text-secondary)", fontWeight: 500 }}
-                      >
-                        Mine only
-                      </span>
-                    </label>
+                      <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none" }}>
+                        <span
+                          onClick={() => setChartScope(chartScope === "mine" ? "all" : "mine")}
+                          style={{
+                            display: "inline-block", width: 30, height: 16,
+                            background: chartScope === "mine" ? "#2563eb" : "var(--border)",
+                            borderRadius: 8, position: "relative",
+                            transition: "background 0.2s ease", cursor: "pointer", flexShrink: 0,
+                          }}
+                        >
+                          <span style={{
+                            position: "absolute", top: 2,
+                            left: chartScope === "mine" ? 14 : 2,
+                            width: 12, height: 12, background: "var(--bg-surface)",
+                            borderRadius: "50%", transition: "left 0.2s ease",
+                            boxShadow: "0 1px 2px rgba(0,0,0,0.2)",
+                          }} />
+                        </span>
+                        <span
+                          onClick={() => setChartScope(chartScope === "mine" ? "all" : "mine")}
+                          style={{ fontSize: 11, color: "var(--text-secondary)", fontWeight: 500 }}
+                        >
+                          Mine only
+                        </span>
+                      </label>
+                    </div>
                   </div>
-                  {/* Inline chart list */}
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  {/* Inline chart list — its own scroll region, so the page never scrolls */}
+                  <div className={styles.chartList}>
                     {loading ? (
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "24px 0", color: "var(--text-muted)", gap: 8 }}>
                         <i className="fas fa-spinner fa-spin" style={{ fontSize: 14 }} />
@@ -956,7 +977,23 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                     ) : filteredCharts.length === 0 ? (
                       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "24px 0", color: "var(--text-muted)", gap: 6 }}>
                         <i className="fas fa-chart-bar" style={{ fontSize: 24, opacity: 0.4 }} />
-                        <span style={{ fontSize: 12 }}>No charts found</span>
+                        <span style={{ fontSize: 12 }}>
+                          {chartQuery || datasetFilter || chartScope === "mine"
+                            ? "No charts match these filters"
+                            : "No charts found"}
+                        </span>
+                        {(chartQuery || datasetFilter) && (
+                          <button
+                            type="button"
+                            onClick={() => { setChartSearch(""); setDatasetFilter(""); }}
+                            style={{
+                              background: "none", border: "none", padding: 0, cursor: "pointer",
+                              fontSize: 12, fontWeight: 600, color: "var(--accent)", fontFamily: "inherit",
+                            }}
+                          >
+                            Clear filters
+                          </button>
+                        )}
                       </div>
                     ) : (
                       filteredCharts.map((chart) => {
@@ -1031,7 +1068,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
 
               {/* Layout Tab Content */}
               {sidebarTab === "layout" && (
-                <div>
+                <div className={`${styles.panel} ${styles.panelScroll}`}>
                   <h3 style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.5px" }}>
                     Layout Components
                   </h3>
@@ -1172,20 +1209,19 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
 
               {/* Filters Tab Content */}
               {sidebarTab === "filters" && (
-                <div>
+                <div className={`${styles.panel} ${styles.panelScroll}`}>
                   <h3 style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.5px" }}>
                     Dashboard Filters
                   </h3>
                   <DashboardFilterBarEnhanced />
                 </div>
               )}
-            </div>
               </>
             )}
         </div>
 
-        {/* Main Center Area - Canvas */}
-        <div style={{ background: 'var(--bg-elevated)', padding: '12px', overflow: 'auto' }}>
+        {/* Main Center Area - Canvas: fills the viewport remainder and scrolls itself */}
+        <div className={styles.canvasPane}>
           <DashboardCanvas />
         </div>
       </div>
@@ -1255,6 +1291,9 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
                     onBlur={(e) => { e.target.style.borderColor = "#e2e8f0"; e.target.style.boxShadow = "none"; }}
                   />
                 </div>
+
+                {/* Dataset filter */}
+                {renderDatasetFilter("Filter charts by dataset", styles.datasetSelectDialog)}
 
                 {/* Count */}
                 <span style={{ fontSize: 13, color: "#64748b", whiteSpace: "nowrap", flexShrink: 0 }}>
