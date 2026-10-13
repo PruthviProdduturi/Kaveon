@@ -394,6 +394,27 @@ function CatalogSourceModal({ source, onClose, onSuccess }: ModalProps) {
   const [s3Region, setS3Region] = useState(initSC.region || "");
   const [s3Prefix, setS3Prefix] = useState(initSC.prefix || "");
 
+  // What the record held when the form opened. A storage change is compared
+  // against this rather than against the inputs' own defaults, so reopening a
+  // form and saving it unchanged is never treated as a re-point.
+  const storedStorage = JSON.stringify({
+    storage_type: source?.storage_type || "local",
+    base_path: initSC.base_path || "",
+    account: initSC.account || "",
+    container: initSC.container || "",
+    root_path: initSC.root_path || "",
+    bucket: initSC.bucket || "",
+    region: initSC.region || "",
+    prefix: initSC.prefix || "",
+  });
+  const currentStorage = JSON.stringify({
+    storage_type: storageType,
+    base_path: basePath, account: adlsAccount, container: adlsContainer,
+    root_path: adlsRootPath, bucket: s3Bucket, region: s3Region, prefix: s3Prefix,
+  });
+  const storageChanged = storedStorage !== currentStorage;
+  const [storageChangeConfirmed, setStorageChangeConfirmed] = useState(false);
+
   const initAC = parseAdapterConfig(source);
   const [adapterEndpoint, setAdapterEndpoint] = useState(initAC.endpoint || "");
   const [adapterDatabase, setAdapterDatabase] = useState(initAC.database || "");
@@ -431,6 +452,26 @@ function CatalogSourceModal({ source, onClose, onSuccess }: ModalProps) {
       if (credentialKind) {
         body.credential_kind = credentialKind;
         body.credential_ref = credentialRef.trim() || null;
+      }
+
+      // Re-pointing a catalog that already holds tables moves every one of
+      // them, and the tables keep their own relative locations — so a changed
+      // account, container or root path makes each of them address an object
+      // that very likely does not exist. This form once offered an empty,
+      // required Root Path for a catalog whose real prefix was held only in
+      // the Engine: typing anything and saving would have been enough to
+      // break every table in it on the next synchronization.
+      //
+      // So a storage change on an existing catalog has to be meant. Creating
+      // one is unaffected: there is nothing to re-point.
+      if (isEditing && storageChanged && !storageChangeConfirmed) {
+        setError(
+          `This changes where ${engineCatalog || "the catalog"} reads from. Every table registered in it `
+          + "keeps its own relative location, so each will address a different object — most likely one "
+          + "that does not exist. Confirm below if that is intended."
+        );
+        setSaving(false);
+        return;
       }
 
       const url = isEditing
@@ -543,7 +584,7 @@ function CatalogSourceModal({ source, onClose, onSuccess }: ModalProps) {
                 </div>
                 <div>
                   <label style={labelStyle}>Root Path *</label>
-                  <input style={{ ...inputStyle, fontFamily: "monospace" }} placeholder="warehouse/" value={adlsRootPath} onChange={e => setAdlsRootPath(e.target.value)} required />
+                  <input style={{ ...inputStyle, fontFamily: "monospace" }} placeholder={isEditing ? "" : "warehouse/"} value={adlsRootPath} onChange={e => setAdlsRootPath(e.target.value)} required />
                 </div>
               </div>
             )}
@@ -663,6 +704,28 @@ function CatalogSourceModal({ source, onClose, onSuccess }: ModalProps) {
               />
             </div>
           </div>
+
+          {/* Shown only once the storage actually differs from what the record
+              held, so an operator correcting a description never sees it. */}
+          {isEditing && storageChanged && (
+            <div style={{ margin: "0 1.5rem 1rem", padding: "0.75rem 0.875rem", borderRadius: 8,
+                          border: "1px solid var(--warning, #f59e0b)",
+                          background: "rgba(245, 158, 11, 0.08)", fontSize: 12.5,
+                          color: "var(--text-secondary)" }}>
+              <div style={{ fontWeight: 600, color: "var(--text-primary)", marginBottom: 4 }}>
+                This re-points {engineCatalog || "the catalog"}
+              </div>
+              Every table registered in it keeps its own relative location, so each will address a
+              different object once this is synchronized to the Engine. Tables whose data has not
+              moved with it will stop reading.
+              <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8,
+                              color: "var(--text-primary)", fontWeight: 600 }}>
+                <input type="checkbox" checked={storageChangeConfirmed}
+                       onChange={(event) => setStorageChangeConfirmed(event.target.checked)} />
+                The data has moved too, or this catalog holds no tables yet
+              </label>
+            </div>
+          )}
 
           <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", padding: "1.25rem 1.5rem", borderTop: "1px solid var(--border)", background: "var(--bg-primary)" }}>
             <Button type="button" variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
