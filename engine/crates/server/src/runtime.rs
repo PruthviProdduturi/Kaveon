@@ -582,6 +582,26 @@ mod tests {
     }
 
     #[test]
+    fn cancel_running_exchange_cancels_all_stages_and_queues_cleanup_once() {
+        let mut runtime = StageRuntime::new(graph(), assignments()).unwrap();
+        let task = runtime.ready_tasks().remove(0);
+        runtime.start_task(&task.task_id).unwrap();
+
+        runtime.cancel();
+
+        assert_eq!(runtime.stage_state(StageId(0)), Some(StageState::Canceled));
+        assert_eq!(runtime.stage_state(StageId(1)), Some(StageState::Canceled));
+        assert!(runtime.ready_tasks().is_empty());
+        assert!(runtime.is_terminal());
+        assert_eq!(runtime.drain_cleanup_intents().len(), 1);
+
+        // Cancellation is idempotent and must not strand duplicate cleanup
+        // work for the same exchange.
+        runtime.cancel();
+        assert!(runtime.drain_cleanup_intents().is_empty());
+    }
+
+    #[test]
     fn completing_consumer_emits_cleanup_once() {
         let mut runtime = StageRuntime::new(graph(), assignments()).unwrap();
         for task in runtime.ready_tasks() {
