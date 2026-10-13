@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     product_manifest::{
-        CatalogChange, CatalogSnapshot, ImmutableFileRef, PrepareChange, SnapshotRef,
+        CatalogChange, CatalogSnapshot, ImmutableFileRef, PrepareChange, SnapshotRef, TypedTableRef,
     },
     product_metrics::{TransactionMetrics, TransactionOutcome},
 };
@@ -516,7 +516,39 @@ cannot be told from a new operation"
                 Err(kind) => return (finish_storage(attempt, kind), false),
             }
         }
-        let bytes = match encode(&next) {
+        // Carve the typed tables out before encoding. What gets published and
+        // digested is the manifest — references to the tables, not the rows —
+        // so the snapshot's size no longer grows with the catalog's contents.
+        let (manifest, pending_tables) = match split_typed_tables(&next) {
+            Ok(split) => split,
+            Err(()) => {
+                eprintln!(
+                    "[product-commit] rejected: a typed table exceeds MAX_TYPED_TABLE_BYTES ({} bytes); operation {}",
+                    MAX_TYPED_TABLE_BYTES, request.operation_id
+                );
+                attempt.finish(TransactionOutcome::Rejected);
+                return (CommitOutcome::Rejected, false);
+            }
+        };
+        // Create-only and content-addressed, published before the head moves,
+        // so a snapshot never references a table that is not there. An
+        // interrupted commit leaves orphaned table objects, which are
+        // unreachable rather than wrong — the same property the product
+        // documents already rely on.
+        for (path, table_bytes) in &pending_tables {
+            match self
+                .storage
+                .create_immutable(&format!("{}/{}", self.prefix, path), table_bytes.clone())
+                .await
+            {
+                Ok(_) => {}
+                // Named by its own digest, so an object already there holds
+                // these very bytes and the write is already done.
+                Err(error) if error.kind == CommitErrorKind::Conflict => {}
+                Err(error) => return (finish_storage(attempt, error.kind), false),
+            }
+        }
+        let bytes = match encode(&manifest) {
             Ok(bytes) => bytes,
             Err(()) => {
                 // The size is reported because the bound alone does not say how
@@ -835,9 +867,14 @@ operation {}",
             .map_err(|error| error.kind)?;
         let snapshot: CatalogSnapshot =
             decode(&object.bytes, MAX_SNAPSHOT_BYTES).ok_or(CommitErrorKind::Invalid)?;
+        // Before validation, because validation reasons about the rows and a
+        // manifest on its own carries only references to them.
+        let snapshot = self.materialise_typed_tables(snapshot).await?;
         if snapshot.reference() != *reference || snapshot.validate().is_err() {
             return Err(CommitErrorKind::Invalid);
         }
+        // The manifest bytes, which are what was published and what the head
+        // and the operation index record a digest of.
         Ok((snapshot, object.bytes))
     }
 
@@ -887,6 +924,43 @@ operation {}",
             }
             Err(error) => Err(error.kind),
         }
+    }
+
+    /// Load the rows for every table a manifest references.
+    ///
+    /// A snapshot written before typed tables moved out of line carries its
+    /// rows inline and references nothing, so it is already materialised and
+    /// is returned untouched — those snapshots stay readable, and the first
+    /// commit after this change writes the new form.
+    async fn materialise_typed_tables(
+        &self,
+        mut snapshot: CatalogSnapshot,
+    ) -> Result<CatalogSnapshot, CommitErrorKind> {
+        if snapshot.typed_tables.is_empty() {
+            return Ok(snapshot);
+        }
+        for (table, reference) in snapshot.typed_tables.clone() {
+            if !valid_digest(&reference.document.sha256) {
+                return Err(CommitErrorKind::Invalid);
+            }
+            let bytes = self
+                .storage
+                .read_bounded(
+                    &format!("{}/{}", self.prefix, reference.document.path),
+                    MAX_TYPED_TABLE_BYTES,
+                )
+                .await
+                .map_err(|error| error.kind)?
+                .bytes;
+            // The object is named by its own digest, so a mismatch is
+            // corruption rather than a stale read, and must not be served.
+            if digest(&bytes) != reference.document.sha256 {
+                return Err(CommitErrorKind::Invalid);
+            }
+            let rows = decode(&bytes, MAX_TYPED_TABLE_BYTES).ok_or(CommitErrorKind::Invalid)?;
+            snapshot.typed_rows.insert(table, rows);
+        }
+        Ok(snapshot)
     }
 
     async fn read_shard(
@@ -971,6 +1045,53 @@ fn encode_bounded<T: Serialize>(value: &T, max_bytes: usize) -> Result<Vec<u8>, 
         return Err(());
     }
     Ok(bytes)
+}
+
+/// One typed table's object, read and written under the same ceiling.
+///
+/// Generous relative to a snapshot, because this holds one table rather than
+/// the whole catalog, and a table is read on its own and written only when it
+/// changes. The snapshot it was carved out of is now a few kilobytes of
+/// references whatever the tables grow to.
+const MAX_TYPED_TABLE_BYTES: usize = 64 * 1024 * 1024;
+
+/// Separate a materialised snapshot into the manifest that is published and
+/// the typed-table objects it refers to.
+///
+/// A table whose rows are byte-identical to the parent's keeps the reference it
+/// already had and is not republished. That is the whole point: a commit used
+/// to rewrite every row in the catalog — saving a favourite republished 5.3 MB
+/// of query history — and now writes only the tables it touched.
+#[allow(clippy::type_complexity)]
+fn split_typed_tables(
+    snapshot: &CatalogSnapshot,
+) -> Result<(CatalogSnapshot, Vec<(String, Vec<u8>)>), ()> {
+    let mut manifest = snapshot.clone();
+    manifest.typed_rows = BTreeMap::new();
+    manifest.typed_tables = BTreeMap::new();
+    let mut pending = Vec::new();
+    for (table, rows) in &snapshot.typed_rows {
+        let bytes = encode_bounded(rows, MAX_TYPED_TABLE_BYTES)?;
+        let sha256 = digest(&bytes);
+        let path = format!("typed-tables/{sha256}.json");
+        // The parent's reference for this table. Equal digests mean equal
+        // bytes, so the object is already published and nothing is written.
+        let unchanged = snapshot
+            .typed_tables
+            .get(table)
+            .is_some_and(|reference| reference.document.sha256 == sha256);
+        if !unchanged {
+            pending.push((path.clone(), bytes));
+        }
+        manifest.typed_tables.insert(
+            table.clone(),
+            TypedTableRef {
+                document: ImmutableFileRef { path, sha256 },
+                rows: rows.len() as u64,
+            },
+        );
+    }
+    Ok((manifest, pending))
 }
 
 /// Drop the oldest entries until the shard encodes within its bound.
@@ -1136,7 +1257,7 @@ mod tests {
     use super::*;
     use crate::product_manifest::{
         CatalogChange, ImmutableFileRef, ProductRecordKind, ProductRecordRef,
-        ProductRecordReference, TableManifestRef,
+        ProductRecordReference, TableManifestRef, TypedRow, TypedValue,
     };
     use object_store::{ObjectStore, memory::InMemory, path::Path};
 
@@ -2022,6 +2143,111 @@ mod tests {
             }
         }
         unreachable!()
+    }
+
+    #[tokio::test]
+    async fn a_large_typed_table_does_not_grow_the_snapshot() {
+        // The property that stops this recurring on a fresh installation.
+        //
+        // Typed rows were serialised into the snapshot, and a commit
+        // republishes the whole snapshot — so every write cost the size of the
+        // entire catalog, and the snapshot had a ceiling it could reach. A
+        // production catalog stopped accepting writes of any kind with 5,650
+        // rows of query history filling an 8 MiB snapshot, while its datasets,
+        // charts and dashboards together came to 74 KB.
+        //
+        // One table is filled past that old ceiling here. Every commit must
+        // still succeed, and the published manifest must stay small, because
+        // it carries a reference to the table instead of its rows.
+        let catalog = catalog();
+        let genesis = CatalogSnapshot::empty("snapshot-genesis").unwrap();
+        catalog.initialize(genesis.clone()).await;
+
+        // ~80 KB a row, so 120 rows is near 10 MB — past what a snapshot may
+        // encode to, with few enough commits to stay a fast test.
+        let payload = "x".repeat(80_000);
+        let mut current = genesis;
+        for number in 0..120u32 {
+            let mut columns = BTreeMap::new();
+            columns.insert("payload".to_string(), TypedValue::String(payload.clone()));
+            let request = PrepareChange {
+                base: current.reference(),
+                snapshot_id: format!("snapshot-row-{number}"),
+                operation_id: format!("op-row-{number}"),
+                request_digest: DIGEST.into(),
+                changes: vec![CatalogChange::InsertTypedRow {
+                    table: "query_history".into(),
+                    row: TypedRow {
+                        primary_key: format!("row-{number}"),
+                        revision: 1,
+                        columns,
+                        unique_keys: BTreeMap::new(),
+                    },
+                }],
+            };
+            current = match catalog.commit(request).await {
+                CommitOutcome::Committed(value) => value,
+                outcome => panic!("row {number} did not commit: {outcome:?}"),
+            };
+        }
+
+        assert_eq!(
+            current.typed_rows["query_history"].len(),
+            120,
+            "every row must be present after materialisation"
+        );
+        let inline = encode_bounded(&current.typed_rows, usize::MAX)
+            .unwrap()
+            .len();
+        assert!(
+            inline > MAX_SNAPSHOT_BYTES,
+            "the test must exceed the old ceiling to prove anything; rows were {inline} bytes"
+        );
+
+        // The manifest is the thing with a ceiling, and it holds a reference.
+        let (manifest, _) = split_typed_tables(&current).unwrap();
+        let bytes = encode(&manifest).expect("the manifest must encode well inside its bound");
+        assert!(
+            bytes.len() < 64 * 1024,
+            "a snapshot of references should stay small; was {} bytes",
+            bytes.len()
+        );
+        assert!(
+            manifest.typed_rows.is_empty(),
+            "rows do not belong in the manifest"
+        );
+        assert_eq!(manifest.typed_tables["query_history"].rows, 120);
+
+        // A write to one table must not republish another. This is why a
+        // commit now costs what it touched rather than what the catalog holds.
+        let mut columns = BTreeMap::new();
+        columns.insert("note".to_string(), TypedValue::String("small".into()));
+        let request = PrepareChange {
+            base: current.reference(),
+            snapshot_id: "snapshot-other-table".into(),
+            operation_id: "op-other-table".into(),
+            request_digest: DIGEST.into(),
+            changes: vec![CatalogChange::InsertTypedRow {
+                table: "favorites".into(),
+                row: TypedRow {
+                    primary_key: "fav-1".into(),
+                    revision: 1,
+                    columns,
+                    unique_keys: BTreeMap::new(),
+                },
+            }],
+        };
+        let after = match catalog.commit(request).await {
+            CommitOutcome::Committed(value) => value,
+            outcome => panic!("the unrelated write did not commit: {outcome:?}"),
+        };
+        let (_, pending) = split_typed_tables(&after).unwrap();
+        let rewritten: Vec<&String> = pending.iter().map(|(path, _)| path).collect();
+        assert_eq!(
+            rewritten.len(),
+            1,
+            "only the table that changed should be written; got {rewritten:?}"
+        );
     }
 
     #[tokio::test]
