@@ -140,8 +140,10 @@ foundations, but several operators are still centralized or narrow:
   identical Arrow logical types through the existing schema check.
 - Regular hash joins now support `DECIMAL(precision, scale)` keys using the
   exact unscaled integer plus scale, matching the existing semi/anti-join
-  representation. Duplicate and NULL behavior is covered by execution tests;
-  `Decimal256` remains outside this slice.
+  representation. Duplicate and NULL behavior is covered by execution tests.
+  `DECIMAL256` keys now retain Arrow's native `i256` value through regular and
+  semi/anti joins, with exact-value and NULL coverage; decimal scale and
+  precision still must match through the existing schema check.
 - Top-level `ORDER BY` now carries explicit `NULLS FIRST`/`NULLS LAST` through
   logical planning, binding, fragment sort specifications, and local/remote
   execution. Omitted placement keeps Trino's defaults (NULLS LAST ascending,
