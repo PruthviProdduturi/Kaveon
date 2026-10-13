@@ -13,6 +13,7 @@ class MergeQualificationTests(unittest.TestCase):
     def comparison(self):
         return {
             "passed": True,
+            "preflight": {"kaveon_image_pinned_and_expected": True},
             "cases": [{
                 "kaveon_ms": [10, 20, 30, 40],
                 "kaveon_execution_by_stage": {"0": {
@@ -37,7 +38,7 @@ class MergeQualificationTests(unittest.TestCase):
 
     def pressure(self, cleanup=True):
         return {
-            "checks": {"worker_loss_exact_retry_and_recovery": True},
+            "checks": {"worker_loss_exact_retry_and_recovery": True, "cancellation_cleanup": True},
             "concurrent_exact": {"requests": [{"exact": True, "status": 200}]},
             "worker_loss": {"exact": True, "retry": {"attempt_incremented": True}},
             "pressure": {"sampled_engine_memory_within_pod_limits": True},
@@ -60,6 +61,14 @@ class MergeQualificationTests(unittest.TestCase):
         result = merge_aks.merge(self.comparison(), self.pressure(cleanup=False))
         self.assertFalse(result["passed"])
         self.assertFalse(result["gates"]["coordinator_restart_cleanup"])
+        self.assertFalse(result["slo"]["passed"])
+
+    def test_slo_fails_closed_when_cancellation_evidence_is_missing(self):
+        pressure = self.pressure()
+        pressure["checks"].pop("cancellation_cleanup")
+        result = merge_aks.merge(self.comparison(), pressure)
+        self.assertFalse(result["slo"]["passed"])
+        self.assertFalse(result["slo"]["requirements"]["cancellation_cleanup"])
 
 
 if __name__ == "__main__":
