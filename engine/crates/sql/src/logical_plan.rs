@@ -1896,8 +1896,8 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
             }),
         },
         // `ARRAY[…]` is carried as a call named ARRAY. The executor evaluates
-        // numeric array literals as Arrow List<Float64> values; aggregate
-        // lowering also consumes constant percentile lists here.
+        // homogeneous literals as typed Arrow lists; aggregate lowering also
+        // consumes constant percentile lists here.
         ast::Expr::Array(array) => Ok(Expr::Function {
             name: "ARRAY".into(),
             args: array

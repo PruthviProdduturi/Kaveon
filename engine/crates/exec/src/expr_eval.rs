@@ -3236,6 +3236,115 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 Ok(Arc::new(builder.finish()))
             }
         }
+        "ARRAY_MIN" | "ARRAY_MAX" => {
+            check_arity(name, args, 1)?;
+            let list = args[0]
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .ok_or_else(|| {
+                    KaveonError::Execution(format!("{name} requires an ARRAY/List value"))
+                })?;
+            let take_max = name == "ARRAY_MAX";
+            match list.value_type() {
+                DataType::Int64 => {
+                    let mut result = Int64Builder::new();
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            result.append_null();
+                            continue;
+                        }
+                        let values = list.value(row);
+                        let values = values.as_primitive::<Int64Type>();
+                        let best = (0..values.len())
+                            .filter(|&index| values.is_valid(index))
+                            .map(|index| values.value(index))
+                            .reduce(|left, right| {
+                                if (take_max && right > left) || (!take_max && right < left) {
+                                    right
+                                } else {
+                                    left
+                                }
+                            });
+                        result.append_option(best);
+                    }
+                    Ok(Arc::new(result.finish()))
+                }
+                DataType::Float64 => {
+                    let mut result = Float64Builder::new();
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            result.append_null();
+                            continue;
+                        }
+                        let values = list.value(row);
+                        let values = values.as_primitive::<Float64Type>();
+                        let best = (0..values.len())
+                            .filter(|&index| values.is_valid(index))
+                            .map(|index| values.value(index))
+                            .reduce(|left, right| {
+                                if (take_max && right > left) || (!take_max && right < left) {
+                                    right
+                                } else {
+                                    left
+                                }
+                            });
+                        result.append_option(best);
+                    }
+                    Ok(Arc::new(result.finish()))
+                }
+                DataType::Decimal128(precision, scale) => {
+                    let mut result = Decimal128Builder::new()
+                        .with_precision_and_scale(precision, scale)
+                        .map_err(|error| KaveonError::Execution(error.to_string()))?;
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            result.append_null();
+                            continue;
+                        }
+                        let values = list.value(row);
+                        let values = values.as_primitive::<arrow::datatypes::Decimal128Type>();
+                        let best = (0..values.len())
+                            .filter(|&index| values.is_valid(index))
+                            .map(|index| values.value(index))
+                            .reduce(|left, right| {
+                                if (take_max && right > left) || (!take_max && right < left) {
+                                    right
+                                } else {
+                                    left
+                                }
+                            });
+                        result.append_option(best);
+                    }
+                    Ok(Arc::new(result.finish()))
+                }
+                DataType::Utf8 => {
+                    let mut result = StringBuilder::new();
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            result.append_null();
+                            continue;
+                        }
+                        let values = list.value(row);
+                        let values = values.as_string::<i32>();
+                        let best = (0..values.len())
+                            .filter(|&index| values.is_valid(index))
+                            .map(|index| values.value(index))
+                            .reduce(|left, right| {
+                                if (take_max && right > left) || (!take_max && right < left) {
+                                    right
+                                } else {
+                                    left
+                                }
+                            });
+                        result.append_option(best);
+                    }
+                    Ok(Arc::new(result.finish()))
+                }
+                other => Err(KaveonError::Execution(format!(
+                    "{name} does not support list element type {other}"
+                ))),
+            }
+        }
         "CARDINALITY" => {
             check_arity(name, args, 1)?;
             if let Some(map) = args[0].as_any().downcast_ref::<MapArray>() {
@@ -5499,6 +5608,24 @@ mod tests {
         assert_eq!(sliced.len(), 2);
         assert_eq!(sliced.value(0), 2);
         assert_eq!(sliced.value(1), 3);
+
+        for (name, expected) in [("ARRAY_MIN", 1_i128), ("ARRAY_MAX", 3_i128)] {
+            let extremum = Expr::Function {
+                name: name.into(),
+                args: vec![Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![decimal(3), Expr::Literal(ScalarValue::Null), decimal(1)],
+                }],
+            };
+            let extremum = evaluate(&extremum, &batch).unwrap();
+            assert_eq!(
+                extremum
+                    .as_primitive::<arrow::datatypes::Decimal128Type>()
+                    .value(0),
+                expected
+            );
+            assert_eq!(extremum.data_type(), &DataType::Decimal128(20, 2));
+        }
     }
 
     #[test]
