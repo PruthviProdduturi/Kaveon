@@ -689,15 +689,13 @@ where
     T: ArrowPrimitiveType,
     T::Native: PartialEq,
 {
-    let mut saw_null = false;
+    let saw_null = left.null_count() > 0 || right.null_count() > 0;
     for left_index in 0..left.len() {
         if left.is_null(left_index) {
-            saw_null = true;
             continue;
         }
         for right_index in 0..right.len() {
             if right.is_null(right_index) {
-                saw_null = true;
             } else if left.value(left_index) == right.value(right_index) {
                 return Some(true);
             }
@@ -707,15 +705,13 @@ where
 }
 
 fn string_arrays_overlap(left: &arrow::array::StringArray, right: &arrow::array::StringArray) -> Option<bool> {
-    let mut saw_null = false;
+    let saw_null = left.null_count() > 0 || right.null_count() > 0;
     for left_index in 0..left.len() {
         if left.is_null(left_index) {
-            saw_null = true;
             continue;
         }
         for right_index in 0..right.len() {
             if right.is_null(right_index) {
-                saw_null = true;
             } else if left.value(left_index) == right.value(right_index) {
                 return Some(true);
             }
@@ -3444,15 +3440,13 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         let right_inner = right.value(row);
                         let left_values = left_inner.as_boolean();
                         let right_values = right_inner.as_boolean();
-                        let mut saw_null = false;
+                        let saw_null = left_values.null_count() > 0 || right_values.null_count() > 0;
                         for left_index in 0..left_values.len() {
                             if left_values.is_null(left_index) {
-                                saw_null = true;
                                 continue;
                             }
                             for right_index in 0..right_values.len() {
                                 if right_values.is_null(right_index) {
-                                    saw_null = true;
                                 } else if left_values.value(left_index) == right_values.value(right_index) {
                                     return Some(true);
                                 }
