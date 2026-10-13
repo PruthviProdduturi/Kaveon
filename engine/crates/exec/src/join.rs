@@ -623,6 +623,7 @@ enum Key {
     Int32(i32),
     Int64(i64),
     UInt64(u64),
+    Decimal(i128, i8),
     Float64(u64),
     Utf8(String),
 }
@@ -784,6 +785,12 @@ fn row_key(
                         .as_primitive::<arrow::datatypes::UInt64Type>()
                         .value(row),
                 ),
+                DataType::Decimal128(_, scale) => Key::Decimal(
+                    column
+                        .as_primitive::<arrow::datatypes::Decimal128Type>()
+                        .value(row),
+                    *scale,
+                ),
                 DataType::Float64 => {
                     let value = column
                         .as_primitive::<arrow::datatypes::Float64Type>()
@@ -812,7 +819,7 @@ fn exec_err(message: impl Into<String>) -> KaveonError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int64Array, StringArray, TimestampMillisecondArray};
+    use arrow::array::{Decimal128Array, Int64Array, StringArray, TimestampMillisecondArray};
     use std::collections::VecDeque;
 
     struct Input {
@@ -939,6 +946,49 @@ mod tests {
             Box::new(Input::new(right)),
             JoinType::Inner,
             vec![("ts".into(), "ts".into())],
+        )
+        .unwrap();
+        let batches = kaveon_core::collect_batches(&mut join).unwrap();
+        let result = concat_batches(join.schema(), &batches).unwrap();
+        assert_eq!(result.num_rows(), 2);
+        assert_eq!(result.column(0).null_count(), 0);
+    }
+
+    #[test]
+    fn decimal_join_keys_match_exact_scaled_values_and_skip_nulls() {
+        let data_type = DataType::Decimal128(10, 2);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("amount", data_type.clone(), true),
+            Field::new("side", DataType::Utf8, false),
+        ]));
+        let decimal = |values: Vec<Option<i128>>| {
+            Arc::new(
+                Decimal128Array::from(values)
+                    .with_precision_and_scale(10, 2)
+                    .unwrap(),
+            ) as Arc<dyn arrow::array::Array>
+        };
+        let left = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                decimal(vec![Some(125), Some(200), None]),
+                Arc::new(StringArray::from(vec!["a", "b", "null"])),
+            ],
+        )
+        .unwrap();
+        let right = RecordBatch::try_new(
+            schema,
+            vec![
+                decimal(vec![Some(125), Some(125), None]),
+                Arc::new(StringArray::from(vec!["x", "y", "null"])),
+            ],
+        )
+        .unwrap();
+        let mut join = HashJoin::try_new(
+            Box::new(Input::new(left)),
+            Box::new(Input::new(right)),
+            JoinType::Inner,
+            vec![("amount".into(), "amount".into())],
         )
         .unwrap();
         let batches = kaveon_core::collect_batches(&mut join).unwrap();
