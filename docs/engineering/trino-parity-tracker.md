@@ -738,6 +738,12 @@ is implementation and regression evidence for the covered shapes; it does not
 replace the deployed differential corpus or the remaining complex-type and
 wire-protocol gates.
 
+The deployed cache evidence harness is now checked in at
+`engine/qualification/cache_slo.py`. It fails closed until the operator supplies
+coordinator-restart evidence, and reports warm-hit percentiles, exact hashes,
+bypass behavior, cache bounds/counters, and administrator clear behavior. No
+deployment has been marked cache-SLO complete yet.
+
 ## 9/10 exit gate
 
 Do not claim 9/10 until all of the following are true:
