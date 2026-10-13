@@ -195,6 +195,11 @@ time, hash/copy time, copy allocations/bytes, and spill bytes/runs/compactions.
 Missing task metrics remain visible through `tasks_with_metrics` and
 `tasks_with_cpu`; they are not inferred.
 
+The co-tenant lease check records stable controller identities (`kind/name`)
+instead of restart-specific pod names, so an unrelated pod recreation cannot
+invalidate a long comparison while a real workload or node change still fails
+closed.
+
 This harness does not itself kill a worker. Before publishing a distributed
 result, attach the report from `scripts/qualify-aks-fault-pressure.py` to prove
 worker retry, active-query cancellation cleanup, and exact-result recovery. The comparison report records these

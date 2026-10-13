@@ -157,7 +157,7 @@ def _pod(name, node, owner_kind, owner_name, *, ready=False, image_id=None):
     if image_id:
         status["containerStatuses"] = [{"imageID": image_id}]
     return {"metadata": {"namespace": "bench", "name": name, "uid": name + "-uid",
-                          "ownerReferences": [{"kind": owner_kind, "name": owner_name}]},
+                          "ownerReferences": [{"kind": owner_kind, "name": owner_name, "controller": True}]},
             "spec": {"nodeName": node}, "status": status}
 
 
@@ -184,7 +184,19 @@ class CoTenantFilteringTests(unittest.TestCase):
         ])
         runtime = active_worker_nodes(kube, "kaveon-worker", 2,
                                       ("kaveon-worker", "trino-worker"))
-        self.assertEqual(runtime["co_tenants"], ["node-a/bench/metrics"])
+        self.assertEqual(runtime["co_tenants"], ["node-a/bench/Deployment/metrics"])
+
+    def test_controller_identity_ignores_pod_restart_suffix(self):
+        image = "docker-pullable://engine@sha256:" + "a" * 64
+        pods = [
+            _pod("kaveon-worker-0", "node-a", "StatefulSet", "kaveon-worker", ready=True, image_id=image),
+            _pod("kaveon-worker-1", "node-b", "StatefulSet", "kaveon-worker", ready=True, image_id=image),
+            _pod("api-abc-123", "node-a", "ReplicaSet", "api-abc", ready=True),
+        ]
+        pods[-1]["metadata"]["namespace"] = "platform"
+        runtime = active_worker_nodes(FakeKube(pods), "kaveon-worker", 2,
+                                      ("kaveon-worker", "trino-worker"))
+        self.assertEqual(runtime["co_tenants"], ["node-a/platform/ReplicaSet/api-abc"])
 
 
 if __name__ == "__main__":
