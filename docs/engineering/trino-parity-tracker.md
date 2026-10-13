@@ -35,7 +35,7 @@ the same acceptance contract rather than separate informal benchmarks.
 
 ## Audit snapshot — October 13, 2026
 
-The local parity baseline was rerun from commit `01cb2082` on October 12:
+The local parity baseline was rerun from commit `34914e4e` on October 13:
 `cargo test -p kaveon-server` passed **342/342** tests,
 `cargo test -p kaveon-sql` passed **115/115** tests, and
 `cargo test -p kaveon-exec --lib` passed **269/269** non-ignored tests with four
@@ -91,10 +91,11 @@ foundations, but several operators are still centralized or narrow:
   selection remain open.
 - Non-recursive CTEs, derived tables, joins, aggregates, `HAVING`, `CASE`, and
   common set operations work. Uncorrelated aggregate scalar subqueries in
-  `WHERE` and bounded projection scalar subqueries are supported when they
-  return one ungrouped, single-column aggregate. Correlated, multi-row, and
-  other scalar forms, recursive CTEs, the full prepared-statement protocol,
-  and general lake-table DML remain missing. `INTERSECT ALL` and `EXCEPT ALL`
+  `WHERE`, the qualified correlated scalar aggregate filter shape, and bounded
+  projection scalar subqueries are supported when they return one ungrouped,
+  single-column aggregate. Correlated non-aggregate, multi-row, and other
+  scalar forms, recursive CTEs, the full prepared-statement protocol, and
+  general lake-table DML remain missing. `INTERSECT ALL` and `EXCEPT ALL`
   now preserve multiplicity through local and distributed execution.
   Typed positional `$1`, sequential `?`, and named `:name` parameters are now
   validated and bound through the HTTP statement API; the full prepare/describe/
@@ -112,8 +113,9 @@ foundations, but several operators are still centralized or narrow:
   Prepared-parameter discovery now also ignores PostgreSQL `::type` casts,
   so cast names cannot be mistaken for named bindings (`617b69f6`).
   Uncorrelated aggregate scalar subqueries in `WHERE` are now supported with
-  exact-result differential coverage; correlated and multi-row scalar forms
-  remain explicitly rejected while bounded projection forms are supported.
+  exact-result differential coverage; unsupported correlated and multi-row
+  scalar forms remain explicitly rejected while bounded projection forms are
+  supported.
   `CAST(... AS DATE)` is now supported with nullable `Date32` execution and
   focused parser/executor coverage. `CAST(... AS TIMESTAMP)` and
   `TIMESTAMP WITH TIME ZONE` now map to Arrow microsecond timestamps with
@@ -541,7 +543,7 @@ qualification remain open.
 Track 2 remains partial because prepared statements are now available through
 the Engine HTTP lifecycle and scalar `EXECUTE ... USING` is supported by the
 Trino adapter, but the adapter still lacks a wire-compatible full protocol;
-correlated and other unsupported scalar subqueries, residual outer joins,
+correlated non-aggregate and other unsupported scalar subqueries, residual outer joins,
 ordered map comparisons, broader array element types, and broader typed DML are
 not yet implemented. Inner residual joins are correctness-complete but use a
 cross-join fallback until a residual-aware hash join is available.
