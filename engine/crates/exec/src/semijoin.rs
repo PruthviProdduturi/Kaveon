@@ -27,6 +27,7 @@ use kaveon_core::{
 enum Key {
     Bool(bool),
     Number(i128, i8),
+    Decimal256(arrow::datatypes::i256, i8),
     Float(u64),
     Text(String),
 }
@@ -676,7 +677,7 @@ pub(crate) fn key_hash_at(array: &dyn Array, row: usize) -> Result<Option<u64>> 
         }
         _ => {}
     }
-    let mut bytes = [0u8; 18];
+    let mut bytes = [0u8; 34];
     let hashed: &[u8] = match extract_value(array, row)? {
         Key::Bool(value) => {
             bytes[0] = 1;
@@ -688,6 +689,12 @@ pub(crate) fn key_hash_at(array: &dyn Array, row: usize) -> Result<Option<u64>> 
             bytes[1..17].copy_from_slice(&value.to_le_bytes());
             bytes[17] = scale as u8;
             &bytes[..18]
+        }
+        Key::Decimal256(value, scale) => {
+            bytes[0] = 5;
+            bytes[1..33].copy_from_slice(&value.to_le_bytes());
+            bytes[33] = scale as u8;
+            &bytes[..34]
         }
         Key::Float(bits) => {
             bytes[0] = 3;
@@ -840,6 +847,12 @@ fn extract_value(array: &dyn Array, row: usize) -> Result<Key> {
             }
             Ok(Key::Number(value, scale))
         }
+        arrow::datatypes::DataType::Decimal256(_, scale) => Ok(Key::Decimal256(
+            array
+                .as_primitive::<arrow::datatypes::Decimal256Type>()
+                .value(row),
+            *scale,
+        )),
         arrow::datatypes::DataType::Float64 => {
             let v = array.as_primitive::<Float64Type>().value(row);
             Ok(Key::Float(if v == 0.0 {

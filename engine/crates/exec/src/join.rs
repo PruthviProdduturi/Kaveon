@@ -624,6 +624,7 @@ enum Key {
     Int64(i64),
     UInt64(u64),
     Decimal(i128, i8),
+    Decimal256(arrow::datatypes::i256, i8),
     Float64(u64),
     Utf8(String),
 }
@@ -814,6 +815,12 @@ fn row_key(
                         .value(row),
                     *scale,
                 ),
+                DataType::Decimal256(_, scale) => Key::Decimal256(
+                    column
+                        .as_primitive::<arrow::datatypes::Decimal256Type>()
+                        .value(row),
+                    *scale,
+                ),
                 DataType::Float64 => {
                     let value = column
                         .as_primitive::<arrow::datatypes::Float64Type>()
@@ -843,9 +850,10 @@ fn exec_err(message: impl Into<String>) -> KaveonError {
 mod tests {
     use super::*;
     use arrow::array::{
-        Date64Array, Decimal128Array, Int64Array, StringArray, Time32MillisecondArray,
-        TimestampMillisecondArray,
+        Date64Array, Decimal128Array, Decimal256Array, Int64Array, StringArray,
+        Time32MillisecondArray, TimestampMillisecondArray,
     };
+    use arrow::datatypes::i256;
     use std::collections::VecDeque;
 
     struct Input {
@@ -1073,6 +1081,49 @@ mod tests {
             schema,
             vec![
                 decimal(vec![Some(125), Some(125), None]),
+                Arc::new(StringArray::from(vec!["x", "y", "null"])),
+            ],
+        )
+        .unwrap();
+        let mut join = HashJoin::try_new(
+            Box::new(Input::new(left)),
+            Box::new(Input::new(right)),
+            JoinType::Inner,
+            vec![("amount".into(), "amount".into())],
+        )
+        .unwrap();
+        let batches = kaveon_core::collect_batches(&mut join).unwrap();
+        let result = concat_batches(join.schema(), &batches).unwrap();
+        assert_eq!(result.num_rows(), 2);
+        assert_eq!(result.column(0).null_count(), 0);
+    }
+
+    #[test]
+    fn decimal256_join_keys_match_exact_values_and_skip_nulls() {
+        let data_type = DataType::Decimal256(40, 2);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("amount", data_type.clone(), true),
+            Field::new("side", DataType::Utf8, false),
+        ]));
+        let decimal = |values: Vec<Option<i256>>| {
+            Arc::new(
+                Decimal256Array::from(values)
+                    .with_precision_and_scale(40, 2)
+                    .unwrap(),
+            ) as Arc<dyn arrow::array::Array>
+        };
+        let left = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                decimal(vec![Some(i256::from_i128(125)), Some(i256::from_i128(200)), None]),
+                Arc::new(StringArray::from(vec!["a", "b", "null"])),
+            ],
+        )
+        .unwrap();
+        let right = RecordBatch::try_new(
+            schema,
+            vec![
+                decimal(vec![Some(i256::from_i128(125)), Some(i256::from_i128(125)), None]),
                 Arc::new(StringArray::from(vec!["x", "y", "null"])),
             ],
         )
