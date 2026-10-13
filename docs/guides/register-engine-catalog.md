@@ -168,6 +168,50 @@ rebuild was recovered this way, in this order:
 4. Run `scripts/qualify-dlm-questions.py --execute-live` through the portal;
    the corpus names its datasets, so the restored ids do not matter.
 
+## Datasets on a new cluster
+
+Registering the Engine catalog makes the tables queryable. It does not create
+datasets, and **nothing in the installer does either**: the platform chart's
+`init-job.yaml` only applies the schema and writes one `catalog_sources` row,
+and it is gated off entirely in retirement and rehearsal mode — the modes
+`deploy-kaveon-aks.sh` always runs in. A new cluster over the same lake comes up
+with a queryable catalog and an empty dataset list. The `demo/` loaders do not
+fill it either; they target the retired Neon Postgres demo
+(`NEON_URL`), not the Engine.
+
+Exactly two scripts create datasets, and they answer different needs:
+
+- [`import-vercel-live-dashboards.py`](../../scripts/import-vercel-live-dashboards.py)
+  rebuilds the eight imported dashboards and their 70 charts. Its
+  `PHYSICAL_DATASETS` map is frozen to the **legacy Vercel projections** on
+  purpose — `COVID-19 Global` is bound to `OpenSource.public.covid_global`
+  (50,838 rows, 12 columns) and `NYC Taxi by Borough` to
+  `OpenSource.public.nyc_taxi_borough` (5 rows), because those are the exact
+  column sets the saved charts read. Do not re-point them at their source
+  tables: the columns differ, and every chart over them would break. Leaving
+  them as they are is the reason a full-source dataset is registered separately.
+- the `scripts/register-*-dataset.py` scripts register one dataset each over a
+  **full source table**, idempotently, and verify the live Engine schema before
+  writing. Run each one after the catalog registration passes its row-count
+  checks:
+
+  ```bash
+  kubectl -n kaveon port-forward svc/kaveon-portal 13015:3000
+  python scripts/register-covid-reported-cases-dataset.py          # preflight
+  python scripts/register-covid-reported-cases-dataset.py --apply --generate
+  ```
+
+  Each declares its binding as an Engine table id rather than a
+  catalog/schema/table triple, so `POST /api/v1/datasets` resolves the names
+  from the Engine's own definition (`services.engine_datasets`) and a dataset
+  cannot name one table and read another. Prefer that shape for any new
+  registration.
+
+So a fresh cluster needs both: the importer for the dashboard-bound
+projections, then the register scripts for the source-table datasets. A
+`register-*` script left unrun is the only reason a source table ends up with
+no dataset of its own.
+
 ## Verify
 
 Use CLI 0.2.0 or newer to check `SHOW CATALOGS`, `SHOW SCHEMAS`, `SHOW TABLES`,
