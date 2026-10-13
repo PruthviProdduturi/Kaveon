@@ -248,20 +248,24 @@ fn plan_with_predicate(
             Ok(Box::new(WindowOperator::new(source, window_exprs.clone())?))
         }
 
-        LogicalPlan::Intersect { left, right } => {
+        LogicalPlan::Intersect { left, right, all } => {
             let left = plan_to_operator(left, catalog)?;
             let right = plan_to_operator(right, catalog)?;
             Ok(Box::new(SetOpOperator::new(
                 left,
                 right,
-                SetOpMode::Intersect,
+                if *all { SetOpMode::IntersectAll } else { SetOpMode::Intersect },
             )))
         }
 
-        LogicalPlan::Except { left, right } => {
+        LogicalPlan::Except { left, right, all } => {
             let left = plan_to_operator(left, catalog)?;
             let right = plan_to_operator(right, catalog)?;
-            Ok(Box::new(SetOpOperator::new(left, right, SetOpMode::Except)))
+            Ok(Box::new(SetOpOperator::new(
+                left,
+                right,
+                if *all { SetOpMode::ExceptAll } else { SetOpMode::Except },
+            )))
         }
         LogicalPlan::SemiJoin {
             left,

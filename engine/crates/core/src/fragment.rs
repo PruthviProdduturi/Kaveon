@@ -70,6 +70,8 @@ pub enum FragmentOperator {
     },
     Intersect,
     Except,
+    IntersectAll,
+    ExceptAll,
     ExchangeOutput(ExchangeOutput),
     HashJoin(JoinSpec),
 }
@@ -412,6 +414,8 @@ impl FragmentNode {
             FragmentOperator::Window { .. } => 1,
             FragmentOperator::Intersect => 2,
             FragmentOperator::Except => 2,
+            FragmentOperator::IntersectAll => 2,
+            FragmentOperator::ExceptAll => 2,
         };
         if self.inputs.len() != expected {
             return invalid(format!(

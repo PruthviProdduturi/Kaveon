@@ -173,8 +173,8 @@ pub fn qualify_tables(plan: &mut LogicalPlan, catalog: &str, schema: &str) {
                 qualify_tables(input, catalog, schema);
             }
         }
-        LogicalPlan::Intersect { left, right }
-        | LogicalPlan::Except { left, right }
+        LogicalPlan::Intersect { left, right, .. }
+        | LogicalPlan::Except { left, right, .. }
         | LogicalPlan::SemiJoin { left, right, .. }
         | LogicalPlan::AntiJoin { left, right, .. } => {
             qualify_tables(left, catalog, schema);
@@ -189,8 +189,8 @@ pub fn scan_tables(plan: &LogicalPlan) -> Vec<String> {
         match plan {
             LogicalPlan::Scan { table, .. } => out.push(table.clone()),
             LogicalPlan::Join { left, right, .. }
-            | LogicalPlan::Intersect { left, right }
-            | LogicalPlan::Except { left, right }
+            | LogicalPlan::Intersect { left, right, .. }
+            | LogicalPlan::Except { left, right, .. }
             | LogicalPlan::SemiJoin { left, right, .. }
             | LogicalPlan::AntiJoin { left, right, .. } => {
                 collect(left, out);
@@ -755,7 +755,7 @@ impl ExecutableFragmentBuilder<'_> {
                 },
                 None,
             ),
-            LogicalPlan::Intersect { left, right } => {
+            LogicalPlan::Intersect { left, right, all } => {
                 let left_stage = self.build(left)?;
                 let right_stage = self.build(right)?;
                 let target = StageId(self.next_stage);
@@ -765,11 +765,10 @@ impl ExecutableFragmentBuilder<'_> {
                     (left_stage, left_exchange.clone()),
                     (right_stage, right_exchange.clone()),
                 ] {
-                    // Set semantics: each side deduplicates on its workers
-                    // before the exchange, so the single final task receives
-                    // distinct rows rather than every row of the input.
                     let mut draft = self.draft_mut(stage)?;
-                    draft.push(FragmentOperator::Distinct, vec![draft.root]);
+                    if !all {
+                        draft.push(FragmentOperator::Distinct, vec![draft.root]);
+                    }
                     draft.push(
                         FragmentOperator::ExchangeOutput(ExchangeOutput {
                             exchange_id: exchange.id,
@@ -790,12 +789,12 @@ impl ExecutableFragmentBuilder<'_> {
                     }),
                 });
                 target_draft.push(
-                    FragmentOperator::Intersect,
+                    if *all { FragmentOperator::IntersectAll } else { FragmentOperator::Intersect },
                     vec![FragmentNodeId(0), FragmentNodeId(1)],
                 );
                 Ok(self.add_fragment(target_draft))
             }
-            LogicalPlan::Except { left, right } => {
+            LogicalPlan::Except { left, right, all } => {
                 let left_stage = self.build(left)?;
                 let right_stage = self.build(right)?;
                 let target = StageId(self.next_stage);
@@ -805,11 +804,10 @@ impl ExecutableFragmentBuilder<'_> {
                     (left_stage, left_exchange.clone()),
                     (right_stage, right_exchange.clone()),
                 ] {
-                    // Set semantics: each side deduplicates on its workers
-                    // before the exchange, so the single final task receives
-                    // distinct rows rather than every row of the input.
                     let mut draft = self.draft_mut(stage)?;
-                    draft.push(FragmentOperator::Distinct, vec![draft.root]);
+                    if !all {
+                        draft.push(FragmentOperator::Distinct, vec![draft.root]);
+                    }
                     draft.push(
                         FragmentOperator::ExchangeOutput(ExchangeOutput {
                             exchange_id: exchange.id,
@@ -830,7 +828,7 @@ impl ExecutableFragmentBuilder<'_> {
                     }),
                 });
                 target_draft.push(
-                    FragmentOperator::Except,
+                    if *all { FragmentOperator::ExceptAll } else { FragmentOperator::Except },
                     vec![FragmentNodeId(0), FragmentNodeId(1)],
                 );
                 Ok(self.add_fragment(target_draft))
@@ -1534,7 +1532,7 @@ impl StageGraphBuilder {
                     Ok(target)
                 }
             }
-            LogicalPlan::Intersect { left, right } | LogicalPlan::Except { left, right } => {
+            LogicalPlan::Intersect { left, right, .. } | LogicalPlan::Except { left, right, .. } => {
                 let left_stage = self.build(left)?;
                 let right_stage = self.build(right)?;
                 let physical = physical_plan_tree(plan);
@@ -1764,8 +1762,8 @@ fn build_plan_tree(
     if let Some(input) = input {
         node.children.push(build_plan_tree(input, next_id, phase));
     } else if let LogicalPlan::Join { left, right, .. }
-    | LogicalPlan::Intersect { left, right }
-    | LogicalPlan::Except { left, right } = plan
+    | LogicalPlan::Intersect { left, right, .. }
+    | LogicalPlan::Except { left, right, .. } = plan
     {
         node.children.push(build_plan_tree(left, next_id, phase));
         node.children.push(build_plan_tree(right, next_id, phase));
@@ -2281,7 +2279,7 @@ fn plan_query_with_predicate(
             })
         }
 
-        LogicalPlan::Intersect { left, right } => {
+        LogicalPlan::Intersect { left, right, all } => {
             let left_planned = plan_query_inner(left, catalog, partition, memory, pins)?;
             let right_planned = plan_query_inner(right, catalog, partition, memory, pins)?;
             let mut scan_metrics = left_planned.scan_metrics;
@@ -2289,7 +2287,7 @@ fn plan_query_with_predicate(
             let mut operator = SetOpOperator::new(
                 left_planned.operator,
                 right_planned.operator,
-                SetOpMode::Intersect,
+                if *all { SetOpMode::IntersectAll } else { SetOpMode::Intersect },
             );
             if let Some(memory) = memory {
                 operator = operator.with_memory(memory.operator("set-operation")?);
@@ -2300,7 +2298,7 @@ fn plan_query_with_predicate(
             })
         }
 
-        LogicalPlan::Except { left, right } => {
+        LogicalPlan::Except { left, right, all } => {
             let left_planned = plan_query_inner(left, catalog, partition, memory, pins)?;
             let right_planned = plan_query_inner(right, catalog, partition, memory, pins)?;
             let mut scan_metrics = left_planned.scan_metrics;
@@ -2308,7 +2306,7 @@ fn plan_query_with_predicate(
             let mut operator = SetOpOperator::new(
                 left_planned.operator,
                 right_planned.operator,
-                SetOpMode::Except,
+                if *all { SetOpMode::ExceptAll } else { SetOpMode::Except },
             );
             if let Some(memory) = memory {
                 operator = operator.with_memory(memory.operator("set-operation")?);
@@ -3223,6 +3221,14 @@ mod tests {
             (
                 "SELECT id FROM items EXCEPT SELECT id FROM customers",
                 "Except",
+            ),
+            (
+                "SELECT id FROM items INTERSECT ALL SELECT id FROM customers",
+                "IntersectAll",
+            ),
+            (
+                "SELECT id FROM items EXCEPT ALL SELECT id FROM customers",
+                "ExceptAll",
             ),
         ] {
             let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(sql).unwrap();

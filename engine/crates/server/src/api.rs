@@ -7362,8 +7362,8 @@ fn collect_scan_predicates(
             predicates.entry(table.clone()).or_default().push(None);
         }
         LogicalPlan::Join { left, right, .. }
-        | LogicalPlan::Intersect { left, right }
-        | LogicalPlan::Except { left, right }
+        | LogicalPlan::Intersect { left, right, .. }
+        | LogicalPlan::Except { left, right, .. }
         | LogicalPlan::SemiJoin { left, right, .. }
         | LogicalPlan::AntiJoin { left, right, .. } => {
             collect_scan_predicates(left, predicates);
@@ -7441,8 +7441,8 @@ fn collect_join_statistics_tables(
                 collect_join_statistics_tables(input, tables);
             }
         }
-        LogicalPlan::Intersect { left, right }
-        | LogicalPlan::Except { left, right }
+        LogicalPlan::Intersect { left, right, .. }
+        | LogicalPlan::Except { left, right, .. }
         | LogicalPlan::SemiJoin { left, right, .. }
         | LogicalPlan::AntiJoin { left, right, .. } => {
             collect_join_statistics_tables(left, tables);
@@ -9834,8 +9834,8 @@ fn general_distributed_eligible(plan: &LogicalPlan) -> bool {
         | LogicalPlan::Distinct { input, .. }
         | LogicalPlan::Window { input, .. } => general_distributed_eligible(input),
         LogicalPlan::Join { left, right, .. }
-        | LogicalPlan::Intersect { left, right }
-        | LogicalPlan::Except { left, right } => {
+        | LogicalPlan::Intersect { left, right, .. }
+        | LogicalPlan::Except { left, right, .. } => {
             general_distributed_eligible(left) && general_distributed_eligible(right)
         }
         LogicalPlan::SemiJoin { left, right, .. } | LogicalPlan::AntiJoin { left, right, .. } => {
