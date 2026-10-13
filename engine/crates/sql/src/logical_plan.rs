@@ -3672,6 +3672,14 @@ mod tests {
         let text = format!("{named:?}");
         assert!(text.contains("Int64(42)"));
         assert!(text.contains("Utf8(\"EU\")"));
+        let named = sql_to_logical_plan_for_binder_with_parameters(
+            "SELECT * FROM t WHERE region = :region",
+            &[ScalarValue::Utf8("EU".into())],
+        )
+        .unwrap_err();
+        assert!(named
+            .to_string()
+            .contains("unsupported parameter placeholder ':region'"));
     }
 
     #[test]
