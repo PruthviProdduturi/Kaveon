@@ -388,6 +388,17 @@ container restarts. The credential-free result is archived in
 scheduling and worker replacement evidence, but not an in-flight query
 surviving node loss; that active-query node-drain gate remains open.
 
+That active-query boundary is now qualified for the declared current workload:
+on 2026-10-13 the harness drained the node hosting `kaveon-worker-0` during a
+running 504M-row distributed scan. The coordinator observed the loss, created
+a retry attempt, returned the exact baseline result, and restored a
+catalog-compatible three-worker cluster; the exact post-recovery probe and
+bounded-pressure tail also passed. The credential-free report is archived in
+`docs/qualification/engine-aks-fault-pressure-2026-10-13-node-drain.md`.
+This closes active-query worker recovery during node drain for that image and
+workload. Coordinator exchange-spool cleanup and coordinator active-query
+restart recovery remain separate gates.
+
 The distributed/local join-mode differential now also includes an inner
 residual predicate (`key equality AND value inequality`); local and
 distributed result sets match and all reservations are released.
