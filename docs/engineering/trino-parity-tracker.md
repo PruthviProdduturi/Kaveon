@@ -174,6 +174,11 @@ qualification documents; this tracker remains the single ordered work list.
   (`bb788709`). The input remains distributed, while the exact global merge
   is explicitly finalized by one task; a range exchange for parallel global
   ordering remains open (`7f32d854`).
+- Inner equi-joins now propagate a safe literal predicate across the equality
+  key in both join-condition orders. This lets exact source statistics see the
+  reduced build side before distribution selection; the optimizer qualification
+  covers the propagated filters and the existing no-statistics partitioned
+  fallback (`0ba56846`, `04c5d391`).
 - A distributed self-join with grouped output now has exact worker-loss
   recovery coverage, including retries and moved exchange spools
   (`43a2f8f9`). AKS worker-loss qualification remains open.
