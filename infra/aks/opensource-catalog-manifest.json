@@ -1,2311 +1,1926 @@
 {
- "catalog": "OpenSource",
- "root_path": "snapshots/2026-09-09-v1",
- "notes": "Public-source analytical tables only. Locations are relative to the ADLS container root path. Kaveon-owned synthetic usage and showcase tables are registered separately from kaveon-catalog-manifest.json; the Parquet objects remain in the same lake prefix.",
- "tables": [
-  {
-   "columns": [
+  "catalog": "OpenSource",
+  "root_path": "snapshots/2026-09-09-v1",
+  "notes": "Regenerated from the live OpenSource catalog on 2026-10-13, read from the Engine's own table definitions plus a COUNT(*) per table. Every table is a Delta directory; the lake-wide conversion on 2026-10-07 left this file describing single-file Parquet objects that no longer exist, with row counts from before the conversion. Because register-curated-catalog.py verifies COUNT(*) against row_count here, a rebuild from the stale file failed outright on covid.reported_cases (573360 recorded against 583440 live) and would have registered pre-Delta locations for the rest. `format` is now carried per table rather than assumed, so a future conversion cannot silently invalidate this file in the same way.",
+  "tables": [
     {
-     "data_type": "Int64",
-     "name": "VendorID",
-     "nullable": true
+      "schema": "ai_benchmarks",
+      "name": "arena_battles",
+      "format": "Delta",
+      "location": "ai_benchmarks/arena_battles",
+      "row_count": 15,
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "model_a",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "model_b",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "wins_a",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "wins_b",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "ties",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "total_battles",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "win_rate_a",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "category",
+          "data_type": "Utf8",
+          "nullable": true
+        }
+      ]
     },
     {
-     "data_type": "Utf8",
-     "name": "tpep_pickup_datetime",
-     "nullable": true
+      "schema": "ai_benchmarks",
+      "name": "benchmark_scores",
+      "format": "Delta",
+      "location": "ai_benchmarks/benchmark_scores",
+      "row_count": 61,
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "model_name",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "benchmark",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "score",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "score_unit",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "eval_date",
+          "data_type": "Date32",
+          "nullable": true
+        },
+        {
+          "name": "source",
+          "data_type": "Utf8",
+          "nullable": true
+        }
+      ]
     },
     {
-     "data_type": "Utf8",
-     "name": "tpep_dropoff_datetime",
-     "nullable": true
+      "schema": "ai_benchmarks",
+      "name": "leaderboard",
+      "format": "Delta",
+      "location": "ai_benchmarks/leaderboard",
+      "row_count": 34,
+      "columns": [
+        {
+          "name": "model_name",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "provider",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "family",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "release_date",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "parameters_b",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "context_window",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "is_open_source",
+          "data_type": "Boolean",
+          "nullable": true
+        },
+        {
+          "name": "input_cost",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "output_cost",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "arena_elo",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "mmlu",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "humaneval",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "gsm8k",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "mt_bench",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "gpqa",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "math_score",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "arc_challenge",
+          "data_type": "Float64",
+          "nullable": true
+        }
+      ]
     },
     {
-     "data_type": "Int64",
-     "name": "passenger_count",
-     "nullable": true
+      "schema": "ai_benchmarks",
+      "name": "open_llm_results",
+      "format": "Delta",
+      "location": "ai_benchmarks/open_llm_results",
+      "row_count": 4576,
+      "columns": [
+        {
+          "name": "eval_name",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "precision",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "type",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "t",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "weight_type",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "architecture",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "model",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "fullname",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "model_sha",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "average",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "hub_license",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "hub",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "params_b",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "available_on_the_hub",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "moe",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "flagged",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "chat_template",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "co_cost_kg",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "ifeval_raw",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "ifeval",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "bbh_raw",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "bbh",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "math_lvl_5_raw",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "math_lvl_5",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "gpqa_raw",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "gpqa",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "musr_raw",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "musr",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "mmlu_pro_raw",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "mmlu_pro",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "merged",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "official_providers",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "upload_to_hub_date",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "submission_date",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "generation",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "base_model",
+          "data_type": "Utf8",
+          "nullable": true
+        }
+      ]
     },
     {
-     "data_type": "Float64",
-     "name": "trip_distance",
-     "nullable": true
+      "schema": "ai_benchmarks",
+      "name": "pricing",
+      "format": "Delta",
+      "location": "ai_benchmarks/pricing",
+      "row_count": 27,
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "model_name",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "input_cost",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "output_cost",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "effective_date",
+          "data_type": "Utf8",
+          "nullable": true
+        }
+      ]
     },
     {
-     "data_type": "Int64",
-     "name": "RatecodeID",
-     "nullable": true
+      "schema": "climate_energy",
+      "name": "climate_x_energy",
+      "format": "Delta",
+      "location": "climate_energy/climate_x_energy",
+      "row_count": 1169,
+      "columns": [
+        {
+          "name": "country",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "iso_code",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "year",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "population",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "gdp",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "avg_tc",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "max_tc",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "min_tc",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "primary_energy_consumption",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "energy_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "electricity_generation",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "electricity_demand",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "fossil_share_energy",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "renewables_share_energy",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "renewables_electricity",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "solar_electricity",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "wind_electricity",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "nuclear_electricity",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "carbon_intensity_elec",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "greenhouse_gas_emissions",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "low_carbon_share_energy",
+          "data_type": "Float64",
+          "nullable": true
+        }
+      ]
     },
     {
-     "data_type": "Utf8",
-     "name": "store_and_fwd_flag",
-     "nullable": true
+      "schema": "climate_energy",
+      "name": "energy",
+      "format": "Delta",
+      "location": "climate_energy/energy",
+      "row_count": 23377,
+      "columns": [
+        {
+          "name": "country",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "year",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "iso_code",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "population",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "gdp",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "biofuel_cons_change_pct",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "biofuel_cons_change_twh",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "biofuel_cons_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "biofuel_consumption",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "biofuel_elec_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "biofuel_electricity",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "biofuel_share_elec",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "biofuel_share_energy",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "carbon_intensity_elec",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "coal_cons_change_pct",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "coal_cons_change_twh",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "coal_cons_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "coal_consumption",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "coal_elec_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "coal_electricity",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "coal_prod_change_pct",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "coal_prod_change_twh",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "coal_prod_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "coal_production",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "coal_share_elec",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "coal_share_energy",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "electricity_demand",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "electricity_demand_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "electricity_generation",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "electricity_share_energy",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "energy_cons_change_pct",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "energy_cons_change_twh",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "energy_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "energy_per_gdp",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "fossil_cons_change_pct",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "fossil_cons_change_twh",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "fossil_elec_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "fossil_electricity",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "fossil_energy_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "fossil_fuel_consumption",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "fossil_share_elec",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "fossil_share_energy",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "gas_cons_change_pct",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "gas_cons_change_twh",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "gas_consumption",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "gas_elec_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "gas_electricity",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "gas_energy_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "gas_prod_change_pct",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "gas_prod_change_twh",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "gas_prod_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "gas_production",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "gas_share_elec",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "gas_share_energy",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "greenhouse_gas_emissions",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "hydro_cons_change_pct",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "hydro_cons_change_twh",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "hydro_consumption",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "hydro_elec_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "hydro_electricity",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "hydro_energy_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "hydro_share_elec",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "hydro_share_energy",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "low_carbon_cons_change_pct",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "low_carbon_cons_change_twh",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "low_carbon_consumption",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "low_carbon_elec_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "low_carbon_electricity",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "low_carbon_energy_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "low_carbon_share_elec",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "low_carbon_share_energy",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "net_elec_imports",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "net_elec_imports_share_demand",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "nuclear_cons_change_pct",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "nuclear_cons_change_twh",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "nuclear_consumption",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "nuclear_elec_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "nuclear_electricity",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "nuclear_energy_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "nuclear_share_elec",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "nuclear_share_energy",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "oil_cons_change_pct",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "oil_cons_change_twh",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "oil_consumption",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "oil_elec_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "oil_electricity",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "oil_energy_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "oil_prod_change_pct",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "oil_prod_change_twh",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "oil_prod_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "oil_production",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "oil_share_elec",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "oil_share_energy",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "other_renewable_consumption",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "other_renewable_electricity",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "other_renewable_exc_biofuel_electricity",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "other_renewables_cons_change_pct",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "other_renewables_cons_change_twh",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "other_renewables_elec_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "other_renewables_elec_per_capita_exc_biofuel",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "other_renewables_energy_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "other_renewables_share_elec",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "other_renewables_share_elec_exc_biofuel",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "other_renewables_share_energy",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "per_capita_electricity",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "primary_energy_consumption",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "renewables_cons_change_pct",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "renewables_cons_change_twh",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "renewables_consumption",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "renewables_elec_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "renewables_electricity",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "renewables_energy_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "renewables_share_elec",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "renewables_share_energy",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "solar_cons_change_pct",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "solar_cons_change_twh",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "solar_consumption",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "solar_elec_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "solar_electricity",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "solar_energy_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "solar_share_elec",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "solar_share_energy",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "wind_cons_change_pct",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "wind_cons_change_twh",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "wind_consumption",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "wind_elec_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "wind_electricity",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "wind_energy_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "wind_share_elec",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "wind_share_energy",
+          "data_type": "Float64",
+          "nullable": true
+        }
+      ]
     },
     {
-     "data_type": "Int64",
-     "name": "PULocationID",
-     "nullable": true
+      "schema": "climate_energy",
+      "name": "energy_annual",
+      "format": "Delta",
+      "location": "climate_energy/energy_annual",
+      "row_count": 1169,
+      "columns": [
+        {
+          "name": "country",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "year",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "iso_code",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "population",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "gdp",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "primary_energy_consumption",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "energy_per_capita",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "energy_per_gdp",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "electricity_generation",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "electricity_demand",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "fossil_fuel_consumption",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "fossil_share_energy",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "renewables_consumption",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "renewables_share_energy",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "renewables_electricity",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "solar_electricity",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "wind_electricity",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "hydro_electricity",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "nuclear_electricity",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "coal_electricity",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "gas_electricity",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "oil_electricity",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "carbon_intensity_elec",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "greenhouse_gas_emissions",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "low_carbon_share_energy",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "low_carbon_electricity",
+          "data_type": "Float64",
+          "nullable": true
+        }
+      ]
     },
     {
-     "data_type": "Int64",
-     "name": "DOLocationID",
-     "nullable": true
+      "schema": "climate_energy",
+      "name": "global_temperature_monthly",
+      "format": "Delta",
+      "location": "climate_energy/global_temperature_monthly",
+      "row_count": 1764,
+      "columns": [
+        {
+          "name": "year",
+          "data_type": "Int64",
+          "nullable": false
+        },
+        {
+          "name": "month",
+          "data_type": "Int64",
+          "nullable": false
+        },
+        {
+          "name": "anomaly_deg_c",
+          "data_type": "Float64",
+          "nullable": true
+        }
+      ]
     },
     {
-     "data_type": "Int64",
-     "name": "payment_type",
-     "nullable": true
+      "schema": "climate_energy",
+      "name": "temperature_monthly",
+      "format": "Delta",
+      "location": "climate_energy/temperature_monthly",
+      "row_count": 19041,
+      "columns": [
+        {
+          "name": "country",
+          "data_type": "Utf8",
+          "nullable": false
+        },
+        {
+          "name": "country_code",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "year",
+          "data_type": "Int64",
+          "nullable": false
+        },
+        {
+          "name": "month",
+          "data_type": "Int64",
+          "nullable": false
+        },
+        {
+          "name": "temp_change_c",
+          "data_type": "Float64",
+          "nullable": true
+        }
+      ]
     },
     {
-     "data_type": "Float64",
-     "name": "fare_amount",
-     "nullable": true
+      "schema": "covid",
+      "name": "country_latest",
+      "format": "Delta",
+      "location": "covid/country_latest",
+      "row_count": 240,
+      "columns": [
+        {
+          "name": "report_date",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "country_code",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "country",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "who_region",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "new_cases",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "cumulative_cases",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "new_deaths",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "cumulative_deaths",
+          "data_type": "Int64",
+          "nullable": true
+        }
+      ]
     },
     {
-     "data_type": "Float64",
-     "name": "extra",
-     "nullable": true
+      "schema": "covid",
+      "name": "reported_cases",
+      "format": "Delta",
+      "location": "covid/reported_cases",
+      "row_count": 583440,
+      "columns": [
+        {
+          "name": "report_date",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "country_code",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "country",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "who_region",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "new_cases",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "cumulative_cases",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "new_deaths",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "cumulative_deaths",
+          "data_type": "Int64",
+          "nullable": true
+        }
+      ]
     },
     {
-     "data_type": "Float64",
-     "name": "mta_tax",
-     "nullable": true
+      "schema": "public",
+      "name": "covid_global",
+      "format": "Delta",
+      "location": "public/covid_global",
+      "row_count": 50838,
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "iso_code",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "country",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "continent",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "dt",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "total_cases",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "new_cases",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "total_deaths",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "new_deaths",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "population",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "total_cases_per_million",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "total_deaths_per_million",
+          "data_type": "Float64",
+          "nullable": true
+        }
+      ]
     },
     {
-     "data_type": "Float64",
-     "name": "tip_amount",
-     "nullable": true
+      "schema": "public",
+      "name": "kaveon_events_dashboard",
+      "format": "Delta",
+      "location": "public/kaveon_events_dashboard",
+      "row_count": 24,
+      "columns": [
+        {
+          "name": "user_id",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "surface",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "actions",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "sessions",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "queries_run",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "charts_created",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "errors",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "rows_scanned",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "cache_hits",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "latency_p75_ms",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "platform",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "license",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "segment",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "industry",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "region",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "country",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "deployment",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "acquisition_channel",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "team_size",
+          "data_type": "Utf8",
+          "nullable": true
+        }
+      ]
     },
     {
-     "data_type": "Float64",
-     "name": "tolls_amount",
-     "nullable": true
+      "schema": "public",
+      "name": "kaveon_events_enriched",
+      "format": "Delta",
+      "location": "public/kaveon_events_enriched",
+      "row_count": 504000000,
+      "columns": [
+        {
+          "name": "event_date",
+          "data_type": "Date32",
+          "nullable": true
+        },
+        {
+          "name": "user_id",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "surface",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "actions",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "sessions",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "duration_sec",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "queries_run",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "charts_created",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "errors",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "rows_scanned",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "cache_hits",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "latency_p75_ms",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "platform",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "license",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "segment",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "industry",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "region",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "country",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "deployment",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "acquisition_channel",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "team_size",
+          "data_type": "Utf8",
+          "nullable": true
+        }
+      ],
+      "shape": {
+        "dimensions": [
+          {
+            "name": "surface",
+            "cap": 10000
+          },
+          {
+            "name": "platform",
+            "cap": 10000
+          },
+          {
+            "name": "license",
+            "cap": 10000
+          },
+          {
+            "name": "segment",
+            "cap": 10000
+          },
+          {
+            "name": "industry",
+            "cap": 10000
+          },
+          {
+            "name": "region",
+            "cap": 10000
+          },
+          {
+            "name": "country",
+            "cap": 10000
+          },
+          {
+            "name": "deployment",
+            "cap": 10000
+          },
+          {
+            "name": "acquisition_channel",
+            "cap": 10000
+          },
+          {
+            "name": "team_size",
+            "cap": 10000
+          }
+        ],
+        "measures": [
+          {
+            "column": "actions",
+            "aggregates": [
+              "sum",
+              "count"
+            ]
+          },
+          {
+            "column": "sessions",
+            "aggregates": [
+              "sum"
+            ]
+          },
+          {
+            "column": "queries_run",
+            "aggregates": [
+              "sum"
+            ]
+          },
+          {
+            "column": "charts_created",
+            "aggregates": [
+              "sum"
+            ]
+          },
+          {
+            "column": "errors",
+            "aggregates": [
+              "sum"
+            ]
+          },
+          {
+            "column": "rows_scanned",
+            "aggregates": [
+              "sum"
+            ]
+          },
+          {
+            "column": "cache_hits",
+            "aggregates": [
+              "sum"
+            ]
+          },
+          {
+            "column": "duration_sec",
+            "aggregates": [
+              "sum"
+            ]
+          },
+          {
+            "column": "latency_p75_ms",
+            "aggregates": [
+              "sum",
+              "count",
+              "min",
+              "max"
+            ]
+          },
+          {
+            "column": "user_id",
+            "aggregates": [
+              "count_distinct"
+            ]
+          }
+        ],
+        "time": {
+          "column": "event_date",
+          "grain": "day",
+          "cap": 3660
+        }
+      }
     },
     {
-     "data_type": "Float64",
-     "name": "improvement_surcharge",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "total_amount",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "congestion_surcharge",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "Airport_fee",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "cbd_congestion_fee",
-     "nullable": true
+      "schema": "public",
+      "name": "nyc_taxi_borough",
+      "format": "Delta",
+      "location": "public/nyc_taxi_borough",
+      "row_count": 5,
+      "columns": [
+        {
+          "name": "borough",
+          "data_type": "Utf8",
+          "nullable": true
+        },
+        {
+          "name": "trips",
+          "data_type": "Int64",
+          "nullable": true
+        },
+        {
+          "name": "revenue",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "avg_fare",
+          "data_type": "Float64",
+          "nullable": true
+        },
+        {
+          "name": "avg_distance",
+          "data_type": "Float64",
+          "nullable": true
+        }
+      ]
     }
-   ],
-   "location": "bronze/yellow_trips/part-00000.parquet",
-   "name": "yellow_trips",
-   "row_count": 3475226,
-   "schema": "bronze"
-  },
-  {
-   "columns": [
-    {
-     "data_type": "Int64",
-     "name": "VendorID",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "tpep_pickup_datetime",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "tpep_dropoff_datetime",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "passenger_count",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "trip_distance",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "RatecodeID",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "store_and_fwd_flag",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "PULocationID",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "DOLocationID",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "payment_type",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "fare_amount",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "extra",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "mta_tax",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "tip_amount",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "tolls_amount",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "improvement_surcharge",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "total_amount",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "congestion_surcharge",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "Airport_fee",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "cbd_congestion_fee",
-     "nullable": true
-    }
-   ],
-   "location": "silver/yellow_trips/part-00000.parquet",
-   "name": "yellow_trips",
-   "row_count": 3412043,
-   "schema": "silver"
-  },
-  {
-   "columns": [
-    {
-     "data_type": "Int64",
-     "name": "VendorID",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "tpep_pickup_datetime",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "tpep_dropoff_datetime",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "passenger_count",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "trip_distance",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "RatecodeID",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "store_and_fwd_flag",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "PULocationID",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "DOLocationID",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "payment_type",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "fare_amount",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "extra",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "mta_tax",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "tip_amount",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "tolls_amount",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "improvement_surcharge",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "total_amount",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "congestion_surcharge",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "Airport_fee",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "cbd_congestion_fee",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "rejection_reason",
-     "nullable": false
-    }
-   ],
-   "location": "silver/yellow_rejected/part-00000.parquet",
-   "name": "yellow_rejected",
-   "row_count": 63183,
-   "schema": "silver"
-  },
-  {
-   "columns": [
-    {
-     "data_type": "Int64",
-     "name": "VendorID",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "lpep_pickup_datetime",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "lpep_dropoff_datetime",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "store_and_fwd_flag",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "RatecodeID",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "PULocationID",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "DOLocationID",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "passenger_count",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "trip_distance",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "fare_amount",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "extra",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "mta_tax",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "tip_amount",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "tolls_amount",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "ehail_fee",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "improvement_surcharge",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "total_amount",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "payment_type",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "trip_type",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "congestion_surcharge",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "cbd_congestion_fee",
-     "nullable": true
-    }
-   ],
-   "location": "bronze/green_trips/part-00000.parquet",
-   "name": "green_trips",
-   "row_count": 48326,
-   "schema": "bronze"
-  },
-  {
-   "columns": [
-    {
-     "data_type": "Int64",
-     "name": "VendorID",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "lpep_pickup_datetime",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "lpep_dropoff_datetime",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "store_and_fwd_flag",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "RatecodeID",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "PULocationID",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "DOLocationID",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "passenger_count",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "trip_distance",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "fare_amount",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "extra",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "mta_tax",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "tip_amount",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "tolls_amount",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "ehail_fee",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "improvement_surcharge",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "total_amount",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "payment_type",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "trip_type",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "congestion_surcharge",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "cbd_congestion_fee",
-     "nullable": true
-    }
-   ],
-   "location": "silver/green_trips/part-00000.parquet",
-   "name": "green_trips",
-   "row_count": 48131,
-   "schema": "silver"
-  },
-  {
-   "columns": [
-    {
-     "data_type": "Int64",
-     "name": "VendorID",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "lpep_pickup_datetime",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "lpep_dropoff_datetime",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "store_and_fwd_flag",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "RatecodeID",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "PULocationID",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "DOLocationID",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "passenger_count",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "trip_distance",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "fare_amount",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "extra",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "mta_tax",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "tip_amount",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "tolls_amount",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "ehail_fee",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "improvement_surcharge",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "total_amount",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "payment_type",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "trip_type",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "congestion_surcharge",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "cbd_congestion_fee",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "rejection_reason",
-     "nullable": false
-    }
-   ],
-   "location": "silver/green_rejected/part-00000.parquet",
-   "name": "green_rejected",
-   "row_count": 195,
-   "schema": "silver"
-  },
-  {
-   "columns": [
-    {
-     "data_type": "Int64",
-     "name": "LocationID",
-     "nullable": false
-    },
-    {
-     "data_type": "Utf8",
-     "name": "Borough",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "Zone",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "service_zone",
-     "nullable": true
-    }
-   ],
-   "location": "reference/taxi_zones/part-00000.parquet",
-   "name": "taxi_zones",
-   "row_count": 265,
-   "schema": "reference"
-  },
-  {
-   "columns": [
-    {
-     "data_type": "Utf8",
-     "name": "pickup_date",
-     "nullable": false
-    },
-    {
-     "data_type": "Utf8",
-     "name": "service_type",
-     "nullable": false
-    },
-    {
-     "data_type": "Int64",
-     "name": "trip_count",
-     "nullable": false
-    },
-    {
-     "data_type": "Int64",
-     "name": "total_amount_cents",
-     "nullable": false
-    },
-    {
-     "data_type": "Float64",
-     "name": "total_trip_distance",
-     "nullable": false
-    }
-   ],
-   "location": "gold/daily_trips/part-00000.parquet",
-   "name": "daily_trips",
-   "row_count": 62,
-   "schema": "gold"
-  },
-  {
-   "schema": "ai_benchmarks",
-   "name": "leaderboard",
-   "location": "ai_benchmarks/leaderboard/part-00000.parquet",
-   "row_count": 34,
-   "columns": [
-    {
-     "name": "model_name",
-     "data_type": "Utf8",
-     "nullable": true
-    },
-    {
-     "name": "provider",
-     "data_type": "Utf8",
-     "nullable": true
-    },
-    {
-     "name": "family",
-     "data_type": "Utf8",
-     "nullable": true
-    },
-    {
-     "name": "release_date",
-     "data_type": "Utf8",
-     "nullable": true
-    },
-    {
-     "name": "parameters_b",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "context_window",
-     "data_type": "Int64",
-     "nullable": true
-    },
-    {
-     "name": "is_open_source",
-     "data_type": "Boolean",
-     "nullable": true
-    },
-    {
-     "name": "input_cost",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "output_cost",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "arena_elo",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "mmlu",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "humaneval",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "gsm8k",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "mt_bench",
-     "data_type": "Utf8",
-     "nullable": true
-    },
-    {
-     "name": "gpqa",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "math_score",
-     "data_type": "Utf8",
-     "nullable": true
-    },
-    {
-     "name": "arc_challenge",
-     "data_type": "Utf8",
-     "nullable": true
-    }
-   ]
-  },
-  {
-   "schema": "ai_benchmarks",
-   "name": "arena_battles",
-   "location": "ai_benchmarks/arena_battles/part-00000.parquet",
-   "row_count": 15,
-   "columns": [
-    {
-     "name": "id",
-     "data_type": "Int64",
-     "nullable": true
-    },
-    {
-     "name": "model_a",
-     "data_type": "Utf8",
-     "nullable": true
-    },
-    {
-     "name": "model_b",
-     "data_type": "Utf8",
-     "nullable": true
-    },
-    {
-     "name": "wins_a",
-     "data_type": "Int64",
-     "nullable": true
-    },
-    {
-     "name": "wins_b",
-     "data_type": "Int64",
-     "nullable": true
-    },
-    {
-     "name": "ties",
-     "data_type": "Int64",
-     "nullable": true
-    },
-    {
-     "name": "total_battles",
-     "data_type": "Int64",
-     "nullable": true
-    },
-    {
-     "name": "win_rate_a",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "category",
-     "data_type": "Utf8",
-     "nullable": true
-    }
-   ]
-  },
-  {
-   "schema": "ai_benchmarks",
-   "name": "pricing",
-   "location": "ai_benchmarks/pricing/part-00000.parquet",
-   "row_count": 27,
-   "columns": [
-    {
-     "name": "id",
-     "data_type": "Int64",
-     "nullable": true
-    },
-    {
-     "name": "model_name",
-     "data_type": "Utf8",
-     "nullable": true
-    },
-    {
-     "name": "input_cost",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "output_cost",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "effective_date",
-     "data_type": "Utf8",
-     "nullable": true
-    }
-   ]
-  },
-  {
-   "schema": "public",
-   "name": "covid_global",
-   "location": "public/covid_global/part-00000.parquet",
-   "row_count": 50838,
-   "columns": [
-    {
-     "name": "id",
-     "data_type": "Int64",
-     "nullable": true
-    },
-    {
-     "name": "iso_code",
-     "data_type": "Utf8",
-     "nullable": true
-    },
-    {
-     "name": "country",
-     "data_type": "Utf8",
-     "nullable": true
-    },
-    {
-     "name": "continent",
-     "data_type": "Utf8",
-     "nullable": true
-    },
-    {
-     "name": "dt",
-     "data_type": "Utf8",
-     "nullable": true
-    },
-    {
-     "name": "total_cases",
-     "data_type": "Int64",
-     "nullable": true
-    },
-    {
-     "name": "new_cases",
-     "data_type": "Int64",
-     "nullable": true
-    },
-    {
-     "name": "total_deaths",
-     "data_type": "Int64",
-     "nullable": true
-    },
-    {
-     "name": "new_deaths",
-     "data_type": "Int64",
-     "nullable": true
-    },
-    {
-     "name": "population",
-     "data_type": "Int64",
-     "nullable": true
-    },
-    {
-     "name": "total_cases_per_million",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "total_deaths_per_million",
-     "data_type": "Float64",
-     "nullable": true
-    }
-   ]
-  },
-  {
-   "schema": "public",
-   "name": "nyc_taxi_borough",
-   "location": "public/nyc_taxi_borough/part-00000.parquet",
-   "row_count": 5,
-   "columns": [
-    {
-     "name": "borough",
-     "data_type": "Utf8",
-     "nullable": true
-    },
-    {
-     "name": "trips",
-     "data_type": "Int64",
-     "nullable": true
-    },
-    {
-     "name": "revenue",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "avg_fare",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "avg_distance",
-     "data_type": "Float64",
-     "nullable": true
-    }
-   ]
-  },
-  {
-   "columns": [
-    {
-     "data_type": "Utf8",
-     "name": "report_date",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "country_code",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "country",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "who_region",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "new_cases",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "cumulative_cases",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "new_deaths",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "cumulative_deaths",
-     "nullable": true
-    }
-   ],
-   "location": "covid/reported_cases/part-00000.parquet",
-   "name": "reported_cases",
-   "row_count": 573360,
-   "schema": "covid"
-  },
-  {
-   "columns": [
-    {
-     "data_type": "Utf8",
-     "name": "report_date",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "country_code",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "country",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "who_region",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "new_cases",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "cumulative_cases",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "new_deaths",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "cumulative_deaths",
-     "nullable": true
-    }
-   ],
-   "location": "covid/country_latest/part-00000.parquet",
-   "name": "country_latest",
-   "row_count": 240,
-   "schema": "covid"
-  },
-  {
-   "columns": [
-    {
-     "data_type": "Utf8",
-     "name": "report_date",
-     "nullable": false
-    },
-    {
-     "data_type": "Int64",
-     "name": "new_cases",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "new_deaths",
-     "nullable": true
-    }
-   ],
-   "location": "gold/covid_reported_by_date/part-00000.parquet",
-   "name": "covid_reported_by_date",
-   "row_count": 2389,
-   "schema": "gold"
-  },
-  {
-   "columns": [
-    {
-     "data_type": "Utf8",
-     "name": "country",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "year",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "iso_code",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "population",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "gdp",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "biofuel_cons_change_pct",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "biofuel_cons_change_twh",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "biofuel_cons_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "biofuel_consumption",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "biofuel_elec_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "biofuel_electricity",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "biofuel_share_elec",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "biofuel_share_energy",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "carbon_intensity_elec",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "coal_cons_change_pct",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "coal_cons_change_twh",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "coal_cons_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "coal_consumption",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "coal_elec_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "coal_electricity",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "coal_prod_change_pct",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "coal_prod_change_twh",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "coal_prod_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "coal_production",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "coal_share_elec",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "coal_share_energy",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "electricity_demand",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "electricity_demand_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "electricity_generation",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "electricity_share_energy",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "energy_cons_change_pct",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "energy_cons_change_twh",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "energy_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "energy_per_gdp",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "fossil_cons_change_pct",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "fossil_cons_change_twh",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "fossil_elec_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "fossil_electricity",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "fossil_energy_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "fossil_fuel_consumption",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "fossil_share_elec",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "fossil_share_energy",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "gas_cons_change_pct",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "gas_cons_change_twh",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "gas_consumption",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "gas_elec_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "gas_electricity",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "gas_energy_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "gas_prod_change_pct",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "gas_prod_change_twh",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "gas_prod_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "gas_production",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "gas_share_elec",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "gas_share_energy",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "greenhouse_gas_emissions",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "hydro_cons_change_pct",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "hydro_cons_change_twh",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "hydro_consumption",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "hydro_elec_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "hydro_electricity",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "hydro_energy_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "hydro_share_elec",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "hydro_share_energy",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "low_carbon_cons_change_pct",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "low_carbon_cons_change_twh",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "low_carbon_consumption",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "low_carbon_elec_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "low_carbon_electricity",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "low_carbon_energy_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "low_carbon_share_elec",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "low_carbon_share_energy",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "net_elec_imports",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "net_elec_imports_share_demand",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "nuclear_cons_change_pct",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "nuclear_cons_change_twh",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "nuclear_consumption",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "nuclear_elec_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "nuclear_electricity",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "nuclear_energy_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "nuclear_share_elec",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "nuclear_share_energy",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "oil_cons_change_pct",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "oil_cons_change_twh",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "oil_consumption",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "oil_elec_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "oil_electricity",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "oil_energy_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "oil_prod_change_pct",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "oil_prod_change_twh",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "oil_prod_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "oil_production",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "oil_share_elec",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "oil_share_energy",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "other_renewable_consumption",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "other_renewable_electricity",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "other_renewable_exc_biofuel_electricity",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "other_renewables_cons_change_pct",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "other_renewables_cons_change_twh",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "other_renewables_elec_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "other_renewables_elec_per_capita_exc_biofuel",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "other_renewables_energy_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "other_renewables_share_elec",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "other_renewables_share_elec_exc_biofuel",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "other_renewables_share_energy",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "per_capita_electricity",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "primary_energy_consumption",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "renewables_cons_change_pct",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "renewables_cons_change_twh",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "renewables_consumption",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "renewables_elec_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "renewables_electricity",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "renewables_energy_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "renewables_share_elec",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "renewables_share_energy",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "solar_cons_change_pct",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "solar_cons_change_twh",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "solar_consumption",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "solar_elec_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "solar_electricity",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "solar_energy_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "solar_share_elec",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "solar_share_energy",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "wind_cons_change_pct",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "wind_cons_change_twh",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "wind_consumption",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "wind_elec_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "wind_electricity",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "wind_energy_per_capita",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "wind_share_elec",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "wind_share_energy",
-     "nullable": true
-    }
-   ],
-   "location": "climate_energy/energy/part-00000.parquet",
-   "name": "energy",
-   "row_count": 23377,
-   "schema": "climate_energy"
-  },
-  {
-   "columns": [
-    {
-     "data_type": "Utf8",
-     "name": "indicator",
-     "nullable": false
-    },
-    {
-     "data_type": "Utf8",
-     "name": "description",
-     "nullable": true
-    }
-   ],
-   "location": "reference/energy_indicators/part-00000.parquet",
-   "name": "energy_indicators",
-   "row_count": 130,
-   "schema": "reference"
-  },
-  {
-   "columns": [
-    {
-     "data_type": "Int64",
-     "name": "year",
-     "nullable": false
-    },
-    {
-     "data_type": "Int64",
-     "name": "month",
-     "nullable": false
-    },
-    {
-     "data_type": "Float64",
-     "name": "anomaly_deg_c",
-     "nullable": true
-    }
-   ],
-   "location": "climate_energy/global_temperature_monthly/part-00000.parquet",
-   "name": "global_temperature_monthly",
-   "row_count": 1764,
-   "schema": "climate_energy"
-  },
-  {
-   "columns": [
-    {
-     "data_type": "Utf8",
-     "name": "eval_name",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "precision",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "type",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "t",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "weight_type",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "architecture",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "model",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "fullname",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "model_sha",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "average",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "hub_license",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "hub",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "params_b",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "available_on_the_hub",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "moe",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "flagged",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "chat_template",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "co_cost_kg",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "ifeval_raw",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "ifeval",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "bbh_raw",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "bbh",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "math_lvl_5_raw",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "math_lvl_5",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "gpqa_raw",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "gpqa",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "musr_raw",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "musr",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "mmlu_pro_raw",
-     "nullable": true
-    },
-    {
-     "data_type": "Float64",
-     "name": "mmlu_pro",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "merged",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "official_providers",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "upload_to_hub_date",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "submission_date",
-     "nullable": true
-    },
-    {
-     "data_type": "Int64",
-     "name": "generation",
-     "nullable": true
-    },
-    {
-     "data_type": "Utf8",
-     "name": "base_model",
-     "nullable": true
-    }
-   ],
-   "location": "ai_benchmarks/open_llm_results/part-00000.parquet",
-   "name": "open_llm_results",
-   "row_count": 4576,
-   "schema": "ai_benchmarks"
-  },
-  {
-   "schema": "climate_energy",
-   "name": "temperature_monthly",
-   "location": "climate_energy/temperature_monthly/part-00000.parquet",
-   "row_count": 19041,
-   "columns": [
-    {
-     "name": "country",
-     "data_type": "Utf8",
-     "nullable": false
-    },
-    {
-     "name": "country_code",
-     "data_type": "Utf8",
-     "nullable": true
-    },
-    {
-     "name": "year",
-     "data_type": "Int64",
-     "nullable": false
-    },
-    {
-     "name": "month",
-     "data_type": "Int64",
-     "nullable": false
-    },
-    {
-     "name": "temp_change_c",
-     "data_type": "Float64",
-     "nullable": true
-    }
-   ]
-  },
-  {
-   "schema": "climate_energy",
-   "name": "energy_annual",
-   "location": "climate_energy/energy_annual/part-00000.parquet",
-   "row_count": 1169,
-   "columns": [
-    {
-     "name": "country",
-     "data_type": "Utf8",
-     "nullable": true
-    },
-    {
-     "name": "year",
-     "data_type": "Int64",
-     "nullable": true
-    },
-    {
-     "name": "iso_code",
-     "data_type": "Utf8",
-     "nullable": true
-    },
-    {
-     "name": "population",
-     "data_type": "Int64",
-     "nullable": true
-    },
-    {
-     "name": "gdp",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "primary_energy_consumption",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "energy_per_capita",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "energy_per_gdp",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "electricity_generation",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "electricity_demand",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "fossil_fuel_consumption",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "fossil_share_energy",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "renewables_consumption",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "renewables_share_energy",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "renewables_electricity",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "solar_electricity",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "wind_electricity",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "hydro_electricity",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "nuclear_electricity",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "coal_electricity",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "gas_electricity",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "oil_electricity",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "carbon_intensity_elec",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "greenhouse_gas_emissions",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "low_carbon_share_energy",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "low_carbon_electricity",
-     "data_type": "Float64",
-     "nullable": true
-    }
-   ]
-  },
-  {
-   "schema": "climate_energy",
-   "name": "climate_x_energy",
-   "location": "climate_energy/climate_x_energy/part-00000.parquet",
-   "row_count": 1169,
-   "columns": [
-    {
-     "name": "country",
-     "data_type": "Utf8",
-     "nullable": true
-    },
-    {
-     "name": "iso_code",
-     "data_type": "Utf8",
-     "nullable": true
-    },
-    {
-     "name": "year",
-     "data_type": "Int64",
-     "nullable": true
-    },
-    {
-     "name": "population",
-     "data_type": "Int64",
-     "nullable": true
-    },
-    {
-     "name": "gdp",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "avg_tc",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "max_tc",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "min_tc",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "primary_energy_consumption",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "energy_per_capita",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "electricity_generation",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "electricity_demand",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "fossil_share_energy",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "renewables_share_energy",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "renewables_electricity",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "solar_electricity",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "wind_electricity",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "nuclear_electricity",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "carbon_intensity_elec",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "greenhouse_gas_emissions",
-     "data_type": "Float64",
-     "nullable": true
-    },
-    {
-     "name": "low_carbon_share_energy",
-     "data_type": "Float64",
-     "nullable": true
-    }
-   ]
-  }
- ]
+  ]
 }

@@ -14,6 +14,13 @@ July 19, 2026. Coverage describes the retrieved source, not current-day reportin
 See the [validation report](../engineering/opensource-validation-2026-09-09.json).
 An authenticated live SQL Lab query returned 48,131 cleaned green taxi trips.
 
+Those figures record that run and are not the current lake. The lake was
+converted to Delta on 2026-10-07 and the WHO table was reloaded: `covid.
+reported_cases` now holds 583,440 rows through August 30, 2026, and the
+bronze/silver/gold taxi layers described above are no longer registered.
+`infra/aks/opensource-catalog-manifest.json` is the current statement of what
+exists, read back from the Engine's own definitions.
+
 The extras import adds four verified tables: complete OWID energy data (23,377
 rows), its 130-indicator codebook, 1,764 NASA GISTEMP global monthly anomalies,
 and 4,576 Open LLM leaderboard results. The published catalog now has 11 tables across four subject schemas.
