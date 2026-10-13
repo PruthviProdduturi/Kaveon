@@ -74,9 +74,10 @@ foundations, but several operators are still centralized or narrow:
   validated and bound through the HTTP statement API; the full prepare/describe/
   bind/execute protocol remains open.
   A `/v1/trino/statement` adapter now accepts raw SQL with standard
-  `X-Trino-*` session headers and emits `nextUri`/`stats`-shaped responses;
-  this is intentionally a submission-compatibility slice, not the full
-  prepared-statement wire protocol.
+  `X-Trino-*` session headers, recognizes the encoded
+  `X-Trino-Prepared-Statement` SQL header, and emits `nextUri`/`stats`-shaped
+  responses; parameter binding and the full prepared-statement wire protocol
+  remain open.
   Prepared-parameter discovery now also ignores PostgreSQL `::type` casts,
   so cast names cannot be mistaken for named bindings (`617b69f6`).
   Uncorrelated aggregate scalar subqueries in `WHERE` are now supported with

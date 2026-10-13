@@ -2732,8 +2732,8 @@ async fn submit_trino_statement(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let query = match String::from_utf8(body.to_vec()) {
-        Ok(query) if !query.trim().is_empty() => query,
+    let query = match trino_prepared_query(&headers).or_else(|| String::from_utf8(body.to_vec()).ok()) {
+        Some(query) if !query.trim().is_empty() => query,
         _ => {
             return (
                 StatusCode::BAD_REQUEST,
@@ -2782,6 +2782,31 @@ fn trino_header(headers: &HeaderMap, name: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+/// Trino encodes prepared statements as `name=<url-encoded SQL>` in a
+/// request header. Decode only this header value; SQL in the request body is
+/// otherwise left byte-for-byte intact.
+fn trino_prepared_query(headers: &HeaderMap) -> Option<String> {
+    let value = trino_header(headers, "x-trino-prepared-statement")?;
+    let encoded = value.split_once('=')?.1;
+    let bytes = encoded.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => decoded.push(b' '),
+            b'%' if index + 2 < bytes.len() => {
+                let high = (bytes[index + 1] as char).to_digit(16)? as u8;
+                let low = (bytes[index + 2] as char).to_digit(16)? as u8;
+                decoded.push((high << 4) | low);
+                index += 2;
+            }
+            byte => decoded.push(byte),
+        }
+        index += 1;
+    }
+    String::from_utf8(decoded).ok()
 }
 
 async fn trino_response_shape(response: Response) -> Response {
@@ -18498,6 +18523,10 @@ mod streamed_root_tests {
         headers.insert("x-trino-catalog", "OpenSource".parse().unwrap());
         headers.insert("x-trino-schema", "public".parse().unwrap());
         headers.insert("x-trino-client-tags", "dashboard,  ad-hoc".parse().unwrap());
+        headers.insert(
+            "x-trino-prepared-statement",
+            "name=SELECT+1%20AS%20n".parse().unwrap(),
+        );
         assert_eq!(
             trino_header(&headers, "x-trino-catalog").as_deref(),
             Some("OpenSource")
@@ -18513,6 +18542,10 @@ mod streamed_root_tests {
             .filter(|tag| !tag.is_empty())
             .collect::<Vec<_>>();
         assert_eq!(tags, vec!["dashboard", "ad-hoc"]);
+        assert_eq!(
+            trino_prepared_query(&headers).as_deref(),
+            Some("SELECT 1 AS n")
+        );
     }
 
     #[tokio::test]
