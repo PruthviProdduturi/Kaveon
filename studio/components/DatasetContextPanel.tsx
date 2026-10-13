@@ -88,11 +88,17 @@ export function DatasetContextPanel({ datasetId, dlm, className }: {
           <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)", flexShrink: 0 }}>
             Context
           </span>
+          {/* The card holds its place while the artifact is read, and says
+              what it is reading — a mute placeholder bar here was the same
+              shape as a card with nothing in it. */}
           {state === "loading" && (
             <span
-              aria-hidden="true"
-              style={{ display: "block", width: 230, height: 9, borderRadius: 3, background: "var(--bg-hover)", border: "1px solid var(--border)" }}
-            />
+              role="status"
+              style={{ display: "inline-flex", alignItems: "center", gap: 7, minWidth: 0, fontSize: 12, color: "var(--text-secondary)" }}
+            >
+              <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: 999, background: "var(--accent)", flexShrink: 0 }} />
+              Reading compiled context
+            </span>
           )}
           {state !== "loading" && (
             <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12, color: "var(--text-muted)" }}>

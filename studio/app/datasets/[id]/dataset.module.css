@@ -138,6 +138,17 @@
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   color: var(--text-muted); font: 400 var(--fs-label)/1.3 Inter, sans-serif;
 }
+/* The note line while the card is still working: the same line, the same
+   place, said in the accent so it reads as activity rather than as a fact
+   about the data. */
+.barNoteBusy { display: inline-flex; align-items: center; gap: 7px; color: var(--text-secondary) }
+.pulse {
+  width: 6px; height: 6px; border-radius: 999px; flex-shrink: 0;
+  background: var(--accent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .pulse { animation: dsPulse 1.3s ease-in-out infinite }
+}
 .barTools { margin-left: auto; display: flex; align-items: center; gap: 6px; flex-shrink: 0 }
 /* Pushes a single trailing element — an accordion chevron — to the right edge. */
 .push { margin-left: auto }

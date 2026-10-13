@@ -116,12 +116,42 @@ class EngineBridgeTests(unittest.TestCase):
                 bridge._verify_context()
             self.assertEqual(error.exception.status_code, 503)
 
+    def test_every_round_trip_shares_one_client(self):
+        """A client per round trip parsed the trust store before a byte left
+        the process — 245 ms of it, measured on this interpreter — and then
+        threw away the connection it had just opened. One dataset preview
+        makes several Engine round trips, so that was seconds of certificate
+        parsing in front of a hundred rows."""
+        response = SimpleNamespace(status_code=200, is_success=True, json=lambda: {"ok": True})
+        built, closed = [], []
+
+        def client(**kwargs):
+            made = SimpleNamespace(request=lambda *a, **k: response, close=lambda: closed.append(len(built)))
+            built.append(kwargs)
+            return made
+
+        with patch.dict("os.environ", {"KAVEON_ENGINE_URL": "https://engine.example",
+                                       "KAVEON_ENGINE_BRIDGE_TOKEN": "test"}), \
+             patch.object(bridge, "_verify_context", return_value=True), \
+             patch.object(bridge, "_CLIENT", None), \
+             patch.object(bridge.httpx, "Client", client):
+            for _ in range(4):
+                bridge._request("GET", "/v1/health", "KAVEON_ENGINE_BRIDGE_TOKEN", "alice")
+            self.assertEqual(len(built), 1)
+            # Idle connections expire, so a burst shares one while a connection
+            # the Engine has since dropped is never handed to a later request.
+            self.assertEqual(built[0]["limits"].keepalive_expiry, 5.0)
+            # A changed trust decision retires the client that carried the old one.
+            with patch.dict("os.environ", {"KAVEON_ENGINE_CA_CERT": "C:/private-ca.pem"}):
+                bridge._request("GET", "/v1/health", "KAVEON_ENGINE_BRIDGE_TOKEN", "alice")
+        self.assertEqual((len(built), closed), (2, [2]))
+
     def test_engine_admission_rejection_is_retryable(self):
         response = SimpleNamespace(status_code=429, is_success=False,
                                    json=lambda: {"error": "memory admission wait expired", "code": "MEMORY_ADMISSION_REJECTED"})
         with patch.dict("os.environ", {"KAVEON_ENGINE_URL": "https://engine.example", "KAVEON_ENGINE_BRIDGE_TOKEN": "test"}), \
              patch.object(bridge, "_verify_context", return_value=True), \
-             patch.object(bridge.httpx, "request", return_value=response):
+             patch.object(bridge, "_client", return_value=SimpleNamespace(request=lambda *a, **k: response)):
             with self.assertRaises(HTTPException) as error:
                 bridge._request("POST", "/v1/statement", "KAVEON_ENGINE_BRIDGE_TOKEN", "alice", payload={})
         self.assertEqual(error.exception.status_code, 429)
