@@ -74,7 +74,18 @@ coordinator:
     # KAVEON_EXCHANGE_QUERY_DISK_LIMIT_BYTES: 16 GiB, one query's share.
     queryDiskLimitBytes: "17179869184"
 workers:
-  replicas: 3
+  # One worker per node, and the pool is four. Supported range is 1-4: workers
+  # self-register with the coordinator through KAVEON_DISCOVERY_URI, so there
+  # is no static peer list and no count baked in anywhere. More than four would
+  # leave a pod unschedulable, because the chart places one worker per node.
+  #
+  # Four, not three, so a benchmark round can take three nodes for a node-equal
+  # measurement while the platform keeps serving on the fourth. On three nodes
+  # those two are mutually exclusive — either the measurement acquires a
+  # co-tenant or the platform goes to zero workers, which is what took the demo
+  # down for a whole campaign. See BENCH_WORKERS / DEMO_WORKERS / REST_WORKERS
+  # in scripts/benchmark-rounds.py.
+  replicas: 4
   nodeSelector:
     workload: kaveon-worker
   # One worker per node, so the node is close to theirs alone. A 6 GiB ceiling
