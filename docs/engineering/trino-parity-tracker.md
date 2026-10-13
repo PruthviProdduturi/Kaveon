@@ -227,6 +227,7 @@ qualification documents; this tracker remains the single ordered work list.
 | Windows, sort, TopN, set operations | Partial | Distributed result hashes and null/order semantics |
 | Snapshot pinning | Partial | Catalog mutation during an in-flight query never mixes generations |
 | Worker loss and exchange recovery | Partial | Mid-stage loss with no missing or double-counted partitions |
+| Distributed execution SLO | Partial | A merged qualification artifact proving exact-result, reliability, latency, recovery, cancellation, and bounded-resource gates |
 
 ## Workstream 2 — SQL compatibility and types
 
@@ -614,6 +615,35 @@ image and workload. The current HTTP exchange spool is bounded, replayable,
 and incrementally decoded; network backpressure under sustained pressure,
 cloud-storage fault injection, longer endurance, upgrade/rollback, and
 deployed cancellation under those conditions remain open.
+
+### Track 1 distributed execution SLO
+
+The SLO is scoped to a declared qualification workload and image; it is not a
+promise for arbitrary data, hardware, or cloud topology. A release candidate
+must satisfy all of these gates in one archived, reproducible qualification
+artifact:
+
+- **Correctness:** 100% of accepted statements return the expected typed result
+  hash. Admission refusals are reported separately and never counted as
+  successful work; an execution error or silent mismatch fails the gate.
+- **Reliability:** at least 99.9% of accepted statements complete successfully
+  during the five-minute mixed-workload window, with zero silent wrong results.
+  The worker-loss exercise must recover the exact result after retry, and
+  cancellation must leave no exchange or spill residue.
+- **Latency and throughput:** every run publishes p50, p95, p99, and maximum
+  end-to-end latency, plus successful exact-result QPS. There is no universal
+  latency number independent of data shape; the comparison target remains the
+  separately declared 1.90x Trino throughput objective for its matched suite.
+- **Bounded resources:** peak process/pod memory stays within its configured
+  limit, exchange and spill bytes remain accounted, and cleanup reaches zero
+  retained temporary files after cancellation and restart checks.
+
+The gate is fail-closed: missing samples, missing task metrics, omitted worker
+loss or cancellation evidence, or a report from a different image/configuration
+leaves the SLO **pending**. The current three-worker evidence covers only the
+declared local qualification workload; sustained network pressure, cloud-store
+fault injection, coordinator-loss survival, longer endurance, and
+upgrade/rollback still block an SLO-complete claim.
 Track 2 remains partial because prepared statements are now available through
 the Engine HTTP lifecycle and scalar `EXECUTE ... USING` is supported by the
 Trino adapter, but the adapter still lacks a wire-compatible full protocol;
