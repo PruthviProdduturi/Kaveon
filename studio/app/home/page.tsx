@@ -372,6 +372,8 @@ export default function Home() {
 
   const [query, setQuery] = useState("");
   const [data, setData] = useState<PageData | null>(null);
+  // A read that failed, held apart from a read that answered with nothing.
+  const [dataUnread, setDataUnread] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [sending, setSending] = useState(false);
   const [sources, setSources] = useState<SourceOption[]>([]);
@@ -564,9 +566,16 @@ export default function Home() {
   // A dataset over an Engine table is askable with no registered data source,
   // so the platform is empty only when it holds neither — and only once both
   // reads have answered: a catalogue still in flight is not an absence of data.
-  const catalogueSettled = catalogueState !== "loading";
-  const isEmpty = data !== null && catalogueSettled
-    && data.sourceCount === 0 && datasets.length === 0;
+  // "Settled" has to mean answered. This read `!== "loading"`, which counted
+  // an error as settled — so a failed catalogue read satisfied every condition
+  // for emptiness and the page concluded the installation had no data.
+  const catalogueSettled = catalogueState === "ready" || catalogueState === "empty";
+  // Empty only when both reads answered and both said nothing. Either one
+  // failing leaves it unknown, which is not emptiness and must not be
+  // rendered as it.
+  const readsAnswered = data !== null && !dataUnread && catalogueSettled;
+  const isEmpty = readsAnswered && data.sourceCount === 0 && datasets.length === 0;
+  const readsFailed = dataUnread || catalogueState === "error";
   const inConversation = messages.length > 0;
 
   // ── Data fetching ────────────────────────────────────────────────────────────
@@ -600,10 +609,24 @@ export default function Home() {
           tableCount = active.dataSources.reduce((sum: number, s: any) => sum + (typeof s.table_count === "number" ? s.table_count : 0), 0);
         }
 
+        // Only a read that answered produces counts. A listing that failed
+        // used to be recorded as zero sources, and zero is a statement about
+        // the installation rather than about the request.
+        if (!listRes.ok || !activeRes.ok) {
+          setData(null);
+          setDataUnread(true);
+          return;
+        }
+        setDataUnread(false);
         setData({ sourceCount: list.length, tableCount });
         setSources(list.map((s: any) => ({ id: s.id, name: s.name, database_name: s.database_name })));
       } catch {
-        setData({ sourceCount: 0, tableCount: 0 });
+        // Unknown, not empty. Reporting a failed read as an empty platform is
+        // what printed "Connect your first data source" over a working
+        // installation and then disabled the composer that would have proved
+        // otherwise.
+        setData(null);
+        setDataUnread(true);
       }
     }
 
