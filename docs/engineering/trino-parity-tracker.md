@@ -111,7 +111,8 @@ foundations, but several operators are still centralized or narrow:
   and JSON nulls as serialized JSON text; `JSON_EXTRACT_SCALAR` supports dotted
   object paths and numeric array subscripts. Invalid JSON and missing paths
   return NULL. `REGEXP_LIKE` now reuses the bounded compiled-regex cache and
-  preserves nullable boolean results.
+  preserves nullable boolean results. `MAP_CONCAT` now merges supported typed
+  maps with later values winning duplicate keys.
 - There is no Trino-style cross-source federation yet. Registered SQL sources
   are API passthrough paths, while the strongest native Engine path is
   Parquet/Delta/Iceberg. The connector matrix now records S3 as implemented

@@ -6,6 +6,7 @@ use arrow::array::{
     StringArray,
     StringBuilder, StructArray,
 };
+use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute;
 use arrow::datatypes::{ArrowPrimitiveType, DataType, Float64Type, Int32Type, Int64Type};
 use arrow::record_batch::RecordBatch;
@@ -1495,6 +1496,102 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             keys.offsets().clone(),
             entries,
             keys.nulls().cloned(),
+            false,
+        )?));
+    }
+    if upper == "MAP_CONCAT" {
+        if args.len() < 2 {
+            return Err(KaveonError::Execution(
+                "MAP_CONCAT requires at least 2 arguments".into(),
+            ));
+        }
+        let maps = args
+            .iter()
+            .map(|arg| {
+                arg.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
+                    KaveonError::Execution("MAP_CONCAT requires MAP values".into())
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let key_type = maps[0].keys().data_type().clone();
+        let value_type = maps[0].values().data_type().clone();
+        if !matches!(
+            &key_type,
+            DataType::Boolean | DataType::Int64 | DataType::Float64 | DataType::Utf8
+        ) {
+            return Err(KaveonError::Execution(format!(
+                "MAP_CONCAT does not support key type {key_type}"
+            )));
+        }
+        if maps.iter().any(|map| {
+            map.keys().data_type() != &key_type || map.values().data_type() != &value_type
+        }) {
+            return Err(KaveonError::Execution(
+                "MAP_CONCAT requires matching key and value types".into(),
+            ));
+        }
+        let key_sources = maps
+            .iter()
+            .map(|map| map.keys().as_ref() as &dyn Array)
+            .collect::<Vec<_>>();
+        let value_sources = maps
+            .iter()
+            .map(|map| map.values().as_ref() as &dyn Array)
+            .collect::<Vec<_>>();
+        let all_keys = compute::concat(&key_sources)?;
+        let all_values = compute::concat(&value_sources)?;
+        let mut selected = Vec::<u32>::new();
+        let mut offsets = vec![0_i32];
+        let mut valid = Vec::with_capacity(num_rows);
+        let mut bases = Vec::with_capacity(maps.len());
+        let mut base = 0_u32;
+        for map in &maps {
+            bases.push(base);
+            base += map.keys().len() as u32;
+        }
+        for row in 0..num_rows {
+            if maps.iter().any(|map| map.is_null(row)) {
+                valid.push(false);
+                offsets.push(selected.len() as i32);
+                continue;
+            }
+            valid.push(true);
+            for (map_index, map) in maps.iter().enumerate() {
+                let start = map.value_offsets()[row] as usize;
+                let end = map.value_offsets()[row + 1] as usize;
+                for entry in start..end {
+                    let global = bases[map_index] + entry as u32;
+                    if let Some(position) = selected.iter().position(|candidate| {
+                        map_keys_equal(&all_keys, *candidate as usize, global as usize)
+                            .unwrap_or(false)
+                    }) {
+                        selected[position] = global;
+                    } else {
+                        selected.push(global);
+                    }
+                }
+            }
+            offsets.push(selected.len() as i32);
+        }
+        let indices = arrow::array::UInt32Array::from(selected);
+        let keys = compute::take(all_keys.as_ref(), &indices, None)?;
+        let values = compute::take(all_values.as_ref(), &indices, None)?;
+        let entry_fields: arrow::datatypes::Fields = vec![
+            Arc::new(arrow::datatypes::Field::new("key", key_type, false)),
+            Arc::new(arrow::datatypes::Field::new("value", value_type, true)),
+        ]
+        .into();
+        let entries = StructArray::new(entry_fields.clone(), vec![keys, values], None);
+        let entry_field = Arc::new(arrow::datatypes::Field::new(
+            "entries",
+            DataType::Struct(entry_fields),
+            false,
+        ));
+        return Ok(Arc::new(MapArray::try_new(
+            entry_field,
+            OffsetBuffer::new(ScalarBuffer::from(offsets)),
+            entries,
+            Some(arrow::buffer::NullBuffer::from(valid)),
             false,
         )?));
     }
@@ -4120,6 +4217,35 @@ fn array_join_value(array: &ArrayRef, index: usize) -> Result<String> {
     })
 }
 
+fn map_keys_equal(left: &ArrayRef, left_index: usize, right_index: usize) -> Result<bool> {
+    if left.is_null(left_index) || left.is_null(right_index) {
+        return Ok(false);
+    }
+    Ok(match left.data_type() {
+        DataType::Boolean => {
+            let values = left.as_any().downcast_ref::<BooleanArray>().unwrap();
+            values.value(left_index) == values.value(right_index)
+        }
+        DataType::Int64 => {
+            let values = left.as_any().downcast_ref::<Int64Array>().unwrap();
+            values.value(left_index) == values.value(right_index)
+        }
+        DataType::Float64 => {
+            let values = left.as_any().downcast_ref::<Float64Array>().unwrap();
+            values.value(left_index) == values.value(right_index)
+        }
+        DataType::Utf8 => {
+            let values = left.as_any().downcast_ref::<StringArray>().unwrap();
+            values.value(left_index) == values.value(right_index)
+        }
+        other => {
+            return Err(KaveonError::Execution(format!(
+                "MAP_CONCAT does not support key type {other}"
+            )))
+        }
+    })
+}
+
 fn format_decimal_for_array_join(value: i128, scale: i8) -> String {
     if scale <= 0 {
         return value.checked_mul(10_i128.pow((-scale) as u32)).map(|value| value.to_string()).unwrap_or_else(|| value.to_string());
@@ -5018,6 +5144,47 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("MAP keys cannot contain NULL"));
+    }
+
+    #[test]
+    fn map_concat_uses_later_values_and_preserves_rows() {
+        let input = RecordBatch::try_from_iter([(
+            "dummy",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        let map = |keys: &[&str], values: &[i64]| Expr::Function {
+            name: "MAP".into(),
+            args: vec![
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: keys
+                        .iter()
+                        .map(|key| Expr::Literal(ScalarValue::Utf8((*key).into())))
+                        .collect(),
+                },
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: values
+                        .iter()
+                        .map(|value| Expr::Literal(ScalarValue::Int64(*value)))
+                        .collect(),
+                },
+            ],
+        };
+        let result = evaluate(
+            &Expr::Function {
+                name: "MAP_CONCAT".into(),
+                args: vec![map(&["a", "b"], &[1, 2]), map(&["b", "c"], &[20, 3])],
+            },
+            &input,
+        )
+        .unwrap();
+        let result = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(result.keys().as_string::<i32>().iter().collect::<Vec<_>>(),
+            vec![Some("a"), Some("b"), Some("c")]);
+        assert_eq!(result.values().as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+            vec![Some(1), Some(20), Some(3)]);
     }
 
     #[test]
