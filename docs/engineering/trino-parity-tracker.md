@@ -224,7 +224,7 @@ qualification documents; this tracker remains the single ordered work list.
 | Repartitioned hash joins | Partial | Correctness under skew, spill, retry, and worker loss |
 | Broadcast joins from exact source statistics | Partial | Small-side decision, stale-statistics fallback, and AKS result/latency comparison |
 | Global and grouped aggregates | Partial | Associative merge correctness, bounded memory, spill and cancellation |
-| Analytical result cache | Implemented locally; **Track 1 cache SLO pending** | One deployed, same-image cache evidence run: exact hit parity, p50/p95/p99/max hit latency, hit ratio, byte/entry eviction, TTL, source-version and product-commit invalidation, bypass/paging/admin-clear behavior, authorization isolation, and restart miss |
+| Analytical result cache | **Qualified on AKS for the declared row-result workload**; shared invalidation remains open | `docs/qualification/cache-slo-aks-2026-10-13.json`: exact hit parity, 20/20 warm hits, p50/p95/p99/max latency, hit metrics, bypass, clear, authorization scope, and coordinator restart-to-miss |
 | Windows, sort, TopN, set operations | Partial | Distributed result hashes and null/order semantics |
 | Snapshot pinning | Partial | Catalog mutation during an in-flight query never mixes generations |
 | Worker loss and exchange recovery | Partial | Mid-stage loss with no missing or double-counted partitions |
@@ -282,12 +282,16 @@ all of the following:
 - cache keys remain isolated by catalog, schema, snapshot/version, timezone,
   and authorization view, with no cross-principal result exposure; the
   implementation now includes the effective role and catalog-grant scope,
-  so grant changes cannot reuse the previous authorization view, while the
-  deployed isolation evidence remains pending; and
+  so grant changes cannot reuse the previous authorization view; and
 - a coordinator restart fails closed to a miss and rebuilds safely. A shared
   cross-coordinator cache, restart warm-up, and cache-backed transactional
   reads are outside the current claim until separately implemented and
   qualified.
+
+The deployed AKS qualification passed for the declared row-result workload on
+image `sha256:9c0821abf24cf5646de44c0009a8f83b85f752933928e574ce7e8d4741b60f3d`.
+It does not claim shared cross-coordinator invalidation, TTL-expiry evidence,
+or cache-backed transactional reads; those remain separate gates.
 
 This is a Track 1 execution SLO, not a claim that Trino has a built-in result
 cache. Trino deployments may add connector caches or materialized views, but

@@ -289,14 +289,13 @@ operational visibility, not claim evidence. The complete report remains the
 only artifact accepted by the claim gate.
 
 The coordinator result-cache SLO is a separate Track 1 gate. It is not implied
-by the distributed execution SLO or by the local cache test suite. A cache
-qualification record must come from the deployed image under test and include
-exact warm-hit parity, hit p50/p95/p99/max, hit ratio, byte and entry
-evictions, TTL expiry, catalog/Delta/product-commit invalidation, bypass and
-paging exclusions, admin clear, authorization isolation, and restart-to-miss
-evidence. Until that record is archived, the Track 1 table reports the cache
-as implemented locally with its SLO pending; no shared cross-coordinator or
-cache-backed transactional-read claim is made.
+by the distributed execution SLO or by the local cache test suite. The AKS
+record in `docs/qualification/cache-slo-aks-2026-10-13.json` qualifies the
+declared row-result workload: exact warm-hit parity, 20/20 warm hits, latency
+percentiles, hit metrics, bypass, clear, authorization scope, and
+restart-to-miss all pass on the deployed image. Shared cross-coordinator
+invalidation, TTL-expiry evidence, and cache-backed transactional reads remain
+outside that qualification and must not be claimed from it.
 
 `transaction_compare.py` now produces the transaction input for the product SQL
 facade. It executes point read, insert, update, delete, conflicting update, and a

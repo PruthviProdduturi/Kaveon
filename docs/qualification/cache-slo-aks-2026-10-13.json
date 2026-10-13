@@ -1,0 +1,88 @@
+{
+  "run_date": "2026-10-13",
+  "environment": "AKS kaveon-aks / kaveon",
+  "image_digest": "sha256:9c0821abf24cf5646de44c0009a8f83b85f752933928e574ce7e8d4741b60f3d",
+  "workload": "SELECT * FROM OpenSource.public.kaveon_events_dashboard LIMIT 10",
+  "warm_hits_requested": 20,
+  "warm_latency_ms": {
+    "max": 19.677,
+    "mean": 16.2439,
+    "p50": 15.809,
+    "p95": 19.303,
+    "p99": 19.677
+  },
+  "checks": {
+    "bypass_did_not_add_hit": true,
+    "clear_removed_entries": true,
+    "engine_hit_latency_metrics": true,
+    "exact_result_parity": true,
+    "restart_miss": true,
+    "warm_hit_count": true
+  },
+  "stats_before_clear": {
+    "budget_bytes": 268435456,
+    "bytes": 7708,
+    "enabled": true,
+    "entries": 1,
+    "evictions": 0,
+    "expirations": 0,
+    "hit_latency_ns_max": 9700,
+    "hit_latency_ns_total": 137000,
+    "hit_latency_samples": 21,
+    "hits": 21,
+    "misses": 2,
+    "refused": 0,
+    "ttl_seconds": 600
+  },
+  "restart_evidence": {
+    "restart_miss": true,
+    "before": {
+      "enabled": true,
+      "budget_bytes": 268435456,
+      "ttl_seconds": 600,
+      "entries": 0,
+      "bytes": 0,
+      "hits": 0,
+      "misses": 0,
+      "evictions": 0,
+      "expirations": 0,
+      "refused": 0,
+      "hit_latency_samples": 0,
+      "hit_latency_ns_total": 0,
+      "hit_latency_ns_max": 0
+    },
+    "after_first": {
+      "enabled": true,
+      "budget_bytes": 268435456,
+      "ttl_seconds": 600,
+      "entries": 1,
+      "bytes": 7708,
+      "hits": 0,
+      "misses": 1,
+      "evictions": 0,
+      "expirations": 0,
+      "refused": 0,
+      "hit_latency_samples": 0,
+      "hit_latency_ns_total": 0,
+      "hit_latency_ns_max": 0
+    },
+    "after_second": {
+      "enabled": true,
+      "budget_bytes": 268435456,
+      "ttl_seconds": 600,
+      "entries": 1,
+      "bytes": 7708,
+      "hits": 1,
+      "misses": 1,
+      "evictions": 0,
+      "expirations": 0,
+      "refused": 0,
+      "hit_latency_samples": 1,
+      "hit_latency_ns_total": 7900,
+      "hit_latency_ns_max": 7900
+    },
+    "first_query_id": "497e3e0a-580f-4e88-af3b-febbf8e4c5b5",
+    "second_query_id": "e1b435df-f1f6-4f76-8c1e-e820c9d1db44"
+  },
+  "passed": true
+}
