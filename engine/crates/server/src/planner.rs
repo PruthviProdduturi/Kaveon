@@ -3275,6 +3275,10 @@ mod tests {
             let plan = kaveon_optim::rules::push_projection_down(plan);
             let fixture = fixture();
             let graph = build_stage_graph("query-1", &plan, 4).unwrap();
+            // The probe remains distributed while the subquery is broadcast;
+            // dynamic key filtering into the probe scan is not part of this
+            // protocol yet, so exact qualification stops at this boundary.
+            assert!(graph.stages.iter().any(|stage| stage.task_count == 4));
             assert!(graph.exchanges.iter().any(|exchange| {
                 exchange.target_stage == StageId(0)
                     && matches!(exchange.partitioning, Partitioning::Broadcast)
