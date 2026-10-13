@@ -761,6 +761,29 @@ fn row_key(
                         .as_primitive::<arrow::datatypes::Date32Type>()
                         .value(row),
                 ),
+                DataType::Date64 => Key::Int64(
+                    column
+                        .as_primitive::<arrow::datatypes::Date64Type>()
+                        .value(row),
+                ),
+                DataType::Time32(unit) => Key::Int32(match unit {
+                    TimeUnit::Second => column
+                        .as_primitive::<arrow::datatypes::Time32SecondType>()
+                        .value(row),
+                    TimeUnit::Millisecond => column
+                        .as_primitive::<arrow::datatypes::Time32MillisecondType>()
+                        .value(row),
+                    _ => return Err(exec_err("unsupported TIME32 unit")),
+                }),
+                DataType::Time64(unit) => Key::Int64(match unit {
+                    TimeUnit::Microsecond => column
+                        .as_primitive::<arrow::datatypes::Time64MicrosecondType>()
+                        .value(row),
+                    TimeUnit::Nanosecond => column
+                        .as_primitive::<arrow::datatypes::Time64NanosecondType>()
+                        .value(row),
+                    _ => return Err(exec_err("unsupported TIME64 unit")),
+                }),
                 DataType::Timestamp(unit, _) => Key::Int64(match unit {
                     TimeUnit::Second => column
                         .as_primitive::<arrow::datatypes::TimestampSecondType>()
@@ -819,7 +842,10 @@ fn exec_err(message: impl Into<String>) -> KaveonError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Decimal128Array, Int64Array, StringArray, TimestampMillisecondArray};
+    use arrow::array::{
+        Date64Array, Decimal128Array, Int64Array, StringArray, Time32MillisecondArray,
+        TimestampMillisecondArray,
+    };
     use std::collections::VecDeque;
 
     struct Input {
@@ -952,6 +978,73 @@ mod tests {
         let result = concat_batches(join.schema(), &batches).unwrap();
         assert_eq!(result.num_rows(), 2);
         assert_eq!(result.column(0).null_count(), 0);
+    }
+
+    #[test]
+    fn date64_and_time32_join_keys_match_and_skip_nulls() {
+        let date_schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Date64, true),
+            Field::new("side", DataType::Utf8, false),
+        ]));
+        let left = RecordBatch::try_new(
+            Arc::clone(&date_schema),
+            vec![
+                Arc::new(Date64Array::from(vec![Some(86_400_000), None])),
+                Arc::new(StringArray::from(vec!["left", "null"])),
+            ],
+        )
+        .unwrap();
+        let right = RecordBatch::try_new(
+            date_schema,
+            vec![
+                Arc::new(Date64Array::from(vec![Some(86_400_000), Some(172_800_000)])),
+                Arc::new(StringArray::from(vec!["match", "other"])),
+            ],
+        )
+        .unwrap();
+        let mut join = HashJoin::try_new(
+            Box::new(Input::new(left)),
+            Box::new(Input::new(right)),
+            JoinType::Inner,
+            vec![("key".into(), "key".into())],
+        )
+        .unwrap();
+        let batches = kaveon_core::collect_batches(&mut join).unwrap();
+        assert_eq!(concat_batches(join.schema(), &batches).unwrap().num_rows(), 1);
+
+        let time_schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "key",
+                DataType::Time32(TimeUnit::Millisecond),
+                true,
+            ),
+            Field::new("side", DataType::Utf8, false),
+        ]));
+        let left = RecordBatch::try_new(
+            Arc::clone(&time_schema),
+            vec![
+                Arc::new(Time32MillisecondArray::from(vec![Some(1_000), None])),
+                Arc::new(StringArray::from(vec!["left", "null"])),
+            ],
+        )
+        .unwrap();
+        let right = RecordBatch::try_new(
+            time_schema,
+            vec![
+                Arc::new(Time32MillisecondArray::from(vec![Some(1_000), Some(2_000)])),
+                Arc::new(StringArray::from(vec!["match", "other"])),
+            ],
+        )
+        .unwrap();
+        let mut join = HashJoin::try_new(
+            Box::new(Input::new(left)),
+            Box::new(Input::new(right)),
+            JoinType::Inner,
+            vec![("key".into(), "key".into())],
+        )
+        .unwrap();
+        let batches = kaveon_core::collect_batches(&mut join).unwrap();
+        assert_eq!(concat_batches(join.schema(), &batches).unwrap().num_rows(), 1);
     }
 
     #[test]
