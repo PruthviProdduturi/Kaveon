@@ -1,7 +1,8 @@
 use arrow::array::{
     Array, ArrayRef, AsArray, BooleanArray, BooleanBuilder, Decimal128Array, Decimal128Builder,
     Float64Array, Float64Builder,
-    Int32Array, Int32DictionaryArray, Int64Array, Int64Builder, ListArray, ListBuilder, MapArray,
+    Int32Array, Int32Builder, Int32DictionaryArray, Int64Array, Int64Builder, ListArray,
+    ListBuilder, MapArray,
     NullBuilder, PrimitiveArray,
     StringArray,
     StringBuilder, StructArray,
@@ -1468,6 +1469,11 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 Int64Builder::new(),
                 Int64Array,
                 |values: &Int64Array, row| values.value(row)
+            ),
+            DataType::Int32 => build_array!(
+                Int32Builder::new(),
+                Int32Array,
+                |values: &Int32Array, row| values.value(row)
             ),
             DataType::Float64 => {
                 let mut builder = ListBuilder::new(Float64Builder::new());
@@ -6981,6 +6987,26 @@ mod tests {
         let inner = lists.value(0);
         let values = inner.as_primitive::<Int64Type>();
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(1), None, Some(3)]);
+    }
+
+    #[test]
+    fn evaluates_int32_array_elements() {
+        let batch = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(Int32Array::from(vec![Some(7), None])) as ArrayRef,
+        )])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "ARRAY".into(),
+                args: vec![Expr::Column("value".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        let lists = result.as_list::<i32>();
+        assert_eq!(lists.value(0).as_primitive::<Int32Type>().iter().collect::<Vec<_>>(), vec![Some(7)]);
+        assert_eq!(lists.value(1).as_primitive::<Int32Type>().iter().collect::<Vec<_>>(), vec![None]);
     }
 
     #[test]
