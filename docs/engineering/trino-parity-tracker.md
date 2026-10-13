@@ -372,6 +372,8 @@ invalidation, isolation, bounds, and restart evidence listed above.
   nested list, row, and map values in both `List` and `LargeList` containers.
 - `ARRAY_REVERSE` now preserves nested element values, nulls, and container
   width for both `List` and `LargeList` inputs.
+- `ARRAY_SORT` now supports the existing orderable scalar element set in
+  `LargeList` containers with nulls last and stable container width.
 - The differential corpus now exercises scalar `CARDINALITY`,
   `ARRAY_POSITION`, `ARRAY_JOIN`, and `ARRAYS_OVERLAP` results across alternate
   Parquet encodings and local/two-worker execution paths. This extends the
