@@ -3877,6 +3877,10 @@ mod tests {
             "SELECT id FROM orders ORDER BY id DESC LIMIT 10",
         ] {
             let graph = graph(sql);
+            // Input work remains distributed, but exact global ordering is
+            // finalized by one merge task. Parallelizing this stage would
+            // require a range exchange (and explicit tie/null boundaries).
+            assert!(graph.stages.iter().any(|stage| stage.task_count == 4));
             assert_eq!(graph.stages.len(), 2);
             assert_eq!(graph.exchanges.len(), 1);
             assert_eq!(graph.exchanges[0].partitioning, Partitioning::Single);
