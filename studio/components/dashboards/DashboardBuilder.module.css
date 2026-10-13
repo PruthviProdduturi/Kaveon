@@ -1,0 +1,299 @@
+/*
+ * Dashboard builder layout.
+ *
+ * The builder is a fixed-height workspace, not a document. The page itself must
+ * never scroll; the two regions that can overflow — the chart palette and the
+ * canvas — each own their own scroll region.
+ *
+ * `.page-shell` (globals.css) is padding only: it declares no height and is not
+ * a flex container, so the `flex: 1` the builder body used to carry had nothing
+ * to divide. The body therefore collapsed to its content height, the canvas
+ * stopped at the 600px `min-height` of `.dashboard-canvas` with the page
+ * background running on below it, and the palette grew without bound so the
+ * whole page scrolled instead of the list. This shell gives the builder a
+ * definite height so both of those resolve.
+ */
+
+.shell {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100dvh;
+  padding: 28px 32px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* The toolbar keeps its intrinsic height; the workspace below takes the rest. */
+.header {
+  flex-shrink: 0;
+}
+
+/* Two-column workspace: settings rail + canvas, inside one rounded card so it
+   reads as a pair with the rounded header above it. */
+.body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 360px) minmax(0, 1fr);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+
+.bodyCollapsed {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+/* ── Settings rail ───────────────────────────────────────────────────────── */
+
+.settings {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border);
+}
+
+.settingsCollapsed {
+  align-items: center;
+  background: var(--bg-elevated);
+}
+
+.settingsHeader {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settingsTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.railButton {
+  background: transparent;
+  border: none;
+  padding: 10px 8px;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  border-radius: 6px;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.railButton:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.railLabel {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+  padding: 16px 0;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* Tab strip stays put; only the panel below it scrolls. */
+.tabs {
+  flex-shrink: 0;
+  display: flex;
+  border-bottom: 1px solid var(--border);
+}
+
+/* The panel owns the remaining height and never grows the rail. */
+.panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 16px;
+}
+
+/* Panels whose whole content scrolls as one (Layout, Filters). Block flow, not
+   flex: flex would let the controls shrink to fit instead of scrolling. */
+.panelScroll {
+  display: block;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* ── Items panel: fixed controls above a scrolling chart list ────────────── */
+
+.itemsControls {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.chartList {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* Room for the scrollbar so rows do not shift when it appears. */
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.chartList::-webkit-scrollbar {
+  width: 8px;
+}
+
+.chartList::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chartList::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+.chartList::-webkit-scrollbar-thumb:hover {
+  background: var(--border-hover, var(--text-muted));
+}
+
+/* ── Canvas ──────────────────────────────────────────────────────────────── */
+
+/* A column flex container with a definite height: the canvas fills the
+   viewport remainder, and `.dashboard-canvas-empty`'s `flex: 1` finally has a
+   parent to stretch against. Overflow scrolls here, not on the page. */
+.canvasPane {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: var(--bg-elevated);
+  padding: 12px;
+}
+
+/*
+ * Empty canvas, themed.
+ *
+ * `.dashboard-canvas-empty` (styles/dashboard.css) hardcodes a white fill and
+ * slate text from before the dark theme existed. Now that it stretches to the
+ * full canvas height it would be a full-height white slab on the default dark
+ * theme, so the builder's copy is re-tokenised here. Scoped under .canvasPane
+ * so it outranks the global single-class rule by specificity, not by load
+ * order; the shared rule itself is not this component's to change.
+ */
+.canvasPane :global(.dashboard-canvas-empty) {
+  background: var(--bg-surface);
+  border-color: var(--border);
+  border-radius: 12px;
+}
+
+.canvasPane :global(.dashboard-canvas-empty-icon) {
+  color: var(--text-muted);
+  opacity: 0.5;
+}
+
+.canvasPane :global(.dashboard-canvas-empty-title) {
+  color: var(--text-primary);
+}
+
+.canvasPane :global(.dashboard-canvas-empty-subtitle) {
+  color: var(--text-muted);
+}
+
+/* ── Shared controls ─────────────────────────────────────────────────────── */
+
+.search {
+  position: relative;
+}
+
+.searchIcon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.searchInput {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px 7px 30px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.searchInput:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
+}
+
+.datasetSelect {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.datasetSelect:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
+}
+
+/* The chart-picker dialog paints its own light surface, so the picker inside it
+   matches that surface rather than the app theme. */
+.datasetSelectDialog {
+  box-sizing: border-box;
+  flex-shrink: 0;
+  max-width: 220px;
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  background: #fff;
+  color: #334155;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.datasetSelectDialog:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
