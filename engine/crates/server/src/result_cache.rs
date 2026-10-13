@@ -4,9 +4,9 @@
 //!
 //! A result is keyed by everything that decides it: the statement text
 //! (normalised outside string literals and quoted identifiers), the catalog
-//! and schema it resolved names in, the published catalog snapshot, the
-//! Delta versions the planner pinned, and the request settings that shape
-//! rows (the time zone). A catalog publish changes the snapshot identity
+//! and schema it resolved names in, the authenticated authorization scope,
+//! the published catalog snapshot, the Delta versions the planner pinned,
+//! and the request settings that shape rows (the time zone). A catalog publish changes the snapshot identity
 //! and clears the cache outright; a Delta version the planner pinned
 //! changes the key. Tables the planner did not pin (single-table scans of
 //! Delta or Parquet locations) are covered by the catalog snapshot and by
@@ -37,6 +37,10 @@ pub struct ResultCacheKey {
     pub catalog: String,
     pub schema: String,
     pub catalog_snapshot_id: String,
+    /// The authenticated authorization view.  Results cannot be shared
+    /// between principals (or between role changes for one principal), even
+    /// when the SQL and lake snapshot are identical.
+    pub authorization_scope: String,
     /// Source location to Delta version, as the planner pinned them.
     pub delta_versions: BTreeMap<String, u64>,
     pub time_zone: Option<String>,
@@ -48,6 +52,7 @@ impl ResultCacheKey {
         catalog: &str,
         schema: &str,
         catalog_snapshot_id: &str,
+        authorization_scope: &str,
         delta_versions: &BTreeMap<String, u64>,
         time_zone: Option<&str>,
     ) -> Self {
@@ -56,6 +61,7 @@ impl ResultCacheKey {
             catalog: catalog.to_owned(),
             schema: schema.to_owned(),
             catalog_snapshot_id: catalog_snapshot_id.to_owned(),
+            authorization_scope: authorization_scope.to_owned(),
             delta_versions: delta_versions.clone(),
             time_zone: time_zone.map(str::to_owned),
         }
@@ -362,7 +368,15 @@ mod tests {
     use serde_json::json;
 
     fn key(sql: &str) -> ResultCacheKey {
-        ResultCacheKey::new(sql, "lake", "sales", "snapshot-1", &BTreeMap::new(), None)
+        ResultCacheKey::new(
+            sql,
+            "lake",
+            "sales",
+            "snapshot-1",
+            "analyst:alice",
+            &BTreeMap::new(),
+            None,
+        )
     }
 
     fn columns() -> Vec<ColumnInfo> {
@@ -407,7 +421,15 @@ mod tests {
         other_version.delta_versions.insert("file:///t".into(), 3);
         let mut other_zone = base.clone();
         other_zone.time_zone = Some("UTC".into());
-        for other in [other_schema, other_snapshot, other_version, other_zone] {
+        let mut other_principal = base.clone();
+        other_principal.authorization_scope = "analyst:bob".into();
+        for other in [
+            other_schema,
+            other_snapshot,
+            other_version,
+            other_zone,
+            other_principal,
+        ] {
             assert_ne!(base, other);
         }
     }

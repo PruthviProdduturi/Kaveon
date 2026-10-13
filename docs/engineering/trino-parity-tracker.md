@@ -278,7 +278,9 @@ all of the following:
 - `result_cache = false` produces no hit and inserts no entry, paged results
   remain uncached, and an administrator can clear the cache;
 - cache keys remain isolated by catalog, schema, snapshot/version, timezone,
-  and authorization view, with no cross-principal result exposure; and
+  and authorization view, with no cross-principal result exposure; the
+  implementation now includes the authenticated principal and role in that
+  scope, while the deployed isolation evidence remains pending; and
 - a coordinator restart fails closed to a miss and rebuilds safely. A shared
   cross-coordinator cache, restart warm-up, and cache-backed transactional
   reads are outside the current claim until separately implemented and
