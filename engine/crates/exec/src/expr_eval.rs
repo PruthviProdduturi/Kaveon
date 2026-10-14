@@ -426,6 +426,7 @@ fn compare_column_with_literal(
 const NULL_PROPAGATING_FUNCTIONS: &[&str] = &[
     "REGEXP_REPLACE",
     "REGEXP_EXTRACT",
+    "REGEXP_COUNT",
     "UPPER",
     "LOWER",
     "TRIM",
@@ -3336,6 +3337,22 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         compiled_regex_for("REGEXP_LIKE", patterns.value(row))?
                             .is_match(values.value(row)),
                     ))
+                })
+                .collect::<Result<Vec<_>>>()?
+                .into();
+            Ok(Arc::new(result))
+        }
+        "REGEXP_COUNT" => {
+            check_arity(name, args, 2)?;
+            let values = as_string_array(&args[0])?;
+            let patterns = as_string_array(&args[1])?;
+            let result: Int64Array = (0..num_rows)
+                .map(|row| {
+                    if values.is_null(row) || patterns.is_null(row) {
+                        return Ok(None);
+                    }
+                    let regex = compiled_regex_for("REGEXP_COUNT", patterns.value(row))?;
+                    Ok(Some(regex.find_iter(values.value(row)).count() as i64))
                 })
                 .collect::<Result<Vec<_>>>()?
                 .into();
@@ -12523,5 +12540,44 @@ mod tests {
         .unwrap();
         let error = evaluate(&expr, &invalid).unwrap_err();
         assert!(error.to_string().contains("pattern") && error.to_string().contains("invalid"));
+    }
+
+    #[test]
+    fn evaluates_regexp_count_with_non_overlapping_matches_and_nulls() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "value",
+                Arc::new(StringArray::from(vec![Some("banana"), Some("aaaa"), None]))
+                    as ArrayRef,
+            ),
+            (
+                "pattern",
+                Arc::new(StringArray::from(vec![Some("ana"), Some("aa"), Some("a")]))
+                    as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let expr = Expr::Function {
+            name: "REGEXP_COUNT".into(),
+            args: vec![Expr::Column("value".into()), Expr::Column("pattern".into())],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        assert_eq!(
+            result
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(2), None]
+        );
+
+        let invalid = RecordBatch::try_from_iter([
+            ("value", Arc::new(StringArray::from(vec![Some("a")])) as ArrayRef),
+            ("pattern", Arc::new(StringArray::from(vec![Some("[")])) as ArrayRef),
+        ])
+        .unwrap();
+        let error = evaluate(&expr, &invalid).unwrap_err();
+        assert!(error.to_string().contains("REGEXP_COUNT") && error.to_string().contains("invalid"));
     }
 }
