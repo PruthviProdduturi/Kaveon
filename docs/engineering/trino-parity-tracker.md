@@ -420,7 +420,7 @@ qualification documents; this tracker remains the single ordered work list.
 | Arrays, maps, structs, JSON | Partial — JSON/JSONB casts now use the Engine's UTF-8 JSON representation | Parse, plan, execute, and explicit unsupported diagnostics; broader typed JSON semantics remain to be qualified |
 | Decimal, timestamp, interval, and casts | Partial | Overflow, timezone, precision, and implicit-cast cases |
 | `CASE`, `HAVING`, `FILTER`, `QUALIFY` | Partial | Exact-result and error semantics |
-| Native DML and prepared parameters | Partial | `BEGIN`/`COMMIT`/`ROLLBACK`, parameter binding, and transactional visibility |
+| Native DML and prepared parameters | Partial — bounded product DML parameter binding is qualified; full wire lifecycle and broader typed DML remain open | `BEGIN`/`COMMIT`/`ROLLBACK`, positional/named binding on statement and transaction HTTP routes, multi-row `VALUES`, and transactional visibility |
 
 ### Cache boundary and latency target
 
