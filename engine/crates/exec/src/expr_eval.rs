@@ -740,6 +740,27 @@ where
     if saw_null { None } else { Some(false) }
 }
 
+fn large_string_arrays_overlap(
+    left: &arrow::array::LargeStringArray,
+    right: &arrow::array::LargeStringArray,
+) -> Option<bool> {
+    let saw_null = left.null_count() > 0 || right.null_count() > 0;
+    for left_index in 0..left.len() {
+        if left.is_null(left_index) {
+            continue;
+        }
+        for right_index in 0..right.len() {
+            if right.is_null(right_index) {
+                continue;
+            }
+            if left.value(left_index) == right.value(right_index) {
+                return Some(true);
+            }
+        }
+    }
+    if saw_null { None } else { Some(false) }
+}
+
 fn string_arrays_overlap(left: &arrow::array::StringArray, right: &arrow::array::StringArray) -> Option<bool> {
     let saw_null = left.null_count() > 0 || right.null_count() > 0;
     for left_index in 0..left.len() {
@@ -7661,6 +7682,20 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         arrays_overlap_primitive::<_, TimestampMicrosecondType>(left, right),
                     DataType::Boolean => arrays_overlap_boolean(left, right),
                     DataType::Utf8 => arrays_overlap_utf8(left, right),
+                    DataType::LargeUtf8 => {
+                        let result = (0..left.len())
+                            .map(|row| {
+                                if left.is_null(row) || right.is_null(row) {
+                                    return None;
+                                }
+                                large_string_arrays_overlap(
+                                    left.value(row).as_string::<i64>(),
+                                    right.value(row).as_string::<i64>(),
+                                )
+                            })
+                            .collect::<BooleanArray>();
+                        Ok(Arc::new(result))
+                    }
                     other => Err(KaveonError::Execution(format!(
                         "ARRAYS_OVERLAP does not support list element type {other}"
                     ))),
@@ -7778,6 +7813,17 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         string_arrays_overlap(
                             left.value(row).as_string::<i32>(),
                             right.value(row).as_string::<i32>(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                DataType::LargeUtf8 => (0..num_rows)
+                    .map(|row| {
+                        if left.is_null(row) || right.is_null(row) {
+                            return None;
+                        }
+                        large_string_arrays_overlap(
+                            left.value(row).as_string::<i64>(),
+                            right.value(row).as_string::<i64>(),
                         )
                     })
                     .collect::<Vec<_>>(),
@@ -11235,6 +11281,24 @@ mod tests {
         )
         .unwrap();
         assert!(result.as_boolean().value(0));
+
+        let mut large_text_overlap_left = LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
+        large_text_overlap_left.values().append_value("alpha");
+        large_text_overlap_left.values().append_null();
+        large_text_overlap_left.append(true);
+        let mut large_text_overlap_right = LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
+        large_text_overlap_right.values().append_value("beta");
+        large_text_overlap_right.append(true);
+        let result = eval_scalar_function(
+            "ARRAYS_OVERLAP",
+            &[
+                Arc::new(large_text_overlap_left.finish()) as ArrayRef,
+                Arc::new(large_text_overlap_right.finish()) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        assert!(result.as_boolean().is_null(0));
 
         let mut large_text_position = LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
         large_text_position.values().append_value("alpha");
