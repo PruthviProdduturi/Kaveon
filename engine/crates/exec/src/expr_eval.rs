@@ -4721,24 +4721,62 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             Ok(Arc::new(result))
         }
         "SPLIT" => {
-            check_arity(name, args, 2)?;
+            if args.len() != 2 && args.len() != 3 {
+                return Err(KaveonError::Execution(
+                    "SPLIT requires 2 or 3 arguments".into(),
+                ));
+            }
             let values = as_string_array(&args[0])?;
             let delimiters = as_string_array(&args[1])?;
+            let limits = if args.len() == 3 {
+                Some(compute::cast(&args[2], &DataType::Int64)?)
+            } else {
+                None
+            };
+            let limits = limits.as_ref().map(|array| array.as_primitive::<Int64Type>());
+            for row in 0..num_rows {
+                if let Some(limits) = limits {
+                    if !limits.is_null(row) && limits.value(row) <= 0 {
+                        return Err(KaveonError::Execution(
+                            "SPLIT limit must be greater than zero".into(),
+                        ));
+                    }
+                }
+            }
             let mut builder = ListBuilder::new(StringBuilder::new());
             for row in 0..num_rows {
-                if values.is_null(row) || delimiters.is_null(row) {
+                if values.is_null(row)
+                    || delimiters.is_null(row)
+                    || limits.is_some_and(|limits| limits.is_null(row))
+                {
                     builder.append(false);
                     continue;
                 }
                 let value = values.value(row);
                 let delimiter = delimiters.value(row);
+                let limit = limits.map(|limits| limits.value(row) as usize);
                 if delimiter.is_empty() {
-                    for character in value.chars() {
-                        builder.values().append_value(character.to_string());
+                    let characters = value.chars().map(|character| character.to_string()).collect::<Vec<_>>();
+                    if let Some(limit) = limit.filter(|limit| *limit < characters.len()) {
+                        for character in &characters[..limit - 1] {
+                            builder.values().append_value(character);
+                        }
+                        builder.values().append_value(characters[limit - 1..].concat());
+                    } else {
+                        for character in characters {
+                            builder.values().append_value(character);
+                        }
                     }
                 } else {
-                    for part in value.split(delimiter) {
-                        builder.values().append_value(part);
+                    if let Some(limit) = limit {
+                        let mut parts = value.splitn(limit, delimiter);
+                        for part in parts.by_ref() {
+                            builder.values().append_value(part);
+                        }
+                    } else {
+                        for part in value.split(delimiter) {
+                            builder.values().append_value(part);
+                        }
                     }
                 }
                 builder.append(true);
@@ -10667,6 +10705,40 @@ mod tests {
             vec![Some("a"), Some("b"), Some("c")]
         );
         assert!(values.is_null(2));
+
+        let limited = Expr::Function {
+            name: "SPLIT".into(),
+            args: vec![
+                Expr::Literal(ScalarValue::Utf8("a,b,c".into())),
+                Expr::Literal(ScalarValue::Utf8(",".into())),
+                Expr::Literal(ScalarValue::Int64(2)),
+            ],
+        };
+        let limited = evaluate(&limited, &batch).unwrap();
+        let limited = limited.as_any().downcast_ref::<ListArray>().unwrap();
+        let limited = limited.value(0);
+        assert_eq!(
+            limited
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some("a"), Some("b,c")]
+        );
+
+        let invalid_limit = Expr::Function {
+            name: "SPLIT".into(),
+            args: vec![
+                Expr::Literal(ScalarValue::Utf8("a,b".into())),
+                Expr::Literal(ScalarValue::Utf8(",".into())),
+                Expr::Literal(ScalarValue::Int64(0)),
+            ],
+        };
+        assert!(evaluate(&invalid_limit, &batch)
+            .unwrap_err()
+            .to_string()
+            .contains("limit must be greater than zero"));
     }
 
     #[test]
