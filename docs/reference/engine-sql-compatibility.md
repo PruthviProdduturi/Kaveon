@@ -111,9 +111,9 @@ unchanged; nothing is approximated unless the statement writes an
   `CONTAINS`, `ARRAY_POSITION`, `ARRAY_DISTINCT`, `ARRAY_SORT`,
   `ARRAY_REVERSE`, `ELEMENT_AT`, and positive or negative-stride slices;
   date, timestamp, and decimal arrays are currently qualified for selected
-  scalar operations, and `ARRAY_CONCAT`, `ARRAY_APPEND`, and `ARRAY_PREPEND`
-  preserve nested list, row, and map elements; broader array element types and
-  function combinations remain open;
+  scalar operations, and `ARRAY_CONCAT`, `ARRAY_APPEND`, `ARRAY_PREPEND`, and
+  `ARRAY_REMOVE` preserve nested list, row, and map elements; broader array
+  element types and function combinations remain open;
   approximate aggregates beyond `APPROX_COUNT_DISTINCT` and
   `APPROX_PERCENTILE` — `APPROX_MOST_FREQUENT` has no heavy-hitter sketch in
   the statistics object yet.

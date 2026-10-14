@@ -202,7 +202,8 @@ foundations, but several operators are still centralized or narrow:
   elements; `ARRAY_APPEND` and `ARRAY_PREPEND` add typed values while
   preserving list nullability, including nested list, row, and map elements;
   `ARRAY_REMOVE` removes matching values without
-  dropping non-matching nulls; and `ARRAY_MIN` and `ARRAY_MAX` return typed extrema while
+  dropping non-matching nulls, including nested list, row, and map elements;
+  and `ARRAY_MIN` and `ARRAY_MAX` return typed extrema while
   ignoring null elements, and `ARRAYS_OVERLAP` follows Trino's true/false/NULL
   intersection semantics. `ARRAY_JOIN` now formats supported typed elements,
   omits NULL elements by default, and accepts a NULL replacement policy.
