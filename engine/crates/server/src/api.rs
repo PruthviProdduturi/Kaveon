@@ -2863,6 +2863,9 @@ async fn submit_trino_statement_parts(
     };
     let body_text = String::from_utf8(body.to_vec()).ok();
     if let Some(body) = body_text.as_deref() {
+        if trino_is_show_session(body) {
+            return trino_session_response(&state.config);
+        }
         match trino_prepare_statement(body) {
             Ok(Some((name, query))) => {
                 if let Err(error) = kaveon_sql::parser::parse_sql(&query) {
@@ -3145,6 +3148,73 @@ fn trino_deallocate_statement(body: &str) -> Option<String> {
         return None;
     }
     words.next().map(ToOwned::to_owned)
+}
+
+fn trino_is_show_session(body: &str) -> bool {
+    body.trim()
+        .trim_end_matches(';')
+        .trim()
+        .eq_ignore_ascii_case("SHOW SESSION")
+}
+
+fn trino_session_response(config: &crate::config::ServerConfig) -> Response {
+    let columns = ["Name", "Value", "Default", "Type", "Description"]
+        .into_iter()
+        .map(|name| {
+            serde_json::json!({
+                "name": name,
+                "type": "varchar",
+                "typeSignature": {"rawType": "varchar"}
+            })
+        })
+        .collect::<Vec<_>>();
+    let rows = vec![
+        serde_json::json!([
+            "query_memory_limit_bytes",
+            config.query_memory_limit_bytes.to_string(),
+            config.query_memory_limit_bytes.to_string(),
+            "bigint",
+            "Maximum memory admitted to one statement"
+        ]),
+        serde_json::json!([
+            "admission_wait_seconds",
+            config.memory_admission_wait_seconds.to_string(),
+            config.memory_admission_wait_seconds.to_string(),
+            "bigint",
+            "Maximum wait for memory admission"
+        ]),
+        serde_json::json!([
+            "result_cache",
+            "true",
+            "true",
+            "boolean",
+            "Use the analytical result cache"
+        ]),
+        serde_json::json!([
+            "approximate",
+            "false",
+            "false",
+            "boolean",
+            "Allow approximate distinct answers from sketches"
+        ]),
+        serde_json::json!([
+            "use_statistics",
+            "true",
+            "true",
+            "boolean",
+            "Allow context and statistics answers"
+        ]),
+    ];
+    let id = Uuid::new_v4().to_string();
+    Json(serde_json::json!({
+        "id": id,
+        "infoUri": format!("/v1/trino/query/{id}"),
+        "partialCancelUri": format!("/v1/trino/query/{id}"),
+        "stats": {"state": "FINISHED", "elapsedTimeMillis": 0},
+        "columns": columns,
+        "data": rows
+    }))
+    .into_response()
 }
 
 fn trino_control_response() -> Response {
@@ -19382,6 +19452,23 @@ mod streamed_root_tests {
             .expect("mixed-case PREPARE should be recognized");
         assert_eq!(mixed.0, "recent");
         assert!(kaveon_sql::parser::parse_sql(&mixed.1).is_ok());
+    }
+
+    #[tokio::test]
+    async fn trino_show_session_exposes_supported_settings() {
+        assert!(trino_is_show_session("SHOW SESSION;"));
+        assert!(trino_is_show_session("show session"));
+        assert!(!trino_is_show_session("SHOW SESSION foo"));
+        let response = trino_session_response(&crate::config::ServerConfig::default());
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["stats"]["state"], "FINISHED");
+        assert_eq!(value["columns"].as_array().unwrap().len(), 5);
+        let rows = value["data"].as_array().unwrap();
+        assert!(rows.iter().any(|row| row[0] == "result_cache"));
+        assert!(rows.iter().any(|row| row[0] == "query_memory_limit_bytes"));
     }
 
     #[test]

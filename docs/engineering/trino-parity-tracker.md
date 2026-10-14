@@ -39,7 +39,7 @@ The local parity baseline was rerun on October 13 with focused qualification
 changes through commit `71e5b956`. The checkout also contained separate, uncommitted
 engine work from the parallel optimization lane, so these numbers are a local
 regression snapshot and are not a release-image claim:
-`cargo test -p kaveon-server --bin kaveon-server` passed **357/357** tests,
+`cargo test -p kaveon-server --bin kaveon-server` passed **358/358** tests,
 `cargo test -p kaveon-sql --lib` passed **121/121** tests, and
 `cargo test -p kaveon-optim --lib` passed **47/47** tests,
 `cargo test -p kaveon-exec --lib` passed **289/289** non-ignored tests with four
@@ -139,6 +139,9 @@ foundations, but several operators are still centralized or narrow:
   elements; object/map values and the full prepare/describe/bind wire protocol
   remain open. Trino `EXECUTE ... USING ARRAY[...]` literals now use the same
   recursive binding path, including nested arrays and null elements.
+  The raw Trino route also answers `SHOW SESSION` with the supported Engine
+  settings in Trino's metadata result shape; it does not create a persistent
+  server-side session.
   Prepared-parameter discovery now also ignores PostgreSQL `::type` casts,
   so cast names cannot be mistaken for named bindings (`617b69f6`).
   Uncorrelated aggregate scalar subqueries in `WHERE` are now supported with
@@ -861,7 +864,7 @@ prepared-statement coverage, worker-loss, and exact-result differential runs
 are still required.
 
 The current local validation baseline is green on the same checkout: the full
-`kaveon-server` suite passed **357 tests**, and the full CLI suite passed **211
+`kaveon-server` suite passed **358 tests**, and the full CLI suite passed **211
 tests** (one ignored). The set-operation coverage includes `UNION ALL`, distinct and
 multiset `INTERSECT`/`EXCEPT`, dictionary-versus-plain values, duplicate
 counts, null handling, planner lowering, and exchange-input consumption. This
