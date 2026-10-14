@@ -2201,6 +2201,7 @@ fn array_sort_generic<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<
             | DataType::Timestamp(TimeUnit::Microsecond, _)
             | DataType::Decimal128(_, _)
             | DataType::Utf8
+            | DataType::LargeUtf8
             | DataType::Boolean
     );
     if !supported {
@@ -2251,7 +2252,9 @@ fn array_sort_generic<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<
                 }
             }
         });
-        selected.extend(entries.into_iter().flatten());
+        selected.extend(entries.into_iter().map(|value| {
+            value.unwrap_or_else(|| arrow::array::new_null_array(&list.value_type(), 1))
+        }));
         offsets.push(L::from_usize(selected.len()).ok_or_else(|| {
             KaveonError::Execution("ARRAY_SORT result offset overflow".into())
         })?);
@@ -2370,6 +2373,7 @@ fn array_extrema_generic<L: OffsetSizeTrait>(
             | DataType::Timestamp(TimeUnit::Microsecond, _)
             | DataType::Decimal128(_, _)
             | DataType::Utf8
+            | DataType::LargeUtf8
     );
     if !supported {
         return Err(KaveonError::Execution(format!(
@@ -5380,6 +5384,31 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                                 seen.push(value.clone());
                                 builder.values().append_option(value.as_deref());
                             }
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }
+                DataType::LargeUtf8 => {
+                    let mut builder = ListBuilder::new(LargeStringBuilder::new());
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let inner = list.value(row);
+                        let values = inner.as_string::<i64>();
+                        let mut sorted = (0..values.len())
+                            .map(|index| values.is_valid(index).then(|| values.value(index).to_owned()))
+                            .collect::<Vec<_>>();
+                        sorted.sort_by(|left, right| match (left, right) {
+                            (None, None) => std::cmp::Ordering::Equal,
+                            (None, Some(_)) => std::cmp::Ordering::Greater,
+                            (Some(_), None) => std::cmp::Ordering::Less,
+                            (Some(left), Some(right)) => left.cmp(right),
+                        });
+                        for value in sorted {
+                            builder.values().append_option(value.as_deref());
                         }
                         builder.append(true);
                     }
@@ -11361,6 +11390,22 @@ mod tests {
         let inner = result.value(0);
         let values = inner.as_string::<i32>();
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some("z"), None, Some("a")]);
+
+        let mut large_text_sort_builder = LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
+        large_text_sort_builder.values().append_value("z");
+        large_text_sort_builder.values().append_null();
+        large_text_sort_builder.values().append_value("a");
+        large_text_sort_builder.append(true);
+        let result = eval_scalar_function(
+            "ARRAY_SORT",
+            &[Arc::new(large_text_sort_builder.finish()) as ArrayRef],
+            1,
+        )
+        .unwrap();
+        let result = result.as_any().downcast_ref::<LargeListArray>().unwrap();
+        let inner = result.value(0);
+        let values = inner.as_string::<i64>();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some("a"), Some("z"), None]);
 
         let mut reverse_builder = LargeListBuilder::new(ListBuilder::new(Int64Builder::new()));
         for value in [1_i64, 2, 3] {
