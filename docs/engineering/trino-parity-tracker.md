@@ -874,7 +874,7 @@ prepared-statement coverage, worker-loss, and exact-result differential runs
 are still required.
 
 The current local validation baseline is green on the same checkout: the full
-`kaveon-server` suite passed **359 tests**, and the full CLI suite passed **211
+`kaveon-server` suite passed **361 tests**, and the full CLI suite passed **211
 tests** (one ignored). The set-operation coverage includes `UNION ALL`, distinct and
 multiset `INTERSECT`/`EXCEPT`, dictionary-versus-plain values, duplicate
 counts, null handling, planner lowering, and exchange-input consumption. This
