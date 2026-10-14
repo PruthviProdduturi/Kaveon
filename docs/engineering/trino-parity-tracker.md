@@ -863,6 +863,8 @@ distinct-value state through the executable fragment wire contract, so the
 distributed final merge unions values before calculating the result. The
 multi-encoding differential corpus covers these grouped forms; older fragments
 without the field remain compatible as non-distinct aggregates.
+Positional and named parameter cardinality is checked before planning; extra
+values fail closed instead of being silently ignored.
 Column-key `GROUPING SETS ((a), (b), ...)`, `CUBE`, and `ROLLUP` now lower to
 typed `UNION ALL` aggregate branches and are covered by SQL and physical-
 planner tests and a local execution regression. `GROUPING(column)` and
