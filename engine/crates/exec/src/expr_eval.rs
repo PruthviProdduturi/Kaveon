@@ -7870,40 +7870,20 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     "ARRAY_JOIN requires 2 or 3 arguments".into(),
                 ));
             }
-            let list = args[0]
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .ok_or_else(|| KaveonError::Execution("ARRAY_JOIN requires an ARRAY/List value".into()))?;
             let delimiters = as_string_array(&args[1])?;
             let replacements = if args.len() == 3 {
                 Some(as_string_array(&args[2])?)
             } else {
                 None
             };
-            let result: StringArray = (0..num_rows)
-                .map(|row| {
-                    if list.is_null(row) || delimiters.is_null(row) {
-                        return Ok(None);
-                    }
-                    let replacement = replacements.as_ref().and_then(|values| {
-                        (!values.is_null(row)).then(|| values.value(row))
-                    });
-                    let values = list.value(row);
-                    let mut parts = Vec::with_capacity(values.len());
-                    for index in 0..values.len() {
-                        if values.is_null(index) {
-                            if let Some(replacement) = replacement {
-                                parts.push(replacement.to_owned());
-                            }
-                        } else {
-                            parts.push(array_join_value(&values, index)?);
-                        }
-                    }
-                    Ok(Some(parts.join(delimiters.value(row))))
-                })
-                .collect::<Result<Vec<_>>>()?
-                .into();
-            Ok(Arc::new(result))
+            if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
+                return Ok(Arc::new(array_join_list(list, &delimiters, replacements)?));
+            }
+            let list = args[0]
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .ok_or_else(|| KaveonError::Execution("ARRAY_JOIN requires an ARRAY/List value".into()))?;
+            Ok(Arc::new(array_join_list(list, &delimiters, replacements)?))
         }
         "CARDINALITY" => {
             check_arity(name, args, 1)?;
@@ -8126,6 +8106,36 @@ fn json_extract_value(document: &str, path: &str) -> Option<serde_json::Value> {
         };
     }
     Some(value)
+}
+
+fn array_join_list<L: OffsetSizeTrait>(
+    list: &GenericListArray<L>,
+    delimiters: &StringArray,
+    replacements: Option<&StringArray>,
+) -> Result<StringArray> {
+    let result = (0..list.len())
+        .map(|row| {
+            if list.is_null(row) || delimiters.is_null(row) {
+                return Ok(None);
+            }
+            let replacement = replacements.and_then(|values| {
+                (!values.is_null(row)).then(|| values.value(row))
+            });
+            let values = list.value(row);
+            let mut parts = Vec::with_capacity(values.len());
+            for index in 0..values.len() {
+                if values.is_null(index) {
+                    if let Some(replacement) = replacement {
+                        parts.push(replacement.to_owned());
+                    }
+                } else {
+                    parts.push(array_join_value(&values, index)?);
+                }
+            }
+            Ok(Some(parts.join(delimiters.value(row))))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(result.into())
 }
 
 fn array_join_value(array: &ArrayRef, index: usize) -> Result<String> {
@@ -11408,6 +11418,23 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.as_primitive::<Int64Type>().value(0), 2);
+
+        let mut large_join_builder = LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
+        large_join_builder.values().append_value("alpha");
+        large_join_builder.values().append_null();
+        large_join_builder.values().append_value("beta");
+        large_join_builder.append(true);
+        let result = eval_scalar_function(
+            "ARRAY_JOIN",
+            &[
+                Arc::new(large_join_builder.finish()) as ArrayRef,
+                Arc::new(StringArray::from(vec![Some(",")])) as ArrayRef,
+                Arc::new(StringArray::from(vec![Some("?")])) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        assert_eq!(result.as_string::<i32>().value(0), "alpha,?,beta");
 
         let mut large_text_sort_builder = LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
         large_text_sort_builder.values().append_value("z");
