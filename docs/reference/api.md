@@ -238,6 +238,12 @@ planning; they are never interpolated into SQL text. `source`,
 are not trusted user identity. The record's `principal` comes from the
 authenticated identity; `client_address` is not recorded.
 
+The authenticated `POST /v1/transaction/sql` endpoint accepts the same
+`parameters` and `named_parameters` fields for its bounded product DML. It
+binds them before the native transaction parser, supports scalar values and
+nested arrays, and rejects missing or extra values. Objects must be sent as
+JSON strings because product documents are stored as immutable JSON bytes.
+
 ### Catalog statements
 
 `POST /v1/statement` accepts the Trino-shaped catalog DDL below. A catalog
