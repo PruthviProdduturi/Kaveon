@@ -157,8 +157,9 @@ node-drain recovery, and sustained soak remain separate acceptance gates.
   create a persistent server-side session.
   `EXPLAIN` now unwraps the plan-only envelope, runs the normal binder and
   optimizer without starting scans or worker tasks, and returns a Trino-shaped
-  `Query Plan` column for logical, optimized, distributed/physical, and IO
-  views. `EXPLAIN ANALYZE` and unsupported output formats fail explicitly;
+  `Query Plan` column for logical, optimized, and distributed/physical views.
+  `TYPE IO` uses the physical-plan projection because runtime IO statistics
+  are not available before execution. `EXPLAIN ANALYZE` and unsupported output formats fail explicitly;
   execution profiling remains a separate query-history surface.
   `LIMIT ALL` is also accepted as Trino's explicit no-limit pagination form.
   Prepared-parameter discovery now also ignores PostgreSQL `::type` casts,
