@@ -198,6 +198,11 @@ node-drain recovery, and sustained soak remain separate acceptance gates.
   prepare/describe/bind wire protocol remains open. Trino `EXECUTE ... USING
   ARRAY[...]` literals now use the same recursive binding path, including nested
   arrays and null elements.
+  SQL-level `PREPARE` and `DEALLOCATE PREPARE` emit the standard
+  `X-Trino-Added-Prepare` and `X-Trino-Deallocated-Prepare` response headers,
+  allowing compatible clients to retain and evict their session-side prepared
+  statement entries. This closes the response-header portion of the protocol
+  adapter; it does not claim the complete wire prepare/describe/bind lifecycle.
   SQL `DEALLOCATE PREPARE ALL` now clears every prepared statement owned by the
   requesting principal while preserving other principals' entries.
   The raw Trino route answers `SHOW SESSION` and `SHOW SESSION LIKE 'pattern'`

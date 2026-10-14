@@ -2912,11 +2912,19 @@ async fn submit_trino_statement_parts(
                     )
                         .into_response();
                 }
+                let response_header = format!(
+                    "{}={}",
+                    trino_percent_encode(&name),
+                    trino_percent_encode(&query)
+                );
                 TRINO_PREPARED_STATEMENTS
                     .write()
                     .await
                     .insert((identity.principal.clone(), name), query);
-                return trino_control_response();
+                return trino_control_response_with_header(
+                    "x-trino-added-prepare",
+                    response_header,
+                );
             }
             Ok(None) => {}
             Err(error) => {
@@ -2931,6 +2939,7 @@ async fn submit_trino_statement_parts(
             }
         }
         if let Some(name) = trino_deallocate_statement(body) {
+            let response_name = name.clone();
             let mut prepared = TRINO_PREPARED_STATEMENTS.write().await;
             if name.eq_ignore_ascii_case("ALL") {
                 // Trino scopes prepared statements to the session/principal;
@@ -2940,7 +2949,10 @@ async fn submit_trino_statement_parts(
             } else {
                 prepared.remove(&(identity.principal.clone(), name));
             }
-            return trino_control_response();
+            return trino_control_response_with_header(
+                "x-trino-deallocated-prepare",
+                response_name,
+            );
         }
         if let Some(name) = trino_describe_input(body) {
             let query = TRINO_PREPARED_STATEMENTS
@@ -3819,6 +3831,32 @@ fn trino_control_response() -> Response {
         "data": []
     }))
     .into_response()
+}
+
+fn trino_control_response_with_header(name: &'static str, value: String) -> Response {
+    let mut response = trino_control_response();
+    let header_name = header::HeaderName::from_static(name);
+    let header_value = header::HeaderValue::from_str(&value)
+        .expect("Trino control header values are percent-encoded or ASCII identifiers");
+    response.headers_mut().insert(header_name, header_value);
+    response
+}
+
+/// Encode a prepared-statement name or SQL body for Trino's response headers.
+/// Keep only RFC 3986 unreserved bytes literal; this avoids commas and equals
+/// being mistaken for additional prepared statements by clients.
+fn trino_percent_encode(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            encoded.push('%');
+            encoded.push(char::from_digit((byte >> 4) as u32, 16).unwrap().to_ascii_uppercase());
+            encoded.push(char::from_digit((byte & 0x0f) as u32, 16).unwrap().to_ascii_uppercase());
+        }
+    }
+    encoded
 }
 
 fn trino_percent_decode(encoded: &str) -> Result<String, String> {
@@ -20356,6 +20394,51 @@ mod streamed_root_tests {
         assert_eq!(queries.get("second").map(String::as_str), Some("SELECT 2"));
         assert_eq!(trino_execute_name("EXECUTE second USING 2"), Some("second".into()));
         assert_eq!(trino_execute_name("SELECT 1"), None);
+    }
+
+    #[test]
+    fn trino_prepare_control_headers_round_trip_names_and_sql() {
+        let response = trino_control_response_with_header(
+            "x-trino-added-prepare",
+            format!(
+                "{}={}",
+                trino_percent_encode("recent"),
+                trino_percent_encode("SELECT * FROM events WHERE id = ?")
+            ),
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-trino-added-prepare")
+                .and_then(|value| value.to_str().ok()),
+            Some("recent=SELECT%20%2A%20FROM%20events%20WHERE%20id%20%3D%20%3F")
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-trino-prepared-statement",
+            response
+                .headers()
+                .get("x-trino-added-prepare")
+                .unwrap()
+                .clone(),
+        );
+        let queries = trino_prepared_queries(&headers).unwrap().unwrap();
+        assert_eq!(
+            queries.get("recent").map(String::as_str),
+            Some("SELECT * FROM events WHERE id = ?")
+        );
+
+        let deallocated = trino_control_response_with_header(
+            "x-trino-deallocated-prepare",
+            "recent".to_owned(),
+        );
+        assert_eq!(
+            deallocated
+                .headers()
+                .get("x-trino-deallocated-prepare")
+                .and_then(|value| value.to_str().ok()),
+            Some("recent")
+        );
     }
 
     #[test]
