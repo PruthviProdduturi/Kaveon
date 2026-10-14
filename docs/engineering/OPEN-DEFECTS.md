@@ -143,9 +143,10 @@ something that fills it before a reader asks, and that keeps the other hot
 reads (catalog listings, charts, dashboards, datasets) warm the same way.
 
 ### D-28 · Dashboard tabs pass v1 props to react-grid-layout v2
-**open** · 2026-10-13 · found while fixing D-2. Note the v1 prop in question
-is `draggableHandle`, and the canvas now declares `dragConfig.handle`
-properly — the tabs grid should be brought to the same shape.
+**fixed, browser-verified** · `ff7d1a30` · and the consequence was worse than
+the missing handle: on v2 defaults a row height of 150 rendered an eight-row
+chart 1200px tall, and `width` was hardcoded to 1200 so every tab laid out for
+a canvas nobody has.
 
 `studio/components/dashboards/components/DashboardTabsComponent.tsx:19,711`
 loads the default export and passes `draggableHandle`, top-level `cols` and
@@ -174,7 +175,10 @@ Resolved by deleting the four objects and redeploying; the guard is now
 `managed-by: Helm` and verified holding the floor.
 
 ### D-31 · One Row or Column kills drag and resize for the whole dashboard
-**open** · 2026-10-13 · found while fixing the drag handle
+**fixed, browser-verified** · `ff7d1a30` · containers are tiles now;
+`hasContainers`/`isFlatGrid` deleted. Evidence it mattered: 8 dashboards, 73
+items, zero rows/columns/tabs — the feature had never been used once, because
+using it was worse than not.
 
 `DashboardCanvas.tsx:97,100,177-181`: if any root item is a `row` or `column`,
 `hasContainers` is true, `isFlatGrid` is false, and the canvas renders a plain
@@ -201,6 +205,30 @@ Underneath it, `dashboard.css` carried 121 literal colours with three behind
 tokens, predating the dark theme entirely — the same cause as the white
 empty-canvas slab and the light-only chart picker. Fifty-nine declarations
 tokenised by what the property does rather than by colour value.
+
+### D-33 · `moveItemToContainer` ignores a caller-supplied position
+**open** · 2026-10-13 · dead API, found while auditing the container path
+
+`DashboardContext.tsx:655` reads
+`y: position?.y ?? (i.children || []).length > 0 ? Math.max(...) : 0`, which
+parses as `(position?.y ?? (length > 0)) ? max : 0` — so a caller's
+`position.y` is discarded and replaced by the maximum, and `y: 0` arrives at
+zero by a different route than intended.
+
+Exposed on the context and called by nothing, so it is currently harmless.
+Recorded rather than fixed because a dead API with a latent precedence bug is
+a trap for whoever first uses it.
+
+### D-34 · A container taller than its tile spills over its neighbour
+**open, needs a judgement** · 2026-10-13
+
+Container tiles keep `overflow: visible` because a row's only delete control
+sits at `top: -14px`, outside its own box. So a row whose contents exceed its
+tile height overlaps whatever is below until the tile is resized. Clipping
+would fix the overlap and hide the delete button.
+
+Neither option is obviously right; it needs a design decision rather than a
+patch.
 
 ### D-5 · 4,068 query-history rows belong to synthetic accounts
 **open, by decision** · 2026-10-13
