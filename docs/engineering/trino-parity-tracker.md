@@ -129,7 +129,8 @@ foundations, but several operators are still centralized or narrow:
   `EXECUTE name USING`, binds scalar values (including typed `DATE` literals)
   through the typed binder, and emits
   `nextUri`/`stats`-shaped
-  responses. Malformed prepared headers now fail closed with a structured
+  responses, including standard `infoUri` and `partialCancelUri` links for
+  query inspection and cancellation. Malformed prepared headers now fail closed with a structured
   `INVALID_PREPARED_STATEMENT` response rather than silently falling back to
   the request body. Compound prepared literals and the full
   prepare/describe/bind wire protocol remain open.

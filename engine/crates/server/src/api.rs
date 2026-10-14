@@ -3123,6 +3123,21 @@ async fn trino_response_shape(response: Response) -> Response {
         return (status, [(header::CONTENT_TYPE, "application/json")], bytes).into_response();
     };
     if let Some(object) = value.as_object_mut() {
+        if let Some(query_id) = object
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned)
+        {
+            // These are standard Trino response links. They point at the
+            // compatibility routes so clients can inspect or cancel a query
+            // without knowing Kaveon's native endpoint names.
+            object
+                .entry("infoUri".to_owned())
+                .or_insert_with(|| serde_json::Value::String(format!("/v1/trino/query/{query_id}")));
+            object.entry("partialCancelUri".to_owned()).or_insert_with(|| {
+                serde_json::Value::String(format!("/v1/trino/query/{query_id}"))
+            });
+        }
         if let Some(next_uri) = object.remove("next_uri") {
             let next_uri = next_uri
                 .as_str()
@@ -19125,6 +19140,8 @@ mod streamed_root_tests {
             .unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["nextUri"], "/v1/trino/query/q1/results/0");
+        assert_eq!(value["infoUri"], "/v1/trino/query/q1");
+        assert_eq!(value["partialCancelUri"], "/v1/trino/query/q1");
         assert!(value.get("next_uri").is_none());
         assert_eq!(value["stats"]["elapsedTimeMillis"], 7);
         assert!(value.get("elapsed_ms").is_none());
