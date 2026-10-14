@@ -20646,13 +20646,56 @@ mod streamed_root_tests {
         );
 
         let missing = submit_trino_statement_parts(
-            state,
+            std::sync::Arc::clone(&state),
             owner,
             HeaderMap::new(),
             Bytes::from(format!("EXECUTE {name}")),
         )
         .await;
         assert_eq!(missing.status(), StatusCode::BAD_REQUEST);
+
+        let array_name = format!("array_{}", Uuid::new_v4().simple());
+        let prepared_array = submit_trino_statement_parts(
+            std::sync::Arc::clone(&state),
+            alice(),
+            HeaderMap::new(),
+            Bytes::from(format!(
+                "PREPARE {array_name} FROM SELECT CARDINALITY(?) AS n FROM numbers LIMIT 1"
+            )),
+        )
+        .await;
+        assert_eq!(prepared_array.status(), StatusCode::OK);
+        let executed_array = submit_trino_statement_parts(
+            std::sync::Arc::clone(&state),
+            alice(),
+            HeaderMap::new(),
+            Bytes::from(format!(
+                "EXECUTE {array_name} USING ARRAY[1, 2, NULL]"
+            )),
+        )
+        .await;
+        assert_eq!(executed_array.status(), StatusCode::OK);
+        let executed_array_body = axum::body::to_bytes(executed_array.into_body(), usize::MAX)
+            .await
+            .expect("array execute body");
+        let executed_array_json: serde_json::Value =
+            serde_json::from_slice(&executed_array_body).expect("array execute JSON");
+        let array_query_id = executed_array_json["id"]
+            .as_str()
+            .expect("array query id")
+            .to_owned();
+        let array_page = get_trino_result_page(
+            State(std::sync::Arc::clone(&state)),
+            axum::extract::Path((array_query_id, 0)),
+            axum::Extension(alice()),
+        )
+        .await;
+        let array_page_body = axum::body::to_bytes(array_page.into_body(), usize::MAX)
+            .await
+            .expect("array result page body");
+        let array_page_json: serde_json::Value =
+            serde_json::from_slice(&array_page_body).expect("array result page JSON");
+        assert_eq!(array_page_json["data"], serde_json::json!([[3]]));
         let _ = std::fs::remove_dir_all(directory);
     }
 
