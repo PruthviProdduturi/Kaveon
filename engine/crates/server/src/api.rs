@@ -882,9 +882,18 @@ fn request_parameter_value(
             .map(|value| request_parameter_value(value, label))
             .collect::<Result<Vec<_>, _>>()
             .map(ParameterValue::Array),
-        serde_json::Value::Object(_) => Err(format!(
-            "parameter {label} must be null, boolean, number, string, or array"
-        )),
+        serde_json::Value::Object(values) => values
+            .iter()
+            .map(|(key, value)| {
+                request_parameter_value(value, &format!("{label}.{key}")).map(|value| {
+                    (
+                        ParameterValue::Scalar(ScalarValue::Utf8(key.clone())),
+                        value,
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(ParameterValue::Map),
     }
 }
 
@@ -3507,6 +3516,37 @@ fn trino_literal_to_json(value: &str) -> Result<serde_json::Value, String> {
     // target column. Preserve the ISO text rather than converting through a
     // host date type (which could silently change the day around a timezone).
     let trimmed = value.trim();
+    if trimmed.len() >= 4
+        && trimmed[..3].eq_ignore_ascii_case("map")
+        && trimmed[3..].trim_start().starts_with('(')
+        && trimmed.ends_with(')')
+    {
+        let opening = trimmed.find('(').expect("MAP has an opening parenthesis");
+        let inner = trimmed[opening + 1..trimmed.len() - 1].trim();
+        let args = split_trino_arguments(inner);
+        if args.len() != 2 {
+            return Err("MAP parameters require exactly a key array and a value array".to_owned());
+        }
+        let keys = trino_literal_to_json(args[0])?;
+        let values = trino_literal_to_json(args[1])?;
+        let (serde_json::Value::Array(keys), serde_json::Value::Array(values)) = (keys, values)
+        else {
+            return Err("MAP parameters must be ARRAY literals".to_owned());
+        };
+        if keys.len() != values.len() {
+            return Err("MAP key and value arrays must have the same length".to_owned());
+        }
+        let mut object = serde_json::Map::with_capacity(keys.len());
+        for (key, value) in keys.into_iter().zip(values) {
+            let Some(key) = key.as_str() else {
+                return Err("MAP parameter keys must be strings".to_owned());
+            };
+            if object.insert(key.to_owned(), value).is_some() {
+                return Err(format!("MAP parameter contains duplicate key '{key}'"));
+            }
+        }
+        return Ok(serde_json::Value::Object(object));
+    }
     if trimmed.len() >= 7
         && trimmed[..5].eq_ignore_ascii_case("array")
         && trimmed[5..].trim_start().starts_with('[')
@@ -19722,6 +19762,36 @@ mod streamed_root_tests {
         );
         let typed = request_parameter_values(&values).unwrap();
         assert!(matches!(typed[0], ParameterValue::Array(_)));
+    }
+
+    #[test]
+    fn trino_execute_using_map_literals_binds_typed_map_values() {
+        let values = trino_execute_parameters(
+            "EXECUTE statement USING MAP(ARRAY['a', 'b'], ARRAY[1, NULL])",
+        )
+        .unwrap();
+        assert_eq!(values, vec![serde_json::json!({"a": 1, "b": null})]);
+        let typed = request_parameter_values(&values).unwrap();
+        assert!(matches!(typed[0], ParameterValue::Map(_)));
+        let plan = kaveon_sql::logical_plan::sql_to_logical_plan_for_binder_with_parameter_values(
+            "SELECT $1['a'] FROM events",
+            &typed,
+            &std::collections::HashMap::new(),
+        )
+        .expect("map parameter reaches the typed MAP expression lowerer");
+        assert!(format!("{plan:?}").contains("ELEMENT_AT"));
+    }
+
+    #[test]
+    fn trino_execute_using_map_literals_rejects_malformed_maps() {
+        for sql in [
+            "EXECUTE statement USING MAP(ARRAY['a'], ARRAY[1, 2])",
+            "EXECUTE statement USING MAP(ARRAY[1], ARRAY[2])",
+            "EXECUTE statement USING MAP(ARRAY['a', 'a'], ARRAY[1, 2])",
+        ] {
+            let error = trino_execute_parameters(sql).unwrap_err();
+            assert!(error.contains("MAP"), "{sql}: {error}");
+        }
     }
 
     #[test]
