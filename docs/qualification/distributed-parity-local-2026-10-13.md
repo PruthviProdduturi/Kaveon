@@ -11,7 +11,7 @@ not prove cluster latency, node pressure, or long-running network behavior.
 
 | Gate | Command | Result |
 |---|---|---|
-| SQL planning and compatibility | `cargo test -p kaveon-sql --quiet` | 132 passed |
+| SQL planning and compatibility | `cargo test -p kaveon-sql --quiet` | 134 passed |
 | Executor semantics and spill paths | `cargo test -p kaveon-exec --quiet` | 293 passed, 4 ignored benchmark cases |
 | Server regression suite | `cargo test -p kaveon-server --bin kaveon-server --quiet` | 364 passed |
 | Worker loss after producer exchange | `cargo test -p kaveon-server --bin kaveon-server --quiet a_worker_lost_between_the_producers_and_the_consumers_is_recovered_exactly` | 1 passed |
@@ -19,7 +19,7 @@ not prove cluster latency, node pressure, or long-running network behavior.
 
 The full workspace regression (`cargo test --workspace --quiet`) also passed:
 all workspace targets were green, including the server differential suite
-(364 tests), SQL (132), executor (293 plus four ignored benchmarks), optimizer
+(364 tests), SQL (134), executor (293 plus four ignored benchmarks), optimizer
 (47), and the remaining catalog/core/CLI/storage targets. The workspace run is
 the broad regression gate; the focused rows above make the distributed gates
 easy to reproduce.

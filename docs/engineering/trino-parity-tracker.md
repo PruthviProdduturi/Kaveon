@@ -40,7 +40,7 @@ changes through commit `3e741ce9`. The checkout also contained separate, uncommi
 engine work from the parallel optimization lane, so these numbers are a local
 regression snapshot and are not a release-image claim:
 `cargo test -p kaveon-server --bin kaveon-server` passed **364/364** tests,
-`cargo test -p kaveon-sql --lib` passed **132/132** tests, and
+`cargo test -p kaveon-sql --lib` passed **134/134** tests, and
 `cargo test -p kaveon-optim --lib` passed **47/47** tests,
 `cargo test -p kaveon-exec --lib` passed **293/293** non-ignored tests with four
 benchmark tests intentionally ignored. Documentation validation also passed for 146 Markdown
@@ -898,7 +898,7 @@ prepared-statement coverage, worker-loss, and exact-result differential runs
 are still required.
 
 The current local validation baseline is green on the same checkout: the full
-`kaveon-server` suite passed **361 tests**, and the full CLI suite passed **211
+`kaveon-server` suite passed **364 tests**, and the full CLI suite passed **211
 tests** (one ignored). The set-operation coverage includes `UNION ALL`, distinct and
 multiset `INTERSECT`/`EXCEPT`, dictionary-versus-plain values, duplicate
 counts, null handling, planner lowering, and exchange-input consumption. This
