@@ -1407,8 +1407,33 @@ fn build_aggregate(
             }
             let sets = exprs.iter().find_map(|expr| match expr {
                 ast::Expr::GroupingSets(sets) => Some(sets.clone()),
-                ast::Expr::Cube(_) | ast::Expr::Rollup(_) => {
-                    Some(Vec::new())
+                ast::Expr::Cube(keys) => {
+                    // CUBE is a finite expansion of every subset. Keep an
+                    // explicit bound so malformed/generated SQL cannot
+                    // allocate an exponential plan without a clear error.
+                    let keys = keys.iter().flatten().cloned().collect::<Vec<_>>();
+                    if keys.len() >= 16 {
+                        return Some(Vec::new());
+                    }
+                    let mut sets = Vec::with_capacity(1usize << keys.len());
+                    for mask in 0..(1usize << keys.len()) {
+                        sets.push(
+                            keys.iter()
+                                .enumerate()
+                                .filter(|(index, _)| mask & (1usize << *index) != 0)
+                                .map(|(_, key)| key.clone())
+                                .collect(),
+                        );
+                    }
+                    Some(sets)
+                }
+                ast::Expr::Rollup(keys) => {
+                    let keys = keys.iter().flatten().cloned().collect::<Vec<_>>();
+                    let mut sets = Vec::with_capacity(keys.len() + 1);
+                    for length in (0..=keys.len()).rev() {
+                        sets.push(keys.iter().take(length).cloned().collect());
+                    }
+                    Some(sets)
                 }
                 _ => None,
             });
@@ -1462,11 +1487,11 @@ fn build_aggregate(
     // equivalent aggregate branches. Each branch keeps the same typed output
     // columns: keys absent from a set are represented by a CASE expression
     // whose column arm preserves the source type and whose value is NULL.
-    // CUBE/ROLLUP remain separate features because their expansion and
-    // grouping metadata have different semantics.
+    // Grouping metadata functions remain separate because they need a
+    // grouping-id column in addition to these expanded aggregate branches.
     if let Some(sets_ast) = grouping_sets_ast {
         if sets_ast.is_empty() {
-            return Err(sql_err("GROUP BY CUBE and ROLLUP are not supported"));
+            return Err(sql_err("GROUP BY CUBE with 16 or more keys is not supported"));
         }
         if group_by_ast.len() != 1 || aggregates.is_empty() {
             return Err(sql_err(
@@ -4626,6 +4651,19 @@ mod tests {
         assert_eq!(debug.matches("Aggregate").count(), 2, "{debug}");
         assert!(debug.contains("region"), "{debug}");
         assert!(debug.contains("platform"), "{debug}");
+    }
+
+    #[test]
+    fn expands_cube_and_rollup_into_union_all_aggregates() {
+        for sql in [
+            "SELECT region, platform, COUNT(*) FROM events GROUP BY CUBE (region, platform)",
+            "SELECT region, platform, COUNT(*) FROM events GROUP BY ROLLUP (region, platform)",
+        ] {
+            let plan = sql_to_logical_plan(sql).unwrap();
+            let debug = format!("{plan:?}");
+            assert!(debug.contains("Union"), "{sql}: {debug}");
+            assert!(debug.matches("Aggregate").count() >= 3, "{sql}: {debug}");
+        }
     }
 
     #[test]
