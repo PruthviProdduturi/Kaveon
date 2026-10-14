@@ -1422,6 +1422,7 @@ fn build_aggregate(
     select: &ast::Select,
     approximate: bool,
 ) -> Result<LogicalPlan> {
+    const MAX_GROUPING_SET_BRANCHES: usize = 4096;
     let (group_by_ast, grouping_sets_ast) = match &select.group_by {
         ast::GroupByExpr::Expressions(exprs, modifiers) => {
             if !modifiers.is_empty() {
@@ -1516,6 +1517,11 @@ fn build_aggregate(
     if let Some(sets_ast) = grouping_sets_ast {
         if sets_ast.is_empty() {
             return Err(sql_err("GROUP BY CUBE with 16 or more keys is not supported"));
+        }
+        if sets_ast.len() > MAX_GROUPING_SET_BRANCHES {
+            return Err(sql_err(format!(
+                "GROUPING SETS expands to too many branches (maximum {MAX_GROUPING_SET_BRANCHES})"
+            )));
         }
         if aggregates.is_empty() {
             return Err(sql_err(
@@ -4917,6 +4923,18 @@ mod tests {
         .unwrap();
         let debug = format!("{plan:?}");
         assert_eq!(debug.matches("Aggregate").count(), 1, "{debug}");
+    }
+
+    #[test]
+    fn grouping_sets_branch_expansion_is_bounded() {
+        let sets = std::iter::repeat_n("(region)", 4097)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT COUNT(*) FROM events GROUP BY GROUPING SETS ({sets})"
+        );
+        let error = sql_to_logical_plan(&sql).unwrap_err();
+        assert!(error.to_string().contains("maximum 4096"), "{error}");
     }
 
     #[test]

@@ -108,8 +108,10 @@ unchanged; nothing is approximated unless the statement writes an
   `ROLLUP` (including the grand-total `GROUPING SETS (())` form) lower to typed
   `UNION ALL` aggregate branches; grouping metadata
   `GROUPING(column)` and `GROUPING_ID(...)` are materialized for those
-  expanded branches. CUBE expansions with 16 or more keys remain unsupported
-  and are rejected explicitly rather than silently treated as a plain `GROUP BY`;
+  expanded branches. Expansion is bounded at 4,096 aggregate branches so a
+  query cannot construct an unbounded UNION plan; CUBE expansions with 16 or
+  more keys remain unsupported and are rejected explicitly rather than
+  silently treated as a plain `GROUP BY`;
   typed numeric, text, and boolean `ARRAY[...]` literals support `CARDINALITY`,
   `CONTAINS`, `ARRAY_POSITION`, `ARRAY_DISTINCT`, `ARRAY_SORT`,
   `ARRAY_REVERSE`, `ELEMENT_AT`, and positive or negative-stride slices;
