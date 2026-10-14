@@ -16576,6 +16576,30 @@ mod tests {
         (body, record)
     }
 
+    #[tokio::test]
+    async fn explain_returns_a_plan_without_starting_execution() {
+        let (state, directory) = analyze_test_state().await;
+        register_events_directory(&state, &directory, 30).await;
+        let (status, body) = submit(
+            &state,
+            &admin(),
+            "EXPLAIN (TYPE LOGICAL) SELECT id FROM events WHERE id > 3",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["columns"][0]["name"], "Query Plan");
+        assert!(body["data"].as_array().is_some_and(|rows| !rows.is_empty()));
+        let query_id = body["id"].as_str().expect("query id");
+        let record = record(query_id, &admin()).await;
+        assert_eq!(record["state"], "FINISHED");
+        assert_eq!(record["execution"]["detail"], "explain");
+        assert_eq!(record["stages"].as_array().unwrap().len(), 0);
+        assert_eq!(record["scans"].as_array().unwrap().len(), 0);
+        assert_eq!(record["row_count"], body["data"].as_array().unwrap().len());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     /// Every statement statistics may answer equals the scanned answer —
     /// columns and rows — and is answered from statistics only while they
     /// describe the statement's pinned version exactly.
