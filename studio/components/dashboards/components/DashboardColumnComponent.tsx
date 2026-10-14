@@ -399,6 +399,10 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
                 {isEditMode && !isDivider && (
                   <div
                     title={`Drag to resize · ${child.h || 8} rows`}
+                    // The column is itself a draggable grid tile, and this bar
+                    // is its own gesture. Declared in DashboardCanvas's
+                    // DRAG_CANCEL so a press here never also moves the tile.
+                    data-no-tile-drag="true"
                     style={{
                       height: 12,
                       cursor: 'row-resize',
