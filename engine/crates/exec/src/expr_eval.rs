@@ -10207,6 +10207,25 @@ mod tests {
             result.data_type(),
             &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
         );
+
+        // Offset-bearing input is accepted by the same timestamp parser and
+        // retains the timezone-bearing output type.
+        let result = evaluate(
+            &Expr::Cast {
+                expr: Box::new(Expr::Literal(ScalarValue::Utf8(
+                    "2026-10-13 12:34:56+05:30".into(),
+                ))),
+                data_type: CastTarget::TimestampMicros {
+                    with_timezone: true,
+                },
+            },
+            &literal_batch,
+        )
+        .unwrap();
+        assert_eq!(
+            result.data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+        );
     }
 
     #[test]
