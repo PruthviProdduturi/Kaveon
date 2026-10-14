@@ -633,6 +633,11 @@ invalidation, isolation, bounds, and restart evidence listed above.
   valid values in the same batch remain intact (`6e4a8a44`). The distributed
   differential corpus also covers invalid text-to-integer casts becoming NULL
   and valid numeric casts remaining usable in aggregates.
+- `TRY(CAST(...))` and `TRY(JSON_PARSE(...))` now lower to those same safe
+  vectorized evaluators, preserving Trino's NULL-on-invalid-value behavior
+  without adding a second execution path. Other arbitrary `TRY(expr)` forms
+  remain explicitly rejected until the executor can mask row-local failures
+  for every scalar operator.
 - `ROW(...)` constructors now produce typed Arrow `StructArray` values with
   null-preserving child fields. `MAP(...)` now produces Arrow `MapArray` values
   from matching list offsets and rejects NULL keys. `MAP_KEYS` and `MAP_VALUES`
