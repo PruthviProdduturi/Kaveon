@@ -3229,16 +3229,20 @@ mod tests {
 
     #[test]
     fn translates_grouping_sets_into_union_stages() {
-        let fragments = executable_fragments(
+        for sql in [
             "SELECT id, COUNT(*) FROM items GROUP BY GROUPING SETS ((id), ())",
-        );
-        assert!(
-            fragments.values().any(|fragment| fragment
-                .nodes
-                .iter()
-                .any(|node| matches!(node.operator, FragmentOperator::Union))),
-            "GROUPING SETS should create a physical UNION stage"
-        );
+            "SELECT id, COUNT(*) FROM items GROUP BY CUBE (id)",
+            "SELECT id, COUNT(*) FROM items GROUP BY ROLLUP (id)",
+        ] {
+            let fragments = executable_fragments(sql);
+            assert!(
+                fragments.values().any(|fragment| fragment
+                    .nodes
+                    .iter()
+                    .any(|node| matches!(node.operator, FragmentOperator::Union))),
+                "{sql} should create a physical UNION stage"
+            );
+        }
     }
 
     #[test]
