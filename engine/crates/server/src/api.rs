@@ -657,7 +657,7 @@ static QUERY_STORE: std::sync::LazyLock<RwLock<QueryStore>> = std::sync::LazyLoc
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .merge(crate::exchange::routes())
-        .route("/v1/statement", post(submit_statement))
+        .route("/v1/statement", post(submit_statement_wire))
         .route("/v1/trino/statement", post(submit_trino_statement))
         .route(
             "/v1/trino/query/{query_id}",
@@ -2721,6 +2721,48 @@ async fn submit_statement(
     run_statement(state, identity, req, Uuid::new_v4().to_string()).await
 }
 
+/// Accept both the native JSON statement contract and Trino's raw SQL
+/// contract on the conventional `/v1/statement` path. Trino clients do not
+/// know Kaveon's namespaced compatibility path; routing by media type keeps
+/// existing JSON callers unchanged while allowing standard clients to point
+/// at the familiar endpoint.
+async fn submit_statement_wire(
+    State(state): State<Arc<AppState>>,
+    Extension(identity): Extension<Identity>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if !is_json_content_type(&headers) {
+        return submit_trino_statement_parts(state, identity, headers, body).await;
+    }
+    let request = match serde_json::from_slice::<StatementRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": format!("invalid JSON statement request: {error}"),
+                    "code": "INVALID_REQUEST"
+                })),
+            )
+                .into_response();
+        }
+    };
+    run_statement(state, identity, request, Uuid::new_v4().to_string()).await
+}
+
+fn is_json_content_type(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(';')
+                .next()
+                .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"))
+        })
+}
+
 /// A narrow Trino HTTP compatibility surface. Trino clients submit SQL as a
 /// raw request body and negotiate the session through `X-Trino-*` headers;
 /// the native Kaveon API intentionally remains JSON. Keeping this adapter on
@@ -2729,6 +2771,15 @@ async fn submit_statement(
 async fn submit_trino_statement(
     State(state): State<Arc<AppState>>,
     Extension(identity): Extension<Identity>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    submit_trino_statement_parts(state, identity, headers, body).await
+}
+
+async fn submit_trino_statement_parts(
+    state: Arc<AppState>,
+    identity: Identity,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -18958,6 +19009,18 @@ mod streamed_root_tests {
         );
         let settings = trino_session_settings(&headers).unwrap().unwrap();
         assert_eq!(settings["result_cache"], serde_json::json!("false,unused=ignored"));
+    }
+
+    #[test]
+    fn conventional_statement_route_distinguishes_json_and_raw_sql() {
+        let mut headers = HeaderMap::new();
+        assert!(!is_json_content_type(&headers));
+        headers.insert("content-type", "text/plain; charset=utf-8".parse().unwrap());
+        assert!(!is_json_content_type(&headers));
+        headers.insert("content-type", "application/json; charset=utf-8".parse().unwrap());
+        assert!(is_json_content_type(&headers));
+        headers.insert("content-type", "Application/JSON".parse().unwrap());
+        assert!(is_json_content_type(&headers));
     }
 
     #[test]

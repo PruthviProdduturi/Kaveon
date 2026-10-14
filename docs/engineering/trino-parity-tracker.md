@@ -492,6 +492,11 @@ invalidation, isolation, bounds, and restart evidence listed above.
   input semantics and executor coverage (`054e898a`).
 - Typed positional parameters are now exposed through the HTTP statement API,
   validated as JSON scalars, and bound before planning (`0ea777ba`).
+- The conventional `/v1/statement` route now accepts both the native JSON
+  request and Trino's raw UTF-8 SQL request selected by `Content-Type`; the
+  raw path uses the same session headers and Trino-shaped paging response as
+  the namespaced adapter. This removes a client-side route special case while
+  preserving the native contract (`573c1163` follow-up).
 - The HTTP parameter path now has an explicit regression test proving validated
   scalar values reach SQL planning without string interpolation (`dcd67679`).
 - Correlated scalar subqueries now have explicit rejection and binder-boundary
