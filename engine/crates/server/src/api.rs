@@ -4484,8 +4484,17 @@ fn prepared_parameter_names(query: &str) -> Vec<String> {
         index += 1;
     }
     names.sort();
-    names.dedup();
-    names
+    // Each `?` is a sequential positional slot, so repeated question marks
+    // must remain visible to DESCRIBE INPUT and the prepared-statement API.
+    // Named and numbered placeholders identify a reusable slot and remain
+    // deduplicated.
+    let mut distinct = Vec::with_capacity(names.len());
+    for name in names {
+        if name == "?" || distinct.last() != Some(&name) {
+            distinct.push(name);
+        }
+    }
+    distinct
 }
 
 async fn prepare_statement(
@@ -20932,6 +20941,18 @@ mod streamed_root_tests {
             .expect("mixed-case PREPARE should be recognized");
         assert_eq!(mixed.0, "recent");
         assert!(kaveon_sql::parser::parse_sql(&mixed.1).is_ok());
+    }
+
+    #[test]
+    fn prepared_parameter_metadata_preserves_repeated_positional_slots() {
+        assert_eq!(
+            prepared_parameter_names("SELECT ? + ? FROM events"),
+            vec!["?".to_owned(), "?".to_owned()]
+        );
+        assert_eq!(
+            prepared_parameter_names("SELECT $1 + $1 + :amount + :amount FROM events"),
+            vec!["$1".to_owned(), ":amount".to_owned()]
+        );
     }
 
     #[test]

@@ -1101,7 +1101,9 @@ explicit casts and transparent `LIMIT`/`ORDER BY` wrappers, returning Trino's
 seven-column metadata shape with explicit aliases and planner-inferred
 scalar/cast types; unbound column types remain `unknown`. The complete wire
 prepare/describe/bind lifecycle remains open, so these are compatibility
-slices rather than a full protocol claim.
+slices rather than a full protocol claim. Repeated `?` placeholders retain
+their distinct positional slots in `DESCRIBE INPUT`; repeated named and
+numbered placeholders remain one reusable slot.
 
 The route-level regression `trino_sql_prepare_lifecycle_is_owner_scoped`
 exercises the implemented SQL slice against a real Parquet table: `PREPARE`
