@@ -5045,6 +5045,60 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     "ARRAY_CONCAT requires arrays with matching row counts and element types".into(),
                 ));
             }
+            // Complex element types (nested arrays, ROWs, and MAPs) cannot
+            // use the primitive builders below, but Arrow can concatenate
+            // their sliced child arrays without converting them to JSON or
+            // losing nulls. Keep this path generic and preserve each outer
+            // row's validity and offsets.
+            if matches!(
+                left.value_type(),
+                DataType::List(_)
+                    | DataType::LargeList(_)
+                    | DataType::Struct(_)
+                    | DataType::Map(_, _)
+            ) {
+                let mut child_chunks = Vec::with_capacity(num_rows * 2);
+                let mut offsets = vec![0_i32];
+                let mut valid = Vec::with_capacity(num_rows);
+                for row in 0..num_rows {
+                    if left.is_null(row) || right.is_null(row) {
+                        valid.push(false);
+                        offsets.push(*offsets.last().unwrap());
+                        continue;
+                    }
+                    valid.push(true);
+                    let left_inner = left.value(row);
+                    let right_inner = right.value(row);
+                    child_chunks.push(left_inner);
+                    child_chunks.push(right_inner);
+                    let length = offsets.last().copied().unwrap_or_default() as usize
+                        + child_chunks[child_chunks.len() - 2].len()
+                        + child_chunks[child_chunks.len() - 1].len();
+                    offsets.push(i32::try_from(length).map_err(|_| {
+                        KaveonError::Execution("ARRAY_CONCAT result offset overflow".into())
+                    })?);
+                }
+                let values = if child_chunks.is_empty() {
+                    arrow::array::new_empty_array(&left.value_type())
+                } else {
+                    let chunks = child_chunks
+                        .iter()
+                        .map(|chunk| chunk.as_ref() as &dyn Array)
+                        .collect::<Vec<_>>();
+                    compute::concat(&chunks)?
+                };
+                let field = Arc::new(arrow::datatypes::Field::new(
+                    "item",
+                    values.data_type().clone(),
+                    true,
+                ));
+                return Ok(Arc::new(ListArray::try_new(
+                    field,
+                    OffsetBuffer::new(ScalarBuffer::from(offsets)),
+                    values,
+                    Some(arrow::buffer::NullBuffer::from(valid)),
+                )?));
+            }
             macro_rules! concat_primitive {
                 ($ty:ty, $builder:expr) => {{
                     let mut builder = ListBuilder::new($builder);
@@ -7413,6 +7467,36 @@ mod tests {
         let keys = maps.keys().as_string::<i32>();
         assert_eq!((0..keys.len()).map(|i| keys.value(i)).collect::<Vec<_>>(), ["a", "b"]);
         assert_eq!(maps.values().as_primitive::<Int64Type>().values(), &[1, 2]);
+    }
+
+    #[test]
+    fn array_concat_preserves_nested_array_elements() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        let array = |values: Vec<Expr>| Expr::Function {
+            name: "ARRAY".into(),
+            args: values,
+        };
+        let result = evaluate(
+            &Expr::Function {
+                name: "ARRAY_CONCAT".into(),
+                args: vec![
+                    array(vec![array(vec![Expr::Literal(ScalarValue::Int64(1))])]),
+                    array(vec![array(vec![Expr::Literal(ScalarValue::Int64(2))])]),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        let outer = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let nested_value = outer.value(0);
+        let nested = nested_value.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(nested.len(), 2);
+        assert_eq!(nested.value(0).as_primitive::<Int64Type>().value(0), 1);
+        assert_eq!(nested.value(1).as_primitive::<Int64Type>().value(0), 2);
     }
 
     #[test]

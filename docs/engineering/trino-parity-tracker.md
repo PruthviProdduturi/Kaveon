@@ -209,7 +209,9 @@ foundations, but several operators are still centralized or narrow:
   Arrow containers with element nulls preserved; mixed or unsupported element
   types remain explicit boundaries. `ARRAY_DISTINCT` now deduplicates nested
   list, row, and map elements by typed equality while preserving order and one
-  NULL element.
+  NULL element. `ARRAY_CONCAT` also preserves nested list, row, and map
+  elements through a generic Arrow child-array path; other combinations remain
+  explicit boundaries.
   Scalar, DATE, timestamp, and DECIMAL casts are supported; complex cast
   targets fail with typed planner diagnostics. `value IN UNNEST(array)` and
   its `NOT IN` form lower to the existing nullable `CONTAINS` path; row-
