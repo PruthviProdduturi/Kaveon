@@ -1046,6 +1046,8 @@ apply the same promotion for mixed-offset operands. `ZIP` also promotes
 mixed-offset inputs while preserving the typed row fields. The `ARRAY`
 constructor preserves `LargeUtf8` values as a 64-bit-offset list and promotes
 mixed `Utf8`/`LargeUtf8` arguments to that common type.
+`CONTAINS_KEY` and `MAP_ELEMENT_AT` now support `LargeUtf8` map keys with the
+same null and missing-key behavior as narrow UTF-8 keys.
 `ARRAY_DISTINCT`, `ARRAY_POSITION`, `ARRAY_SORT`, `CONTAINS`, and `ARRAYS_OVERLAP` also accept bounded
 64-bit-offset primitive lists, including `LargeUtf8`, by normalizing them to
 the 32-bit execution representation. Distinct preserves element types, NULLs,
