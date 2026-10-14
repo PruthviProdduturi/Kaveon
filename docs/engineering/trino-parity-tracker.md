@@ -1102,11 +1102,12 @@ remain `unknown`. The complete wire prepare/describe/bind lifecycle remains
 open, so these are compatibility slices rather than a full protocol claim.
 
 The route-level regression `trino_sql_prepare_lifecycle_is_owner_scoped`
-exercises the implemented SQL control slice: `PREPARE` returns the Trino
-prepare header, `DESCRIBE INPUT` reports the bound type, another principal
-cannot execute the statement, and the owner can deallocate it. This proves
-the supported lifecycle boundary without overstating it as full Trino wire
-protocol compatibility.
+exercises the implemented SQL slice against a real Parquet table: `PREPARE`
+returns the Trino prepare header, `DESCRIBE INPUT` reports the bound type,
+owner `EXECUTE ... USING` returns its exact result through the Trino result
+page, another principal cannot execute the statement, and the owner can
+deallocate it. This proves the supported lifecycle boundary without
+overstating it as full Trino wire protocol compatibility.
 
 The same route supports `SHOW SESSION LIKE 'pattern'`, applying Trino wildcard
 semantics to the supported settings and rejecting malformed patterns explicitly.
