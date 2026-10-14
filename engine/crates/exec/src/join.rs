@@ -77,6 +77,23 @@ impl BuildKeyFilter {
     /// common in fact/dimension joins and can use the already-built hash maps
     /// directly; composite and other keys retain the exact row-key path.
     pub(crate) fn filter_batch(&self, batch: &RecordBatch) -> Result<BooleanArray> {
+        if let (JoinIndex::Int32 { first_rows, duplicate_rows }, [(left, _)]) =
+            (&self.index, self.keys.as_slice())
+        {
+            let values = batch
+                .column(*left)
+                .as_any()
+                .downcast_ref::<arrow::array::Int32Array>()
+                .ok_or_else(|| exec_err("runtime filter key type changed after planning"))?;
+            return Ok((0..batch.num_rows())
+                .map(|row| {
+                    values.is_valid(row)
+                        && (first_rows.contains_key(&values.value(row))
+                            || duplicate_rows.contains_key(&values.value(row)))
+                })
+                .collect::<Vec<_>>()
+                .into());
+        }
         if let (JoinIndex::Int64 { first_rows, duplicate_rows }, [(left, _)]) =
             (&self.index, self.keys.as_slice())
         {
@@ -870,6 +887,10 @@ enum Key {
 /// Other key layouts use the existing exact typed composite representation.
 #[derive(Clone)]
 enum JoinIndex {
+    Int32 {
+        first_rows: AHashMap<i32, usize>,
+        duplicate_rows: AHashMap<i32, Vec<usize>>,
+    },
     Int64 {
         first_rows: AHashMap<i64, usize>,
         duplicate_rows: AHashMap<i64, Vec<usize>>,
@@ -887,6 +908,35 @@ impl JoinIndex {
         keys: &[(usize, usize)],
         memory: Option<&OperatorMemoryAccount>,
     ) -> Result<Self> {
+        if let [(.., index)] = keys
+            && right.column(*index).data_type() == &DataType::Int32
+        {
+            let values = right
+                .column(*index)
+                .as_primitive::<arrow::datatypes::Int32Type>();
+            let mut first_rows = AHashMap::new();
+            let mut duplicate_rows: AHashMap<i32, Vec<usize>> = AHashMap::new();
+            for row in 0..values.len() {
+                if row.is_multiple_of(1024) {
+                    check_cancelled(memory)?;
+                }
+                if values.is_valid(row) {
+                    let key = values.value(row);
+                    if let Some(first_row) = first_rows.get(&key).copied() {
+                        duplicate_rows
+                            .entry(key)
+                            .or_insert_with(|| vec![first_row])
+                            .push(row);
+                    } else {
+                        first_rows.insert(key, row);
+                    }
+                }
+            }
+            return Ok(Self::Int32 {
+                first_rows,
+                duplicate_rows,
+            });
+        }
         if let [(.., index)] = keys
             && right.column(*index).data_type() == &DataType::Int64
         {
@@ -975,6 +1025,27 @@ impl JoinIndex {
         keys: &[(usize, usize)],
     ) -> Result<Option<&[usize]>> {
         Ok(match self {
+            Self::Int32 {
+                first_rows,
+                duplicate_rows,
+            } => {
+                let values = left
+                    .column(keys[0].0)
+                    .as_primitive::<arrow::datatypes::Int32Type>();
+                if values.is_null(row) {
+                    None
+                } else {
+                    let key = values.value(row);
+                    if duplicate_rows.is_empty() {
+                        first_rows.get(&key).map(std::slice::from_ref)
+                    } else {
+                        duplicate_rows
+                            .get(&key)
+                            .map(Vec::as_slice)
+                            .or_else(|| first_rows.get(&key).map(std::slice::from_ref))
+                    }
+                }
+            }
             Self::Int64 {
                 first_rows,
                 duplicate_rows,

@@ -619,6 +619,10 @@ invalidation, isolation, bounds, and restart evidence listed above.
 - The same optimizer path now propagates bounded positive `IN (...)` literal
   filters across inner equality keys (up to 64 values), preserving a safe
   partition/build reduction without claiming runtime dynamic filtering.
+- Build-side runtime filters now use typed `Int32` hash indexes for single-key
+  probe batches, alongside the existing `Int64`, `Utf8`, and `LargeUtf8` paths.
+  This removes per-row composite-key allocation for common integer dimensions;
+  composite keys and scan-level dynamic filtering remain separate open gates.
 - A distributed self-join with grouped output now has exact worker-loss
   recovery coverage, including retries and moved exchange spools
   (`43a2f8f9`). The deployed AKS worker-loss gate is now also green for the
