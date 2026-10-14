@@ -2516,6 +2516,18 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
                 .ok_or_else(|| sql_err(format!("invalid DATE literal: '{value}'")))?;
             Ok(Expr::Literal(ScalarValue::Int64(days)))
         }
+        ast::Expr::TypedString {
+            data_type: ast::DataType::Timestamp(_, timezone),
+            value,
+        } => Ok(Expr::Cast {
+            expr: Box::new(Expr::Literal(ScalarValue::Utf8(value.clone()))),
+            data_type: CastTarget::TimestampMicros {
+                with_timezone: matches!(
+                    timezone,
+                    ast::TimezoneInfo::WithTimeZone | ast::TimezoneInfo::Tz
+                ),
+            },
+        }),
 
         // ── CAST ────────────────────────────────────────────────────────
         ast::Expr::Cast {
@@ -3879,6 +3891,42 @@ mod tests {
                 right: Box::new(Expr::Literal(ScalarValue::Int64(15887))),
             }
         );
+    }
+
+    #[test]
+    fn timestamp_literals_lower_to_typed_timestamp_casts() {
+        let plan = sql_to_logical_plan(
+            "SELECT TIMESTAMP '2026-10-13 12:34:56.789' AS ts, TIMESTAMP WITH TIME ZONE '2026-10-13 12:34:56Z' AS utc_ts FROM t",
+        )
+        .unwrap();
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("projection");
+        };
+        assert_eq!(
+            columns[0],
+            Expr::Alias {
+                expr: Box::new(Expr::Cast {
+                    expr: Box::new(Expr::Literal(ScalarValue::Utf8(
+                        "2026-10-13 12:34:56.789".into(),
+                    ))),
+                    data_type: CastTarget::TimestampMicros {
+                        with_timezone: false,
+                    },
+                }),
+                name: "ts".into(),
+            }
+        );
+        assert!(matches!(
+            &columns[1],
+            Expr::Alias {
+                expr,
+                name
+            } if name == "utc_ts"
+                && matches!(expr.as_ref(), Expr::Cast {
+                    data_type: CastTarget::TimestampMicros { with_timezone: true },
+                    ..
+                })
+        ));
     }
 
     #[test]
