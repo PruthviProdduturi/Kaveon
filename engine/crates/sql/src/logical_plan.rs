@@ -539,6 +539,8 @@ fn bind_parameters(
 ) -> Result<()> {
     let mut error = None;
     let mut question_index = 0usize;
+    let mut maximum_positional_index = 0usize;
+    let mut used_named_parameters = std::collections::HashSet::new();
     let mut bind = |expr: &mut ast::Expr| {
         let ast::Expr::Value(ast::Value::Placeholder(name)) = expr else {
             return ControlFlow::<()>::Continue(());
@@ -547,8 +549,10 @@ fn bind_parameters(
             question_index += 1;
             question_index
         } else if let Some(index) = name.strip_prefix('$').and_then(|n| n.parse::<usize>().ok()) {
+            maximum_positional_index = maximum_positional_index.max(index);
             index
         } else if let Some(key) = name.strip_prefix(':') {
+            used_named_parameters.insert(key.to_owned());
             if let Some(value) = named_parameters.get(key) {
                 match parameter_to_ast_expr(value) {
                     Ok(value) => *expr = value,
@@ -576,6 +580,7 @@ fn bind_parameters(
             )));
             return ControlFlow::Break(());
         };
+        maximum_positional_index = maximum_positional_index.max(index);
         if index == 0 || index > parameters.len() {
             error = Some(sql_err(format!(
                 "parameter {name} is not bound (received {} values)",
@@ -593,6 +598,25 @@ fn bind_parameters(
         ControlFlow::Continue(())
     };
     let _ = visit_expressions_mut(statements, &mut bind);
+    if error.is_none() {
+        if parameters.len() > maximum_positional_index {
+            error = Some(sql_err(format!(
+                "received {} positional values but the query binds {}",
+                parameters.len(), maximum_positional_index
+            )));
+        } else if named_parameters
+            .keys()
+            .any(|name| !used_named_parameters.contains(name))
+        {
+            let unused = named_parameters
+                .keys()
+                .find(|name| !used_named_parameters.contains(*name))
+                .expect("unused named parameter exists");
+            error = Some(sql_err(format!(
+                "named parameter :{unused} was supplied but is not used by the query"
+            )));
+        }
+    }
     error.map_or(Ok(()), Err)
 }
 
@@ -4711,6 +4735,31 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("parameter :region is not bound"));
+    }
+
+    #[test]
+    fn extra_positional_and_named_parameters_fail_before_planning() {
+        let positional = sql_to_logical_plan_for_binder_with_parameters(
+            "SELECT * FROM t WHERE id = ?",
+            &[ScalarValue::Int64(1), ScalarValue::Int64(2)],
+        )
+        .unwrap_err();
+        assert!(positional
+            .to_string()
+            .contains("received 2 positional values but the query binds 1"));
+
+        let mut named = HashMap::new();
+        named.insert("region".to_owned(), ScalarValue::Utf8("EU".to_owned()));
+        named.insert("unused".to_owned(), ScalarValue::Utf8("x".to_owned()));
+        let named = sql_to_logical_plan_for_binder_with_parameter_bindings(
+            "SELECT * FROM t WHERE region = :region",
+            &[],
+            &named,
+        )
+        .unwrap_err();
+        assert!(named
+            .to_string()
+            .contains("named parameter :unused was supplied but is not used"));
     }
 
     #[test]

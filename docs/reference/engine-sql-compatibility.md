@@ -152,7 +152,8 @@ the supported product families. Multi-row values, `INSERT ... SELECT`,
 tables, and lake-table DML are rejected explicitly. Statement execution accepts
 typed positional (`$1`, `?`) and named (`:name`) scalar or JSON-array parameters
 through the HTTP API; values are bound before planning and are never
-interpolated into SQL. Nested arrays and null array elements lower to typed
+interpolated into SQL. Missing or extra positional and named values fail before
+planning. Nested arrays and null array elements lower to typed
 `ARRAY[...]` expressions; object/map parameter values remain rejected.
 The Trino adapter also accepts scalar and `ARRAY[...]` `EXECUTE name USING`
 values carried by
