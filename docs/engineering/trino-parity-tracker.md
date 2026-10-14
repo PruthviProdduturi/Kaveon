@@ -49,7 +49,7 @@ does not replace the deployed three-worker qualification gates listed below.
 
 The complete `cargo test --workspace` run also passed on this tree, including
 catalog, CLI, core, executor, optimizer, server, SQL, and storage crates plus
-all doctests. The executor result is **289 passed, 4 ignored**; the ignored
+all doctests. The executor result is **290 passed, 4 ignored**; the ignored
 cases are explicitly marked release benchmarks. This workspace result is
 repository-wide regression evidence, not a substitute for the deployed
 three-worker and connector qualification gates.
