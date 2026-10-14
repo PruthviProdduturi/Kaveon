@@ -1937,9 +1937,8 @@ fn join_type(join_type: kaveon_core::JoinType) -> Result<JoinType> {
         kaveon_core::JoinType::Right => Ok(JoinType::Right),
         kaveon_core::JoinType::Full => Ok(JoinType::Full),
         kaveon_core::JoinType::Cross => Ok(JoinType::Cross),
-        kaveon_core::JoinType::Semi | kaveon_core::JoinType::Anti => {
-            Err(exec_err("semi and anti fragment joins are not implemented"))
-        }
+        kaveon_core::JoinType::Semi => Ok(JoinType::Semi),
+        kaveon_core::JoinType::Anti => Ok(JoinType::Anti),
     }
 }
 
@@ -3253,9 +3252,9 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unsupported_join_modes_and_executes_regular_residuals() {
+    fn executes_semi_join_modes_and_regular_residuals() {
         let result = join_type(kaveon_core::JoinType::Semi);
-        assert!(result.is_err());
+        assert_eq!(result.unwrap(), JoinType::Semi);
         // An inner join carries no residual.
         let fragment = ExecutableFragment {
             version: EXECUTABLE_FRAGMENT_VERSION,

@@ -20,6 +20,8 @@ pub enum JoinType {
     Right,
     Full,
     Cross,
+    Semi,
+    Anti,
 }
 
 pub struct HashJoin {
@@ -208,17 +210,25 @@ impl HashJoin {
         let left_schema = Arc::clone(left.schema());
         let right_schema = Arc::clone(right.schema());
         let key_indices = resolve_join_keys(&left_schema, &right_schema, &keys)?;
-        let fields = left_schema
-            .fields()
-            .iter()
-            .map(|field| qualified_field(field, left_qualifier))
-            .chain(
-                right_schema
-                    .fields()
-                    .iter()
-                    .map(|field| qualified_field(field, right_qualifier)),
-            )
-            .collect::<Vec<_>>();
+        let fields = if matches!(join_type, JoinType::Semi | JoinType::Anti) {
+            left_schema
+                .fields()
+                .iter()
+                .map(|field| qualified_field(field, left_qualifier))
+                .collect::<Vec<_>>()
+        } else {
+            left_schema
+                .fields()
+                .iter()
+                .map(|field| qualified_field(field, left_qualifier))
+                .chain(
+                    right_schema
+                        .fields()
+                        .iter()
+                        .map(|field| qualified_field(field, right_qualifier)),
+                )
+                .collect::<Vec<_>>()
+        };
         Ok(Self {
             left,
             right,
@@ -509,6 +519,17 @@ impl BatchOperator for HashJoin {
                         )?;
                     }
                     let match_count = state.match_rows.len();
+                    if matches!(self.join_type, JoinType::Semi | JoinType::Anti) {
+                        let keep = (self.join_type == JoinType::Semi && match_count > 0)
+                            || (self.join_type == JoinType::Anti && match_count == 0);
+                        if keep {
+                            left_rows.push(Some(state.left_row as u64));
+                        }
+                        state.left_row += 1;
+                        state.match_offset = 0;
+                        state.match_rows.clear();
+                        continue;
+                    }
                     if match_count == 0 {
                         if matches!(self.join_type, JoinType::Left | JoinType::Full) {
                             push_output_pair(
@@ -575,24 +596,31 @@ impl BatchOperator for HashJoin {
                     }
                     continue;
                 }
-                let bytes = estimated_output_bytes(left, &left_rows)?
-                    .checked_add(estimated_output_bytes(&state.right, &right_rows)?)
-                    .ok_or_else(|| exec_err("join output memory estimate overflow"))?;
+                let bytes = estimated_output_bytes(left, &left_rows)?;
+                let bytes = if matches!(self.join_type, JoinType::Semi | JoinType::Anti) {
+                    bytes
+                } else {
+                    bytes
+                        .checked_add(estimated_output_bytes(&state.right, &right_rows)?)
+                        .ok_or_else(|| exec_err("join output memory estimate overflow"))?
+                };
                 self.output_memory = reserve_bytes(self.memory.as_ref(), bytes)?;
                 let left_indices = UInt64Array::from(left_rows);
-                let right_indices = UInt64Array::from(right_rows);
-                let columns = left
-                    .columns()
-                    .iter()
-                    .map(|column| take(column, &left_indices, None))
-                    .chain(
-                        state
-                            .right
-                            .columns()
-                            .iter()
-                            .map(|column| take(column, &right_indices, None)),
-                    )
-                    .collect::<std::result::Result<Vec<ArrayRef>, _>>()?;
+                let columns = if matches!(self.join_type, JoinType::Semi | JoinType::Anti) {
+                    left.columns()
+                        .iter()
+                        .map(|column| take(column, &left_indices, None))
+                        .collect::<std::result::Result<Vec<ArrayRef>, _>>()?
+                } else {
+                    let right_indices = UInt64Array::from(right_rows);
+                    left.columns()
+                        .iter()
+                        .map(|column| take(column, &left_indices, None))
+                        .chain(state.right.columns().iter().map(|column| {
+                            take(column, &right_indices, None)
+                        }))
+                        .collect::<std::result::Result<Vec<ArrayRef>, _>>()?
+                };
                 return Ok(Some(RecordBatch::try_new(self.schema.clone(), columns)?));
             }
         })();
@@ -1044,6 +1072,43 @@ mod tests {
             )
             .unwrap(),
         )
+    }
+
+    #[test]
+    fn semi_and_anti_hash_joins_emit_only_matching_left_rows() {
+        for (join_type, expected) in [
+            (JoinType::Semi, vec![Some(2), Some(3)]),
+            (JoinType::Anti, vec![Some(1), None]),
+        ] {
+            let left = Box::new(input(
+                vec![Some(1), Some(2), Some(3), None],
+                vec!["a", "b", "c", "n"],
+                "left_name",
+            ));
+            let right = Box::new(input(
+                vec![Some(2), Some(3), None],
+                vec!["b", "c", "n"],
+                "right_name",
+            ));
+            let mut join = HashJoin::try_new(
+                left,
+                right,
+                join_type,
+                vec![("id".into(), "id".into())],
+            )
+            .unwrap();
+            let batches = kaveon_core::collect_batches(&mut join).unwrap();
+            let result = concat_batches(join.schema(), &batches).unwrap();
+            assert_eq!(result.num_columns(), 2);
+            assert_eq!(
+                result
+                    .column(0)
+                    .as_primitive::<arrow::datatypes::Int64Type>()
+                    .iter()
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
     }
 
     #[test]
