@@ -200,7 +200,8 @@ foundations, but several operators are still centralized or narrow:
   `ARRAY_POSITION`, `ARRAY_DISTINCT`, `ARRAY_SORT`, `ARRAY_REVERSE`, and
   `ARRAY_SLICE`; `ARRAY_CONCAT` now joins typed lists while preserving null
   elements; `ARRAY_APPEND` and `ARRAY_PREPEND` add typed values while
-  preserving list nullability; `ARRAY_REMOVE` removes matching values without
+  preserving list nullability, including nested list, row, and map elements;
+  `ARRAY_REMOVE` removes matching values without
   dropping non-matching nulls; and `ARRAY_MIN` and `ARRAY_MAX` return typed extrema while
   ignoring null elements, and `ARRAYS_OVERLAP` follows Trino's true/false/NULL
   intersection semantics. `ARRAY_JOIN` now formats supported typed elements,
