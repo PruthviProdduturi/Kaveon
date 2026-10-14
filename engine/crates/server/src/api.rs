@@ -3052,8 +3052,25 @@ async fn submit_trino_statement_parts(
                 .into_response();
         }
     };
-    let (query, parameters) = match (prepared_query, body_text) {
-        (Some(query), Some(body)) => match trino_execute_parameters(&body) {
+    let immediate = match (prepared_query.is_none(), body_text.as_deref()) {
+        (true, Some(body)) => match trino_execute_immediate(body) {
+            Ok(immediate) => immediate,
+            Err(error) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": error,
+                        "errorName": "INVALID_PARAMETER"
+                    })),
+                )
+                    .into_response();
+            }
+        },
+        _ => None,
+    };
+    let (query, parameters) = match (prepared_query, immediate, body_text) {
+        (None, Some((query, parameters)), _) => (query, parameters),
+        (Some(query), _, Some(body)) => match trino_execute_parameters(&body) {
             Ok(parameters) => (query, parameters),
             Err(error) => {
                 return (
@@ -3066,8 +3083,8 @@ async fn submit_trino_statement_parts(
                     .into_response();
             }
         },
-        (Some(query), None) => (query, Vec::new()),
-        (None, Some(query)) if !query.trim().is_empty() => (query, Vec::new()),
+        (Some(query), _, None) => (query, Vec::new()),
+        (None, None, Some(query)) if !query.trim().is_empty() => (query, Vec::new()),
         _ => {
             return (
                 StatusCode::BAD_REQUEST,
@@ -3883,6 +3900,78 @@ fn trino_percent_decode(encoded: &str) -> Result<String, String> {
         index += 1;
     }
     String::from_utf8(decoded).map_err(|_| "header value is not valid UTF-8".to_owned())
+}
+
+/// Parse Trino's `EXECUTE IMMEDIATE 'sql' USING ...` form. The SQL text must
+/// be a single quoted literal; doubled quotes are decoded using SQL literal
+/// rules. Values are passed through the same typed JSON binder as named
+/// prepared statements, so this path never interpolates values into SQL.
+fn trino_execute_immediate(
+    body: &str,
+) -> Result<Option<(String, Vec<serde_json::Value>)>, String> {
+    let trimmed = body.trim().trim_end_matches(';').trim();
+    let prefix = "EXECUTE IMMEDIATE";
+    if !trimmed
+        .get(..prefix.len())
+        .is_some_and(|value| value.eq_ignore_ascii_case(prefix))
+        || !trimmed
+            .get(prefix.len()..)
+            .and_then(|rest| rest.chars().next())
+            .is_some_and(char::is_whitespace)
+    {
+        return Ok(None);
+    }
+    let mut rest = trimmed[prefix.len()..].trim_start();
+    if !rest.starts_with('\'') {
+        return Err("EXECUTE IMMEDIATE requires a single-quoted SQL string".to_owned());
+    }
+    rest = &rest[1..];
+    let bytes = rest.as_bytes();
+    let mut query = String::new();
+    let mut index = 0;
+    let mut closed = false;
+    while index < bytes.len() {
+        if bytes[index] != b'\'' {
+            query.push(bytes[index] as char);
+            index += 1;
+            continue;
+        }
+        if bytes.get(index + 1) == Some(&b'\'') {
+            query.push('\'');
+            index += 2;
+        } else {
+            index += 1;
+            closed = true;
+            break;
+        }
+    }
+    if !closed || query.trim().is_empty() {
+        return Err("EXECUTE IMMEDIATE SQL literal is unterminated or empty".to_owned());
+    }
+    rest = rest[index..].trim_start();
+    if rest.is_empty() {
+        return Ok(Some((query, Vec::new())));
+    }
+    let Some(using) = rest.get(..5) else {
+        return Err("EXECUTE IMMEDIATE accepts only a USING clause after the SQL literal".to_owned());
+    };
+    if !using.eq_ignore_ascii_case("USING")
+        || !rest
+            .get(5..)
+            .and_then(|suffix| suffix.chars().next())
+            .is_some_and(char::is_whitespace)
+    {
+        return Err("EXECUTE IMMEDIATE accepts only a USING clause after the SQL literal".to_owned());
+    }
+    let values = rest[5..].trim();
+    if values.is_empty() {
+        return Err("EXECUTE IMMEDIATE USING requires at least one value".to_owned());
+    }
+    let parameters = split_trino_arguments(values)
+        .into_iter()
+        .map(|value| trino_literal_to_json(value.trim()))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Some((query, parameters)))
 }
 
 /// Parse the scalar values from Trino's `EXECUTE name USING ...` request.
@@ -20439,6 +20528,24 @@ mod streamed_root_tests {
                 .and_then(|value| value.to_str().ok()),
             Some("recent")
         );
+    }
+
+    #[test]
+    fn trino_execute_immediate_decodes_sql_and_typed_values() {
+        let (query, parameters) = trino_execute_immediate(
+            "EXECUTE IMMEDIATE 'SELECT * FROM events WHERE name = ''O''Reilly''' USING 'EU', ARRAY[1, NULL]",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            query,
+            "SELECT * FROM events WHERE name = 'O'Reilly'"
+        );
+        assert_eq!(parameters.len(), 2);
+        assert_eq!(parameters[0], serde_json::json!("EU"));
+        assert_eq!(parameters[1], serde_json::json!([1, null]));
+        assert!(trino_execute_immediate("EXECUTE IMMEDIATE SELECT 1").is_err());
+        assert!(trino_execute_immediate("EXECUTE IMMEDIATE 'SELECT 1' USING").is_err());
     }
 
     #[test]

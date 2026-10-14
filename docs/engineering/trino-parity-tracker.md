@@ -203,6 +203,11 @@ node-drain recovery, and sustained soak remain separate acceptance gates.
   allowing compatible clients to retain and evict their session-side prepared
   statement entries. This closes the response-header portion of the protocol
   adapter; it does not claim the complete wire prepare/describe/bind lifecycle.
+  `EXECUTE IMMEDIATE 'sql' USING ...` is also accepted when the SQL text is a
+  single quoted literal; doubled quotes are decoded and its values use the same
+  typed binder. Invalid quoting, empty SQL, and malformed `USING` clauses fail
+  closed. This covers the direct execution form without claiming dynamic SQL
+  expressions or the complete prepared-statement wire lifecycle.
   SQL `DEALLOCATE PREPARE ALL` now clears every prepared statement owned by the
   requesting principal while preserving other principals' entries.
   The raw Trino route answers `SHOW SESSION` and `SHOW SESSION LIKE 'pattern'`
