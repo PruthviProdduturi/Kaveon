@@ -5237,6 +5237,70 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             if args[1].len() != num_rows {
                 return Err(KaveonError::Execution(format!("{name} requires one value per row")));
             }
+            if matches!(
+                list.value_type(),
+                DataType::List(_)
+                    | DataType::LargeList(_)
+                    | DataType::Struct(_)
+                    | DataType::Map(_, _)
+            ) {
+                let scalar = if args[1].data_type() == &DataType::Null {
+                    arrow::array::new_null_array(&list.value_type(), num_rows)
+                } else {
+                    if args[1].data_type() != &list.value_type() {
+                        return Err(KaveonError::Execution(format!(
+                            "{name} requires the appended value to match list element type"
+                        )));
+                    }
+                    Arc::clone(&args[1])
+                };
+                let mut child_chunks = Vec::with_capacity(num_rows * 2);
+                let mut offsets = vec![0_i32];
+                let mut valid = Vec::with_capacity(num_rows);
+                for row in 0..num_rows {
+                    if list.is_null(row) {
+                        valid.push(false);
+                        offsets.push(*offsets.last().unwrap());
+                        continue;
+                    }
+                    valid.push(true);
+                    let inner = list.value(row);
+                    let value = scalar.slice(row, 1);
+                    if prepend {
+                        child_chunks.push(value);
+                        child_chunks.push(inner);
+                    } else {
+                        child_chunks.push(inner);
+                        child_chunks.push(value);
+                    }
+                    let length = offsets.last().copied().unwrap_or_default() as usize
+                        + child_chunks[child_chunks.len() - 2].len()
+                        + child_chunks[child_chunks.len() - 1].len();
+                    offsets.push(i32::try_from(length).map_err(|_| {
+                        KaveonError::Execution(format!("{name} result offset overflow"))
+                    })?);
+                }
+                let values = if child_chunks.is_empty() {
+                    arrow::array::new_empty_array(&list.value_type())
+                } else {
+                    let chunks = child_chunks
+                        .iter()
+                        .map(|chunk| chunk.as_ref() as &dyn Array)
+                        .collect::<Vec<_>>();
+                    compute::concat(&chunks)?
+                };
+                let field = Arc::new(arrow::datatypes::Field::new(
+                    "item",
+                    values.data_type().clone(),
+                    true,
+                ));
+                return Ok(Arc::new(ListArray::try_new(
+                    field,
+                    OffsetBuffer::new(ScalarBuffer::from(offsets)),
+                    values,
+                    Some(arrow::buffer::NullBuffer::from(valid)),
+                )?));
+            }
             macro_rules! append_primitive {
                 ($ty:ty, $builder:expr) => {{
                     let scalar = compute::cast(&args[1], &list.value_type())?;
@@ -7536,6 +7600,23 @@ mod tests {
         let maps = maps_value.as_any().downcast_ref::<MapArray>().unwrap();
         assert_eq!(maps.len(), 2);
         assert_eq!(maps.keys().as_string::<i32>().value(1), "b");
+
+        let appended = evaluate(
+            &Expr::Function {
+                name: "ARRAY_APPEND".into(),
+                args: vec![
+                    array(vec![array(vec![Expr::Literal(ScalarValue::Int64(7))])]),
+                    array(vec![Expr::Literal(ScalarValue::Int64(8))]),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        let appended = appended.as_any().downcast_ref::<ListArray>().unwrap();
+        let appended_value = appended.value(0);
+        let appended = appended_value.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(appended.len(), 2);
+        assert_eq!(appended.value(1).as_primitive::<Int64Type>().value(0), 8);
     }
 
     #[test]
