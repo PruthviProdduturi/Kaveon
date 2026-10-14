@@ -153,9 +153,13 @@ The Trino adapter also accepts scalar and `ARRAY[...]` `EXECUTE name USING`
 values carried by
 `X-Trino-Prepared-Statement`, including validated `DATE 'YYYY-MM-DD'` literals
 that remain text until the target column's Date32 coercion. Compound values
-The raw Trino statement route also accepts owner-scoped SQL `PREPARE name FROM
-...`, `EXECUTE name`, and `DEALLOCATE PREPARE name`; prepared SQL still passes
-through the normal parser and typed binder. Compound values beyond arrays,
+are still limited to the supported array forms. The raw Trino statement route
+also accepts owner-scoped SQL `PREPARE name FROM ...`, `EXECUTE name`, and
+`DEALLOCATE PREPARE name`; prepared SQL still passes through the normal parser
+and typed binder. `SHOW SESSION` on that route returns the Engine's supported
+session settings (`query_memory_limit_bytes`, `admission_wait_seconds`,
+`result_cache`, `approximate`, and `use_statistics`) in Trino's tabular
+metadata shape. Compound values beyond arrays,
 timestamps, intervals, and the complete prepare/describe/bind wire lifecycle
 remain explicitly unsupported.
 The current product transaction contract
