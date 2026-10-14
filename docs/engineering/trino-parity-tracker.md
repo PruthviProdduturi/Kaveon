@@ -64,6 +64,12 @@ server differential test
 AKS release SLO still requires separate image-bound fault-pressure and
 comparison artifacts.
 
+The server differential corpus currently passes **11/11** tests, including
+forced distributed aggregate spill with exact-result comparison and zero
+retained spill bytes, join spill, residual and outer-join modes, filtered
+aggregates, and correlated `EXISTS` shapes. This is package-level evidence for
+those declared cases; it does not replace the deployed image-bound corpus.
+
 Temporal `ARRAY[...]` literals now preserve DATE32, DATE64, TIME32 second and
 millisecond, and TIMESTAMP microsecond element types, including null elements;
 the execution suite includes a timestamp-list regression. `ARRAY_CONCAT` also
