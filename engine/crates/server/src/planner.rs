@@ -707,7 +707,7 @@ impl ExecutableFragmentBuilder<'_> {
                     Some(FragmentOperator::Distinct),
                 )
             }
-            LogicalPlan::Union { inputs, .. } => {
+            LogicalPlan::Union { inputs, all } => {
                 let mut stages = Vec::new();
                 for input in inputs {
                     stages.push(self.build(input)?);
@@ -743,6 +743,9 @@ impl ExecutableFragmentBuilder<'_> {
                     union_inputs.push(id);
                 }
                 target_draft.push(FragmentOperator::Union, union_inputs);
+                if !all {
+                    target_draft.push(FragmentOperator::Distinct, vec![target_draft.root]);
+                }
                 Ok(self.add_fragment(target_draft))
             }
             LogicalPlan::Window {
@@ -2418,7 +2421,7 @@ fn plan_query_with_predicate(
             })
         }
 
-        LogicalPlan::Union { inputs, .. } => {
+        LogicalPlan::Union { inputs, all } => {
             let mut operators: Vec<Box<dyn BatchOperator>> = Vec::new();
             let mut scan_metrics = Vec::new();
             for input in inputs {
@@ -2426,10 +2429,13 @@ fn plan_query_with_predicate(
                 operators.push(planned.operator);
                 scan_metrics.extend(planned.scan_metrics);
             }
-            Ok(PlannedQuery {
-                operator: Box::new(UnionOperator::new(operators)),
-                scan_metrics,
-            })
+            let operator = Box::new(UnionOperator::new(operators));
+            let operator = if *all {
+                operator
+            } else {
+                crate::fragment_exec::distinct_operator(operator, memory)?
+            };
+            Ok(PlannedQuery { operator, scan_metrics })
         }
 
         LogicalPlan::Window {
@@ -3538,6 +3544,34 @@ mod tests {
             exchange.partitioning,
             Partitioning::RoundRobin { partition_count: 4 }
         )));
+    }
+
+    #[test]
+    fn direct_distinct_union_plan_adds_final_deduplication() {
+        let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(
+            "SELECT id FROM items UNION ALL SELECT id FROM customers",
+        )
+        .unwrap();
+        let LogicalPlan::Union { all, .. } = &mut plan else {
+            panic!("expected union plan");
+        };
+        *all = false;
+        qualify_tables(&mut plan, "test", "default");
+        let fixture = fixture();
+        let fragments = build_executable_fragments("query-1", &plan, &fixture.catalog, 1).unwrap();
+        let target = fragments
+            .values()
+            .find(|fragment| {
+                fragment
+                    .nodes
+                    .iter()
+                    .any(|node| matches!(node.operator, FragmentOperator::Union))
+            })
+            .expect("union fragment");
+        assert!(matches!(
+            target.nodes.last().map(|node| &node.operator),
+            Some(FragmentOperator::Distinct)
+        ));
     }
 
     #[test]
