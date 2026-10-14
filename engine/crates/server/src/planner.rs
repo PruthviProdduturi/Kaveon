@@ -3279,6 +3279,28 @@ mod tests {
     }
 
     #[test]
+    fn executes_grouping_sets_grand_total() {
+        let fixture = fixture();
+        let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(
+            "SELECT COUNT(*) FROM items GROUP BY GROUPING SETS (())",
+        )
+        .unwrap();
+        qualify_tables(&mut plan, "test", "default");
+        let mut planned = plan_query(&plan, &fixture.catalog).unwrap();
+        let batches = collect_batches(&mut *planned.operator).unwrap();
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+        assert_eq!(
+            batches[0]
+                .column(0)
+                .as_any()
+                .downcast_ref::<arrow::array::UInt64Array>()
+                .unwrap()
+                .value(0),
+            4
+        );
+    }
+
+    #[test]
     fn having_and_nested_aggregate_references_bind_to_aggregate_outputs() {
         let fragments = executable_fragments(
             "SELECT id, SUM(id) * 2 AS doubled, CASE WHEN COUNT(*) > 1 THEN 'many' ELSE 'one' END AS n              FROM items GROUP BY id HAVING SUM(id) > 100 AND COUNT(*) >= 1",

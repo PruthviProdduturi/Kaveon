@@ -105,7 +105,8 @@ unchanged; nothing is approximated unless the statement writes an
   more than one column, or multi-key correlated `IN`; each is refused by name.
 - Outer non-equality join conditions (residual join filters), recursive CTEs,
   ordered map and JSON comparison. Column-key `GROUPING SETS`, `CUBE`, and
-  `ROLLUP` lower to typed `UNION ALL` aggregate branches; grouping metadata
+  `ROLLUP` (including the grand-total `GROUPING SETS (())` form) lower to typed
+  `UNION ALL` aggregate branches; grouping metadata
   `GROUPING(column)` and `GROUPING_ID(...)` are materialized for those
   expanded branches. CUBE expansions with 16 or more keys remain unsupported
   and are rejected explicitly rather than silently treated as a plain `GROUP BY`;
