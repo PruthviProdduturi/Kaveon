@@ -3496,6 +3496,7 @@ fn trino_functions_response(pattern: Option<&str>) -> Response {
         ("approx_count_distinct", "bigint", "[unknown]", "aggregate", true, "Approximate distinct count"),
         ("approx_percentile", "double", "[double, double]", "aggregate", true, "Approximate percentile"),
         ("array", "array", "[unknown]", "scalar", true, "Construct an array"),
+        ("json_array_contains", "boolean", "[varchar, unknown]", "scalar", true, "Test JSON array membership"),
         ("array_distinct", "array", "[array]", "scalar", true, "Remove duplicate array elements"),
         ("array_join", "varchar", "[array, varchar]", "scalar", true, "Join array elements"),
         ("array_position", "bigint", "[array, unknown]", "scalar", true, "Find an array element"),
@@ -20395,6 +20396,7 @@ mod streamed_root_tests {
             .expect("sum metadata");
         assert_eq!(sum[3], "aggregate");
         assert_eq!(sum[2], serde_json::json!(["double"]));
+        assert!(rows.iter().any(|row| row[0] == "json_array_contains"));
         let filtered = trino_functions_response(Some("sum%"));
         let body = axum::body::to_bytes(filtered.into_body(), 64 * 1024)
             .await
