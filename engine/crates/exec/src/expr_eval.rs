@@ -5762,6 +5762,24 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     }
                     Ok(Arc::new(builder.finish()))
                 }
+                DataType::LargeUtf8 => {
+                    let mut builder = ListBuilder::new(LargeStringBuilder::new());
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let inner = list.value(row);
+                        let values = inner.as_string::<i64>();
+                        for index in (0..values.len()).rev() {
+                            builder.values().append_option(
+                                values.is_valid(index).then(|| values.value(index)),
+                            );
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }
                 DataType::Boolean => {
                     let mut builder = ListBuilder::new(BooleanBuilder::new());
                     for row in 0..num_rows {
@@ -11451,6 +11469,22 @@ mod tests {
         let inner = result.value(0);
         let values = inner.as_string::<i64>();
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some("a"), Some("z"), None]);
+
+        let mut large_text_reverse_builder = LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
+        large_text_reverse_builder.values().append_value("alpha");
+        large_text_reverse_builder.values().append_null();
+        large_text_reverse_builder.values().append_value("beta");
+        large_text_reverse_builder.append(true);
+        let result = eval_scalar_function(
+            "ARRAY_REVERSE",
+            &[Arc::new(large_text_reverse_builder.finish()) as ArrayRef],
+            1,
+        )
+        .unwrap();
+        let result = result.as_any().downcast_ref::<LargeListArray>().unwrap();
+        let inner = result.value(0);
+        let values = inner.as_string::<i64>();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some("beta"), None, Some("alpha")]);
 
         let mut reverse_builder = LargeListBuilder::new(ListBuilder::new(Int64Builder::new()));
         for value in [1_i64, 2, 3] {
