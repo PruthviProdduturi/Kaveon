@@ -657,6 +657,8 @@ invalidation, isolation, bounds, and restart evidence listed above.
   preserves NULL results for NULL inputs, non-matches, and missing captures.
 - `REGEXP_SPLIT` now uses the shared compiled-pattern cache, returns a typed
   text array, preserves trailing empty fields, and propagates NULL inputs.
+- `CONCAT_WS` now skips NULL value arguments, preserves empty strings, and
+  returns NULL when its separator is NULL.
 - `SPLIT` now returns typed text arrays, preserves NULL inputs, supports a
   positive limit whose final element contains the remainder, and follows
   Trino's character splitting behavior for an empty delimiter.
