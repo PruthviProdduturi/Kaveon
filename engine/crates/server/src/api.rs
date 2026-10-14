@@ -2866,6 +2866,9 @@ async fn submit_trino_statement_parts(
         if trino_is_show_session(body) {
             return trino_session_response(&state.config);
         }
+        if trino_is_show_functions(body) {
+            return trino_functions_response();
+        }
         match trino_prepare_statement(body) {
             Ok(Some((name, query))) => {
                 if let Err(error) = kaveon_sql::parser::parse_sql(&query) {
@@ -3155,6 +3158,106 @@ fn trino_is_show_session(body: &str) -> bool {
         .trim_end_matches(';')
         .trim()
         .eq_ignore_ascii_case("SHOW SESSION")
+}
+
+fn trino_is_show_functions(body: &str) -> bool {
+    body.trim()
+        .trim_end_matches(';')
+        .trim()
+        .eq_ignore_ascii_case("SHOW FUNCTIONS")
+}
+
+fn trino_functions_response() -> Response {
+    // Keep this list next to the adapter so the wire metadata describes the
+    // functions that the Engine deliberately exposes, rather than pretending
+    // to be a complete PostgreSQL or Trino registry.  The executor's parser
+    // and evaluator remain the source of truth for actual execution.
+    const FUNCTIONS: &[(&str, &str, &str, &str, bool, &str)] = &[
+        ("abs", "double", "[double]", "scalar", true, "Absolute value"),
+        ("approx_count_distinct", "bigint", "[unknown]", "aggregate", true, "Approximate distinct count"),
+        ("approx_percentile", "double", "[double, double]", "aggregate", true, "Approximate percentile"),
+        ("array", "array", "[unknown]", "scalar", true, "Construct an array"),
+        ("array_distinct", "array", "[array]", "scalar", true, "Remove duplicate array elements"),
+        ("array_join", "varchar", "[array, varchar]", "scalar", true, "Join array elements"),
+        ("array_position", "bigint", "[array, unknown]", "scalar", true, "Find an array element"),
+        ("array_sort", "array", "[array]", "scalar", true, "Sort an array"),
+        ("cardinality", "bigint", "[array]", "scalar", true, "Return collection cardinality"),
+        ("coalesce", "unknown", "[unknown]", "scalar", true, "First non-null value"),
+        ("concat", "varchar", "[varchar]", "scalar", true, "Concatenate strings"),
+        ("contains", "boolean", "[array, unknown]", "scalar", true, "Test array membership"),
+        ("count", "bigint", "[unknown]", "aggregate", true, "Count rows or values"),
+        ("current_date", "date", "[]", "scalar", false, "Current session date"),
+        ("date_part", "bigint", "[varchar, date]", "scalar", true, "Extract a date field"),
+        ("date_trunc", "date", "[varchar, date]", "scalar", true, "Truncate a date or timestamp"),
+        ("ends_with", "boolean", "[varchar, varchar]", "scalar", true, "Test a string suffix"),
+        ("exp", "double", "[double]", "scalar", true, "Exponential function"),
+        ("floor", "double", "[double]", "scalar", true, "Round down"),
+        ("greatest", "unknown", "[unknown]", "scalar", true, "Greatest non-null value"),
+        ("least", "unknown", "[unknown]", "scalar", true, "Least non-null value"),
+        ("ln", "double", "[double]", "scalar", true, "Natural logarithm"),
+        ("lower", "varchar", "[varchar]", "scalar", true, "Lowercase a string"),
+        ("lpad", "varchar", "[varchar, bigint, varchar]", "scalar", true, "Left-pad a string"),
+        ("max", "unknown", "[unknown]", "aggregate", true, "Maximum value"),
+        ("min", "unknown", "[unknown]", "aggregate", true, "Minimum value"),
+        ("nullif", "unknown", "[unknown, unknown]", "scalar", true, "Null when values match"),
+        ("pi", "double", "[]", "scalar", true, "The constant pi"),
+        ("repeat", "varchar", "[varchar, bigint]", "scalar", true, "Repeat a string"),
+        ("replace", "varchar", "[varchar, varchar, varchar]", "scalar", true, "Replace string occurrences"),
+        ("reverse", "varchar", "[varchar]", "scalar", true, "Reverse a string"),
+        ("rpad", "varchar", "[varchar, bigint, varchar]", "scalar", true, "Right-pad a string"),
+        ("round", "double", "[double]", "scalar", true, "Round a number"),
+        ("sqrt", "double", "[double]", "scalar", true, "Square root"),
+        ("starts_with", "boolean", "[varchar, varchar]", "scalar", true, "Test a string prefix"),
+        ("sum", "double", "[double]", "aggregate", true, "Sum values"),
+        ("trim", "varchar", "[varchar]", "scalar", true, "Trim whitespace"),
+        ("upper", "varchar", "[varchar]", "scalar", true, "Uppercase a string"),
+    ];
+    let columns = [
+        ("Function", "varchar"),
+        ("Return Type", "varchar"),
+        ("Argument Types", "array(varchar)"),
+        ("Function Type", "varchar"),
+        ("Deterministic", "boolean"),
+        ("Description", "varchar"),
+    ]
+    .into_iter()
+    .map(|(name, raw_type)| {
+        serde_json::json!({
+            "name": name,
+            "type": raw_type,
+            "typeSignature": {"rawType": raw_type}
+        })
+    })
+    .collect::<Vec<_>>();
+    let rows = FUNCTIONS
+        .iter()
+        .map(|(name, return_type, args, kind, deterministic, description)| {
+            let argument_types = args
+                .trim_matches(['[', ']'])
+                .split(',')
+                .map(str::trim)
+                .filter(|argument| !argument.is_empty())
+                .collect::<Vec<_>>();
+            serde_json::json!([
+                name,
+                return_type,
+                argument_types,
+                kind,
+                deterministic,
+                description
+            ])
+        })
+        .collect::<Vec<_>>();
+    let id = Uuid::new_v4().to_string();
+    Json(serde_json::json!({
+        "id": id,
+        "infoUri": format!("/v1/trino/query/{id}"),
+        "partialCancelUri": format!("/v1/trino/query/{id}"),
+        "stats": {"state": "FINISHED", "elapsedTimeMillis": 0},
+        "columns": columns,
+        "data": rows
+    }))
+    .into_response()
 }
 
 fn trino_session_response(config: &crate::config::ServerConfig) -> Response {
@@ -19469,6 +19572,28 @@ mod streamed_root_tests {
         let rows = value["data"].as_array().unwrap();
         assert!(rows.iter().any(|row| row[0] == "result_cache"));
         assert!(rows.iter().any(|row| row[0] == "query_memory_limit_bytes"));
+    }
+
+    #[tokio::test]
+    async fn trino_show_functions_exposes_supported_function_metadata() {
+        assert!(trino_is_show_functions("SHOW FUNCTIONS;"));
+        assert!(trino_is_show_functions("show functions"));
+        assert!(!trino_is_show_functions("SHOW FUNCTIONS LIKE 'sum'"));
+        let response = trino_functions_response();
+        let body = axum::body::to_bytes(response.into_body(), 256 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["stats"]["state"], "FINISHED");
+        assert_eq!(value["columns"].as_array().unwrap().len(), 6);
+        assert_eq!(value["columns"][2]["type"], "array(varchar)");
+        let rows = value["data"].as_array().unwrap();
+        let sum = rows
+            .iter()
+            .find(|row| row[0] == "sum")
+            .expect("sum metadata");
+        assert_eq!(sum[3], "aggregate");
+        assert_eq!(sum[2], serde_json::json!(["double"]));
     }
 
     #[test]
