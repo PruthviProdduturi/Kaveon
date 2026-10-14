@@ -2971,6 +2971,39 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
         _ => return Err(sql_err(format!("unsupported function arguments in {name}"))),
     };
 
+    // Trino's TRY(expr) turns failures in a scalar expression into NULL.  A
+    // safe cast is the most common and most useful form in lake queries, and
+    // JSON_PARSE has the same row-local failure contract.  Lower both forms
+    // to the vectorized safe evaluators already used by TRY_CAST and
+    // TRY_JSON_PARSE.  Other expressions are rejected explicitly until the
+    // executor can mask arbitrary per-row failures without changing their
+    // normal error semantics.
+    if name == "TRY" {
+        let [argument] = args.as_slice() else {
+            return Err(sql_err("TRY requires exactly one argument"));
+        };
+        return match argument.clone() {
+            Expr::Cast { expr, data_type } => Ok(Expr::Function {
+                name: format!("TRY_CAST_{}", cast_target_name(data_type)),
+                args: vec![*expr],
+            }),
+            Expr::Function {
+                name: inner_name,
+                args: inner_args,
+            } if inner_name.eq_ignore_ascii_case("JSON_PARSE")
+                && inner_args.len() == 1 =>
+            {
+                Ok(Expr::Function {
+                    name: "TRY_JSON_PARSE".into(),
+                    args: inner_args,
+                })
+            }
+            _ => Err(sql_err(
+                "TRY currently supports CAST and JSON_PARSE expressions",
+            )),
+        };
+    }
+
     // Trino's COUNT_IF(predicate) is COUNT(*) FILTER (WHERE predicate).
     // Lower it to the existing null-preserving COUNT path so local,
     // distributed, spill, and window execution retain one implementation.
@@ -4842,6 +4875,24 @@ mod tests {
         let plan = sql_to_logical_plan("SELECT TRY_CAST(value AS BIGINT) FROM t").unwrap();
         let debug = format!("{plan:?}");
         assert!(debug.contains("TRY_CAST_INT64"));
+    }
+
+    #[test]
+    fn try_lowers_cast_and_json_parse_to_safe_vectorized_forms() {
+        let cast = sql_to_logical_plan("SELECT TRY(CAST(value AS BIGINT)) FROM t").unwrap();
+        assert!(format!("{cast:?}").contains("TRY_CAST_INT64"));
+        let json = sql_to_logical_plan("SELECT TRY(JSON_PARSE(payload)) FROM t").unwrap();
+        assert!(format!("{json:?}").contains("TRY_JSON_PARSE"));
+    }
+
+    #[test]
+    fn try_rejects_unsupported_expression_with_actionable_error() {
+        let error = sql_to_logical_plan("SELECT TRY(value / divisor) FROM t").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("TRY currently supports CAST and JSON_PARSE")
+        );
     }
 
     #[test]
