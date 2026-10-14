@@ -2412,7 +2412,9 @@ main.main-lab {
 .chart-picker-preview {
   height: 90px;
   border-radius: 8px;
-  background: linear-gradient(135deg, #eff6ff, #dbeafe);
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--accent) 7%, var(--bg-elevated)),
+    color-mix(in srgb, var(--accent) 16%, var(--bg-elevated)));
   position: relative;
   overflow: hidden;
 }
@@ -2490,9 +2492,14 @@ main.main-lab {
   margin-bottom: 0.25rem;
 }
 
+/* Named "scroll" and given `flex: 1; min-height: 0` but never given an
+   overflow, so the Chart source pane did not scroll: a dataset with more
+   columns than the pane is tall spilled out of a grid row of fixed height
+   instead, and the columns past the fold were unreachable. */
 .chart-builder-left-scroll {
   flex: 1;
   min-height: 0;
+  overflow-y: auto;
   padding-right: 0.2rem;
   display: flex;
   flex-direction: column;
@@ -2608,7 +2615,7 @@ main.main-lab {
 
 .chart-builder-error {
   font-size: 0.8rem;
-  color: #b91c1c;
+  color: var(--error);
 }
 
 .chart-builder-panel-title {
@@ -2703,7 +2710,7 @@ main.main-lab {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: #e0edff;
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-surface));
   color: var(--lens-primary);
   font-size: 0.75rem;
 }
@@ -2822,7 +2829,7 @@ main.main-lab {
 }
 
 .chart-builder-input-inline-btn:hover {
-  background: #e5e7ff;
+  background: var(--bg-hover);
   color: var(--text-primary);
   border-color: var(--border);
 }
@@ -3049,7 +3056,7 @@ main.main-lab {
 }
 
 .chart-source-section-header:focus-visible {
-  outline: 2px solid #0078D4;
+  outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 
@@ -3113,23 +3120,23 @@ main.main-lab {
 }
 
 .chart-source-item-icon-metric {
-  background: color-mix(in srgb, var(--lens-primary) 10%, white);
+  background: color-mix(in srgb, var(--lens-primary) 10%, var(--bg-surface));
   color: var(--lens-primary);
 }
 
 .chart-source-item-icon-metric-column {
-  background: #e0f2fe;
-  color: #0369a1;
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-surface));
+  color: var(--accent);
 }
 
 .chart-source-item-icon-time {
-  background: #fef3c7;
-  color: #92400e;
+  background: color-mix(in srgb, var(--warning) 16%, var(--bg-surface));
+  color: var(--warning);
 }
 
 .chart-source-item-icon-dimension {
-  background: #ecfdf3;
-  color: #166534;
+  background: color-mix(in srgb, var(--success) 14%, var(--bg-surface));
+  color: var(--success);
 }
 
 .chart-source-item-main {
@@ -5467,7 +5474,11 @@ main.main-wide {
 
 /* Add-to-editor action on a schema-browser table row. Clicking the row previews
    the table into the results pane; putting the statement into the editor is a
-   separate deliberate act, so the control appears on hover or keyboard focus. */
+   separate deliberate act, which is why it has its own control.
+   It used to be `opacity: 0` until the row was hovered or the button took
+   keyboard focus — clickable, invisible, and on a touch device genuinely
+   unreachable, since the row's other route into the editor is a drag. Shown
+   always now, quietly; hover and focus raise it rather than reveal it. */
 .table-preview-btn {
   flex-shrink: 0;
   width: 22px;
@@ -5476,10 +5487,9 @@ main.main-wide {
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--text-faint);
   font-size: 0.65rem;
   cursor: pointer;
-  opacity: 0;
   transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
 }
 
@@ -5637,7 +5647,7 @@ main.main-wide {
 }
 .table-item:hover .table-preview-btn,
 .table-preview-btn:focus-visible {
-  opacity: 1;
+  color: var(--text-secondary);
 }
 .table-preview-btn:hover {
   background: color-mix(in srgb, var(--lens-primary, #0078D4) 14%, transparent);

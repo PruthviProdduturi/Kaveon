@@ -20,9 +20,48 @@ import { CatalogPicker } from "../../components/lab/CatalogPicker";
 import { SystemCatalogList } from "../../components/lab/SystemCatalogList";
 import { useRole } from "../../hooks/useRole";
 import { catalogLabel, isSystemCatalog } from "../../utils/systemCatalog";
+import { UnknownLine, reasonFromStatus, unknownText, type ReadFailure } from "../../components/Reading";
 import styles from "./lab.module.css";
 // using same-origin relative API calls
 const PRIMARY_DB_NAME = process.env.NEXT_PUBLIC_PRIMARY_DATABASE_NAME || "";
+
+/**
+ * A failed read that remembers the status it failed with.
+ *
+ * Everything on this page that lists something — catalogs, schemas, tables —
+ * used to throw a bare message, and the page then guessed at the cause from a
+ * `sessionStorage` flag written by an unrelated setup check. That guess was
+ * wrong in the one case that matters: a coordinator restarting was reported as
+ * a metadata database that had never been configured, which sent an operator
+ * to a wizard this installation refuses outright. The status is the only
+ * honest signal, and `Reading.reasonFromStatus` is the one place it is read.
+ */
+class ReadError extends Error {
+  readonly status: number | null;
+  constructor(message: string, status: number | null) {
+    super(message);
+    this.name = "ReadError";
+    this.status = status;
+  }
+}
+
+interface LoadFailure {
+  message: string;
+  status: number | null;
+}
+
+const asLoadFailure = (error: unknown, fallback: string): LoadFailure => ({
+  message: error instanceof Error ? error.message : fallback,
+  status: error instanceof ReadError ? error.status : null,
+});
+
+/** The same failure, in the vocabulary `components/Reading` renders. */
+const unknownFromError = (error: unknown, what: string): ReadFailure => ({
+  what,
+  says: "which tables it holds",
+  reason: reasonFromStatus(error instanceof ReadError ? error.status : null),
+  detail: error instanceof Error ? error.message : null,
+});
 
 interface DatabaseConfig {
   database: string;
@@ -406,7 +445,12 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
 
   const [isLoadingDatabases, setIsLoadingDatabases] = useState(false);
   const [isLoadingTables, setIsLoadingTables] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<LoadFailure | null>(null);
+  // Separate from `loadError` on purpose: the error above is a modal the
+  // reader dismisses, and once dismissed the table panel would go straight
+  // back to claiming the catalog is empty. This outlives the dismissal and is
+  // cleared only by a listing that actually answered.
+  const [tablesUnknown, setTablesUnknown] = useState<ReadFailure | null>(null);
   const [isDbDropdownOpen, setIsDbDropdownOpen] = useState(false);
   const [initialSavedQueryLoaded, setInitialSavedQueryLoaded] = useState(false);
   const [pendingHistoryLoaded, setPendingHistoryLoaded] = useState(false);
@@ -776,7 +820,7 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
           headers: userEmail ? { 'x-user-email': userEmail } : undefined,
         });
         if (!res.ok) {
-          throw new Error("Failed to load data sources");
+          throw new ReadError("Failed to load data sources", res.status);
         }
         const data = await res.json();
         const sources: DataSource[] = data.dataSources || [];
@@ -792,8 +836,7 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
           await switchDatabase(preferred.database_name);
         }
       } catch (e: unknown) {
-        const message = e instanceof Error ? e.message : "Unknown error";
-        setLoadError(message);
+        setLoadError(asLoadFailure(e, "Data sources could not be read"));
       } finally {
         setIsLoadingDatabases(false);
       }
@@ -812,10 +855,10 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
           headers: userEmail ? { "x-user-email": userEmail } : undefined,
         });
         const data = await res.json();
-        if (!res.ok || !data.success) throw new Error(data.detail || "Failed to load Engine sources");
+        if (!res.ok || !data.success) throw new ReadError(data.detail || "Failed to load Engine sources", res.status);
         setEngineSources(data.sources || []);
       } catch (error) {
-        setLoadError(error instanceof Error ? error.message : "Failed to load Engine sources");
+        setLoadError(asLoadFailure(error, "Failed to load Engine sources"));
       } finally {
         setIsLoadingEngineSources(false);
       }
@@ -841,7 +884,7 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
       setCurrentDataSourceId(null);
       setCurrentEngineSourceId(requestedSourceId);
       lastEngineSourceIdRef.current = requestedSourceId;
-      void loadEngineSchemas(requestedSourceId).catch((error) => setLoadError(error instanceof Error ? error.message : "Failed to load Engine schemas"));
+      void loadEngineSchemas(requestedSourceId).catch((error) => setLoadError(asLoadFailure(error, "Failed to load Engine schemas")));
       return;
     }
     if (requestedSchema && requestedSchema !== currentDatabase && engineSchemas.includes(requestedSchema)) setCurrentDatabase(requestedSchema);
@@ -855,7 +898,7 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
     const source = engineSources[0];
     setCurrentEngineSourceId(source.id);
     lastEngineSourceIdRef.current = source.id;
-    void loadEngineSchemas(source.id).catch((error) => setLoadError(error instanceof Error ? error.message : "Failed to load Engine schemas"));
+    void loadEngineSchemas(source.id).catch((error) => setLoadError(asLoadFailure(error, "Failed to load Engine schemas")));
     // Source selection runs once after both discovery requests settle.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [embedded, isLoadingDatabases, isLoadingEngineSources, currentDataSourceId, currentEngineSourceId, engineSources, dataSources]);
@@ -868,6 +911,8 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
     setCurrentDatabase(null);
     setTables([]);
     setFilteredTables([]);
+    // A previous catalog's failure says nothing about this one.
+    setTablesUnknown(null);
     setTableColumns({});
     setExpandedTables({});
     setExpandedSchemas({});
@@ -878,7 +923,7 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
         headers: userEmail ? { "x-user-email": userEmail } : undefined,
       });
       const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || "Failed to load Engine schemas");
+      if (!res.ok || !data.success) throw new ReadError(data.error || "Failed to load Engine schemas", res.status);
       const schemas: string[] = data.schemas || [];
       if (loadId !== engineLoadRef.current) return;
       setEngineSchemas(schemas);
@@ -897,6 +942,9 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
       setCurrentDatabase(null);
       setTables([]);
       setFilteredTables([]);
+      // Cleared state is not an answer. Without this the panel below read
+      // "No tables found." over a catalog nobody had managed to ask.
+      setTablesUnknown(unknownFromError(error, "This catalog"));
       setIsLoadingTables(false);
       throw error;
     }
@@ -911,17 +959,19 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
         headers: userEmail ? { "x-user-email": userEmail } : undefined,
       });
       const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || "Failed to load Engine tables");
+      if (!res.ok || !data.success) throw new ReadError(data.error || "Failed to load Engine tables", res.status);
       return (data.tables || []).map((name: string) => ({ id: `engine:${sourceId}:${schema}.${name}`, schema, name, fullName: `${schema}.${name}` }));
       }));
       const discovered = groups.flat();
       if (loadId !== engineLoadRef.current) return;
       setTables(discovered);
       setFilteredTables(discovered);
+      setTablesUnknown(null);
     } catch (error) {
       if (loadId !== engineLoadRef.current) return;
       setTables([]);
       setFilteredTables([]);
+      setTablesUnknown(unknownFromError(error, "This catalog"));
       throw error;
     } finally {
       if (loadId === engineLoadRef.current) setIsLoadingTables(false);
@@ -943,14 +993,14 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
-        throw new Error(data.error || "Failed to switch database");
+        throw new ReadError(data.error || "Failed to switch database", res.status);
       }
 
       setCurrentDatabase(databaseName);
       await loadTables(false, databaseName);
     } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Unknown error";
-      setLoadError(message);
+      setLoadError(asLoadFailure(e, "The database could not be read"));
+      setTablesUnknown(unknownFromError(e, "This database"));
     } finally {
       setIsLoadingTables(false);
     }
@@ -1002,10 +1052,7 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
   const loadTables = async (refresh: boolean = false, databaseName?: string) => {
     const dbToUse = databaseName || currentDatabase;
 
-    if (!dbToUse) {
-      console.warn('[Lab] No database selected, skipping table load');
-      return;
-    }
+    if (!dbToUse) return;
 
     const params = new URLSearchParams();
     if (refresh) params.append('refresh', '1');
@@ -1014,13 +1061,12 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
     const queryString = params.toString() ? `?${params.toString()}` : '';
     const userEmail = account?.email || account?.username || null;
 
-    console.log(`[Lab] Loading tables from database: ${dbToUse}`);
     const res = await msalFetch(`${API_BASE}/api/v1/lab/tables${queryString}`, {
       headers: userEmail ? { 'x-user-email': userEmail } : undefined,
     });
     const data = await res.json();
     if (!res.ok || !data.success) {
-      throw new Error(data.error || "Failed to load tables");
+      throw new ReadError(data.error || "Failed to load tables", res.status);
     }
 
     const withIds: TableInfo[] = (data.tables || []).map((t: any, idx: number) => ({
@@ -1030,9 +1076,9 @@ export function LabWorkbench({ embedded = false, engineSourceId: embeddedSourceI
       fullName: t.fullName,
     }));
 
-    console.log(`[Lab] Loaded ${withIds.length} tables from ${dbToUse}`);
     setTables(withIds);
     setFilteredTables(withIds);
+    setTablesUnknown(null);
   };
 
   const schemaGroups = useMemo(() => {
@@ -2278,7 +2324,7 @@ return;
                 onSelect={async (id) => {
                   setCurrentEngineSourceId(id);
                   lastEngineSourceIdRef.current = id;
-                  try { await loadEngineSchemas(id); } catch (error) { setLoadError(error instanceof Error ? error.message : "Failed to load Engine catalog"); }
+                  try { await loadEngineSchemas(id); } catch (error) { setLoadError(asLoadFailure(error, "Failed to load Engine catalog")); }
                 }}
                 action={(
                   <button
@@ -2328,13 +2374,13 @@ return;
                     if (value === "kaveon") {
                       const id = currentEngineSourceId || lastEngineSourceIdRef.current || engineSources[0]?.id;
                       if (!id) {
-                        setLoadError("No KaveonDB catalogs are available");
+                        setLoadError({ message: "No KaveonDB catalogs are available", status: null });
                         return;
                       }
                       setCurrentEngineSourceId(id);
                       lastEngineSourceIdRef.current = id;
                       setCurrentDataSourceId(null);
-                      try { await loadEngineSchemas(id); } catch (error) { setLoadError(error instanceof Error ? error.message : "Failed to load Engine source"); }
+                      try { await loadEngineSchemas(id); } catch (error) { setLoadError(asLoadFailure(error, "Failed to load Engine source")); }
                       return;
                     }
                     const id = value ? parseInt(value) : null;
@@ -2343,6 +2389,7 @@ return;
                     setEngineSchemas([]);
                     setTables([]);
                     setFilteredTables([]);
+                    setTablesUnknown(null);
                     setTableColumns({});
                     setExpandedSchemas({});
                     setCurrentDataSourceId(id);
@@ -2391,7 +2438,16 @@ return;
                   <span>Loading tables...</span>
                 </div>
               )}
-              {!onSystemCatalog && !isLoadingTables && schemaGroups.length === 0 && (
+              {/* Three states, which this collapsed into one: the listing is
+                  genuinely empty, or it could not be read. It used to say
+                  "No tables found." either way, so a coordinator that was
+                  restarting read as a catalog with nothing in it. */}
+              {!onSystemCatalog && !isLoadingTables && schemaGroups.length === 0 && tablesUnknown && (
+                <div className="loading-tables" style={{ display: "block", padding: "0.5rem 0.75rem" }}>
+                  <UnknownLine {...tablesUnknown} />
+                </div>
+              )}
+              {!onSystemCatalog && !isLoadingTables && schemaGroups.length === 0 && !tablesUnknown && (
                 <div className="loading-tables">
                   <span>No tables found.</span>
                 </div>
@@ -3286,11 +3342,25 @@ return;
                   aria-modal="true"
                   aria-labelledby="lab-error-title"
                 >
+                  {/* This dialog used to title itself "Metadata database not
+                      configured" whenever a `sessionStorage` flag from an
+                      unrelated setup check was absent — which it also is when
+                      that check itself could not reach the API. On this
+                      installation there is no metadata database by design,
+                      KaveonDB is the authority, and the wizard it pointed at
+                      is refused outright. The same wrong advice was removed
+                      from Settings in `e7f8b453`; the distinction it
+                      established is the status, and `reasonFromStatus` is the
+                      one place it is read: 503 means this deployment was
+                      never told where to look, 502/504 mean it was and the
+                      server did not answer. */}
                   <div className="save-query-modal-header">
                     <h3 id="lab-error-title" className="save-query-modal-title">
-                      {typeof sessionStorage !== "undefined" && sessionStorage.getItem("lens_setup_ok") !== "1"
-                        ? "Metadata database not configured"
-                        : "Connection problem"}
+                      {reasonFromStatus(loadError.status) === "not_configured"
+                        ? "No data source is configured"
+                        : reasonFromStatus(loadError.status) === "unreachable"
+                          ? "The catalog did not answer"
+                          : "Connection problem"}
                     </h3>
                     <button
                       type="button"
@@ -3302,25 +3372,19 @@ return;
                     </button>
                   </div>
                   <div className="save-query-modal-body">
-                    {typeof sessionStorage !== "undefined" && sessionStorage.getItem("lens_setup_ok") !== "1" ? (
-                      <p style={{ marginBottom: 8 }}>
-                        Kaveon needs a metadata database to load data sources.{" "}
-                        <a href="/settings/system" style={{ color: "var(--accent)", textDecoration: "underline" }}>
-                          Go to System Settings
-                        </a>{" "}
-                        to configure it.
+                    <p style={{ marginBottom: 8 }}>
+                      {unknownText({
+                        what: "The catalog SQL Lab reads",
+                        says: "which tables you can query",
+                        reason: reasonFromStatus(loadError.status),
+                      })}
+                    </p>
+                    <p className="save-query-modal-error">{loadError.message}</p>
+                    {reasonFromStatus(loadError.status) !== "not_configured" && (
+                      <p style={{ fontSize: "0.8rem", color: "var(--text-secondary)", marginTop: 8 }}>
+                        The header refresh button tries again. Nothing needs to be
+                        reconfigured for this.
                       </p>
-                    ) : (
-                      <>
-                        <p style={{ marginBottom: 8 }}>
-                          We couldn&apos;t connect to the primary database for Lab.
-                        </p>
-                        <p className="save-query-modal-error">{loadError}</p>
-                        <p style={{ fontSize: "0.8rem", color: "var(--text-secondary)", marginTop: 8 }}>
-                          You can try again from the header refresh button or adjust the
-                          data source connection settings.
-                        </p>
-                      </>
                     )}
                   </div>
                   <div className="save-query-modal-footer">

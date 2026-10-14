@@ -10,6 +10,7 @@ import { useAuth } from '../../../auth/useAuth';
 import { useRole } from '../../../hooks/useRole';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from '../../../components/Button';
+import { UnknownPanel, reasonFromStatus, type ReadFailure } from '../../../components/Reading';
 
 interface DatasetSummary {
   id: number;
@@ -32,7 +33,11 @@ const ChartNewPage: React.FC = () => {
   const searchParams = useSearchParams();
 
   const [datasets, setDatasets] = useState<DatasetSummary[]>([]);
-  const [datasetsError, setDatasetsError] = useState<string | null>(null);
+  // A failed listing is an unknown, not a problem with the datasets. It used
+  // to print the raw status under "Problem loading datasets", which reads as
+  // something being wrong with the data rather than with the asking.
+  const [datasetsFailure, setDatasetsFailure] = useState<ReadFailure | null>(null);
+  const [datasetsAnswered, setDatasetsAnswered] = useState(false);
   const [selectedDatasetId, setSelectedDatasetId] = useState<number | null>(null);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const [labSql, setLabSql] = useState<string | null>(null);
@@ -47,15 +52,27 @@ const ChartNewPage: React.FC = () => {
     const load = async () => {
       try {
         const res = await msalFetch(`${API_BASE}/api/v1/datasets/summary`);
-        if (!res.ok) throw new Error(`Failed to load datasets: ${res.status}`);
+        if (!res.ok) {
+          setDatasetsFailure({
+            what: 'The dataset library',
+            says: 'which datasets you can build on',
+            reason: reasonFromStatus(res.status),
+          });
+          return;
+        }
         const data = await res.json();
         setDatasets((data.recent || []).map((d: any) => ({
           id: d.id,
           name: d.dataset_name,
           description: d.description || null,
         })));
+        setDatasetsAnswered(true);
       } catch (e: unknown) {
-        setDatasetsError(e instanceof Error ? e.message : 'Unknown error');
+        setDatasetsFailure({
+          what: 'The dataset library',
+          says: 'which datasets you can build on',
+          detail: e instanceof Error ? e.message : null,
+        });
       }
     };
     void load();
@@ -178,7 +195,7 @@ const ChartNewPage: React.FC = () => {
                 </svg>
               )}
               {selectedTemplate && (
-                <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: selectedColor, fontFamily: 'Inter, -apple-system, sans-serif', fontWeight: 500 }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--text-primary)', fontFamily: 'Inter, -apple-system, sans-serif', fontWeight: 500 }}>
                   <ChartIcon id={selectedTemplate.id} color={selectedColor} size={14} />
                   {selectedTemplate.name}
                 </span>
@@ -214,14 +231,9 @@ const ChartNewPage: React.FC = () => {
         <p style={{ color: 'var(--text-muted)', fontFamily: 'Inter, -apple-system, sans-serif' }}>Sign in to create charts.</p>
       )}
 
-      {isAuthenticated && datasetsError && (
-        <div className="card page-empty-card">
-          <p className="page-empty-title">Problem loading datasets</p>
-          <p className="page-empty-body">{datasetsError}</p>
-        </div>
-      )}
+      {isAuthenticated && datasetsFailure && <UnknownPanel {...datasetsFailure} />}
 
-      {isAuthenticated && !datasetsError && (
+      {isAuthenticated && !datasetsFailure && (
         <div style={{ display: 'flex', gap: 14, alignItems: 'stretch', height: PANEL_H, minHeight: PANEL_MIN_H }}>
 
           {/* ── Left: Dataset panel ──────────────────────────────────────── */}
@@ -277,7 +289,7 @@ const ChartNewPage: React.FC = () => {
               <div style={{ flex: 1, overflowY: 'auto', padding: '5px 7px' }}>
                 {datasets.length === 0 && (
                   <div style={{ padding: '24px 8px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 12, fontFamily: 'Inter, -apple-system, sans-serif' }}>
-                    No datasets available yet.
+                    {datasetsAnswered ? 'No datasets available yet.' : 'Reading the dataset library…'}
                   </div>
                 )}
                 {filteredDatasets.length === 0 && datasets.length > 0 && (
@@ -399,7 +411,11 @@ const ChartNewPage: React.FC = () => {
                         </span>
                         <span style={{
                           fontSize: 11.5, fontWeight: active ? 600 : 400,
-                          color: active ? color : 'var(--text-secondary)',
+                          // Colour stays on the glyph and the left border;
+                          // the label is text, so it takes the text token.
+                          // These category hexes are mid-tone and fall to
+                          // roughly 1.9:1 as small text on the dark surface.
+                          color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
                           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                         }}>
                           {cat.label}
@@ -472,7 +488,7 @@ const ChartNewPage: React.FC = () => {
                             {/* Name */}
                             <span style={{
                               fontSize: 11.5, fontWeight: isSelected ? 600 : 500,
-                              color: isSelected ? color : 'var(--text-secondary)',
+                              color: isSelected ? 'var(--text-primary)' : 'var(--text-secondary)',
                               textAlign: 'center', lineHeight: 1.35,
                               letterSpacing: '-0.01em',
                             }}>
@@ -487,7 +503,7 @@ const ChartNewPage: React.FC = () => {
                                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                               }}>
                                 <svg viewBox="0 0 10 10" width="9" height="9">
-                                  <polyline points="1.5,5 4,7.5 8.5,2.5" fill="none" stroke="white" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                                  <polyline points="1.5,5 4,7.5 8.5,2.5" fill="none" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
                                 </svg>
                               </div>
                             )}

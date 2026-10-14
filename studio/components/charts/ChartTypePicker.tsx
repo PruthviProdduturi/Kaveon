@@ -517,7 +517,10 @@ const ChartTypePicker: React.FC = () => {
                     padding: "3px 9px", borderRadius: 20,
                     border: active ? `1.5px solid ${color}` : "1.5px solid var(--border)",
                     background: active ? `${color}15` : "var(--bg-primary)",
-                    color: active ? color : "var(--text-muted)",
+                    // The category hex stays on the pill's border and tint.
+                    // As 11px label text it reads at roughly 1.9:1 on the
+                    // dark surface, so the words take the text token.
+                    color: active ? "var(--text-primary)" : "var(--text-muted)",
                     fontSize: 11, fontWeight: active ? 600 : 400,
                     fontFamily: "Inter, -apple-system, sans-serif",
                     cursor: "pointer", transition: "all 0.15s ease", whiteSpace: "nowrap",

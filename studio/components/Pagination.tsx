@@ -29,13 +29,16 @@ export function Pagination({ total, page, pageSize, onChange }: PaginationProps)
     pages.push(totalPages);
   }
 
+  // Tokenised by what each part does, not by colour value: this pager sits on
+  // the Lab results grid, the data-sources table, the catalog sources list and
+  // the Table chart, and every one of those surfaces has a dark rendering.
   const btn = (active: boolean, disabled?: boolean): React.CSSProperties => ({
     display: "inline-flex", alignItems: "center", justifyContent: "center",
     minWidth: 32, height: 32, padding: "0 0.4rem",
     borderRadius: 7,
-    border: active ? "none" : "1px solid #e2e8f0",
-    background: active ? primaryColor : "white",
-    color: active ? "white" : disabled ? "#cbd5e1" : "#374151",
+    border: active ? "none" : "1px solid var(--border)",
+    background: active ? primaryColor : "var(--bg-surface)",
+    color: active ? "#fff" : disabled ? "var(--text-faint)" : "var(--text-secondary)",
     fontSize: 13, fontWeight: active ? 600 : 400,
     cursor: disabled ? "not-allowed" : "pointer",
     transition: "all 0.15s",
@@ -45,10 +48,10 @@ export function Pagination({ total, page, pageSize, onChange }: PaginationProps)
   return (
     <div style={{
       display: "flex", alignItems: "center", justifyContent: "space-between",
-      padding: "0.75rem 1rem", borderTop: "1px solid #f1f5f9",
+      padding: "0.75rem 1rem", borderTop: "1px solid var(--border)",
       flexWrap: "wrap", gap: "0.5rem",
     }}>
-      <span style={{ fontSize: 13, color: "#64748b" }}>
+      <span style={{ fontSize: 13, color: "var(--text-muted)" }}>
         {from}–{to} of {total}
       </span>
       <div style={{ display: "flex", gap: "0.25rem", alignItems: "center" }}>
@@ -59,7 +62,7 @@ export function Pagination({ total, page, pageSize, onChange }: PaginationProps)
         </button>
         {pages.map((p, i) =>
           p === "…" ? (
-            <span key={`el-${i}`} style={{ padding: "0 4px", color: "#94a3b8", fontSize: 13, userSelect: "none" }}>…</span>
+            <span key={`el-${i}`} style={{ padding: "0 4px", color: "var(--text-faint)", fontSize: 13, userSelect: "none" }}>…</span>
           ) : (
             <button key={p} type="button" style={btn(p === page)} onClick={() => onChange(p as number)}>
               {p}

@@ -41,18 +41,17 @@ export function Button({
   const variantStyles: Record<string, React.CSSProperties> = {
     primary: {
       background: disabled
-        ? '#e5e7eb'
-        : `linear-gradient(135deg, ${primaryColor} 0%, #0284c7 100%)`,
-      color: disabled ? '#9ca3af' : '#ffffff',
+        ? 'var(--bg-hover)'
+        : `linear-gradient(135deg, ${primaryColor} 0%, var(--accent-dark) 100%)`,
+      color: disabled ? 'var(--text-muted)' : '#ffffff',
       boxShadow: disabled ? 'none' : '0 2px 4px rgba(0, 0, 0, 0.1)',
-      opacity: disabled ? 1 : 1,
     },
     secondary: {
-      background: '#ffffff',
-      color: '#374151',
+      background: 'var(--bg-surface)',
+      color: 'var(--text-secondary)',
       borderWidth: '1px',
       borderStyle: 'solid',
-      borderColor: '#d1d5db',
+      borderColor: 'var(--border)',
       opacity: disabled ? 0.5 : 1,
     },
     ghost: {
@@ -72,13 +71,13 @@ export function Button({
         }
       : variant === 'secondary'
       ? {
-          background: '#f9fafb',
+          background: 'var(--bg-hover)',
           borderWidth: '1px',
           borderStyle: 'solid',
-          borderColor: '#9ca3af',
+          borderColor: 'var(--border-hover)',
         }
       : {
-          background: 'rgba(0, 120, 212, 0.05)',
+          background: 'color-mix(in srgb, var(--accent) 8%, transparent)',
         }
     : {};
 

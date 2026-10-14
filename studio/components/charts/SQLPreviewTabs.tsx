@@ -70,7 +70,7 @@ const SQLPreviewTabs: React.FC = () => {
   }, [isRunning]);
 
   const renderSql = () => {
-    if (error) return <div style={{ color: "#f97373" }}>{error}</div>;
+    if (error) return <div style={{ color: "var(--error)" }}>{error}</div>;
     if (isRunning) return <div className="muted">{runningLabel}</div>;
     if (!lastSql)
       return <div className="muted">{runPrompt} to see the generated SQL.</div>;
@@ -84,9 +84,8 @@ const SQLPreviewTabs: React.FC = () => {
         keywordCase: "upper",
         linesBetweenQueries: 2,
       });
-    } catch (err) {
-      // If formatting fails, fall back to unformatted SQL
-      console.warn("[SQLPreviewTabs] SQL formatting failed:", err);
+    } catch {
+      // Unformattable SQL is shown as written rather than not at all.
       formattedSql = lastSql;
     }
 
@@ -132,7 +131,7 @@ const SQLPreviewTabs: React.FC = () => {
   };
 
   const renderData = () => {
-    if (error) return <div style={{ color: "#f97373" }}>{error}</div>;
+    if (error) return <div style={{ color: "var(--error)" }}>{error}</div>;
     if (isRunning) return <div className="muted">{runningLabel}</div>;
     if (!dataColumns.length)
       return <div className="muted">No data yet. {runPrompt} to preview rows.</div>;

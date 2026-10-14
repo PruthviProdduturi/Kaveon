@@ -182,7 +182,7 @@ const BigNumberKpiCard: React.FC<BigNumberKpiCardProps> = ({ options, rows, colu
   };
 
   const formatted = value === null ? "—" : `${prefix}${formatKpiValue(value)}${suffix}`;
-  const trendColor = trend === null ? "#6b7280" : trend >= 0 ? "#16a34a" : "#dc2626";
+  const trendColor = trend === null ? "var(--text-muted)" : trend >= 0 ? "var(--success)" : "var(--error)";
   const trendIcon = trend === null ? null : trend >= 0 ? "▲" : "▼";
   // Custom label overrides auto-detected column name
   const displayLabel = kpiOpts.labelText || label;
@@ -197,10 +197,10 @@ const BigNumberKpiCard: React.FC<BigNumberKpiCardProps> = ({ options, rows, colu
           mid-digit — "901.2M" lost its M. `cqw` is the card's own width. */}
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, padding: hasSpark ? "10px 20px 2px" : "12px 20px" }}>
         {options?.title?.text && (
-          <div style={{ fontSize: 13, color: "var(--text-muted, #6b7280)", fontWeight: 500, textAlign: "center" }}>{options.title.text}</div>
+          <div style={{ fontSize: 13, color: "var(--text-muted)", fontWeight: 500, textAlign: "center" }}>{options.title.text}</div>
         )}
-        <div style={{ fontSize: hasSpark ? "clamp(22px, 15cqw, 46px)" : "clamp(24px, 17cqw, 56px)", fontWeight: 700, color: "var(--text-primary, #0f172a)", lineHeight: 1.05, letterSpacing: "-1px", whiteSpace: "nowrap", maxWidth: "100%", fontVariantNumeric: "tabular-nums" }}>{formatted}</div>
-        {displayLabel && <div style={{ fontSize: 11.5, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>{displayLabel}</div>}
+        <div style={{ fontSize: hasSpark ? "clamp(22px, 15cqw, 46px)" : "clamp(24px, 17cqw, 56px)", fontWeight: 700, color: "var(--text-primary)", lineHeight: 1.05, letterSpacing: "-1px", whiteSpace: "nowrap", maxWidth: "100%", fontVariantNumeric: "tabular-nums" }}>{formatted}</div>
+        {displayLabel && <div style={{ fontSize: 11.5, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>{displayLabel}</div>}
         {trend !== null && (
           <div style={{ fontSize: 13, color: trendColor, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
             <span>{trendIcon}</span>
@@ -315,7 +315,7 @@ const TableRenderer: React.FC<TableRendererProps> = ({ rows, columns, isPivot, a
   return (
     <div style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%" }}>
       {/* Search bar */}
-      <div style={{ padding: "6px 8px", borderBottom: "1px solid #e2e8f0", flexShrink: 0 }}>
+      <div style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
         <input
           type="text"
           placeholder="Search…"
@@ -324,8 +324,9 @@ const TableRenderer: React.FC<TableRendererProps> = ({ rows, columns, isPivot, a
           style={{
             width: "100%", boxSizing: "border-box",
             padding: "4px 8px", fontSize: 12,
-            border: "1px solid #e2e8f0", borderRadius: 5,
-            outline: "none", color: "#374151",
+            border: "1px solid var(--border)", borderRadius: 5,
+            outline: "none", color: "var(--text-primary)",
+            background: "var(--bg-surface)",
             fontFamily: "Inter, -apple-system, sans-serif",
           }}
         />
@@ -342,11 +343,11 @@ const TableRenderer: React.FC<TableRendererProps> = ({ rows, columns, isPivot, a
                   onClick={() => handleSort(i)}
                   style={{
                     padding: "6px 10px",
-                    background: "#f8fafc",
-                    borderBottom: "2px solid #e2e8f0",
+                    background: "var(--bg-hover)",
+                    borderBottom: "2px solid var(--border)",
                     textAlign: "left",
                     fontWeight: 600,
-                    color: "#374151",
+                    color: "var(--text-secondary)",
                     whiteSpace: "nowrap",
                     cursor: "pointer",
                     userSelect: "none",
@@ -363,7 +364,7 @@ const TableRenderer: React.FC<TableRendererProps> = ({ rows, columns, isPivot, a
           </thead>
           <tbody>
             {pageRows.map((row, ri) => (
-              <tr key={ri} style={{ background: ri % 2 === 0 ? "var(--bg-surface, #fff)" : "var(--bg-hover, #f9fafb)" }}>
+              <tr key={ri} style={{ background: ri % 2 === 0 ? "var(--bg-surface)" : "var(--bg-hover)" }}>
                 {row.map((cell, ci) => {
                   const numeric = isNumeric(cell);
                   let bg: string | undefined;
@@ -377,16 +378,16 @@ const TableRenderer: React.FC<TableRendererProps> = ({ rows, columns, isPivot, a
                       key={ci}
                       style={{
                         padding: "5px 10px",
-                        borderBottom: "1px solid #e2e8f0",
+                        borderBottom: "1px solid var(--border)",
                         textAlign: numeric ? "right" : "left",
-                        color: "#1f2937",
+                        color: "var(--text-primary)",
                         whiteSpace: "nowrap",
                         fontVariantNumeric: "tabular-nums",
                         background: bg,
                       }}
                     >
                       {cell === null || cell === undefined ? (
-                        <span style={{ color: "#9ca3af" }}>null</span>
+                        <span style={{ color: "var(--text-faint)" }}>null</span>
                       ) : numeric ? (
                         Number(cell).toLocaleString()
                       ) : (
@@ -404,21 +405,21 @@ const TableRenderer: React.FC<TableRendererProps> = ({ rows, columns, isPivot, a
       {/* Pagination */}
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "5px 10px", borderTop: "1px solid var(--border, #e2e8f0)", flexShrink: 0,
-        fontSize: 11, color: "var(--text-muted, #64748b)",
+        padding: "5px 10px", borderTop: "1px solid var(--border)", flexShrink: 0,
+        fontSize: 11, color: "var(--text-muted)",
       }}>
         <span>{filtered.length} row{filtered.length !== 1 ? "s" : ""}{search ? ` (filtered from ${baseRows.length})` : ""}</span>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <button
             onClick={() => setPage(p => Math.max(0, p - 1))}
             disabled={safePage === 0}
-            style={{ padding: "2px 7px", borderRadius: 4, border: "1px solid var(--border, #e2e8f0)", background: "var(--bg-surface, #fff)", cursor: safePage === 0 ? "default" : "pointer", opacity: safePage === 0 ? 0.4 : 1 }}
+            style={{ padding: "2px 7px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--bg-surface)", color: "var(--text-secondary)", cursor: safePage === 0 ? "default" : "pointer", opacity: safePage === 0 ? 0.4 : 1 }}
           >‹</button>
           <span>Page {safePage + 1} of {totalPages}</span>
           <button
             onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
             disabled={safePage >= totalPages - 1}
-            style={{ padding: "2px 7px", borderRadius: 4, border: "1px solid var(--border, #e2e8f0)", background: "var(--bg-surface, #fff)", cursor: safePage >= totalPages - 1 ? "default" : "pointer", opacity: safePage >= totalPages - 1 ? 0.4 : 1 }}
+            style={{ padding: "2px 7px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--bg-surface)", color: "var(--text-secondary)", cursor: safePage >= totalPages - 1 ? "default" : "pointer", opacity: safePage >= totalPages - 1 ? 0.4 : 1 }}
           >›</button>
         </div>
       </div>
@@ -1675,11 +1676,11 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
                   marginTop: 10,
                   padding: '5px 14px',
                   background: 'transparent',
-                  border: '1px solid #cbd5e1',
+                  border: '1px solid var(--border)',
                   borderRadius: 6,
                   cursor: 'pointer',
                   fontSize: 12,
-                  color: '#64748b',
+                  color: 'var(--text-secondary)',
                 }}
               >
                 Cancel
@@ -1688,17 +1689,17 @@ const ChartPreview: React.FC<ChartPreviewProps> = ({ onCrossFilter, onRegisterEx
           </div>
         ) : sqlPreview.error ? (
           <div className="chart-preview-empty-state" style={{ padding: 16, textAlign: 'center' }}>
-            <i className="fas fa-triangle-exclamation" style={{ fontSize: 30, color: '#f59e0b', marginBottom: 10 }} />
-            <div className="chart-preview-empty-title" style={{ color: '#b45309' }}>Couldn&apos;t load this chart</div>
-            <div style={{ fontSize: 12, color: '#64748b', marginTop: 6, maxWidth: 360, wordBreak: 'break-word', lineHeight: 1.4 }}>
+            <i className="fas fa-triangle-exclamation" style={{ fontSize: 30, color: 'var(--warning)', marginBottom: 10 }} />
+            <div className="chart-preview-empty-title" style={{ color: 'var(--text-primary)' }}>Couldn&apos;t load this chart</div>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 6, maxWidth: 360, wordBreak: 'break-word', lineHeight: 1.4 }}>
               {String(sqlPreview.error)}
             </div>
             <button
               onClick={() => { void runPreviewQuery(true); }}
               style={{
                 marginTop: 12, padding: '5px 14px', background: 'transparent',
-                border: '1px solid #cbd5e1', borderRadius: 6, cursor: 'pointer',
-                fontSize: 12, color: '#475569',
+                border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer',
+                fontSize: 12, color: 'var(--text-secondary)',
               }}
             >
               Retry
