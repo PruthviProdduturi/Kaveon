@@ -659,6 +659,8 @@ invalidation, isolation, bounds, and restart evidence listed above.
   text array, preserves trailing empty fields, and propagates NULL inputs.
 - `CONCAT_WS` now skips NULL value arguments, preserves empty strings, and
   returns NULL when its separator is NULL.
+- `TRANSLATE` now maps Unicode code points by position, keeps source
+  characters without a mapping, and removes characters whose target is absent.
 - `SPLIT` now returns typed text arrays, preserves NULL inputs, supports a
   positive limit whose final element contains the remainder, and follows
   Trino's character splitting behavior for an empty delimiter.
