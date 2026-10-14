@@ -1196,7 +1196,7 @@ fn the_differential_sweep_matches_across_parquet_encodings_and_execution_paths()
     let distributed = |statement: &str, ordered: bool| -> Vec<String> {
         let plan = optimized(statement);
         let pool = QueryMemoryPool::new("differential-distributed", 256 * 1024 * 1024).unwrap();
-        let batches = execute_distributed("differential", &plan, &manager, 2, &pool)
+        let batches = execute_distributed("differential", &plan, &manager, 3, &pool)
             .unwrap_or_else(|error| panic!("{statement} (distributed): {error}"));
         assert_eq!(
             pool.snapshot().current_bytes,
