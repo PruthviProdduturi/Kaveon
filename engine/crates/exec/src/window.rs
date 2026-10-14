@@ -805,6 +805,36 @@ mod tests {
         };
         assert_eq!(ints(expr, &input), vec![Some(2); 5]);
     }
+
+    #[test]
+    fn distinct_window_numeric_aggregates_ignore_duplicates_and_nulls() {
+        let input = batch(vec![Some(1), Some(1), Some(2), None]);
+        let whole_partition = frame(
+            WindowFrameUnits::Rows,
+            WindowFrameBound::UnboundedPreceding,
+            WindowFrameBound::UnboundedFollowing,
+        );
+        let sum = evaluate_window(&expression("SUM_DISTINCT", whole_partition.clone()), &input)
+            .unwrap()
+            .as_primitive::<Int64Type>()
+            .iter()
+            .collect::<Vec<_>>();
+        assert_eq!(sum, vec![Some(3); 4]);
+        for (name, expected) in [("MIN_DISTINCT", 1), ("MAX_DISTINCT", 2)] {
+            let values = evaluate_window(&expression(name, whole_partition.clone()), &input)
+                .unwrap()
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>();
+            assert_eq!(values, vec![Some(expected); 4], "{name}");
+        }
+        let values = evaluate_window(&expression("AVG_DISTINCT", whole_partition), &input)
+            .unwrap()
+            .as_primitive::<Float64Type>()
+            .iter()
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![Some(1.5); 4]);
+    }
     #[test]
     fn ranks_tiles_and_value_functions() {
         use WindowFrameBound::*;
