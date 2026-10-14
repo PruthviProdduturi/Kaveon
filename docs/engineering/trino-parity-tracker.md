@@ -172,7 +172,8 @@ foundations, but several operators are still centralized or narrow:
   hour/minute/second intervals use a unit-aware runtime path for timestamps, while
   DATE literals retain exact day-number lowering. Month and year intervals now
   use a runtime calendar path for typed DATE/timestamp columns, clamping source
-  month-end days to the target month while preserving timestamp units.
+  month-end days to the target month while preserving timestamp units. Typed
+  `TIMESTAMP` literals lower through the existing Arrow timestamp cast path.
 - Background statistics and cube refresh deduplication now scopes its
   process-local registry by table and source location. Independent embedded
   catalog stores can no longer suppress one another's refresh, which removes a
