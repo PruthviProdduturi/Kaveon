@@ -3364,6 +3364,31 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 }
                 Ok(Arc::new(builder.finish()) as ArrayRef)
             }
+            DataType::LargeUtf8 => {
+                let elements = args[0].as_string::<i64>();
+                let mut builder = LargeListBuilder::new(LargeStringBuilder::new());
+                for row in 0..num_rows {
+                    if counts.is_null(row) {
+                        builder.append(false);
+                        continue;
+                    }
+                    let count = counts.value(row);
+                    if !(0..=MAX_ARRAY_REPEAT).contains(&count) {
+                        return Err(KaveonError::Execution(
+                            "ARRAY_REPEAT count must be between 0 and 1000000".into(),
+                        ));
+                    }
+                    for _ in 0..count {
+                        if elements.is_null(row) {
+                            builder.values().append_null();
+                        } else {
+                            builder.values().append_value(elements.value(row));
+                        }
+                    }
+                    builder.append(true);
+                }
+                Ok(Arc::new(builder.finish()) as ArrayRef)
+            }
             DataType::Null => {
                 let mut builder = ListBuilder::new(NullBuilder::new());
                 for row in 0..num_rows {
@@ -9985,6 +10010,26 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("between 0 and 1000000"));
+    }
+
+    #[test]
+    fn array_repeat_preserves_large_utf8_offsets() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+        )])
+        .unwrap();
+        let values = Arc::new(LargeStringArray::from(vec![Some("wide"), None])) as ArrayRef;
+        let counts = Arc::new(Int64Array::from(vec![2, 1])) as ArrayRef;
+        let result = eval_scalar_function("ARRAY_REPEAT", &[values, counts], batch.num_rows())
+            .unwrap();
+        let repeated = result.as_any().downcast_ref::<LargeListArray>().unwrap();
+        assert_eq!(repeated.value_type(), DataType::LargeUtf8);
+        assert_eq!(
+            repeated.value(0).as_string::<i64>().iter().collect::<Vec<_>>(),
+            vec![Some("wide"), Some("wide")]
+        );
+        assert_eq!(repeated.value(1).null_count(), 1);
     }
 
     #[test]
