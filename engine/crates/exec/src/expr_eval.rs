@@ -18,7 +18,8 @@ use arrow::compute;
 use arrow::datatypes::{
     ArrowPrimitiveType, DataType, Date32Type, Date64Type, Float64Type, Int32Type, Int64Type,
     Time32MillisecondType, Time32SecondType, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, TimeUnit, UInt64Type,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, TimeUnit, UInt32Type,
+    UInt64Type,
 };
 use arrow::record_batch::RecordBatch;
 use kaveon_core::predicate::ScalarValue;
@@ -2415,6 +2416,16 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 Int32Builder::new(),
                 Int32Array,
                 |values: &Int32Array, row| values.value(row)
+            ),
+            DataType::UInt32 => build_array!(
+                PrimitiveBuilder::<UInt32Type>::new(),
+                UInt32Array,
+                |values: &UInt32Array, row| values.value(row)
+            ),
+            DataType::UInt64 => build_array!(
+                PrimitiveBuilder::<UInt64Type>::new(),
+                UInt64Array,
+                |values: &UInt64Array, row| values.value(row)
             ),
             DataType::Date32 => build_array!(
                 PrimitiveBuilder::<arrow::datatypes::Date32Type>::new(),
@@ -11649,6 +11660,38 @@ mod tests {
         let lists = result.as_list::<i32>();
         assert_eq!(lists.value(0).as_primitive::<Int32Type>().iter().collect::<Vec<_>>(), vec![Some(7)]);
         assert_eq!(lists.value(1).as_primitive::<Int32Type>().iter().collect::<Vec<_>>(), vec![None]);
+    }
+
+    #[test]
+    fn evaluates_unsigned_integer_array_elements() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "u32",
+                Arc::new(UInt32Array::from(vec![Some(7), None])) as ArrayRef,
+            ),
+            (
+                "u64",
+                Arc::new(UInt64Array::from(vec![Some(9), None])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        for (column, data_type) in [("u32", DataType::UInt32), ("u64", DataType::UInt64)] {
+            let result = evaluate(
+                &Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![Expr::Column(column.into())],
+                },
+                &batch,
+            )
+            .unwrap();
+            assert_eq!(result.data_type(), &DataType::List(Arc::new(Field::new(
+                "item",
+                data_type,
+                true,
+            ))));
+            assert_eq!(result.as_list::<i32>().value(0).len(), 1);
+            assert!(result.as_list::<i32>().value(1).is_null(0));
+        }
     }
 
     #[test]

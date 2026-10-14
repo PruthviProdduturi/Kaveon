@@ -522,6 +522,8 @@ invalidation, isolation, bounds, and restart evidence listed above.
   microsecond representations. The timestamp unit remains part of the list
   element type; timezone-bearing arrays still require the existing compatible
   timestamp path.
+- `ARRAY[...]` now preserves unsigned `UInt32` and `UInt64` element columns,
+  including nullable rows, instead of rejecting those Arrow integer types.
 - Equality-key `LEFT`, `RIGHT`, and `FULL` joins now carry residual `ON`
   predicates through local and distributed hash joins. Candidate pairs are
   evaluated in bounded batches with SQL TRUE-only matching; preserved rows and
