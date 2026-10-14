@@ -2900,6 +2900,27 @@ async fn submit_trino_statement_parts(
                     .into_response();
             }
         }
+        match trino_use_statement(body) {
+            Ok(Some((catalog, schema))) => {
+                let mut response_headers = Vec::new();
+                if let Some(catalog) = catalog {
+                    response_headers.push(("x-trino-set-catalog", catalog));
+                }
+                response_headers.push(("x-trino-set-schema", schema));
+                return trino_control_response_with_headers(response_headers);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": error,
+                        "errorName": "SYNTAX_ERROR"
+                    })),
+                )
+                    .into_response();
+            }
+        }
         match trino_prepare_statement(body) {
             Ok(Some((name, query))) => {
                 if let Err(error) = kaveon_sql::parser::parse_sql(&query) {
@@ -3851,11 +3872,17 @@ fn trino_control_response() -> Response {
 }
 
 fn trino_control_response_with_header(name: &'static str, value: String) -> Response {
+    trino_control_response_with_headers(vec![(name, value)])
+}
+
+fn trino_control_response_with_headers(headers: Vec<(&'static str, String)>) -> Response {
     let mut response = trino_control_response();
-    let header_name = header::HeaderName::from_static(name);
-    let header_value = header::HeaderValue::from_str(&value)
-        .expect("Trino control header values are percent-encoded or ASCII identifiers");
-    response.headers_mut().insert(header_name, header_value);
+    for (name, value) in headers {
+        let header_name = header::HeaderName::from_static(name);
+        let header_value = header::HeaderValue::from_str(&value)
+            .expect("Trino control header values are ASCII identifiers");
+        response.headers_mut().insert(header_name, header_value);
+    }
     response
 }
 
@@ -3900,6 +3927,47 @@ fn trino_percent_decode(encoded: &str) -> Result<String, String> {
         index += 1;
     }
     String::from_utf8(decoded).map_err(|_| "header value is not valid UTF-8".to_owned())
+}
+
+/// Parse Trino's session-changing `USE` statement. A two-part name updates
+/// both catalog and schema; a one-part name updates only the schema in the
+/// client's current catalog. The response headers are what Trino clients use
+/// to carry this context into subsequent requests.
+fn trino_use_statement(body: &str) -> Result<Option<(Option<String>, String)>, String> {
+    let trimmed = body.trim().trim_end_matches(';').trim();
+    if !trimmed
+        .get(..3)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("USE"))
+    {
+        return Ok(None);
+    }
+    let rest = &trimmed[3..];
+    if !rest.chars().next().is_some_and(char::is_whitespace) {
+        return Ok(None);
+    }
+    let target = rest.trim();
+    if target.is_empty() {
+        return Err("USE requires a schema or catalog.schema".to_owned());
+    }
+    let parts = target.split('.').map(str::trim).collect::<Vec<_>>();
+    if !(parts.len() == 1 || parts.len() == 2) || parts.iter().any(|part| part.is_empty()) {
+        return Err("USE expects schema or catalog.schema".to_owned());
+    }
+    let clean = |part: &str| {
+        part.strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+            .unwrap_or(part)
+            .to_owned()
+    };
+    let parts = parts.into_iter().map(clean).collect::<Vec<_>>();
+    if parts.iter().any(|part| part.is_empty()) {
+        return Err("USE identifiers must be non-empty".to_owned());
+    }
+    Ok(if parts.len() == 1 {
+        Some((None, parts[0].clone()))
+    } else {
+        Some((Some(parts[0].clone()), parts[1].clone()))
+    })
 }
 
 /// Parse Trino's `EXECUTE IMMEDIATE 'sql' USING ...` form. The SQL text must
@@ -20546,6 +20614,41 @@ mod streamed_root_tests {
         assert_eq!(parameters[1], serde_json::json!([1, null]));
         assert!(trino_execute_immediate("EXECUTE IMMEDIATE SELECT 1").is_err());
         assert!(trino_execute_immediate("EXECUTE IMMEDIATE 'SELECT 1' USING").is_err());
+    }
+
+    #[test]
+    fn trino_use_statement_parses_session_context_and_headers() {
+        assert_eq!(
+            trino_use_statement("USE OpenSource.public;").unwrap(),
+            Some((Some("OpenSource".to_owned()), "public".to_owned()))
+        );
+        assert_eq!(
+            trino_use_statement("USE \"OpenSource\".\"public\"").unwrap(),
+            Some((Some("OpenSource".to_owned()), "public".to_owned()))
+        );
+        assert_eq!(
+            trino_use_statement("USE public").unwrap(),
+            Some((None, "public".to_owned()))
+        );
+        assert!(trino_use_statement("USE a.b.c").is_err());
+        let response = trino_control_response_with_headers(vec![
+            ("x-trino-set-catalog", "OpenSource".to_owned()),
+            ("x-trino-set-schema", "public".to_owned()),
+        ]);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-trino-set-catalog")
+                .and_then(|value| value.to_str().ok()),
+            Some("OpenSource")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-trino-set-schema")
+                .and_then(|value| value.to_str().ok()),
+            Some("public")
+        );
     }
 
     #[test]
