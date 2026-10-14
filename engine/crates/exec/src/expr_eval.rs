@@ -10,7 +10,7 @@ use arrow::array::{
     NullBuilder, PrimitiveArray, PrimitiveBuilder,
     StringArray,
     StringBuilder, StructArray,
-    Time32MillisecondArray, Time32SecondArray,
+    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
     TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
     TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
@@ -19,7 +19,8 @@ use arrow::compute;
 use arrow::datatypes::{
     ArrowPrimitiveType, DataType, Date32Type, Date64Type, Float32Type, Float64Type, Int32Type,
     Int64Type,
-    Time32MillisecondType, Time32SecondType, TimestampMicrosecondType,
+    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, TimeUnit, UInt16Type,
     UInt32Type, UInt64Type, UInt8Type,
     Int16Type, Int8Type,
@@ -2474,6 +2475,16 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 PrimitiveBuilder::<Time32MillisecondType>::new(),
                 Time32MillisecondArray,
                 |values: &Time32MillisecondArray, row| values.value(row)
+            ),
+            DataType::Time64(TimeUnit::Microsecond) => build_array!(
+                PrimitiveBuilder::<Time64MicrosecondType>::new(),
+                Time64MicrosecondArray,
+                |values: &Time64MicrosecondArray, row| values.value(row)
+            ),
+            DataType::Time64(TimeUnit::Nanosecond) => build_array!(
+                PrimitiveBuilder::<Time64NanosecondType>::new(),
+                Time64NanosecondArray,
+                |values: &Time64NanosecondArray, row| values.value(row)
             ),
             DataType::Timestamp(TimeUnit::Microsecond, _) => build_array!(
                 PrimitiveBuilder::<TimestampMicrosecondType>::new(),
@@ -11772,6 +11783,37 @@ mod tests {
             ("i16", DataType::Int16),
             ("u8", DataType::UInt8),
             ("u16", DataType::UInt16),
+        ] {
+            let result = evaluate(
+                &Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![Expr::Column(column.into())],
+                },
+                &batch,
+            )
+            .unwrap();
+            let lists = result.as_list::<i32>();
+            assert_eq!(lists.value_type(), data_type);
+            assert!(lists.value(1).is_null(0));
+        }
+    }
+
+    #[test]
+    fn evaluates_time64_array_elements() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "micros",
+                Arc::new(Time64MicrosecondArray::from(vec![Some(42), None])) as ArrayRef,
+            ),
+            (
+                "nanos",
+                Arc::new(Time64NanosecondArray::from(vec![Some(84), None])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        for (column, data_type) in [
+            ("micros", DataType::Time64(TimeUnit::Microsecond)),
+            ("nanos", DataType::Time64(TimeUnit::Nanosecond)),
         ] {
             let result = evaluate(
                 &Expr::Function {
