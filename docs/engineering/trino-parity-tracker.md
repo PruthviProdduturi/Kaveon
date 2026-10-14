@@ -513,8 +513,11 @@ invalidation, isolation, bounds, and restart evidence listed above.
   null-preserving `CASE` expressions, including `COUNT(*) FILTER`, so the
   existing aggregate and spill paths retain their exact semantics. Approximate
   distinct and percentile sketches use the same null-elision contract, so their
-  filters are supported as well; column-statistics profiles, window filters,
-  and non-aggregate filters remain explicit unsupported diagnostics.
+  filters are supported as well. Window filters use that same lowering, and
+  `COUNT|SUM|AVG|MIN|MAX(DISTINCT value) OVER (...)` now deduplicates each
+  frame by logical value (including dictionary-backed columns) before the
+  aggregate is evaluated. Column-statistics profiles and non-aggregate
+  filters remain explicit unsupported diagnostics.
 - The filtered-aggregate corpus case now compares dictionary, plain, split,
   clustered, partitioned, and two-worker distributed execution paths with
   exact canonical rows (`56a07582`).

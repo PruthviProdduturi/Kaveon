@@ -2532,15 +2532,24 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
                 "window NULL treatment and WITHIN GROUP are unsupported",
             ));
         }
+        let window_distinct = matches!(
+            &func.args,
+            ast::FunctionArguments::List(list)
+                if matches!(list.duplicate_treatment, Some(ast::DuplicateTreatment::Distinct))
+        );
         if let ast::FunctionArguments::List(list) = &func.args
-            && (matches!(
-                list.duplicate_treatment,
-                Some(ast::DuplicateTreatment::Distinct)
-            ) || !list.clauses.is_empty())
+            && !list.clauses.is_empty()
         {
             return Err(sql_err(
-                "DISTINCT and argument clauses in window functions are unsupported",
+                "argument clauses in window functions are unsupported",
             ));
+        }
+        if window_distinct
+            && !matches!(name.as_str(), "COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
+        {
+            return Err(sql_err(format!(
+                "DISTINCT is unsupported for window function {name}"
+            )));
         }
         let (partition_by, order_by, frame) = match over {
             ast::WindowType::WindowSpec(spec) => {
@@ -2573,7 +2582,11 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
             }
         };
         return Ok(Expr::WindowFunction {
-            name,
+            name: if window_distinct {
+                format!("{name}_DISTINCT")
+            } else {
+                name
+            },
             args,
             partition_by,
             order_by,
@@ -4765,10 +4778,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unimplemented_window_modifiers() {
-        for sql in ["SELECT COUNT(DISTINCT x) OVER () FROM t"] {
-            assert!(sql_to_logical_plan(sql).is_err());
-        }
+    fn lowers_distinct_window_aggregates() {
+        let plan = sql_to_logical_plan("SELECT COUNT(DISTINCT x) OVER () FROM t").unwrap();
+        let text = format!("{plan:?}");
+        assert!(text.contains("COUNT_DISTINCT"), "{text}");
     }
 
     #[test]

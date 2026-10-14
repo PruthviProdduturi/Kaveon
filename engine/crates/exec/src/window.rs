@@ -252,6 +252,12 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
         .filter(|e| !matches!(e, Expr::Star))
         .map(|e| crate::expr_eval::evaluate(e, batch))
         .transpose()?;
+    let distinct = name.ends_with("_DISTINCT");
+    let aggregate_name = name.strip_suffix("_DISTINCT").unwrap_or(&name);
+    let col = col
+        .map(|column| normalize_dictionary_columns(vec![column]))
+        .transpose()?
+        .and_then(|mut columns| columns.pop());
     let mut indices = vec![None; batch.num_rows()];
     let mut ints = vec![0i64; batch.num_rows()];
     let mut aggregate_results: Vec<(usize, ArrayRef)> = Vec::new();
@@ -286,7 +292,7 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
             if pos % 64 == 0 {
                 crate::expr_eval::check_expression_cancelled()?;
             }
-            match name.as_str() {
+            match aggregate_name {
                 "ROW_NUMBER" => ints[row] = pos as i64 + 1,
                 "RANK" => ints[row] = starts[group[pos]] as i64 + 1,
                 "DENSE_RANK" => ints[row] = group[pos] as i64 + 1,
@@ -311,8 +317,12 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
                 "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "FIRST_VALUE" | "LAST_VALUE" => {
                     let (start, end) =
                         frame_bounds(frame, pos, &rows, &starts, &group, &order_cols, order_by)?;
-                    let selected = &rows[start..end];
-                    match name.as_str() {
+                    let selected = if distinct {
+                        distinct_window_rows(col.as_ref(), &rows[start..end])?
+                    } else {
+                        rows[start..end].to_vec()
+                    };
+                    match aggregate_name {
                         "COUNT" => {
                             ints[row] = selected
                                 .iter()
@@ -321,15 +331,17 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
                         }
                         "FIRST_VALUE" => indices[row] = selected.first().map(|&i| i as u32),
                         "LAST_VALUE" => indices[row] = selected.last().map(|&i| i as u32),
-                        _ => aggregate_results
-                            .push((row, aggregate(&name, col.as_ref().unwrap(), selected)?)),
+                        _ => aggregate_results.push((
+                            row,
+                            aggregate(aggregate_name, col.as_ref().unwrap(), &selected)?,
+                        )),
                     }
                 }
                 _ => return Err(error(format!("unsupported window function: {name}"))),
             }
         }
     }
-    match name.as_str() {
+    match aggregate_name {
         "ROW_NUMBER" | "RANK" | "DENSE_RANK" | "NTILE" | "COUNT" => {
             Ok(Arc::new(Int64Array::from(ints)))
         }
@@ -365,6 +377,28 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
         }
         _ => Err(error(format!("unsupported window function: {name}"))),
     }
+}
+
+/// Return one row for each distinct non-null value in a window frame. Window
+/// DISTINCT aggregates ignore nulls, and a dictionary column has already been
+/// normalized to its logical value representation before reaching this helper.
+fn distinct_window_rows(col: Option<&ArrayRef>, rows: &[usize]) -> Result<Vec<usize>> {
+    let Some(col) = col else {
+        return Err(error("DISTINCT window aggregate requires a value argument"));
+    };
+    let mut unique = Vec::new();
+    for &row in rows {
+        if col.is_null(row) {
+            continue;
+        }
+        if !unique
+            .iter()
+            .any(|&other| compare(col, row, other).is_ok_and(|ordering| ordering == Ordering::Equal))
+        {
+            unique.push(row);
+        }
+    }
+    Ok(unique)
 }
 
 fn literal_offset(expr: Option<&Expr>, default: usize, positive: bool) -> Result<usize> {
@@ -742,6 +776,23 @@ mod tests {
             ),
             vec![Some(0); 3]
         );
+    }
+
+    #[test]
+    fn distinct_window_count_ignores_duplicates_and_nulls() {
+        let input = batch(vec![Some(1), Some(1), Some(2), None, Some(2)]);
+        let expr = Expr::WindowFunction {
+            name: "COUNT_DISTINCT".into(),
+            args: vec![Expr::Column("x".into())],
+            partition_by: vec![],
+            order_by: vec![],
+            frame: Some(WindowFrame {
+                units: WindowFrameUnits::Rows,
+                start: WindowFrameBound::UnboundedPreceding,
+                end: WindowFrameBound::UnboundedFollowing,
+            }),
+        };
+        assert_eq!(ints(expr, &input), vec![Some(2); 5]);
     }
     #[test]
     fn ranks_tiles_and_value_functions() {
