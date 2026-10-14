@@ -72,11 +72,28 @@ impl DiskExchangeStore {
 
     /// `query_limit` bounds one query's share of `limit`.
     pub fn with_query_limit(root: &Path, limit: u64, query_limit: u64) -> Result<Self, String> {
+        Self::with_query_limit_and_reclaim(root, limit, query_limit, false)
+    }
+
+    /// Build a store and optionally reclaim every exchange directory left by
+    /// an earlier coordinator process. The reclaim mode is for a deployment
+    /// with a dedicated spool root: after a process restart no exchange from
+    /// the previous process can still be owned by a live query.
+    pub fn with_query_limit_and_reclaim(
+        root: &Path,
+        limit: u64,
+        query_limit: u64,
+        reclaim_on_start: bool,
+    ) -> Result<Self, String> {
         if limit == 0 || query_limit == 0 {
             return Err("exchange disk limit must be positive".into());
         }
         fs::create_dir_all(root).map_err(|error| error.to_string())?;
-        reconcile_stale_directories(root, SystemTime::now() - TTL)?;
+        if reclaim_on_start {
+            reclaim_exchange_directories(root)?;
+        } else {
+            reconcile_stale_directories(root, SystemTime::now() - TTL)?;
+        }
         let directory = root.join(format!("kaveon-exchange-{}", uuid::Uuid::new_v4()));
         let builder = fs::DirBuilder::new();
         #[cfg(unix)]
@@ -237,6 +254,36 @@ impl DiskExchangeStore {
                 .retain(|_, expires| *expires > Instant::now());
         }
     }
+}
+
+/// Remove all Engine exchange directories below a dedicated spool root.
+/// Result spools and unrelated files use different names and are preserved.
+fn reclaim_exchange_directories(root: &Path) -> Result<(), String> {
+    for item in fs::read_dir(root).map_err(|error| error.to_string())? {
+        let item = match item {
+            Ok(item) => item,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.to_string()),
+        };
+        if !item
+            .file_type()
+            .map_err(|error| error.to_string())?
+            .is_dir()
+        {
+            continue;
+        }
+        let name = item.file_name();
+        let Some(identifier) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix("kaveon-exchange-"))
+        else {
+            continue;
+        };
+        if uuid::Uuid::parse_str(identifier).is_ok() {
+            let _ = fs::remove_dir_all(item.path());
+        }
+    }
+    Ok(())
 }
 
 /// Remove only exchange directories from a previous process that have been
@@ -456,6 +503,24 @@ mod tests {
         assert_eq!(fs::read(unrelated.join("payload")).unwrap(), b"retained");
         assert_eq!(fs::read(malformed.join("payload")).unwrap(), b"retained");
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reclaim_on_start_removes_live_exchange_directories() {
+        let root = std::env::temp_dir().join(format!("kaveon-reclaim-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join(format!("kaveon-exchange-{}", uuid::Uuid::new_v4())))
+            .unwrap();
+        std::fs::write(root.join("keep-me"), b"unrelated").unwrap();
+
+        let store = DiskExchangeStore::with_query_limit_and_reclaim(&root, 1024, 1024, true)
+            .unwrap();
+        assert_eq!(
+            std::fs::read(root.join("keep-me")).unwrap(),
+            b"unrelated"
+        );
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 2);
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

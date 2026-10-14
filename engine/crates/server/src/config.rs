@@ -673,6 +673,12 @@ pub fn load_server_config(path: &Path) -> anyhow::Result<ServerConfig> {
     if let Ok(value) = std::env::var("KAVEON_EXCHANGE_SPOOL_ROOT") {
         config.exchange_spool_root = value.into();
     }
+    if let Ok(value) = std::env::var("KAVEON_EXCHANGE_RECLAIM_ON_START") {
+        anyhow::ensure!(
+            matches!(value.as_str(), "true" | "false" | "1" | "0" | "on" | "off"),
+            "KAVEON_EXCHANGE_RECLAIM_ON_START must be true, false, 1, 0, on, or off"
+        );
+    }
     if let Ok(value) = std::env::var("KAVEON_EXCHANGE_DISK_LIMIT_BYTES") {
         config.exchange_disk_limit_bytes = value.parse()?;
     }

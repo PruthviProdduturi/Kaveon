@@ -209,11 +209,16 @@ async fn main() {
         config.worker_exchange_spool
     };
     let disk_exchange_store = if spools_exchanges {
+        let reclaim_on_start = matches!(
+            std::env::var("KAVEON_EXCHANGE_RECLAIM_ON_START").as_deref(),
+            Ok("1") | Ok("true") | Ok("on")
+        );
         Some(
-            disk_exchange::DiskExchangeStore::with_query_limit(
+            disk_exchange::DiskExchangeStore::with_query_limit_and_reclaim(
                 &config.exchange_spool_root,
                 config.exchange_disk_limit_bytes,
                 config.exchange_query_disk_limit_bytes,
+                reclaim_on_start,
             )
             .expect("exchange spool can be initialized"),
         )
