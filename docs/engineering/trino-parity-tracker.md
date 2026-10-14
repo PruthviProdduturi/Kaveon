@@ -36,7 +36,7 @@ the same acceptance contract rather than separate informal benchmarks.
 ## Audit snapshot — October 13, 2026
 
 The local parity baseline was rerun on October 13 with focused qualification
-changes through commit `c80566c7`. The checkout also contained separate, uncommitted
+changes through commit `3e741ce9`. The checkout also contained separate, uncommitted
 engine work from the parallel optimization lane, so these numbers are a local
 regression snapshot and are not a release-image claim:
 `cargo test -p kaveon-server --bin kaveon-server` passed **364/364** tests,
