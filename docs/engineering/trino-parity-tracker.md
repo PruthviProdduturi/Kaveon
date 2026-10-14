@@ -793,12 +793,13 @@ open.
 Track 1 remains partial because global ordering still uses a centralized merge
 and coordinator-loss recovery is intentionally fail-closed rather than
 survivable for an in-flight query. Deployed worker-loss recovery, active-query
-node-drain recovery, bounded pressure, spill/retry, cancellation cleanup, and
-the five-minute mixed-workload soak are qualified for the declared three-worker
-image and workload. The current HTTP exchange spool is bounded, replayable,
-and incrementally decoded; network backpressure under sustained pressure,
-cloud-storage fault injection, longer endurance, upgrade/rollback, and
-deployed cancellation under those conditions remain open.
+node-drain recovery, bounded pressure, spill/retry, cancellation cleanup, the
+five-minute mixed-workload soak, and coordinator-restart cleanup are qualified
+for the declared three-worker image and workload. The current HTTP exchange
+spool is bounded, replayable, and incrementally decoded; network backpressure
+under sustained pressure, cloud-storage fault injection, longer endurance,
+upgrade/rollback, and deployed cancellation under those conditions remain
+open.
 
 The fault-pressure runner now includes the active-query cancellation probe and
 records `checks.cancellation_cleanup`; the merged SLO artifact consumes that
@@ -816,6 +817,15 @@ snapshot. The complete credential-safe report is archived in
 JSON evidence file. Admission refusals are recorded separately and retried with
 bounded backoff; they are not counted as successful statements. This is a
 positive Track 1 evidence slice, not the release SLO completion artifact.
+
+The coordinator-loss qualification on 14 October 2026 also passed its declared
+cleanup contract. Restarting the coordinator interrupted the in-flight request
+as expected, all three workers and the coordinator became ready again, the
+exact post-restart probe returned `24`, and retained coordinator exchange files
+were zero. The result is archived in
+`docs/qualification/engine-aks-coordinator-loss-2026-10-14.md`. This qualifies
+restart cleanup and fail-closed recovery only; it makes no active-query survival
+or multi-coordinator availability claim.
 
 ### Track 1 distributed execution SLO
 
