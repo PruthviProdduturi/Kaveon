@@ -1326,9 +1326,16 @@ fn aggregate_specs(aggregates: &[AggregateExpr]) -> Vec<AggregateSpec> {
                 AggregateExpr::ApproxPercentile { percentiles, .. } => Some(percentiles.clone()),
                 _ => None,
             };
+            let distinct = match aggregate {
+                AggregateExpr::Count { distinct, .. }
+                | AggregateExpr::Sum { distinct, .. }
+                | AggregateExpr::Avg { distinct, .. } => *distinct,
+                _ => false,
+            };
             AggregateSpec {
                 function,
                 argument,
+                distinct,
                 output: fragment_aggregate_output_name(
                     aggregate.written_name(),
                     &aggregate.arguments(),

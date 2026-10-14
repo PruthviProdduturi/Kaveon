@@ -1147,7 +1147,7 @@ fn aggregate_bindings(
     let aggregates = aggregates
         .iter()
         .map(|aggregate| {
-            let (function, distinct) = match aggregate.function {
+            let (function, function_distinct) = match aggregate.function {
                 AggregateFunction::Count => (AggFunc::Count, false),
                 AggregateFunction::CountDistinct => (AggFunc::Count, true),
                 AggregateFunction::Sum => (AggFunc::Sum, false),
@@ -1169,7 +1169,7 @@ fn aggregate_bindings(
                 .unwrap_or_else(|| "*".into());
             let mut expression = AggExpr::new(function, column).with_alias(&aggregate.output);
             expression.percentiles = aggregate.percentiles.clone();
-            Ok(if distinct {
+            Ok(if aggregate.distinct || function_distinct {
                 expression.distinct()
             } else {
                 expression
@@ -2334,6 +2334,7 @@ mod tests {
                             argument: Some(Expr::Column("value".into())),
                             output: "unique_values".into(),
                             percentiles: None,
+                            distinct: false,
                         }],
                     },
                 ),
@@ -2403,36 +2404,42 @@ mod tests {
                 argument: Some(Expr::Column("value".into())),
                 output: "count_value".into(),
                 percentiles: None,
+                distinct: false,
             },
             AggregateSpec {
                 function: AggregateFunction::Sum,
                 argument: Some(Expr::Column("value".into())),
                 output: "sum_value".into(),
                 percentiles: None,
+                distinct: false,
             },
             AggregateSpec {
                 function: AggregateFunction::Min,
                 argument: Some(Expr::Column("value".into())),
                 output: "min_value".into(),
                 percentiles: None,
+                distinct: false,
             },
             AggregateSpec {
                 function: AggregateFunction::Max,
                 argument: Some(Expr::Column("value".into())),
                 output: "max_value".into(),
                 percentiles: None,
+                distinct: false,
             },
             AggregateSpec {
                 function: AggregateFunction::Avg,
                 argument: Some(Expr::Column("value".into())),
                 output: "avg_value".into(),
                 percentiles: None,
+                distinct: false,
             },
             AggregateSpec {
                 function: AggregateFunction::CountDistinct,
                 argument: Some(Expr::Column("value".into())),
                 output: "distinct_value".into(),
                 percentiles: None,
+                distinct: false,
             },
         ];
         let fragment = |mode, exchange: &str| ExecutableFragment {
@@ -2578,12 +2585,14 @@ mod tests {
                                 argument: None,
                                 output: "rows".into(),
                                 percentiles: None,
+                                distinct: false,
                             },
                             AggregateSpec {
                                 function: AggregateFunction::Sum,
                                 argument: Some(Expr::Column("value".into())),
                                 output: "total".into(),
                                 percentiles: None,
+                                distinct: false,
                             },
                         ],
                     },

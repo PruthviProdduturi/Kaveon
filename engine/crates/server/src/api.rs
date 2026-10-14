@@ -10657,17 +10657,8 @@ async fn release_dispatch_outputs(client: &reqwest::Client, token: &str, dispatc
 fn general_distributed_eligible(plan: &LogicalPlan) -> bool {
     match plan {
         LogicalPlan::Aggregate {
-            input, aggregates, ..
-        } => {
-            let supported = aggregates.iter().all(|aggregate| {
-                !matches!(
-                    aggregate,
-                    AggregateExpr::Sum { distinct: true, .. }
-                        | AggregateExpr::Avg { distinct: true, .. }
-                )
-            });
-            supported && general_distributed_eligible(input)
-        }
+            input, ..
+        } => general_distributed_eligible(input),
         LogicalPlan::Project { input, .. }
         | LogicalPlan::Filter { input, .. }
         | LogicalPlan::Sort { input, .. }
