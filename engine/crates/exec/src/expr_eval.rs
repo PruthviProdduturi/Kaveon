@@ -4841,6 +4841,10 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             check_arity(name, args, 2)?;
             eval_date_add_days(&args[0], &args[1], num_rows)
         }
+        "DATE_ADD_SECONDS" => {
+            check_arity(name, args, 2)?;
+            eval_date_add_seconds(&args[0], &args[1], num_rows)
+        }
         "DATE_ADD_MONTHS" => {
             check_arity(name, args, 2)?;
             eval_date_add_months(&args[0], &args[1], num_rows)
@@ -6505,6 +6509,53 @@ fn eval_date_add_months(source: &ArrayRef, delta: &ArrayRef, num_rows: usize) ->
     }
 }
 
+fn eval_date_add_seconds(source: &ArrayRef, delta: &ArrayRef, num_rows: usize) -> Result<ArrayRef> {
+    let delta = delta
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .ok_or_else(|| KaveonError::Execution("DATE_ADD_SECONDS requires an integer second count".into()))?;
+    match source.data_type() {
+        DataType::Timestamp(TimeUnit::Second, tz) => add_timestamp_seconds::<TimestampSecondType, TimestampSecondArray>(source, delta, num_rows, 1, tz.clone()),
+        DataType::Timestamp(TimeUnit::Millisecond, tz) => add_timestamp_seconds::<TimestampMillisecondType, TimestampMillisecondArray>(source, delta, num_rows, 1_000, tz.clone()),
+        DataType::Timestamp(TimeUnit::Microsecond, tz) => add_timestamp_seconds::<TimestampMicrosecondType, TimestampMicrosecondArray>(source, delta, num_rows, 1_000_000, tz.clone()),
+        DataType::Timestamp(TimeUnit::Nanosecond, tz) => add_timestamp_seconds::<TimestampNanosecondType, TimestampNanosecondArray>(source, delta, num_rows, 1_000_000_000, tz.clone()),
+        other => Err(KaveonError::Execution(format!(
+            "DATE_ADD_SECONDS requires a timestamp input, got {other}"
+        ))),
+    }
+}
+
+fn add_timestamp_seconds<T, A>(
+    source: &ArrayRef,
+    delta: &Int64Array,
+    num_rows: usize,
+    scale: i64,
+    timezone: Option<Arc<str>>,
+) -> Result<ArrayRef>
+where
+    T: arrow::datatypes::ArrowPrimitiveType<Native = i64>,
+    A: From<Vec<Option<i64>>> + Array + 'static,
+{
+    let values = source.as_primitive::<T>();
+    let result = (0..num_rows)
+        .map(|i| {
+            if values.is_null(i) || delta.is_null(i) {
+                None
+            } else {
+                delta.value(i).checked_mul(scale).and_then(|offset| values.value(i).checked_add(offset))
+            }
+        })
+        .collect::<Vec<_>>();
+    let array: ArrayRef = Arc::new(A::from(result));
+    Ok(match source.data_type() {
+        DataType::Timestamp(TimeUnit::Second, _) => Arc::new(array.as_any().downcast_ref::<TimestampSecondArray>().unwrap().clone().with_timezone_opt(timezone)),
+        DataType::Timestamp(TimeUnit::Millisecond, _) => Arc::new(array.as_any().downcast_ref::<TimestampMillisecondArray>().unwrap().clone().with_timezone_opt(timezone)),
+        DataType::Timestamp(TimeUnit::Microsecond, _) => Arc::new(array.as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap().clone().with_timezone_opt(timezone)),
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => Arc::new(array.as_any().downcast_ref::<TimestampNanosecondArray>().unwrap().clone().with_timezone_opt(timezone)),
+        _ => array,
+    })
+}
+
 fn add_months_timestamp_value(value: i64, months: i64, day_scale: i64) -> Option<i64> {
     let days = value.div_euclid(day_scale);
     let remainder = value.rem_euclid(day_scale);
@@ -7162,6 +7213,21 @@ mod tests {
         .unwrap();
         let result = values.as_primitive::<TimestampMillisecondType>();
         assert_eq!(result.value(0), 19_782_i64 * 86_400_000 + time_of_day);
+        assert!(result.is_null(1));
+
+        let values = evaluate(
+            &Expr::Function {
+                name: "DATE_ADD_SECONDS".into(),
+                args: vec![
+                    Expr::Column("ts".into()),
+                    Expr::Literal(ScalarValue::Int64(7_200)),
+                ],
+            },
+            &timestamp,
+        )
+        .unwrap();
+        let result = values.as_primitive::<TimestampMillisecondType>();
+        assert_eq!(result.value(0), 19_753_i64 * 86_400_000 + time_of_day + 7_200_000);
         assert!(result.is_null(1));
     }
 

@@ -2693,6 +2693,27 @@ fn interval_arithmetic(
                 }))
             }
         }
+        Some(ast::DateTimeField::Hour)
+        | Some(ast::DateTimeField::Minute)
+        | Some(ast::DateTimeField::Second) => {
+            let multiplier = match interval.leading_field {
+                Some(ast::DateTimeField::Hour) => 3_600,
+                Some(ast::DateTimeField::Minute) => 60,
+                _ => 1,
+            };
+            let seconds = count
+                .checked_mul(multiplier)
+                .ok_or_else(|| sql_err("INTERVAL second offset overflows INT64"))?;
+            if matches!(&date, Expr::Literal(ScalarValue::Int64(_))) {
+                return Err(sql_err(
+                    "sub-day INTERVAL arithmetic requires a timestamp operand",
+                ));
+            }
+            Ok(Some(Expr::Function {
+                name: "DATE_ADD_SECONDS".into(),
+                args: vec![date, Expr::Literal(ScalarValue::Int64(seconds))],
+            }))
+        }
         Some(ast::DateTimeField::Month) | Some(ast::DateTimeField::Year) => {
             let months = if matches!(interval.leading_field, Some(ast::DateTimeField::Year)) {
                 count * 12
@@ -3954,6 +3975,20 @@ mod tests {
                 right: Box::new(Expr::Column("e".into())),
             }
         );
+        assert_eq!(
+            filter("SELECT x FROM t WHERE ts + INTERVAL '2' HOUR < e"),
+            Expr::BinaryOp {
+                left: Box::new(Expr::Function {
+                    name: "DATE_ADD_SECONDS".into(),
+                    args: vec![Expr::Column("ts".into()), Expr::Literal(ScalarValue::Int64(7_200))],
+                }),
+                op: BinaryOp::Lt,
+                right: Box::new(Expr::Column("e".into())),
+            }
+        );
+        // The binder supplies the source type; logical planning preserves the
+        // operation and the executor rejects a DATE column explicitly.
+        assert!(sql_to_logical_plan("SELECT x FROM t WHERE d + INTERVAL '1' HOUR < e").is_ok());
         assert!(sql_to_logical_plan("SELECT INTERVAL '1' DAY FROM t").is_err());
         assert!(
             sql_to_logical_plan("SELECT x FROM t WHERE d < DATE '1993-07-01' + INTERVAL '1' HOUR")

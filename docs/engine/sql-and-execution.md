@@ -20,8 +20,9 @@ and aggregate windows with `ROWS`/`RANGE`/`GROUPS` frames), `CASE`,
 dictionary value of a dictionary-encoded column), `CAST`, string concatenation and functions
 (`UPPER`, `LOWER`, `LENGTH`, `TRIM`, `CONCAT`, `SUBSTR`/`SUBSTRING`, `REPEAT`, `REPLACE`, `LPAD`, `RPAD`),
 `EXTRACT`, `DATE_TRUNC`, `DATE_PART`, `TO_CHAR`, `NOW`, `CURRENT_DATE`,
-`CURRENT_TIMESTAMP`, `DATE 'YYYY-MM-DD'` literals, typed `date ± INTERVAL 'n'
-DAY`/`MONTH`/`YEAR` (calendar month shifts clamp month-end days), and Decimal128 literals
+`CURRENT_TIMESTAMP`, `DATE 'YYYY-MM-DD'` literals, typed timestamp `± INTERVAL
+'n'` HOUR/MINUTE/SECOND and typed `date ± INTERVAL 'n'` DAY/MONTH/YEAR
+(calendar month shifts clamp month-end days), and Decimal128 literals
 and arithmetic. Every shape runs locally and, where the stage planner can
 express it, distributed; the coordinator records in `execution.detail` why
 it ran a shape itself.

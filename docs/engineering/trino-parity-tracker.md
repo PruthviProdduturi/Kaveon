@@ -168,7 +168,8 @@ foundations, but several operators are still centralized or narrow:
   executes over DATE calendar units plus second, millisecond, microsecond, and
   nanosecond timestamp columns while preserving the source unit and timezone;
   sub-day units on DATE values fail with an explicit diagnostic. Day intervals
-  now use a unit-aware runtime path for typed DATE and timestamp columns, while
+  now use a unit-aware runtime path for typed DATE and timestamp columns, and
+  hour/minute/second intervals use a unit-aware runtime path for timestamps, while
   DATE literals retain exact day-number lowering. Month and year intervals now
   use a runtime calendar path for typed DATE/timestamp columns, clamping source
   month-end days to the target month while preserving timestamp units.
