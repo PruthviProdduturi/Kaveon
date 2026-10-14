@@ -3278,6 +3278,55 @@ mod tests {
     }
 
     #[test]
+    fn runtime_join_filter_uses_typed_int32_index() {
+        use arrow::array::Int32Array;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "key",
+            DataType::Int32,
+            true,
+        )]));
+        let build = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![Some(2), Some(4), Some(4)]))],
+        )
+        .unwrap();
+        let probe = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![
+                Some(1),
+                Some(2),
+                Some(4),
+                None,
+            ]))],
+        )
+        .unwrap();
+        let built = BuiltSide::build(&schema, &[build], &[(0, 0)], JoinType::Inner, None)
+            .unwrap();
+        let filter = BuildKeyFilter::from_built(&built, &[(0, 0)]).unwrap();
+        let mut operator = RuntimeJoinFilter::new(
+            Box::new(Input {
+                schema,
+                batches: VecDeque::from([probe]),
+            }),
+            filter,
+        );
+        let batch = operator.next_batch().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(2), Some(4)]
+        );
+        assert!(operator.next_batch().unwrap().is_none());
+    }
+
+    #[test]
     fn runtime_join_filter_uses_typed_utf8_index_without_allocating_composite_keys() {
         let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Utf8, true)]));
         let build = RecordBatch::try_new(
