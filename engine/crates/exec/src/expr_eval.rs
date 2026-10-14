@@ -2004,6 +2004,33 @@ fn contains_utf8<L: OffsetSizeTrait>(
     Ok(Arc::new(result))
 }
 
+fn contains_large_utf8<L: OffsetSizeTrait>(
+    list: &GenericListArray<L>,
+    needle: &ArrayRef,
+) -> Result<ArrayRef> {
+    let needle = compute::cast(needle, &DataType::LargeUtf8)?;
+    let needle = needle.as_string::<i64>();
+    let result = (0..list.len())
+        .map(|row| {
+            if list.is_null(row) || needle.is_null(row) {
+                return None;
+            }
+            let values = list.value(row);
+            let values = values.as_string::<i64>();
+            let mut saw_null = false;
+            for index in 0..values.len() {
+                if values.is_null(index) {
+                    saw_null = true;
+                } else if values.value(index) == needle.value(row) {
+                    return Some(true);
+                }
+            }
+            if saw_null { None } else { Some(false) }
+        })
+        .collect::<BooleanArray>();
+    Ok(Arc::new(result))
+}
+
 fn array_distinct_nested<L: OffsetSizeTrait>(
     list: &GenericListArray<L>,
 ) -> Result<ArrayRef> {
@@ -4691,6 +4718,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         contains_primitive::<_, TimestampMicrosecondType>(list, &args[1]),
                     DataType::Boolean => contains_boolean(list, &args[1]),
                     DataType::Utf8 => contains_utf8(list, &args[1]),
+                    DataType::LargeUtf8 => contains_large_utf8(list, &args[1]),
                     other => Err(KaveonError::Execution(format!(
                         "CONTAINS does not support list element type {other}"
                     ))),
@@ -4891,6 +4919,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             })
                             .collect();
                         return Ok(Arc::new(result));
+                    }
+                    DataType::LargeUtf8 => {
+                        return contains_large_utf8(list, &args[1]);
                     }
                     other => {
                         return Err(KaveonError::Execution(format!(
@@ -11152,6 +11183,21 @@ mod tests {
                     builder.finish()
                 }) as ArrayRef,
                 Arc::new(contains_needle.finish()) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        assert!(result.as_boolean().value(0));
+
+        let mut large_text_list = LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
+        large_text_list.values().append_value("alpha");
+        large_text_list.values().append_null();
+        large_text_list.append(true);
+        let result = eval_scalar_function(
+            "CONTAINS",
+            &[
+                Arc::new(large_text_list.finish()) as ArrayRef,
+                Arc::new(arrow::array::LargeStringArray::from(vec![Some("alpha")])) as ArrayRef,
             ],
             1,
         )

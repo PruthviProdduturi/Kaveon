@@ -1037,7 +1037,7 @@ Plan-only `EXPLAIN` now uses the normal binder and optimizer and returns
 logical, optimized, or physical/distributed plan rows without starting a scan,
 worker task, cache entry, or exchange. `GREATEST` and `LEAST` preserve their
 common input type and propagate NULL arguments; both behaviors have focused
-executor and statement-path coverage. `ARRAY_DISTINCT` also accepts bounded
+executor and statement-path coverage. `ARRAY_DISTINCT` and `CONTAINS` also accept bounded
 64-bit-offset primitive lists, including `LargeUtf8`, by normalizing them to
 the 32-bit execution representation, preserving element types, NULLs, and
 first-occurrence order.
