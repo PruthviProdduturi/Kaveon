@@ -208,6 +208,10 @@ node-drain recovery, and sustained soak remain separate acceptance gates.
   typed binder. Invalid quoting, empty SQL, and malformed `USING` clauses fail
   closed. This covers the direct execution form without claiming dynamic SQL
   expressions or the complete prepared-statement wire lifecycle.
+  `USE catalog.schema` and `USE schema` emit the standard
+  `X-Trino-Set-Catalog` and `X-Trino-Set-Schema` response headers, allowing
+  clients to carry session context into subsequent requests. Quoted identifiers
+  are accepted; malformed or multi-part targets fail closed.
   SQL `DEALLOCATE PREPARE ALL` now clears every prepared statement owned by the
   requesting principal while preserving other principals' entries.
   The raw Trino route answers `SHOW SESSION` and `SHOW SESSION LIKE 'pattern'`
