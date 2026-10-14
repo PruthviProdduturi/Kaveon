@@ -7,6 +7,7 @@
  */
 
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import * as RGL from 'react-grid-layout';
 import { ConfirmModal } from '../../../components/ConfirmModal';
 import dynamic from 'next/dynamic';
 import type { DashboardComponentProps, TabConfig, DashboardLayoutItem, ComponentType } from '../../../types/dashboard';
@@ -15,9 +16,38 @@ import { msalFetch } from '../../../utils/msalFetch';
 import { API_BASE } from '../../../config';
 import { DEFAULT_COMPONENT_DIMENSIONS, MIN_COMPONENT_DIMENSIONS } from '../../../types/dashboard';
 
-// Dynamically import GridLayout
-const GridLayout = dynamic(() => import('react-grid-layout'), { ssr: false });
-const GridLayoutAny = GridLayout as any;
+// react-grid-layout v2 API (installed 2.2.4). @types are v1, so treat as any.
+// This file used to load the default export through next/dynamic and configure
+// it with v1 props — `cols`, `rowHeight`, `margin`, `isDraggable`,
+// `draggableHandle`, `useCSSTransforms`, `compactType`, `preventCollision` —
+// every one of which v2 ignores. A tab's grid therefore ran on the library
+// defaults: rowHeight 150 instead of 30 (so an eight-row chart was 1200px
+// tall), margin [10,10], a single 'se' resize handle, and no drag handle at
+// all. It also hardcoded `width={1200}`, which is not the width of anything.
+// See docs/engineering/OPEN-DEFECTS.md D-28.
+const GridLayoutAny: any = (RGL as any).GridLayout;
+const useContainerWidth: any = (RGL as any).useContainerWidth;
+
+/** Matches the outer canvas, so a tab's grid measures like the canvas's. */
+const TAB_GRID_CONFIG = {
+  cols: 12,
+  rowHeight: 30,
+  margin: [16, 16] as [number, number],
+  containerPadding: [0, 0] as [number, number],
+};
+/**
+ * The inner grid is the ONE grid that must declare a handle.
+ *
+ * A tabs component is itself a tile on the canvas grid, and the canvas drags a
+ * tile by its whole body. Two grids cannot both read the same press as a
+ * whole-tile drag, so the inner grid takes an explicit handle and the canvas
+ * cancels on both that handle and `[data-nested-grid-item]` — see DRAG_CANCEL
+ * in DashboardCanvas.tsx. Press a tab item's grip and only the item moves;
+ * press the tabs tile anywhere else and the tile moves.
+ */
+const TAB_DRAG_HANDLE = '.dashboard-tab-drag-handle';
+const TAB_DRAG_CANCEL = 'button, a, input, select, textarea';
+const TAB_RESIZE_HANDLES = ['se', 'e', 's'];
 
 // Import component types for rendering
 const DashboardChartComponent = dynamic(() => import('./DashboardChartComponent'), { ssr: false });
@@ -125,7 +155,14 @@ const TabDashboardItem: React.FC<{
     >
       <div className="dashboard-component-header">
         {isEditMode && (
-          <div className="dashboard-drag-handle" title="Drag to move">
+          // Wears the tab-specific class as well, because that is what the
+          // inner grid declares as its handle and what the OUTER canvas grid
+          // cancels on. `.dashboard-drag-handle` stays for the shared cursor
+          // and hover styling.
+          <div
+            className="dashboard-drag-handle dashboard-tab-drag-handle"
+            title="Drag to move within this tab"
+          >
             <i className="fas fa-grip-vertical" />
           </div>
         )}
@@ -190,6 +227,14 @@ const DashboardTabsComponent: React.FC<DashboardComponentProps> = ({
   const [activeTabId, setActiveTabId] = useState(tabs[0]?.id || '');
   const [charts, setCharts] = useState<Chart[]>([]);
   const [showAddMenu, setShowAddMenu] = useState(false);
+  // The tab grid's own width. It was hardcoded at 1200, so every tab laid out
+  // for a canvas nobody has: tiles overflowed a narrow tabs tile and left a
+  // gap in a wide one. Measured like the canvas measures itself.
+  const {
+    width: gridWidth,
+    mounted: gridMounted,
+    containerRef: gridRef,
+  } = useContainerWidth({ measureBeforeMount: true });
 
   // Fetch available charts
   useEffect(() => {
@@ -687,42 +732,45 @@ const DashboardTabsComponent: React.FC<DashboardComponentProps> = ({
             )}
 
             {activeTab.layout.length > 0 ? (
-              <GridLayoutAny
-                className="layout"
-                layout={activeTab.layout.map((layoutItem) => ({
-                  i: layoutItem.i,
-                  x: layoutItem.x,
-                  y: layoutItem.y,
-                  w: layoutItem.w,
-                  h: layoutItem.h,
-                  minW: layoutItem.minW,
-                  minH: layoutItem.minH,
-                  static: !isEditMode,
-                }))}
-                cols={12}
-                rowHeight={30}
-                width={1200}
-                margin={[16, 16]}
-                containerPadding={[0, 0]}
-                compactType="vertical"
-                isDraggable={isEditMode}
-                isResizable={isEditMode}
-                onLayoutChange={(newLayout: any) => handleTabLayoutChange(activeTab.id, newLayout)}
-                draggableHandle=".dashboard-drag-handle"
-                useCSSTransforms={true}
-                preventCollision={false}
-              >
-                {activeTab.layout.map((layoutItem) => (
-                  <div key={layoutItem.i}>
-                    <TabDashboardItem
-                      item={layoutItem}
-                      isEditMode={isEditMode}
-                      onRemove={handleRemoveItemFromTab}
-                      onDuplicate={handleDuplicateItemInTab}
-                    />
-                  </div>
-                ))}
-              </GridLayoutAny>
+              <div ref={gridRef}>
+                {gridMounted && gridWidth > 0 && (
+                  <GridLayoutAny
+                    className="layout"
+                    width={gridWidth}
+                    layout={activeTab.layout.map((layoutItem) => ({
+                      i: layoutItem.i,
+                      x: layoutItem.x,
+                      y: layoutItem.y,
+                      w: layoutItem.w,
+                      h: layoutItem.h,
+                      minW: layoutItem.minW,
+                      minH: layoutItem.minH,
+                      static: !isEditMode,
+                    }))}
+                    gridConfig={TAB_GRID_CONFIG}
+                    dragConfig={{
+                      enabled: isEditMode,
+                      handle: TAB_DRAG_HANDLE,
+                      cancel: TAB_DRAG_CANCEL,
+                    }}
+                    resizeConfig={{ enabled: isEditMode, handles: TAB_RESIZE_HANDLES }}
+                    onLayoutChange={(newLayout: any) => handleTabLayoutChange(activeTab.id, newLayout)}
+                  >
+                    {activeTab.layout.map((layoutItem) => (
+                      // The marker the outer canvas grid cancels on, so pressing
+                      // a tab item never drags the tabs tile out from under it.
+                      <div key={layoutItem.i} data-nested-grid-item="true">
+                        <TabDashboardItem
+                          item={layoutItem}
+                          isEditMode={isEditMode}
+                          onRemove={handleRemoveItemFromTab}
+                          onDuplicate={handleDuplicateItemInTab}
+                        />
+                      </div>
+                    ))}
+                  </GridLayoutAny>
+                )}
+              </div>
             ) : (
               <div style={{ textAlign: 'center', padding: 40, color: '#94a3b8' }}>
                 <i className="fas fa-layer-group" style={{ fontSize: 32, marginBottom: 12 }} />

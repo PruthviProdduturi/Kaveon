@@ -106,9 +106,14 @@ const DashboardRowComponent: React.FC<DashboardComponentProps> = ({
       onMouseLeave={() => setIsHovered(false)}
       style={{
         background: 'transparent',
-        border: isEditMode ? '1px solid #e2e8f0' : 'none',
+        border: isEditMode ? '1px solid var(--border)' : 'none',
         borderRadius: 8,
         position: 'relative',
+        // A row is a grid tile now (D-31), so it fills the height the author
+        // gave that tile instead of collapsing to its content. Without this a
+        // chart placed directly in a row has no height to inherit.
+        height: '100%',
+        boxSizing: 'border-box',
       }}
     >
       {/* ── Row toolbar (edit mode, shown on hover) ────────────────────────── */}
@@ -253,6 +258,8 @@ const DashboardRowComponent: React.FC<DashboardComponentProps> = ({
           minHeight: children.length === 0 && isEditMode ? 80 : undefined,
           padding: isEditMode ? 8 : 0,
           gap: 0,
+          height: '100%',
+          boxSizing: 'border-box',
         }}
       >
         {/* Empty row placeholder */}
@@ -295,6 +302,10 @@ const DashboardRowComponent: React.FC<DashboardComponentProps> = ({
             {isEditMode && idx < children.length - 1 && (
               <div
                 title={`Drag to resize · ${child.w || 1} / ${GRID_COLUMNS} cols`}
+                // The row is itself a draggable grid tile, and this bar is its
+                // own gesture. Declared in DashboardCanvas's DRAG_CANCEL so a
+                // press here never also starts moving the tile.
+                data-no-tile-drag="true"
                 style={{
                   width: 16,
                   flexShrink: 0,
