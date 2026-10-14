@@ -1889,6 +1889,32 @@ fn array_position_nested<L: OffsetSizeTrait>(
     Ok(Arc::new(Int64Array::from(result)))
 }
 
+fn array_position_large_utf8<L: OffsetSizeTrait>(
+    list: &GenericListArray<L>,
+    needle: &ArrayRef,
+) -> Result<ArrayRef> {
+    let needle = compute::cast(needle, &DataType::LargeUtf8)?;
+    let needle = needle.as_string::<i64>();
+    let result = (0..list.len())
+        .map(|row| {
+            if list.is_null(row) {
+                return None;
+            }
+            let values_array = list.value(row);
+            let values = values_array.as_string::<i64>();
+            let position = (0..values.len()).find(|&index| {
+                if needle.is_null(row) {
+                    values.is_null(index)
+                } else {
+                    !values.is_null(index) && values.value(index) == needle.value(row)
+                }
+            });
+            Some(position.map(|index| index as i64 + 1).unwrap_or(0))
+        })
+        .collect::<Vec<_>>();
+    Ok(Arc::new(Int64Array::from(result)))
+}
+
 fn contains_nested<L: OffsetSizeTrait>(
     list: &GenericListArray<L>,
     needle: &ArrayRef,
@@ -4955,6 +4981,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 ) {
                     return array_position_nested(list, &args[1]);
                 }
+                if list.value_type() == DataType::LargeUtf8 {
+                    return array_position_large_utf8(list, &args[1]);
+                }
                 return Err(KaveonError::Execution(format!(
                     "ARRAY_POSITION does not support list element type {}",
                     list.value_type()
@@ -5117,6 +5146,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                                 .or(Some(0))
                         })
                         .collect::<Vec<_>>()
+                }
+                DataType::LargeUtf8 => {
+                    return array_position_large_utf8(list, &args[1]);
                 }
                 DataType::Boolean => {
                     let needle = compute::cast(&args[1], &DataType::Boolean)?;
@@ -11203,6 +11235,22 @@ mod tests {
         )
         .unwrap();
         assert!(result.as_boolean().value(0));
+
+        let mut large_text_position = LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
+        large_text_position.values().append_value("alpha");
+        large_text_position.values().append_null();
+        large_text_position.values().append_value("beta");
+        large_text_position.append(true);
+        let result = eval_scalar_function(
+            "ARRAY_POSITION",
+            &[
+                Arc::new(large_text_position.finish()) as ArrayRef,
+                Arc::new(arrow::array::LargeStringArray::from(vec![Some("beta")])) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        assert_eq!(result.as_primitive::<Int64Type>().value(0), 3);
 
         let mut distinct_builder = LargeListBuilder::new(ListBuilder::new(Int64Builder::new()));
         for value in [1_i64, 1, 2] {
