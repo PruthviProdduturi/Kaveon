@@ -1981,7 +1981,10 @@ impl PartitionedHashJoin {
         left: Box<dyn BatchOperator>,
         built: &BuiltSide,
     ) -> Box<dyn BatchOperator> {
-        if self.join_type != JoinType::Inner || self.residual.is_some() || self.keys.is_empty() {
+        if !matches!(self.join_type, JoinType::Inner | JoinType::Semi)
+            || self.residual.is_some()
+            || self.keys.is_empty()
+        {
             return left;
         }
         let Some(filter) = BuildKeyFilter::from_built(built, &self.key_indices) else {
@@ -2403,7 +2406,7 @@ mod tests {
         grouped_aggregate_states_from_batches, merge_grouped_aggregate_states,
     };
     use arrow::{
-        array::{Array, Int64Array, UInt64Array},
+        array::{Array, AsArray, Int64Array, UInt64Array},
         datatypes::{DataType, Field, Schema},
     };
     use kaveon_core::{MemoryAdmissionController, QueryMemoryPool};
@@ -3275,6 +3278,47 @@ mod tests {
         assert_eq!(batch.num_rows(), 2);
         assert_eq!(batch.column(0).as_any().downcast_ref::<Int64Array>().unwrap().iter().collect::<Vec<_>>(), vec![Some(2), Some(4)]);
         assert!(operator.next_batch().unwrap().is_none());
+    }
+
+    #[test]
+    fn partitioned_semi_join_uses_runtime_filter_but_anti_keeps_absent_keys() {
+        for kind in [JoinType::Semi, JoinType::Anti] {
+            let left = vec![Some(1), Some(2), Some(3), None];
+            let right = vec![Some(2), Some(3)];
+            let mut reference = HashJoin::try_new(
+                input(left.clone(), 4),
+                input(right.clone(), 2),
+                kind,
+                vec![("id".into(), "id".into())],
+            )
+            .unwrap();
+            let pool = QueryMemoryPool::new("semi-runtime-filter", 1 << 20).unwrap();
+            let spill = spill();
+            let mut partitioned = PartitionedHashJoin::new(
+                input(left, 4),
+                input(right, 2),
+                kind,
+                vec![("id".into(), "id".into())],
+                None,
+                None,
+                pool.operator("join").unwrap(),
+                spill,
+                4,
+            )
+            .unwrap();
+            let collect_left = |operator: &mut dyn BatchOperator| {
+                let mut rows = Vec::new();
+                while let Some(batch) = operator.next_batch().unwrap() {
+                    let values = batch
+                        .column(0)
+                        .as_primitive::<arrow::datatypes::Int64Type>();
+                    rows.extend(values.iter());
+                }
+                rows.sort();
+                rows
+            };
+            assert_eq!(collect_left(&mut partitioned), collect_left(&mut reference), "{kind:?}");
+        }
     }
 
     #[test]
