@@ -2687,11 +2687,18 @@ fn interval_arithmetic(
     }
     let date = ast_expr_to_expr(date)?;
     match &interval.leading_field {
-        Some(ast::DateTimeField::Day) | None => {
+        Some(ast::DateTimeField::Day) | Some(ast::DateTimeField::Week(_)) | None => {
+            let days = if matches!(interval.leading_field, Some(ast::DateTimeField::Week(_))) {
+                count
+                    .checked_mul(7)
+                    .ok_or_else(|| sql_err("INTERVAL week offset overflows INT64"))?
+            } else {
+                count
+            };
             let arithmetic = Expr::BinaryOp {
-            left: Box::new(date.clone()),
-            op: BinaryOp::Plus,
-            right: Box::new(Expr::Literal(ScalarValue::Int64(count))),
+                left: Box::new(date.clone()),
+                op: BinaryOp::Plus,
+                right: Box::new(Expr::Literal(ScalarValue::Int64(days))),
             };
             // DATE literals are represented as day-number integers and keep
             // the compact arithmetic form. Typed DATE/TIMESTAMP columns need
@@ -2701,7 +2708,7 @@ fn interval_arithmetic(
             } else {
                 Ok(Some(Expr::Function {
                     name: "DATE_ADD_DAYS".into(),
-                    args: vec![date, Expr::Literal(ScalarValue::Int64(count))],
+                    args: vec![date, Expr::Literal(ScalarValue::Int64(days))],
                 }))
             }
         }
@@ -4029,6 +4036,17 @@ mod tests {
                 left: Box::new(Expr::Function {
                     name: "DATE_ADD_SECONDS".into(),
                     args: vec![Expr::Column("ts".into()), Expr::Literal(ScalarValue::Int64(7_200))],
+                }),
+                op: BinaryOp::Lt,
+                right: Box::new(Expr::Column("e".into())),
+            }
+        );
+        assert_eq!(
+            filter("SELECT x FROM t WHERE d + INTERVAL '2' WEEK < e"),
+            Expr::BinaryOp {
+                left: Box::new(Expr::Function {
+                    name: "DATE_ADD_DAYS".into(),
+                    args: vec![Expr::Column("d".into()), Expr::Literal(ScalarValue::Int64(14))],
                 }),
                 op: BinaryOp::Lt,
                 right: Box::new(Expr::Column("e".into())),
