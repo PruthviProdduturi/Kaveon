@@ -1890,6 +1890,8 @@ fn build_limit_offset(
     };
     match limit {
         None => Ok(plan),
+        Some(ast::Expr::Identifier(identifier))
+            if identifier.value.eq_ignore_ascii_case("ALL") => Ok(plan),
         Some(expr) => {
             let count = ast_expr_to_usize(expr)?;
             Ok(LogicalPlan::Limit {
@@ -4434,6 +4436,13 @@ mod tests {
             },
             _ => panic!("expected Limit"),
         }
+    }
+
+    #[test]
+    fn limit_all_keeps_the_input_unbounded() {
+        let plan = sql_to_logical_plan("SELECT * FROM t ORDER BY id LIMIT ALL").unwrap();
+        assert!(matches!(plan, LogicalPlan::Sort { .. }));
+        assert!(!format!("{plan:?}").contains("Limit"));
     }
 
     #[test]
