@@ -1,9 +1,9 @@
 :root {
-  --lens-primary: #0078d4;
+  --lens-primary: var(--accent);
   --lens-primary-hover: #106ebe;
   --lens-dark: #1e293b;
   --lens-text: #111827;
-  --lens-border: #e5e7eb;
+  --lens-border: var(--border);
   --lens-secondary: #0ea5e9;
   --lens-light: #ecfeff;
   --lens-accent: #eef3fb;
@@ -46,8 +46,8 @@ html {
 body {
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
   font-feature-settings: "cv11", "ss01";
-  background: #f8fafc;
-  color: #334155;
+  background: var(--bg-surface);
+  color: var(--text-primary);
   min-height: 100vh;
 }
 
@@ -75,7 +75,7 @@ main.main-lab {
   display: flex;
   flex-direction: column;
   .feature-card {
-    background: #ffffff;
+    background: var(--bg-elevated);
     border-radius: 14px;
     padding: 1.25rem 1.1rem;
     display: flex;
@@ -89,19 +89,19 @@ main.main-lab {
   .feature-card-selected {
     border-color: var(--lens-primary);
     box-shadow: 0 10px 22px rgba(37, 99, 235, 0.18);
-    background: #f9fafb;
+    background: var(--bg-surface);
   }
 
   .feature-card-title {
     font-size: 0.9rem;
     font-weight: 600;
-    color: #111827;
+    color: var(--text-primary);
     margin-bottom: 0.2rem;
   }
 
   .feature-card-body {
     font-size: 0.8rem;
-    color: #6b7280;
+    color: var(--text-secondary);
   }
 
   .chart-type-grid {
@@ -119,7 +119,7 @@ main.main-lab {
   .chart-picker-section-title {
     font-size: 1rem;
     font-weight: 700;
-    color: #1e293b;
+    color: var(--text-primary);
     margin-bottom: 0.75rem;
     display: flex;
     align-items: center;
@@ -142,7 +142,7 @@ main.main-lab {
   .chart-picker-tile {
     border: 1px solid rgba(226, 232, 240, 0.9);
     border-radius: 12px;
-    background: #ffffff;
+    background: var(--bg-elevated);
     padding: 0.8rem 0.9rem;
     text-align: left;
     display: flex;
@@ -157,7 +157,7 @@ main.main-lab {
     border-color: var(--lens-primary);
     box-shadow: 0 10px 22px color-mix(in srgb, var(--lens-primary) 18%, transparent);
     transform: translateY(-2px);
-    background: #f9fafb;
+    background: var(--bg-surface);
   }
 
   .chart-picker-preview {
@@ -367,22 +367,22 @@ main.main-lab {
   .chart-picker-name {
     font-size: 0.9rem;
     font-weight: 600;
-    color: #111827;
+    color: var(--text-primary);
   }
 
   .chart-picker-description {
     font-size: 0.8rem;
-    color: #6b7280;
+    color: var(--text-secondary);
   }
   font-size: 1rem;
   font-weight: 600;
-  color: #111827;
+  color: var(--text-primary);
   margin-bottom: 0.35rem;
 }
 
 .page-empty-body {
   font-size: 0.9rem;
-  color: #6b7280;
+  color: var(--text-secondary);
 }
 
 .page-list-grid {
@@ -408,7 +408,7 @@ main.main-lab {
 }
 
 .muted {
-  color: #64748b;
+  color: var(--text-secondary);
 }
 
 .sql-preview-runtime {
@@ -574,12 +574,12 @@ main.main-lab {
   font-size: 1.1rem;
   font-weight: 600;
   letter-spacing: -0.02em;
-  color: #111827;
+  color: var(--text-primary);
 }
 
 .overview-section-meta {
   font-size: 0.82rem;
-  color: #9ca3af;
+  color: var(--text-muted);
   margin-top: 0.2rem;
 }
 
@@ -737,7 +737,7 @@ main.main-lab {
 }
 
 .overview-item-card-clickable:hover {
-  background: #f9fafb;
+  background: var(--bg-surface);
   transform: translateY(-2px);
   box-shadow: 0 16px 40px rgba(148, 163, 184, 0.4);
 }
@@ -745,13 +745,13 @@ main.main-lab {
 .overview-item-title {
   font-size: 0.98rem;
   font-weight: 600;
-  color: #111827;
+  color: var(--text-primary);
   margin-bottom: 0.25rem;
 }
 
 .overview-item-meta {
   font-size: 0.8rem;
-  color: #6b7280;
+  color: var(--text-secondary);
 }
 
 .overview-item-meta strong {
@@ -761,7 +761,7 @@ main.main-lab {
 .icon-button {
   border: none;
   background: transparent;
-  color: #6b7280;
+  color: var(--text-secondary);
   cursor: pointer;
   padding: 0.25rem;
   border-radius: 999px;
@@ -772,7 +772,7 @@ main.main-lab {
 
 .icon-button:hover {
   background: rgba(148, 163, 184, 0.15);
-  color: #111827;
+  color: var(--text-primary);
 }
 
 .home-main-grid {
@@ -796,7 +796,7 @@ main.main-lab {
 }
 
 .home-panel {
-  background: #ffffff;
+  background: var(--bg-elevated);
   border-radius: 10px;
   padding: 1.25rem;
   border: 1px solid rgba(226, 232, 240, 0.9);
@@ -806,7 +806,7 @@ main.main-lab {
 .home-section-title {
   font-size: 1rem;
   font-weight: 600;
-  color: #111827;
+  color: var(--text-primary);
   margin-bottom: 0.75rem;
 }
 
@@ -834,12 +834,12 @@ main.main-lab {
 
 .home-list-item-title {
   font-weight: 500;
-  color: #111827;
+  color: var(--text-primary);
 }
 
 .home-list-item-meta {
   font-size: 0.8rem;
-  color: #6b7280;
+  color: var(--text-secondary);
 }
 
 .home-list-header {
@@ -848,7 +848,7 @@ main.main-lab {
   justify-content: space-between;
   font-size: 0.8rem;
   margin-bottom: 0.4rem;
-  color: #6b7280;
+  color: var(--text-secondary);
 }
 
 @media (max-width: 768px) {
@@ -865,13 +865,13 @@ main.main-lab {
 
 .dataset-list-header-row {
   cursor: default;
-  background: #f9fafb;
+  background: var(--bg-surface);
   box-shadow: none;
   border-radius: 14px;
   padding: 10px 18px;
   font-size: 0.75rem;
   font-weight: 600;
-  color: #9ca3af;
+  color: var(--text-muted);
 }
 
 .dataset-list-row,
@@ -900,7 +900,7 @@ main.main-lab {
   border: none;
   padding: 0.15rem 0.5rem;
   border-radius: 4px;
-  color: #6b7280;
+  color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.2s ease;
   font-size: 0.75rem;
@@ -908,7 +908,7 @@ main.main-lab {
 
 .saved-queries-toggle button:hover {
   background: rgba(0, 0, 0, 0.05);
-  color: #4b5563;
+  color: var(--text-secondary);
 }
 
 .saved-queries-toggle button.active {
@@ -969,7 +969,7 @@ main.main-lab {
   position: relative;
   border-radius: 8px;
   border: 2px solid #e1e5e9;
-  background: #ffffff;
+  background: var(--bg-elevated);
   display: flex;
   align-items: center;
   padding: 0.1rem 0.4rem 0.1rem 0.5rem;
@@ -1014,10 +1014,10 @@ main.main-lab {
   top: 100%;
   margin-top: 4px;
   border-radius: 0 0 10px 10px;
-  border-color: #e5e7eb;
+  border-color: var(--border);
   border-width: 1px;
   border-style: solid;
-  background: #ffffff;
+  background: var(--bg-elevated);
   box-shadow: 0 12px 30px rgba(15, 23, 42, 0.16);
   max-height: 220px;
   overflow-y: auto;
@@ -1028,11 +1028,11 @@ main.main-lab {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  background: #ffffff;
+  background: var(--bg-elevated);
 }
 
 .chart-dataset-item:hover {
-  background: #f3f4f6;
+  background: var(--bg-surface);
 }
 
 .chart-dataset-item.active {
@@ -1046,13 +1046,13 @@ main.main-lab {
 
 .chart-dataset-item small {
   font-size: 0.75rem;
-  color: #6b7280;
+  color: var(--text-secondary);
 }
 
 .chart-dataset-empty {
   padding: 0.6rem 0.8rem;
   font-size: 0.8rem;
-  color: #9ca3af;
+  color: var(--text-muted);
 }
 
 /* Create chart - chooser layout */
@@ -1080,7 +1080,7 @@ main.main-lab {
 }
 
 .chart-chooser-sidebar {
-  border-right: 1px solid #e5e7eb;
+  border-right: 1px solid var(--border);
   padding-right: 0.75rem;
   display: flex;
   flex-direction: column;
@@ -1098,7 +1098,7 @@ main.main-lab {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: #9ca3af;
+  color: var(--text-muted);
   margin-bottom: 0.2rem;
 }
 
@@ -1112,12 +1112,12 @@ main.main-lab {
   align-items: center;
   gap: 0.45rem;
   font-size: 0.85rem;
-  color: #4b5563;
+  color: var(--text-secondary);
   cursor: pointer;
 }
 
 .chart-sidebar-item:hover {
-  background: #f3f4f6;
+  background: var(--bg-surface);
 }
 
 .chart-sidebar-item-active {
@@ -1159,7 +1159,7 @@ main.main-lab {
 .chart-search-input {
   width: 100%;
   border-radius: 999px;
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--border);
   padding: 0.45rem 0.9rem;
   font-size: 0.82rem;
   outline: none;
@@ -1188,7 +1188,7 @@ main.main-lab {
 
   .chart-chooser-sidebar {
     border-right: none;
-    border-bottom: 1px solid #e5e7eb;
+    border-bottom: 1px solid var(--border);
     padding-right: 0;
     padding-bottom: 0.75rem;
     margin-bottom: 0.75rem;
@@ -1345,10 +1345,10 @@ main.main-lab {
   top: calc(100% + 6px);
   left: 0;
   min-width: 180px;
-  background: #ffffff;
+  background: var(--bg-elevated);
   border-radius: 10px;
   box-shadow: 0 8px 32px rgba(15, 23, 42, 0.16), 0 2px 8px rgba(15, 23, 42, 0.08);
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--border);
   padding: 0.3rem;
   display: none;
   z-index: 100;
@@ -1374,7 +1374,7 @@ main.main-lab {
   white-space: nowrap;
   font-size: 0.845rem;
   font-weight: 500;
-  color: #374151;
+  color: var(--text-secondary);
   text-decoration: none;
   background: none;
   border: none;
@@ -1387,13 +1387,13 @@ main.main-lab {
 
 .header-dropdown-item:hover {
   background: color-mix(in srgb, var(--lens-primary) 9%, #f1f5f9);
-  color: #0f172a;
+  color: var(--text-primary);
 }
 
 /* ── Dropdown section divider ── */
 .header-dropdown-divider {
   height: 1px;
-  background: #f1f5f9;
+  background: var(--bg-hover);
   margin: 0.3rem 0;
 }
 
@@ -1404,17 +1404,17 @@ main.main-lab {
   right: 0;
   top: calc(100% + 6px);
   min-width: 210px;
-  background: #ffffff;
+  background: var(--bg-elevated);
   border-radius: 12px;
   box-shadow: 0 8px 32px rgba(15, 23, 42, 0.16), 0 2px 8px rgba(15, 23, 42, 0.08);
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--border);
   z-index: 100;
   padding: 0.3rem;
 }
 
 .user-dropdown-header {
   padding: 0.65rem 0.75rem 0.5rem;
-  border-bottom: 1px solid #f1f5f9;
+  border-bottom: 1px solid var(--border);
   margin-bottom: 0.3rem;
 }
 
@@ -1686,7 +1686,7 @@ main.main-lab {
 
 .auth-tagline {
   font-size: 1.125rem;
-  color: #4b5563;
+  color: var(--text-secondary);
   margin: 0 0 1.25rem 0;
   font-weight: 400;
   letter-spacing: 0.3px;
@@ -1697,7 +1697,7 @@ main.main-lab {
 
 .auth-tagline strong {
   font-weight: 700;
-  color: #111827;
+  color: var(--text-primary);
 }
 
 .auth-card h2 {
@@ -1870,7 +1870,7 @@ main.main-lab {
 
 .auth-subtitle {
   font-size: 0.9375rem;
-  color: #6b7280;
+  color: var(--text-secondary);
   margin: 0 0 1.75rem 0;
   font-weight: 500;
   line-height: 1.5;
@@ -1896,9 +1896,9 @@ main.main-lab {
   align-items: center;
   gap: 0.5rem;
   padding: 1.125rem 0.75rem;
-  background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%);
+  background: linear-gradient(135deg, var(--bg-surface) 0%, var(--bg-surface) 100%);
   border-radius: 10px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border);
   transition: all 0.3s ease;
 }
 
@@ -1916,7 +1916,7 @@ main.main-lab {
 .feature-item span {
   font-size: 0.8125rem;
   font-weight: 600;
-  color: #374151;
+  color: var(--text-secondary);
   text-align: center;
   line-height: 1.4;
 }
@@ -1966,13 +1966,13 @@ main.main-lab {
 .auth-footer {
   margin-top: 1.75rem;
   padding-top: 1.25rem;
-  border-top: 1px solid #e5e7eb;
+  border-top: 1px solid var(--border);
   animation: fadeIn 0.6s ease-out 0.6s both;
 }
 
 .auth-footer p {
   font-size: 0.8125rem;
-  color: #9ca3af;
+  color: var(--text-muted);
   margin: 0;
   line-height: 1.5;
 }
@@ -1984,7 +1984,7 @@ main.main-lab {
   background: #fef2f2;
   border: 1px solid #fecaca;
   border-radius: 8px;
-  color: #dc2626;
+  color: var(--danger, #dc2626);
   font-size: 0.875rem;
   display: flex;
   align-items: center;
@@ -2010,7 +2010,7 @@ main.main-lab {
 .auth-input-label {
   font-size: 0.8125rem;
   font-weight: 600;
-  color: #374151;
+  color: var(--text-secondary);
   letter-spacing: 0.02em;
 }
 
@@ -2023,7 +2023,7 @@ main.main-lab {
 .auth-input-icon {
   position: absolute;
   left: 13px;
-  color: #9ca3af;
+  color: var(--text-muted);
   font-size: 0.9rem;
   pointer-events: none;
   transition: color 0.2s;
@@ -2033,9 +2033,9 @@ main.main-lab {
   width: 100%;
   padding: 0.72rem 0.9rem 0.72rem 2.6rem;
   border-radius: 10px;
-  border: 1.5px solid #e5e7eb;
-  background: #f9fafb;
-  color: #111827;
+  border: 1.5px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-primary);
   font-size: 0.9375rem;
   font-family: inherit;
   outline: none;
@@ -2049,7 +2049,7 @@ main.main-lab {
 
 .auth-input:focus {
   border-color: var(--lens-primary, #0078d4);
-  background: #fff;
+  background: var(--bg-elevated);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--lens-primary, #0078d4) 12%, transparent);
 }
 
@@ -2074,7 +2074,7 @@ main.main-lab {
 .auth-welcome-heading {
   font-size: 1.375rem;
   font-weight: 800;
-  color: #0f172a;
+  color: var(--text-primary);
   margin: 0 0 0.25rem;
   letter-spacing: -0.4px;
   animation: fadeIn 0.5s ease-out 0.15s both;
@@ -2082,7 +2082,7 @@ main.main-lab {
 
 .auth-welcome-sub {
   font-size: 0.875rem;
-  color: #64748b;
+  color: var(--text-secondary);
   margin: 0 0 1.5rem;
   animation: fadeIn 0.5s ease-out 0.2s both;
 }
@@ -2093,9 +2093,9 @@ main.main-lab {
   gap: 6px;
   margin-top: 0.75rem;
   font-size: 0.8rem;
-  color: #6b7280;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0.5rem 0.75rem;
   animation: fadeIn 0.5s ease-out 0.6s both;
@@ -2144,7 +2144,7 @@ main.main-lab {
 }
 
 .welcome-section {
-  color: #0f172a;
+  color: var(--text-primary);
   padding: 1.25rem 2rem 1.25rem 2rem;
   text-align: center;
   position: relative;
@@ -2182,7 +2182,7 @@ main.main-lab {
   margin-bottom: 0.8rem;
   letter-spacing: -0.025em;
   line-height: 1.15;
-  color: #1e293b;
+  color: var(--text-primary);
 }
 
 .welcome-section p {
@@ -2190,7 +2190,7 @@ main.main-lab {
   opacity: 0.9;
   margin-bottom: 1.1rem;
   font-weight: 300;
-  color: #4b5563;
+  color: var(--text-secondary);
 }
 
 .homepage-search {
@@ -2208,12 +2208,12 @@ main.main-lab {
   padding: 0.6rem 1.2rem;
   font-size: 0.9rem;
   outline: none;
-  background: #ffffff;
+  background: var(--bg-elevated);
   box-shadow: 0 3px 9px rgba(15, 23, 42, 0.05);
 }
 
 .homepage-search-input::placeholder {
-  color: #9ca3af;
+  color: var(--text-muted);
 }
 
 .homepage-search-input:focus {
@@ -2230,7 +2230,7 @@ main.main-lab {
 .welcome-btn {
   background: white;
   border: 1px solid rgba(226, 232, 240, 0.9);
-  color: #0f172a;
+  color: var(--text-primary);
   padding: 1.1rem 1.2rem;
   border-radius: 10px;
   text-decoration: none;
@@ -2254,7 +2254,7 @@ main.main-lab {
 .welcome-btn:hover {
   background: color-mix(in srgb, var(--lens-primary) 8%, white);
   border-color: var(--lens-primary);
-  color: #111827;
+  color: var(--text-primary);
   transform: translateY(-2px);
   box-shadow: 0 10px 22px color-mix(in srgb, var(--lens-primary) 20%, transparent);
 }
@@ -2341,14 +2341,14 @@ main.main-lab {
 .stat-number {
   font-size: 2.1rem;
   font-weight: 600;
-  color: #1e293b;
+  color: var(--text-primary);
   margin-bottom: 0.5rem;
   letter-spacing: -0.025em;
 }
 
 .stat-label {
   font-size: 0.8rem;
-  color: #64748b;
+  color: var(--text-secondary);
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -2368,7 +2368,7 @@ main.main-lab {
 }
 
 .feature-card {
-  background: radial-gradient(circle at top left, #ffffff, #f8fafc);
+  background: radial-gradient(circle at top left, var(--bg-elevated), var(--bg-surface));
   border-radius: 18px;
   padding: 2.25rem 2rem;
   display: flex;
@@ -2382,7 +2382,7 @@ main.main-lab {
 .chart-picker-section-title {
   font-size: 0.95rem;
   font-weight: 600;
-  color: #0f172a;
+  color: var(--text-primary);
   margin-bottom: 0.75rem;
 }
 .chart-picker-row {
@@ -2393,7 +2393,7 @@ main.main-lab {
 .chart-picker-tile {
   border: 1px solid rgba(226, 232, 240, 0.9);
   border-radius: 10px;
-  background: #ffffff;
+  background: var(--bg-elevated);
   padding: 0.6rem 0.7rem;
   text-align: left;
   display: flex;
@@ -2407,7 +2407,7 @@ main.main-lab {
   border-color: var(--lens-primary);
   box-shadow: 0 10px 22px rgba(37, 99, 235, 0.18);
   transform: translateY(-2px);
-  background: #f9fafb;
+  background: var(--bg-surface);
 }
 .chart-picker-preview {
   height: 90px;
@@ -2443,11 +2443,11 @@ main.main-lab {
 .chart-picker-name {
   font-size: 0.9rem;
   font-weight: 600;
-  color: #111827;
+  color: var(--text-primary);
 }
 .chart-picker-description {
   font-size: 0.8rem;
-  color: #6b7280;
+  color: var(--text-secondary);
 }
 
 .chart-builder-layout {
@@ -2673,7 +2673,7 @@ main.main-lab {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   padding: 0.3rem 0 0.4rem;
-  border-bottom: 2px solid #0078D4;
+  border-bottom: 2px solid var(--accent);
   color: var(--text-primary);
 }
 
@@ -3661,7 +3661,7 @@ main.main-wide {
 }
 
 .feature-card:nth-child(3) .feature-icon {
-  background: linear-gradient(135deg, #ea580c, #dc2626);
+  background: linear-gradient(135deg, #ea580c, var(--danger, #dc2626));
   color: #ffffff;
   border-color: rgba(234, 88, 12, 0.5);
 }
@@ -3669,13 +3669,13 @@ main.main-wide {
 .feature-title {
   font-size: 1.25rem;
   font-weight: 600;
-  color: #1e293b;
+  color: var(--text-primary);
   margin-bottom: 0.75rem;
   letter-spacing: -0.025em;
 }
 
 .feature-description {
-  color: #64748b;
+  color: var(--text-secondary);
   line-height: 1.6;
   margin-bottom: 2rem;
   font-size: 0.95rem;
@@ -3700,11 +3700,11 @@ main.main-wide {
   flex-direction: column;
   align-items: flex-start;
   gap: 0.25rem;
-  background: #ffffff;
+  background: var(--bg-elevated);
   border: 1px solid rgba(226, 232, 240, 0.9);
   border-radius: 14px;
   padding: 0.6rem 0.9rem;
-  color: #0f172a;
+  color: var(--text-primary);
   font-weight: 500;
   cursor: pointer;
   box-shadow: 0 6px 16px rgba(15, 23, 42, 0.05);
@@ -3753,7 +3753,7 @@ main.main-wide {
   align-items: center;
   gap: 0.35rem;
   font-size: 0.85rem;
-  color: #475569;
+  color: var(--text-secondary);
   max-width: 100%;
   white-space: nowrap;
   overflow: hidden;
@@ -3762,7 +3762,7 @@ main.main-wide {
 }
 
 .empty-state-text {
-  color: #64748b;
+  color: var(--text-secondary);
   font-size: 0.95rem;
   margin-bottom: 1rem;
   font-style: italic;
@@ -3833,7 +3833,7 @@ main.main-wide {
 }
 
 .status-connected {
-  color: #22c55e;
+  color: var(--success, #22c55e);
   text-shadow: 0 0 0 1px rgba(16, 185, 129, 0.6);
 }
 
@@ -5225,7 +5225,7 @@ main.main-wide {
 }
 
 .status-pill-error .status-dot {
-  background: #ef4444;
+  background: var(--danger, #ef4444);
 }
 
 .status-pill-default {
@@ -5440,7 +5440,7 @@ main.main-wide {
 .dashboard-description-input {
   width: 100%;
   border-radius: 8px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border);
   padding: 0.5rem 0.6rem;
   font-size: 0.85rem;
   font-family: inherit;
@@ -5455,7 +5455,7 @@ main.main-wide {
 }
 
 .dashboard-description-input::placeholder {
-  color: #9ca3af;
+  color: var(--text-muted);
 }
 
 @media (max-width: 960px) {
