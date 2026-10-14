@@ -2931,6 +2931,24 @@ async fn submit_trino_statement_parts(
             }
             return trino_control_response();
         }
+        if let Some(name) = trino_describe_input(body) {
+            let query = TRINO_PREPARED_STATEMENTS
+                .read()
+                .await
+                .get(&(identity.principal.clone(), name.clone()))
+                .cloned();
+            let Some(query) = query else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!("prepared statement '{name}' was not found"),
+                        "errorName": "INVALID_PREPARED_STATEMENT"
+                    })),
+                )
+                    .into_response();
+            };
+            return trino_describe_input_response(&prepared_parameter_names(&query));
+        }
     }
     let prepared_queries = match trino_prepared_queries(&headers) {
         Ok(queries) => queries,
@@ -3176,6 +3194,66 @@ fn trino_deallocate_statement(body: &str) -> Option<String> {
         return None;
     }
     words.next().map(ToOwned::to_owned)
+}
+
+/// Parse Trino's SQL-level `DESCRIBE INPUT name` statement.  The adapter
+/// exposes the parameter positions and names it can discover without
+/// executing the statement; type inference remains the planner's concern and
+/// is reported as `unknown`, matching Trino's metadata contract for an
+/// unbound parameter.
+fn trino_describe_input(body: &str) -> Option<String> {
+    let trimmed = body.trim().trim_end_matches(';').trim();
+    let mut words = trimmed.split_whitespace();
+    if !words
+        .next()
+        .is_some_and(|word| word.eq_ignore_ascii_case("DESCRIBE"))
+        || !words
+            .next()
+            .is_some_and(|word| word.eq_ignore_ascii_case("INPUT"))
+    {
+        return None;
+    }
+    let name = words.next()?.to_owned();
+    if words.next().is_some() || !name.chars().all(|ch| ch == '_' || ch.is_ascii_alphanumeric()) {
+        return None;
+    }
+    Some(name)
+}
+
+fn trino_describe_input_response(parameters: &[String]) -> Response {
+    let columns = [
+        ("Position", "bigint"),
+        ("Name", "varchar"),
+        ("Type", "varchar"),
+        ("Type Signature", "varchar"),
+    ]
+    .into_iter()
+    .map(|(name, data_type)| {
+        serde_json::json!({
+            "name": name,
+            "type": data_type,
+            "typeSignature": {"rawType": data_type}
+        })
+    })
+    .collect::<Vec<_>>();
+    let rows = parameters
+        .iter()
+        .enumerate()
+        .map(|(position, parameter)| {
+            let name = parameter.strip_prefix(':').map(ToOwned::to_owned);
+            serde_json::json!([position as i64, name, "unknown", "unknown"])
+        })
+        .collect::<Vec<_>>();
+    let id = Uuid::new_v4().to_string();
+    Json(serde_json::json!({
+        "id": id,
+        "infoUri": format!("/v1/trino/query/{id}"),
+        "partialCancelUri": format!("/v1/trino/query/{id}"),
+        "stats": {"state": "FINISHED", "elapsedTimeMillis": 0},
+        "columns": columns,
+        "data": rows
+    }))
+    .into_response()
 }
 
 fn trino_is_show_session(body: &str) -> bool {
@@ -19978,6 +20056,39 @@ mod streamed_root_tests {
             .expect("mixed-case PREPARE should be recognized");
         assert_eq!(mixed.0, "recent");
         assert!(kaveon_sql::parser::parse_sql(&mixed.1).is_ok());
+    }
+
+    #[test]
+    fn trino_describe_input_parses_only_named_prepared_statements() {
+        assert_eq!(
+            trino_describe_input("DESCRIBE INPUT recent;"),
+            Some("recent".to_owned())
+        );
+        assert_eq!(
+            trino_describe_input("describe input recent"),
+            Some("recent".to_owned())
+        );
+        assert_eq!(trino_describe_input("DESCRIBE OUTPUT recent"), None);
+        assert_eq!(trino_describe_input("DESCRIBE INPUT recent extra"), None);
+        assert_eq!(trino_describe_input("DESCRIBE INPUT recent-name"), None);
+    }
+
+    #[tokio::test]
+    async fn trino_describe_input_returns_positions_and_names() {
+        let response = trino_describe_input_response(&[
+            "$1".to_owned(),
+            ":region".to_owned(),
+            "?".to_owned(),
+        ]);
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["stats"]["state"], "FINISHED");
+        assert_eq!(value["columns"].as_array().unwrap().len(), 4);
+        assert_eq!(value["data"][0], serde_json::json!([0, null, "unknown", "unknown"]));
+        assert_eq!(value["data"][1], serde_json::json!([1, "region", "unknown", "unknown"]));
+        assert_eq!(value["data"][2], serde_json::json!([2, null, "unknown", "unknown"]));
     }
 
     #[tokio::test]
