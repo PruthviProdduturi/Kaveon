@@ -382,7 +382,9 @@ fn distinct_rows_by_code(batch: &RecordBatch) -> Option<Vec<u32>> {
     Some(rows)
 }
 
-fn extract_value(array: &dyn Array, row: usize) -> Result<AggregateValue> {
+/// Convert a scalar cell to the canonical equality key shared by distinct
+/// execution paths, including window-frame distinct aggregates.
+pub(crate) fn extract_value(array: &dyn Array, row: usize) -> Result<AggregateValue> {
     if array.is_null(row) {
         return Ok(AggregateValue::Null);
     }
