@@ -17,7 +17,7 @@ pinned Delta version so workers do not reinterpret mutable catalog state.
 | Equi-join | Cluster-verified: hash repartition of both sides or broadcast of the small side chosen from exact statistics; forced worker loss retried the join on another worker with the exact result (2026-09-10) |
 | Semi/anti join | Distributed: the subquery side broadcasts into the probe stage |
 | Outer joins | Distributed; local semantics tested, distributed equivalence covered by the differential sweep on the shapes it has |
-| UNION / INTERSECT / EXCEPT | Distributed; matching projected set-operation keys use hash exchange, with per-partition duplicate and multiplicity handling; complex or identity-ambiguous inputs retain a single merge |
+| UNION / INTERSECT / EXCEPT | `UNION ALL` round-robins each input across workers; matching projected `INTERSECT`/`EXCEPT` keys use hash exchange with per-partition duplicate and multiplicity handling; distinct or identity-ambiguous inputs retain a single merge |
 | Window functions | Distributed |
 
 ## Exchange

@@ -1555,15 +1555,24 @@ impl StageGraphBuilder {
                     }
                 }
             }
-            LogicalPlan::Union { inputs, .. } => {
+            LogicalPlan::Union { inputs, all } => {
                 let mut stages = Vec::new();
                 for input in inputs {
                     stages.push(self.build(input)?);
                 }
                 let physical = physical_plan_tree(plan);
-                let target = self.add_exchange_stage("Union", physical.attributes, 1, stages.len());
+                let partitioning = if *all {
+                    Partitioning::RoundRobin {
+                        partition_count: self.worker_count,
+                    }
+                } else {
+                    Partitioning::Single
+                };
+                let task_count = if *all { self.worker_count } else { 1 };
+                let target =
+                    self.add_exchange_stage("Union", physical.attributes, task_count, stages.len());
                 for stage in stages {
-                    self.add_exchange(stage, target, Partitioning::Single);
+                    self.add_exchange(stage, target, partitioning.clone());
                 }
                 Ok(target)
             }
@@ -3508,6 +3517,27 @@ mod tests {
                     if columns == &["id".to_owned()]
             )));
         }
+    }
+
+    #[test]
+    fn union_all_round_robins_each_input_across_workers() {
+        let graph = graph("SELECT id FROM items UNION ALL SELECT id FROM customers");
+        let target = graph
+            .stages
+            .iter()
+            .find(|stage| stage.plan.operator == "Union")
+            .expect("union stage");
+        assert_eq!(target.task_count, 4);
+        let exchanges = graph
+            .exchanges
+            .iter()
+            .filter(|exchange| exchange.target_stage == target.id)
+            .collect::<Vec<_>>();
+        assert_eq!(exchanges.len(), 2);
+        assert!(exchanges.iter().all(|exchange| matches!(
+            exchange.partitioning,
+            Partitioning::RoundRobin { partition_count: 4 }
+        )));
     }
 
     #[test]

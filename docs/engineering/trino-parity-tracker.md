@@ -95,7 +95,7 @@ foundations, but several operators are still centralized or narrow:
   pressure qualification and sustained federated-exchange evidence remain
   open.
 - Windows gather to one task. Final sort/TopN still have centralized merge
-  stages. Set operations with matching projected keys now use hash exchange;
+  stages. `UNION ALL` now round-robins its inputs; set operations with matching projected keys use hash exchange;
   identity-ambiguous inputs retain a centralized merge. Compatible windows with a shared non-empty
   `PARTITION BY` are now hash-partitioned across workers; unpartitioned and
   mixed-key windows remain centralized for correctness. These are not yet
