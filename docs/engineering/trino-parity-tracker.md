@@ -39,7 +39,7 @@ The local parity baseline was rerun on October 13 with focused qualification
 changes through commit `71e5b956`. The checkout also contained separate, uncommitted
 engine work from the parallel optimization lane, so these numbers are a local
 regression snapshot and are not a release-image claim:
-`cargo test -p kaveon-server --bin kaveon-server` passed **356/356** tests,
+`cargo test -p kaveon-server --bin kaveon-server` passed **357/357** tests,
 `cargo test -p kaveon-sql --lib` passed **121/121** tests, and
 `cargo test -p kaveon-optim --lib` passed **47/47** tests,
 `cargo test -p kaveon-exec --lib` passed **289/289** non-ignored tests with four
@@ -165,6 +165,11 @@ foundations, but several operators are still centralized or narrow:
   distinct sketches with the coordinator-built cube. This qualifies the
   statistics answer path at the current deployed worker width; cloud fault and
   larger-capacity evidence remain separate gates.
+- Cube grouping children now divide the parent memory budget across their
+  admission width before dispatch, preventing a cube build from exhausting
+  the pool it is holding and waiting on itself. The boundary is covered by
+  `cube_child_memory_budget_is_shared_across_concurrent_groupings`; one-scan
+  cube construction remains open.
 - The analytical coordinator result cache is now explicitly qualified: it
   normalizes statement text, keys entries by catalog/schema snapshot, pinned
   Delta versions, and time zone, applies byte/TTL/LRU bounds, excludes paged
@@ -856,7 +861,7 @@ prepared-statement coverage, worker-loss, and exact-result differential runs
 are still required.
 
 The current local validation baseline is green on the same checkout: the full
-`kaveon-server` suite passed **356 tests**, and the full CLI suite passed **211
+`kaveon-server` suite passed **357 tests**, and the full CLI suite passed **211
 tests** (one ignored). The set-operation coverage includes `UNION ALL`, distinct and
 multiset `INTERSECT`/`EXCEPT`, dictionary-versus-plain values, duplicate
 counts, null handling, planner lowering, and exchange-input consumption. This
