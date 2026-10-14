@@ -17,7 +17,7 @@ use arrow::array::{
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute;
 use arrow::datatypes::{
-    ArrowPrimitiveType, DataType, Date32Type, Date64Type, Float32Type, Float64Type, Int32Type,
+    ArrowPrimitiveType, DataType, Date32Type, Date64Type, Field, Float32Type, Float64Type, Int32Type,
     Int64Type,
     Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
     TimestampMicrosecondType,
@@ -5121,7 +5121,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "ARRAY_DISTINCT" => {
             check_arity(name, args, 1)?;
-            if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
+            let normalized_large_list = if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
                 if matches!(
                     list.value_type(),
                     DataType::List(_)
@@ -5131,14 +5131,23 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 ) {
                     return array_distinct_nested(list);
                 }
-                return Err(KaveonError::Execution(format!(
-                    "ARRAY_DISTINCT does not support list element type {}",
-                    list.value_type()
-                )));
-            }
-            let list = args[0]
-                .as_any()
-                .downcast_ref::<ListArray>()
+                let field = Field::new("item", list.value_type().clone(), true);
+                Some(compute::cast(
+                    &args[0],
+                    &DataType::List(Arc::new(field)),
+                )?)
+            } else {
+                None
+            };
+            let list = normalized_large_list
+                .as_ref()
+                .map(|array| {
+                    array
+                        .as_any()
+                        .downcast_ref::<ListArray>()
+                        .expect("large-list normalization produces ListArray")
+                })
+                .or_else(|| args[0].as_any().downcast_ref::<ListArray>())
                 .ok_or_else(|| KaveonError::Execution("ARRAY_DISTINCT requires an ARRAY/List value".into()))?;
             if matches!(
                 list.value_type(),
@@ -11159,6 +11168,20 @@ mod tests {
         .unwrap();
         let result = result.as_any().downcast_ref::<LargeListArray>().unwrap();
         assert_eq!(result.value(0).len(), 2);
+
+        let mut primitive_distinct_builder = LargeListBuilder::new(Int64Builder::new());
+        for value in [3_i64, 3, 1, 3, 1] {
+            primitive_distinct_builder.values().append_value(value);
+        }
+        primitive_distinct_builder.append(true);
+        let result = eval_scalar_function(
+            "ARRAY_DISTINCT",
+            &[Arc::new(primitive_distinct_builder.finish()) as ArrayRef],
+            1,
+        )
+        .unwrap();
+        let result = result.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(result.value(0).as_primitive::<Int64Type>().values(), &[3, 1]);
 
         let mut reverse_builder = LargeListBuilder::new(ListBuilder::new(Int64Builder::new()));
         for value in [1_i64, 2, 3] {
