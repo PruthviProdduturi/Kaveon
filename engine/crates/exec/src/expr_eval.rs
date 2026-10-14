@@ -7374,6 +7374,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "ARRAY_REMOVE" => {
             check_arity(name, args, 2)?;
+            if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
+                return array_remove_generic(list, &args[1]);
+            }
             let list = args[0]
                 .as_any()
                 .downcast_ref::<ListArray>()
@@ -8191,6 +8194,74 @@ fn json_extract_value(document: &str, path: &str) -> Option<serde_json::Value> {
         };
     }
     Some(value)
+}
+
+fn array_remove_generic<L: OffsetSizeTrait>(
+    list: &GenericListArray<L>,
+    target: &ArrayRef,
+) -> Result<ArrayRef> {
+    if target.len() != list.len() {
+        return Err(KaveonError::Execution(
+            "ARRAY_REMOVE requires one value per row".into(),
+        ));
+    }
+    let target = if target.data_type() == &DataType::Null {
+        arrow::array::new_null_array(&list.value_type(), list.len())
+    } else {
+        compute::cast(target, &list.value_type())?
+    };
+    let mut selected = Vec::<ArrayRef>::new();
+    let mut offsets = vec![L::zero()];
+    let mut valid = Vec::with_capacity(list.len());
+    for row in 0..list.len() {
+        if list.is_null(row) {
+            valid.push(false);
+            offsets.push(L::from_usize(selected.len()).ok_or_else(|| {
+                KaveonError::Execution("ARRAY_REMOVE result offset overflow".into())
+            })?);
+            continue;
+        }
+        valid.push(true);
+        let inner = list.value(row);
+        let target_is_null = target.is_null(row);
+        let target_value = target.slice(row, 1);
+        for index in 0..inner.len() {
+            let keep = if inner.is_null(index) {
+                !target_is_null
+            } else if target_is_null {
+                true
+            } else {
+                let equal = comparison(&inner.slice(index, 1), &target_value, CompareKind::Eq)?;
+                equal.is_null(0) || !equal.value(0)
+            };
+            if keep {
+                selected.push(inner.slice(index, 1));
+            }
+        }
+        offsets.push(L::from_usize(selected.len()).ok_or_else(|| {
+            KaveonError::Execution("ARRAY_REMOVE result offset overflow".into())
+        })?);
+    }
+    let values = if selected.is_empty() {
+        arrow::array::new_empty_array(&list.value_type())
+    } else {
+        let chunks = selected
+            .iter()
+            .map(|chunk| chunk.as_ref() as &dyn Array)
+            .collect::<Vec<_>>();
+        compute::concat(&chunks)?
+    };
+    let field = Arc::new(arrow::datatypes::Field::new(
+        "item",
+        values.data_type().clone(),
+        true,
+    ));
+    Ok(Arc::new(GenericListArray::<L>::try_new(
+        field,
+        OffsetBuffer::new(ScalarBuffer::from(offsets)),
+        values,
+        Some(arrow::buffer::NullBuffer::from(valid)),
+    )?))
 }
 
 fn array_join_list<L: OffsetSizeTrait>(
@@ -11545,6 +11616,25 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.as_string::<i32>().value(0), "alpha,?,beta");
+
+        let mut large_text_remove_builder = LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
+        large_text_remove_builder.values().append_value("alpha");
+        large_text_remove_builder.values().append_null();
+        large_text_remove_builder.values().append_value("beta");
+        large_text_remove_builder.append(true);
+        let result = eval_scalar_function(
+            "ARRAY_REMOVE",
+            &[
+                Arc::new(large_text_remove_builder.finish()) as ArrayRef,
+                Arc::new(arrow::array::LargeStringArray::from(vec![Some("alpha")])) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        let result = result.as_any().downcast_ref::<LargeListArray>().unwrap();
+        let inner = result.value(0);
+        let values = inner.as_string::<i64>();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![None, Some("beta")]);
 
         let mut large_text_sort_builder = LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
         large_text_sort_builder.values().append_value("z");
