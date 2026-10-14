@@ -107,6 +107,9 @@ preserving list offsets and NULL arrays while rejecting negative counts.
 `ARRAY_FIRST` and `ARRAY_LAST` now return the typed first or last element,
 with NULL for empty or NULL arrays, for both list offset widths.
 
+`ZIP` now builds typed row arrays from two or more lists and pads shorter input
+arrays with NULL fields, preserving the outer list's offset width.
+
 The initial repository audit confirms that the Engine has real distributed
 foundations, but several operators are still centralized or narrow:
 

@@ -2641,6 +2641,76 @@ fn array_first_last<L: OffsetSizeTrait>(
     Ok(compute::concat(&chunks)?)
 }
 
+fn array_zip<L: OffsetSizeTrait>(arrays: &[&GenericListArray<L>]) -> Result<ArrayRef> {
+    if arrays.len() < 2 {
+        return Err(KaveonError::Execution(
+            "ZIP requires at least 2 arrays".into(),
+        ));
+    }
+    let rows = arrays[0].len();
+    if arrays.iter().any(|array| array.len() != rows) {
+        return Err(KaveonError::Execution(
+            "ZIP requires arrays with matching row counts".into(),
+        ));
+    }
+    let mut field_chunks = vec![Vec::<ArrayRef>::new(); arrays.len()];
+    let mut offsets = vec![L::zero()];
+    let mut valid = Vec::with_capacity(rows);
+    for row in 0..rows {
+        if arrays.iter().any(|array| array.is_null(row)) {
+            valid.push(false);
+            offsets.push(L::from_usize(
+                field_chunks.first().map(|chunks| chunks.len()).unwrap_or_default(),
+            )
+            .ok_or_else(|| KaveonError::Execution("ZIP result offset overflow".into()))?);
+            continue;
+        }
+        valid.push(true);
+        let inners = arrays.iter().map(|array| array.value(row)).collect::<Vec<_>>();
+        let width = inners.iter().map(|inner| inner.len()).max().unwrap_or(0);
+        for index in 0..width {
+            for (field, inner) in inners.iter().enumerate() {
+                field_chunks[field].push(if index < inner.len() {
+                    inner.slice(index, 1)
+                } else {
+                    arrow::array::new_null_array(&arrays[field].value_type(), 1)
+                });
+            }
+        }
+        offsets.push(
+            L::from_usize(field_chunks.first().map(|chunks| chunks.len()).unwrap_or_default())
+                .ok_or_else(|| KaveonError::Execution("ZIP result offset overflow".into()))?,
+        );
+    }
+    let mut fields = Vec::with_capacity(arrays.len());
+    let mut columns = Vec::with_capacity(arrays.len());
+    for (index, array) in arrays.iter().enumerate() {
+        let values = if field_chunks[index].is_empty() {
+            arrow::array::new_empty_array(&array.value_type())
+        } else {
+            let chunks = field_chunks[index]
+                .iter()
+                .map(|value| value.as_ref() as &dyn Array)
+                .collect::<Vec<_>>();
+            compute::concat(&chunks)?
+        };
+        fields.push(arrow::datatypes::Field::new(
+            format!("field{index}"),
+            values.data_type().clone(),
+            true,
+        ));
+        columns.push(values);
+    }
+    let values = Arc::new(StructArray::new(fields.into(), columns, None)) as ArrayRef;
+    let field = Arc::new(arrow::datatypes::Field::new("item", values.data_type().clone(), true));
+    Ok(Arc::new(GenericListArray::<L>::try_new(
+        field,
+        OffsetBuffer::new(ScalarBuffer::from(offsets)),
+        values,
+        Some(arrow::buffer::NullBuffer::from(valid)),
+    )?))
+}
+
 fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
     let upper = name.to_uppercase();
     if upper.starts_with("ARRAY_ANY_") || upper.starts_with("ARRAY_ALL_") {
@@ -2942,6 +3012,30 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 "ARRAY elements of type {data_type} are not supported"
             ))),
         };
+    }
+    if upper == "ZIP" {
+        if args.len() < 2 {
+            return Err(KaveonError::Execution(
+                "ZIP requires at least 2 arrays".into(),
+            ));
+        }
+        if let Some(lists) = args
+            .iter()
+            .map(|arg| arg.as_any().downcast_ref::<ListArray>())
+            .collect::<Option<Vec<_>>>()
+        {
+            return array_zip(&lists);
+        }
+        if let Some(lists) = args
+            .iter()
+            .map(|arg| arg.as_any().downcast_ref::<LargeListArray>())
+            .collect::<Option<Vec<_>>>()
+        {
+            return array_zip(&lists);
+        }
+        return Err(KaveonError::Execution(
+            "ZIP requires matching ARRAY/List values".into(),
+        ));
     }
     if matches!(upper.as_str(), "ARRAY_FIRST" | "ARRAY_LAST") {
         check_arity(name, args, 1)?;
@@ -9043,6 +9137,39 @@ mod tests {
             last.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
             vec![Some(3), None, None]
         );
+    }
+
+    #[test]
+    fn zip_builds_typed_rows_and_pads_shorter_arrays_with_nulls() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        let array = |values: Vec<Expr>| Expr::Function {
+            name: "ARRAY".into(),
+            args: values,
+        };
+        let value = evaluate(
+            &Expr::Function {
+                name: "ZIP".into(),
+                args: vec![
+                    array(vec![
+                        Expr::Literal(ScalarValue::Int64(1)),
+                        Expr::Literal(ScalarValue::Int64(2)),
+                    ]),
+                    array(vec![Expr::Literal(ScalarValue::Utf8("a".into()))]),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        let rows = value.as_any().downcast_ref::<ListArray>().unwrap().value(0);
+        let rows = rows.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.column(0).as_primitive::<Int64Type>().iter().collect::<Vec<_>>(), vec![Some(1), Some(2)]);
+        let text = rows.column(1).as_string::<i32>();
+        assert_eq!(text.iter().collect::<Vec<_>>(), vec![Some("a"), None]);
     }
 
     #[test]
