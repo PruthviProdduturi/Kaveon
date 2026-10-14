@@ -153,8 +153,11 @@ The Trino adapter also accepts scalar and `ARRAY[...]` `EXECUTE name USING`
 values carried by
 `X-Trino-Prepared-Statement`, including validated `DATE 'YYYY-MM-DD'` literals
 that remain text until the target column's Date32 coercion. Compound values
-beyond arrays, timestamps, intervals, and the complete prepare/describe/bind
-wire lifecycle remain explicitly unsupported.
+The raw Trino statement route also accepts owner-scoped SQL `PREPARE name FROM
+...`, `EXECUTE name`, and `DEALLOCATE PREPARE name`; prepared SQL still passes
+through the normal parser and typed binder. Compound values beyond arrays,
+timestamps, intervals, and the complete prepare/describe/bind wire lifecycle
+remain explicitly unsupported.
 The current product transaction contract
 does not provide PostgreSQL MVCC isolation, row-level indexes, foreign-key
 enforcement, or crash-recovery parity.

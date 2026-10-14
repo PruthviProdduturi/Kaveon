@@ -66,6 +66,13 @@ struct PreparedStatement {
 static PREPARED_STATEMENTS: std::sync::LazyLock<RwLock<HashMap<String, PreparedStatement>>> =
     std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
 
+/// SQL PREPARE statements submitted through the Trino-compatible route.
+/// Names are scoped by the authenticated principal, matching Trino's session
+/// ownership model and preventing one user from executing another user's SQL.
+static TRINO_PREPARED_STATEMENTS: std::sync::LazyLock<
+    RwLock<HashMap<(String, String), String>>,
+> = std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
+
 /// Number of scan partitions scheduled per compatible worker. Splitting a
 /// large Parquet file by row groups keeps decoder and partial-aggregate work
 /// concurrent even when a deployment has only a few workers. The default is
@@ -2855,6 +2862,45 @@ async fn submit_trino_statement_parts(
         }
     };
     let body_text = String::from_utf8(body.to_vec()).ok();
+    if let Some(body) = body_text.as_deref() {
+        match trino_prepare_statement(body) {
+            Ok(Some((name, query))) => {
+                if let Err(error) = kaveon_sql::parser::parse_sql(&query) {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "error": error.to_string(),
+                            "errorName": "SYNTAX_ERROR"
+                        })),
+                    )
+                        .into_response();
+                }
+                TRINO_PREPARED_STATEMENTS
+                    .write()
+                    .await
+                    .insert((identity.principal.clone(), name), query);
+                return trino_control_response();
+            }
+            Ok(None) => {}
+            Err(error) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": error,
+                        "errorName": "SYNTAX_ERROR"
+                    })),
+                )
+                    .into_response();
+            }
+        }
+        if let Some(name) = trino_deallocate_statement(body) {
+            TRINO_PREPARED_STATEMENTS
+                .write()
+                .await
+                .remove(&(identity.principal.clone(), name));
+            return trino_control_response();
+        }
+    }
     let prepared_queries = match trino_prepared_queries(&headers) {
         Ok(queries) => queries,
         Err(error) => {
@@ -2869,15 +2915,26 @@ async fn submit_trino_statement_parts(
         }
     };
     let execute_name = body_text.as_deref().and_then(trino_execute_name);
-    let prepared_query = match (prepared_queries, execute_name) {
-        (None, _) => Ok(None),
-        (Some(queries), Some(name)) => queries
-            .get(&name)
+    let stored_prepared = if let Some(name) = execute_name.as_ref() {
+        TRINO_PREPARED_STATEMENTS
+            .read()
+            .await
+            .get(&(identity.principal.clone(), name.clone()))
+            .cloned()
+    } else {
+        None
+    };
+    let prepared_query = match (prepared_queries, execute_name.as_deref(), stored_prepared) {
+        (Some(queries), Some(name), _) => queries
+            .get(name)
             .cloned()
             .map(Some)
             .ok_or_else(|| format!("prepared statement '{name}' was not supplied in X-Trino-Prepared-Statement")),
-        (Some(mut queries), None) if queries.len() == 1 => Ok(queries.drain().next().map(|(_, query)| query)),
-        (Some(_), None) => Err("multiple prepared statements require an EXECUTE name".to_owned()),
+        (Some(mut queries), None, _) if queries.len() == 1 => Ok(queries.drain().next().map(|(_, query)| query)),
+        (Some(_), None, _) => Err("multiple prepared statements require an EXECUTE name".to_owned()),
+        (None, Some(_name), Some(query)) => Ok(Some(query)),
+        (None, Some(name), None) => Err(format!("prepared statement '{name}' was not found")),
+        (None, None, _) => Ok(None),
     };
     let prepared_query = match prepared_query {
         Ok(query) => query,
@@ -3018,6 +3075,88 @@ fn trino_execute_name(body: &str) -> Option<String> {
         return None;
     }
     Some(name.to_owned())
+}
+
+/// Parse Trino's SQL-level `PREPARE name FROM <query>` statement. The query
+/// is retained as SQL and still passes through the normal parser and binder
+/// when it is executed.
+fn trino_prepare_statement(body: &str) -> Result<Option<(String, String)>, String> {
+    let trimmed = body.trim().trim_end_matches(';').trim();
+    let Some(prefix) = trimmed.get(..7) else {
+        return Ok(None);
+    };
+    if !prefix.eq_ignore_ascii_case("PREPARE")
+        || !trimmed
+            .get(7..)
+            .and_then(|rest| rest.chars().next())
+            .is_some_and(char::is_whitespace)
+    {
+        return Ok(None);
+    }
+    let rest = &trimmed[7..];
+    let mut parts = rest.trim().splitn(2, char::is_whitespace);
+    let name = parts.next().unwrap_or_default().trim();
+    let remainder = parts.next().unwrap_or_default().trim_start();
+    if name.is_empty() || remainder.is_empty() {
+        return Err("PREPARE requires a statement name and FROM query".to_owned());
+    }
+    let Some(from) = remainder
+        .char_indices()
+        .find_map(|(index, _)| {
+            remainder[index..]
+                .split_whitespace()
+                .next()
+                .filter(|word| word.eq_ignore_ascii_case("FROM"))
+                .map(|_| index)
+        })
+    else {
+        return Err("PREPARE requires FROM <query>".to_owned());
+    };
+    let keyword = remainder[from..]
+        .split_whitespace()
+        .next()
+        .unwrap_or_default();
+    let query = remainder[from + keyword.len()..].trim();
+    if query.is_empty() {
+        return Err("PREPARE requires a non-empty FROM query".to_owned());
+    }
+    if !name
+        .chars()
+        .all(|character| character == '_' || character.is_ascii_alphanumeric())
+    {
+        return Err("PREPARE statement names must be simple identifiers".to_owned());
+    }
+    Ok(Some((name.to_owned(), query.to_owned())))
+}
+
+fn trino_deallocate_statement(body: &str) -> Option<String> {
+    let trimmed = body.trim().trim_end_matches(';').trim();
+    let mut words = trimmed.split_whitespace();
+    if !words
+        .next()
+        .is_some_and(|word| word.eq_ignore_ascii_case("deallocate"))
+    {
+        return None;
+    }
+    if !words
+        .next()
+        .is_some_and(|word| word.eq_ignore_ascii_case("prepare"))
+    {
+        return None;
+    }
+    words.next().map(ToOwned::to_owned)
+}
+
+fn trino_control_response() -> Response {
+    let id = Uuid::new_v4().to_string();
+    Json(serde_json::json!({
+        "id": id,
+        "infoUri": format!("/v1/trino/query/{id}"),
+        "partialCancelUri": format!("/v1/trino/query/{id}"),
+        "stats": {"state": "FINISHED", "elapsedTimeMillis": 0},
+        "data": []
+    }))
+    .into_response()
 }
 
 fn trino_percent_decode(encoded: &str) -> Result<String, String> {
@@ -19184,6 +19323,23 @@ mod streamed_root_tests {
         assert_eq!(queries.get("second").map(String::as_str), Some("SELECT 2"));
         assert_eq!(trino_execute_name("EXECUTE second USING 2"), Some("second".into()));
         assert_eq!(trino_execute_name("SELECT 1"), None);
+    }
+
+    #[test]
+    fn trino_sql_prepare_and_deallocate_parse_without_interpolation() {
+        assert_eq!(
+            trino_prepare_statement("PREPARE recent FROM SELECT * FROM events WHERE id = ?;")
+                .unwrap(),
+            Some((
+                "recent".to_owned(),
+                "SELECT * FROM events WHERE id = ?".to_owned()
+            ))
+        );
+        assert_eq!(
+            trino_deallocate_statement("DEALLOCATE PREPARE recent;"),
+            Some("recent".to_owned())
+        );
+        assert!(trino_prepare_statement("PREPARE recent SELECT 1").is_err());
     }
 
     #[test]
