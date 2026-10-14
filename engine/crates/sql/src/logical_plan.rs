@@ -2739,14 +2739,17 @@ fn interval_arithmetic(
                 args: vec![date, Expr::Literal(ScalarValue::Int64(seconds))],
             }))
         }
-        Some(ast::DateTimeField::Month) | Some(ast::DateTimeField::Year) => {
-            let months = if matches!(interval.leading_field, Some(ast::DateTimeField::Year)) {
-                count
-                    .checked_mul(12)
-                    .ok_or_else(|| sql_err("INTERVAL year offset overflows INT64"))?
-            } else {
-                count
+        Some(ast::DateTimeField::Month)
+        | Some(ast::DateTimeField::Quarter)
+        | Some(ast::DateTimeField::Year) => {
+            let multiplier = match interval.leading_field {
+                Some(ast::DateTimeField::Year) => 12,
+                Some(ast::DateTimeField::Quarter) => 3,
+                _ => 1,
             };
+            let months = count
+                .checked_mul(multiplier)
+                .ok_or_else(|| sql_err("INTERVAL calendar offset overflows INT64"))?;
             if let Expr::Literal(ScalarValue::Int64(days)) = date {
                 Ok(Some(Expr::Literal(ScalarValue::Int64(add_months(
                     days, months,
@@ -4026,6 +4029,10 @@ mod tests {
             "SELECT x FROM t WHERE d < DATE '1993-01-01' - INTERVAL '13' MONTH",
             "1991-12-01",
         );
+        shifted(
+            "SELECT x FROM t WHERE d < DATE '1995-01-31' + INTERVAL '1' QUARTER",
+            "1995-04-30",
+        );
         // A calendar shift of a typed column remains a runtime operation.
         assert_eq!(
             filter("SELECT x FROM t WHERE d + INTERVAL '1' MONTH < e"),
@@ -4068,7 +4075,7 @@ mod tests {
         )
         .unwrap_err()
         .to_string();
-        assert!(error.contains("year offset overflows"), "{error}");
+        assert!(error.contains("calendar offset overflows"), "{error}");
         assert!(sql_to_logical_plan("SELECT INTERVAL '1' DAY FROM t").is_err());
         assert!(
             sql_to_logical_plan("SELECT x FROM t WHERE d < DATE '1993-07-01' + INTERVAL '1' HOUR")
