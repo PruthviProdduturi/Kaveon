@@ -11,6 +11,7 @@ import dynamic from 'next/dynamic';
 import type { DashboardComponentProps } from '../../../types/dashboard';
 import { useDashboard } from '../DashboardContext';
 import { useBuilderContext, moveDragProps, useContainerDropTarget } from '../BuilderContext';
+import { ConfirmModal } from '../../ConfirmModal';
 
 const DashboardItem = dynamic(() => import('../DashboardItem'), { ssr: false });
 
@@ -59,6 +60,9 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
     const ghost = document.createElement('div');
     ghost.textContent = 'Moving item…';
     ghost.style.cssText =
+      // The drag ghost is a deliberate dark chip in both themes: it is a
+      // cursor-following label, not a surface of the page, and it reads
+      // against whatever it passes over.
       'position:fixed;top:-200px;left:0;background:#1e293b;color:#fff;' +
       'padding:5px 12px;border-radius:6px;font-size:12px;font-weight:600;pointer-events:none;';
     document.body.appendChild(ghost);
@@ -103,6 +107,11 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
 
   // ── Delete self ──────────────────────────────────────────────────────────────
 
+  // Asked for, like every other tile type. A column holds children, so it is
+  // the tile where an accidental delete costs the most, and it was the only one
+  // that removed itself straight from onClick with nothing in between.
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
   const handleDelete = useCallback(() => {
     if (item.parentId) {
       removeItemFromContainer(item.parentId, item.i);
@@ -122,6 +131,8 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
     const configs: Record<string, any> = {
       header:  { headerConfig:  { content: 'Section Header', size: 'h2', alignment: 'left' } },
       text:    { textConfig:    { content: 'Click to edit text', alignment: 'left', fontSize: 14 } },
+      // A divider's colour is the block's own stored setting, which a reader
+      // can change — data rather than chrome, so it keeps a literal value.
       divider: { dividerConfig: { orientation: 'horizontal', thickness: 1, color: '#e2e8f0', style: 'solid' } },
     };
     addItemToContainer(item.i, type, configs[type] || {});
@@ -162,6 +173,7 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
   // ── Render ───────────────────────────────────────────────────────────────────
 
   return (
+    <>
     <div
       data-container-id={item.i}
       data-container-type="column"
@@ -207,12 +219,12 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
               onClick={() => setMenuOpen((v) => !v)}
               title="Add block"
               style={{
-                background: '#fff',
-                border: '1px solid #e2e8f0',
+                background: 'var(--bg-elevated)',
+                border: '1px solid var(--border)',
                 borderRadius: 4,
                 cursor: 'pointer',
                 padding: '2px 7px',
-                color: '#475569',
+                color: 'var(--text-secondary)',
                 fontSize: 11,
                 fontWeight: 500,
                 display: 'flex',
@@ -221,14 +233,14 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
                 boxShadow: '0 1px 4px rgba(0,0,0,0.08)',
               }}
               onMouseOver={(e) => {
-                e.currentTarget.style.background = '#eff6ff';
-                e.currentTarget.style.color = '#2563eb';
-                e.currentTarget.style.borderColor = '#bfdbfe';
+                e.currentTarget.style.background = 'rgba(var(--accent-rgb), 0.10)';
+                e.currentTarget.style.color = 'var(--accent)';
+                e.currentTarget.style.borderColor = 'rgba(var(--accent-rgb), 0.45)';
               }}
               onMouseOut={(e) => {
-                e.currentTarget.style.background = '#fff';
-                e.currentTarget.style.color = '#475569';
-                e.currentTarget.style.borderColor = '#e2e8f0';
+                e.currentTarget.style.background = 'var(--bg-elevated)';
+                e.currentTarget.style.color = 'var(--text-secondary)';
+                e.currentTarget.style.borderColor = 'var(--border)';
               }}
             >
               <i className="fas fa-plus" style={{ fontSize: 10 }} />
@@ -243,8 +255,8 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
                   top: '100%',
                   right: 0,
                   marginTop: 4,
-                  background: '#fff',
-                  border: '1px solid #e2e8f0',
+                  background: 'var(--bg-elevated)',
+                  border: '1px solid var(--border)',
                   borderRadius: 6,
                   boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
                   overflow: 'hidden',
@@ -267,14 +279,14 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
                         border: 'none',
                         cursor: 'pointer',
                         fontSize: 12,
-                        color: '#374151',
+                        color: 'var(--text-secondary)',
                         textAlign: 'left',
                         whiteSpace: 'nowrap',
                       }}
-                      onMouseOver={(e) => { e.currentTarget.style.background = '#f1f5f9'; }}
+                      onMouseOver={(e) => { e.currentTarget.style.background = 'var(--bg-hover)'; }}
                       onMouseOut={(e) => { e.currentTarget.style.background = 'transparent'; }}
                     >
-                      <i className={opt.icon} style={{ fontSize: 11, width: 14, color: '#64748b' }} />
+                      <i className={opt.icon} style={{ fontSize: 11, width: 14, color: 'var(--text-secondary)' }} />
                       {opt.label}
                     </button>
                   )
@@ -284,27 +296,27 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
           </div>
 
           <button
-            onClick={handleDelete}
+            onClick={() => setConfirmOpen(true)}
             title="Delete Column"
             style={{
-              background: '#fff',
-              border: '1px solid #e2e8f0',
+              background: 'var(--bg-elevated)',
+              border: '1px solid var(--border)',
               borderRadius: 4,
               cursor: 'pointer',
               padding: '2px 7px',
-              color: '#ef4444',
+              color: 'var(--danger, #ef4444)',
               fontSize: 11,
               display: 'flex',
               alignItems: 'center',
               boxShadow: '0 1px 4px rgba(0,0,0,0.08)',
             }}
             onMouseOver={(e) => {
-              e.currentTarget.style.background = '#fef2f2';
-              e.currentTarget.style.borderColor = '#fecaca';
+              e.currentTarget.style.background = 'rgba(239, 68, 68, 0.10)';
+              e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.45)';
             }}
             onMouseOut={(e) => {
-              e.currentTarget.style.background = '#fff';
-              e.currentTarget.style.borderColor = '#e2e8f0';
+              e.currentTarget.style.background = 'var(--bg-elevated)';
+              e.currentTarget.style.borderColor = 'var(--border)';
             }}
           >
             <i className="fas fa-times" style={{ fontSize: 10 }} />
@@ -335,9 +347,9 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
                 justifyContent: 'center',
                 gap: 12,
                 background: 'transparent',
-                border: '2px dashed #e2e8f0',
+                border: '2px dashed var(--border)',
                 borderRadius: 6,
-                color: '#94a3b8',
+                color: 'var(--text-muted)',
                 fontSize: 12,
                 padding: '16px 12px',
               }}
@@ -355,23 +367,23 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
                         alignItems: 'center',
                         gap: 5,
                         padding: '4px 10px',
-                        background: '#fff',
-                        border: '1px solid #e2e8f0',
+                        background: 'var(--bg-elevated)',
+                        border: '1px solid var(--border)',
                         borderRadius: 4,
                         cursor: 'pointer',
                         fontSize: 11,
-                        color: '#475569',
+                        color: 'var(--text-secondary)',
                         fontWeight: 500,
                       }}
                       onMouseOver={(e) => {
-                        e.currentTarget.style.background = '#eff6ff';
-                        e.currentTarget.style.color = '#2563eb';
-                        e.currentTarget.style.borderColor = '#bfdbfe';
+                        e.currentTarget.style.background = 'rgba(var(--accent-rgb), 0.10)';
+                        e.currentTarget.style.color = 'var(--accent)';
+                        e.currentTarget.style.borderColor = 'rgba(var(--accent-rgb), 0.45)';
                       }}
                       onMouseOut={(e) => {
-                        e.currentTarget.style.background = '#fff';
-                        e.currentTarget.style.color = '#475569';
-                        e.currentTarget.style.borderColor = '#e2e8f0';
+                        e.currentTarget.style.background = 'var(--bg-elevated)';
+                        e.currentTarget.style.color = 'var(--text-secondary)';
+                        e.currentTarget.style.borderColor = 'var(--border)';
                       }}
                     >
                       <i className={opt.icon} style={{ fontSize: 10 }} />
@@ -401,7 +413,7 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
                 style={{
                   flexShrink: 0,
                   marginBottom: 8,
-                  outline: isDropTarget ? '2px dashed #2563eb' : '2px solid transparent',
+                  outline: isDropTarget ? '2px dashed var(--accent)' : '2px solid transparent',
                   borderRadius: 5,
                   transition: 'outline 0.1s',
                 }}
@@ -422,7 +434,7 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
                       padding: '2px 6px',
                       cursor: 'grab',
                       userSelect: 'none',
-                      color: '#cbd5e1',
+                      color: 'var(--text-muted)',
                       fontSize: 10,
                       fontWeight: 600,
                     }}
@@ -457,7 +469,7 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
                       style={{
                         width: '60%',
                         height: 4,
-                        background: isHovered ? '#2563eb' : '#e2e8f0',
+                        background: isHovered ? 'var(--accent)' : 'var(--border)',
                         borderRadius: 2,
                         transition: 'background 0.15s ease',
                       }}
@@ -478,10 +490,10 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
                 width: '100%',
                 padding: '6px',
                 background: 'transparent',
-                border: '2px dashed #e2e8f0',
+                border: '2px dashed var(--border)',
                 borderRadius: 6,
                 cursor: 'pointer',
-                color: '#94a3b8',
+                color: 'var(--text-muted)',
                 fontSize: 12,
                 fontWeight: 500,
                 display: 'flex',
@@ -492,13 +504,13 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
                 flexShrink: 0,
               }}
               onMouseOver={(e) => {
-                e.currentTarget.style.borderColor = '#2563eb';
-                e.currentTarget.style.color = '#2563eb';
-                e.currentTarget.style.background = '#eff6ff';
+                e.currentTarget.style.borderColor = 'var(--accent)';
+                e.currentTarget.style.color = 'var(--accent)';
+                e.currentTarget.style.background = 'rgba(var(--accent-rgb), 0.10)';
               }}
               onMouseOut={(e) => {
-                e.currentTarget.style.borderColor = '#e2e8f0';
-                e.currentTarget.style.color = '#94a3b8';
+                e.currentTarget.style.borderColor = 'var(--border)';
+                e.currentTarget.style.color = 'var(--text-muted)';
                 e.currentTarget.style.background = 'transparent';
               }}
             >
@@ -513,8 +525,8 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
                   bottom: '100%',
                   left: 0,
                   marginBottom: 4,
-                  background: '#fff',
-                  border: '1px solid #e2e8f0',
+                  background: 'var(--bg-elevated)',
+                  border: '1px solid var(--border)',
                   borderRadius: 6,
                   boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
                   overflow: 'hidden',
@@ -537,14 +549,14 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
                         border: 'none',
                         cursor: 'pointer',
                         fontSize: 12,
-                        color: '#374151',
+                        color: 'var(--text-secondary)',
                         textAlign: 'left',
                         whiteSpace: 'nowrap',
                       }}
-                      onMouseOver={(e) => { e.currentTarget.style.background = '#f1f5f9'; }}
+                      onMouseOver={(e) => { e.currentTarget.style.background = 'var(--bg-hover)'; }}
                       onMouseOut={(e) => { e.currentTarget.style.background = 'transparent'; }}
                     >
-                      <i className={opt.icon} style={{ fontSize: 11, width: 14, color: '#64748b' }} />
+                      <i className={opt.icon} style={{ fontSize: 11, width: 14, color: 'var(--text-secondary)' }} />
                       {opt.label}
                     </button>
                   )
@@ -555,6 +567,16 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
         )}
       </div>
     </div>
+
+    <ConfirmModal
+      isOpen={confirmOpen}
+      title="Delete column"
+      message="This column and everything inside it will be removed from the dashboard."
+      confirmLabel="Delete"
+      onConfirm={() => { setConfirmOpen(false); handleDelete(); }}
+      onCancel={() => setConfirmOpen(false)}
+    />
+    </>
   );
 };
 
