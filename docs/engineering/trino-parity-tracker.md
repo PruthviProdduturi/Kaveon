@@ -1005,7 +1005,9 @@ that prevents Studio's SQL Server-style completion from being interpreted as
 an `ARRAY` expression by workers; a deployed image must include commit
 `6818e65f` or later for that protection to be present.
 Track 2 remains partial because prepared statements are now available through
-the Engine HTTP lifecycle and scalar/array/map `EXECUTE ... USING` is supported by
+the Engine HTTP lifecycle, the authenticated product transaction endpoint now
+binds positional (`$1`, `?`) and named (`:name`) values before parsing, and
+scalar/array/map `EXECUTE ... USING` is supported by
 the Trino adapter. The raw Trino statement route also accepts owner-scoped SQL
 `PREPARE name FROM ...`, `EXECUTE name`, and `DEALLOCATE PREPARE name`, using
 the same typed binder and normal SQL parser. The adapter still lacks a

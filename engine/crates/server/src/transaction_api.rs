@@ -1597,6 +1597,14 @@ struct SqlTransactionRequest {
     sql: String,
     #[serde(default)]
     transaction_id: Option<String>,
+    /// Positional values for `$1`, `$2`, … or `?` placeholders. Values are
+    /// converted to SQL literals by the bounded transaction binder; they are
+    /// never concatenated without escaping.
+    #[serde(default)]
+    parameters: Vec<serde_json::Value>,
+    /// Named values for `:name` placeholders.
+    #[serde(default)]
+    named_parameters: HashMap<String, serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -1933,6 +1941,202 @@ async fn stage_sql_batch(
     }
 }
 
+fn transaction_parameter_literal(
+    value: &serde_json::Value,
+    depth: usize,
+) -> Result<String, String> {
+    if depth > 32 {
+        return Err("parameter array nesting exceeds the limit of 32".into());
+    }
+    match value {
+        serde_json::Value::Null => Ok("NULL".into()),
+        serde_json::Value::Bool(value) => Ok(if *value { "TRUE" } else { "FALSE" }.into()),
+        serde_json::Value::Number(value) => Ok(value.to_string()),
+        serde_json::Value::String(value) => Ok(format!("'{}'", value.replace('\'', "''"))),
+        serde_json::Value::Array(values) => {
+            if values.len() > 10_000 {
+                return Err("parameter array exceeds the limit of 10000 elements".into());
+            }
+            values
+                .iter()
+                .map(|value| transaction_parameter_literal(value, depth + 1))
+                .collect::<Result<Vec<_>, _>>()
+                .map(|values| format!("ARRAY[{}]", values.join(", ")))
+        }
+        serde_json::Value::Object(_) => Err(
+            "object parameters are not supported by the product transaction API; send JSON as a string"
+                .into(),
+        ),
+    }
+}
+
+fn transaction_identifier_start(character: char) -> bool {
+    character == '_' || character.is_ascii_alphabetic()
+}
+
+fn transaction_identifier_continue(character: char) -> bool {
+    character == '_' || character.is_ascii_alphanumeric()
+}
+
+/// Bind transaction placeholders without treating text inside SQL literals or
+/// comments as placeholders. Product DML is intentionally small, but the
+/// scanner still handles comments and quoted identifiers so a document JSON
+/// value containing `$1` or `:name` remains data.
+fn bind_transaction_parameters(
+    sql: &str,
+    positional: &[serde_json::Value],
+    named: &HashMap<String, serde_json::Value>,
+) -> Result<String, String> {
+    let input: Vec<char> = sql.chars().collect();
+    let mut output = String::with_capacity(sql.len());
+    let mut index = 0;
+    let mut question_position = 0usize;
+    let mut highest_dollar = 0usize;
+    let mut used_named = std::collections::BTreeSet::new();
+    let mut saw_question = false;
+    let mut saw_dollar = false;
+
+    while index < input.len() {
+        let character = input[index];
+        if character == '\'' || character == '"' {
+            let quote = character;
+            output.push(quote);
+            index += 1;
+            while index < input.len() {
+                let current = input[index];
+                output.push(current);
+                index += 1;
+                if current == quote {
+                    if index < input.len() && input[index] == quote {
+                        output.push(input[index]);
+                        index += 1;
+                    } else {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        if character == '-' && input.get(index + 1) == Some(&'-') {
+            while index < input.len() {
+                let current = input[index];
+                output.push(current);
+                index += 1;
+                if current == '\n' {
+                    break;
+                }
+            }
+            continue;
+        }
+        if character == '/' && input.get(index + 1) == Some(&'*') {
+            output.push('/');
+            output.push('*');
+            index += 2;
+            while index < input.len() {
+                let current = input[index];
+                output.push(current);
+                index += 1;
+                if current == '*' && input.get(index) == Some(&'/') {
+                    output.push('/');
+                    index += 1;
+                    break;
+                }
+            }
+            continue;
+        }
+        if character == '?' {
+            if saw_dollar {
+                return Err("cannot mix '?' and '$n' transaction parameters".into());
+            }
+            saw_question = true;
+            question_position += 1;
+            let value = positional.get(question_position - 1).ok_or_else(|| {
+                format!(
+                    "parameter ?{} is not bound (received {} values)",
+                    question_position,
+                    positional.len()
+                )
+            })?;
+            output.push_str(&transaction_parameter_literal(value, 0)?);
+            index += 1;
+            continue;
+        }
+        if character == '$' {
+            let mut end = index + 1;
+            while end < input.len() && input[end].is_ascii_digit() {
+                end += 1;
+            }
+            if end > index + 1 {
+                if saw_question {
+                    return Err("cannot mix '?' and '$n' transaction parameters".into());
+                }
+                saw_dollar = true;
+                let name: String = input[index + 1..end].iter().collect();
+                let position = name
+                    .parse::<usize>()
+                    .map_err(|_| format!("invalid transaction parameter ${name}"))?;
+                if position == 0 {
+                    return Err("transaction parameter positions start at $1".into());
+                }
+                highest_dollar = highest_dollar.max(position);
+                let value = positional.get(position - 1).ok_or_else(|| {
+                    format!(
+                        "parameter ${position} is not bound (received {} values)",
+                        positional.len()
+                    )
+                })?;
+                output.push_str(&transaction_parameter_literal(value, 0)?);
+                index = end;
+                continue;
+            }
+        }
+        if character == ':'
+            && input.get(index + 1) != Some(&':')
+            && input.get(index + 1).is_some_and(|next| transaction_identifier_start(*next))
+        {
+            let mut end = index + 2;
+            while end < input.len() && transaction_identifier_continue(input[end]) {
+                end += 1;
+            }
+            let name: String = input[index + 1..end].iter().collect();
+            let value = named
+                .get(&name)
+                .or_else(|| named.get(&name.to_ascii_lowercase()))
+                .ok_or_else(|| format!("named parameter :{name} is not bound"))?;
+            used_named.insert(name.to_ascii_lowercase());
+            output.push_str(&transaction_parameter_literal(value, 0)?);
+            index = end;
+            continue;
+        }
+        output.push(character);
+        index += 1;
+    }
+
+    if saw_question && positional.len() > question_position {
+        return Err(format!(
+            "{} positional values were supplied but only {} '?' placeholders are used",
+            positional.len(), question_position
+        ));
+    }
+    if saw_dollar && positional.len() > highest_dollar {
+        return Err(format!(
+            "{} positional values were supplied but the highest placeholder is ${highest_dollar}",
+            positional.len()
+        ));
+    }
+    if !saw_question && !saw_dollar && !positional.is_empty() {
+        return Err("positional transaction values were supplied but the SQL has no positional placeholders".into());
+    }
+    if let Some(unused) = named
+        .keys()
+        .map(|name| name.to_ascii_lowercase())
+        .find(|name| !used_named.contains(name))
+    {
+        return Err(format!("named parameter :{unused} was supplied but is not used by the SQL"));
+    }
+    Ok(output)
+}
+
 async fn execute_sql_request(
     registry: &TransactionRegistry,
     owner: &str,
@@ -1941,7 +2145,15 @@ async fn execute_sql_request(
     use kaveon_sql::parser::{
         NativeTransactionalStatement, adapt_product_dml_batch, parse_native_transactional,
     };
-    let parsed = match parse_native_transactional(&request.sql) {
+    let bound_sql = match bind_transaction_parameters(
+        &request.sql,
+        &request.parameters,
+        &request.named_parameters,
+    ) {
+        Ok(sql) => sql,
+        Err(error) => return error_response(RegistryError::Invalid(error)),
+    };
+    let parsed = match parse_native_transactional(&bound_sql) {
         Ok(parsed) => parsed,
         Err(error) => return error_response(RegistryError::Invalid(error.to_string())),
     };
@@ -3058,6 +3270,8 @@ mod tests {
         let response = execute_sql_request(&registry, "alice", SqlTransactionRequest {
             sql: r#"INSERT INTO kaveon.product.datasets (id, document_json) VALUES ('orders', '{"name":"Orders"}')"#.into(),
             transaction_id: Some(begun.transaction_id.clone()),
+            parameters: vec![],
+            named_parameters: HashMap::new(),
         }).await;
         assert_eq!(response.status(), StatusCode::OK);
         let response = execute_sql_request(
@@ -3066,6 +3280,8 @@ mod tests {
             SqlTransactionRequest {
                 sql: "COMMIT".into(),
                 transaction_id: Some(begun.transaction_id),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
             },
         )
         .await;
@@ -3091,6 +3307,8 @@ mod tests {
             SqlTransactionRequest {
                 sql: r#"INSERT INTO kaveon.product.datasets (id, document_json) VALUES ('one', '{}'), ('two', '{"name":"Two"}')"#.into(),
                 transaction_id: Some(begun.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
             },
         )
         .await;
@@ -3101,6 +3319,8 @@ mod tests {
             SqlTransactionRequest {
                 sql: "COMMIT".into(),
                 transaction_id: Some(begun.transaction_id),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
             },
         )
         .await;
@@ -3116,6 +3336,89 @@ mod tests {
             .is_some());
     }
 
+    #[test]
+    fn transaction_parameter_binder_preserves_literals_comments_and_arrays() {
+        let bound = bind_transaction_parameters(
+            "INSERT INTO product.datasets (id, document_json) VALUES ($1, $2) -- :ignored\n",
+            &[serde_json::json!("ds-1"), serde_json::json!("{\"name\":\"$3\"}")],
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            bound,
+            "INSERT INTO product.datasets (id, document_json) VALUES ('ds-1', '{\"name\":\"$3\"}') -- :ignored\n"
+        );
+
+        let bound = bind_transaction_parameters(
+            "UPDATE product.datasets SET document_json = :document WHERE id = ? AND revision = 1",
+            &[serde_json::json!("ds-1")],
+            &HashMap::from([(String::from("document"), serde_json::json!("{}"))]),
+        )
+        .unwrap();
+        assert_eq!(
+            bound,
+            "UPDATE product.datasets SET document_json = '{}' WHERE id = 'ds-1' AND revision = 1"
+        );
+
+        let array = bind_transaction_parameters(
+            "SELECT ?",
+            &[serde_json::json!([1, null, "two"])],
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(array, "SELECT ARRAY[1, NULL, 'two']");
+    }
+
+    #[test]
+    fn transaction_parameter_binder_rejects_missing_extra_and_mixed_values() {
+        for (sql, positional, named, expected) in [
+            ("SELECT $2", vec![serde_json::json!(1)], HashMap::new(), "parameter $2 is not bound"),
+            ("SELECT ?", vec![serde_json::json!(1), serde_json::json!(2)], HashMap::new(), "only 1 '?' placeholders"),
+            ("SELECT :name", vec![], HashMap::new(), "named parameter :name is not bound"),
+            ("SELECT $1", vec![serde_json::json!(1)], HashMap::from([(String::from("unused"), serde_json::json!(2))]), "named parameter :unused"),
+            ("SELECT ? + $1", vec![serde_json::json!(1)], HashMap::new(), "cannot mix"),
+        ] {
+            let error = bind_transaction_parameters(sql, &positional, &named).unwrap_err();
+            assert!(error.contains(expected), "{error} did not contain {expected}");
+        }
+    }
+
+    #[tokio::test]
+    async fn sql_endpoint_binds_product_dml_parameters_before_staging() {
+        let (registry, catalog) = registry().await;
+        let begun = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "INSERT INTO product.datasets (id, document_json) VALUES ($1, $2)".into(),
+                transaction_id: Some(begun.transaction_id.clone()),
+                parameters: vec![serde_json::json!("bound"), serde_json::json!("{\"ok\":true}")],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "COMMIT".into(),
+                transaction_id: Some(begun.transaction_id),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let snapshot = catalog.read_current().await.unwrap();
+        let record = snapshot
+            .product_record(ProductRecordKind::Dataset, "bound")
+            .unwrap()
+            .unwrap();
+        assert!(record.document.path.contains("products/dataset/bound/"));
+    }
+
     #[tokio::test]
     async fn sql_endpoint_rejects_generic_row_dml_without_staging() {
         let (registry, _) = registry().await;
@@ -3126,6 +3429,8 @@ mod tests {
             SqlTransactionRequest {
                 sql: "DELETE FROM app.users WHERE id = 'alice'".into(),
                 transaction_id: Some(begun.transaction_id.clone()),
+                parameters: vec![],
+                named_parameters: HashMap::new(),
             },
         )
         .await;

@@ -8613,7 +8613,7 @@ async fn capabilities(State(state): State<Arc<AppState>>) -> Json<EngineCapabili
                 "ROLLBACK",
             ],
             single_statement_per_request: true,
-            parameter_binding: false,
+            parameter_binding: true,
             multi_row_insert: true,
             returning: false,
             savepoints: false,
@@ -17160,7 +17160,7 @@ mod tests {
         assert!(!enabled.transactions.enabled);
         assert_eq!(enabled.transactions.supported_statements[0], "BEGIN");
         assert!(enabled.transactions.single_statement_per_request);
-        assert!(!enabled.transactions.parameter_binding);
+        assert!(enabled.transactions.parameter_binding);
         assert!(enabled.transactions.multi_row_insert);
         assert!(!enabled.transactions.returning);
         assert!(!enabled.transactions.savepoints);
