@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, sync::Arc};
+use std::{cmp::Ordering, collections::HashSet, sync::Arc};
 
 use arrow::{
     array::{Array, ArrayRef, AsArray, Float64Array, Int64Array, RecordBatch, UInt32Array},
@@ -386,15 +386,14 @@ fn distinct_window_rows(col: Option<&ArrayRef>, rows: &[usize]) -> Result<Vec<us
     let Some(col) = col else {
         return Err(error("DISTINCT window aggregate requires a value argument"));
     };
-    let mut unique = Vec::new();
+    let mut seen = HashSet::with_capacity(rows.len());
+    let mut unique = Vec::with_capacity(rows.len());
     for &row in rows {
         if col.is_null(row) {
             continue;
         }
-        if !unique
-            .iter()
-            .any(|&other| compare(col, row, other).is_ok_and(|ordering| ordering == Ordering::Equal))
-        {
+        let key = crate::distinct::extract_value(col.as_ref(), row)?;
+        if seen.insert(key) {
             unique.push(row);
         }
     }
