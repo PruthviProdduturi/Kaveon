@@ -9,7 +9,7 @@
 //! directory (`ClusteredParquetWriter`: sorted by country and event date,
 //! small row groups, page index, Bloom filters), and through the
 //! distributed planner's fragments executed in this process as a
-//! two-worker cluster would run them — for the dictionary file, the
+//! three-worker cluster would run them — for the dictionary file, the
 //! partitioned directory and the clustered directory. Any divergence is an Engine defect, whatever the
 //! cluster later says. The encodings exercise different operator paths
 //! (dictionary-aware predicates, coded folds, the columnar aggregate's
@@ -2201,7 +2201,7 @@ fn the_distributed_statistics_read_matches_the_coordinator_build() {
 
 /// `ANALYZE … WITH (cube = true)` on the workers is the coordinator's
 /// build: every grouping of the declared shape as one `GROUP BY`
-/// statement through the two-worker fragments, its rows typed back into
+/// statement through the three-worker fragments, its rows typed back into
 /// cells, against the storage builder's cube over the same directory —
 /// cell for cell, the additive measures exact and the distinct sketches
 /// bit-identical. An axis over its cap is excluded the same way: the
@@ -2284,7 +2284,7 @@ fn the_distributed_cube_read_matches_the_coordinator_build() {
                 "events_parts",
             );
             let plan = bound_plan(&statement.sql, &manager);
-            let batches = execute_distributed(&statement.sql, &plan, &manager, 2, &pool)
+            let batches = execute_distributed(&statement.sql, &plan, &manager, 3, &pool)
                 .unwrap_or_else(|error| panic!("{}: {error}", statement.sql));
             let rows = crate::api::batches_to_json(&batches);
             if let (Some(limit), [axis]) = (statement.limit, grouping.as_slice())

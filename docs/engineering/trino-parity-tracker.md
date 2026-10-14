@@ -155,6 +155,11 @@ foundations, but several operators are still centralized or narrow:
   process-local registry by table and source location. Independent embedded
   catalog stores can no longer suppress one another's refresh, which removes a
   parallel-test and multi-store stale-statistics race.
+- The cube row-path differential now runs every grouping through the declared
+  three-worker execution fixture, comparing exact row/additive measures and
+  distinct sketches with the coordinator-built cube. This qualifies the
+  statistics answer path at the current deployed worker width; cloud fault and
+  larger-capacity evidence remain separate gates.
 - The analytical coordinator result cache is now explicitly qualified: it
   normalizes statement text, keys entries by catalog/schema snapshot, pinned
   Delta versions, and time zone, applies byte/TTL/LRU bounds, excludes paged
