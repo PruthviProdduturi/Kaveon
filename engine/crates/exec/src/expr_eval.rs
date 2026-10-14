@@ -3872,7 +3872,11 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         let value_type = maps[0].values().data_type().clone();
         if !matches!(
             &key_type,
-            DataType::Boolean | DataType::Int64 | DataType::Float64 | DataType::Utf8
+            DataType::Boolean
+                | DataType::Int64
+                | DataType::Float64
+                | DataType::Utf8
+                | DataType::LargeUtf8
         ) {
             return Err(KaveonError::Execution(format!(
                 "MAP_CONCAT does not support key type {key_type}"
@@ -11055,6 +11059,44 @@ mod tests {
         assert_eq!(contains.as_boolean().iter().collect::<Vec<_>>(), vec![Some(true)]);
         let value = eval_scalar_function("MAP_ELEMENT_AT", &[map, needle], 1).unwrap();
         assert_eq!(value.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(), vec![Some(7)]);
+    }
+
+    #[test]
+    fn map_concat_accepts_large_utf8_keys() {
+        let build_map = |keys: &[&str], values: &[i64]| {
+            let fields: arrow::datatypes::Fields = vec![
+                Arc::new(Field::new("key", DataType::LargeUtf8, false)),
+                Arc::new(Field::new("value", DataType::Int64, true)),
+            ]
+            .into();
+            let entries = StructArray::new(
+                fields.clone(),
+                vec![
+                    Arc::new(LargeStringArray::from_iter_values(keys.iter().copied())) as ArrayRef,
+                    Arc::new(Int64Array::from(values.to_vec())) as ArrayRef,
+                ],
+                None,
+            );
+            Arc::new(
+                MapArray::try_new(
+                    Arc::new(Field::new("entries", DataType::Struct(fields), false)),
+                    OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, keys.len() as i32])),
+                    entries,
+                    None,
+                    false,
+                )
+                .unwrap(),
+            ) as ArrayRef
+        };
+        let result = eval_scalar_function(
+            "MAP_CONCAT",
+            &[build_map(&["a", "b"], &[1, 2]), build_map(&["b", "c"], &[20, 3])],
+            1,
+        )
+        .unwrap();
+        let map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(map.keys().as_string::<i64>().iter().collect::<Vec<_>>(), vec![Some("a"), Some("b"), Some("c")]);
+        assert_eq!(map.values().as_primitive::<Int64Type>().values().as_ref(), &[1, 20, 3]);
     }
 
     #[test]
