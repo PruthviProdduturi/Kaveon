@@ -4,7 +4,7 @@ use arrow::array::{
     Decimal128Builder,
     Float32Array, Float64Array, Float64Builder,
     Int16Array, Int32Array, Int32Builder, Int32DictionaryArray, Int64Array, Int64Builder,
-    Int8Array, LargeListArray, LargeStringArray, LargeStringBuilder,
+    Int8Array, LargeListArray, LargeListBuilder, LargeStringArray, LargeStringBuilder,
     ListArray, GenericListArray, OffsetSizeTrait,
     ListBuilder, MapArray,
     NullBuilder, PrimitiveArray, PrimitiveBuilder,
@@ -1297,6 +1297,23 @@ fn text_value<'a>(arr: &'a ArrayRef, row: usize) -> Result<Option<&'a str>> {
         other => Err(KaveonError::Execution(format!(
             "expected VARCHAR, got {other}"
         ))),
+    }
+}
+
+fn split_text_parts(value: &str, delimiter: &str, limit: Option<usize>) -> Vec<String> {
+    if delimiter.is_empty() {
+        let characters = value.chars().map(|character| character.to_string()).collect::<Vec<_>>();
+        if let Some(limit) = limit.filter(|limit| *limit < characters.len()) {
+            let mut parts = characters[..limit - 1].to_vec();
+            parts.push(characters[limit - 1..].concat());
+            parts
+        } else {
+            characters
+        }
+    } else if let Some(limit) = limit {
+        value.splitn(limit, delimiter).map(str::to_owned).collect()
+    } else {
+        value.split(delimiter).map(str::to_owned).collect()
     }
 }
 
@@ -5976,8 +5993,6 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     "SPLIT requires 2 or 3 arguments".into(),
                 ));
             }
-            let values = as_string_array(&args[0])?;
-            let delimiters = as_string_array(&args[1])?;
             let limits = if args.len() == 3 {
                 Some(compute::cast(&args[2], &DataType::Int64)?)
             } else {
@@ -5993,45 +6008,47 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     }
                 }
             }
-            let mut builder = ListBuilder::new(StringBuilder::new());
-            for row in 0..num_rows {
-                if values.is_null(row)
-                    || delimiters.is_null(row)
-                    || limits.is_some_and(|limits| limits.is_null(row))
-                {
-                    builder.append(false);
-                    continue;
-                }
-                let value = values.value(row);
-                let delimiter = delimiters.value(row);
-                let limit = limits.map(|limits| limits.value(row) as usize);
-                if delimiter.is_empty() {
-                    let characters = value.chars().map(|character| character.to_string()).collect::<Vec<_>>();
-                    if let Some(limit) = limit.filter(|limit| *limit < characters.len()) {
-                        for character in &characters[..limit - 1] {
-                            builder.values().append_value(character);
-                        }
-                        builder.values().append_value(characters[limit - 1..].concat());
-                    } else {
-                        for character in characters {
-                            builder.values().append_value(character);
-                        }
+            if args[0].data_type() == &DataType::LargeUtf8 {
+                let mut builder = LargeListBuilder::new(LargeStringBuilder::new());
+                for row in 0..num_rows {
+                    if limits.is_some_and(|values| values.is_null(row)) {
+                        builder.append(false);
+                        continue;
                     }
-                } else {
-                    if let Some(limit) = limit {
-                        let mut parts = value.splitn(limit, delimiter);
-                        for part in parts.by_ref() {
-                            builder.values().append_value(part);
-                        }
-                    } else {
-                        for part in value.split(delimiter) {
-                            builder.values().append_value(part);
-                        }
+                    let limit = limits.map(|values| values.value(row) as usize);
+                    let (Some(value), Some(delimiter)) =
+                        (text_value(&args[0], row)?, text_value(&args[1], row)?)
+                    else {
+                        builder.append(false);
+                        continue;
+                    };
+                    for part in split_text_parts(value, delimiter, limit) {
+                        builder.values().append_value(part);
                     }
+                    builder.append(true);
                 }
-                builder.append(true);
+                Ok(Arc::new(builder.finish()))
+            } else {
+                let mut builder = ListBuilder::new(StringBuilder::new());
+                for row in 0..num_rows {
+                    if limits.is_some_and(|values| values.is_null(row)) {
+                        builder.append(false);
+                        continue;
+                    }
+                    let limit = limits.map(|values| values.value(row) as usize);
+                    let (Some(value), Some(delimiter)) =
+                        (text_value(&args[0], row)?, text_value(&args[1], row)?)
+                    else {
+                        builder.append(false);
+                        continue;
+                    };
+                    for part in split_text_parts(value, delimiter, limit) {
+                        builder.values().append_value(part);
+                    }
+                    builder.append(true);
+                }
+                Ok(Arc::new(builder.finish()))
             }
-            Ok(Arc::new(builder.finish()))
         }
         "REVERSE" => {
             check_arity(name, args, 1)?;
@@ -13556,6 +13573,47 @@ mod tests {
             assert_eq!(values.value(0), expected);
             assert!(values.is_null(1));
         }
+    }
+
+    #[test]
+    fn split_preserves_large_utf8_lists_and_mixed_delimiters() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "text",
+                Arc::new(LargeStringArray::from(vec![Some("a界b界c"), None])) as ArrayRef,
+            ),
+            (
+                "delimiter",
+                Arc::new(StringArray::from(vec![Some("界"), Some("界")])) as ArrayRef,
+            ),
+            (
+                "limit",
+                Arc::new(Int64Array::from(vec![Some(2), Some(2)])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "SPLIT".into(),
+                args: vec![
+                    Expr::Column("text".into()),
+                    Expr::Column("delimiter".into()),
+                    Expr::Column("limit".into()),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(result.data_type(), &DataType::LargeList(Arc::new(arrow::datatypes::Field::new(
+            "item",
+            DataType::LargeUtf8,
+            true,
+        ))));
+        let values = result.as_any().downcast_ref::<LargeListArray>().unwrap();
+        let first = values.value(0);
+        let first = first.as_any().downcast_ref::<LargeStringArray>().unwrap();
+        assert_eq!(first.iter().collect::<Vec<_>>(), vec![Some("a"), Some("b界c")]);
+        assert!(values.is_null(1));
     }
 
     #[test]
