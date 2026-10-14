@@ -2866,8 +2866,19 @@ async fn submit_trino_statement_parts(
         if trino_is_show_session(body) {
             return trino_session_response(&state.config);
         }
-        if trino_is_show_functions(body) {
-            return trino_functions_response();
+        match trino_show_functions_pattern(body) {
+            Ok(Some(pattern)) => return trino_functions_response(Some(&pattern)),
+            Ok(None) => {}
+            Err(error) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": error,
+                        "errorName": "SYNTAX_ERROR"
+                    })),
+                )
+                    .into_response();
+            }
         }
         match trino_prepare_statement(body) {
             Ok(Some((name, query))) => {
@@ -3161,13 +3172,42 @@ fn trino_is_show_session(body: &str) -> bool {
 }
 
 fn trino_is_show_functions(body: &str) -> bool {
-    body.trim()
-        .trim_end_matches(';')
-        .trim()
-        .eq_ignore_ascii_case("SHOW FUNCTIONS")
+    matches!(trino_show_functions_pattern(body), Ok(Some(_)))
 }
 
-fn trino_functions_response() -> Response {
+fn trino_show_functions_pattern(body: &str) -> Result<Option<String>, String> {
+    let statement = body.trim().trim_end_matches(';').trim();
+    if statement.eq_ignore_ascii_case("SHOW FUNCTIONS") {
+        return Ok(Some(String::new()));
+    }
+    let prefix = "SHOW FUNCTIONS LIKE ";
+    if !statement
+        .get(..prefix.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+    {
+        return Ok(None);
+    }
+    let pattern = statement[prefix.len()..].trim();
+    if pattern.len() < 2 || !pattern.starts_with('\'') || !pattern.ends_with('\'') {
+        return Err("SHOW FUNCTIONS LIKE requires a single-quoted pattern".to_owned());
+    }
+    let pattern = &pattern[1..pattern.len() - 1];
+    let mut unescaped = String::with_capacity(pattern.len());
+    let mut chars = pattern.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\'' {
+            if chars.next() != Some('\'') {
+                return Err("SHOW FUNCTIONS LIKE contains an invalid quoted pattern".to_owned());
+            }
+            unescaped.push('\'');
+        } else {
+            unescaped.push(ch);
+        }
+    }
+    Ok(Some(unescaped))
+}
+
+fn trino_functions_response(pattern: Option<&str>) -> Response {
     // Keep this list next to the adapter so the wire metadata describes the
     // functions that the Engine deliberately exposes, rather than pretending
     // to be a complete PostgreSQL or Trino registry.  The executor's parser
@@ -3231,6 +3271,7 @@ fn trino_functions_response() -> Response {
     .collect::<Vec<_>>();
     let rows = FUNCTIONS
         .iter()
+        .filter(|(name, ..)| pattern.is_none_or(|pattern| pattern.is_empty() || trino_like(name, pattern)))
         .map(|(name, return_type, args, kind, deterministic, description)| {
             let argument_types = args
                 .trim_matches(['[', ']'])
@@ -3258,6 +3299,34 @@ fn trino_functions_response() -> Response {
         "data": rows
     }))
     .into_response()
+}
+
+fn trino_like(value: &str, pattern: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    let pattern = pattern.to_ascii_lowercase();
+    let (mut vi, mut pi, mut star, mut checkpoint) = (0usize, 0usize, None, 0usize);
+    let value = value.as_bytes();
+    let pattern = pattern.as_bytes();
+    while vi < value.len() {
+        if pi < pattern.len() && (pattern[pi] == b'_' || pattern[pi] == value[vi]) {
+            vi += 1;
+            pi += 1;
+        } else if pi < pattern.len() && pattern[pi] == b'%' {
+            star = Some(pi);
+            pi += 1;
+            checkpoint = vi;
+        } else if let Some(star) = star {
+            pi = star + 1;
+            checkpoint += 1;
+            vi = checkpoint;
+        } else {
+            return false;
+        }
+    }
+    while pi < pattern.len() && pattern[pi] == b'%' {
+        pi += 1;
+    }
+    pi == pattern.len()
 }
 
 fn trino_session_response(config: &crate::config::ServerConfig) -> Response {
@@ -19578,8 +19647,15 @@ mod streamed_root_tests {
     async fn trino_show_functions_exposes_supported_function_metadata() {
         assert!(trino_is_show_functions("SHOW FUNCTIONS;"));
         assert!(trino_is_show_functions("show functions"));
-        assert!(!trino_is_show_functions("SHOW FUNCTIONS LIKE 'sum'"));
-        let response = trino_functions_response();
+        assert!(trino_is_show_functions("SHOW FUNCTIONS LIKE 'sum'"));
+        assert_eq!(
+            trino_show_functions_pattern("SHOW FUNCTIONS LIKE 'sum%'").unwrap(),
+            Some("sum%".to_owned())
+        );
+        assert!(trino_show_functions_pattern("SHOW FUNCTIONS LIKE sum").is_err());
+        assert!(trino_like("approx_count_distinct", "approx%"));
+        assert!(!trino_like("sum", "count%"));
+        let response = trino_functions_response(None);
         let body = axum::body::to_bytes(response.into_body(), 256 * 1024)
             .await
             .unwrap();
@@ -19594,6 +19670,14 @@ mod streamed_root_tests {
             .expect("sum metadata");
         assert_eq!(sum[3], "aggregate");
         assert_eq!(sum[2], serde_json::json!(["double"]));
+        let filtered = trino_functions_response(Some("sum%"));
+        let body = axum::body::to_bytes(filtered.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let rows = value["data"].as_array().unwrap();
+        assert!(rows.iter().any(|row| row[0] == "sum"));
+        assert!(rows.iter().all(|row| row[0].as_str().unwrap().starts_with("sum")));
     }
 
     #[test]
