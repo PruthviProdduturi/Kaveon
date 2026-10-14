@@ -49,6 +49,42 @@ def sweep_identity() -> Optional[str]:
     return os.getenv("KAVEON_DLM_SWEEP_ACTOR", "").strip() or None
 
 
+def discovery_mode() -> str:
+    """Whether the sweep also looks for tables the catalog does not hold.
+
+    Three states rather than two, because "found nothing" and "never looked"
+    are different readings and a reader of this job's output has to be able to
+    tell them apart. `register` writes to the catalog; `report` only says what
+    it saw, which is the default — a scheduled sweep should have been asked
+    before it registers anything.
+    """
+    raw = (os.getenv("KAVEON_DLM_DISCOVER_TABLES") or "").strip().lower()
+    if raw in {"register", "true", "1", "yes"}:
+        return "register"
+    if raw in {"report", "observe"}:
+        return "report"
+    return "off"
+
+
+def discover(actor: str, mode: str) -> Optional[Dict[str, Any]]:
+    """Find tables in the lake that the catalog does not hold.
+
+    Runs BEFORE the context sweep, so a table registered here is compiled in
+    the same run rather than waiting an hour for the next one. A failure here
+    is reported and the sweep still happens: discovery is an addition, and it
+    must not be able to stop the thing this job already did.
+    """
+    if mode == "off":
+        return None
+    from services import lake_discovery
+
+    try:
+        return lake_discovery.discover(actor, register=(mode == "register"))
+    except Exception as error:  # noqa: BLE001 - the sweep is the primary job
+        logger.warning("table discovery failed: %s: %s", type(error).__name__, error)
+        return {"failed": f"{type(error).__name__}: {str(error)[:200]}"}
+
+
 def _stale_datasets(engine) -> tuple[int, List[Dict[str, Any]]]:
     """Every compiled dataset whose source has moved since it was compiled.
 
@@ -133,6 +169,20 @@ def main() -> int:
     if not actor:
         print("KAVEON_DLM_SWEEP_ACTOR is not set; refusing to sweep as nobody")
         return 2
+
+    # Before the sweep: a table registered now is compiled by the sweep that
+    # follows, in this run.
+    found = discover(actor, discovery_mode())
+    if found is not None:
+        if found.get("failed"):
+            print(f"table discovery failed: {found['failed']}")
+        else:
+            print(f"table discovery: {len(found['registered'])} registered, "
+                  f"{len(found['found'])} new in the lake, "
+                  f"{len(found['undecidable'])} left alone, "
+                  f"{len(found['unreadable'])} source(s) unreadable"
+                  + (f" — {json.dumps(found, default=str)}"
+                     if found['registered'] or found['undecidable'] else ""))
 
     result = sweep(actor)
     if not result["stale"]:

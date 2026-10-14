@@ -89,6 +89,11 @@ spec:
                 # ambient administrator, and the job refuses to run without
                 # one rather than silently checking nothing.
                 - {name: KAVEON_DLM_SWEEP_ACTOR, value: {{ required "api.dlmFreshness.actor is required when dlmFreshness is enabled" .Values.api.dlmFreshness.actor | quote }}}
+                # Whether the sweep also looks for tables the catalog does not
+                # hold: `off`, `report`, or `register`. Off by default, because
+                # a scheduled job that writes to the product catalog on its own
+                # is what swept benchmark scratch into it once already.
+                - {name: KAVEON_DLM_DISCOVER_TABLES, value: {{ .Values.api.dlmFreshness.discoverTables | quote }}}
               volumeMounts:
                 - {name: tmp, mountPath: /tmp}
                 - {name: engine-ca, mountPath: /var/run/kaveon/engine-ca, readOnly: true}
