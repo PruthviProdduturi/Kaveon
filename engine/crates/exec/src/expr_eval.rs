@@ -3148,6 +3148,32 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 }
                 Ok(Arc::new(builder.finish()) as ArrayRef)
             }
+            DataType::LargeUtf8 => {
+                let mut builder = LargeListBuilder::new(LargeStringBuilder::new());
+                for row in 0..num_rows {
+                    for arg in args {
+                        if arg.data_type() == &DataType::Null {
+                            builder.values().append_null();
+                            continue;
+                        }
+                        let values = arg
+                            .as_any()
+                            .downcast_ref::<LargeStringArray>()
+                            .ok_or_else(|| {
+                                KaveonError::Execution(
+                                    "ARRAY element type could not be decoded".into(),
+                                )
+                            })?;
+                        if values.is_null(row) {
+                            builder.values().append_null();
+                        } else {
+                            builder.values().append_value(values.value(row));
+                        }
+                    }
+                    builder.append(true);
+                }
+                Ok(Arc::new(builder.finish()) as ArrayRef)
+            }
             DataType::Decimal128(precision, scale) => {
                 let mut builder = ListBuilder::new(
                     Decimal128Builder::new()
@@ -10120,6 +10146,23 @@ mod tests {
             vec![Some("wide"), Some("wide")]
         );
         assert_eq!(repeated.value(1).null_count(), 1);
+    }
+
+    #[test]
+    fn array_constructor_preserves_large_utf8_offsets() {
+        let left = Arc::new(LargeStringArray::from(vec![Some("a"), None])) as ArrayRef;
+        let right = Arc::new(LargeStringArray::from(vec![Some("b"), Some("c")])) as ArrayRef;
+        let result = eval_scalar_function("ARRAY", &[left, right], 2).unwrap();
+        let arrays = result.as_any().downcast_ref::<LargeListArray>().unwrap();
+        assert_eq!(arrays.value_type(), DataType::LargeUtf8);
+        assert_eq!(
+            arrays.value(0).as_string::<i64>().iter().collect::<Vec<_>>(),
+            vec![Some("a"), Some("b")]
+        );
+        assert_eq!(
+            arrays.value(1).as_string::<i64>().iter().collect::<Vec<_>>(),
+            vec![None, Some("c")]
+        );
     }
 
     #[test]
