@@ -4892,6 +4892,15 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let source = &args[1];
             eval_date_part(field_arr, source, num_rows)
         }
+        "DATE_DIFF" => {
+            if args.len() != 3 {
+                return Err(KaveonError::Execution(
+                    "DATE_DIFF requires 3 arguments (unit, start, end)".into(),
+                ));
+            }
+            let unit_arr = as_string_array(&args[0])?;
+            eval_date_diff(unit_arr, &args[1], &args[2], num_rows)
+        }
         "TO_CHAR" | "DATE_FORMAT" => {
             check_arity(name, args, 2)?;
             let source = &args[0];
@@ -6834,6 +6843,115 @@ fn eval_date_part(field_arr: &StringArray, source: &ArrayRef, num_rows: usize) -
     Ok(Arc::new(Int64Array::from(result)))
 }
 
+/// Return a temporal value as nanoseconds from the Unix epoch.  Keeping the
+/// intermediate in `i128` lets DATE_DIFF compare any pair of supported Arrow
+/// time units without overflowing while converting a nanosecond timestamp.
+fn temporal_nanoseconds(source: &ArrayRef, row: usize) -> Result<Option<i128>> {
+    let value = match source.data_type() {
+        // DATE literals are represented as epoch-day INT64 values by the SQL
+        // planner before a table schema is available.
+        DataType::Int64 => {
+            let values = source.as_primitive::<Int64Type>();
+            values.is_null(row).then_some(None).unwrap_or_else(|| {
+                Some((values.value(row) as i128) * 86_400_000_000_000i128)
+            })
+        }
+        DataType::Date32 => {
+            let values = source.as_primitive::<Date32Type>();
+            values.is_null(row).then_some(None).unwrap_or_else(|| {
+                Some((values.value(row) as i128) * 86_400_000_000_000i128)
+            })
+        }
+        DataType::Date64 => {
+            let values = source.as_primitive::<Date64Type>();
+            values.is_null(row).then_some(None).unwrap_or_else(|| {
+                Some((values.value(row) as i128) * 1_000_000i128)
+            })
+        }
+        DataType::Timestamp(TimeUnit::Second, _) => {
+            let values = source.as_primitive::<TimestampSecondType>();
+            values.is_null(row).then_some(None).unwrap_or_else(|| {
+                Some((values.value(row) as i128) * 1_000_000_000i128)
+            })
+        }
+        DataType::Timestamp(TimeUnit::Millisecond, _) => {
+            let values = source.as_primitive::<TimestampMillisecondType>();
+            values.is_null(row).then_some(None).unwrap_or_else(|| {
+                Some((values.value(row) as i128) * 1_000_000i128)
+            })
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, _) => {
+            let values = source.as_primitive::<TimestampMicrosecondType>();
+            values.is_null(row).then_some(None).unwrap_or_else(|| {
+                Some((values.value(row) as i128) * 1_000i128)
+            })
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+            let values = source.as_primitive::<TimestampNanosecondType>();
+            values.is_null(row).then_some(None).unwrap_or_else(|| {
+                Some(values.value(row) as i128)
+            })
+        }
+        other => {
+            return Err(KaveonError::Execution(format!(
+                "DATE_DIFF requires DATE or timestamp inputs, got {other}"
+            )))
+        }
+    };
+    Ok(value)
+}
+
+fn eval_date_diff(
+    unit_arr: &StringArray,
+    start: &ArrayRef,
+    end: &ArrayRef,
+    num_rows: usize,
+) -> Result<ArrayRef> {
+    if start.len() != end.len() || start.len() != unit_arr.len() {
+        return Err(KaveonError::Execution(
+            "DATE_DIFF arguments must have the same length".into(),
+        ));
+    }
+    let result = (0..num_rows)
+        .map(|row| {
+            if unit_arr.is_null(row) {
+                return Ok(None);
+            }
+            let divisor = match unit_arr.value(row).to_ascii_uppercase().as_str() {
+                "NANOSECOND" => 1i128,
+                "MICROSECOND" => 1_000i128,
+                "MILLISECOND" => 1_000_000i128,
+                "SECOND" => 1_000_000_000i128,
+                "MINUTE" => 60_000_000_000i128,
+                "HOUR" => 3_600_000_000_000i128,
+                "DAY" => 86_400_000_000_000i128,
+                "WEEK" => 604_800_000_000_000i128,
+                "MONTH" | "QUARTER" | "YEAR" => {
+                    return Err(KaveonError::Execution(
+                        "DATE_DIFF month, quarter, and year units require calendar arithmetic and are not yet supported".into(),
+                    ))
+                }
+                unit => {
+                    return Err(KaveonError::Execution(format!(
+                        "unsupported DATE_DIFF unit: {unit}"
+                    )))
+                }
+            };
+            let Some(start) = temporal_nanoseconds(start, row)? else {
+                return Ok(None);
+            };
+            let Some(end) = temporal_nanoseconds(end, row)? else {
+                return Ok(None);
+            };
+            let difference = (end - start) / divisor;
+            i64::try_from(difference)
+                .map(Some)
+                .map_err(|_| KaveonError::Execution("DATE_DIFF result overflows BIGINT".into()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Arc::new(Int64Array::from(result)))
+}
+
 fn eval_to_char(source: &ArrayRef, _fmt: &StringArray, num_rows: usize) -> Result<ArrayRef> {
     match source.data_type() {
         DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, _) => {
@@ -7189,6 +7307,91 @@ mod tests {
         let result = values.as_primitive::<TimestampMillisecondType>();
         assert_eq!(result.value(0), -86_400_000);
         assert!(result.is_null(1));
+    }
+
+    #[test]
+    fn date_diff_supports_fixed_units_and_nulls() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new(
+                "start",
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                true,
+            ),
+            arrow::datatypes::Field::new(
+                "end",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                true,
+            ),
+        ]));
+        let input = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(TimestampMillisecondArray::from(vec![
+                    Some(0),
+                    Some(3_600_000),
+                    None,
+                ])),
+                Arc::new(TimestampMicrosecondArray::from(vec![
+                    Some(86_400_000_000),
+                    Some(7_200_000_000),
+                    Some(1_000),
+                ])),
+            ],
+        )
+        .unwrap();
+        let values = evaluate(
+            &Expr::Function {
+                name: "DATE_DIFF".into(),
+                args: vec![
+                    Expr::Literal(ScalarValue::Utf8("DAY".into())),
+                    Expr::Column("start".into()),
+                    Expr::Column("end".into()),
+                ],
+            },
+            &input,
+        )
+        .unwrap();
+        assert_eq!(
+            values
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(0), None]
+        );
+
+        let values = evaluate(
+            &Expr::Function {
+                name: "DATE_DIFF".into(),
+                args: vec![
+                    Expr::Literal(ScalarValue::Utf8("HOUR".into())),
+                    Expr::Column("start".into()),
+                    Expr::Column("end".into()),
+                ],
+            },
+            &input,
+        )
+        .unwrap();
+        assert_eq!(
+            values
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(24), Some(1), None]
+        );
+
+        let error = evaluate(
+            &Expr::Function {
+                name: "DATE_DIFF".into(),
+                args: vec![
+                    Expr::Literal(ScalarValue::Utf8("MONTH".into())),
+                    Expr::Column("start".into()),
+                    Expr::Column("end".into()),
+                ],
+            },
+            &input,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("calendar arithmetic"), "{error}");
     }
 
     #[test]

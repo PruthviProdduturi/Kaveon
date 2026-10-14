@@ -3236,6 +3236,7 @@ fn trino_functions_response(pattern: Option<&str>) -> Response {
         ("contains", "boolean", "[array, unknown]", "scalar", true, "Test array membership"),
         ("count", "bigint", "[unknown]", "aggregate", true, "Count rows or values"),
         ("current_date", "date", "[]", "scalar", false, "Current session date"),
+        ("date_diff", "bigint", "[varchar, date, date]", "scalar", true, "Difference between temporal values in a fixed unit"),
         ("date_part", "bigint", "[varchar, date]", "scalar", true, "Extract a date field"),
         ("date_trunc", "date", "[varchar, date]", "scalar", true, "Truncate a date or timestamp"),
         ("ends_with", "boolean", "[varchar, varchar]", "scalar", true, "Test a string suffix"),
