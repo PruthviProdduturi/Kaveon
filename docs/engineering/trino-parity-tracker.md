@@ -42,14 +42,14 @@ regression snapshot and are not a release-image claim:
 `cargo test -p kaveon-server --bin kaveon-server` passed **356/356** tests,
 `cargo test -p kaveon-sql --lib` passed **121/121** tests, and
 `cargo test -p kaveon-optim --lib` passed **47/47** tests,
-`cargo test -p kaveon-exec --lib` passed **287/287** non-ignored tests with four
+`cargo test -p kaveon-exec --lib` passed **289/289** non-ignored tests with four
 benchmark tests intentionally ignored. Documentation validation also passed for 145 Markdown
 files, 39 routes, and 9 SVGs. This is an in-process regression baseline; it
 does not replace the deployed three-worker qualification gates listed below.
 
 The complete `cargo test --workspace` run also passed on this tree, including
 catalog, CLI, core, executor, optimizer, server, SQL, and storage crates plus
-all doctests. The executor result is **287 passed, 4 ignored**; the ignored
+all doctests. The executor result is **289 passed, 4 ignored**; the ignored
 cases are explicitly marked release benchmarks. This workspace result is
 repository-wide regression evidence, not a substitute for the deployed
 three-worker and connector qualification gates.
