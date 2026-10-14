@@ -2471,6 +2471,90 @@ fn array_concat_variadic<L: OffsetSizeTrait>(
     )?))
 }
 
+fn array_flatten<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<ArrayRef> {
+    let mut chunks = Vec::<ArrayRef>::new();
+    let mut offsets = vec![L::zero()];
+    let mut valid = Vec::with_capacity(list.len());
+    let mut element_type = None;
+    for row in 0..list.len() {
+        if list.is_null(row) {
+            valid.push(false);
+            offsets.push(L::from_usize(chunks.iter().map(|chunk| chunk.len()).sum()).ok_or_else(
+                || KaveonError::Execution("flatten result offset overflow".into()),
+            )?);
+            continue;
+        }
+        let nested = list.value(row);
+        let row_start = chunks.len();
+        let mut row_valid = true;
+        match nested.data_type() {
+            DataType::List(_) => {
+                let nested = nested
+                    .as_any()
+                    .downcast_ref::<ListArray>()
+                    .expect("List data type must be a ListArray");
+                element_type = Some(nested.value_type());
+                for index in 0..nested.len() {
+                    if nested.is_null(index) {
+                        row_valid = false;
+                        break;
+                    }
+                    chunks.push(nested.value(index));
+                }
+            }
+            DataType::LargeList(_) => {
+                let nested = nested
+                    .as_any()
+                    .downcast_ref::<LargeListArray>()
+                    .expect("LargeList data type must be a LargeListArray");
+                element_type = Some(nested.value_type());
+                for index in 0..nested.len() {
+                    if nested.is_null(index) {
+                        row_valid = false;
+                        break;
+                    }
+                    chunks.push(nested.value(index));
+                }
+            }
+            other => {
+                return Err(KaveonError::Execution(format!(
+                    "flatten requires ARRAY of ARRAY values, got {other}"
+                )))
+            }
+        }
+        if !row_valid {
+            chunks.truncate(row_start);
+        }
+        valid.push(row_valid);
+        offsets.push(L::from_usize(chunks.iter().map(|chunk| chunk.len()).sum()).ok_or_else(
+            || KaveonError::Execution("flatten result offset overflow".into()),
+        )?);
+    }
+    let element_type = element_type.ok_or_else(|| {
+        KaveonError::Execution("flatten requires ARRAY of ARRAY values".into())
+    })?;
+    let values = if chunks.is_empty() {
+        arrow::array::new_empty_array(&element_type)
+    } else {
+        let chunks = chunks
+            .iter()
+            .map(|value| value.as_ref() as &dyn Array)
+            .collect::<Vec<_>>();
+        compute::concat(&chunks)?
+    };
+    let field = Arc::new(arrow::datatypes::Field::new(
+        "item",
+        values.data_type().clone(),
+        true,
+    ));
+    Ok(Arc::new(GenericListArray::<L>::try_new(
+        field,
+        OffsetBuffer::new(ScalarBuffer::from(offsets)),
+        values,
+        Some(arrow::buffer::NullBuffer::from(valid)),
+    )?))
+}
+
 fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
     let upper = name.to_uppercase();
     if upper.starts_with("ARRAY_ANY_") || upper.starts_with("ARRAY_ALL_") {
@@ -2772,6 +2856,18 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 "ARRAY elements of type {data_type} are not supported"
             ))),
         };
+    }
+    if upper == "FLATTEN" {
+        check_arity(name, args, 1)?;
+        if let Some(list) = args[0].as_any().downcast_ref::<ListArray>() {
+            return array_flatten(list);
+        }
+        if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
+            return array_flatten(list);
+        }
+        return Err(KaveonError::Execution(
+            "FLATTEN requires an ARRAY of ARRAY values".into(),
+        ));
     }
     if matches!(upper.as_str(), "ARRAY_UNION" | "ARRAY_INTERSECT" | "ARRAY_EXCEPT") {
         check_arity(name, args, 2)?;
@@ -8741,6 +8837,40 @@ mod tests {
         assert_eq!(
             arrays.value(0).as_primitive::<Int64Type>().values(),
             &[1, 2, 3, 4]
+        );
+    }
+
+    #[test]
+    fn flatten_concatenates_nested_typed_arrays() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        let inner = |values: &[i64]| Expr::Function {
+            name: "ARRAY".into(),
+            args: values
+                .iter()
+                .copied()
+                .map(ScalarValue::Int64)
+                .map(Expr::Literal)
+                .collect(),
+        };
+        let value = evaluate(
+            &Expr::Function {
+                name: "FLATTEN".into(),
+                args: vec![Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![inner(&[1, 2]), inner(&[3])],
+                }],
+            },
+            &batch,
+        )
+        .unwrap();
+        let arrays = value.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(
+            arrays.value(0).as_primitive::<Int64Type>().values(),
+            &[1, 2, 3]
         );
     }
 

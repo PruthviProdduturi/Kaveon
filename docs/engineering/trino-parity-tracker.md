@@ -97,6 +97,10 @@ mixed offset widths and complex nested values remain explicit boundaries.
 `ARRAY_CONCAT` now accepts two or more matching typed lists, including the
 64-bit-offset representation, while retaining explicit null-array semantics.
 
+`FLATTEN` now concatenates nested typed arrays for both list offset widths. An
+outer NULL remains NULL, and a NULL nested array fails closed instead of being
+silently treated as an empty array.
+
 The initial repository audit confirms that the Engine has real distributed
 foundations, but several operators are still centralized or narrow:
 
