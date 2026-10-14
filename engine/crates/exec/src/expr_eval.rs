@@ -10153,6 +10153,26 @@ mod tests {
         let timestamps = result.as_primitive::<arrow::datatypes::TimestampMicrosecondType>();
         assert_eq!(timestamps.value(0), 20_000);
         assert!(timestamps.is_null(1));
+
+        let literal_batch = RecordBatch::try_from_iter([(
+            "row",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Cast {
+                expr: Box::new(Expr::Literal(ScalarValue::Utf8(
+                    "2026-10-13 12:34:56.789".into(),
+                ))),
+                data_type: CastTarget::TimestampMicros {
+                    with_timezone: false,
+                },
+            },
+            &literal_batch,
+        )
+        .unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.data_type(), &DataType::Timestamp(TimeUnit::Microsecond, None));
     }
 
     #[test]
