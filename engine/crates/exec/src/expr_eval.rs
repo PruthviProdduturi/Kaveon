@@ -7913,6 +7913,12 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     .collect::<Vec<_>>();
                 return Ok(Arc::new(Int64Array::from(values)));
             }
+            if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
+                let values = (0..num_rows)
+                    .map(|row| (!list.is_null(row)).then(|| list.value_length(row) as i64))
+                    .collect::<Vec<_>>();
+                return Ok(Arc::new(Int64Array::from(values)));
+            }
             let list = args[0]
                 .as_any()
                 .downcast_ref::<arrow::array::ListArray>()
@@ -11390,6 +11396,18 @@ mod tests {
         let inner = result.value(0);
         let values = inner.as_string::<i32>();
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some("z"), None, Some("a")]);
+
+        let mut large_cardinality_builder = LargeListBuilder::new(Int64Builder::new());
+        large_cardinality_builder.values().append_value(1);
+        large_cardinality_builder.values().append_value(2);
+        large_cardinality_builder.append(true);
+        let result = eval_scalar_function(
+            "CARDINALITY",
+            &[Arc::new(large_cardinality_builder.finish()) as ArrayRef],
+            1,
+        )
+        .unwrap();
+        assert_eq!(result.as_primitive::<Int64Type>().value(0), 2);
 
         let mut large_text_sort_builder = LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
         large_text_sort_builder.values().append_value("z");
