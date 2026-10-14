@@ -1493,12 +1493,36 @@ fn build_aggregate(
         if sets_ast.is_empty() {
             return Err(sql_err("GROUP BY CUBE with 16 or more keys is not supported"));
         }
-        if group_by_ast.len() != 1 || aggregates.is_empty() {
+        if aggregates.is_empty() {
             return Err(sql_err(
-                "GROUPING SETS requires one grouping expression and at least one aggregate",
+                "GROUPING SETS requires at least one aggregate",
             ));
         }
+        let ordinary_group_by = group_by_ast
+            .iter()
+            .filter(|expression| {
+                !matches!(
+                    expression,
+                    ast::Expr::GroupingSets(_) | ast::Expr::Cube(_) | ast::Expr::Rollup(_)
+                )
+            })
+            .map(ast_expr_to_expr)
+            .collect::<Result<Vec<_>>>()?;
         let mut full_group_by = Vec::new();
+        // Ordinary keys beside a grouping specification are present in every
+        // expanded branch (for example, `GROUP BY region, CUBE (platform)`).
+        // Keep them first so the visible output order follows the query.
+        for expression in ordinary_group_by {
+            if !matches!(expression, Expr::Column(_)) {
+                return Err(sql_err(
+                    "GROUPING SETS currently requires column grouping keys",
+                ));
+            }
+            if !full_group_by.contains(&expression) {
+                full_group_by.push(expression);
+            }
+        }
+        let ordinary_count = full_group_by.len();
         for set in &sets_ast {
             for expression in set {
                 let expression = ast_expr_to_expr(expression)?;
@@ -1517,10 +1541,17 @@ fn build_aggregate(
         }
         let mut inputs = Vec::with_capacity(sets_ast.len());
         for set in sets_ast {
-            let set = set
+            let mut set = set
                 .iter()
                 .map(ast_expr_to_expr)
                 .collect::<Result<Vec<_>>>()?;
+            // Ordinary keys are the prefix of full_group_by and are present
+            // in every branch; set-specific keys are not.
+            for expression in &full_group_by[..ordinary_count] {
+                if !set.contains(expression) {
+                    set.push(expression.clone());
+                }
+            }
             let group_by = full_group_by
                 .iter()
                 .map(|expression| {
@@ -4664,6 +4695,18 @@ mod tests {
             assert!(debug.contains("Union"), "{sql}: {debug}");
             assert!(debug.matches("Aggregate").count() >= 3, "{sql}: {debug}");
         }
+    }
+
+    #[test]
+    fn grouping_sets_keep_ordinary_keys_in_every_branch() {
+        let plan = sql_to_logical_plan(
+            "SELECT region, platform, COUNT(*) FROM events GROUP BY region, GROUPING SETS ((platform), ())",
+        )
+        .unwrap();
+        let debug = format!("{plan:?}");
+        assert_eq!(debug.matches("Aggregate").count(), 2, "{debug}");
+        assert!(debug.contains("region"), "{debug}");
+        assert!(debug.contains("platform"), "{debug}");
     }
 
     #[test]
