@@ -27,7 +27,7 @@ use kaveon_sql::logical_plan::{
     sql_to_logical_plan_for_binder_with_parameter_values, ParameterValue,
 };
 use kaveon_sql::parser::{
-    NativeTransactionalStatement, adapt_product_dml, parse_native_transactional,
+    NativeTransactionalStatement, adapt_product_dml_batch, parse_native_transactional,
 };
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
@@ -8531,7 +8531,7 @@ fn transaction_api_guidance(
         NativeTransactionalStatement::Begin
         | NativeTransactionalStatement::Commit
         | NativeTransactionalStatement::Rollback => true,
-        NativeTransactionalStatement::Dml(dml) => adapt_product_dml(&dml).is_ok(),
+        NativeTransactionalStatement::Dml(dml) => adapt_product_dml_batch(&dml).is_ok(),
     };
     if !supported {
         return None;
@@ -8614,7 +8614,7 @@ async fn capabilities(State(state): State<Arc<AppState>>) -> Json<EngineCapabili
             ],
             single_statement_per_request: true,
             parameter_binding: false,
-            multi_row_insert: false,
+            multi_row_insert: true,
             returning: false,
             savepoints: false,
             explicit_isolation_modes: false,
@@ -17161,7 +17161,7 @@ mod tests {
         assert_eq!(enabled.transactions.supported_statements[0], "BEGIN");
         assert!(enabled.transactions.single_statement_per_request);
         assert!(!enabled.transactions.parameter_binding);
-        assert!(!enabled.transactions.multi_row_insert);
+        assert!(enabled.transactions.multi_row_insert);
         assert!(!enabled.transactions.returning);
         assert!(!enabled.transactions.savepoints);
         assert!(!enabled.transactions.explicit_isolation_modes);

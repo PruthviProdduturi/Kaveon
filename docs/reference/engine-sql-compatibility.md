@@ -151,7 +151,7 @@ server or a general row-store protocol.
 | Existing operation | Behavior |
 |---|---|
 | `BEGIN` | Creates an owner-isolated transaction session against the current product snapshot |
-| `INSERT` | One explicit `(id, document_json)` record into a supported `kaveon.product` family |
+| `INSERT` | One or more explicit `(id, document_json)` records into a supported `kaveon.product` family; all rows stage under one transaction commit |
 | `UPDATE` | Revision-checked replacement of one product document; `id` and `revision` are required in `WHERE` |
 | `DELETE` | Revision-checked deletion of one product document; `id` and `revision` are required in `WHERE` |
 | `COMMIT` | Publishes a prepared immutable catalog snapshot through the configured product store |
@@ -159,7 +159,8 @@ server or a general row-store protocol.
 
 Each request carries one statement and a transaction ID after `BEGIN`. Product
 operations are authenticated, owner-isolated, revision-checked, and limited to
-the supported product families. Multi-row values, `INSERT ... SELECT`,
+the supported product families. Multi-row `VALUES` are expanded into bounded
+typed commands and committed atomically. `INSERT ... SELECT`,
 `RETURNING`, `ON CONFLICT`, savepoints, transaction modifiers, arbitrary user
 tables, and lake-table DML are rejected explicitly. Statement execution accepts
 typed positional (`$1`, `?`) and named (`:name`) scalar or JSON-array parameters
@@ -183,7 +184,9 @@ filtering to session settings. `SHOW FUNCTIONS` and `SHOW FUNCTIONS LIKE 'patter
 the Engine's supported scalar and aggregate function metadata in Trino's
 standard six-column shape. Compound values beyond arrays,
 timestamps, intervals, and the complete prepare/describe/bind wire lifecycle
-remain explicitly unsupported.
+remain explicitly unsupported. `EXECUTE IMMEDIATE 'sql' USING ...` is supported
+for a quoted SQL literal with the same typed binder. `USE catalog.schema` and
+`USE schema` emit Trino's session-update response headers.
 The current product transaction contract
 does not provide PostgreSQL MVCC isolation, row-level indexes, foreign-key
 enforcement, or crash-recovery parity.

@@ -1899,7 +1899,7 @@ async fn stage_sql_batch(
     Json(request): Json<SqlBatchRequest>,
 ) -> Response {
     use kaveon_sql::parser::{
-        NativeTransactionalStatement, adapt_product_dml, parse_native_transactional,
+        NativeTransactionalStatement, adapt_product_dml_batch, parse_native_transactional,
     };
     if request.statements.is_empty() || request.statements.len() > 1000 {
         return error_response(RegistryError::Invalid(
@@ -1917,11 +1917,11 @@ async fn stage_sql_batch(
             }
             Err(error) => return error_response(RegistryError::Invalid(error.to_string())),
         };
-        let command = match adapt_product_dml(&parsed) {
+        let mut adapted = match adapt_product_dml_batch(&parsed) {
             Ok(command) => command,
             Err(error) => return error_response(RegistryError::Invalid(error.to_string())),
         };
-        commands.push(command);
+        commands.append(&mut adapted);
     }
     match state
         .product_transactions
@@ -1939,7 +1939,7 @@ async fn execute_sql_request(
     request: SqlTransactionRequest,
 ) -> Response {
     use kaveon_sql::parser::{
-        NativeTransactionalStatement, adapt_product_dml, parse_native_transactional,
+        NativeTransactionalStatement, adapt_product_dml_batch, parse_native_transactional,
     };
     let parsed = match parse_native_transactional(&request.sql) {
         Ok(parsed) => parsed,
@@ -1974,11 +1974,11 @@ async fn execute_sql_request(
             let Some(id) = request.transaction_id else {
                 return error_response(RegistryError::Invalid("transaction_id is required".into()));
             };
-            let command = match adapt_product_dml(&dml) {
+            let commands = match adapt_product_dml_batch(&dml) {
                 Ok(command) => command,
                 Err(error) => return error_response(RegistryError::Invalid(error.to_string())),
             };
-            match registry.stage_product_command(owner, &id, command).await {
+            match registry.stage_product_commands(owner, &id, commands).await {
                 Ok(snapshot) => Json(snapshot).into_response(),
                 Err(error) => error_response(error),
             }
@@ -3079,6 +3079,41 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    #[tokio::test]
+    async fn sql_endpoint_stages_multi_row_product_insert_in_one_commit() {
+        let (registry, catalog) = registry().await;
+        let begun = registry.begin("alice").await.unwrap();
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: r#"INSERT INTO kaveon.product.datasets (id, document_json) VALUES ('one', '{}'), ('two', '{"name":"Two"}')"#.into(),
+                transaction_id: Some(begun.transaction_id.clone()),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = execute_sql_request(
+            &registry,
+            "alice",
+            SqlTransactionRequest {
+                sql: "COMMIT".into(),
+                transaction_id: Some(begun.transaction_id),
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let snapshot = catalog.read_current().await.unwrap();
+        assert!(snapshot
+            .product_record(ProductRecordKind::Dataset, "one")
+            .unwrap()
+            .is_some());
+        assert!(snapshot
+            .product_record(ProductRecordKind::Dataset, "two")
+            .unwrap()
+            .is_some());
     }
 
     #[tokio::test]

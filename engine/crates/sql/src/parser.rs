@@ -116,6 +116,19 @@ pub enum ProductDmlCommand {
 /// Adapt only Kaveon's typed product-record SQL facade. Arbitrary row DML has
 /// no storage contract and is rejected instead of being silently emulated.
 pub fn adapt_product_dml(dml: &NativeDmlStatement) -> Result<ProductDmlCommand> {
+    let mut commands = adapt_product_dml_batch(dml)?;
+    if commands.len() != 1 {
+        return Err(sql_error(
+            "product INSERT accepts one record per statement; use the transaction batch API for multiple records",
+        ));
+    }
+    Ok(commands.remove(0))
+}
+
+/// Adapt a product DML statement into one or more transactional commands.
+/// Multi-row INSERT is intentionally expanded here so the transaction layer
+/// can stage every row under one commit boundary without interpolating SQL.
+pub fn adapt_product_dml_batch(dml: &NativeDmlStatement) -> Result<Vec<ProductDmlCommand>> {
     let kind = if dml.table.eq_ignore_ascii_case("kaveon.product.typed_rows")
         || dml.table.eq_ignore_ascii_case("product.typed_rows")
     {
@@ -143,14 +156,20 @@ pub fn adapt_product_dml(dml: &NativeDmlStatement) -> Result<ProductDmlCommand> 
             else {
                 return Err(sql_error("product INSERT requires VALUES"));
             };
-            if values.rows.len() != 1 || values.rows[0].len() != 2 {
-                return Err(sql_error("product INSERT accepts exactly one record"));
+            if values.rows.is_empty() || values.rows.iter().any(|row| row.len() != 2) {
+                return Err(sql_error("product INSERT rows must contain id and document_json"));
             }
-            Ok(ProductDmlCommand::Create {
-                kind,
-                id: string_literal(&values.rows[0][0], "product ID")?,
-                document_json: string_literal(&values.rows[0][1], "product document_json")?,
-            })
+            values
+                .rows
+                .iter()
+                .map(|row| {
+                    Ok(ProductDmlCommand::Create {
+                        kind: kind.clone(),
+                        id: string_literal(&row[0], "product ID")?,
+                        document_json: string_literal(&row[1], "product document_json")?,
+                    })
+                })
+                .collect()
         }
         Statement::Update {
             assignments,
@@ -168,20 +187,20 @@ pub fn adapt_product_dml(dml: &NativeDmlStatement) -> Result<ProductDmlCommand> 
             }
             let document_json = string_literal(&assignments[0].value, "product document_json")?;
             let (id, expected_revision) = product_key_predicate(selection.as_ref())?;
-            Ok(ProductDmlCommand::Update {
+            Ok(vec![ProductDmlCommand::Update {
                 kind,
                 id,
                 expected_revision,
                 document_json,
-            })
+            }])
         }
         Statement::Delete(delete) => {
             let (id, expected_revision) = product_key_predicate(delete.selection.as_ref())?;
-            Ok(ProductDmlCommand::Delete {
+            Ok(vec![ProductDmlCommand::Delete {
                 kind,
                 id,
                 expected_revision,
-            })
+            }])
         }
         _ => Err(sql_error("statement is not product DML")),
     }
@@ -625,7 +644,6 @@ mod tests {
         for sql in [
             "INSERT INTO app.users (id, document_json) VALUES ('u-1', '{}')",
             "INSERT INTO product.datasets (document_json, id) VALUES ('{}', 'd-1')",
-            "INSERT INTO product.datasets (id, document_json) VALUES ('d-1', '{}'), ('d-2', '{}')",
             "UPDATE product.datasets SET document_json = '{}' WHERE id = 'd-1' AND owner = 'alice'",
             "DELETE FROM product.datasets WHERE revision = 1 AND revision = 2",
         ] {
@@ -638,5 +656,34 @@ mod tests {
                 "unexpectedly adapted {sql}"
             );
         }
+    }
+
+    #[test]
+    fn product_insert_batch_expands_rows_without_sql_interpolation() {
+        let NativeTransactionalStatement::Dml(dml) = parse_native_transactional(
+            "INSERT INTO product.datasets (id, document_json) VALUES ('one', '{}'), ('two', '{\"n\":2}')",
+        )
+        .unwrap() else {
+            panic!("expected product DML");
+        };
+        let commands = adapt_product_dml_batch(&dml).unwrap();
+        assert_eq!(commands.len(), 2);
+        assert_eq!(
+            commands[0],
+            ProductDmlCommand::Create {
+                kind: "dataset".into(),
+                id: "one".into(),
+                document_json: "{}".into(),
+            }
+        );
+        assert_eq!(
+            commands[1],
+            ProductDmlCommand::Create {
+                kind: "dataset".into(),
+                id: "two".into(),
+                document_json: "{\"n\":2}".into(),
+            }
+        );
+        assert!(adapt_product_dml(&dml).is_err());
     }
 }
