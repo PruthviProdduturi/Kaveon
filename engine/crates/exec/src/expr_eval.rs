@@ -2887,6 +2887,54 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let result: StringArray = arr.iter().map(|v| v.map(|s| s.trim().to_owned())).collect();
             Ok(Arc::new(result))
         }
+        "CHR" => {
+            check_arity(name, args, 1)?;
+            let values = compute::cast(&args[0], &DataType::Int64)?;
+            let values = values.as_primitive::<Int64Type>();
+            let result: StringArray = (0..num_rows)
+                .map(|row| {
+                    if values.is_null(row) {
+                        return Ok(None);
+                    }
+                    let value = values.value(row);
+                    let codepoint = u32::try_from(value).map_err(|_| {
+                        KaveonError::Execution(format!("CHR code point {value} is invalid"))
+                    })?;
+                    char::from_u32(codepoint)
+                        .map(|character| Some(character.to_string()))
+                        .ok_or_else(|| {
+                            KaveonError::Execution(format!("CHR code point {value} is invalid"))
+                        })
+                })
+                .collect::<Result<Vec<_>>>()?
+                .into();
+            Ok(Arc::new(result))
+        }
+        "CODEPOINT" => {
+            check_arity(name, args, 1)?;
+            let values = as_string_array(&args[0])?;
+            let result: Int64Array = (0..num_rows)
+                .map(|row| {
+                    if values.is_null(row) {
+                        return Ok(None);
+                    }
+                    let mut characters = values.value(row).chars();
+                    let character = characters.next().ok_or_else(|| {
+                        KaveonError::Execution(
+                            "CODEPOINT requires exactly one Unicode code point".into(),
+                        )
+                    })?;
+                    if characters.next().is_some() {
+                        return Err(KaveonError::Execution(
+                            "CODEPOINT requires exactly one Unicode code point".into(),
+                        ));
+                    }
+                    Ok(Some(i64::from(u32::from(character))))
+                })
+                .collect::<Result<Vec<_>>>()?
+                .into();
+            Ok(Arc::new(result))
+        }
         "JSON_ARRAY_LENGTH" => {
             check_arity(name, args, 1)?;
             let documents = as_string_array(&args[0])?;
@@ -10728,6 +10776,49 @@ mod tests {
         assert_eq!(arr.value(0), "HELLO");
         assert_eq!(arr.value(1), "WORLD");
         assert!(arr.is_null(2));
+    }
+
+    #[test]
+    fn chr_and_codepoint_round_trip_unicode_and_reject_invalid_width() {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("code", DataType::Int64, true),
+                Field::new("text", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(0x41), Some(0x1F600), None])),
+                Arc::new(StringArray::from(vec![Some("A"), Some("😀"), None])),
+            ],
+        )
+        .unwrap();
+        let chr = Expr::Function {
+            name: "CHR".into(),
+            args: vec![Expr::Column("code".into())],
+        };
+        let result = evaluate(&chr, &batch).unwrap();
+        let values = as_string_array(&result).unwrap();
+        assert_eq!(values.value(0), "A");
+        assert_eq!(values.value(1), "😀");
+        assert!(values.is_null(2));
+
+        let codepoint = Expr::Function {
+            name: "CODEPOINT".into(),
+            args: vec![Expr::Column("text".into())],
+        };
+        let result = evaluate(&codepoint, &batch).unwrap();
+        let values = result.as_primitive::<Int64Type>();
+        assert_eq!(values.value(0), 0x41);
+        assert_eq!(values.value(1), 0x1F600);
+        assert!(values.is_null(2));
+
+        let invalid = Expr::Function {
+            name: "CODEPOINT".into(),
+            args: vec![Expr::Literal(ScalarValue::Utf8("AB".into()))],
+        };
+        assert!(evaluate(&invalid, &batch)
+            .unwrap_err()
+            .to_string()
+            .contains("exactly one Unicode code point"));
     }
 
     #[test]
