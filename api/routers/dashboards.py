@@ -108,13 +108,29 @@ def delete_dashboard(dashboard_id: str, ctx: UserContext = Depends(require_user_
         raise HTTPException(status_code=404, detail="Dashboard not found")
     if not can_write(existing["created_by"], ctx):
         raise HTTPException(status_code=403, detail="You don't have permission to delete this dashboard")
-    svc.delete_dashboard(dashboard_id, ctx.email, ctx.role)
-    # Also purge it from every user's recents so it doesn't linger there.
-    # Recents store the id prefixed by type (e.g. "dashboard-<id>").
+    # References first, then the record.
+    #
+    # A recents entry and a favorite each NAME this dashboard as a reference in
+    # the product catalog, and the catalog refuses to delete a record that
+    # another record still points at:
+    #
+    #     invalid transaction: product record 'user_recent/<id>'
+    #     references missing 'dashboard/<id>'
+    #
+    # These purges used to run after the delete, so the delete raised and they
+    # never ran at all: any dashboard anyone had ever opened or favorited could
+    # not be deleted, and the Studio reported it as a permission problem. A
+    # failure to clear the references is raised rather than printed, because
+    # proceeding would only produce that same rejection one line later.
     try:
         recents_svc.remove_recent_all_users(f"dashboard-{dashboard_id}", "dashboard")
-    except Exception as e:
-        print(f"[Dashboards] recents cleanup failed for {dashboard_id}: {e}")
+        fav_svc.remove_favorite_all_users("dashboard", dashboard_id)
+    except Exception as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not clear this dashboard's references, so it was not deleted: {error}",
+        ) from error
+    svc.delete_dashboard(dashboard_id, ctx.email, ctx.role)
 
 
 @router.put("/dashboards/{dashboard_id}/favorite")

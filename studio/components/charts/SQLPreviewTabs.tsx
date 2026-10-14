@@ -9,6 +9,7 @@ const SQLPreviewTabs: React.FC = () => {
 
   const {
     lastSql,
+    runningSql,
     lastConfigJson,
     dataColumns,
     dataRows,
@@ -69,16 +70,24 @@ const SQLPreviewTabs: React.FC = () => {
     };
   }, [isRunning]);
 
+  /** The statement to display, and whether it is the one running now. */
+  const shown = isRunning
+    ? { sql: runningSql, live: true }
+    : { sql: lastSql, live: false };
+
   const renderSql = () => {
     if (error) return <div style={{ color: "var(--error)" }}>{error}</div>;
-    if (isRunning) return <div className="muted">{runningLabel}</div>;
-    if (!lastSql)
+    // A run has started but the statement is still being generated: there is
+    // no statement to show yet, which is not the same as there being none.
+    if (isRunning && !shown.sql)
+      return <div className="muted">Generating the statement…</div>;
+    if (!shown.sql)
       return <div className="muted">{runPrompt} to see the generated SQL.</div>;
 
     // Format SQL for better readability
     let formattedSql: string;
     try {
-      formattedSql = formatSql(lastSql, {
+      formattedSql = formatSql(shown.sql, {
         language: "tsql",
         tabWidth: 2,
         keywordCase: "upper",
@@ -86,11 +95,11 @@ const SQLPreviewTabs: React.FC = () => {
       });
     } catch {
       // Unformattable SQL is shown as written rather than not at all.
-      formattedSql = lastSql;
+      formattedSql = shown.sql;
     }
 
     return (
-      <>
+      <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
         {coalesceDiagnostics.hasMultiSemanticGroups &&
           !coalesceDiagnostics.hasCoalesceInSql && (
             <div
@@ -98,9 +107,12 @@ const SQLPreviewTabs: React.FC = () => {
                 marginBottom: 8,
                 padding: "6px 8px",
                 borderRadius: 6,
-                background: "#fffbeb",
-                border: "1px solid #fbbf24",
-                color: "#92400e",
+                // A tint of the warning colour over whatever is behind it,
+                // rather than the fixed cream/amber/brown that rendered this
+                // as a light block on a dark card.
+                background: "rgba(245, 158, 11, 0.12)",
+                border: "1px solid var(--warning, #f59e0b)",
+                color: "var(--text-primary)",
                 fontSize: 11,
               }}
             >
@@ -110,6 +122,28 @@ const SQLPreviewTabs: React.FC = () => {
               multiple tables), double-check the dataset metadata.
             </div>
           )}
+        {shown.live && (
+          <div
+            style={{
+              marginBottom: 8,
+              padding: "6px 8px",
+              borderRadius: 6,
+              background: "rgba(var(--accent-rgb), 0.10)",
+              border: "1px solid rgba(var(--accent-rgb), 0.35)",
+              color: "var(--text-secondary)",
+              fontSize: 11,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            <i className="fas fa-circle-notch fa-spin" style={{ color: "var(--accent)" }} />
+            <span>
+              {runningLabel.replace(/\.\.\.$/, "")} — this is the statement running now
+              {liveElapsedMs != null ? `, ${formatDurationMs(liveElapsedMs)} so far` : ""}.
+            </span>
+          </div>
+        )}
         <pre
           style={{
             background: "var(--bg-surface)",
@@ -117,16 +151,18 @@ const SQLPreviewTabs: React.FC = () => {
             borderRadius: 8,
             padding: 8,
             fontSize: 12,
-            height: "100%",
             width: "100%",
             boxSizing: "border-box",
             overflow: "auto",
             border: "1px solid var(--border)",
+            flex: 1,
+            minHeight: 0,
+            margin: 0,
           }}
         >
           {formattedSql}
         </pre>
-      </>
+      </div>
     );
   };
 

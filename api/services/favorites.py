@@ -10,6 +10,10 @@ from services import product_outbox, product_shadow_read
 
 MIGRATABLE_TYPES = {"dataset", "chart", "dashboard", "saved_query", "source"}
 
+# The same bound the recents purge uses: a cross-owner delete is a fanout, and
+# an unbounded one is a way to take the catalog down by deleting one chart.
+MAX_CROSS_OWNER_DELETE = 100
+
 def _record_id(owner, object_type, object_id):
     return hashlib.sha256(f"{owner}\0{object_type}\0{object_id}".encode()).hexdigest()
 
@@ -196,3 +200,48 @@ def _adapt(row: dict) -> dict:
         "created_at": row.get("created_at"),
         "user_id": row.get("user_email"),
     }
+
+
+def remove_favorite_all_users(object_type: str, object_id: str) -> None:
+    """Purge a favorite for every user — call BEFORE deleting the chart,
+    dashboard or dataset it points at.
+
+    A favorite names its object as a reference in the product catalog, and the
+    catalog refuses to delete a record another record still references:
+
+        invalid transaction: product record 'favorite/<id>'
+        references missing 'chart/<id>'
+
+    So the reference has to go first. It belongs to whoever favorited the
+    object rather than to the person deleting it, which is why this is a fanout
+    across owners and cannot share the delete's transaction — each owner's
+    records are written as that owner, exactly as the recents purge does it.
+    """
+    from services import product_read_authority, product_store
+    if not product_read_authority.enabled("favorites"):
+        # On the PostgreSQL path the favorites row is removed by its own
+        # foreign key, so there is no dangling reference to clear.
+        return
+    object_type, object_id = _normalized_reference(object_type, object_id)
+    matches = []
+    for record in product_store.list_records("favorite", "kaveon-system", "Admin",
+                                             max_records=1000):
+        document, revision = record.get("document"), record.get("revision")
+        if (not isinstance(document, dict) or not isinstance(record.get("id"), str)
+                or not isinstance(revision, int) or revision < 1):
+            raise RuntimeError("KaveonDB returned an invalid favorite record")
+        if (document.get("object_type") == object_type
+                and str(document.get("object_id")) == object_id):
+            matches.append(record)
+    if len(matches) > MAX_CROSS_OWNER_DELETE:
+        raise RuntimeError("cross-owner favorite delete exceeds its fanout bound")
+    by_owner: dict[str, list] = {}
+    for record in matches:
+        owner = record["document"].get("user_email")
+        if not isinstance(owner, str) or not owner:
+            raise RuntimeError("KaveonDB returned an invalid favorite owner")
+        by_owner.setdefault(owner, []).append(record)
+    for owner, owned in by_owner.items():
+        product_store.transact([product_store.ProductMutation(
+            "delete", "favorite", record["id"], expected_revision=record["revision"])
+            for record in owned], owner, "Admin")

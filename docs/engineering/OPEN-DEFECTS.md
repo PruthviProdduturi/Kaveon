@@ -297,27 +297,6 @@ chart.
 
 Every append re-encodes its whole typed table. Needs chunking.
 
----
-
-## Verified fixed
-
-| | what it was | verified |
-|---|---|---|
-| **D-9** | Context banner took 6.5s on every load: three catalog listings and nine artifact reads, all serial, each artifact read rebuilding an Azure credential (0.24s of re-authentication per read) | 6.48s → 1.76s cold. `dc0299b1` |
-| **D-10** | A failed read rendered as a verdict: Settings said "Metadata database not configured — run the setup wizard" and "KaveonDB unavailable — set KAVEON_ENGINE_URL" while both were correct and the coordinator was merely restarting | `e7f8b453` |
-| **D-11** | Benchmark left the Engine at zero replicas: the restore sat outside `try`, so any failed round left the platform down | restore in `finally`, verified by a rigged failure. `34cdb5b8` |
-| **D-12** | Kaveon worker scheduled onto a Trino node while the spare node sat empty, contaminating the measurement the node was added to protect | required anti-affinity; verified live during a round. `baea94a3` |
-| **D-13** | Dashboard previews stored for only 3 of 8: capture sent up to 3,500,000 chars against an API bound of 256,000, and the 422 was swallowed | `74fd75ef` |
-| **D-14** | "Refresh outstanding" permanently disabled: staleness depended on a localStorage baseline a fresh browser never has | staleness now from `thumbnail_updated_at`. `74fd75ef` |
-| **D-15** | Viewer shown Add chart / Add dashboard / delete / Publish, and both builder entry pages had no role check at all | `72adb3b4` |
-| **D-16** | SQL Lab results drew below the composer then jumped to the top: columns publish before rows, and the in-progress panel was in-flow above the grid | `660f87e5` |
-| **D-17** | Dashboard builder: chart list did not scroll, canvas did not fill the page | root was `.page-shell` with no height, so every `flex: 1` beneath it was inert. `794af12f` — **see D-2** |
-| **D-18** | Recorded row counts never refreshed: the freshness sweep was disabled in the PostgreSQL-free runtime and had no identity to read artifacts with | hourly CronJob, verified running. `0ed5e7a0` |
-| **D-19** | Catalog manifest described pre-Delta single-file Parquet objects with stale counts; a rebuild from it would have failed | regenerated from the Engine. `d5d20f6c` |
-| **D-20** | Saved Queries tab empty: 6 rows in the typed table, 0 ever backfilled into the product family | all 6 restored, verified |
-| **D-21** | `OpenSource` catalog had no declared credential, working only because the pod identity happened to hold account-scope access; its source record also carried `root_path: ""`, which a re-sync would have written over the real prefix | `WorkloadIdentity` declared, reads verified |
-| **D-22** | Kaveon Events bound to a 24-row projection instead of the 504M source table | re-pointed; 34 charts verified resolving |
-
 ### D-38 · A cube build starves on the memory pool it is itself holding
 **verified** · 2026-10-13 · **Engine — @Codex** · `NEXT`
 
@@ -343,3 +322,97 @@ statement's effective memory budget by the configured concurrent width before
 admission. The bound is always positive, is sent to workers through the normal
 task settings, and is covered by
 `cube_child_memory_budget_is_shared_across_concurrent_groupings`.
+
+### D-39 · A cube build scans the table once per grouping
+**open** · 2026-10-13 · **Engine — @Codex**
+
+Observed during the D-38 build: each grouping is an independent
+`SELECT <axis>, COUNT(*), SUM(…) … GROUP BY` over the full table. A 10-axis
+shape is 10 single-axis groupings plus the 45 two-axis pairs the cube holds, so
+a 504,000,000-row table is scanned on the order of 55 times for one build at
+four statements at a time. One scan feeding every grouping is the same work
+once.
+
+### D-40 · A column deletes with no confirmation, unlike every other tile
+**open** · 2026-10-13
+
+`DashboardColumnComponent`'s delete calls `removeItemFromContainer` /
+`removeLayoutItem` straight from `onClick`. Every other tile type routes
+removal through `ConfirmModal` first. A column holds children, so it is the
+tile where an accidental delete costs the most, and it is the one that does not
+ask. Found while verifying that each tile type owns a remove control for the
+D-33 follow-up.
+
+### D-41 · The column toolbar is hardcoded light
+**open** · 2026-10-13
+
+Its buttons declare `background: '#fff'`, `border: '1px solid #e2e8f0'` and
+`color: '#64748b'` inline, so the column's own controls stay a white cluster on
+a dark canvas. Same shape as the Customize tab and the Add charts dialog: a
+surface written before the dark theme and never mapped to tokens.
+
+
+
+### D-42 · Every non-ASCII character in every SQL statement is corrupted
+**open** · 2026-10-13 · **Engine — @Codex** · data integrity
+
+`engine/crates/sql/src/parser.rs`, `normalize_bracket_identifiers`: the
+function walks the statement with `sql.as_bytes()` and rebuilds it with
+`out.push(b as char)`. In Rust `u8 as char` is a Latin-1 to Unicode
+conversion, so UTF-8 byte 0xF0 becomes U+00F0 and the String re-encodes it as
+0xC3 0xB0. Every statement passes through this function on its way to the
+parser, so every non-ASCII character in any statement is replaced by its
+Latin-1 misreading — identifiers and string literals alike.
+
+Demonstrated with a literal and nothing else:
+
+    sent      SELECT 'Probe (taxi emoji) en-dash' FROM events.dashboard LIMIT 1
+    returned  the same string with each non-ASCII byte expanded to its
+              Latin-1 character
+
+Product records are written as SQL literals, so this silently corrupts stored
+data, once per write. The read path is innocent: the wire bytes for a stored
+name are already the double-encoded form at rest.
+
+**Corrupted data now in the catalog.** The six seeded saved queries carry one
+pass each. A chart named `New Chart - Oct 13, 2026` (with an en dash) carried
+three, because the passes compound on every rewrite — it had been saved three
+times. Repair is `encode('latin-1').decode('utf-8')` applied once per pass,
+and must wait until the write path is fixed or it will simply be re-corrupted.
+A helper already exists at `api/services/dlm_run_backfill.py:61`.
+
+### D-43 · A maintenance build takes capacity from interactive queries
+**open** · 2026-10-13
+
+A cube build and a chart compete in the same resource group, so while a build
+runs the product degrades: a chart that takes 33 s on an idle cluster was
+measured at 158 s total against 28.7 s of server time — 130 s of it admission
+wait behind the build's own scans. D-38 fixed the build starving itself; it
+does not stop the build starving everything else.
+
+The Engine already supports the separation: `resource_groups` selectors match
+on `client_tag`, and `engine_bridge` already stamps a client tag on every
+statement. Maintenance work — `ANALYZE`, cube builds, the freshness sweep —
+should carry a reserved tag and be bound to a small group, so a build can
+never consume the interactive share.
+
+---
+
+## Verified fixed
+
+| | what it was | verified |
+|---|---|---|
+| **D-9** | Context banner took 6.5s on every load: three catalog listings and nine artifact reads, all serial, each artifact read rebuilding an Azure credential (0.24s of re-authentication per read) | 6.48s → 1.76s cold. `dc0299b1` |
+| **D-10** | A failed read rendered as a verdict: Settings said "Metadata database not configured — run the setup wizard" and "KaveonDB unavailable — set KAVEON_ENGINE_URL" while both were correct and the coordinator was merely restarting | `e7f8b453` |
+| **D-11** | Benchmark left the Engine at zero replicas: the restore sat outside `try`, so any failed round left the platform down | restore in `finally`, verified by a rigged failure. `34cdb5b8` |
+| **D-12** | Kaveon worker scheduled onto a Trino node while the spare node sat empty, contaminating the measurement the node was added to protect | required anti-affinity; verified live during a round. `baea94a3` |
+| **D-13** | Dashboard previews stored for only 3 of 8: capture sent up to 3,500,000 chars against an API bound of 256,000, and the 422 was swallowed | `74fd75ef` |
+| **D-14** | "Refresh outstanding" permanently disabled: staleness depended on a localStorage baseline a fresh browser never has | staleness now from `thumbnail_updated_at`. `74fd75ef` |
+| **D-15** | Viewer shown Add chart / Add dashboard / delete / Publish, and both builder entry pages had no role check at all | `72adb3b4` |
+| **D-16** | SQL Lab results drew below the composer then jumped to the top: columns publish before rows, and the in-progress panel was in-flow above the grid | `660f87e5` |
+| **D-17** | Dashboard builder: chart list did not scroll, canvas did not fill the page | root was `.page-shell` with no height, so every `flex: 1` beneath it was inert. `794af12f` — **see D-2** |
+| **D-18** | Recorded row counts never refreshed: the freshness sweep was disabled in the PostgreSQL-free runtime and had no identity to read artifacts with | hourly CronJob, verified running. `0ed5e7a0` |
+| **D-19** | Catalog manifest described pre-Delta single-file Parquet objects with stale counts; a rebuild from it would have failed | regenerated from the Engine. `d5d20f6c` |
+| **D-20** | Saved Queries tab empty: 6 rows in the typed table, 0 ever backfilled into the product family | all 6 restored, verified |
+| **D-21** | `OpenSource` catalog had no declared credential, working only because the pod identity happened to hold account-scope access; its source record also carried `root_path: ""`, which a re-sync would have written over the real prefix | `WorkloadIdentity` declared, reads verified |
+| **D-22** | Kaveon Events bound to a 24-row projection instead of the 504M source table | re-pointed; 34 charts verified resolving |
