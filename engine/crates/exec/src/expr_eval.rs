@@ -2,7 +2,7 @@ use arrow::array::{
     Array, ArrayRef, AsArray, BooleanArray, BooleanBuilder, Date32Array, Date64Array,
     Decimal128Array,
     Decimal128Builder,
-    Float64Array, Float64Builder,
+    Float32Array, Float64Array, Float64Builder,
     Int32Array, Int32Builder, Int32DictionaryArray, Int64Array, Int64Builder, LargeListArray,
     ListArray, GenericListArray, OffsetSizeTrait,
     ListBuilder, MapArray,
@@ -16,7 +16,8 @@ use arrow::array::{
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute;
 use arrow::datatypes::{
-    ArrowPrimitiveType, DataType, Date32Type, Date64Type, Float64Type, Int32Type, Int64Type,
+    ArrowPrimitiveType, DataType, Date32Type, Date64Type, Float32Type, Float64Type, Int32Type,
+    Int64Type,
     Time32MillisecondType, Time32SecondType, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, TimeUnit, UInt32Type,
     UInt64Type,
@@ -2426,6 +2427,11 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 PrimitiveBuilder::<UInt64Type>::new(),
                 UInt64Array,
                 |values: &UInt64Array, row| values.value(row)
+            ),
+            DataType::Float32 => build_array!(
+                PrimitiveBuilder::<Float32Type>::new(),
+                Float32Array,
+                |values: &Float32Array, row| values.value(row)
             ),
             DataType::Date32 => build_array!(
                 PrimitiveBuilder::<arrow::datatypes::Date32Type>::new(),
@@ -11692,6 +11698,30 @@ mod tests {
             assert_eq!(result.as_list::<i32>().value(0).len(), 1);
             assert!(result.as_list::<i32>().value(1).is_null(0));
         }
+    }
+
+    #[test]
+    fn evaluates_float32_array_elements() {
+        let batch = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(Float32Array::from(vec![Some(1.25), None])) as ArrayRef,
+        )])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "ARRAY".into(),
+                args: vec![Expr::Column("value".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            result.data_type(),
+            &DataType::List(Arc::new(Field::new("item", DataType::Float32, true)))
+        );
+        let values = result.as_list::<i32>();
+        assert_eq!(values.value(0).as_primitive::<Float32Type>().value(0), 1.25);
+        assert!(values.value(1).is_null(0));
     }
 
     #[test]
