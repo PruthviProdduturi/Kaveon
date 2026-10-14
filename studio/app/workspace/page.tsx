@@ -468,11 +468,32 @@ export default function WorkspacePage() {
     setDeleteError(null);
     try {
       const res = await msalFetch(`${tab.endpoint}/${item.id}`, { method: "DELETE" });
-      if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok && res.status !== 204) {
+        // The reason comes from the response, not from a guess. This read
+        // "You may not have permission" for every failure, which sent the
+        // reader looking at roles while the real answer was a 502 from the
+        // catalog refusing to delete a record other records still referenced.
+        let detail = "";
+        try {
+          const body = await res.json();
+          detail = typeof body?.detail === "string" ? body.detail : "";
+        } catch {
+          detail = "";
+        }
+        const reason =
+          detail ||
+          (res.status === 403
+            ? "You don't have permission to delete it."
+            : res.status === 404
+              ? "It no longer exists."
+              : `The server returned ${res.status}.`);
+        throw new Error(reason);
+      }
       setItems((prev) => prev.filter((i) => i.id !== item.id));
       setConfirmItem(null);
-    } catch {
-      setDeleteError(`Couldn't delete that ${kind}. You may not have permission.`);
+    } catch (error) {
+      const reason = error instanceof Error && error.message ? error.message : "";
+      setDeleteError(`Couldn't delete that ${kind}.${reason ? ` ${reason}` : ""}`);
     } finally {
       setDeletingId(null);
     }

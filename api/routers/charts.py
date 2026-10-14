@@ -128,12 +128,29 @@ def delete_chart(chart_id: str, ctx: UserContext = Depends(require_user_context)
         raise HTTPException(status_code=404, detail="Chart not found")
     if not can_write(existing["created_by"], ctx):
         raise HTTPException(status_code=403, detail="You don't have permission to delete this chart")
-    svc.delete_chart(chart_id, ctx.email, ctx.role)
-    # Also purge it from every user's recents (id is prefixed by type).
+    # References first, then the record.
+    #
+    # A recents entry and a favorite each NAME this chart as a reference in
+    # the product catalog, and the catalog refuses to delete a record that
+    # another record still points at:
+    #
+    #     invalid transaction: product record 'user_recent/<id>'
+    #     references missing 'chart/<id>'
+    #
+    # These purges used to run after the delete, so the delete raised and they
+    # never ran at all: any chart anyone had ever opened or favorited could
+    # not be deleted, and the Studio reported it as a permission problem. A
+    # failure to clear the references is raised rather than printed, because
+    # proceeding would only produce that same rejection one line later.
     try:
         recents_svc.remove_recent_all_users(f"chart-{chart_id}", "chart")
-    except Exception as e:
-        print(f"[Charts] recents cleanup failed for {chart_id}: {e}")
+        fav_svc.remove_favorite_all_users("chart", chart_id)
+    except Exception as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not clear this chart's references, so it was not deleted: {error}",
+        ) from error
+    svc.delete_chart(chart_id, ctx.email, ctx.role)
 
 
 @router.put("/charts/{chart_id}/favorite")

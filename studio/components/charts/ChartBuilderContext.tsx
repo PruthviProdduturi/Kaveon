@@ -982,6 +982,18 @@ export interface ChartFilterConfig {
 
 export interface SqlPreviewState {
   lastSql: string | null;
+  // The statement currently in flight, as submitted.
+  //
+  // `lastSql` is written only when a run finishes, so during a run it still
+  // holds the PREVIOUS statement — showing that while "Updating chart..." is
+  // on screen would present one statement as another, which is the failure
+  // this codebase keeps finding. This field is set from the statement actually
+  // handed to the execute endpoint and cleared when the run settles, so the
+  // SQL tab can show what is running without ever showing a stale statement
+  // as a live one. Null while the statement is still being generated: at that
+  // point there is genuinely no statement yet, which is a different thing from
+  // one that is unknown.
+  runningSql: string | null;
   lastConfigJson: any | null;
   dataColumns: string[];
   dataRows: (string | number | null)[][];
@@ -1449,6 +1461,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
   } | null>(null);
   const [sqlPreview, setSqlPreview] = useState<SqlPreviewState>({
     lastSql: null,
+    runningSql: null,
     lastConfigJson: null,
     dataColumns: [],
     dataRows: [],
@@ -3190,7 +3203,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
     if (!config) return;
 
     isQueryRunningRef.current = true;
-    setSqlPreview((prev) => ({ ...prev, isRunning: true, error: null }));
+    setSqlPreview((prev) => ({ ...prev, isRunning: true, error: null, runningSql: null }));
 
     const abort = new AbortController();
     queryAbortRef.current = abort;
@@ -3298,6 +3311,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
               } catch { /* SQL generation is best-effort */ }
 
               setSqlPreview({
+                runningSql: null,
                 lastSql: dlmSql,
                 lastConfigJson: config,
                 dataColumns: executeJson.columns,
@@ -3361,6 +3375,13 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
       const dashboardIdFromContext = isDashboard
         ? (runContext || "").split(":")[1] || undefined
         : undefined;
+
+      // The statement is settled and about to be submitted: publish it so the
+      // SQL tab can show what is running rather than hiding it behind
+      // "Updating chart...". A 43 s aggregate is exactly when a reader wants
+      // to see the statement, and until now it was the one moment it was
+      // withheld.
+      setSqlPreview((prev) => ({ ...prev, runningSql: sqlText }));
 
       const executeBody = {
         sql_text: sqlText,
@@ -3807,6 +3828,7 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
       setPreviewOptions(option);
 
       setSqlPreview({
+        runningSql: null,
         lastSql: sqlText,
         lastConfigJson: config,
         dataColumns: executeJson.columns ?? [],
@@ -3834,9 +3856,9 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
       // The reader cancelled or left the page: stand the chart down without
       // reporting a failure that did not happen.
       if (isAbortError(e)) {
-        setSqlPreview((prev) => ({ ...prev, isRunning: false, error: null }));
+        setSqlPreview((prev) => ({ ...prev, isRunning: false, error: null, runningSql: null }));
       } else {
-        setSqlPreview((prev) => ({ ...prev, isRunning: false, error: e instanceof Error ? e.message : "Unknown error" }));
+        setSqlPreview((prev) => ({ ...prev, isRunning: false, error: e instanceof Error ? e.message : "Unknown error", runningSql: null }));
       }
     } finally {
       releaseEngineSlot?.();
