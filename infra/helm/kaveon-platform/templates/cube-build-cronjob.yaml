@@ -1,0 +1,120 @@
+{{- if .Values.api.cubeBuild.enabled }}
+{{- /*
+  Builds a table's cube, in its own pod.
+
+  A cube lets the Engine answer a grouped aggregate over a table's declared
+  shape without scanning it. Nothing builds one implicitly -- the freshness
+  sweep recompiles DLM context, which is a different thing -- so a table can
+  have current statistics, current context, and still scan half a billion rows
+  for every chart.
+
+  Suspended, and deliberately a CronJob rather than a Job. A Job in a chart is
+  re-created by `helm upgrade`, and deploys here happen on every push, so a
+  Job would rebuild the cube on every push: tens of minutes of cluster time,
+  repeatedly, unasked. Suspended it never runs on its own, and an operator
+  triggers one run from it:
+
+      kubectl create job cube-build-1 \
+        --from=cronjob/kaveon-cube-build -n <namespace>
+
+  Its own pod is the point. A build over a 10-axis shape issues one statement
+  per grouping -- ten single axes plus the forty-five pairs the cube holds --
+  so it runs for tens of minutes, and two attempts made over `kubectl exec`
+  died when a deploy replaced the API pod underneath them: the connection
+  holding the statement went away and the coordinator cancelled it, losing
+  about ten completed groupings each time.
+
+  The statement carries the maintenance client tag, which the coordinator's
+  resource groups select into the maintenance group, so the build cannot take
+  the slots interactive queries need. Without that group it takes all four of
+  the default group's slots and a chart is refused outright rather than slowed.
+  See infra/helm/kaveon-engine/examples/resource-groups.maintenance.json.
+*/}}
+{{- $retirement := .Values.api.cutover.retirementMode }}
+{{- $rehearsal := .Values.api.cutover.restartRehearsalMode }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kaveon-cube-build
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: kaveon-cube-build
+spec:
+  # Never on a clock. The schedule is required by the API and is never
+  # reached; `suspend` is what holds it, and a run is created from it by hand.
+  schedule: "0 0 31 2 *"
+  suspend: true
+  # Two builds over one table would scan it twice to publish the same cube.
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # One attempt. A build that failed on admission or memory fails the same
+      # way again immediately, and a backoff loop would hold the Forbid lock
+      # while repeating a scan that costs tens of minutes.
+      backoffLimit: 0
+      activeDeadlineSeconds: {{ .Values.api.cubeBuild.timeoutSeconds }}
+      template:
+        metadata:
+          labels:
+            app: kaveon-cube-build
+            azure.workload.identity/use: "true"
+        spec:
+          restartPolicy: Never
+          serviceAccountName: kaveon-api
+          automountServiceAccountToken: false
+          # The same identity the API runs as. `runAsNonRoot` alone is not
+          # enough: the image declares no USER, so the kubelet refuses the
+          # container with CreateContainerConfigError rather than picking a uid
+          # for it.
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: build
+              image: {{ include "portal.image" (list .Values.images.api "api") }}
+              command: ["python", "-m", "services.cube_build_job"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: [ALL]}
+              resources:
+{{ toYaml .Values.api.cubeBuild.resources | indent 16 }}
+              env:
+{{- include "portal.apiEnv" . | nindent 16 }}
+                # Named explicitly, both of them. The job refuses to run
+                # without a principal rather than building as an ambient
+                # administrator, and refuses to guess a table rather than
+                # deciding unattended to spend tens of minutes of cluster time
+                # on one -- which tables carry a cube is a modelling decision,
+                # recorded as the table's shape.
+                - {name: KAVEON_CUBE_ACTOR, value: {{ required "api.cubeBuild.actor is required when cubeBuild is enabled" .Values.api.cubeBuild.actor | quote }}}
+                - {name: KAVEON_CUBE_TARGET, value: {{ required "api.cubeBuild.target is required when cubeBuild is enabled" .Values.api.cubeBuild.target | quote }}}
+              volumeMounts:
+                - {name: tmp, mountPath: /tmp}
+                - {name: engine-ca, mountPath: /var/run/kaveon/engine-ca, readOnly: true}
+{{- if or $retirement $rehearsal }}
+                - {name: retirement-evidence, mountPath: /retirement, readOnly: true}
+{{- end }}
+          volumes:
+            - name: tmp
+              emptyDir: {}
+            # The same two forms the sweep job accepts: `engine.caSecret` is
+            # empty by default and the trust material then comes from a
+            # ConfigMap, so a job that assumed the secret would mount nothing
+            # on a default installation and fail its first Engine call.
+            - name: engine-ca
+{{- if .Values.engine.caSecret }}
+              secret: {secretName: {{ .Values.engine.caSecret }}}
+{{- else }}
+              configMap: {name: {{ required "engine.caConfigMap is required when engine.caSecret is empty" .Values.engine.caConfigMap }}}
+{{- end }}
+{{- if or $retirement $rehearsal }}
+            - name: retirement-evidence
+              persistentVolumeClaim: {claimName: {{ .Values.api.cutover.evidencePvc }}}
+{{- end }}
+{{- end }}

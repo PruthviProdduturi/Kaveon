@@ -206,6 +206,36 @@ api:
     resources:
       requests: {cpu: 250m, memory: 1Gi}
       limits: {cpu: "2", memory: 8Gi}
+  # Builds one table's cube, so the Engine can answer a grouped aggregate over
+  # its declared shape without scanning it.
+  #
+  # Rendered as a SUSPENDED CronJob: a Job in a chart is re-created by every
+  # `helm upgrade`, and deploys happen on every push here, so a Job would
+  # rebuild the cube on every push. Suspended it never runs on its own, and a
+  # run is created from it deliberately:
+  #
+  #   kubectl create job cube-build-1 --from=cronjob/kaveon-cube-build -n <ns>
+  #
+  # Its own pod is the point: a build over a ten-axis shape issues one
+  # statement per grouping and runs for tens of minutes, and builds driven over
+  # `kubectl exec` were cancelled twice when a deploy replaced the API pod
+  # under them.
+  cubeBuild:
+    enabled: false
+    # The principal the build runs as, and the table to build, as
+    # catalog.schema.table. Naming both is what makes the job renderable; it
+    # refuses to build as nobody or to guess a table.
+    actor: ""
+    target: ""
+    # Bounds one build. Generous, because the work is one scan per grouping and
+    # a ten-axis shape is fifty-five of them; the maintenance resource group is
+    # what keeps that off the interactive path, not this.
+    timeoutSeconds: 14400
+    # A scan, not a request. It aggregates server-side, so the memory it needs
+    # is the Engine's rather than this pod's.
+    resources:
+      requests: {cpu: 100m, memory: 256Mi}
+      limits: {cpu: "1", memory: 1Gi}
   # Puts the Engine back when something has scaled it to nothing.
   #
   # This cluster serves the platform and also hosts a benchmark campaign that
