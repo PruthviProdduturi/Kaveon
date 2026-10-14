@@ -1531,6 +1531,23 @@ fn eval_in_list(
 
 fn eval_cast(expr: &Expr, target: CastTarget, batch: &RecordBatch) -> Result<ArrayRef> {
     let arr = evaluate(expr, batch)?;
+    if matches!(target, CastTarget::TimestampMicros { with_timezone: true }) {
+        // Arrow's string parser requires the optional chrono-tz feature for
+        // named zones such as UTC. Parse the instant as a naive timestamp,
+        // then attach the Engine's canonical UTC metadata without changing
+        // the microsecond value.
+        let naive = compute::cast(
+            &arr,
+            &DataType::Timestamp(TimeUnit::Microsecond, None),
+        )?;
+        let values = naive
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .ok_or_else(|| KaveonError::Execution("timestamp cast produced an invalid array".into()))?
+            .clone()
+            .with_timezone("UTC");
+        return Ok(Arc::new(values));
+    }
     let arrow_type = target.to_arrow_type();
     Ok(compute::cast(&arr, &arrow_type)?)
 }
@@ -10173,6 +10190,23 @@ mod tests {
         .unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result.data_type(), &DataType::Timestamp(TimeUnit::Microsecond, None));
+
+        let result = evaluate(
+            &Expr::Cast {
+                expr: Box::new(Expr::Literal(ScalarValue::Utf8(
+                    "2026-10-13 12:34:56Z".into(),
+                ))),
+                data_type: CastTarget::TimestampMicros {
+                    with_timezone: true,
+                },
+            },
+            &literal_batch,
+        )
+        .unwrap();
+        assert_eq!(
+            result.data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+        );
     }
 
     #[test]
