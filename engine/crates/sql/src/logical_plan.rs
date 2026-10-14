@@ -2177,27 +2177,14 @@ fn build_limit_offset(
     offset: &Option<ast::Offset>,
     fetch: Option<&ast::Fetch>,
 ) -> Result<LogicalPlan> {
-    let plan = match offset {
-        Some(ast::Offset { value, .. }) => {
-            let count = ast_expr_to_usize(value)?;
-            if count > 0 {
-                LogicalPlan::Offset {
-                    input: Box::new(plan),
-                    count,
-                }
-            } else {
-                plan
-            }
-        }
-        None => plan,
+    let offset_count = match offset {
+        Some(ast::Offset { value, .. }) => ast_expr_to_usize(value)?,
+        None => 0,
     };
     let fetch_limit = match fetch {
         None => None,
         Some(fetch) if fetch.percent => {
             return Err(sql_err("FETCH PERCENT is unsupported; use FETCH ... ROWS ONLY"));
-        }
-        Some(fetch) if fetch.with_ties => {
-            return Err(sql_err("FETCH WITH TIES is unsupported; use FETCH ... ROWS ONLY"));
         }
         Some(fetch) => Some(
             fetch
@@ -2206,24 +2193,88 @@ fn build_limit_offset(
                 .ok_or_else(|| sql_err("FETCH requires a row count"))?,
         ),
     };
+    let with_ties = fetch.is_some_and(|fetch| fetch.with_ties);
     match (limit, fetch_limit) {
         (Some(_), Some(_)) => Err(sql_err("LIMIT and FETCH cannot both be specified")),
-        (None, None) => Ok(plan),
+        (None, None) if offset_count == 0 => Ok(plan),
+        (None, None) => Ok(LogicalPlan::Offset {
+            input: Box::new(plan),
+            count: offset_count,
+        }),
         (Some(expr), None) => {
             if matches!(expr, ast::Expr::Identifier(identifier) if identifier.value.eq_ignore_ascii_case("ALL")) {
-                return Ok(plan);
+                return if offset_count == 0 {
+                    Ok(plan)
+                } else {
+                    Ok(LogicalPlan::Offset {
+                        input: Box::new(plan),
+                        count: offset_count,
+                    })
+                };
             }
             let count = ast_expr_to_usize(expr)?;
-            Ok(LogicalPlan::Limit {
-                input: Box::new(plan),
-                count,
-            })
+            let plan = if offset_count == 0 {
+                plan
+            } else {
+                LogicalPlan::Offset {
+                    input: Box::new(plan),
+                    count: offset_count,
+                }
+            };
+            Ok(LogicalPlan::Limit { input: Box::new(plan), count })
         }
         (None, Some(expr)) => {
             let count = ast_expr_to_usize(expr)?;
-            Ok(LogicalPlan::Limit {
-                input: Box::new(plan),
-                count,
+            if !with_ties {
+                let plan = if offset_count == 0 {
+                    plan
+                } else {
+                    LogicalPlan::Offset {
+                        input: Box::new(plan),
+                        count: offset_count,
+                    }
+                };
+                return Ok(LogicalPlan::Limit { input: Box::new(plan), count });
+            }
+            let LogicalPlan::Sort { input, order_by } = plan else {
+                return Err(sql_err(
+                    "FETCH WITH TIES requires an ORDER BY clause",
+                ));
+            };
+            let rank = Expr::WindowFunction {
+                name: "RANK".to_owned(),
+                args: Vec::new(),
+                partition_by: Vec::new(),
+                order_by: order_by.clone(),
+                frame: None,
+            };
+            let rank_name = format!("__kaveon_window_{rank:?}");
+            let ranked = LogicalPlan::Window {
+                input,
+                window_exprs: vec![rank],
+            };
+            let bounded = LogicalPlan::Filter {
+                input: Box::new(ranked),
+                predicate: Expr::BinaryOp {
+                    left: Box::new(Expr::Column(rank_name)),
+                    op: kaveon_core::BinaryOp::Le,
+                    right: Box::new(Expr::Literal(ScalarValue::Int64(
+                        i64::try_from(offset_count.saturating_add(count))
+                            .map_err(|_| sql_err("FETCH row count is too large"))?,
+                    ))),
+                },
+            };
+            let bounded = if offset_count == 0 {
+                bounded
+            } else {
+                LogicalPlan::Offset {
+                    input: Box::new(bounded),
+                    count: offset_count,
+                }
+            };
+            Ok(LogicalPlan::Sort {
+                input: Box::new(bounded),
+                order_by,
             })
         }
     }
@@ -5082,14 +5133,28 @@ mod tests {
     }
 
     #[test]
-    fn fetch_rejects_percent_and_with_ties_explicitly() {
-        for sql in [
-            "SELECT * FROM t FETCH FIRST 10 PERCENT ROWS ONLY",
-            "SELECT * FROM t ORDER BY id FETCH FIRST 10 ROWS WITH TIES",
-        ] {
-            let error = sql_to_logical_plan(sql).expect_err("unsupported FETCH form");
-            assert!(error.to_string().contains("FETCH"), "{error}");
-        }
+    fn fetch_percent_rejects_and_with_ties_preserves_rank_semantics() {
+        let error = sql_to_logical_plan("SELECT * FROM t FETCH FIRST 10 PERCENT ROWS ONLY")
+            .expect_err("FETCH PERCENT should remain unsupported");
+        assert!(error.to_string().contains("FETCH"), "{error}");
+
+        let plan = sql_to_logical_plan(
+            "SELECT id, score FROM t ORDER BY score DESC FETCH FIRST 2 ROWS WITH TIES",
+        )
+        .expect("FETCH WITH TIES should lower through rank");
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("WindowFunction"), "{debug}");
+        assert!(debug.contains("__kaveon_fetch_rank"), "{debug}");
+        assert!(debug.contains("Filter"), "{debug}");
+        assert!(debug.contains("Sort"), "{debug}");
+
+        let offset = sql_to_logical_plan(
+            "SELECT id FROM t ORDER BY score OFFSET 3 ROWS FETCH NEXT 2 ROWS WITH TIES",
+        )
+        .expect("offset with ties should be accepted");
+        let debug = format!("{offset:?}");
+        assert!(debug.contains("Int64(5)"), "rank boundary must include offset: {debug}");
+        assert!(debug.contains("count: 3"), "offset must apply after ties: {debug}");
     }
 
     #[test]
