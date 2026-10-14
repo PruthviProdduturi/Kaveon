@@ -120,6 +120,27 @@ interface DashboardCanvasProps {
 const dimsFor = (type: ComponentType) =>
   DEFAULT_COMPONENT_DIMENSIONS[type] || DEFAULT_COMPONENT_DIMENSIONS.chart;
 
+/**
+ * Tile types that already carry their own remove control, in their own actions
+ * cluster, routed through their own confirm.
+ *
+ * Checked one by one in the source rather than assumed: text, header and
+ * divider each render a `fa-trash` in their hover toolbar; a row has one in its
+ * "ROW · Column · Chart ·" toolbar; a column has its `×`; a tabs block has the
+ * pair in `.dashboard-component-header`. The CHART is the only type with none —
+ * `DashboardItem` returns for it before reaching that header — which is exactly
+ * the tile the complaint was about.
+ *
+ * So the canvas supplies the control for anything NOT listed here. The default
+ * is deliberately "the canvas provides it": a new tile type that forgets its
+ * own delete gets one anyway, which is the failure this list is guarding
+ * against, and the worst case is one redundant button rather than a tile that
+ * cannot be removed.
+ */
+const TYPES_WITH_OWN_REMOVE: ReadonlySet<ComponentType> = new Set<ComponentType>([
+  'text', 'header', 'divider', 'row', 'column', 'tabs',
+]);
+
 /** What the remove button calls the thing it removes, so its tooltip is specific. */
 const REMOVE_LABELS: Partial<Record<ComponentType, string>> = {
   chart: 'chart',
@@ -407,37 +428,39 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
                     <i className="fas fa-grip-lines" />
                   </div>
                 )}
-                {isEditMode && (
+                {/*
+                  Beside the type's own options control, for the types that do
+                  not already have a delete of their own. A `button`, which is
+                  already in DRAG_CANCEL, so pressing it cannot begin a tile
+                  drag.
+                */}
+                {isEditMode && !TYPES_WITH_OWN_REMOVE.has(item.type) && (
+                  <button
+                    type="button"
+                    className={styles.remove}
+                    onClick={() => setPendingRemoveId(item.i)}
+                    title={`Remove this ${label}`}
+                    aria-label={`Remove this ${label}`}
+                  >
+                    <i className="fas fa-trash" />
+                  </button>
+                )}
+                {/*
+                  "Into a container". `[draggable="true"]` is also in
+                  DRAG_CANCEL, so this grip never starts a grid drag either —
+                  the two gestures stay separate and each means one thing. Only
+                  rendered when there is somewhere it could go.
+                */}
+                {isEditMode && builder && hasContainerTarget && (
                   <div className={styles.tileTools}>
-                    {/*
-                      A `button`, which is already in DRAG_CANCEL, so pressing
-                      it cannot begin a tile drag.
-                    */}
-                    <button
-                      type="button"
-                      className={styles.remove}
-                      onClick={() => setPendingRemoveId(item.i)}
-                      title={`Remove this ${label}`}
-                      aria-label={`Remove this ${label}`}
+                    <div
+                      {...moveDragProps(builder.pendingDrag, item)}
+                      className={styles.nest}
+                      title="Drag into a row or column"
+                      aria-label="Drag into a row or column"
                     >
-                      <i className="fas fa-trash" />
-                    </button>
-                    {/*
-                      "Into a container". `[draggable="true"]` is also in
-                      DRAG_CANCEL, so this grip never starts a grid drag either
-                      — the two gestures stay separate and each means one thing.
-                      Only rendered when there is somewhere it could go.
-                    */}
-                    {builder && hasContainerTarget && (
-                      <div
-                        {...moveDragProps(builder.pendingDrag, item)}
-                        className={styles.nest}
-                        title="Drag into a row or column"
-                        aria-label="Drag into a row or column"
-                      >
-                        <i className="fas fa-object-group" />
-                      </div>
-                    )}
+                      <i className="fas fa-object-group" />
+                    </div>
                   </div>
                 )}
                 <DashboardItem item={item} isEditMode={isEditMode} />
