@@ -19585,6 +19585,7 @@ mod tests {
 #[cfg(test)]
 mod streamed_root_tests {
     use super::*;
+    use crate::security::{Identity, Role};
     use arrow::array::Int64Array;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -20537,6 +20538,84 @@ mod streamed_root_tests {
         headers.insert("x-trino-prepared-statement", "name=%ZZ".parse().unwrap());
         let error = trino_prepared_queries(&headers).expect_err("invalid encoding");
         assert!(error.contains("percent-encoded"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn trino_sql_prepare_lifecycle_is_owner_scoped() {
+        let state = std::sync::Arc::new(catalog_test_state());
+        let name = format!("lifecycle_{}", Uuid::new_v4().simple());
+        let query = "SELECT CAST(? AS BIGINT) AS value";
+        let owner = alice();
+        let other = Identity {
+            principal: "other".into(),
+            display_identity: None,
+            role: Role::Analyst,
+        };
+
+        let prepared = submit_trino_statement_parts(
+            std::sync::Arc::clone(&state),
+            owner.clone(),
+            HeaderMap::new(),
+            Bytes::from(format!("PREPARE {name} FROM {query}")),
+        )
+        .await;
+        assert_eq!(prepared.status(), StatusCode::OK);
+        let added = prepared
+            .headers()
+            .get("x-trino-added-prepare")
+            .and_then(|value| value.to_str().ok())
+            .expect("prepare response advertises the stored statement");
+        assert!(added.starts_with(&format!("{name}=")), "{added}");
+
+        let described = submit_trino_statement_parts(
+            std::sync::Arc::clone(&state),
+            owner.clone(),
+            HeaderMap::new(),
+            Bytes::from(format!("DESCRIBE INPUT {name}")),
+        )
+        .await;
+        assert_eq!(described.status(), StatusCode::OK);
+        let described_body = axum::body::to_bytes(described.into_body(), usize::MAX)
+            .await
+            .expect("describe input body");
+        let described_json: serde_json::Value =
+            serde_json::from_slice(&described_body).expect("describe input JSON");
+        assert_eq!(described_json["data"][0][0], serde_json::json!(0));
+        assert_eq!(described_json["data"][0][2], serde_json::json!("bigint"));
+
+        let denied = submit_trino_statement_parts(
+            std::sync::Arc::clone(&state),
+            other,
+            HeaderMap::new(),
+            Bytes::from(format!("EXECUTE {name}")),
+        )
+        .await;
+        assert_eq!(denied.status(), StatusCode::BAD_REQUEST);
+
+        let deallocated = submit_trino_statement_parts(
+            std::sync::Arc::clone(&state),
+            owner.clone(),
+            HeaderMap::new(),
+            Bytes::from(format!("DEALLOCATE PREPARE {name}")),
+        )
+        .await;
+        assert_eq!(deallocated.status(), StatusCode::OK);
+        assert_eq!(
+            deallocated
+                .headers()
+                .get("x-trino-deallocated-prepare")
+                .and_then(|value| value.to_str().ok()),
+            Some(name.as_str())
+        );
+
+        let missing = submit_trino_statement_parts(
+            state,
+            owner,
+            HeaderMap::new(),
+            Bytes::from(format!("EXECUTE {name}")),
+        )
+        .await;
+        assert_eq!(missing.status(), StatusCode::BAD_REQUEST);
     }
 
     #[test]
