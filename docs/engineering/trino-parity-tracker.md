@@ -155,6 +155,11 @@ node-drain recovery, and sustained soak remain separate acceptance gates.
   the supported scalar and aggregate registry in Trino's six-column metadata
   shape, including `LIKE` wildcard filtering; these metadata calls do not
   create a persistent server-side session.
+  `EXPLAIN` now unwraps the plan-only envelope, runs the normal binder and
+  optimizer without starting scans or worker tasks, and returns a Trino-shaped
+  `Query Plan` column for logical, optimized, distributed/physical, and IO
+  views. `EXPLAIN ANALYZE` and unsupported output formats fail explicitly;
+  execution profiling remains a separate query-history surface.
   `LIMIT ALL` is also accepted as Trino's explicit no-limit pagination form.
   Prepared-parameter discovery now also ignores PostgreSQL `::type` casts,
   so cast names cannot be mistaken for named bindings (`617b69f6`).
