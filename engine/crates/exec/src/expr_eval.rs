@@ -4841,6 +4841,10 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             check_arity(name, args, 2)?;
             eval_date_add_days(&args[0], &args[1], num_rows)
         }
+        "DATE_ADD_MONTHS" => {
+            check_arity(name, args, 2)?;
+            eval_date_add_months(&args[0], &args[1], num_rows)
+        }
         "DATE_PART" => {
             if args.len() != 2 {
                 return Err(KaveonError::Execution(
@@ -6451,6 +6455,121 @@ fn eval_date_add_days(source: &ArrayRef, delta: &ArrayRef, num_rows: usize) -> R
     }
 }
 
+fn eval_date_add_months(source: &ArrayRef, delta: &ArrayRef, num_rows: usize) -> Result<ArrayRef> {
+    let delta = delta
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .ok_or_else(|| KaveonError::Execution("DATE_ADD_MONTHS requires an integer month count".into()))?;
+    match source.data_type() {
+        DataType::Date32 => {
+            let values = source.as_primitive::<Date32Type>();
+            let result = (0..num_rows)
+                .map(|i| {
+                    if values.is_null(i) || delta.is_null(i) {
+                        None
+                    } else {
+                        i32::try_from(add_months_to_days(values.value(i).into(), delta.value(i))).ok()
+                    }
+                })
+                .collect::<Vec<_>>();
+            Ok(Arc::new(Date32Array::from(result)))
+        }
+        DataType::Date64 => {
+            let values = source.as_primitive::<Date64Type>();
+            let result = (0..num_rows)
+                .map(|i| {
+                    if values.is_null(i) || delta.is_null(i) {
+                        None
+                    } else {
+                        add_months_timestamp_value(values.value(i), delta.value(i), 86_400_000)
+                    }
+                })
+                .collect::<Vec<_>>();
+            Ok(Arc::new(Date64Array::from(result)))
+        }
+        DataType::Timestamp(TimeUnit::Second, tz) => add_timestamp_months::<TimestampSecondType, TimestampSecondArray>(
+            source, delta, num_rows, 86_400, tz.clone()
+        ),
+        DataType::Timestamp(TimeUnit::Millisecond, tz) => add_timestamp_months::<TimestampMillisecondType, TimestampMillisecondArray>(
+            source, delta, num_rows, 86_400_000, tz.clone()
+        ),
+        DataType::Timestamp(TimeUnit::Microsecond, tz) => add_timestamp_months::<TimestampMicrosecondType, TimestampMicrosecondArray>(
+            source, delta, num_rows, 86_400_000_000, tz.clone()
+        ),
+        DataType::Timestamp(TimeUnit::Nanosecond, tz) => add_timestamp_months::<TimestampNanosecondType, TimestampNanosecondArray>(
+            source, delta, num_rows, 86_400_000_000_000, tz.clone()
+        ),
+        other => Err(KaveonError::Execution(format!(
+            "DATE_ADD_MONTHS requires DATE or timestamp input, got {other}"
+        ))),
+    }
+}
+
+fn add_months_timestamp_value(value: i64, months: i64, day_scale: i64) -> Option<i64> {
+    let days = value.div_euclid(day_scale);
+    let remainder = value.rem_euclid(day_scale);
+    add_months_to_days(days, months)
+        .checked_mul(day_scale)?
+        .checked_add(remainder)
+}
+
+fn add_months_to_days(days: i64, months: i64) -> i64 {
+    let (year, month, day) = days_to_ymd(days);
+    let total = i64::from(year) * 12 + i64::from(month - 1) + months;
+    let year = total.div_euclid(12) as i32;
+    let month = total.rem_euclid(12) as u32 + 1;
+    let day = day.min(days_in_month(year, month));
+    ymd_to_days(year, month, day)
+}
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+fn add_timestamp_months<T, A>(
+    source: &ArrayRef,
+    delta: &Int64Array,
+    num_rows: usize,
+    day_scale: i64,
+    timezone: Option<Arc<str>>,
+) -> Result<ArrayRef>
+where
+    T: arrow::datatypes::ArrowPrimitiveType<Native = i64>,
+    A: From<Vec<Option<i64>>> + Array + 'static,
+{
+    let values = source.as_primitive::<T>();
+    let result = (0..num_rows)
+        .map(|i| {
+            if values.is_null(i) || delta.is_null(i) {
+                None
+            } else {
+                add_months_timestamp_value(values.value(i), delta.value(i), day_scale)
+            }
+        })
+        .collect::<Vec<_>>();
+    let array: ArrayRef = Arc::new(A::from(result));
+    Ok(match source.data_type() {
+        DataType::Timestamp(TimeUnit::Second, _) => Arc::new(
+            array.as_any().downcast_ref::<TimestampSecondArray>().unwrap().clone().with_timezone_opt(timezone),
+        ),
+        DataType::Timestamp(TimeUnit::Millisecond, _) => Arc::new(
+            array.as_any().downcast_ref::<TimestampMillisecondArray>().unwrap().clone().with_timezone_opt(timezone),
+        ),
+        DataType::Timestamp(TimeUnit::Microsecond, _) => Arc::new(
+            array.as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap().clone().with_timezone_opt(timezone),
+        ),
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => Arc::new(
+            array.as_any().downcast_ref::<TimestampNanosecondArray>().unwrap().clone().with_timezone_opt(timezone),
+        ),
+        _ => array,
+    })
+}
+
 fn add_timestamp_days<T, A>(
     source: &ArrayRef,
     delta: &Int64Array,
@@ -6985,6 +7104,64 @@ mod tests {
         .unwrap();
         let result = values.as_primitive::<TimestampMillisecondType>();
         assert_eq!(result.value(0), -86_400_000);
+        assert!(result.is_null(1));
+    }
+
+    #[test]
+    fn date_add_months_clamps_calendar_end_and_preserves_units() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("day", DataType::Date32, true),
+        ]));
+        let input = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Date32Array::from(vec![Some(19_753), None, Some(19_782)]))],
+        )
+        .unwrap();
+        let values = evaluate(
+            &Expr::Function {
+                name: "DATE_ADD_MONTHS".into(),
+                args: vec![
+                    Expr::Column("day".into()),
+                    Expr::Literal(ScalarValue::Int64(1)),
+                ],
+            },
+            &input,
+        )
+        .unwrap();
+        let result = values.as_primitive::<Date32Type>();
+        assert_eq!(result.value(0), 19_782); // 2024-01-31 -> 2024-02-29
+        assert!(result.is_null(1));
+        assert_eq!(result.value(2), 19_811); // 2024-02-29 -> 2024-03-29
+
+        let timestamp_schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new(
+                "ts",
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                true,
+            ),
+        ]));
+        let time_of_day = 12 * 3_600_000 + 34 * 60_000 + 56_789;
+        let timestamp = RecordBatch::try_new(
+            timestamp_schema,
+            vec![Arc::new(TimestampMillisecondArray::from(vec![
+                Some(19_753_i64 * 86_400_000 + time_of_day),
+                None,
+            ]))],
+        )
+        .unwrap();
+        let values = evaluate(
+            &Expr::Function {
+                name: "DATE_ADD_MONTHS".into(),
+                args: vec![
+                    Expr::Column("ts".into()),
+                    Expr::Literal(ScalarValue::Int64(1)),
+                ],
+            },
+            &timestamp,
+        )
+        .unwrap();
+        let result = values.as_primitive::<TimestampMillisecondType>();
+        assert_eq!(result.value(0), 19_782_i64 * 86_400_000 + time_of_day);
         assert!(result.is_null(1));
     }
 

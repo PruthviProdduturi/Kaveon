@@ -2699,15 +2699,16 @@ fn interval_arithmetic(
             } else {
                 count
             };
-            let Expr::Literal(ScalarValue::Int64(days)) = date else {
-                return Err(sql_err(format!(
-                    "INTERVAL {} arithmetic needs a DATE literal operand",
-                    interval.leading_field.as_ref().expect("month or year")
-                )));
-            };
-            Ok(Some(Expr::Literal(ScalarValue::Int64(add_months(
-                days, months,
-            )))))
+            if let Expr::Literal(ScalarValue::Int64(days)) = date {
+                Ok(Some(Expr::Literal(ScalarValue::Int64(add_months(
+                    days, months,
+                )))))
+            } else {
+                Ok(Some(Expr::Function {
+                    name: "DATE_ADD_MONTHS".into(),
+                    args: vec![date, Expr::Literal(ScalarValue::Int64(months))],
+                }))
+            }
         }
         Some(other) => Err(sql_err(format!("unsupported INTERVAL field: {other}"))),
     }
@@ -3941,11 +3942,18 @@ mod tests {
             "SELECT x FROM t WHERE d < DATE '1993-01-01' - INTERVAL '13' MONTH",
             "1991-12-01",
         );
-        // A calendar shift of a column has no day-number form.
-        let error = sql_to_logical_plan("SELECT x FROM t WHERE d + INTERVAL '1' MONTH < e")
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("needs a DATE literal operand"), "{error}");
+        // A calendar shift of a typed column remains a runtime operation.
+        assert_eq!(
+            filter("SELECT x FROM t WHERE d + INTERVAL '1' MONTH < e"),
+            Expr::BinaryOp {
+                left: Box::new(Expr::Function {
+                    name: "DATE_ADD_MONTHS".into(),
+                    args: vec![Expr::Column("d".into()), Expr::Literal(ScalarValue::Int64(1))],
+                }),
+                op: BinaryOp::Lt,
+                right: Box::new(Expr::Column("e".into())),
+            }
+        );
         assert!(sql_to_logical_plan("SELECT INTERVAL '1' DAY FROM t").is_err());
         assert!(
             sql_to_logical_plan("SELECT x FROM t WHERE d < DATE '1993-07-01' + INTERVAL '1' HOUR")

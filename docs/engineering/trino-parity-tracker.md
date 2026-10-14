@@ -42,7 +42,7 @@ regression snapshot and are not a release-image claim:
 `cargo test -p kaveon-server --bin kaveon-server` passed **364/364** tests,
 `cargo test -p kaveon-sql --lib` passed **131/131** tests, and
 `cargo test -p kaveon-optim --lib` passed **47/47** tests,
-`cargo test -p kaveon-exec --lib` passed **292/292** non-ignored tests with four
+`cargo test -p kaveon-exec --lib` passed **293/293** non-ignored tests with four
 benchmark tests intentionally ignored. Documentation validation also passed for 145 Markdown
 files, 39 routes, and 9 SVGs. This is an in-process regression baseline; it
 does not replace the deployed three-worker qualification gates listed below.
@@ -169,7 +169,9 @@ foundations, but several operators are still centralized or narrow:
   nanosecond timestamp columns while preserving the source unit and timezone;
   sub-day units on DATE values fail with an explicit diagnostic. Day intervals
   now use a unit-aware runtime path for typed DATE and timestamp columns, while
-  DATE literals retain exact day-number lowering.
+  DATE literals retain exact day-number lowering. Month and year intervals now
+  use a runtime calendar path for typed DATE/timestamp columns, clamping source
+  month-end days to the target month while preserving timestamp units.
 - Background statistics and cube refresh deduplication now scopes its
   process-local registry by table and source location. Independent embedded
   catalog stores can no longer suppress one another's refresh, which removes a

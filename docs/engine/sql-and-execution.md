@@ -20,8 +20,8 @@ and aggregate windows with `ROWS`/`RANGE`/`GROUPS` frames), `CASE`,
 dictionary value of a dictionary-encoded column), `CAST`, string concatenation and functions
 (`UPPER`, `LOWER`, `LENGTH`, `TRIM`, `CONCAT`, `SUBSTR`/`SUBSTRING`, `REPEAT`, `REPLACE`, `LPAD`, `RPAD`),
 `EXTRACT`, `DATE_TRUNC`, `DATE_PART`, `TO_CHAR`, `NOW`, `CURRENT_DATE`,
-`CURRENT_TIMESTAMP`, `DATE 'YYYY-MM-DD'` literals, `date ± INTERVAL 'n'
-DAY` (and `MONTH`/`YEAR` against a DATE literal), and Decimal128 literals
+`CURRENT_TIMESTAMP`, `DATE 'YYYY-MM-DD'` literals, typed `date ± INTERVAL 'n'
+DAY`/`MONTH`/`YEAR` (calendar month shifts clamp month-end days), and Decimal128 literals
 and arithmetic. Every shape runs locally and, where the stage planner can
 express it, distributed; the coordinator records in `execution.detail` why
 it ran a shape itself.
@@ -55,8 +55,8 @@ l1.l_suppkey` needs a semi join with a residual over matched pairs, which
 `SemiJoinOperator` and `JoinSpec.residual` do not carry yet), `COUNT` in a
 correlated scalar subquery, `LIMIT`/`OFFSET` or set operations inside a
 correlated subquery, `EXISTS` correlated on more than one column, correlated
-`IN`, a scalar subquery that is not an ungrouped aggregate, `INTERVAL
-MONTH`/`YEAR` added to a column, recursive CTEs, `GROUPING SETS`/`CUBE`/
+`IN`, a scalar subquery that is not an ungrouped aggregate, recursive CTEs,
+`GROUPING SETS`/`CUBE`/
 `ROLLUP`, named windows, window `FILTER`/
 `WITHIN GROUP`/`DISTINCT`, approximate aggregates, array/map/JSON types,
 general DDL and row DML (the product transaction API is a bounded
