@@ -188,7 +188,7 @@ pub enum JoinDistribution {
     BroadcastRight,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum LogicalPlan {
     Scan {
         table: String,
@@ -1398,31 +1398,42 @@ fn build_aggregate(
     select: &ast::Select,
     approximate: bool,
 ) -> Result<LogicalPlan> {
-    let group_by_ast = match &select.group_by {
+    let (group_by_ast, grouping_sets_ast) = match &select.group_by {
         ast::GroupByExpr::Expressions(exprs, modifiers) => {
             if !modifiers.is_empty() {
                 return Err(sql_err(
                     "GROUP BY WITH ROLLUP, CUBE, and TOTALS are not supported",
                 ));
             }
-            exprs.clone()
+            let sets = exprs.iter().find_map(|expr| match expr {
+                ast::Expr::GroupingSets(sets) => Some(sets.clone()),
+                ast::Expr::Cube(_) | ast::Expr::Rollup(_) => {
+                    Some(Vec::new())
+                }
+                _ => None,
+            });
+            (exprs.clone(), sets)
         }
         ast::GroupByExpr::All(_) => {
             return Err(sql_err("GROUP BY ALL is not supported"));
         }
     };
-    let group_by: Vec<Expr> = group_by_ast
-        .iter()
-        .map(ast_expr_to_expr)
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        // A literal contributes the same value to every input row.  Keeping
-        // it as a hash key needlessly widens every partial group and exchange
-        // frame (ClickBench q35 uses `GROUP BY 1, URL`).  The projection
-        // above the aggregate still evaluates the literal for each output
-        // row, so SQL results and column order are unchanged.
-        .filter(|expr| !matches!(expr, Expr::Literal(_)))
-        .collect();
+    let group_by: Vec<Expr> = if grouping_sets_ast.is_some() {
+        Vec::new()
+    } else {
+        group_by_ast
+            .iter()
+            .map(ast_expr_to_expr)
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            // A literal contributes the same value to every input row.  Keeping
+            // it as a hash key needlessly widens every partial group and exchange
+            // frame (ClickBench q35 uses `GROUP BY 1, URL`).  The projection
+            // above the aggregate still evaluates the literal for each output
+            // row, so SQL results and column order are unchanged.
+            .filter(|expr| !matches!(expr, Expr::Literal(_)))
+            .collect()
+    };
 
     let mut aggregates = Vec::new();
     for item in &select.projection {
@@ -1445,6 +1456,77 @@ fn build_aggregate(
             .into_iter()
             .map(AggregateExpr::approximated)
             .collect();
+    }
+
+    // Lower the basic Trino `GROUPING SETS ((a), (b), …)` form into
+    // equivalent aggregate branches. Each branch keeps the same typed output
+    // columns: keys absent from a set are represented by a CASE expression
+    // whose column arm preserves the source type and whose value is NULL.
+    // CUBE/ROLLUP remain separate features because their expansion and
+    // grouping metadata have different semantics.
+    if let Some(sets_ast) = grouping_sets_ast {
+        if sets_ast.is_empty() {
+            return Err(sql_err("GROUP BY CUBE and ROLLUP are not supported"));
+        }
+        if group_by_ast.len() != 1 || aggregates.is_empty() {
+            return Err(sql_err(
+                "GROUPING SETS requires one grouping expression and at least one aggregate",
+            ));
+        }
+        let mut full_group_by = Vec::new();
+        for set in &sets_ast {
+            for expression in set {
+                let expression = ast_expr_to_expr(expression)?;
+                if !matches!(expression, Expr::Column(_)) {
+                    return Err(sql_err(
+                        "GROUPING SETS currently requires column grouping keys",
+                    ));
+                }
+                if !full_group_by.contains(&expression) {
+                    full_group_by.push(expression);
+                }
+            }
+        }
+        if full_group_by.is_empty() {
+            return Err(sql_err("GROUPING SETS must contain a grouping key"));
+        }
+        let mut inputs = Vec::with_capacity(sets_ast.len());
+        for set in sets_ast {
+            let set = set
+                .iter()
+                .map(ast_expr_to_expr)
+                .collect::<Result<Vec<_>>>()?;
+            let group_by = full_group_by
+                .iter()
+                .map(|expression| {
+                    let Expr::Column(name) = expression else {
+                        unreachable!("validated grouping key")
+                    };
+                    let expression = if set.contains(expression) {
+                        Expr::Column(name.clone())
+                    } else {
+                        Expr::Case {
+                            operand: None,
+                            when_then: vec![(
+                                Expr::Literal(ScalarValue::Bool(false)),
+                                Expr::Column(name.clone()),
+                            )],
+                            else_expr: Some(Box::new(Expr::Literal(ScalarValue::Null))),
+                        }
+                    };
+                    Expr::Alias {
+                        expr: Box::new(expression),
+                        name: name.clone(),
+                    }
+                })
+                .collect();
+            inputs.push(LogicalPlan::Aggregate {
+                input: Box::new(plan.clone()),
+                group_by,
+                aggregates: aggregates.clone(),
+            });
+        }
+        return Ok(LogicalPlan::Union { inputs, all: true });
     }
 
     // GROUP BY over plain columns with nothing to aggregate is DISTINCT over
@@ -1582,6 +1664,24 @@ fn lower_aggregate_expressions(
                 LogicalPlan::Window {
                     input: Box::new(input),
                     window_exprs,
+                },
+                bindings,
+            ))
+        }
+        LogicalPlan::Union { inputs, all } => {
+            let mut lowered = Vec::with_capacity(inputs.len());
+            let mut bindings = Vec::new();
+            for input in inputs {
+                let (input, input_bindings) = lower_aggregate_expressions(input, force)?;
+                if bindings.is_empty() {
+                    bindings = input_bindings;
+                }
+                lowered.push(input);
+            }
+            Ok((
+                LogicalPlan::Union {
+                    inputs: lowered,
+                    all,
                 },
                 bindings,
             ))
@@ -4513,6 +4613,19 @@ mod tests {
     fn parses_union_all() {
         let plan = sql_to_logical_plan("SELECT a FROM t1 UNION ALL SELECT b FROM t2").unwrap();
         assert!(matches!(plan, LogicalPlan::Union { all: true, .. }));
+    }
+
+    #[test]
+    fn lowers_basic_grouping_sets_to_union_all_aggregates() {
+        let plan = sql_to_logical_plan(
+            "SELECT region, platform, COUNT(*) FROM events GROUP BY GROUPING SETS ((region), (platform))",
+        )
+        .unwrap();
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("Union"), "expected UNION ALL branches: {debug}");
+        assert_eq!(debug.matches("Aggregate").count(), 2, "{debug}");
+        assert!(debug.contains("region"), "{debug}");
+        assert!(debug.contains("platform"), "{debug}");
     }
 
     #[test]
