@@ -73,9 +73,9 @@ impl BuildKeyFilter {
         Ok(self.index.matches(batch, row, &self.keys)?.is_some())
     }
 
-    /// Build one probe mask for a batch. Single INT64 keys are common in
-    /// fact/dimension joins and can use the already-built hash maps directly;
-    /// composite and non-INT64 keys retain the exact row-key path.
+    /// Build one probe mask for a batch. Single INT64 and UTF-8 keys are
+    /// common in fact/dimension joins and can use the already-built hash maps
+    /// directly; composite and other keys retain the exact row-key path.
     pub(crate) fn filter_batch(&self, batch: &RecordBatch) -> Result<BooleanArray> {
         if let (JoinIndex::Int64 { first_rows, duplicate_rows }, [(left, _)]) =
             (&self.index, self.keys.as_slice())
@@ -90,6 +90,28 @@ impl BuildKeyFilter {
                     values.is_valid(row)
                         && (first_rows.contains_key(&values.value(row))
                             || duplicate_rows.contains_key(&values.value(row)))
+                })
+                .collect::<Vec<_>>()
+                .into());
+        }
+        if let (
+            JoinIndex::Utf8 {
+                first_rows,
+                duplicate_rows,
+            },
+            [(left, _)],
+        ) = (&self.index, self.keys.as_slice())
+        {
+            let values = batch
+                .column(*left)
+                .as_any()
+                .downcast_ref::<arrow::array::StringArray>()
+                .ok_or_else(|| exec_err("runtime filter key type changed after planning"))?;
+            return Ok((0..batch.num_rows())
+                .map(|row| {
+                    values.is_valid(row)
+                        && (first_rows.contains_key(values.value(row))
+                            || duplicate_rows.contains_key(values.value(row)))
                 })
                 .collect::<Vec<_>>()
                 .into());
@@ -844,6 +866,10 @@ enum JoinIndex {
         first_rows: AHashMap<i64, usize>,
         duplicate_rows: AHashMap<i64, Vec<usize>>,
     },
+    Utf8 {
+        first_rows: AHashMap<String, usize>,
+        duplicate_rows: AHashMap<String, Vec<usize>>,
+    },
     Composite(AHashMap<Vec<Key>, Vec<usize>>),
 }
 
@@ -878,6 +904,33 @@ impl JoinIndex {
                 }
             }
             return Ok(Self::Int64 {
+                first_rows,
+                duplicate_rows,
+            });
+        }
+        if let [(.., index)] = keys
+            && right.column(*index).data_type() == &DataType::Utf8
+        {
+            let values = right.column(*index).as_string::<i32>();
+            let mut first_rows = AHashMap::new();
+            let mut duplicate_rows: AHashMap<String, Vec<usize>> = AHashMap::new();
+            for row in 0..values.len() {
+                if row.is_multiple_of(1024) {
+                    check_cancelled(memory)?;
+                }
+                if values.is_valid(row) {
+                    let key = values.value(row);
+                    if let Some(first_row) = first_rows.get(key).copied() {
+                        duplicate_rows
+                            .entry(key.to_owned())
+                            .or_insert_with(|| vec![first_row])
+                            .push(row);
+                    } else {
+                        first_rows.insert(key.to_owned(), row);
+                    }
+                }
+            }
+            return Ok(Self::Utf8 {
                 first_rows,
                 duplicate_rows,
             });
@@ -919,6 +972,25 @@ impl JoinIndex {
                             .get(&key)
                             .map(Vec::as_slice)
                             .or_else(|| first_rows.get(&key).map(std::slice::from_ref))
+                    }
+                }
+            }
+            Self::Utf8 {
+                first_rows,
+                duplicate_rows,
+            } => {
+                let values = left.column(keys[0].0).as_string::<i32>();
+                if values.is_null(row) {
+                    None
+                } else {
+                    let key = values.value(row);
+                    if duplicate_rows.is_empty() {
+                        first_rows.get(key).map(std::slice::from_ref)
+                    } else {
+                        duplicate_rows
+                            .get(key)
+                            .map(Vec::as_slice)
+                            .or_else(|| first_rows.get(key).map(std::slice::from_ref))
                     }
                 }
             }

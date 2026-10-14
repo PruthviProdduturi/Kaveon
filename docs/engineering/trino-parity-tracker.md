@@ -150,10 +150,10 @@ node-drain recovery, and sustained soak remain separate acceptance gates.
 - Static predicates are pushed into eligible build scans, including broadcast
   joins; the build-side key set is not yet propagated to the probe scan at
   runtime. A bounded in-memory inner/semi-join filter now removes probe batches
-  whose keys are absent from the build before hash probing; single INT64 keys
-  use a batch mask over the built hash index and composite keys retain the
-  exact typed fallback. It is disabled for outer/anti/residual joins and
-  spilled builds. Scan-level dynamic filtering,
+  whose keys are absent from the build before hash probing; single INT64 and
+  UTF-8 keys use a batch mask over the built hash index and composite keys
+  retain the exact typed fallback. It is disabled for outer/anti/residual
+  joins and spilled builds. Scan-level dynamic filtering,
   join reordering, skew mitigation, and qualified coordinator failover remain
   open.
 - Ordinary distributed joins use equality keys; inner residual predicates now

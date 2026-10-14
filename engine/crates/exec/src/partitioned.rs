@@ -2403,7 +2403,7 @@ mod tests {
         grouped_aggregate_states_from_batches, merge_grouped_aggregate_states,
     };
     use arrow::{
-        array::{Array, AsArray, Int64Array, UInt64Array},
+        array::{Array, AsArray, Int64Array, StringArray, UInt64Array},
         datatypes::{DataType, Field, Schema},
     };
     use kaveon_core::{MemoryAdmissionController, QueryMemoryPool};
@@ -3274,6 +3274,49 @@ mod tests {
         let batch = operator.next_batch().unwrap().unwrap();
         assert_eq!(batch.num_rows(), 2);
         assert_eq!(batch.column(0).as_any().downcast_ref::<Int64Array>().unwrap().iter().collect::<Vec<_>>(), vec![Some(2), Some(4)]);
+        assert!(operator.next_batch().unwrap().is_none());
+    }
+
+    #[test]
+    fn runtime_join_filter_uses_typed_utf8_index_without_allocating_composite_keys() {
+        let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Utf8, true)]));
+        let build = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(StringArray::from(vec![Some("b"), Some("d"), Some("d")]))],
+        )
+        .unwrap();
+        let probe = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(StringArray::from(vec![
+                Some("a"),
+                Some("b"),
+                Some("d"),
+                None,
+            ]))],
+        )
+        .unwrap();
+        let built = BuiltSide::build(&schema, &[build], &[(0, 0)], JoinType::Inner, None)
+            .unwrap();
+        let filter = BuildKeyFilter::from_built(&built, &[(0, 0)]).unwrap();
+        let mut operator = RuntimeJoinFilter::new(
+            Box::new(Input {
+                schema,
+                batches: VecDeque::from([probe]),
+            }),
+            filter,
+        );
+        let batch = operator.next_batch().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some("b"), Some("d")]
+        );
         assert!(operator.next_batch().unwrap().is_none());
     }
 
