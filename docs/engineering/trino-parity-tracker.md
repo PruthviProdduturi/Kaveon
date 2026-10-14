@@ -1082,6 +1082,15 @@ is implementation and regression evidence for the covered shapes; it does not
 replace the deployed differential corpus or the remaining complex-type and
 wire-protocol gates.
 
+On 2026-10-14 the server differential sweep was rerun from the current checkout
+with `cargo test -p kaveon-server --bin kaveon-server differential_tests --quiet`:
+11 tests passed, 0 failed, and 360 unrelated tests were filtered. The sweep
+covered the in-memory and Parquet execution paths, dictionary and plain Parquet
+encodings, partitioned inputs, joins, aggregates, windows, ordering, set
+operations, NULL behavior, and the supported complex-type cases. This is a
+fresh local regression result for Track 2; it does not qualify the unresolved
+wire protocol, correlated-subquery, typed-DML, or deployed multi-worker gates.
+
 The deployed cache evidence harness is checked in at
 `engine/qualification/cache_slo.py`. The AKS qualification is archived at
 `docs/qualification/cache-slo-aks-2026-10-13.json`; it reports warm-hit
