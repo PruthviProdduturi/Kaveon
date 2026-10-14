@@ -41,14 +41,14 @@ engine work from the parallel optimization lane, so these numbers are a local
 regression snapshot and are not a release-image claim:
 `cargo test -p kaveon-server` passed **349/349** tests,
 `cargo test -p kaveon-sql` passed **119/119** tests, and
-`cargo test -p kaveon-exec --lib` passed **286/286** non-ignored tests with four
+`cargo test -p kaveon-exec --lib` passed **287/287** non-ignored tests with four
 benchmark tests intentionally ignored. Documentation validation also passed for 145 Markdown
 files, 39 routes, and 9 SVGs. This is an in-process regression baseline; it
 does not replace the deployed three-worker qualification gates listed below.
 
 The complete `cargo test --workspace` run also passed on this tree, including
 catalog, CLI, core, executor, optimizer, server, SQL, and storage crates plus
-all doctests. The executor result is **286 passed, 4 ignored**; the ignored
+all doctests. The executor result is **287 passed, 4 ignored**; the ignored
 cases are explicitly marked release benchmarks. This workspace result is
 repository-wide regression evidence, not a substitute for the deployed
 three-worker and connector qualification gates.
@@ -589,7 +589,7 @@ invalidation, isolation, bounds, and restart evidence listed above.
 ### Current focused validation
 
 The latest focused validation passes 349 `kaveon-server` tests, 119
-`kaveon-sql` tests, and 286 `kaveon-exec` library tests (four executor
+`kaveon-sql` tests, and 287 `kaveon-exec` library tests (four executor
 benchmarks are ignored). The repository differential gate
 (`differential_tests::the_differential_sweep_matches_across_parquet_encodings_and_execution_paths`)
 also passes, comparing the same corpus across alternate Parquet encodings and
