@@ -766,9 +766,18 @@ impl Binder<'_> {
                 "a correlation reaching past an IN or EXISTS subquery is not supported".into(),
             ));
         }
-        let correlated_projection_matches = match lateral.as_slice() {
-            [Correlation::Key { inner, .. }] => match &right.plan {
-                LogicalPlan::Project { columns, .. } => {
+        let correlated_key = lateral.iter().find_map(|correlation| match correlation {
+            Correlation::Key { inner, .. } => Some(inner.as_str()),
+            Correlation::Residual { .. } => None,
+        });
+        let correlated_projection_matches = correlated_key.is_some()
+            && lateral
+                .iter()
+                .filter(|correlation| matches!(correlation, Correlation::Key { .. }))
+                .count()
+                == 1
+            && match (&right.plan, correlated_key) {
+                (LogicalPlan::Project { columns, .. }, Some(inner)) => {
                     let first = columns.first().and_then(|column| match column {
                         Expr::Column(name) => Some(name.as_str()),
                         _ => None,
@@ -783,9 +792,7 @@ impl Binder<'_> {
                     first.is_some() && first == source
                 }
                 _ => false,
-            },
-            _ => false,
-        };
+            };
         if lateral.is_empty() {
             let left_key = self.bind_expr(left_key, &left_scope, None)?;
             // The subquery side binds its key by position (`*`) or not at
@@ -806,10 +813,10 @@ impl Binder<'_> {
             });
         }
         // A correlated IN can be reduced to a keyed semi/anti join when its
-        // subquery has exactly one equality correlation and no residual. The
-        // projected subquery column is the right-side key; additional
-        // correlations remain rejected because they need a residual-aware
-        // multi-key rewrite to preserve SQL NULL semantics.
+        // subquery projects the equality correlation key first. Residual
+        // predicates ride through the same residual-aware operator as EXISTS;
+        // unlike NOT EXISTS, NOT IN must retain right-side NULLs so the
+        // operator can apply SQL's set-wide NULL rule.
         if matches!(&right_key, Expr::Column(name) if name == "*")
             && residual.is_none()
             && lateral.len() == 1
@@ -831,7 +838,9 @@ impl Binder<'_> {
                 correlations: left.correlations,
             });
         }
-        if !matches!(right_key, Expr::Literal(_)) {
+        let correlated_in = matches!(&right_key, Expr::Column(name) if name == "*")
+            && correlated_projection_matches;
+        if !matches!(right_key, Expr::Literal(_)) && !correlated_in {
             return Err(KaveonError::Sql(
                 "a correlated IN subquery is not supported".into(),
             ));
@@ -895,7 +904,7 @@ impl Binder<'_> {
             .map(|predicate| self.bind_expr(predicate, &left_scope, None))
             .transpose()?;
         let mut subquery = right.plan;
-        if anti {
+        if anti && !correlated_in {
             subquery = LogicalPlan::Filter {
                 input: Box::new(subquery),
                 predicate: Expr::IsNotNull(Box::new(key.clone())),
@@ -2293,6 +2302,31 @@ mod tests {
         assert!(matches!(left_key, Expr::Column(name) if name == "o_orderkey"));
         assert!(matches!(right_key, Expr::Column(name) if name == "__kaveon_corr_0"));
         assert!(residual.is_none());
+    }
+
+    #[test]
+    fn a_correlated_in_with_a_residual_uses_the_semi_join_residual_path() {
+        let plan = bound(
+            "SELECT o_orderkey FROM orders o WHERE o_orderkey IN (SELECT l_orderkey FROM lineitem l WHERE l_orderkey = o_orderkey AND l_quantity > o_custkey)",
+        );
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("projection");
+        };
+        let LogicalPlan::SemiJoin {
+            right_key,
+            residual,
+            right,
+            ..
+        } = *input
+        else {
+            panic!("correlated IN should lower to a residual semi join");
+        };
+        assert_eq!(right_key, column("__kaveon_corr_0"));
+        assert!(matches!(residual, Some(Expr::BinaryOp { op: BinaryOp::Gt, .. })));
+        let LogicalPlan::Project { columns, .. } = *right else {
+            panic!("the subquery projects the key and residual column");
+        };
+        assert_eq!(columns.len(), 2);
     }
 
     /// Q21's EXISTS: one equality is the key, the non-equality the
