@@ -15,7 +15,14 @@ not prove cluster latency, node pressure, or long-running network behavior.
 | Executor semantics and spill paths | `cargo test -p kaveon-exec --quiet` | 293 passed, 4 ignored benchmark cases |
 | Server regression suite | `cargo test -p kaveon-server --bin kaveon-server --quiet` | 364 passed |
 | Worker loss after producer exchange | `cargo test -p kaveon-server --bin kaveon-server --quiet a_worker_lost_between_the_producers_and_the_consumers_is_recovered_exactly` | 1 passed |
-| Documentation contract | `node scripts/validate-docs.mjs` | 145 Markdown files, 39 routes, 9 SVGs |
+| Documentation contract | `node scripts/validate-docs.mjs` | 146 Markdown files, 39 routes, 9 SVGs |
+
+The full workspace regression (`cargo test --workspace --quiet`) also passed:
+all workspace targets were green, including the server differential suite
+(364 tests), SQL (131), executor (293 plus four ignored benchmarks), optimizer
+(47), and the remaining catalog/core/CLI/storage targets. The workspace run is
+the broad regression gate; the focused rows above make the distributed gates
+easy to reproduce.
 
 The worker-loss test asserts an exact grouped result, identifies the lost
 worker, records the moved spool, records stage retries, and verifies that the
