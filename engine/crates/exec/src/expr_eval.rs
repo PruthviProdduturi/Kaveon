@@ -5961,8 +5961,6 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "SPLIT_PART" => {
             check_arity(name, args, 3)?;
-            let values = as_string_array(&args[0])?;
-            let delimiters = as_string_array(&args[1])?;
             let indices = compute::cast(&args[2], &DataType::Int64)?;
             let indices = indices.as_primitive::<Int64Type>();
             for row in 0..num_rows {
@@ -5972,20 +5970,61 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     ));
                 }
             }
-            let result: StringArray = (0..num_rows)
-                .map(|row| {
-                    if values.is_null(row) || delimiters.is_null(row) || indices.is_null(row) {
-                        return None;
+            if args[0].data_type() == &DataType::LargeUtf8 {
+                let mut result = LargeStringBuilder::with_capacity(num_rows, 0);
+                for row in 0..num_rows {
+                    if indices.is_null(row) {
+                        result.append_null();
+                        continue;
                     }
+                    let (Some(value), Some(delimiter)) =
+                        (text_value(&args[0], row)?, text_value(&args[1], row)?)
+                    else {
+                        result.append_null();
+                        continue;
+                    };
                     let index = indices.value(row) as usize;
-                    let delimiter = delimiters.value(row);
                     if delimiter.is_empty() {
-                        return (index == 1).then(|| values.value(row).to_owned());
+                        if index == 1 {
+                            result.append_value(value);
+                        } else {
+                            result.append_null();
+                        }
+                    } else if let Some(part) = value.split(delimiter).nth(index - 1) {
+                        result.append_value(part);
+                    } else {
+                        result.append_null();
                     }
-                    values.value(row).split(delimiter).nth(index - 1).map(str::to_owned)
-                })
-                .collect();
-            Ok(Arc::new(result))
+                }
+                Ok(Arc::new(result.finish()))
+            } else {
+                let mut result = StringBuilder::with_capacity(num_rows, 0);
+                for row in 0..num_rows {
+                    if indices.is_null(row) {
+                        result.append_null();
+                        continue;
+                    }
+                    let (Some(value), Some(delimiter)) =
+                        (text_value(&args[0], row)?, text_value(&args[1], row)?)
+                    else {
+                        result.append_null();
+                        continue;
+                    };
+                    let index = indices.value(row) as usize;
+                    if delimiter.is_empty() {
+                        if index == 1 {
+                            result.append_value(value);
+                        } else {
+                            result.append_null();
+                        }
+                    } else if let Some(part) = value.split(delimiter).nth(index - 1) {
+                        result.append_value(part);
+                    } else {
+                        result.append_null();
+                    }
+                }
+                Ok(Arc::new(result.finish()))
+            }
         }
         "SPLIT" => {
             if args.len() != 2 && args.len() != 3 {
@@ -13613,6 +13652,41 @@ mod tests {
         let first = values.value(0);
         let first = first.as_any().downcast_ref::<LargeStringArray>().unwrap();
         assert_eq!(first.iter().collect::<Vec<_>>(), vec![Some("a"), Some("b界c")]);
+        assert!(values.is_null(1));
+    }
+
+    #[test]
+    fn split_part_preserves_large_utf8_and_mixed_delimiters() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "text",
+                Arc::new(LargeStringArray::from(vec![Some("a界b界c"), None])) as ArrayRef,
+            ),
+            (
+                "delimiter",
+                Arc::new(StringArray::from(vec![Some("界"), Some("界")])) as ArrayRef,
+            ),
+            (
+                "index",
+                Arc::new(Int64Array::from(vec![Some(2), Some(1)])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "SPLIT_PART".into(),
+                args: vec![
+                    Expr::Column("text".into()),
+                    Expr::Column("delimiter".into()),
+                    Expr::Column("index".into()),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(result.data_type(), &DataType::LargeUtf8);
+        let values = result.as_any().downcast_ref::<LargeStringArray>().unwrap();
+        assert_eq!(values.value(0), "b");
         assert!(values.is_null(1));
     }
 
