@@ -1039,8 +1039,9 @@ worker task, cache entry, or exchange. `GREATEST` and `LEAST` preserve their
 common input type and propagate NULL arguments; both behaviors have focused
 executor and statement-path coverage. `CARDINALITY`, `ARRAY_JOIN`, `ARRAY_REVERSE`, `ARRAY_SLICE`, `ARRAY_MIN`,
 `ARRAY_MAX`, `ARRAY_REMOVE`, `ARRAY_APPEND`, `ARRAY_PREPEND`, and `ARRAY_REPEAT`
-now accept
-both 32-bit and 64-bit list offsets.
+now accept both 32-bit and 64-bit list offsets. `ARRAY_CONCAT` also promotes
+mixed 32-bit/64-bit list operands to a 64-bit result while preserving element
+types and nullability.
 `ARRAY_DISTINCT`, `ARRAY_POSITION`, `ARRAY_SORT`, `CONTAINS`, and `ARRAYS_OVERLAP` also accept bounded
 64-bit-offset primitive lists, including `LargeUtf8`, by normalizing them to
 the 32-bit execution representation. Distinct preserves element types, NULLs,
