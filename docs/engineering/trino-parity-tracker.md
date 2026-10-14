@@ -165,8 +165,9 @@ foundations, but several operators are still centralized or narrow:
   nullable execution coverage. `MIN` and `MAX` over timestamp columns now
   preserve the input unit/timezone and exact integer values, including grouped
   and null-only groups (`178c3bdb`). `DATE_TRUNC` now preserves nulls and
-  executes over second, millisecond, microsecond, and nanosecond timestamp
-  columns while preserving the source unit and timezone.
+  executes over DATE calendar units plus second, millisecond, microsecond, and
+  nanosecond timestamp columns while preserving the source unit and timezone;
+  sub-day units on DATE values fail with an explicit diagnostic.
 - Background statistics and cube refresh deduplication now scopes its
   process-local registry by table and source location. Independent embedded
   catalog stores can no longer suppress one another's refresh, which removes a
