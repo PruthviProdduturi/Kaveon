@@ -2675,11 +2675,24 @@ fn interval_arithmetic(
     }
     let date = ast_expr_to_expr(date)?;
     match &interval.leading_field {
-        Some(ast::DateTimeField::Day) | None => Ok(Some(Expr::BinaryOp {
-            left: Box::new(date),
+        Some(ast::DateTimeField::Day) | None => {
+            let arithmetic = Expr::BinaryOp {
+            left: Box::new(date.clone()),
             op: BinaryOp::Plus,
             right: Box::new(Expr::Literal(ScalarValue::Int64(count))),
-        })),
+            };
+            // DATE literals are represented as day-number integers and keep
+            // the compact arithmetic form. Typed DATE/TIMESTAMP columns need
+            // a runtime unit-aware operation instead.
+            if matches!(&date, Expr::Literal(ScalarValue::Int64(_))) {
+                Ok(Some(arithmetic))
+            } else {
+                Ok(Some(Expr::Function {
+                    name: "DATE_ADD_DAYS".into(),
+                    args: vec![date, Expr::Literal(ScalarValue::Int64(count))],
+                }))
+            }
+        }
         Some(ast::DateTimeField::Month) | Some(ast::DateTimeField::Year) => {
             let months = if matches!(interval.leading_field, Some(ast::DateTimeField::Year)) {
                 count * 12
@@ -3848,7 +3861,8 @@ mod tests {
 
     #[test]
     fn interval_arithmetic_on_dates_lowers_to_day_numbers() {
-        // A day interval is day-number arithmetic, on a literal or a column.
+        // A day interval keeps day-number arithmetic for DATE literals and
+        // uses a runtime unit-aware function for typed columns.
         let filter = |sql: &str| {
             let plan = sql_to_logical_plan(sql).unwrap();
             let LogicalPlan::Project { input, .. } = plan else {
@@ -3875,10 +3889,9 @@ mod tests {
         assert_eq!(
             filter("SELECT x FROM t WHERE d + INTERVAL '7' DAY < e"),
             Expr::BinaryOp {
-                left: Box::new(Expr::BinaryOp {
-                    left: Box::new(Expr::Column("d".into())),
-                    op: BinaryOp::Plus,
-                    right: day(7),
+                left: Box::new(Expr::Function {
+                    name: "DATE_ADD_DAYS".into(),
+                    args: vec![Expr::Column("d".into()), Expr::Literal(ScalarValue::Int64(7))],
                 }),
                 op: BinaryOp::Lt,
                 right: Box::new(Expr::Column("e".into())),

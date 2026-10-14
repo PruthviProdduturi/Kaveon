@@ -4837,6 +4837,10 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let ts = &args[1];
             eval_date_trunc(unit_arr, ts, num_rows)
         }
+        "DATE_ADD_DAYS" => {
+            check_arity(name, args, 2)?;
+            eval_date_add_days(&args[0], &args[1], num_rows)
+        }
         "DATE_PART" => {
             if args.len() != 2 {
                 return Err(KaveonError::Execution(
@@ -6380,6 +6384,141 @@ fn eval_date_trunc(unit_arr: &StringArray, ts: &ArrayRef, num_rows: usize) -> Re
     }
 }
 
+fn eval_date_add_days(source: &ArrayRef, delta: &ArrayRef, num_rows: usize) -> Result<ArrayRef> {
+    let delta = delta
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .ok_or_else(|| KaveonError::Execution("DATE_ADD_DAYS requires an integer day count".into()))?;
+    let day_at = |i: usize| -> Option<i64> {
+        if delta.is_null(i) {
+            None
+        } else {
+            Some(delta.value(i))
+        }
+    };
+    match source.data_type() {
+        DataType::Date32 => {
+            let values = source.as_primitive::<Date32Type>();
+            let result = (0..num_rows)
+                .map(|i| {
+                    if values.is_null(i) {
+                        None
+                    } else {
+                        day_at(i).and_then(|days| {
+                            i32::try_from(days)
+                                .ok()
+                                .and_then(|days| values.value(i).checked_add(days))
+                        })
+                    }
+                })
+                .collect::<Vec<_>>();
+            Ok(Arc::new(Date32Array::from(result)))
+        }
+        DataType::Date64 => {
+            let values = source.as_primitive::<Date64Type>();
+            let result = (0..num_rows)
+                .map(|i| day_at(i).and_then(|days| {
+                    values
+                        .value(i)
+                        .checked_add(days.checked_mul(86_400_000)?)
+                }))
+                .collect::<Vec<_>>();
+            Ok(Arc::new(Date64Array::from(result)))
+        }
+        DataType::Timestamp(TimeUnit::Second, tz) => {
+            add_timestamp_days::<TimestampSecondType, TimestampSecondArray>(
+                source, delta, num_rows, 86_400, tz.clone()
+            )
+        }
+        DataType::Timestamp(TimeUnit::Millisecond, tz) => {
+            add_timestamp_days::<TimestampMillisecondType, TimestampMillisecondArray>(
+                source, delta, num_rows, 86_400_000, tz.clone()
+            )
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, tz) => {
+            add_timestamp_days::<TimestampMicrosecondType, TimestampMicrosecondArray>(
+                source, delta, num_rows, 86_400_000_000, tz.clone()
+            )
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+            add_timestamp_days::<TimestampNanosecondType, TimestampNanosecondArray>(
+                source, delta, num_rows, 86_400_000_000_000, tz.clone()
+            )
+        }
+        other => Err(KaveonError::Execution(format!(
+            "DATE_ADD_DAYS requires DATE or timestamp input, got {other}"
+        ))),
+    }
+}
+
+fn add_timestamp_days<T, A>(
+    source: &ArrayRef,
+    delta: &Int64Array,
+    num_rows: usize,
+    scale: i64,
+    timezone: Option<Arc<str>>,
+) -> Result<ArrayRef>
+where
+    T: arrow::datatypes::ArrowPrimitiveType<Native = i64>,
+    A: From<Vec<Option<i64>>> + Array + 'static,
+{
+    let values = source.as_primitive::<T>();
+    let result = (0..num_rows)
+        .map(|i| {
+            if values.is_null(i) || delta.is_null(i) {
+                None
+            } else {
+                delta
+                    .value(i)
+                    .checked_mul(scale)
+                    .and_then(|offset| values.value(i).checked_add(offset))
+            }
+        })
+        .collect::<Vec<_>>();
+    let array = A::from(result);
+    let array: ArrayRef = Arc::new(array);
+    if let DataType::Timestamp(_, _) = source.data_type() {
+        // The concrete timestamp array already has its source unit; restore
+        // its timezone metadata without changing the value representation.
+        return Ok(match source.data_type() {
+            DataType::Timestamp(TimeUnit::Second, _) => Arc::new(
+                array
+                    .as_any()
+                    .downcast_ref::<TimestampSecondArray>()
+                    .expect("timestamp array type")
+                    .clone()
+                    .with_timezone_opt(timezone),
+            ),
+            DataType::Timestamp(TimeUnit::Millisecond, _) => Arc::new(
+                array
+                    .as_any()
+                    .downcast_ref::<TimestampMillisecondArray>()
+                    .expect("timestamp array type")
+                    .clone()
+                    .with_timezone_opt(timezone),
+            ),
+            DataType::Timestamp(TimeUnit::Microsecond, _) => Arc::new(
+                array
+                    .as_any()
+                    .downcast_ref::<TimestampMicrosecondArray>()
+                    .expect("timestamp array type")
+                    .clone()
+                    .with_timezone_opt(timezone),
+            ),
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => Arc::new(
+                array
+                    .as_any()
+                    .downcast_ref::<TimestampNanosecondArray>()
+                    .expect("timestamp array type")
+                    .clone()
+                    .with_timezone_opt(timezone),
+            ),
+            _ => unreachable!(),
+        });
+    }
+    Ok(array)
+}
+
 /// Truncate timestamps at microsecond precision, then convert the result back
 /// to the source unit. `scale` is the number of source units per microsecond;
 /// nanoseconds use its negative reciprocal to avoid an overflowing scale.
@@ -6793,6 +6932,60 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("not valid for DATE"), "{error}");
+    }
+
+    #[test]
+    fn date_add_days_preserves_temporal_type_and_nulls() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("day", DataType::Date32, true),
+        ]));
+        let input = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Date32Array::from(vec![Some(19_858), None, Some(-1)]))],
+        )
+        .unwrap();
+        let values = evaluate(
+            &Expr::Function {
+                name: "DATE_ADD_DAYS".into(),
+                args: vec![
+                    Expr::Column("day".into()),
+                    Expr::Literal(ScalarValue::Int64(7)),
+                ],
+            },
+            &input,
+        )
+        .unwrap();
+        let result = values.as_primitive::<Date32Type>();
+        assert_eq!(result.value(0), 19_865);
+        assert!(result.is_null(1));
+        assert_eq!(result.value(2), 6);
+
+        let timestamp_schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new(
+                "ts",
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                true,
+            ),
+        ]));
+        let timestamp = RecordBatch::try_new(
+            timestamp_schema,
+            vec![Arc::new(TimestampMillisecondArray::from(vec![Some(0), None]))],
+        )
+        .unwrap();
+        let values = evaluate(
+            &Expr::Function {
+                name: "DATE_ADD_DAYS".into(),
+                args: vec![
+                    Expr::Column("ts".into()),
+                    Expr::Literal(ScalarValue::Int64(-1)),
+                ],
+            },
+            &timestamp,
+        )
+        .unwrap();
+        let result = values.as_primitive::<TimestampMillisecondType>();
+        assert_eq!(result.value(0), -86_400_000);
+        assert!(result.is_null(1));
     }
 
     #[test]
