@@ -1069,6 +1069,12 @@ the 32-bit execution representation. Distinct preserves element types, NULLs,
 and first-occurrence order; position preserves one-based indexes and NULL
 semantics; sort keeps NULL elements at the end.
 
+The product transaction adapter now expands multi-row `VALUES` inserts into
+bounded typed commands and stages them under one commit boundary. The
+capabilities endpoint advertises `multi_row_insert: true`; `INSERT ... SELECT`,
+`RETURNING`, conflict clauses, and arbitrary row-store DML remain explicitly
+unsupported.
+
 These slices do not close Tracks 1 and 2's qualification gates; the broader
 three-worker corpus, complex types, correlated/unsupported scalar shapes,
 prepared-statement coverage, worker-loss, and exact-result differential runs

@@ -5144,7 +5144,7 @@ mod tests {
         .expect("FETCH WITH TIES should lower through rank");
         let debug = format!("{plan:?}");
         assert!(debug.contains("WindowFunction"), "{debug}");
-        assert!(debug.contains("__kaveon_fetch_rank"), "{debug}");
+        assert!(debug.contains("__kaveon_window_"), "{debug}");
         assert!(debug.contains("Filter"), "{debug}");
         assert!(debug.contains("Sort"), "{debug}");
 
