@@ -337,9 +337,22 @@ def _sql_role(role):
     return roles[role]
 
 
-def _statement_payload(sql, catalog, schema, tag, settings):
+# Maintenance work carries this tag so the Engine can hold it in a resource
+# group of its own. A cube build and a chart currently share the one `default`
+# group, so a build takes the interactive share with it: a chart measured at
+# 33 s on an idle cluster took 158 s total against 28.7 s of server time while
+# a build ran, the other 130 s being admission wait behind the build's own
+# scans. The tag is the half of the separation that belongs to the API; the
+# group that binds it is Engine configuration, and `resource_groups` selectors
+# already match on `client_tag`. Until that group exists the tag changes
+# nothing, which is why it is safe to stamp now.
+MAINTENANCE_CLIENT_TAG = "kaveon:maintenance"
+
+
+def _statement_payload(sql, catalog, schema, tag, settings, *, maintenance=False):
+    tags = [tag] + ([MAINTENANCE_CLIENT_TAG] if maintenance else [])
     payload = {"query": sql, "catalog": catalog, "schema": schema,
-               "source": "studio", "client": "kaveon-api", "client_tags": [tag]}
+               "source": "studio", "client": "kaveon-api", "client_tags": tags}
     if settings is not None:
         payload["settings"] = dict(settings)
     return payload
@@ -902,7 +915,11 @@ def analyze_table(catalog, schema, table, actor, role, *, sketches=False, distin
     # statement. Deep scans retain the caller's role and editor/manage gate.
     engine_role = "admin" if metadata_only else _sql_role(role)
     tag = "kaveon-api:" + uuid.uuid4().hex
-    payload = _statement_payload(statement, catalog, schema, tag, None)
+    # ANALYZE is maintenance by definition — nobody is waiting on a screen for
+    # it — so it is named as such and can be bound away from the interactive
+    # share. A cube build is the extreme case: one build issues a statement per
+    # grouping, each a full scan.
+    payload = _statement_payload(statement, catalog, schema, tag, None, maintenance=True)
     try:
         response = _send("POST", "/v1/statement", "KAVEON_ENGINE_BRIDGE_TOKEN", actor,
                          payload=payload, role=engine_role, timeout=timeout)

@@ -122,7 +122,14 @@ const ChartNewPage: React.FC = () => {
     setIsCreating(true);
     setCreateError(null);
     try {
-      const name = `New Chart – ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+      // An ASCII hyphen, not an en dash. A stored name is searched and sorted
+  // rather than read as prose, so the typographic dash bought nothing — and
+  // until D-42 is fixed in the Engine's SQL parser, every non-ASCII character
+  // in a written name is corrupted on the way in and corrupted again on every
+  // rewrite, which is how this template produced "New Chart ÃÂ¢ÃÂÃÂ Oct 13,
+  // 2026" after three saves. This keeps new charts clean now; the parser fix
+  // is what stops the next non-ASCII name going the same way.
+  const name = `New Chart - ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
       const res = await msalFetch(`${API_BASE}/api/v1/charts`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -133,7 +140,14 @@ const ChartNewPage: React.FC = () => {
         throw new Error((err as any).detail || `Failed to create chart (${res.status})`);
       }
       const chart = await res.json();
-      router.push(`/charts/${chart.id}`);
+      // `replace`, not `push`: the creation step is finished and must not stay
+      // in history. With a push, Back from the saved chart returned INTO the
+      // creation flow -- "after a chart is saved, Back should go to the
+      // library" -- and on this page that flow would have created a second
+      // chart. Replacing it leaves [wherever they came from, the chart], so
+      // the page's own Back button, which returns where the reader came from,
+      // reaches the library it was opened from.
+      router.replace(`/charts/${chart.id}`);
     } catch (e) {
       setCreateError(e instanceof Error ? e.message : 'Failed to create chart');
       setIsCreating(false);
