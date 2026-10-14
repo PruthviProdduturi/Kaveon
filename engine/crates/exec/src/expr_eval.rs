@@ -4808,7 +4808,57 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 None,
             )?)
         }
-        "STRPOS" | "POSITION" => {
+        "STRPOS" => {
+            if args.len() != 2 && args.len() != 3 {
+                return Err(KaveonError::Execution(
+                    "STRPOS requires 2 or 3 arguments".into(),
+                ));
+            }
+            let arr = as_string_array(&args[0])?;
+            let needle = as_string_array(&args[1])?;
+            let instances = if args.len() == 3 {
+                Some(compute::cast(&args[2], &DataType::Int64)?)
+            } else {
+                None
+            };
+            let instances = instances
+                .as_ref()
+                .map(|array| array.as_primitive::<Int64Type>());
+            for row in 0..num_rows {
+                if let Some(instances) = instances {
+                    if !instances.is_null(row) && instances.value(row) == 0 {
+                        return Err(KaveonError::Execution(
+                            "STRPOS instance must not be zero".into(),
+                        ));
+                    }
+                }
+            }
+            let result: Int64Array = (0..num_rows)
+                .map(|i| {
+                    if arr.is_null(i)
+                        || needle.is_null(i)
+                        || instances.is_some_and(|instances| instances.is_null(i))
+                    {
+                        return None;
+                    }
+                    let instance = instances.map_or(1, |instances| instances.value(i));
+                    let positions = arr.value(i)
+                        .match_indices(needle.value(i))
+                        .map(|(byte, _)| arr.value(i)[..byte].chars().count() as i64 + 1)
+                        .collect::<Vec<_>>();
+                    let position = if instance > 0 {
+                        positions.get(instance as usize - 1).copied()
+                    } else {
+                        let offset = instance.unsigned_abs() as usize;
+                        (offset <= positions.len())
+                            .then(|| positions[positions.len() - offset])
+                    };
+                    Some(position.unwrap_or(0))
+                })
+                .collect();
+            Ok(Arc::new(result))
+        }
+        "POSITION" => {
             check_arity(name, args, 2)?;
             let arr = as_string_array(&args[0])?;
             let needle = as_string_array(&args[1])?;
@@ -4819,8 +4869,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     } else {
                         Some(
                             arr.value(i)
-                                .find(needle.value(i))
-                                .map(|p| p as i64 + 1)
+                                .match_indices(needle.value(i))
+                                .next()
+                                .map(|(byte, _)| arr.value(i)[..byte].chars().count() as i64 + 1)
                                 .unwrap_or(0),
                         )
                     }
@@ -10870,6 +10921,37 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("index must be greater than zero"));
+    }
+
+    #[test]
+    fn strpos_supports_positive_and_negative_instances_with_unicode_positions() {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)])),
+            vec![Arc::new(StringArray::from(vec![
+                Some("é-é-é"),
+                Some("abc"),
+                None,
+            ]))],
+        )
+        .unwrap();
+        let expr = |instance| Expr::Function {
+            name: "STRPOS".into(),
+            args: vec![
+                Expr::Column("value".into()),
+                Expr::Literal(ScalarValue::Utf8("é".into())),
+                Expr::Literal(ScalarValue::Int64(instance)),
+            ],
+        };
+        let result = evaluate(&expr(2), &batch).unwrap();
+        assert_eq!(result.as_primitive::<Int64Type>().value(0), 3);
+        let result = evaluate(&expr(-1), &batch).unwrap();
+        assert_eq!(result.as_primitive::<Int64Type>().value(0), 5);
+        let result = evaluate(&expr(4), &batch).unwrap();
+        assert_eq!(result.as_primitive::<Int64Type>().value(0), 0);
+        assert!(evaluate(&expr(0), &batch)
+            .unwrap_err()
+            .to_string()
+            .contains("instance must not be zero"));
     }
 
     #[test]
