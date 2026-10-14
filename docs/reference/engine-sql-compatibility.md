@@ -15,7 +15,7 @@ by the selected database and Kaveon's API guardrails.
 | `WHERE` comparisons and boolean expressions | Alpha | Row-level filter operator is implemented |
 | `GROUP BY` | Alpha | Local and distributed columnar hash aggregation: partials on several threads that flush on memory pressure, a hybrid final merge that spills sub-partitions; `GROUP BY` without an aggregate is DISTINCT over the keys |
 | `SUM`, `COUNT`, `AVG`, `MIN`, `MAX`, `COUNT(DISTINCT ...)` | Alpha | Weighted AVG and exact DISTINCT states are mergeable across workers |
-| `LIMIT`, `OFFSET` | Alpha | Physical limit and offset operators; `LIMIT ALL` is an explicit no-limit form; `ORDER BY … OFFSET n LIMIT m` plans as a top-N |
+| `LIMIT`, `OFFSET`, `FETCH FIRST/NEXT … ROWS ONLY` | Alpha | Physical limit and offset operators; `LIMIT ALL` is an explicit no-limit form; `ORDER BY … OFFSET n LIMIT m` and the `FETCH` spelling plan as a bounded top-N; `PERCENT`, `WITH TIES`, and conflicting `LIMIT`/`FETCH` forms are rejected explicitly |
 | Qualified table names | Alpha | `catalog.schema.table` resolution is supported by the catalog |
 | `ORDER BY`, `NULLS FIRST/LAST`, TopN | Alpha | Local/distributed execution; Sort/TopN support bounded external merge runs |
 | Equi joins | Alpha | INNER/LEFT/RIGHT/FULL locally and distributed (hash repartition or broadcast of the small side from exact statistics); comma joins with WHERE equalities become hash joins through the binder; ON conditions route like WHERE and an outer join filters its non-preserved side by single-side conjuncts |
