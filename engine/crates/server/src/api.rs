@@ -4516,12 +4516,14 @@ async fn run_statement(
     // validation, but no cache lookup, worker task, scan, or exchange is
     // started.  Render one line per plan node in the same single-column
     // shape used by Trino's HTTP protocol.
-    if let Some(kind) = explain_kind {
+    if let Some(kind) = explain_kind.filter(|kind| !matches!(kind, ExplainPlanKind::Analyze)) {
         let selected = match kind {
-            ExplainPlanKind::Logical => &logical_plan,
-            ExplainPlanKind::Optimized => &optimized_plan,
-            ExplainPlanKind::Physical => &physical_plan,
+            ExplainPlanKind::Logical => Some(&logical_plan),
+            ExplainPlanKind::Optimized => Some(&optimized_plan),
+            ExplainPlanKind::Physical => Some(&physical_plan),
+            ExplainPlanKind::Analyze => unreachable!("filtered above"),
         };
+        let selected = selected.expect("plan-only explain kind");
         let mut lines = Vec::new();
         explain_plan_lines(selected, 0, &mut lines);
         let columns = vec![ColumnInfo {
@@ -4589,7 +4591,10 @@ async fn run_statement(
     // The result cache: a complete result of this statement under this
     // catalog snapshot, these pinned versions and this time zone is served
     // without worker work. Bypassed by `settings.result_cache = false`.
-    let cache_key = (settings.result_cache_enabled() && state.result_cache.enabled()).then(|| {
+    let cache_key = (settings.result_cache_enabled()
+        && state.result_cache.enabled()
+        && !matches!(explain_kind, Some(ExplainPlanKind::Analyze)))
+        .then(|| {
         crate::result_cache::ResultCacheKey::new(
             &sql,
             &context.catalog,
@@ -5310,7 +5315,7 @@ async fn run_statement(
         }
     };
 
-    let columns: Vec<ColumnInfo> = if paged {
+    let mut columns: Vec<ColumnInfo> = if paged {
         local_columns
     } else if let Some(first) = batches.first() {
         first
@@ -5327,7 +5332,23 @@ async fn run_statement(
     };
 
     let serialization_start = Instant::now();
-    let rows = batches_to_json(&batches);
+    let mut rows = batches_to_json(&batches);
+    if matches!(explain_kind, Some(ExplainPlanKind::Analyze)) {
+        let mut lines = Vec::new();
+        explain_plan_lines(&optimized_plan, 0, &mut lines);
+        lines.push(format!(
+            "Runtime: rows={}, analysis_us={}, planning_us={}, execution_us={}",
+            rows.len(), analysis_us, planning_us, execution_us
+        ));
+        columns = vec![ColumnInfo {
+            name: "Query Plan".to_owned(),
+            data_type: "VARCHAR".to_owned(),
+        }];
+        rows = lines
+            .into_iter()
+            .map(|line| vec![serde_json::Value::String(line)])
+            .collect();
+    }
     if let Some(key) = &cache_key
         && !paged
     {
@@ -5693,12 +5714,13 @@ enum ExplainPlanKind {
     Logical,
     Optimized,
     Physical,
+    Analyze,
 }
 
 /// Unwrap the plan-only subset of Trino's EXPLAIN envelope.  Planning is
-/// performed by the normal binder and optimizer below; this helper only
-/// chooses which already-built plan tree to render.  EXPLAIN ANALYZE is kept
-/// explicit because it is an execution request with different semantics.
+/// performed by the normal binder and optimizer below; this helper chooses
+/// which plan view to render. EXPLAIN ANALYZE is an execution request and is
+/// handled by the normal result path so its output includes measured timings.
 fn parse_explain_statement(sql: &str) -> Result<Option<(ExplainPlanKind, String)>, String> {
     let trimmed = sql.trim();
     let Some(rest) = trimmed
@@ -5720,7 +5742,11 @@ fn parse_explain_statement(sql: &str) -> Result<Option<(ExplainPlanKind, String)
             .get(7..)
             .is_some_and(|tail| tail.is_empty() || tail.starts_with(|c: char| c.is_ascii_whitespace()))
     {
-        return Err("EXPLAIN ANALYZE is not supported; submit the query itself for execution".to_owned());
+        let query = rest[7..].trim();
+        if query.is_empty() {
+            return Err("EXPLAIN ANALYZE requires a statement".to_owned());
+        }
+        return Ok(Some((ExplainPlanKind::Analyze, query.to_owned())));
     }
     if let Some(after_open) = rest.strip_prefix('(') {
         let Some(close) = after_open.find(')') else {
@@ -13362,9 +13388,10 @@ mod tests {
             parse_explain_statement("EXPLAIN (TYPE VALIDATE) SELECT 1"),
             Ok(Some((ExplainPlanKind::Optimized, "SELECT 1".to_owned())))
         );
-        assert!(parse_explain_statement("EXPLAIN ANALYZE SELECT 1")
-            .unwrap_err()
-            .contains("not supported"));
+        assert_eq!(
+            parse_explain_statement("EXPLAIN ANALYZE SELECT 1"),
+            Ok(Some((ExplainPlanKind::Analyze, "SELECT 1".to_owned())))
+        );
         assert!(parse_explain_statement("EXPLAIN (FORMAT GRAPHVIZ) SELECT 1")
             .unwrap_err()
             .contains("unsupported EXPLAIN option"));
@@ -15503,6 +15530,23 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body["data"], serde_json::json!([[5]]));
+
+        // EXPLAIN ANALYZE executes once and reports the optimized plan with
+        // measured runtime facts instead of using the plan-only path.
+        let (status, analyzed) = submit(
+            &state,
+            &analyst,
+            "EXPLAIN ANALYZE SELECT COUNT(*) FROM orders",
+            serde_json::json!({"result_cache": false}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{analyzed}");
+        assert_eq!(analyzed["columns"][0]["name"], "Query Plan");
+        assert!(analyzed["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row[0].as_str().unwrap().starts_with("Runtime: rows=1,")));
 
         // A location that cannot be read fails the statement and its record.
         let (status, body) = submit(
