@@ -57,10 +57,7 @@ impl BatchOperator for RuntimeJoinFilter {
 
     fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
         while let Some(batch) = self.source.next_batch()? {
-            let mask: BooleanArray = (0..batch.num_rows())
-                .map(|row| self.filter.matches(&batch, row))
-                .collect::<Result<Vec<_>>>()?
-                .into();
+            let mask: BooleanArray = self.filter.filter_batch(&batch)?;
             let filtered = compute::filter_record_batch(&batch, &mask)?;
             if filtered.num_rows() > 0 {
                 return Ok(Some(filtered));

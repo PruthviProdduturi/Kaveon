@@ -72,6 +72,33 @@ impl BuildKeyFilter {
     pub(crate) fn matches(&self, batch: &RecordBatch, row: usize) -> Result<bool> {
         Ok(self.index.matches(batch, row, &self.keys)?.is_some())
     }
+
+    /// Build one probe mask for a batch. Single INT64 keys are common in
+    /// fact/dimension joins and can use the already-built hash maps directly;
+    /// composite and non-INT64 keys retain the exact row-key path.
+    pub(crate) fn filter_batch(&self, batch: &RecordBatch) -> Result<BooleanArray> {
+        if let (JoinIndex::Int64 { first_rows, duplicate_rows }, [(left, _)]) =
+            (&self.index, self.keys.as_slice())
+        {
+            let values = batch
+                .column(*left)
+                .as_any()
+                .downcast_ref::<arrow::array::Int64Array>()
+                .ok_or_else(|| exec_err("runtime filter key type changed after planning"))?;
+            return Ok((0..batch.num_rows())
+                .map(|row| {
+                    values.is_valid(row)
+                        && (first_rows.contains_key(&values.value(row))
+                            || duplicate_rows.contains_key(&values.value(row)))
+                })
+                .collect::<Vec<_>>()
+                .into());
+        }
+        (0..batch.num_rows())
+            .map(|row| self.matches(batch, row))
+            .collect::<Result<Vec<_>>>()
+            .map(Into::into)
+    }
 }
 
 impl BuiltSide {
