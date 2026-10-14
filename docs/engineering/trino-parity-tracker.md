@@ -136,9 +136,12 @@ foundations, but several operators are still centralized or narrow:
   `INVALID_PREPARED_STATEMENT` response rather than silently falling back to
   the request body. JSON array parameters through the HTTP statement API now
   lower to typed `ARRAY[...]` expressions, including nested arrays and null
-  elements; object/map values and the full prepare/describe/bind wire protocol
-  remain open. Trino `EXECUTE ... USING ARRAY[...]` literals now use the same
-  recursive binding path, including nested arrays and null elements.
+  elements. String-keyed JSON objects and Trino `MAP(ARRAY[…], ARRAY[…])`
+  literals now lower to typed `MAP` expressions through the same recursive
+  binder; malformed lengths, keys, and duplicate keys fail closed. The full
+  prepare/describe/bind wire protocol remains open. Trino `EXECUTE ... USING
+  ARRAY[...]` literals now use the same recursive binding path, including nested
+  arrays and null elements.
   The raw Trino route also answers `SHOW SESSION` with the supported Engine
   settings in Trino's metadata result shape, and answers `SHOW FUNCTIONS` with
   the supported scalar and aggregate registry in Trino's six-column metadata
@@ -832,7 +835,7 @@ that prevents Studio's SQL Server-style completion from being interpreted as
 an `ARRAY` expression by workers; a deployed image must include commit
 `6818e65f` or later for that protection to be present.
 Track 2 remains partial because prepared statements are now available through
-the Engine HTTP lifecycle and scalar/array `EXECUTE ... USING` is supported by
+the Engine HTTP lifecycle and scalar/array/map `EXECUTE ... USING` is supported by
 the Trino adapter. The raw Trino statement route also accepts owner-scoped SQL
 `PREPARE name FROM ...`, `EXECUTE name`, and `DEALLOCATE PREPARE name`, using
 the same typed binder and normal SQL parser. The adapter still lacks a

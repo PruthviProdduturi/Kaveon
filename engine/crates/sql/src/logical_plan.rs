@@ -409,6 +409,11 @@ pub fn sql_to_logical_plan_for_binder_with_parameters(
 pub enum ParameterValue {
     Scalar(ScalarValue),
     Array(Vec<ParameterValue>),
+    /// A map parameter is lowered to the same typed `MAP(keys, values)`
+    /// expression used by ordinary SQL. Keys are kept as parameters too so
+    /// nested arrays/maps retain their type and null semantics until the
+    /// normal expression lowerer validates them.
+    Map(Vec<(ParameterValue, ParameterValue)>),
 }
 
 /// Lower SQL after binding both positional (`$1`, `?`) and named (`:name`)
@@ -601,6 +606,43 @@ fn parameter_to_ast_expr(value: &ParameterValue) -> Result<ast::Expr> {
                 .collect::<Result<Vec<_>>>()?,
             named: false,
         })),
+        ParameterValue::Map(entries) => {
+            let keys = entries
+                .iter()
+                .map(|(key, _)| parameter_to_ast_expr(key))
+                .collect::<Result<Vec<_>>>()?;
+            let values = entries
+                .iter()
+                .map(|(_, value)| parameter_to_ast_expr(value))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(ast::Expr::Function(ast::Function {
+                name: ast::ObjectName(vec![ast::Ident::new("MAP")]),
+                args: ast::FunctionArguments::List(ast::FunctionArgumentList {
+                    args: vec![
+                        ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(
+                            ast::Expr::Array(ast::Array {
+                                elem: keys,
+                                named: false,
+                            }),
+                        )),
+                        ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(
+                            ast::Expr::Array(ast::Array {
+                                elem: values,
+                                named: false,
+                            }),
+                        )),
+                    ],
+                    duplicate_treatment: None,
+                    clauses: vec![],
+                }),
+                filter: None,
+                null_treatment: None,
+                over: None,
+                uses_odbc_syntax: false,
+                parameters: ast::FunctionArguments::None,
+                within_group: vec![],
+            }))
+        }
     }
 }
 
