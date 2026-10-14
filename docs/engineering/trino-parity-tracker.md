@@ -142,8 +142,9 @@ foundations, but several operators are still centralized or narrow:
   supported.
   Equality-correlated `IN`/`NOT IN` subqueries whose projected value is the
   correlation key now lower to keyed semi/anti joins with owner-side NULL
-  handling; residual or multi-correlation `IN` shapes remain explicitly
-  rejected until their null semantics have a dedicated rewrite.
+  handling. A single equality key plus residual predicate now uses the same
+  residual-aware semi/anti path as `EXISTS`; multi-key and deeper correlations
+  remain explicitly rejected.
   `CAST(... AS DATE)` is now supported with nullable `Date32` execution and
   focused parser/executor coverage. `CAST(... AS TIMESTAMP)` and
   `TIMESTAMP WITH TIME ZONE` now map to Arrow microsecond timestamps with
@@ -815,7 +816,8 @@ outer joins now carry residual
 after the complete predicate is evaluated.
 Equality-correlated `IN` and `NOT IN` forms whose projected value is the
 correlation key are now included in the exact local/distributed differential
-corpus; residual and multi-correlation forms remain explicitly rejected.
+corpus, including one equality key with a residual predicate; multi-key and
+deeper correlations remain explicitly rejected.
 Grouped `SUM(DISTINCT ...)` and `AVG(DISTINCT ...)` now preserve their exact
 distinct-value state through the executable fragment wire contract, so the
 distributed final merge unions values before calculating the result. The

@@ -486,6 +486,16 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "correlated_in_residual",
+        "SELECT COUNT(*) AS n FROM {T} e WHERE e.user_id IN (SELECT i.user_id FROM {T} i WHERE i.user_id = e.user_id AND i.actions > e.actions)",
+        false,
+    ),
+    (
+        "correlated_not_in_residual",
+        "SELECT COUNT(*) AS n FROM {T} e WHERE e.user_id NOT IN (SELECT i.user_id FROM {T} i WHERE i.user_id = e.user_id AND i.actions > e.actions)",
+        false,
+    ),
+    (
         "grouped_sum_avg_distinct",
         "SELECT region, SUM(DISTINCT actions) AS total, AVG(DISTINCT actions) AS average FROM {T} GROUP BY region ORDER BY region",
         true,
