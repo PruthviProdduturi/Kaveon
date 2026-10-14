@@ -3228,6 +3228,20 @@ mod tests {
     }
 
     #[test]
+    fn translates_grouping_sets_into_union_stages() {
+        let fragments = executable_fragments(
+            "SELECT id, COUNT(*) FROM items GROUP BY GROUPING SETS ((id), ())",
+        );
+        assert!(
+            fragments.values().any(|fragment| fragment
+                .nodes
+                .iter()
+                .any(|node| matches!(node.operator, FragmentOperator::Union))),
+            "GROUPING SETS should create a physical UNION stage"
+        );
+    }
+
+    #[test]
     fn having_and_nested_aggregate_references_bind_to_aggregate_outputs() {
         let fragments = executable_fragments(
             "SELECT id, SUM(id) * 2 AS doubled, CASE WHEN COUNT(*) > 1 THEN 'many' ELSE 'one' END AS n              FROM items GROUP BY id HAVING SUM(id) > 100 AND COUNT(*) >= 1",

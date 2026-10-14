@@ -103,10 +103,12 @@ unchanged; nothing is approximated unless the statement writes an
   (TPC-H Q21's `l2.l_suppkey <> l1.l_suppkey`), `COUNT` in a correlated scalar,
   `LIMIT`/set operations inside a correlated subquery, `EXISTS` correlated on
   more than one column, or multi-key correlated `IN`; each is refused by name.
-- Outer non-equality join conditions (residual join filters) and `GROUPING SETS`/
-  `CUBE`/`ROLLUP`, recursive CTEs, ordered map and JSON comparison;
-  grouping modifiers are rejected explicitly rather than silently treated as a
-  plain `GROUP BY`;
+- Outer non-equality join conditions (residual join filters), `CUBE`/`ROLLUP`,
+  recursive CTEs, ordered map and JSON comparison. Basic column-key
+  `GROUPING SETS ((a), (b), ...)` lowers to typed `UNION ALL` aggregate
+  branches; grouping metadata functions and the `CUBE`/`ROLLUP` expansions
+  remain unsupported and are rejected explicitly rather than silently treated
+  as a plain `GROUP BY`;
   typed numeric, text, and boolean `ARRAY[...]` literals support `CARDINALITY`,
   `CONTAINS`, `ARRAY_POSITION`, `ARRAY_DISTINCT`, `ARRAY_SORT`,
   `ARRAY_REVERSE`, `ELEMENT_AT`, and positive or negative-stride slices;
