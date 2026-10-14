@@ -3398,37 +3398,107 @@ fn trino_describe_input_metadata_response(parameters: &[(String, String)]) -> Re
 fn trino_explicit_parameter_type(query: &str, parameter: &str) -> String {
     let lower = query.to_ascii_lowercase();
     let parameter = parameter.to_ascii_lowercase();
-    let cast_prefix = format!("cast({parameter} as ");
-    if let Some(start) = lower.find(&cast_prefix) {
-        let type_start = start + cast_prefix.len();
-        let bytes = lower.as_bytes();
-        let mut depth = 0usize;
-        for index in type_start..bytes.len() {
-            match bytes[index] {
-                b'(' => depth += 1,
-                b')' if depth == 0 => {
-                    return lower[type_start..index].trim().to_owned();
-                }
-                b')' => depth -= 1,
-                _ => {}
-            }
-        }
+    if let Some(data_type) = find_cast_parameter_type(&lower, &parameter) {
+        return normalize_declared_parameter_type(data_type);
     }
     let cast_suffix = format!("{parameter}::");
     if let Some(start) = lower.find(&cast_suffix) {
         let type_start = start + cast_suffix.len();
-        let end = lower[type_start..]
+        let remainder = lower[type_start..].trim_start();
+        let end = remainder
             .find(|character: char| {
-                character.is_whitespace()
-                    || matches!(character, ',' | ')' | ';' | '=' | '<' | '>' | '+')
+                matches!(character, ',' | ')' | ';' | '=' | '<' | '>' | '+')
             })
-            .map(|offset| type_start + offset)
-            .unwrap_or(lower.len());
-        return lower[type_start..end].trim().to_owned();
+            .unwrap_or(remainder.len());
+        return normalize_declared_parameter_type(&remainder[..end]);
     }
     "unknown".to_owned()
 }
 
+/// Finds `CAST(parameter AS type)` while allowing the whitespace forms emitted
+/// by different SQL clients, including nested type arguments such as
+/// `DECIMAL(10, 2)`.
+fn find_cast_parameter_type<'a>(query: &'a str, parameter: &str) -> Option<&'a str> {
+    let bytes = query.as_bytes();
+    let mut cursor = 0usize;
+    while cursor < bytes.len() {
+        let Some(offset) = query[cursor..].find("cast") else {
+            break;
+        };
+        let start = cursor + offset;
+        let mut index = start + 4;
+        while bytes.get(index).is_some_and(|byte| byte.is_ascii_whitespace()) {
+            index += 1;
+        }
+        if bytes.get(index) != Some(&b'(') {
+            cursor = start + 4;
+            continue;
+        }
+        index += 1;
+        while bytes.get(index).is_some_and(|byte| byte.is_ascii_whitespace()) {
+            index += 1;
+        }
+        if !query[index..].starts_with(parameter) {
+            cursor = start + 4;
+            continue;
+        }
+        index += parameter.len();
+        while bytes.get(index).is_some_and(|byte| byte.is_ascii_whitespace()) {
+            index += 1;
+        }
+        if !query[index..].starts_with("as") {
+            cursor = start + 4;
+            continue;
+        }
+        index += 2;
+        if bytes
+            .get(index)
+            .is_some_and(|byte| !byte.is_ascii_whitespace())
+        {
+            cursor = start + 4;
+            continue;
+        }
+        while bytes.get(index).is_some_and(|byte| byte.is_ascii_whitespace()) {
+            index += 1;
+        }
+        let type_start = index;
+        let mut depth = 0usize;
+        while let Some(byte) = bytes.get(index) {
+            match byte {
+                b'(' => depth += 1,
+                b')' if depth == 0 => return Some(query[type_start..index].trim()),
+                b')' => depth -= 1,
+                _ => {}
+            }
+            index += 1;
+        }
+        cursor = start + 4;
+    }
+    None
+}
+
+fn normalize_declared_parameter_type(data_type: &str) -> String {
+    let data_type = data_type.trim();
+    if data_type.contains('(') {
+        return data_type.to_owned();
+    }
+    for suffix in [
+        " with time zone",
+        " without time zone",
+        " precision",
+        " varying",
+    ] {
+        if data_type.ends_with(suffix) {
+            return data_type.to_owned();
+        }
+    }
+    data_type
+        .split_whitespace()
+        .next()
+        .filter(|type_name| !type_name.is_empty())
+        .unwrap_or("unknown")
+        .to_owned()
+}
 fn trino_describe_output_response(metadata: &[(String, String, bool)]) -> Response {
     let columns = [
         ("Column Name", "varchar"),
@@ -20397,6 +20467,15 @@ mod streamed_root_tests {
         assert_eq!(value["data"][0], serde_json::json!([0, null, "date", "date"]));
         assert_eq!(value["data"][1], serde_json::json!([1, "name", "unknown", "unknown"]));
         assert_eq!(value["data"][2], serde_json::json!([2, null, "bigint", "bigint"]));
+        let spaced = trino_describe_input_query_response(
+            "SELECT CAST ( ? AS DECIMAL(10, 2)), $2::timestamp with time zone",
+        );
+        let body = axum::body::to_bytes(spaced.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["data"][0], serde_json::json!([0, null, "timestamp with time zone", "timestamp with time zone"]));
+        assert_eq!(value["data"][1], serde_json::json!([1, null, "decimal(10, 2)", "decimal(10, 2)"]));
     }
 
     #[tokio::test]
