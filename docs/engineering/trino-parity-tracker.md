@@ -40,7 +40,7 @@ changes through commit `71e5b956`. The checkout also contained separate, uncommi
 engine work from the parallel optimization lane, so these numbers are a local
 regression snapshot and are not a release-image claim:
 `cargo test -p kaveon-server --bin kaveon-server` passed **359/359** tests,
-`cargo test -p kaveon-sql --lib` passed **122/122** tests, and
+`cargo test -p kaveon-sql --lib` passed **123/123** tests, and
 `cargo test -p kaveon-optim --lib` passed **47/47** tests,
 `cargo test -p kaveon-exec --lib` passed **289/289** non-ignored tests with four
 benchmark tests intentionally ignored. Documentation validation also passed for 145 Markdown
@@ -144,6 +144,7 @@ foundations, but several operators are still centralized or narrow:
   the supported scalar and aggregate registry in Trino's six-column metadata
   shape, including `LIKE` wildcard filtering; these metadata calls do not
   create a persistent server-side session.
+  `LIMIT ALL` is also accepted as Trino's explicit no-limit pagination form.
   Prepared-parameter discovery now also ignores PostgreSQL `::type` casts,
   so cast names cannot be mistaken for named bindings (`617b69f6`).
   Uncorrelated aggregate scalar subqueries in `WHERE` are now supported with
