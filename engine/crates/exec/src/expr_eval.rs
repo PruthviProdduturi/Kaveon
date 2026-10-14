@@ -11,14 +11,14 @@ use arrow::array::{
     StringBuilder, StructArray,
     Time32MillisecondArray, Time32SecondArray,
     TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray, UInt32Array,
+    TimestampSecondArray, UInt32Array, UInt64Array,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute;
 use arrow::datatypes::{
     ArrowPrimitiveType, DataType, Date32Type, Date64Type, Float64Type, Int32Type, Int64Type,
     Time32MillisecondType, Time32SecondType, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, TimeUnit,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, TimeUnit, UInt64Type,
 };
 use arrow::record_batch::RecordBatch;
 use kaveon_core::predicate::ScalarValue;
@@ -1331,6 +1331,22 @@ fn zip_arrays(
             let t = true_vals.as_primitive::<Int64Type>();
             let f = false_vals.as_primitive::<Int64Type>();
             let result: Int64Array = (0..len)
+                .map(|i| {
+                    if !mask.is_null(i) && mask.value(i) {
+                        if t.is_null(i) { None } else { Some(t.value(i)) }
+                    } else if f.is_null(i) {
+                        None
+                    } else {
+                        Some(f.value(i))
+                    }
+                })
+                .collect();
+            Ok(Arc::new(result))
+        }
+        DataType::UInt64 => {
+            let t = true_vals.as_primitive::<UInt64Type>();
+            let f = false_vals.as_primitive::<UInt64Type>();
+            let result: UInt64Array = (0..len)
                 .map(|i| {
                     if !mask.is_null(i) && mask.value(i) {
                         if t.is_null(i) { None } else { Some(t.value(i)) }

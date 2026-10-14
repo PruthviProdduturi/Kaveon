@@ -53,9 +53,9 @@ there plan as cross products.
 Unsupported syntax fails explicitly rather than returning a wrong answer:
 correlated non-equality subqueries (TPC-H Q21: `l2.l_suppkey <>
 l1.l_suppkey` needs a semi join with a residual over matched pairs, which
-`SemiJoinOperator` and `JoinSpec.residual` do not carry yet), `COUNT` in a
-correlated scalar subquery, `LIMIT`/`OFFSET` or set operations inside a
-correlated subquery, `EXISTS` correlated on more than one column, correlated
+`SemiJoinOperator` and `JoinSpec.residual` do not carry yet), `LIMIT`/`OFFSET`
+or set operations inside a correlated subquery, `EXISTS` correlated on more
+than one column, correlated
 `IN`, a scalar subquery that is not an ungrouped aggregate, recursive CTEs,
 named windows,
 `WITHIN GROUP`/`DISTINCT`, approximate aggregates, array/map/JSON types,

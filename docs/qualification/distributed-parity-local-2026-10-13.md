@@ -20,7 +20,7 @@ not prove cluster latency, node pressure, or long-running network behavior.
 The full workspace regression (`cargo test --workspace --quiet`) also passed:
 all workspace targets were green, including the server differential suite
 (364 tests), SQL (134), executor (293 plus four ignored benchmarks), optimizer
-(47), and the remaining catalog/core/CLI/storage targets. The workspace run is
+(48), and the remaining catalog/core/CLI/storage targets. The workspace run is
 the broad regression gate; the focused rows above make the distributed gates
 easy to reproduce.
 

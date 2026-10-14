@@ -315,20 +315,10 @@ impl Binder<'_> {
                     .collect::<Result<Vec<_>>>()?;
                 // A correlated column becomes a group key: the aggregate
                 // answers per value of the enclosing query's column, and
-                // the join above selects the row for its value. A COUNT
-                // has an answer (zero) for a value with no rows, which no
-                // join row can carry. A residual selects the rows the
-                // aggregate sees per enclosing row, which no grouping can
-                // express.
+                // the join above selects the row for its value. A residual
+                // selects the rows the aggregate sees per enclosing row,
+                // which no grouping can express.
                 if !input.correlations.is_empty() {
-                    if aggregates
-                        .iter()
-                        .any(|aggregate| matches!(aggregate, AggregateExpr::Count { .. }))
-                    {
-                        return Err(KaveonError::Sql(
-                            "COUNT in a correlated subquery is not supported: its result for an unmatched row is zero, which the join cannot produce".into(),
-                        ));
-                    }
                     for correlation in &input.correlations {
                         let inner = match correlation {
                             Correlation::Key { inner, .. } => inner,
@@ -469,13 +459,22 @@ impl Binder<'_> {
                 // correlations become this join's keys.
                 let mut right_outer = outer.to_vec();
                 right_outer.push(self.scope_of(&left.plan));
-                let right = self.bind(*right, &right_outer)?;
+                let mut right = self.bind(*right, &right_outer)?;
                 let (lateral, deeper): (Vec<_>, Vec<_>) = right
                     .correlations
                     .into_iter()
                     .partition(|correlation| correlation.depth() == outer.len());
                 let mut correlations = left.correlations;
                 correlations.extend(deeper);
+                // A correlated COUNT needs to retain an outer row when its
+                // grouped build side has no matching key. The aggregate
+                // emits no group for that key, so use a left join and turn
+                // the null-extended count into SQL's required zero.
+                let correlated_count =
+                    !lateral.is_empty() && contains_count_aggregate(&right.plan);
+                if correlated_count {
+                    right.plan = coalesce_count_projection(right.plan);
+                }
                 let keys = lateral
                     .into_iter()
                     .map(|correlation| match correlation {
@@ -502,6 +501,11 @@ impl Binder<'_> {
                         aggregate_input: None,
                         correlations,
                     });
+                };
+                let join_type = if correlated_count && join_type == JoinType::Cross {
+                    JoinType::Left
+                } else {
+                    join_type
                 };
                 let mut bound =
                     self.bind_on(left.plan, right.plan, join_type, condition, distribution)?;
@@ -1711,6 +1715,56 @@ fn is_aggregate(name: &str) -> bool {
     kaveon_core::is_aggregate_function(name)
 }
 
+fn contains_count_aggregate(plan: &LogicalPlan) -> bool {
+    if let LogicalPlan::Aggregate { aggregates, .. } = plan
+        && aggregates
+            .iter()
+            .any(|aggregate| matches!(aggregate, AggregateExpr::Count { .. }))
+    {
+        return true;
+    }
+    plan.inputs().into_iter().any(contains_count_aggregate)
+}
+
+fn coalesce_count_projection(plan: LogicalPlan) -> LogicalPlan {
+    match plan {
+        LogicalPlan::Project { input, columns } => LogicalPlan::Project {
+            input,
+            columns: columns
+                .into_iter()
+                .map(|column| match column {
+                    Expr::Alias { expr, name } if name.starts_with("__kaveon_scalar_") => {
+                        let Expr::Function { name: function, args } = *expr else {
+                            return Expr::Alias { expr, name };
+                        };
+                        if !function.eq_ignore_ascii_case("COUNT") || args.len() != 1 {
+                            return Expr::Alias {
+                                expr: Box::new(Expr::Function { name: function, args }),
+                                name,
+                            };
+                        }
+                        Expr::Alias {
+                            expr: Box::new(Expr::Function {
+                                name: "COALESCE".into(),
+                                args: vec![
+                                    Expr::Function {
+                                        name: function,
+                                        args,
+                                    },
+                                    Expr::Literal(kaveon_core::predicate::ScalarValue::Int64(0)),
+                                ],
+                            }),
+                            name,
+                        }
+                    }
+                    other => other,
+                })
+                .collect(),
+        },
+        other => other,
+    }
+}
+
 /// The aggregate's output column as the local planner names it.
 fn aggregate_output_name(aggregate: &AggregateExpr) -> String {
     aggregate.output_name()
@@ -2255,15 +2309,21 @@ mod tests {
     }
 
     #[test]
+    fn a_correlated_count_preserves_unmatched_rows_with_zero() {
+        let plan = bound(
+            "SELECT o_orderkey FROM orders WHERE o_orderkey > (SELECT count(*) FROM lineitem WHERE l_orderkey = o_orderkey)",
+        );
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("join_type: Left"), "{debug}");
+        assert!(debug.contains("COALESCE"), "{debug}");
+    }
+
+    #[test]
     fn correlations_the_join_cannot_carry_are_refused_with_their_reason() {
         for (sql, reason) in [
             (
                 "SELECT o_orderkey FROM orders WHERE EXISTS (SELECT * FROM lineitem WHERE l_orderkey <> o_orderkey)",
                 "EXISTS correlated without an equality",
-            ),
-            (
-                "SELECT o_orderkey FROM orders WHERE o_custkey > (SELECT count(*) FROM lineitem WHERE l_orderkey = o_orderkey)",
-                "COUNT in a correlated subquery",
             ),
             (
                 "SELECT o_orderkey FROM orders WHERE EXISTS (SELECT * FROM lineitem WHERE l_orderkey = o_orderkey LIMIT 1)",
