@@ -212,6 +212,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "offset_fetch_top_n",
+        "SELECT country, region FROM {T} ORDER BY country, region OFFSET 1 ROWS FETCH NEXT 2 ROWS ONLY",
+        true,
+    ),
+    (
         "in_list",
         "SELECT country, SUM(actions) AS a FROM {T} WHERE country IN ('Japan', 'Brazil', 'Kenya') GROUP BY country ORDER BY country",
         true,
