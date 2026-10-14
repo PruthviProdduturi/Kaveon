@@ -40,7 +40,7 @@ changes through commit `afdefc95`. The checkout also contained separate, uncommi
 engine work from the parallel optimization lane, so these numbers are a local
 regression snapshot and are not a release-image claim:
 `cargo test -p kaveon-server --bin kaveon-server` passed **364/364** tests,
-`cargo test -p kaveon-sql --lib` passed **130/130** tests, and
+`cargo test -p kaveon-sql --lib` passed **131/131** tests, and
 `cargo test -p kaveon-optim --lib` passed **47/47** tests,
 `cargo test -p kaveon-exec --lib` passed **289/289** non-ignored tests with four
 benchmark tests intentionally ignored. Documentation validation also passed for 145 Markdown
@@ -868,8 +868,9 @@ values fail closed instead of being silently ignored.
 Column-key `GROUPING SETS ((a), (b), ...)`, the grand-total `GROUPING SETS (())`,
 `CUBE`, and `ROLLUP` now lower to typed `UNION ALL` aggregate branches and are covered by SQL and physical-
 planner tests and a local execution regression. `GROUPING(column)` and
-`GROUPING_ID(...)` are materialized for expanded column-key branches. CUBE expansions with 16 or more keys remain
-explicitly unsupported. The compatibility claim is intentionally limited to
+`GROUPING_ID(...)` are materialized for expanded column-key branches. Expansion
+is bounded at 4,096 aggregate branches; CUBE expansions with 16 or more keys
+remain explicitly unsupported. The compatibility claim is intentionally limited to
 column-key grouping expressions, including ordinary keys carried alongside a
 grouping specification.
 `MIN(DISTINCT ...)` and `MAX(DISTINCT ...)` are accepted as Trino-compatible
