@@ -85,6 +85,14 @@ temporal array operations remain outside this slice.
 The initial repository audit confirms that the Engine has real distributed
 foundations, but several operators are still centralized or narrow:
 
+The current immutable AKS image has now passed the bounded worker-loss,
+retry, cancellation, and concurrent pressure gate. The evidence is
+`docs/qualification/engine-aks-fault-pressure-2026-10-14.md`; the report
+exercised three compatible workers, exact result hashes, catalog-snapshot
+pinning, replacement-worker recovery, and cleanup checks. This closes the
+bounded qualification slice for those scenarios. Coordinator failover,
+node-drain recovery, and sustained soak remain separate acceptance gates.
+
 - Hash repartition, broadcast, joins, partial/final aggregates, spill, retry,
   cancellation, and snapshot fields exist. Cluster qualification remains open
   for skew, spill pressure, rolling worker loss, and cancellation stress.
