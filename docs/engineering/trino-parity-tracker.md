@@ -39,8 +39,8 @@ The local parity baseline was rerun on October 13 with focused qualification
 changes through commit `afdefc95`. The checkout also contained separate, uncommitted
 engine work from the parallel optimization lane, so these numbers are a local
 regression snapshot and are not a release-image claim:
-`cargo test -p kaveon-server --bin kaveon-server` passed **363/363** tests,
-`cargo test -p kaveon-sql --lib` passed **129/129** tests, and
+`cargo test -p kaveon-server --bin kaveon-server` passed **364/364** tests,
+`cargo test -p kaveon-sql --lib` passed **130/130** tests, and
 `cargo test -p kaveon-optim --lib` passed **47/47** tests,
 `cargo test -p kaveon-exec --lib` passed **289/289** non-ignored tests with four
 benchmark tests intentionally ignored. Documentation validation also passed for 145 Markdown
