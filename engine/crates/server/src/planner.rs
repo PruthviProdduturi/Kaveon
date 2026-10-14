@@ -3248,6 +3248,37 @@ mod tests {
     }
 
     #[test]
+    fn executes_grouping_id_with_branch_specific_flags() {
+        let fixture = fixture();
+        let mut plan = kaveon_sql::logical_plan::sql_to_logical_plan(
+            "SELECT GROUPING_ID(id), COUNT(*) FROM items GROUP BY CUBE (id)",
+        )
+        .unwrap();
+        qualify_tables(&mut plan, "test", "default");
+        let mut planned = plan_query(&plan, &fixture.catalog).unwrap();
+        let rows = collect_batches(&mut *planned.operator)
+            .unwrap()
+            .iter()
+            .flat_map(|batch| {
+                (0..batch.num_rows()).map(move |row| {
+                    (0..batch.num_columns())
+                        .map(|column| {
+                            arrow::util::display::array_value_to_string(batch.column(column), row)
+                                .unwrap()
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut rows = rows
+            .into_iter()
+            .map(|row| row.join(":"))
+            .collect::<Vec<_>>();
+        rows.sort();
+        assert_eq!(rows, ["0:1", "0:1", "0:1", "0:1", "1:4"]);
+    }
+
+    #[test]
     fn having_and_nested_aggregate_references_bind_to_aggregate_outputs() {
         let fragments = executable_fragments(
             "SELECT id, SUM(id) * 2 AS doubled, CASE WHEN COUNT(*) > 1 THEN 'many' ELSE 'one' END AS n              FROM items GROUP BY id HAVING SUM(id) > 100 AND COUNT(*) >= 1",
