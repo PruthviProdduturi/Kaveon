@@ -821,6 +821,9 @@ distinct-value state through the executable fragment wire contract, so the
 distributed final merge unions values before calculating the result. The
 multi-encoding differential corpus covers these grouped forms; older fragments
 without the field remain compatible as non-distinct aggregates.
+`MIN(DISTINCT ...)` and `MAX(DISTINCT ...)` are accepted as Trino-compatible
+extrema (deduplication does not change an extremum), with grouped distributed
+differential coverage alongside the sum/average cases.
 Multiset set operations are now implemented
 and covered end to end. Positional
  scalar parameters, including named placeholders, are supported through the
