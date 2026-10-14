@@ -3984,7 +3984,7 @@ async fn run_statement(
     let group = groups.select(&identity, &req.client_tags);
     let resource_group = crate::resource_groups::EffectiveGroup::from(group);
     // Settings first: a refused setting is a 400 before anything is held.
-    let (mut settings, sql, time_zone) =
+    let (mut settings, submitted_sql, time_zone) =
         match request_settings(&req, &state.config, &group.default_settings) {
             Ok(parsed) => parsed,
             Err(error) => {
@@ -3998,6 +3998,20 @@ async fn run_statement(
                     .into_response();
             }
         };
+    let (explain_kind, sql) = match parse_explain_statement(&submitted_sql) {
+        Ok(Some((kind, inner))) => (Some(kind), inner),
+        Ok(None) => (None, submitted_sql),
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": error,
+                    "code": "SYNTAX_ERROR"
+                })),
+            )
+                .into_response();
+        }
+    };
     if let Some(cap) = group.max_local_parallelism {
         let requested = match settings.local_parallelism {
             Some(threads) => threads,
@@ -4496,6 +4510,80 @@ async fn run_statement(
         record.plan.logical = Some(logical_plan.clone());
         record.plan.optimized = Some(optimized_plan.clone());
         record.plan.physical = Some(physical_plan.clone());
+    }
+
+    // EXPLAIN is plan-only: the normal binder and optimizer have done all
+    // validation, but no cache lookup, worker task, scan, or exchange is
+    // started.  Render one line per plan node in the same single-column
+    // shape used by Trino's HTTP protocol.
+    if let Some(kind) = explain_kind {
+        let selected = match kind {
+            ExplainPlanKind::Logical => &logical_plan,
+            ExplainPlanKind::Optimized => &optimized_plan,
+            ExplainPlanKind::Physical => &physical_plan,
+        };
+        let mut lines = Vec::new();
+        explain_plan_lines(selected, 0, &mut lines);
+        let columns = vec![ColumnInfo {
+            name: "Query Plan".to_owned(),
+            data_type: "VARCHAR".to_owned(),
+        }];
+        let rows = lines
+            .into_iter()
+            .map(|line| vec![serde_json::Value::String(line)])
+            .collect::<Vec<_>>();
+        let elapsed = start.elapsed().as_millis() as u64;
+        let record = QueryRecord {
+            rows_are_preview: true,
+            scan_metrics_complete: true,
+            execution: ExecutionPlacement::coordinator(Some("explain".to_owned())),
+            recovery: None,
+            settings: settings.clone(),
+            cached_from: None,
+            cached_elapsed_ms: None,
+            admission_wait_ms,
+            next_uri: None,
+            id: query_id.clone(),
+            sql: format!("EXPLAIN {sql}"),
+            state: QueryState::Finished,
+            columns: columns.clone(),
+            rows: history_preview(&rows),
+            row_count: Some(rows.len() as u64),
+            error: None,
+            error_code: None,
+            elapsed_ms: elapsed,
+            submitted_at_ms,
+            completed_at_ms: unix_time_ms(),
+            timings: QueryTimings {
+                analysis_us: Some(analysis_us),
+                planning_us: Some(elapsed_us(start)),
+                execution_us: Some(0),
+                result_serialization_us: Some(0),
+            },
+            plan: QueryPlan {
+                logical: Some(logical_plan),
+                optimized: Some(optimized_plan),
+                physical: Some(physical_plan),
+            },
+            scans: vec![],
+            stages: vec![],
+            context,
+        };
+        drop(result_writer);
+        drop(query_memory);
+        if !commit_query_record(record).await {
+            return canceled_task_response();
+        }
+        return Json(StatementResponse {
+            next_uri: None,
+            id: query_id,
+            state: QueryState::Finished,
+            columns: Some(columns),
+            data: Some(rows),
+            error: None,
+            elapsed_ms: elapsed,
+        })
+        .into_response();
     }
 
     // The result cache: a complete result of this statement under this
@@ -5598,6 +5686,81 @@ fn request_settings(
     let settings = QuerySettings::from_request(&settings, config)?;
     let sql = prefix.statement.trim().trim_end_matches(';').to_owned();
     Ok((settings, sql, time_zone))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExplainPlanKind {
+    Logical,
+    Optimized,
+    Physical,
+}
+
+/// Unwrap the plan-only subset of Trino's EXPLAIN envelope.  Planning is
+/// performed by the normal binder and optimizer below; this helper only
+/// chooses which already-built plan tree to render.  EXPLAIN ANALYZE is kept
+/// explicit because it is an execution request with different semantics.
+fn parse_explain_statement(sql: &str) -> Result<Option<(ExplainPlanKind, String)>, String> {
+    let trimmed = sql.trim();
+    let Some(rest) = trimmed
+        .get(..7)
+        .filter(|head| head.eq_ignore_ascii_case("EXPLAIN"))
+        .and_then(|_| trimmed.get(7..))
+        .filter(|rest| rest.is_empty() || rest.starts_with(|c: char| c.is_ascii_whitespace()))
+    else {
+        return Ok(None);
+    };
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return Err("EXPLAIN requires a statement".to_owned());
+    }
+    if rest
+        .get(..7)
+        .is_some_and(|head| head.eq_ignore_ascii_case("ANALYZE"))
+        && rest
+            .get(7..)
+            .is_some_and(|tail| tail.is_empty() || tail.starts_with(|c: char| c.is_ascii_whitespace()))
+    {
+        return Err("EXPLAIN ANALYZE is not supported; submit the query itself for execution".to_owned());
+    }
+    if let Some(after_open) = rest.strip_prefix('(') {
+        let Some(close) = after_open.find(')') else {
+            return Err("EXPLAIN option list must close with ')'".to_owned());
+        };
+        let option = after_open[..close].trim();
+        let query = after_open[close + 1..].trim();
+        let kind = match option.to_ascii_uppercase().as_str() {
+            "TYPE LOGICAL" => ExplainPlanKind::Logical,
+            "TYPE DISTRIBUTED" | "TYPE IO" => ExplainPlanKind::Physical,
+            "TYPE VALIDATE" => ExplainPlanKind::Optimized,
+            _ => {
+                return Err(format!(
+                    "unsupported EXPLAIN option '{option}'; use TYPE LOGICAL, TYPE DISTRIBUTED, TYPE IO, or TYPE VALIDATE"
+                ));
+            }
+        };
+        if query.is_empty() {
+            return Err("EXPLAIN requires a statement after the option list".to_owned());
+        }
+        return Ok(Some((kind, query.to_owned())));
+    }
+    Ok(Some((ExplainPlanKind::Physical, rest.to_owned())))
+}
+
+fn explain_plan_lines(node: &kaveon_core::PlanNode, depth: usize, lines: &mut Vec<String>) {
+    let mut line = format!("{}{}", "  ".repeat(depth), node.operator);
+    if !node.attributes.is_empty() {
+        let attributes = node
+            .attributes
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        line.push_str(&format!(" [{attributes}]"));
+    }
+    lines.push(line);
+    for child in &node.children {
+        explain_plan_lines(child, depth + 1, lines);
+    }
 }
 
 /// Which columns `ANALYZE` counts distinct values for: none (the metadata
@@ -13137,12 +13300,14 @@ mod tests {
     }
 
     use super::{
-        AnalyzeStatement, ColumnInfo, DistinctColumns, MergeOperation, StatisticsStatement,
+        AnalyzeStatement, ColumnInfo, DistinctColumns, ExplainPlanKind, MergeOperation,
+        StatisticsStatement,
         TaskRequest, TaskResponse, aggregate_merge_contract, await_task_memory, capabilities,
         catalog_test_state, collect_join_statistics_tables, decode_arrow_stream,
         encode_arrow_stream, exact_metadata_count_plan, execute_analyze,
         general_distributed_eligible, iso_utc_ms, merge_partial_aggregates, mutation_actor,
-        parse_analyze_statement, parse_statistics_statement, statistics_diagnostics,
+        parse_analyze_statement, parse_explain_statement, parse_statistics_statement,
+        statistics_diagnostics,
         task_request_from_dispatch, top_n_merge_contract, transaction_api_guidance,
         validate_replacement,
     };
@@ -13178,6 +13343,31 @@ mod tests {
         assert!(analyze("ANALYZE orders WHERE true").is_err());
         assert!(analyze("ANALYZE a.b.c.d").is_err());
         assert!(analyze("ANALYZE ").is_err());
+    }
+
+    #[test]
+    fn explain_parser_selects_plan_kind_without_execution() {
+        assert_eq!(
+            parse_explain_statement("EXPLAIN SELECT * FROM events"),
+            Ok(Some((
+                ExplainPlanKind::Physical,
+                "SELECT * FROM events".to_owned()
+            )))
+        );
+        assert_eq!(
+            parse_explain_statement("EXPLAIN (TYPE LOGICAL) SELECT 1"),
+            Ok(Some((ExplainPlanKind::Logical, "SELECT 1".to_owned())))
+        );
+        assert_eq!(
+            parse_explain_statement("EXPLAIN (TYPE VALIDATE) SELECT 1"),
+            Ok(Some((ExplainPlanKind::Optimized, "SELECT 1".to_owned())))
+        );
+        assert!(parse_explain_statement("EXPLAIN ANALYZE SELECT 1")
+            .unwrap_err()
+            .contains("not supported"));
+        assert!(parse_explain_statement("EXPLAIN (FORMAT GRAPHVIZ) SELECT 1")
+            .unwrap_err()
+            .contains("unsupported EXPLAIN option"));
     }
 
     /// The statements `ANALYZE` runs on the workers, and the values that
