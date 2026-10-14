@@ -161,8 +161,10 @@ node-drain recovery, and sustained soak remain separate acceptance gates.
   Semi/anti joins now hash-partition both inputs on
   ordinary column keys, including positional keys projected by correlated
   EXISTS plans, and retain a deliberate broadcast fallback only when a key
-  cannot be resolved; runtime build-key propagation and adaptive broadcast
-  selection remain open.
+  cannot be resolved. The distributed fragment executor now emits only the
+  matching (semi) or non-matching (anti) left rows from the partitioned hash
+  join, preserving the left schema; runtime build-key propagation and adaptive
+  broadcast selection remain open.
 - Non-recursive CTEs, derived tables, joins, aggregates, `HAVING`, `CASE`, and
   common set operations work. Uncorrelated aggregate scalar subqueries in
   `WHERE`, the qualified correlated scalar aggregate filter shape, and bounded
