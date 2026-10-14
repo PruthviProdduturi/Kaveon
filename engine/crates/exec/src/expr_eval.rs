@@ -3240,6 +3240,39 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .collect();
             Ok(Arc::new(result))
         }
+        "TRANSLATE" => {
+            check_arity(name, args, 3)?;
+            let sources = as_string_array(&args[0])?;
+            let from = as_string_array(&args[1])?;
+            let to = as_string_array(&args[2])?;
+            let bytes = sources.values().len() as u64;
+            reserve_string_expansion(bytes, num_rows)?;
+            let result: StringArray = (0..num_rows)
+                .map(|row| {
+                    if sources.is_null(row) || from.is_null(row) || to.is_null(row) {
+                        return None;
+                    }
+                    let source = sources.value(row);
+                    let from_chars = from.value(row).chars().collect::<Vec<_>>();
+                    let to_chars = to.value(row).chars().collect::<Vec<_>>();
+                    let mut mapping = std::collections::HashMap::new();
+                    for (index, character) in from_chars.into_iter().enumerate() {
+                        mapping.entry(character).or_insert(to_chars.get(index).copied());
+                    }
+                    Some(
+                        source
+                            .chars()
+                            .filter_map(|character| match mapping.get(&character) {
+                                Some(Some(mapped)) => Some(*mapped),
+                                Some(None) => None,
+                                None => Some(character),
+                            })
+                            .collect::<String>(),
+                    )
+                })
+                .collect();
+            Ok(Arc::new(result))
+        }
         "LEFT" => {
             check_arity(name, args, 2)?;
             let arr = as_string_array(&args[0])?;
@@ -10858,6 +10891,32 @@ mod tests {
         let values = as_string_array(&result).unwrap();
         assert_eq!(values.value(0), "a-b");
         assert_eq!(values.value(1), "b");
+        assert!(values.is_null(2));
+    }
+
+    #[test]
+    fn translate_maps_unicode_characters_and_removes_unmapped_targets() {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)])),
+            vec![Arc::new(StringArray::from(vec![
+                Some("aébc"),
+                Some("aabc"),
+                None,
+            ]))],
+        )
+        .unwrap();
+        let expr = Expr::Function {
+            name: "TRANSLATE".into(),
+            args: vec![
+                Expr::Column("value".into()),
+                Expr::Literal(ScalarValue::Utf8("aéb".into())),
+                Expr::Literal(ScalarValue::Utf8("XY".into())),
+            ],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        let values = as_string_array(&result).unwrap();
+        assert_eq!(values.value(0), "XYc");
+        assert_eq!(values.value(1), "XXc");
         assert!(values.is_null(2));
     }
 
