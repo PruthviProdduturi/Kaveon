@@ -638,6 +638,11 @@ invalidation, isolation, bounds, and restart evidence listed above.
   without adding a second execution path. Other arbitrary `TRY(expr)` forms
   remain explicitly rejected until the executor can mask row-local failures
   for every scalar operator.
+- `GREATEST` and `LEAST` now fold through the common input type instead of
+  forcing results to `DOUBLE`; pairwise comparisons preserve integers, text,
+  dates, and other supported comparable values, and any NULL argument produces
+  NULL for that row. Focused executor coverage protects both type preservation
+  and null propagation.
 - `ROW(...)` constructors now produce typed Arrow `StructArray` values with
   null-preserving child fields. `MAP(...)` now produces Arrow `MapArray` values
   from matching list offsets and rejects NULL keys. `MAP_KEYS` and `MAP_VALUES`
