@@ -149,9 +149,9 @@ node-drain recovery, and sustained soak remain separate acceptance gates.
   Trino-class parallel plans across the full window corpus.
 - Static predicates are pushed into eligible build scans, including broadcast
   joins; the build-side key set is not yet propagated to the probe scan at
-  runtime. A bounded in-memory inner-join filter now removes probe batches
+  runtime. A bounded in-memory inner/semi-join filter now removes probe batches
   whose keys are absent from the build before hash probing; it is disabled for
-  outer/residual joins and spilled builds. Scan-level dynamic filtering,
+  outer/anti/residual joins and spilled builds. Scan-level dynamic filtering,
   join reordering, skew mitigation, and qualified coordinator failover remain
   open.
 - Ordinary distributed joins use equality keys; inner residual predicates now
