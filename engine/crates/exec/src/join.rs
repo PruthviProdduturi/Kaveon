@@ -1114,6 +1114,7 @@ fn row_key(
                     })
                 }
                 DataType::Utf8 => Key::Utf8(column.as_string::<i32>().value(row).to_owned()),
+                DataType::LargeUtf8 => Key::Utf8(column.as_string::<i64>().value(row).to_owned()),
                 data_type => {
                     return Err(exec_err(format!("unsupported join key type {data_type}")));
                 }
@@ -1130,8 +1131,8 @@ fn exec_err(message: impl Into<String>) -> KaveonError {
 mod tests {
     use super::*;
     use arrow::array::{
-        Date64Array, Decimal128Array, Decimal256Array, Int32Array, Int64Array, StringArray,
-        Time32MillisecondArray, TimestampMillisecondArray,
+        Date64Array, Decimal128Array, Decimal256Array, Int32Array, Int64Array,
+        LargeStringArray, StringArray, Time32MillisecondArray, TimestampMillisecondArray,
     };
     use arrow::datatypes::i256;
     use std::collections::VecDeque;
@@ -1208,6 +1209,34 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn large_utf8_join_keys_match_and_skip_nulls() {
+        let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::LargeUtf8, true)]));
+        let left = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(LargeStringArray::from(vec![
+                Some("alpha"),
+                Some("missing"),
+                None,
+            ]))],
+        )
+        .unwrap();
+        let right = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(LargeStringArray::from(vec![Some("alpha"), None]))],
+        )
+        .unwrap();
+        let mut join = HashJoin::try_new(
+            Box::new(Input::new(left)),
+            Box::new(Input::new(right)),
+            JoinType::Inner,
+            vec![("key".into(), "key".into())],
+        )
+        .unwrap();
+        let batches = kaveon_core::collect_batches(&mut join).unwrap();
+        assert_eq!(concat_batches(join.schema(), &batches).unwrap().num_rows(), 1);
     }
 
     #[test]
