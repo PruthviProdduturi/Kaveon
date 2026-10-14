@@ -3996,6 +3996,38 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .collect();
             Ok(Arc::new(result))
         }
+        "JSON_ARRAY_CONTAINS" => {
+            check_arity(name, args, 2)?;
+            let documents = as_string_array(&args[0])?;
+            let mut values = Vec::with_capacity(num_rows);
+            for row in 0..num_rows {
+                    if documents.is_null(row) || args[1].is_null(row) {
+                        values.push(None);
+                        continue;
+                    }
+                    let Some(needle) = json_scalar_value(&args[1], row)? else {
+                        values.push(None);
+                        continue;
+                    };
+                    let Ok(document) =
+                        serde_json::from_str::<serde_json::Value>(documents.value(row))
+                    else {
+                        values.push(None);
+                        continue;
+                    };
+                    let serde_json::Value::Array(document_values) = document else {
+                        values.push(Some(false));
+                        continue;
+                    };
+                    values.push(Some(
+                        document_values
+                            .iter()
+                            .any(|value| value == &needle),
+                    ));
+            }
+            let result: BooleanArray = values.into();
+            Ok(Arc::new(result))
+        }
         "JSON_SIZE" => {
             check_arity(name, args, 2)?;
             let documents = as_string_array(&args[0])?;
@@ -7833,6 +7865,63 @@ fn json_extract_scalar(document: &str, path: &str) -> Option<String> {
         serde_json::Value::Bool(value) => Some(value.to_string()),
         serde_json::Value::Number(value) => Some(value.to_string()),
     }
+}
+
+fn json_scalar_value(array: &ArrayRef, row: usize) -> Result<Option<serde_json::Value>> {
+    if array.is_null(row) {
+        return Ok(None);
+    }
+    let value = match array.data_type() {
+        DataType::Boolean => serde_json::Value::Bool(
+            array
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .expect("boolean JSON needle")
+                .value(row),
+        ),
+        DataType::Int64 => serde_json::Value::Number(serde_json::Number::from(
+            array
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("int64 JSON needle")
+                .value(row),
+        )),
+        DataType::Float64 => {
+            let number = array
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .expect("float64 JSON needle")
+                .value(row);
+            let Some(number) = serde_json::Number::from_f64(number) else {
+                return Err(KaveonError::Execution(
+                    "JSON_ARRAY_CONTAINS does not accept NaN or infinity needles".into(),
+                ));
+            };
+            serde_json::Value::Number(number)
+        }
+        DataType::Utf8 => serde_json::Value::String(
+            array
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("utf8 JSON needle")
+                .value(row)
+                .to_owned(),
+        ),
+        DataType::LargeUtf8 => serde_json::Value::String(
+            array
+                .as_any()
+                .downcast_ref::<LargeStringArray>()
+                .expect("large utf8 JSON needle")
+                .value(row)
+                .to_owned(),
+        ),
+        data_type => {
+            return Err(KaveonError::Execution(format!(
+                "JSON_ARRAY_CONTAINS does not support needle type {data_type}"
+            )))
+        }
+    };
+    Ok(Some(value))
 }
 
 /// Extract a JSON value at a conservative SQL/JSON path. The result is
@@ -14446,6 +14535,75 @@ mod tests {
             result.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
             vec![Some(3), None, None, None]
         );
+    }
+
+    #[test]
+    fn evaluates_json_array_contains_for_typed_needles_and_nulls() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "document",
+                Arc::new(StringArray::from(vec![
+                    Some(r#"[1,2,3]"#),
+                    Some(r#"["alpha", "beta"]"#),
+                    Some(r#"{"value":1}"#),
+                    None,
+                ])) as ArrayRef,
+            ),
+            (
+                "needle",
+                Arc::new(Int64Array::from(vec![Some(2), Some(2), Some(1), None])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "JSON_ARRAY_CONTAINS".into(),
+                args: vec![
+                    Expr::Column("document".into()),
+                    Expr::Column("needle".into()),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(
+            result
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(true), Some(false), Some(false), None]
+        );
+
+        let string_batch = RecordBatch::try_from_iter([
+            (
+                "document",
+                Arc::new(StringArray::from(vec![Some(r#"["alpha", "beta"]"#)]))
+                    as ArrayRef,
+            ),
+            (
+                "needle",
+                Arc::new(StringArray::from(vec![Some("beta")])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "JSON_ARRAY_CONTAINS".into(),
+                args: vec![
+                    Expr::Column("document".into()),
+                    Expr::Column("needle".into()),
+                ],
+            },
+            &string_batch,
+        )
+        .unwrap();
+        assert!(result
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap()
+            .value(0));
     }
 
     #[test]

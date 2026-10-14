@@ -40,6 +40,10 @@ by the selected database and Kaveon's API guardrails.
 | `SUM(DISTINCT)`, `AVG(DISTINCT)` | Alpha | Exact mergeable distinct state |
 | `APPROX_COUNT_DISTINCT` (`APPROX_DISTINCT`), `APPROX_PERCENTILE` | Alpha | Sketch-answered estimates with the error stated on the query record; from the table's statistics without a scan when they carry sketches at the pinned version, else computed over the rows. See [Approximate aggregates](#approximate-aggregates) |
 
+`JSON_ARRAY_CONTAINS(json_array, value)` supports boolean, integer,
+floating-point, and text needles. It preserves NULL inputs, returns NULL for
+malformed JSON, and returns `false` for valid non-array JSON values.
+
 ## Approximate aggregates
 
 Two aggregates answer with an estimate from a mergeable sketch, and say
