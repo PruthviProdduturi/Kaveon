@@ -42,7 +42,7 @@ regression snapshot and are not a release-image claim:
 `cargo test -p kaveon-server --bin kaveon-server` passed **364/364** tests,
 `cargo test -p kaveon-sql --lib` passed **131/131** tests, and
 `cargo test -p kaveon-optim --lib` passed **47/47** tests,
-`cargo test -p kaveon-exec --lib` passed **290/290** non-ignored tests with four
+`cargo test -p kaveon-exec --lib` passed **291/291** non-ignored tests with four
 benchmark tests intentionally ignored. Documentation validation also passed for 145 Markdown
 files, 39 routes, and 9 SVGs. This is an in-process regression baseline; it
 does not replace the deployed three-worker qualification gates listed below.
@@ -164,7 +164,9 @@ foundations, but several operators are still centralized or narrow:
   `TIMESTAMP WITH TIME ZONE` now map to Arrow microsecond timestamps with
   nullable execution coverage. `MIN` and `MAX` over timestamp columns now
   preserve the input unit/timezone and exact integer values, including grouped
-  and null-only groups (`178c3bdb`).
+  and null-only groups (`178c3bdb`). `DATE_TRUNC` now preserves nulls and
+  executes over second, millisecond, microsecond, and nanosecond timestamp
+  columns while preserving the source unit and timezone.
 - Background statistics and cube refresh deduplication now scopes its
   process-local registry by table and source location. Independent embedded
   catalog stores can no longer suppress one another's refresh, which removes a
