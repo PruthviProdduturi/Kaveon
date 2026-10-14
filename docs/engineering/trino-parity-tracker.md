@@ -153,7 +153,7 @@ node-drain recovery, and sustained soak remain separate acceptance gates.
   joins; the build-side key set is not yet propagated to the probe scan at
   runtime. A bounded in-memory inner/semi-join filter now removes probe batches
   whose keys are absent from the build before hash probing; single INT32,
-  INT64, UTF-8, and LargeUtf8 keys use a batch mask over the built hash index and
+  INT64, UInt64, Date32, UTF-8, and LargeUtf8 keys use a batch mask over the built hash index and
   composite keys retain the exact typed fallback. It is disabled for outer/anti/residual
   joins and spilled builds. Scan-level dynamic filtering,
   join reordering, skew mitigation, and qualified coordinator failover remain
@@ -619,9 +619,10 @@ invalidation, isolation, bounds, and restart evidence listed above.
 - The same optimizer path now propagates bounded positive `IN (...)` literal
   filters across inner equality keys (up to 64 values), preserving a safe
   partition/build reduction without claiming runtime dynamic filtering.
-- Build-side runtime filters now use typed `Int32` hash indexes for single-key
-  probe batches, alongside the existing `Int64`, `Utf8`, and `LargeUtf8` paths.
-  This removes per-row composite-key allocation for common integer dimensions;
+- Build-side runtime filters now use typed `Int32`, `UInt64`, and `Date32` hash
+  indexes for single-key probe batches, alongside the existing `Int64`, `Utf8`,
+  and `LargeUtf8` paths. This removes per-row composite-key allocation for
+  common integer and date dimensions;
   composite keys and scan-level dynamic filtering remain separate open gates.
 - A distributed self-join with grouped output now has exact worker-loss
   recovery coverage, including retries and moved exchange spools
