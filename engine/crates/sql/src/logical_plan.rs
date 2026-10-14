@@ -1539,6 +1539,24 @@ fn build_aggregate(
         if full_group_by.is_empty() {
             return Err(sql_err("GROUPING SETS must contain a grouping key"));
         }
+        let mut grouping_columns = Vec::new();
+        for item in &select.projection {
+            if let ast::SelectItem::UnnamedExpr(expr)
+            | ast::SelectItem::ExprWithAlias { expr, .. } = item
+            {
+                collect_grouping_columns_from_ast_expr(expr, &mut grouping_columns)?;
+            }
+        }
+        if let Some(having) = &select.having {
+            collect_grouping_columns_from_ast_expr(having, &mut grouping_columns)?;
+        }
+        for column in &grouping_columns {
+            if !full_group_by.contains(&Expr::Column(column.clone())) {
+                return Err(sql_err(format!(
+                    "GROUPING column '{column}' is not present in the grouping keys"
+                )));
+            }
+        }
         let mut inputs = Vec::with_capacity(sets_ast.len());
         for set in sets_ast {
             let mut set = set
@@ -1552,7 +1570,7 @@ fn build_aggregate(
                     set.push(expression.clone());
                 }
             }
-            let group_by = full_group_by
+            let mut group_by: Vec<Expr> = full_group_by
                 .iter()
                 .map(|expression| {
                     let Expr::Column(name) = expression else {
@@ -1576,6 +1594,17 @@ fn build_aggregate(
                     }
                 })
                 .collect();
+            for column in &grouping_columns {
+                let flag = if set.contains(&Expr::Column(column.clone())) {
+                    0
+                } else {
+                    1
+                };
+                group_by.push(Expr::Alias {
+                    expr: Box::new(Expr::Literal(ScalarValue::Int64(flag))),
+                    name: grouping_marker_name(column),
+                });
+            }
             inputs.push(LogicalPlan::Aggregate {
                 input: Box::new(plan.clone()),
                 group_by,
@@ -1766,14 +1795,27 @@ fn lower_aggregate_expressions(
             for (i, expr) in group_by.iter_mut().enumerate() {
                 let name = match expr {
                     Expr::Column(name) => name.clone(),
+                    Expr::Alias { name, .. } => name.clone(),
                     _ => format!("__kaveon_group_{i}"),
                 };
+                let original = expr.clone();
                 projection.push(Expr::Alias {
                     expr: Box::new(expr.clone()),
                     name: name.clone(),
                 });
                 let column = Expr::Column(name);
-                bindings.push((expr.clone(), column.clone()));
+                bindings.push((original.clone(), column.clone()));
+                if let Expr::Alias { name, .. } = original {
+                    if let Some(grouping_column) = name.strip_prefix("__kaveon_grouping_") {
+                        bindings.push((
+                            Expr::Function {
+                                name: "GROUPING".to_owned(),
+                                args: vec![Expr::Column(grouping_column.to_owned())],
+                            },
+                            column.clone(),
+                        ));
+                    }
+                }
                 *expr = column;
             }
             for (i, aggregate) in aggregates.iter_mut().enumerate() {
@@ -2943,6 +2985,74 @@ fn contains_aggregate_select_item(item: &ast::SelectItem) -> bool {
             contains_aggregate_expr(expr)
         }
         _ => false,
+    }
+}
+
+fn grouping_marker_name(column: &str) -> String {
+    format!("__kaveon_grouping_{column}")
+}
+
+fn collect_grouping_columns_from_ast_expr(
+    expr: &ast::Expr,
+    out: &mut Vec<String>,
+) -> Result<()> {
+    match expr {
+        ast::Expr::Function(func) => {
+            if canonical_function_name(func) == "GROUPING" {
+                let ast::FunctionArguments::List(args) = &func.args else {
+                    return Err(sql_err("GROUPING requires one grouping column"));
+                };
+                let [ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(column))] =
+                    args.args.as_slice()
+                else {
+                    return Err(sql_err("GROUPING requires one grouping column"));
+                };
+                let Expr::Column(column) = ast_expr_to_expr(column)? else {
+                    return Err(sql_err("GROUPING currently requires a column argument"));
+                };
+                if !out.contains(&column) {
+                    out.push(column);
+                }
+                return Ok(());
+            }
+            if let ast::FunctionArguments::List(args) = &func.args {
+                for argument in &args.args {
+                    if let ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(expr)) = argument
+                    {
+                        collect_grouping_columns_from_ast_expr(expr, out)?;
+                    }
+                }
+            }
+            Ok(())
+        }
+        ast::Expr::BinaryOp { left, right, .. } => {
+            collect_grouping_columns_from_ast_expr(left, out)?;
+            collect_grouping_columns_from_ast_expr(right, out)
+        }
+        ast::Expr::UnaryOp { expr, .. }
+        | ast::Expr::Nested(expr)
+        | ast::Expr::Cast { expr, .. } => collect_grouping_columns_from_ast_expr(expr, out),
+        ast::Expr::Case {
+            operand,
+            conditions,
+            results,
+            else_result,
+        } => {
+            if let Some(operand) = operand {
+                collect_grouping_columns_from_ast_expr(operand, out)?;
+            }
+            for condition in conditions {
+                collect_grouping_columns_from_ast_expr(condition, out)?;
+            }
+            for result in results {
+                collect_grouping_columns_from_ast_expr(result, out)?;
+            }
+            if let Some(else_result) = else_result {
+                collect_grouping_columns_from_ast_expr(else_result, out)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
     }
 }
 
@@ -4707,6 +4817,17 @@ mod tests {
         assert_eq!(debug.matches("Aggregate").count(), 2, "{debug}");
         assert!(debug.contains("region"), "{debug}");
         assert!(debug.contains("platform"), "{debug}");
+    }
+
+    #[test]
+    fn grouping_metadata_uses_branch_specific_grouping_flags() {
+        let plan = sql_to_logical_plan(
+            "SELECT region, GROUPING(region), COUNT(*) FROM events GROUP BY GROUPING SETS ((region), ())",
+        )
+        .unwrap();
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("__kaveon_grouping_region"), "{debug}");
+        assert!(!debug.contains("name: \"GROUPING\""), "{debug}");
     }
 
     #[test]
