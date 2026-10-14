@@ -655,6 +655,8 @@ invalidation, isolation, bounds, and restart evidence listed above.
 - `REGEXP_EXTRACT` now compiles each pattern through the shared regex cache,
   returns capture group 0 by default or a requested zero-based group, and
   preserves NULL results for NULL inputs, non-matches, and missing captures.
+- `REGEXP_SPLIT` now uses the shared compiled-pattern cache, returns a typed
+  text array, preserves trailing empty fields, and propagates NULL inputs.
 - `SPLIT` now returns typed text arrays, preserves NULL inputs, supports a
   positive limit whose final element contains the remainder, and follows
   Trino's character splitting behavior for an empty delimiter.

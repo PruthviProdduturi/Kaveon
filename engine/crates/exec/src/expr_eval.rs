@@ -3152,6 +3152,24 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .into();
             Ok(Arc::new(result))
         }
+        "REGEXP_SPLIT" => {
+            check_arity(name, args, 2)?;
+            let values = as_string_array(&args[0])?;
+            let patterns = as_string_array(&args[1])?;
+            let mut builder = ListBuilder::new(StringBuilder::new());
+            for row in 0..num_rows {
+                if values.is_null(row) || patterns.is_null(row) {
+                    builder.append(false);
+                    continue;
+                }
+                let regex = compiled_regex_for("REGEXP_SPLIT", patterns.value(row))?;
+                for part in regex.split(values.value(row)) {
+                    builder.values().append_value(part);
+                }
+                builder.append(true);
+            }
+            Ok(Arc::new(builder.finish()))
+        }
         "REPLACE" => {
             check_arity(name, args, 3)?;
             let arr = as_string_array(&args[0])?;
@@ -9874,6 +9892,41 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("group must be non-negative"));
+    }
+
+    #[test]
+    fn regexp_split_preserves_trailing_empty_fields_and_nulls() {
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, true)]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(StringArray::from(vec![
+                Some("one,two,"),
+                Some("no delimiter"),
+                None,
+            ]))],
+        )
+        .unwrap();
+        let expr = Expr::Function {
+            name: "REGEXP_SPLIT".into(),
+            args: vec![
+                Expr::Column("s".into()),
+                Expr::Literal(ScalarValue::Utf8(",".into())),
+            ],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        let values = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let first = values.value(0);
+        assert_eq!(
+            first
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some("one"), Some("two"), Some("")]
+        );
+        assert_eq!(values.value(1).len(), 1);
+        assert!(values.is_null(2));
     }
 
     #[test]
