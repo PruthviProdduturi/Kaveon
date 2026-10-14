@@ -4,7 +4,7 @@ use arrow::array::{
     Decimal128Builder,
     Float32Array, Float64Array, Float64Builder,
     Int16Array, Int32Array, Int32Builder, Int32DictionaryArray, Int64Array, Int64Builder,
-    Int8Array, LargeListArray,
+    Int8Array, LargeListArray, LargeStringArray, LargeStringBuilder,
     ListArray, GenericListArray, OffsetSizeTrait,
     ListBuilder, MapArray,
     NullBuilder, PrimitiveArray, PrimitiveBuilder,
@@ -5921,12 +5921,34 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "REVERSE" => {
             check_arity(name, args, 1)?;
-            let arr = as_string_array(&args[0])?;
-            let result: StringArray = arr
-                .iter()
-                .map(|v| v.map(|s| s.chars().rev().collect::<String>()))
-                .collect();
-            Ok(Arc::new(result))
+            match args[0].data_type() {
+                DataType::Utf8 => {
+                    let arr = as_string_array(&args[0])?;
+                    let result: StringArray = arr
+                        .iter()
+                        .map(|v| v.map(|s| s.chars().rev().collect::<String>()))
+                        .collect();
+                    Ok(Arc::new(result))
+                }
+                DataType::LargeUtf8 => {
+                    let arr = args[0]
+                        .as_any()
+                        .downcast_ref::<LargeStringArray>()
+                        .ok_or_else(|| KaveonError::Execution("expected large string array".into()))?;
+                    let mut result = LargeStringBuilder::with_capacity(num_rows, arr.value_offsets().len());
+                    for row in 0..num_rows {
+                        if arr.is_null(row) {
+                            result.append_null();
+                        } else {
+                            result.append_value(arr.value(row).chars().rev().collect::<String>());
+                        }
+                    }
+                    Ok(Arc::new(result.finish()))
+                }
+                other => Err(KaveonError::Execution(format!(
+                    "REVERSE expects VARCHAR, got {other}"
+                ))),
+            }
         }
         "REPEAT" => {
             check_arity(name, args, 2)?;
@@ -13243,6 +13265,28 @@ mod tests {
             .value(0);
         let values = inner.as_primitive::<arrow::datatypes::Date32Type>();
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some(20), Some(10)]);
+    }
+
+    #[test]
+    fn reverse_preserves_large_utf8_columns_and_nulls() {
+        let batch = RecordBatch::try_from_iter([(
+            "text",
+            Arc::new(LargeStringArray::from(vec![Some("Kaveon"), None, Some("世界")])) as ArrayRef,
+        )])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "REVERSE".into(),
+                args: vec![Expr::Column("text".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(result.data_type(), &DataType::LargeUtf8);
+        let values = result.as_any().downcast_ref::<LargeStringArray>().unwrap();
+        assert_eq!(values.value(0), "noevaK");
+        assert!(values.is_null(1));
+        assert_eq!(values.value(2), "界世");
     }
 
     #[test]
