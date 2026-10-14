@@ -3046,6 +3046,43 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .collect();
             Ok(Arc::new(result))
         }
+        "CONCAT_WS" => {
+            if args.len() < 2 {
+                return Err(KaveonError::Execution(
+                    "CONCAT_WS requires a separator and at least one value".into(),
+                ));
+            }
+            let string_args: Vec<StringArray> = args[1..]
+                .iter()
+                .map(cast_to_string)
+                .collect::<Result<_>>()?;
+            let separator = cast_to_string(&args[0])?;
+            let bytes = string_args.iter().fold(0_u64, |bytes, array| {
+                bytes.saturating_add(array.value_data().len() as u64)
+            });
+            reserve_string_expansion(bytes, num_rows)?;
+            let result: StringArray = (0..num_rows)
+                .map(|row| {
+                    if separator.is_null(row) {
+                        return None;
+                    }
+                    let mut output = String::new();
+                    let mut added = false;
+                    for array in &string_args {
+                        if array.is_null(row) {
+                            continue;
+                        }
+                        if added {
+                            output.push_str(separator.value(row));
+                        }
+                        output.push_str(array.value(row));
+                        added = true;
+                    }
+                    Some(output)
+                })
+                .collect();
+            Ok(Arc::new(result))
+        }
         "REGEXP_REPLACE" => {
             check_arity(name, args, 3)?;
             let arr = as_string_array(&args[0])?;
@@ -10792,6 +10829,36 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("limit must be greater than zero"));
+    }
+
+    #[test]
+    fn concat_ws_skips_null_values_and_propagates_null_separator() {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Utf8, true),
+                Field::new("b", DataType::Utf8, true),
+                Field::new("separator", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec![Some("a"), None, Some("c")])),
+                Arc::new(StringArray::from(vec![Some("b"), Some("b"), None])),
+                Arc::new(StringArray::from(vec![Some("-"), Some("-"), None])),
+            ],
+        )
+        .unwrap();
+        let expr = Expr::Function {
+            name: "CONCAT_WS".into(),
+            args: vec![
+                Expr::Column("separator".into()),
+                Expr::Column("a".into()),
+                Expr::Column("b".into()),
+            ],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        let values = as_string_array(&result).unwrap();
+        assert_eq!(values.value(0), "a-b");
+        assert_eq!(values.value(1), "b");
+        assert!(values.is_null(2));
     }
 
     #[test]
