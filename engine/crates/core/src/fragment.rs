@@ -7,6 +7,10 @@ use crate::{
     StoragePredicate,
 };
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// The wire format a coordinator sends. Version 6 added the directory
 /// listing to a scan (`ScanSpec::listing`); version 5 carried the location
 /// alone. A worker accepts both: a version-5 fragment from an older
@@ -239,6 +243,11 @@ pub struct AggregateSpec {
     pub function: AggregateFunction,
     pub argument: Option<Expr>,
     pub output: String,
+    /// Whether the aggregate consumes each argument value at most once.
+    /// Kept on the executable spec so distributed partial/final stages retain
+    /// SUM(DISTINCT ...) and AVG(DISTINCT ...) semantics across the exchange.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub distinct: bool,
     /// For `ApproxPercentile`: what it answers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub percentiles: Option<Percentiles>,

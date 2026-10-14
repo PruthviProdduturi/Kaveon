@@ -816,6 +816,11 @@ after the complete predicate is evaluated.
 Equality-correlated `IN` and `NOT IN` forms whose projected value is the
 correlation key are now included in the exact local/distributed differential
 corpus; residual and multi-correlation forms remain explicitly rejected.
+Grouped `SUM(DISTINCT ...)` and `AVG(DISTINCT ...)` now preserve their exact
+distinct-value state through the executable fragment wire contract, so the
+distributed final merge unions values before calculating the result. The
+multi-encoding differential corpus covers these grouped forms; older fragments
+without the field remain compatible as non-distinct aggregates.
 Multiset set operations are now implemented
 and covered end to end. Positional
  scalar parameters, including named placeholders, are supported through the
