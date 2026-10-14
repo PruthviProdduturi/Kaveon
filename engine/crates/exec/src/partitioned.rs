@@ -8,7 +8,12 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{collections::VecDeque, sync::Arc};
 
-use arrow::{compute::concat_batches, datatypes::SchemaRef, record_batch::RecordBatch};
+use arrow::{
+    array::BooleanArray,
+    compute::{self, concat_batches},
+    datatypes::SchemaRef,
+    record_batch::RecordBatch,
+};
 use kaveon_core::{
     BatchOperator, Expr, KaveonError, MemoryReservation, OperatorMemoryAccount, QueryMemoryPool,
     Result,
@@ -20,7 +25,7 @@ use crate::{
         grouped_aggregate_states_to_schema_batch,
     },
     exchange::HashPartitioner,
-    join::{BuiltSide, HashJoin, JoinType},
+    join::{BuildKeyFilter, BuiltSide, HashJoin, JoinType},
     semijoin::{BuildFacts, SemiJoinOperator},
     spill::{SpillManager, SpillRun, SpillRunReader},
 };
@@ -28,6 +33,42 @@ use crate::{
 const MAX_PARTITIONS: usize = 256;
 const MAX_RUNS_PER_PARTITION: usize = 16;
 const MAX_ADAPTIVE_BATCHES: usize = 64;
+
+/// Applies a build-side key set to probe batches before hash probing. This is
+/// safe only for inner equi-joins without residual predicates; NULL probe keys
+/// are removed because they cannot match SQL equality joins.
+struct RuntimeJoinFilter {
+    source: Box<dyn BatchOperator>,
+    filter: BuildKeyFilter,
+    schema: SchemaRef,
+}
+
+impl RuntimeJoinFilter {
+    fn new(source: Box<dyn BatchOperator>, filter: BuildKeyFilter) -> Self {
+        let schema = source.schema().clone();
+        Self { source, filter, schema }
+    }
+}
+
+impl BatchOperator for RuntimeJoinFilter {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        while let Some(batch) = self.source.next_batch()? {
+            let mask: BooleanArray = (0..batch.num_rows())
+                .map(|row| self.filter.matches(&batch, row))
+                .collect::<Result<Vec<_>>>()?
+                .into();
+            let filtered = compute::filter_record_batch(&batch, &mask)?;
+            if filtered.num_rows() > 0 {
+                return Ok(Some(filtered));
+            }
+        }
+        Ok(None)
+    }
+}
 
 /// How a grouped partial decides whether aggregating pays. Registered on
 /// the query pool (a test's, or the settings a caller pins), else read
@@ -1903,7 +1944,10 @@ impl PartitionedHashJoin {
                     .take()
                     .expect("right input exists before the build");
                 match self.build(right)? {
-                    Ok(built) => self.active = Some(self.probe(left, built)?),
+                    Ok(built) => {
+                        let left = self.runtime_filter(left, &built);
+                        self.active = Some(self.probe(left, built)?);
+                    }
                     Err(refused) => self.repartition(left, refused, None)?,
                 }
                 continue;
@@ -1923,10 +1967,27 @@ impl PartitionedHashJoin {
                 partition.right,
             ));
             match self.build(right)? {
-                Ok(built) => self.active = Some(self.probe(left, built)?),
+                Ok(built) => {
+                    let left = self.runtime_filter(left, &built);
+                    self.active = Some(self.probe(left, built)?);
+                }
                 Err(refused) => self.repartition(left, refused, Some(partition.depth))?,
             }
         }
+    }
+
+    fn runtime_filter(
+        &self,
+        left: Box<dyn BatchOperator>,
+        built: &BuiltSide,
+    ) -> Box<dyn BatchOperator> {
+        if self.join_type != JoinType::Inner || self.residual.is_some() || self.keys.is_empty() {
+            return left;
+        }
+        let Some(filter) = BuildKeyFilter::from_built(built, &self.key_indices) else {
+            return left;
+        };
+        Box::new(RuntimeJoinFilter::new(left, filter))
     }
 }
 
@@ -3194,6 +3255,26 @@ mod tests {
         assert_eq!(rows, 200_000);
         assert_eq!(spill.snapshot().peak_bytes, 0);
         assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
+    fn runtime_join_filter_drops_probe_keys_absent_from_build() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, true),
+        ]));
+        let build = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int64Array::from(vec![Some(2), Some(4)]))],
+        )
+        .unwrap();
+        let built = BuiltSide::build(&schema, &[build], &[(0, 0)], JoinType::Inner, None)
+            .unwrap();
+        let filter = BuildKeyFilter::from_built(&built, &[(0, 0)]).unwrap();
+        let mut operator = RuntimeJoinFilter::new(input(vec![Some(1), Some(2), Some(4), None], 4), filter);
+        let batch = operator.next_batch().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.column(0).as_any().downcast_ref::<Int64Array>().unwrap().iter().collect::<Vec<_>>(), vec![Some(2), Some(4)]);
+        assert!(operator.next_batch().unwrap().is_none());
     }
 
     #[test]

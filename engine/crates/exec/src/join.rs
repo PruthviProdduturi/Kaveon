@@ -47,6 +47,31 @@ pub(crate) struct BuiltSide {
     reservations: Vec<MemoryReservation>,
 }
 
+/// A bounded runtime key filter derived from an in-memory build side. It is
+/// intentionally separate from the join index so callers can apply it to
+/// probe batches before hash probing without changing outer-join semantics.
+pub(crate) struct BuildKeyFilter {
+    index: JoinIndex,
+    keys: Vec<(usize, usize)>,
+}
+
+impl BuildKeyFilter {
+    pub(crate) fn from_built(built: &BuiltSide, keys: &[(usize, usize)]) -> Option<Self> {
+        // Cloning a very large index would defeat the purpose of filtering;
+        // the bounded path is for the common small-build/large-probe case.
+        (built.right.num_rows() <= 100_000)
+            .then(|| built.index.as_ref().map(|index| Self {
+                index: index.clone(),
+                keys: keys.to_vec(),
+            }))
+            .flatten()
+    }
+
+    pub(crate) fn matches(&self, batch: &RecordBatch, row: usize) -> Result<bool> {
+        Ok(self.index.matches(batch, row, &self.keys)?.is_some())
+    }
+}
+
 impl BuiltSide {
     /// Build from batches the caller holds (and has accounted for): the
     /// concatenated copy, then the index, then the bitmap, each reserved
@@ -758,6 +783,7 @@ enum Key {
 
 /// Common integer joins avoid allocating a Vec<Key> for every probe row.
 /// Other key layouts use the existing exact typed composite representation.
+#[derive(Clone)]
 enum JoinIndex {
     Int64 {
         first_rows: AHashMap<i64, usize>,

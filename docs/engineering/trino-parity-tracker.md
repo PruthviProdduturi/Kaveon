@@ -110,8 +110,11 @@ node-drain recovery, and sustained soak remain separate acceptance gates.
   Trino-class parallel plans across the full window corpus.
 - Static predicates are pushed into eligible build scans, including broadcast
   joins; the build-side key set is not yet propagated to the probe scan at
-  runtime. General dynamic filtering, join reordering, skew mitigation, and
-  qualified coordinator failover remain open.
+  runtime. A bounded in-memory inner-join filter now removes probe batches
+  whose keys are absent from the build before hash probing; it is disabled for
+  outer/residual joins and spilled builds. Scan-level dynamic filtering,
+  join reordering, skew mitigation, and qualified coordinator failover remain
+  open.
 - Ordinary distributed joins use equality keys; inner residual predicates now
   lower to a correctness-first cross join plus filter, while equality-key
   residual predicates on outer joins are evaluated inside the hash join before
@@ -617,7 +620,8 @@ invalidation, isolation, bounds, and restart evidence listed above.
 - Broadcast planning now has an explicit dynamic-filter boundary test: static
   predicates reach the build scan, while runtime build-key propagation to the
   probe scan remains refused until its correctness and exchange behavior are
-  qualified (`57db621d`).
+  qualified (`57db621d`). The bounded in-memory join-side filter is covered
+  separately and does not claim scan pruning.
 - Semi/anti join planning now hash-partitions both inputs across the worker
   set when both keys are resolvable columns, including the binder's positional
   `*` marker for correlated EXISTS projections. Truly unresolvable keys retain
