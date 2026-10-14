@@ -1,0 +1,26 @@
+{
+  "demo": { "enabled": false },
+  "groups": [
+    {
+      "name": "maintenance",
+      "max_memory_bytes": 2147483648,
+      "max_concurrent": 2,
+      "max_queued": 32,
+      "max_queue_wait_seconds": 900,
+      "max_local_parallelism": 2,
+      "priority": 1,
+      "default_settings": { "query_memory_limit_bytes": 536870912 }
+    },
+    {
+      "name": "default",
+      "max_concurrent": 4,
+      "max_queued": 64,
+      "max_queue_wait_seconds": 60,
+      "priority": 10
+    }
+  ],
+  "selectors": [
+    { "client_tag": "kaveon:maintenance", "group": "maintenance" },
+    { "group": "default" }
+  ]
+}
