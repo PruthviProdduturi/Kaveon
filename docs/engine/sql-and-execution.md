@@ -12,8 +12,8 @@ select, `ORDER BY` with `NULLS FIRST/LAST`, `LIMIT`, `OFFSET`
 right, full and cross joins, semi and anti joins from `IN`/`NOT IN`/
 `EXISTS`/`NOT EXISTS`, `UNION [ALL]`, `INTERSECT`, `EXCEPT`, CTEs, derived
 tables, uncorrelated scalar subqueries in WHERE and HAVING, correlated
-`EXISTS`/`NOT EXISTS` and correlated scalar aggregates decorrelated by the
-binder, window functions (`ROW_NUMBER`, `RANK`, `DENSE_RANK`, `LAG`, `LEAD`
+`EXISTS`/`NOT EXISTS`, single-key correlated `IN`/`NOT IN`, and correlated
+scalar aggregates decorrelated by the binder, window functions (`ROW_NUMBER`, `RANK`, `DENSE_RANK`, `LAG`, `LEAD`
 and aggregate windows with `ROWS`/`RANGE`/`GROUPS` frames), `CASE`,
 `COALESCE`, `BETWEEN`, `IN` lists, `LIKE`/`ILIKE` through Arrow's kernels,
 `REGEXP_REPLACE` (once per distinct value of a batch, once per used
