@@ -480,6 +480,11 @@ const CASES: &[(&str, &str, bool)] = &[
         "SELECT COUNT(*) AS n FROM {T} e WHERE e.user_id IN (SELECT i.user_id FROM {T} i WHERE i.user_id = e.user_id AND i.actions > 5)",
         false,
     ),
+    (
+        "correlated_not_in_projected_key",
+        "SELECT COUNT(*) AS n FROM {T} e WHERE e.user_id NOT IN (SELECT i.user_id FROM {T} i WHERE i.user_id = e.user_id AND i.actions > 5)",
+        false,
+    ),
     // A correlated EXISTS with a residual (Q21's shape): an event whose
     // user also has an event on the same day from another country, and
     // (NOT EXISTS) with no such event of more actions.
