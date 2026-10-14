@@ -652,6 +652,9 @@ invalidation, isolation, bounds, and restart evidence listed above.
 - `SPLIT_PART` now provides Trino's one-based string partitioning semantics,
   including NULL propagation, NULL for an out-of-range index, and an explicit
   error for non-positive indexes.
+- `REGEXP_EXTRACT` now compiles each pattern through the shared regex cache,
+  returns capture group 0 by default or a requested zero-based group, and
+  preserves NULL results for NULL inputs, non-matches, and missing captures.
 - `ROW(...)` constructors now produce typed Arrow `StructArray` values with
   null-preserving child fields. `MAP(...)` now produces Arrow `MapArray` values
   from matching list offsets and rejects NULL keys. `MAP_KEYS` and `MAP_VALUES`
