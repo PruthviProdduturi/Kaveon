@@ -676,6 +676,8 @@ invalidation, isolation, bounds, and restart evidence listed above.
   rows; dereference and keyed lookup remain explicit complex-type gaps.
 - `SPLIT_TO_MAP` now parses delimited text into typed text maps, preserves NULL
   rows, and rejects empty delimiters and duplicate keys.
+- `SPLIT_TO_MULTIMAP` now groups repeated delimited keys into ordered text
+  arrays while preserving map-row NULLs and delimiter validation.
 - `ARRAY_POSITION(array, value)` now returns Trino-compatible one-based positions
   for numeric and text lists, returns `0` when absent, preserves NULL list and
   element semantics, and fails explicitly for unsupported element types

@@ -2708,6 +2708,89 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             false,
         )?));
     }
+    if upper == "SPLIT_TO_MULTIMAP" {
+        check_arity(name, args, 3)?;
+        let sources = as_string_array(&args[0])?;
+        let entry_delimiters = as_string_array(&args[1])?;
+        let key_delimiters = as_string_array(&args[2])?;
+        let mut map_offsets = vec![0_i32];
+        let mut value_offsets = vec![0_i32];
+        let mut valid = Vec::with_capacity(num_rows);
+        let mut keys = Vec::new();
+        let mut values = Vec::new();
+        for row in 0..num_rows {
+            if sources.is_null(row)
+                || entry_delimiters.is_null(row)
+                || key_delimiters.is_null(row)
+            {
+                valid.push(false);
+                map_offsets.push(keys.len() as i32);
+                continue;
+            }
+            let entry_delimiter = entry_delimiters.value(row);
+            let key_delimiter = key_delimiters.value(row);
+            if entry_delimiter.is_empty() || key_delimiter.is_empty() {
+                return Err(KaveonError::Execution(
+                    "SPLIT_TO_MULTIMAP delimiters must not be empty".into(),
+                ));
+            }
+            let mut grouped = Vec::<(String, Vec<String>)>::new();
+            let mut positions = std::collections::HashMap::<String, usize>::new();
+            for entry in sources.value(row).split(entry_delimiter) {
+                let mut pair = entry.splitn(2, key_delimiter);
+                let key = pair.next().unwrap_or_default().to_owned();
+                let value = pair.next().unwrap_or_default().to_owned();
+                if let Some(position) = positions.get(&key).copied() {
+                    grouped[position].1.push(value);
+                } else {
+                    positions.insert(key.clone(), grouped.len());
+                    grouped.push((key, vec![value]));
+                }
+            }
+            for (key, grouped_values) in grouped {
+                keys.push(key);
+                values.extend(grouped_values);
+                value_offsets.push(values.len() as i32);
+            }
+            valid.push(true);
+            map_offsets.push(keys.len() as i32);
+        }
+        let key_array = Arc::new(StringArray::from(keys)) as ArrayRef;
+        let value_array = Arc::new(StringArray::from(values)) as ArrayRef;
+        let list_field = Arc::new(arrow::datatypes::Field::new("item", DataType::Utf8, true));
+        let list_array = ListArray::try_new(
+            list_field,
+            OffsetBuffer::new(ScalarBuffer::from(value_offsets)),
+            value_array,
+            None,
+        )?;
+        let entry_fields: arrow::datatypes::Fields = vec![
+            Arc::new(arrow::datatypes::Field::new("key", DataType::Utf8, false)),
+            Arc::new(arrow::datatypes::Field::new(
+                "value",
+                list_array.data_type().clone(),
+                true,
+            )),
+        ]
+        .into();
+        let entries = StructArray::new(
+            entry_fields.clone(),
+            vec![key_array, Arc::new(list_array)],
+            None,
+        );
+        let entry_field = Arc::new(arrow::datatypes::Field::new(
+            "entries",
+            DataType::Struct(entry_fields),
+            false,
+        ));
+        return Ok(Arc::new(MapArray::try_new(
+            entry_field,
+            OffsetBuffer::new(ScalarBuffer::from(map_offsets)),
+            entries,
+            Some(arrow::buffer::NullBuffer::from(valid)),
+            false,
+        )?));
+    }
     if upper == "MAP_CONCAT" {
         if args.len() < 2 {
             return Err(KaveonError::Execution(
@@ -8659,6 +8742,29 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("duplicate key"));
+    }
+
+    #[test]
+    fn split_to_multimap_groups_duplicate_keys_in_order() {
+        let batch = RecordBatch::try_from_iter([(
+            "dummy",
+            Arc::new(StringArray::from(vec!["x", "y"])) as ArrayRef,
+        )])
+        .unwrap();
+        let expression = Expr::Function {
+            name: "SPLIT_TO_MULTIMAP".into(),
+            args: vec![
+                Expr::Literal(ScalarValue::Utf8("a:1,b:2,a:3".into())),
+                Expr::Literal(ScalarValue::Utf8(",".into())),
+                Expr::Literal(ScalarValue::Utf8(":".into())),
+            ],
+        };
+        let result = evaluate(&expression, &batch).unwrap();
+        let map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(map.keys().as_string::<i32>().iter().collect::<Vec<_>>(), vec![Some("a"), Some("b"), Some("a"), Some("b")]);
+        let values = map.values().as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(values.value(0).as_string::<i32>().iter().collect::<Vec<_>>(), vec![Some("1"), Some("3")]);
+        assert_eq!(values.value(1).as_string::<i32>().iter().collect::<Vec<_>>(), vec![Some("2")]);
     }
 
     #[test]
