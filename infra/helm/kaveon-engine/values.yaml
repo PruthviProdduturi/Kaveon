@@ -69,6 +69,10 @@ coordinator:
   # the 32 GiB state PVC so the spool can be turned back on without retuning.
   exchange:
     spool: false
+    # The chart gives every Engine pod its own spool root. Reclaim abandoned
+    # exchange directories on restart so an interrupted coordinator cannot
+    # accumulate disk state across rollouts.
+    reclaimOnStart: true
     # KAVEON_EXCHANGE_DISK_LIMIT_BYTES: 24 GiB across all active exchanges.
     diskLimitBytes: "25769803776"
     # KAVEON_EXCHANGE_QUERY_DISK_LIMIT_BYTES: 16 GiB, one query's share.
@@ -119,6 +123,9 @@ workers:
   # live on the ephemeral state volume sized by stateSizeLimit.
   exchange:
     spool: true
+    # Each worker owns its /state/exchange root; reclaim abandoned exchange
+    # directories after a worker process restart.
+    reclaimOnStart: true
     # KAVEON_EXCHANGE_DISK_LIMIT_BYTES: 8 GiB across all active exchanges.
     diskLimitBytes: "8589934592"
     # KAVEON_EXCHANGE_QUERY_DISK_LIMIT_BYTES: 6 GiB, one query's share.

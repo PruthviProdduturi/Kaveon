@@ -246,6 +246,11 @@ spec:
             {{- end }}
             - name: KAVEON_EXCHANGE_SPOOL_ROOT
               value: /state/exchange
+            # Each coordinator/worker has a dedicated spool root. On process
+            # restart, exchange directories from the previous process cannot
+            # belong to a live query and are reclaimed before serving traffic.
+            - name: KAVEON_EXCHANGE_RECLAIM_ON_START
+              value: {{ $settings.exchange.reclaimOnStart | quote }}
             - name: KAVEON_EXCHANGE_DISK_LIMIT_BYTES
               value: {{ $settings.exchange.diskLimitBytes | quote }}
             - name: KAVEON_EXCHANGE_QUERY_DISK_LIMIT_BYTES
