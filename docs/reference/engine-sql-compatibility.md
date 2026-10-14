@@ -105,6 +105,8 @@ unchanged; nothing is approximated unless the statement writes an
   more than one column, or multi-key correlated `IN`; each is refused by name.
 - Outer non-equality join conditions (residual join filters) and `GROUPING SETS`/
   `CUBE`/`ROLLUP`, recursive CTEs, ordered map and JSON comparison;
+  grouping modifiers are rejected explicitly rather than silently treated as a
+  plain `GROUP BY`;
   typed numeric, text, and boolean `ARRAY[...]` literals support `CARDINALITY`,
   `CONTAINS`, `ARRAY_POSITION`, `ARRAY_DISTINCT`, `ARRAY_SORT`,
   `ARRAY_REVERSE`, `ELEMENT_AT`, and positive or negative-stride slices;
