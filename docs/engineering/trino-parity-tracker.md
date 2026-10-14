@@ -865,10 +865,11 @@ multi-encoding differential corpus covers these grouped forms; older fragments
 without the field remain compatible as non-distinct aggregates.
 Column-key `GROUPING SETS ((a), (b), ...)`, `CUBE`, and `ROLLUP` now lower to
 typed `UNION ALL` aggregate branches and are covered by SQL and physical-
-planner tests. Grouping metadata functions and CUBE expansions with 16 or more
-keys remain explicitly unsupported; the compatibility claim is intentionally
-limited to column-key grouping expressions, including ordinary keys carried
-alongside a grouping specification.
+planner tests. `GROUPING_ID` and CUBE expansions with 16 or more
+keys remain explicitly unsupported; `GROUPING(column)` is materialized for
+expanded column-key branches. The compatibility claim is intentionally limited
+to column-key grouping expressions, including ordinary keys carried alongside
+a grouping specification.
 `MIN(DISTINCT ...)` and `MAX(DISTINCT ...)` are accepted as Trino-compatible
 extrema (deduplication does not change an extremum), with grouped distributed
 differential coverage alongside the sum/average cases.
