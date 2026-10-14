@@ -39,8 +39,8 @@ The local parity baseline was rerun on October 13 with focused qualification
 changes through commit `71e5b956`. The checkout also contained separate, uncommitted
 engine work from the parallel optimization lane, so these numbers are a local
 regression snapshot and are not a release-image claim:
-`cargo test -p kaveon-server --bin kaveon-server` passed **358/358** tests,
-`cargo test -p kaveon-sql --lib` passed **121/121** tests, and
+`cargo test -p kaveon-server --bin kaveon-server` passed **359/359** tests,
+`cargo test -p kaveon-sql --lib` passed **122/122** tests, and
 `cargo test -p kaveon-optim --lib` passed **47/47** tests,
 `cargo test -p kaveon-exec --lib` passed **289/289** non-ignored tests with four
 benchmark tests intentionally ignored. Documentation validation also passed for 145 Markdown
@@ -866,7 +866,7 @@ prepared-statement coverage, worker-loss, and exact-result differential runs
 are still required.
 
 The current local validation baseline is green on the same checkout: the full
-`kaveon-server` suite passed **358 tests**, and the full CLI suite passed **211
+`kaveon-server` suite passed **359 tests**, and the full CLI suite passed **211
 tests** (one ignored). The set-operation coverage includes `UNION ALL`, distinct and
 multiset `INTERSECT`/`EXCEPT`, dictionary-versus-plain values, duplicate
 counts, null handling, planner lowering, and exchange-input consumption. This
