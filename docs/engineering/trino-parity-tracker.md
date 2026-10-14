@@ -89,6 +89,11 @@ bounded at one million elements to prevent an accidental query from consuming
 unbounded execution memory. This is a bounded function-compatibility slice;
 complex element types and the full Trino array-function surface remain open.
 
+`ARRAY_UNION`, `ARRAY_INTERSECT`, and `ARRAY_EXCEPT` now operate on matching
+typed lists, preserve first-seen order, remove duplicates, and treat NULL as a
+single comparable element. Both 32-bit and 64-bit list offsets are accepted;
+mixed offset widths and complex nested values remain explicit boundaries.
+
 The initial repository audit confirms that the Engine has real distributed
 foundations, but several operators are still centralized or narrow:
 
