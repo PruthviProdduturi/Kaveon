@@ -6302,6 +6302,26 @@ fn ymd_to_days(y: i32, m: u32, d: u32) -> i64 {
 
 fn eval_date_trunc(unit_arr: &StringArray, ts: &ArrayRef, num_rows: usize) -> Result<ArrayRef> {
     match ts.data_type() {
+        DataType::Date32 => {
+            let values = ts.as_primitive::<Date32Type>();
+            let result = (0..num_rows)
+                .map(|i| {
+                    if unit_arr.is_null(i) || values.is_null(i) {
+                        return Ok(None);
+                    }
+                    let unit = unit_arr.value(i).to_uppercase();
+                    if !matches!(unit.as_str(), "YEAR" | "QUARTER" | "MONTH" | "WEEK" | "DAY")
+                    {
+                        return Err(KaveonError::Execution(format!(
+                            "DATE_TRUNC unit '{unit}' is not valid for DATE values"
+                        )));
+                    }
+                    let micros = i64::from(values.value(i)).saturating_mul(86_400_000_000);
+                    Ok(Some((truncate_micros(micros, &unit) / 86_400_000_000) as i32))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(Arc::new(Date32Array::from(result)))
+        }
         DataType::Timestamp(TimeUnit::Second, tz) => {
             let values = ts.as_primitive::<TimestampSecondType>();
             let result = truncate_timestamp_values(
@@ -6355,7 +6375,7 @@ fn eval_date_trunc(unit_arr: &StringArray, ts: &ArrayRef, num_rows: usize) -> Re
             ))
         }
         _ => Err(KaveonError::Execution(
-            "DATE_TRUNC requires a timestamp value".into(),
+            "DATE_TRUNC requires a DATE or timestamp value".into(),
         )),
     }
 }
@@ -6732,6 +6752,47 @@ mod tests {
                 .value(0),
             (source_ms / 1_000) * 1_000_000_000
         );
+
+        let date_schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("day", DataType::Date32, true),
+        ]));
+        let dates = RecordBatch::try_new(
+            date_schema,
+            vec![Arc::new(Date32Array::from(vec![
+                Some(19_858),
+                None,
+                Some(-1),
+            ]))],
+        )
+        .unwrap();
+        let values = evaluate(
+            &Expr::Function {
+                name: "DATE_TRUNC".into(),
+                args: vec![
+                    Expr::Literal(ScalarValue::Utf8("MONTH".into())),
+                    Expr::Column("day".into()),
+                ],
+            },
+            &dates,
+        )
+        .unwrap();
+        let result = values.as_primitive::<Date32Type>();
+        assert_eq!(result.value(0), 19_844);
+        assert!(result.is_null(1));
+        assert_eq!(result.value(2), -31);
+
+        let error = evaluate(
+            &Expr::Function {
+                name: "DATE_TRUNC".into(),
+                args: vec![
+                    Expr::Literal(ScalarValue::Utf8("HOUR".into())),
+                    Expr::Column("day".into()),
+                ],
+            },
+            &dates,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("not valid for DATE"), "{error}");
     }
 
     #[test]
