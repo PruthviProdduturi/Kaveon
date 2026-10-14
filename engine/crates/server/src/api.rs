@@ -3332,8 +3332,46 @@ fn trino_describe_output(body: &str) -> Option<String> {
 }
 
 fn trino_output_metadata(query: &str) -> Result<Vec<(String, String, bool)>, String> {
-    let plan = sql_to_logical_plan_for_binder(query).map_err(|error| error.to_string())?;
-    let LogicalPlan::Project { columns, .. } = plan else {
+    // DESCRIBE OUTPUT must plan a prepared query before values exist. Bind
+    // placeholders to typed NULL sentinels so explicit casts remain visible
+    // (`CAST(? AS BIGINT)` reports bigint), while an uncast parameter still
+    // reports unknown through `trino_expr_type`.
+    let parameter_names = prepared_parameter_names(query);
+    let positional_count = parameter_names
+        .iter()
+        .filter(|name| name.as_str() == "?")
+        .count();
+    let numbered_count = parameter_names
+        .iter()
+        .filter_map(|name| name.strip_prefix('$')?.parse::<usize>().ok())
+        .max()
+        .unwrap_or(0);
+    let positional = vec![ParameterValue::Scalar(ScalarValue::Null);
+        positional_count.max(numbered_count)];
+    let named = parameter_names
+        .iter()
+        .filter(|name| *name != "?" && !name.starts_with('$'))
+        .map(|name| (name.clone(), ParameterValue::Scalar(ScalarValue::Null)))
+        .collect::<HashMap<_, _>>();
+    let plan = if parameter_names.is_empty() {
+        sql_to_logical_plan_for_binder(query)
+    } else {
+        kaveon_sql::logical_plan::sql_to_logical_plan_for_binder_with_parameter_values(
+            query, &positional, &named,
+        )
+    }
+    .map_err(|error| error.to_string())?;
+    let mut projected = &plan;
+    while let Some(input) = match projected {
+        LogicalPlan::Limit { input, .. }
+        | LogicalPlan::Offset { input, .. }
+        | LogicalPlan::Sort { input, .. }
+        | LogicalPlan::Distinct { input } => Some(input.as_ref()),
+        _ => None,
+    } {
+        projected = input;
+    }
+    let LogicalPlan::Project { columns, .. } = projected else {
         return Err("DESCRIBE OUTPUT requires a query with a projection".to_owned());
     };
     if columns.iter().any(|column| matches!(column, Expr::Star)) {
@@ -20584,6 +20622,28 @@ mod streamed_root_tests {
             serde_json::from_slice(&described_body).expect("describe input JSON");
         assert_eq!(described_json["data"][0][0], serde_json::json!(0));
         assert_eq!(described_json["data"][0][2], serde_json::json!("bigint"));
+
+        let output_description = submit_trino_statement_parts(
+            std::sync::Arc::clone(&state),
+            owner.clone(),
+            HeaderMap::new(),
+            Bytes::from(format!("DESCRIBE OUTPUT {name}")),
+        )
+        .await;
+        let output_status = output_description.status();
+        let output_body = axum::body::to_bytes(output_description.into_body(), usize::MAX)
+            .await
+            .expect("describe output body");
+        assert_eq!(
+            output_status,
+            StatusCode::OK,
+            "{}",
+            String::from_utf8_lossy(&output_body)
+        );
+        let output_json: serde_json::Value =
+            serde_json::from_slice(&output_body).expect("describe output JSON");
+        assert_eq!(output_json["data"][0][0], serde_json::json!("value"));
+        assert_eq!(output_json["data"][0][4], serde_json::json!("bigint"));
 
         let executed = submit_trino_statement_parts(
             std::sync::Arc::clone(&state),

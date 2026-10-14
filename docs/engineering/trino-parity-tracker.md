@@ -1095,11 +1095,13 @@ The raw Trino route now also answers SQL-level `DESCRIBE INPUT name` for an
 owner-scoped prepared statement. It returns the discovered parameter positions
 and named parameters in Trino's four-column metadata shape; explicit `CAST`
 and PostgreSQL-style `::type` annotations are reported with their normalized
-types, while genuinely unresolved parameters remain `unknown`. It also answers `DESCRIBE OUTPUT`
-for projection plans, returning Trino's seven-column metadata shape with
-explicit aliases and planner-inferred scalar/cast types; unbound column types
-remain `unknown`. The complete wire prepare/describe/bind lifecycle remains
-open, so these are compatibility slices rather than a full protocol claim.
+types, while genuinely unresolved parameters remain `unknown`. It also answers
+`DESCRIBE OUTPUT` for projection plans, including prepared placeholders with
+explicit casts and transparent `LIMIT`/`ORDER BY` wrappers, returning Trino's
+seven-column metadata shape with explicit aliases and planner-inferred
+scalar/cast types; unbound column types remain `unknown`. The complete wire
+prepare/describe/bind lifecycle remains open, so these are compatibility
+slices rather than a full protocol claim.
 
 The route-level regression `trino_sql_prepare_lifecycle_is_owner_scoped`
 exercises the implemented SQL slice against a real Parquet table: `PREPARE`
