@@ -7011,6 +7011,23 @@ async fn run_sub_statement(
     settings.insert("result_cache".into(), serde_json::Value::Bool(false));
     let mut client_tags = context.client_tags.clone();
     client_tags.push(format!("analyze:{parent_id}"));
+    // Cube analysis fans out several grouping scans under one parent. Keep
+    // those children from each reserving the full interactive statement cap:
+    // otherwise the cube can exhaust its own admission pool and wait on
+    // itself until the admission timeout. Other ANALYZE children retain the
+    // caller's requested bound.
+    if label.starts_with("cube grouping over ") {
+        let configured = context
+            .settings
+            .query_memory_limit_bytes(&state.config);
+        let width = context.resource_group.max_concurrent;
+        settings.insert(
+            "query_memory_limit_bytes".into(),
+            serde_json::Value::Number(
+                serde_json::Number::from(bounded_cube_child_memory_limit(configured, width)),
+            ),
+        );
+    }
     let request = StatementRequest {
         query,
         parameters: vec![],
@@ -7149,6 +7166,16 @@ async fn run_sub_statement(
     };
     state.results.remove(&child_id);
     outcome.map(|()| rows)
+}
+
+/// Divide a cube's parent budget across its concurrently admitted grouping
+/// scans. The result is always positive so a deliberately small test or
+/// deployment budget remains a valid Engine setting.
+fn bounded_cube_child_memory_limit(configured: u64, max_concurrent: usize) -> u64 {
+    configured
+        .checked_div(max_concurrent.max(1) as u64)
+        .unwrap_or(0)
+        .max(1)
 }
 
 /// Run `jobs` — each a sub-statement of the parent — `width` at a time,
@@ -12616,6 +12643,16 @@ mod tests {
         let debug = format!("{plan:?}");
         assert!(debug.contains("Utf8(\"Europe\")"));
         assert!(debug.contains("Bool(true)"));
+    }
+
+    #[test]
+    fn cube_child_memory_budget_is_shared_across_concurrent_groupings() {
+        assert_eq!(
+            super::bounded_cube_child_memory_limit(8 * 1024 * 1024 * 1024, 4),
+            2 * 1024 * 1024 * 1024
+        );
+        assert_eq!(super::bounded_cube_child_memory_limit(1024, 0), 1024);
+        assert_eq!(super::bounded_cube_child_memory_limit(3, 8), 1);
     }
 
     #[test]

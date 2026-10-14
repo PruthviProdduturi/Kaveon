@@ -297,6 +297,61 @@ chart.
 
 Every append re-encodes its whole typed table. Needs chunking.
 
+### D-38 · A cube build starves on the memory pool it is itself holding
+**verified** · 2026-10-13 · **Engine — @Codex** · `NEXT`
+
+`ANALYZE … WITH (cube = true)` over a 10-axis shape runs one statement per
+grouping, concurrently, out of the same admission pool. Each inherits the
+default per-query budget of 4 GiB, so two of them fill the 8 GiB pool and the
+third waits the full 60 s admission wait and fails the whole build. On a
+completely idle cluster, with nothing else running:
+
+```
+cube grouping over platform failed: memory admission wait of 60 s expired:
+8589934592 of 8589934592 bytes admitted, 1 statements waiting,
+resource group 'default' running 2 of 4
+```
+
+The API surfaces this as `429 Engine query capacity is temporarily exhausted`,
+which reads as contention and sends the reader looking for another tenant.
+There is none: the build is competing with itself, and no amount of waiting or
+retrying helps.
+
+Fixed at the substatement boundary: cube grouping children divide the parent
+statement's effective memory budget by the configured concurrent width before
+admission. The bound is always positive, is sent to workers through the normal
+task settings, and is covered by
+`cube_child_memory_budget_is_shared_across_concurrent_groupings`.
+
+### D-39 · A cube build scans the table once per grouping
+**open** · 2026-10-13 · **Engine — @Codex**
+
+Observed during the D-38 build: each grouping is an independent
+`SELECT <axis>, COUNT(*), SUM(…) … GROUP BY` over the full table. A 10-axis
+shape is 10 single-axis groupings plus the 45 two-axis pairs the cube holds, so
+a 504,000,000-row table is scanned on the order of 55 times for one build at
+four statements at a time. One scan feeding every grouping is the same work
+once.
+
+### D-40 · A column deletes with no confirmation, unlike every other tile
+**open** · 2026-10-13
+
+`DashboardColumnComponent`'s delete calls `removeItemFromContainer` /
+`removeLayoutItem` straight from `onClick`. Every other tile type routes
+removal through `ConfirmModal` first. A column holds children, so it is the
+tile where an accidental delete costs the most, and it is the one that does not
+ask. Found while verifying that each tile type owns a remove control for the
+D-33 follow-up.
+
+### D-41 · The column toolbar is hardcoded light
+**open** · 2026-10-13
+
+Its buttons declare `background: '#fff'`, `border: '1px solid #e2e8f0'` and
+`color: '#64748b'` inline, so the column's own controls stay a white cluster on
+a dark canvas. Same shape as the Customize tab and the Add charts dialog: a
+surface written before the dark theme and never mapped to tokens.
+
+
 ---
 
 ## Verified fixed
