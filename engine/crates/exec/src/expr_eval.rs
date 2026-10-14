@@ -5952,29 +5952,62 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "REPEAT" => {
             check_arity(name, args, 2)?;
-            let arr = as_string_array(&args[0])?;
             let counts = args[1].as_primitive::<Int64Type>();
-            let bytes = (0..num_rows).try_fold(0_u64, |total, index| {
-                if arr.is_null(index) || counts.is_null(index) {
-                    return Ok(total);
+            match args[0].data_type() {
+                DataType::Utf8 => {
+                    let arr = as_string_array(&args[0])?;
+                    let bytes = (0..num_rows).try_fold(0_u64, |total, index| {
+                        if arr.is_null(index) || counts.is_null(index) {
+                            return Ok(total);
+                        }
+                        let bytes = (arr.value(index).len() as u64)
+                            .checked_mul(counts.value(index).max(0) as u64)
+                            .and_then(|bytes| total.checked_add(bytes))
+                            .ok_or_else(|| KaveonError::Execution("REPEAT output size overflow".into()))?;
+                        Ok::<_, KaveonError>(bytes)
+                    })?;
+                    reserve_string_expansion(bytes, num_rows)?;
+                    let result: StringArray = (0..num_rows)
+                        .map(|i| {
+                            if arr.is_null(i) || counts.is_null(i) {
+                                None
+                            } else {
+                                Some(arr.value(i).repeat(counts.value(i).max(0) as usize))
+                            }
+                        })
+                        .collect();
+                    Ok(Arc::new(result))
                 }
-                let bytes = (arr.value(index).len() as u64)
-                    .checked_mul(counts.value(index).max(0) as u64)
-                    .and_then(|bytes| total.checked_add(bytes))
-                    .ok_or_else(|| KaveonError::Execution("REPEAT output size overflow".into()))?;
-                Ok::<_, KaveonError>(bytes)
-            })?;
-            reserve_string_expansion(bytes, num_rows)?;
-            let result: StringArray = (0..num_rows)
-                .map(|i| {
-                    if arr.is_null(i) || counts.is_null(i) {
-                        None
-                    } else {
-                        Some(arr.value(i).repeat(counts.value(i).max(0) as usize))
+                DataType::LargeUtf8 => {
+                    let arr = args[0]
+                        .as_any()
+                        .downcast_ref::<LargeStringArray>()
+                        .ok_or_else(|| KaveonError::Execution("expected large string array".into()))?;
+                    let bytes = (0..num_rows).try_fold(0_u64, |total, index| {
+                        if arr.is_null(index) || counts.is_null(index) {
+                            return Ok(total);
+                        }
+                        let bytes = (arr.value(index).len() as u64)
+                            .checked_mul(counts.value(index).max(0) as u64)
+                            .and_then(|bytes| total.checked_add(bytes))
+                            .ok_or_else(|| KaveonError::Execution("REPEAT output size overflow".into()))?;
+                        Ok::<_, KaveonError>(bytes)
+                    })?;
+                    reserve_string_expansion(bytes, num_rows)?;
+                    let mut result = LargeStringBuilder::with_capacity(num_rows, bytes as usize);
+                    for row in 0..num_rows {
+                        if arr.is_null(row) || counts.is_null(row) {
+                            result.append_null();
+                        } else {
+                            result.append_value(arr.value(row).repeat(counts.value(row).max(0) as usize));
+                        }
                     }
-                })
-                .collect();
-            Ok(Arc::new(result))
+                    Ok(Arc::new(result.finish()))
+                }
+                other => Err(KaveonError::Execution(format!(
+                    "REPEAT expects VARCHAR, got {other}"
+                ))),
+            }
         }
 
         // ── Math functions ──────────────────────────────────────────────
@@ -13287,6 +13320,34 @@ mod tests {
         assert_eq!(values.value(0), "noevaK");
         assert!(values.is_null(1));
         assert_eq!(values.value(2), "界世");
+    }
+
+    #[test]
+    fn repeat_preserves_large_utf8_columns_and_nulls() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "text",
+                Arc::new(LargeStringArray::from(vec![Some("ab"), None, Some("界")])) as ArrayRef,
+            ),
+            (
+                "count",
+                Arc::new(Int64Array::from(vec![Some(2), Some(3), Some(-1)])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "REPEAT".into(),
+                args: vec![Expr::Column("text".into()), Expr::Column("count".into())],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(result.data_type(), &DataType::LargeUtf8);
+        let values = result.as_any().downcast_ref::<LargeStringArray>().unwrap();
+        assert_eq!(values.value(0), "abab");
+        assert!(values.is_null(1));
+        assert_eq!(values.value(2), "");
     }
 
     #[test]
