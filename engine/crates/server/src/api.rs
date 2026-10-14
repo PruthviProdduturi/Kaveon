@@ -3078,6 +3078,30 @@ fn trino_literal_to_json(value: &str) -> Result<serde_json::Value, String> {
         }
         return Err(format!("invalid Trino DATE literal '{value}'"));
     }
+    // Preserve other typed temporal/decimal literals as text. The normal
+    // parameter binder coerces that text against the prepared expression's
+    // target type, which keeps timezone and decimal precision intact instead
+    // of routing through a host-language representation.
+    for prefix in [
+        "timestamp with time zone",
+        "timestamp",
+        "time with time zone",
+        "time",
+        "decimal",
+    ] {
+        if trimmed.len() > prefix.len()
+            && trimmed[..prefix.len()].eq_ignore_ascii_case(prefix)
+            && trimmed[prefix.len()..].trim_start().starts_with('\'')
+            && trimmed.ends_with('\'')
+        {
+            let literal = trimmed[prefix.len()..].trim_start();
+            let text = literal[1..literal.len() - 1].replace("''", "'");
+            if text.is_empty() {
+                return Err(format!("invalid Trino {prefix} literal '{value}'"));
+            }
+            return Ok(serde_json::Value::String(text));
+        }
+    }
     if value.eq_ignore_ascii_case("null") {
         return Ok(serde_json::Value::Null);
     }
@@ -19120,6 +19144,25 @@ mod streamed_root_tests {
         );
         let typed = request_parameters(&values).unwrap();
         assert_eq!(typed[0], ScalarValue::Utf8("2026-10-13".into()));
+    }
+
+    #[test]
+    fn trino_execute_using_preserves_typed_temporal_and_decimal_literals() {
+        let values = trino_execute_parameters(
+            "EXECUTE statement USING TIMESTAMP '2026-10-13 12:34:56.123', TIME '12:34:56', DECIMAL '12.3400'",
+        )
+        .unwrap();
+        assert_eq!(
+            values,
+            vec![
+                serde_json::json!("2026-10-13 12:34:56.123"),
+                serde_json::json!("12:34:56"),
+                serde_json::json!("12.3400"),
+            ]
+        );
+        let typed = request_parameters(&values).unwrap();
+        assert_eq!(typed[0], ScalarValue::Utf8("2026-10-13 12:34:56.123".into()));
+        assert_eq!(typed[2], ScalarValue::Utf8("12.3400".into()));
     }
 
     #[test]
