@@ -140,6 +140,10 @@ foundations, but several operators are still centralized or narrow:
   exact-result differential coverage; unsupported correlated and multi-row
   scalar forms remain explicitly rejected while bounded projection forms are
   supported.
+  Equality-correlated `IN`/`NOT IN` subqueries whose projected value is the
+  correlation key now lower to keyed semi/anti joins with owner-side NULL
+  handling; residual or multi-correlation `IN` shapes remain explicitly
+  rejected until their null semantics have a dedicated rewrite.
   `CAST(... AS DATE)` is now supported with nullable `Date32` execution and
   focused parser/executor coverage. `CAST(... AS TIMESTAMP)` and
   `TIMESTAMP WITH TIME ZONE` now map to Arrow microsecond timestamps with
