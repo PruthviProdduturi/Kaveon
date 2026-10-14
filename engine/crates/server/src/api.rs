@@ -3239,6 +3239,7 @@ fn trino_functions_response(pattern: Option<&str>) -> Response {
         ("coalesce", "unknown", "[unknown]", "scalar", true, "First non-null value"),
         ("concat", "varchar", "[varchar]", "scalar", true, "Concatenate strings"),
         ("contains", "boolean", "[array, unknown]", "scalar", true, "Test array membership"),
+        ("contains_key", "boolean", "[map, unknown]", "scalar", true, "Test map key membership"),
         ("count", "bigint", "[unknown]", "aggregate", true, "Count rows or values"),
         ("current_date", "date", "[]", "scalar", false, "Current session date"),
         ("date_diff", "bigint", "[varchar, date, date]", "scalar", true, "Difference between temporal values in a fixed unit"),
