@@ -207,7 +207,11 @@ empty-canvas slab and the light-only chart picker. Fifty-nine declarations
 tokenised by what the property does rather than by colour value.
 
 ### D-33 · `moveItemToContainer` ignores a caller-supplied position
-**open** · 2026-10-13 · dead API, found while auditing the container path
+**fixed** · `42436ae7` · replaced with an insertion index, which is what a
+container can honour — a child's position is decided by its parent, so a pixel
+was never meaningful there. A second bug surfaced beside it: two of the three
+removal paths did not re-split a row's twelve columns, so taking one child out
+of a pair left the survivor at half width next to a permanent gap.
 
 `DashboardContext.tsx:655` reads
 `y: position?.y ?? (i.children || []).length > 0 ? Math.max(...) : 0`, which
@@ -229,6 +233,42 @@ would fix the overlap and hide the delete button.
 
 Neither option is obviously right; it needs a design decision rather than a
 patch.
+
+### D-35 · A control written once, rendered for one tile type in six
+**fixed twice, cause still open** · 2026-10-13
+
+`DashboardItem` returns early per tile type before reaching the shared header
+it renders for tabs. That is why a chart tile had no drag handle (fixed in
+`2285c465`) and no remove button (fixed in `42436ae7`) — both controls existed,
+were wired, were styled, and were rendered for exactly one of six types.
+
+Both fixes work by moving the control into the canvas, per grid child, where a
+tile type cannot miss it. The component itself is still shaped so the next
+shared control added to that header will reach tabs and nothing else. Worth
+restructuring `DashboardItem` so the header is not reachable only through one
+branch — until then, treat anything added there as rendered for tabs only.
+
+Two of my own diagnoses of the remove button were wrong before this was
+measured: I believed the grab strip covered it, then that the chart overlay
+did. It was never rendered. `elementFromPoint` settled it.
+
+### D-36 · The nesting grip is correct and not discoverable
+**open, needs a design decision** · 2026-10-13
+
+Dragging a tile into a row works, but only off a small grip that appears on
+hover and only when the dashboard contains a container. "Drag by this square
+to put the tile inside that row" is not self-evident.
+
+A hover dropzone or a right-click "Move into…" would read better. Recorded
+rather than guessed at, since it is a design choice and the mechanism
+underneath is sound.
+
+### D-37 · Insertion position inside a container is modelled, not offered
+**open** · 2026-10-13
+
+`moveItemToContainer` takes an index and every caller appends, so a tile cannot
+be dropped between two existing children of a row. The model supports it; no
+drop target surfaces it.
 
 ### D-5 · 4,068 query-history rows belong to synthetic accounts
 **open, by decision** · 2026-10-13
