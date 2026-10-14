@@ -1357,8 +1357,17 @@ fn build_aggregate(
     approximate: bool,
 ) -> Result<LogicalPlan> {
     let group_by_ast = match &select.group_by {
-        ast::GroupByExpr::Expressions(exprs, _) => exprs.clone(),
-        _ => Vec::new(),
+        ast::GroupByExpr::Expressions(exprs, modifiers) => {
+            if !modifiers.is_empty() {
+                return Err(sql_err(
+                    "GROUP BY WITH ROLLUP, CUBE, and TOTALS are not supported",
+                ));
+            }
+            exprs.clone()
+        }
+        ast::GroupByExpr::All(_) => {
+            return Err(sql_err("GROUP BY ALL is not supported"));
+        }
     };
     let group_by: Vec<Expr> = group_by_ast
         .iter()
@@ -3589,6 +3598,18 @@ mod tests {
             sql_to_logical_plan("SELECT UPPER(country) FROM u GROUP BY UPPER(country)").unwrap(),
             LogicalPlan::Project { input, .. } if matches!(*input, LogicalPlan::Aggregate { .. })
         ));
+    }
+
+    #[test]
+    fn grouping_modifiers_fail_closed_until_their_lowering_exists() {
+        for sql in [
+            "SELECT country, COUNT(*) FROM u GROUP BY country WITH ROLLUP",
+            "SELECT country, COUNT(*) FROM u GROUP BY country WITH CUBE",
+            "SELECT country, COUNT(*) FROM u GROUP BY country WITH TOTALS",
+            "SELECT country, COUNT(*) FROM u GROUP BY ALL",
+        ] {
+            assert!(sql_to_logical_plan(sql).is_err(), "{sql} must fail closed");
+        }
     }
 
     #[test]
