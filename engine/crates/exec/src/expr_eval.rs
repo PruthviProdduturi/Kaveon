@@ -3,7 +3,8 @@ use arrow::array::{
     Decimal128Array,
     Decimal128Builder,
     Float32Array, Float64Array, Float64Builder,
-    Int32Array, Int32Builder, Int32DictionaryArray, Int64Array, Int64Builder, LargeListArray,
+    Int16Array, Int32Array, Int32Builder, Int32DictionaryArray, Int64Array, Int64Builder,
+    Int8Array, LargeListArray,
     ListArray, GenericListArray, OffsetSizeTrait,
     ListBuilder, MapArray,
     NullBuilder, PrimitiveArray, PrimitiveBuilder,
@@ -11,7 +12,7 @@ use arrow::array::{
     StringBuilder, StructArray,
     Time32MillisecondArray, Time32SecondArray,
     TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray, UInt32Array, UInt64Array,
+    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute;
@@ -19,8 +20,9 @@ use arrow::datatypes::{
     ArrowPrimitiveType, DataType, Date32Type, Date64Type, Float32Type, Float64Type, Int32Type,
     Int64Type,
     Time32MillisecondType, Time32SecondType, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, TimeUnit, UInt32Type,
-    UInt64Type,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, TimeUnit, UInt16Type,
+    UInt32Type, UInt64Type, UInt8Type,
+    Int16Type, Int8Type,
 };
 use arrow::record_batch::RecordBatch;
 use kaveon_core::predicate::ScalarValue;
@@ -2418,6 +2420,16 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 Int32Array,
                 |values: &Int32Array, row| values.value(row)
             ),
+            DataType::Int8 => build_array!(
+                PrimitiveBuilder::<Int8Type>::new(),
+                Int8Array,
+                |values: &Int8Array, row| values.value(row)
+            ),
+            DataType::Int16 => build_array!(
+                PrimitiveBuilder::<Int16Type>::new(),
+                Int16Array,
+                |values: &Int16Array, row| values.value(row)
+            ),
             DataType::UInt32 => build_array!(
                 PrimitiveBuilder::<UInt32Type>::new(),
                 UInt32Array,
@@ -2427,6 +2439,16 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 PrimitiveBuilder::<UInt64Type>::new(),
                 UInt64Array,
                 |values: &UInt64Array, row| values.value(row)
+            ),
+            DataType::UInt8 => build_array!(
+                PrimitiveBuilder::<UInt8Type>::new(),
+                UInt8Array,
+                |values: &UInt8Array, row| values.value(row)
+            ),
+            DataType::UInt16 => build_array!(
+                PrimitiveBuilder::<UInt16Type>::new(),
+                UInt16Array,
+                |values: &UInt16Array, row| values.value(row)
             ),
             DataType::Float32 => build_array!(
                 PrimitiveBuilder::<Float32Type>::new(),
@@ -11722,6 +11744,47 @@ mod tests {
         let values = result.as_list::<i32>();
         assert_eq!(values.value(0).as_primitive::<Float32Type>().value(0), 1.25);
         assert!(values.value(1).is_null(0));
+    }
+
+    #[test]
+    fn evaluates_narrow_integer_array_elements() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "i8",
+                Arc::new(Int8Array::from(vec![Some(-3), None])) as ArrayRef,
+            ),
+            (
+                "i16",
+                Arc::new(Int16Array::from(vec![Some(-300), None])) as ArrayRef,
+            ),
+            (
+                "u8",
+                Arc::new(UInt8Array::from(vec![Some(3), None])) as ArrayRef,
+            ),
+            (
+                "u16",
+                Arc::new(UInt16Array::from(vec![Some(300), None])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        for (column, data_type) in [
+            ("i8", DataType::Int8),
+            ("i16", DataType::Int16),
+            ("u8", DataType::UInt8),
+            ("u16", DataType::UInt16),
+        ] {
+            let result = evaluate(
+                &Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![Expr::Column(column.into())],
+                },
+                &batch,
+            )
+            .unwrap();
+            let lists = result.as_list::<i32>();
+            assert_eq!(lists.value_type(), data_type);
+            assert!(lists.value(1).is_null(0));
+        }
     }
 
     #[test]
