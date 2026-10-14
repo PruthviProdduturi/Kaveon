@@ -133,7 +133,7 @@ const ColumnBrowser: React.FC = () => {
   return (
     <>
       {datasetDetailError && (
-        <p className="text-sm text-red-600 mb-2">{datasetDetailError}</p>
+        <p className="chart-source-empty" role="alert" style={{ color: "var(--error)" }}>{datasetDetailError}</p>
       )}
 
       <div className="chart-source-search">

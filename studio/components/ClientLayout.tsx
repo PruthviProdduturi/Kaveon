@@ -23,7 +23,18 @@ interface ClientLayoutProps {
   children: ReactNode;
 }
 
-const SETUP_OK_KEY = "lens_setup_ok";
+/**
+ * There used to be a `lens_setup_ok` sessionStorage mirror of `isSetupOk`
+ * alongside this context, and four unrelated surfaces read it to decide
+ * whether to tell the operator their metadata database was unconfigured —
+ * SQL Lab's error modal, both tabs of Saved queries, and `ListPageShell`.
+ * The mirror is absent in three different situations that read identically:
+ * setup genuinely incomplete, the check not yet returned, and the check
+ * itself unable to reach the API. The third is what the complaint was about,
+ * and it sent people to a wizard this installation refuses. The mirror is
+ * gone; this context is the one answer, and a read that failed is reported by
+ * `components/Reading` from the status it failed with.
+ */
 
 /** Inline loading state — shown inside the sidebar layout, not full-screen */
 function InlineLoading() {
@@ -57,10 +68,7 @@ export function ClientLayout({ children }: ClientLayoutProps) {
   const checkedRef = useRef(false);
 
   useEffect(() => {
-    if (!isAuthenticated && typeof sessionStorage !== "undefined") {
-      sessionStorage.removeItem(SETUP_OK_KEY);
-      setIsSetupOk(null);
-    }
+    if (!isAuthenticated) setIsSetupOk(null);
   }, [isAuthenticated]);
 
   useEffect(() => {
@@ -71,14 +79,11 @@ export function ClientLayout({ children }: ClientLayoutProps) {
       try {
         const res = await msalFetch(`${API_BASE}/api/v1/setup/status`);
         const data: SetupData = await res.json();
-        if (data.status === "ok") {
-          sessionStorage.setItem(SETUP_OK_KEY, "1");
-          setIsSetupOk(true);
-        } else {
-          sessionStorage.removeItem(SETUP_OK_KEY);
-          setIsSetupOk(false);
-        }
+        setIsSetupOk(data.status === "ok");
       } catch {
+        // The check itself not answering says nothing about setup, so it is
+        // not reported as a verdict either way: the app opens, and whichever
+        // read actually fails reports its own failure.
         setIsSetupOk(true);
       }
     })();

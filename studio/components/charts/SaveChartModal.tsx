@@ -51,7 +51,7 @@ const SaveChartModal: React.FC<SaveChartModalProps> = ({ isOpen, onClose }) => {
           />
         </div>
         {saveError && (
-          <div className="muted" style={{ marginBottom: 8, color: "#b91c1c" }}>
+          <div className="muted" style={{ marginBottom: 8, color: "var(--error)" }}>
             {saveError}
           </div>
         )}

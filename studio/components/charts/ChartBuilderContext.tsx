@@ -3936,8 +3936,11 @@ export const ChartBuilderProvider: React.FC<ChartBuilderProviderProps> = ({
       // If this was a new chart (no chartId before), update the chartId
       if (!chartId && targetId) {
         setChartId(targetId);
-        // Update the URL without navigation to reflect the chart ID
-        window.history.replaceState(null, "", `/charts/${targetId}/edit`);
+        // Update the URL without navigation to reflect the chart ID. It must
+        // be a URL that resolves: `/charts/{id}/edit` is not a route, so a
+        // reload, a bookmark or a copied link off the address bar landed on a
+        // 404 immediately after a save that had succeeded.
+        window.history.replaceState(null, "", `/charts/${targetId}`);
       }
 
       // Best-effort: snapshot the rendered chart and persist it as a thumbnail,

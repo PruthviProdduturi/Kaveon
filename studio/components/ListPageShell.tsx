@@ -3,6 +3,7 @@
 import React, { ReactNode } from "react";
 import { useTheme } from "../contexts/ThemeContext";
 import { KaveonLoading } from "./KaveonLoading";
+import { UnknownPanel, type ReadFailure } from "./Reading";
 
 export interface ListPill {
   label: string;
@@ -24,8 +25,12 @@ interface ListPageShellProps {
   /** Loading state — shows KaveonLoading spinner */
   loading?: boolean;
   loadingMessage?: string;
-  /** Error message — shows error card */
-  error?: string | null;
+  /**
+   * A read that did not answer. A string is treated as the detail of a plain
+   * unknown; a `ReadFailure` carries the server's own account of why, which is
+   * the only thing that may produce configuration advice.
+   */
+  error?: string | ReadFailure | null;
   /** Empty state — shows empty card */
   empty?: boolean;
   emptyIcon?: string;
@@ -168,59 +173,21 @@ export function ListPageShell({
       {/* ── Loading ── */}
       {loading && <KaveonLoading message={loadingMessage} />}
 
-      {/* ── Error ── */}
-      {!loading && error && (() => {
-        const metadataReady = typeof sessionStorage !== "undefined"
-          ? sessionStorage.getItem("lens_setup_ok") === "1"
-          : true;
-        const panel: React.CSSProperties = {
-          background: "var(--bg-surface)", borderRadius: 16, border: "1px solid var(--border)",
-          boxShadow: "var(--shadow-sm)",
-          padding: "3.5rem 2rem", textAlign: "center",
-          display: "flex", flexDirection: "column", alignItems: "center",
-        };
-        const iconWrap = (bg: string): React.CSSProperties => ({
-          width: 68, height: 68, borderRadius: 18, marginBottom: 18,
-          background: bg, display: "flex", alignItems: "center", justifyContent: "center",
-        });
-        const titleStyle: React.CSSProperties = { margin: 0, fontSize: "1.35rem", fontWeight: 800, color: "var(--text-primary)", letterSpacing: "-0.4px" };
-        const bodyStyle: React.CSSProperties = { margin: "8px 0 0", fontSize: "0.95rem", color: "var(--text-muted)", maxWidth: 460, lineHeight: 1.55 };
-        if (!metadataReady) {
-          return (
-            <div style={panel}>
-              <div style={iconWrap("#fef3c7")}>
-                <i className="fas fa-database" style={{ color: "#d97706", fontSize: 28 }} />
-              </div>
-              <h2 style={titleStyle}>Connect a metadata database</h2>
-              <p style={bodyStyle}>
-                Kaveon stores your dashboards, charts and datasets in a metadata database.
-                Configure one to get started — it takes about a minute.
-              </p>
-              <a
-                href="/settings/connections"
-                style={{
-                  marginTop: 24, display: "inline-flex", alignItems: "center", gap: 8,
-                  padding: "0.6rem 1.1rem", borderRadius: 8, textDecoration: "none",
-                  background: `linear-gradient(135deg, ${gradientColors.light}, ${gradientColors.dark})`,
-                  color: "white", fontWeight: 600, fontSize: "0.9rem",
-                  boxShadow: `0 6px 18px ${primaryColor}35`,
-                }}
-              >
-                <i className="fas fa-sliders-h" /> Open System Settings
-              </a>
-            </div>
-          );
-        }
-        return (
-          <div style={panel}>
-            <div style={iconWrap("#fef2f2")}>
-              <i className="fas fa-exclamation-triangle" style={{ color: "var(--error)", fontSize: 28 }} />
-            </div>
-            <h2 style={titleStyle}>Something went wrong</h2>
-            <p style={bodyStyle}>{error}</p>
-          </div>
-        );
-      })()}
+      {/* ── A read that did not answer ──
+          This used to branch on the `lens_setup_ok` sessionStorage flag and,
+          where it was absent, tell the reader to "Connect a metadata
+          database … it takes about a minute". The flag is also absent
+          whenever the setup check itself could not reach the API, and on this
+          installation there is no metadata database by design — KaveonDB is
+          the authority and the wizard it pointed at is refused outright. That
+          is the same wrong advice removed from Settings in `e7f8b453`.
+          `components/Reading` holds the rule now, so this shell cannot drift
+          from the other surfaces that report an unknown. */}
+      {!loading && error && (
+        typeof error === "string"
+          ? <UnknownPanel what={title} says={`what ${title.toLowerCase()} it holds`} detail={error} />
+          : <UnknownPanel {...error} />
+      )}
 
       {/* ── Empty state — centered, systematic onboarding ── */}
       {!loading && !error && empty && (

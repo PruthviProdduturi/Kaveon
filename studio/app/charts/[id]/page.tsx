@@ -17,6 +17,7 @@ import { useAuth } from "../../../auth/useAuth";
 import { useRecents } from "../../../hooks/useRecents";
 import { useRole } from "../../../hooks/useRole";
 import { useRouter, useParams } from "next/navigation";
+import { UnknownPanel, reasonFromStatus, type ReadFailure } from "../../../components/Reading";
 
 export const dynamic = 'force-dynamic';
 export const dynamicParams = true;
@@ -77,7 +78,10 @@ const ChartDetailBuilderView: React.FC<ChartDetailBuilderViewProps> = ({
     try {
       const newId = await saveChartAs(saveAsName.trim());
       setShowSaveAs(false);
-      if (newId) headerRouter.push(`/charts/${newId}/edit`);
+      // `/charts/{id}/edit` is not a route — there is no `edit` segment under
+      // `app/charts/[id]`, only `view`. So the one outcome of a successful
+      // "Create copy" was a 404 over a chart that had in fact been created.
+      if (newId) headerRouter.push(`/charts/${newId}`);
     } finally {
       setSavingAs(false);
     }
@@ -297,7 +301,7 @@ const ChartDetailBuilderView: React.FC<ChartDetailBuilderViewProps> = ({
                 Cancel
               </button>
               <button type="button" onClick={confirmSaveAs} disabled={savingAs || !saveAsName.trim()}
-                style={{ padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", border: "none", borderRadius: 8, background: "#2563eb", color: "#fff", minWidth: 96 }}>
+                style={{ padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", border: "none", borderRadius: 8, background: "var(--accent)", color: "#fff", minWidth: 96 }}>
                 {savingAs ? "Saving…" : "Create copy"}
               </button>
             </div>
@@ -319,7 +323,12 @@ const ChartDetailPage: React.FC = () => {
   const [chart, setChart] = useState<ChartDetail | null>(null);
   const [dataset, setDataset] = useState<DatasetDetailSummary | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  // "Chart not found" and "the server that holds charts did not answer" are
+  // different answers and used to come out as the same card. A 404 is a
+  // finding about this chart; a 502 or 504 is a finding about nothing at all,
+  // and `components/Reading` is where that difference is written.
   const [error, setError] = useState<string | null>(null);
+  const [failure, setFailure] = useState<ReadFailure | null>(null);
   const [isFavorite, setIsFavorite] = useState(false);
   const fetchedChartIdRef = useRef<string | null>(null);
 
@@ -346,6 +355,7 @@ const ChartDetailPage: React.FC = () => {
 
     setIsLoading(true);
     setError(null);
+    setFailure(null);
 
     const userEmail = account?.email || account?.username || null;
     const identity = userEmail ? { 'x-user-email': userEmail } : undefined;
@@ -367,7 +377,14 @@ const ChartDetailPage: React.FC = () => {
         // A chart this caller may not read is indistinguishable from one that
         // does not exist, and the API answers both the same way.
         if (chartRes.status === 404) throw new Error("Chart not found");
-        if (!chartRes.ok) throw new Error("Failed to load chart details");
+        if (!chartRes.ok) {
+          setFailure({
+            what: "The chart library",
+            says: "how this chart is defined",
+            reason: reasonFromStatus(chartRes.status),
+          });
+          return;
+        }
         const chartDetail = (await chartRes.json()) as ChartDetail;
         setChart(chartDetail);
         if (chartDetail?.name) {
@@ -384,7 +401,14 @@ const ChartDetailPage: React.FC = () => {
         }
 
         if (!chartDetail.dataset_id) throw new Error("This chart has no associated dataset.");
-        if (!datasetRes.ok) throw new Error("Failed to load dataset details");
+        if (!datasetRes.ok) {
+          setFailure({
+            what: "The dataset library",
+            says: "which dataset this chart is built on",
+            reason: reasonFromStatus(datasetRes.status),
+          });
+          return;
+        }
         const datasetList = (await datasetRes.json()) as { recent?: any[] };
         // The dataset list is visibility-scoped, so its silence is an answer:
         // this caller may not read the dataset the chart is built on.
@@ -438,14 +462,16 @@ const ChartDetailPage: React.FC = () => {
         <p className="muted">Sign in to view chart details.</p>
       )}
 
-      {isAuthenticated && error && (
+      {isAuthenticated && failure && <UnknownPanel {...failure} />}
+
+      {isAuthenticated && !failure && error && (
         <div className="card page-empty-card" style={{ marginTop: 12 }}>
-          <p className="page-empty-title">Problem loading chart</p>
+          <p className="page-empty-title">This chart cannot be opened</p>
           <p className="page-empty-body">{error}</p>
         </div>
       )}
 
-      {isAuthenticated && !error && isLoading && (
+      {isAuthenticated && !error && !failure && isLoading && (
         <LoadingOverlay />
       )}
 
@@ -453,7 +479,7 @@ const ChartDetailPage: React.FC = () => {
           caller cannot save over the chart, the configuration is presented
           rather than offered for editing. One signal, decided here because
           this is where both the role and the chart's owner are known. */}
-      {isAuthenticated && !error && !isLoading && chart && dataset && (
+      {isAuthenticated && !error && !failure && !isLoading && chart && dataset && (
         <ChartBuilderProvider readOnly={!canWrite(chart.created_by)}>
           <ChartDetailBuilderView
             chart={chart}

@@ -10,6 +10,7 @@ import { msalFetch } from "../../../utils/msalFetch";
 import { useAuth } from "../../../auth/useAuth";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTheme } from "../../../contexts/ThemeContext";
+import { UnknownLine, reasonFromStatus, type ReadFailure } from "../../../components/Reading";
 
 // using same-origin relative API calls
 
@@ -273,8 +274,20 @@ const LabQueriesPage: React.FC = () => {
   const [history, setHistory] = useState<QueryHistoryRow[]>([]);
   const [isLoadingSaved, setIsLoadingSaved] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
-  const [errorSaved, setErrorSaved] = useState<string | null>(null);
-  const [errorHistory, setErrorHistory] = useState<string | null>(null);
+  // A read that failed is reported as an unknown, with the status it failed
+  // with, so the page never guesses at a cause. The guess it used to make was
+  // "Metadata database not configured", read off a `sessionStorage` flag an
+  // unrelated setup check writes - and that flag is also absent when the
+  // check itself could not reach the API. `components/Reading` holds the rule
+  // and `reasonFromStatus` the distinction (503 unconfigured, 502/504
+  // configured and not answering).
+  const [errorSaved, setErrorSaved] = useState<ReadFailure | null>(null);
+  // A clone, a delete or a preview that was refused is a failed action, not a
+  // failed read, and it is reported as one. These three used to be written
+  // into the list's own error slot, where they read as "the list could not be
+  // loaded" over a list that had loaded perfectly well.
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [errorHistory, setErrorHistory] = useState<ReadFailure | null>(null);
   const [preview, setPreview] = useState<QueryPreviewState | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [savedSortBy, setSavedSortBy] = useState<SavedSortKey | null>(null);
@@ -319,17 +332,27 @@ const LabQueriesPage: React.FC = () => {
 
     setIsLoadingSaved(true);
     setErrorSaved(null);
+    setActionError(null);
 
     (async () => {
       try {
         const res = await msalFetch(`${API_BASE}/api/v1/lab/saved-queries`);
-        if (!res.ok) throw new Error("Failed to load saved queries");
+        if (!res.ok) {
+          setErrorSaved({
+            what: "The saved-query store",
+            says: "which queries you have saved",
+            reason: reasonFromStatus(res.status),
+          });
+          return;
+        }
         const data = (await res.json()) as SavedQueryRow[];
         setSavedQueries(data || []);
       } catch (err) {
-        console.error("Error loading saved queries:", err);
-        const message = err instanceof Error ? err.message : "Failed to load saved queries";
-        setErrorSaved(message);
+        setErrorSaved({
+          what: "The saved-query store",
+          says: "which queries you have saved",
+          detail: err instanceof Error ? err.message : null,
+        });
       } finally {
         setIsLoadingSaved(false);
       }
@@ -345,14 +368,22 @@ const LabQueriesPage: React.FC = () => {
     (async () => {
       try {
         const res = await msalFetch(`${API_BASE}/api/v1/lab/query-history?limit=1000`);
-        if (!res.ok) throw new Error("Failed to load query history");
+        if (!res.ok) {
+          setErrorHistory({
+            what: "The query history",
+            says: "which queries have run",
+            reason: reasonFromStatus(res.status),
+          });
+          return;
+        }
         const data = (await res.json()) as QueryHistoryRow[];
         setHistory(data || []);
-        console.log(`[QueryHistory UI] Loaded ${data.length} query history entries`);
       } catch (err) {
-        console.error("Error loading query history:", err);
-        const message = err instanceof Error ? err.message : "Failed to load query history";
-        setErrorHistory(message);
+        setErrorHistory({
+          what: "The query history",
+          says: "which queries have run",
+          detail: err instanceof Error ? err.message : null,
+        });
       } finally {
         setIsLoadingHistory(false);
       }
@@ -425,9 +456,7 @@ const LabQueriesPage: React.FC = () => {
 
       loadSavedQueries();
     } catch (err) {
-      console.error("Error cloning saved query:", err);
-      const message = err instanceof Error ? err.message : "Failed to clone saved query";
-      setErrorSaved(message);
+      setActionError(err instanceof Error ? err.message : "The query could not be duplicated.");
     }
   };
 
@@ -468,9 +497,7 @@ const LabQueriesPage: React.FC = () => {
 
       setSavedQueries((prev) => prev.filter((q) => q.id !== id));
     } catch (err) {
-      console.error("Error deleting saved query:", err);
-      const message = err instanceof Error ? err.message : "Failed to delete saved query";
-      setErrorSaved(message);
+      setActionError(err instanceof Error ? err.message : "The query could not be deleted.");
     }
   };
 
@@ -499,9 +526,7 @@ const LabQueriesPage: React.FC = () => {
         savedQueryId: row.id,
       });
     } catch (err) {
-      console.error("Error loading saved query for preview:", err);
-      const message = err instanceof Error ? err.message : "Failed to load saved query";
-      setErrorSaved(message);
+      setActionError(err instanceof Error ? err.message : "The query could not be opened.");
     }
   };
 
@@ -765,9 +790,10 @@ const LabQueriesPage: React.FC = () => {
             <div className="results-table-container">
               {isLoadingSaved && <LoadingOverlay />}
               {!isLoadingSaved && errorSaved && (
-                typeof sessionStorage !== "undefined" && sessionStorage.getItem("lens_setup_ok") !== "1"
-                  ? <p className="muted">Metadata database not configured. <a href="/settings/system" style={{ color: "var(--accent)" }}>Go to System Settings</a> to set it up.</p>
-                  : <p className="muted">{errorSaved}</p>
+                <div style={{ padding: "0.75rem 1rem" }}><UnknownLine {...errorSaved} /></div>
+              )}
+              {actionError && (
+                <div role="alert" style={{ padding: "0.75rem 1rem", fontSize: 12.5, color: "var(--error)" }}>{actionError}</div>
               )}
               {!isLoadingSaved && !errorSaved && sortedSavedQueries.length === 0 && (
                 <p className="muted">No saved queries yet.</p>
@@ -931,9 +957,7 @@ const LabQueriesPage: React.FC = () => {
               </div>
               {isLoadingHistory && <LoadingOverlay />}
               {!isLoadingHistory && errorHistory && (
-                typeof sessionStorage !== "undefined" && sessionStorage.getItem("lens_setup_ok") !== "1"
-                  ? <p className="muted">Metadata database not configured. <a href="/settings/system" style={{ color: "var(--accent)" }}>Go to System Settings</a> to set it up.</p>
-                  : <p className="muted">{errorHistory}</p>
+                <div style={{ padding: "0.75rem 1rem" }}><UnknownLine {...errorHistory} /></div>
               )}
               {!isLoadingHistory && !errorHistory && history.length === 0 && (
                 <p className="muted">No query history available yet.</p>

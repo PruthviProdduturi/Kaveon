@@ -680,9 +680,9 @@ const ChartTypeOptions: React.FC<ChartTypeOptionsProps> = ({ chartType, advanced
                   style={{
                     flex: 1, padding: "7px 0", fontSize: 12, fontWeight: 600,
                     borderRadius: 6, cursor: "pointer", border: "1.5px solid",
-                    borderColor: (ctOpts.mapStyle || "flat") === style ? "#0078d4" : "var(--border)",
-                    background: (ctOpts.mapStyle || "flat") === style ? "#eff6ff" : "var(--bg-surface)",
-                    color: (ctOpts.mapStyle || "flat") === style ? "#0078d4" : "var(--text-secondary)",
+                    borderColor: (ctOpts.mapStyle || "flat") === style ? "var(--accent)" : "var(--border)",
+                    background: (ctOpts.mapStyle || "flat") === style ? "color-mix(in srgb, var(--accent) 12%, var(--bg-surface))" : "var(--bg-surface)",
+                    color: (ctOpts.mapStyle || "flat") === style ? "var(--text-primary)" : "var(--text-secondary)",
                     display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
                   }}
                 >
@@ -1444,7 +1444,7 @@ const AdvancedChartOptions: React.FC = () => {
                         </select>
                       </div>
                       <button type="button" onClick={() => removeLine(idx)}
-                        style={{ padding: '5px 8px', borderRadius: 5, border: '1px solid #fca5a5', background: 'var(--bg-surface)', color: '#ef4444', cursor: 'pointer', fontSize: 12, alignSelf: 'flex-end' }}
+                        style={{ padding: '5px 8px', borderRadius: 5, border: '1px solid color-mix(in srgb, var(--error) 45%, var(--border))', background: 'var(--bg-surface)', color: 'var(--error)', cursor: 'pointer', fontSize: 12, alignSelf: 'flex-end' }}
                         title="Remove line">
                         <i className="fas fa-times" />
                       </button>
