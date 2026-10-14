@@ -2872,8 +2872,19 @@ async fn submit_trino_statement_parts(
     };
     let body_text = String::from_utf8(body.to_vec()).ok();
     if let Some(body) = body_text.as_deref() {
-        if trino_is_show_session(body) {
-            return trino_session_response(&state.config);
+        match trino_show_session_pattern(body) {
+            Ok(Some(pattern)) => return trino_session_response_pattern(&state.config, Some(&pattern)),
+            Ok(None) => {}
+            Err(error) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": error,
+                        "errorName": "SYNTAX_ERROR"
+                    })),
+                )
+                    .into_response();
+            }
         }
         match trino_show_functions_pattern(body) {
             Ok(Some(pattern)) => return trino_functions_response(Some(&pattern)),
@@ -3402,11 +3413,41 @@ fn trino_describe_output_response(metadata: &[(String, String, bool)]) -> Respon
     .into_response()
 }
 
+#[cfg(test)]
 fn trino_is_show_session(body: &str) -> bool {
-    body.trim()
-        .trim_end_matches(';')
-        .trim()
-        .eq_ignore_ascii_case("SHOW SESSION")
+    matches!(trino_show_session_pattern(body), Ok(Some(pattern)) if pattern.is_empty())
+}
+
+fn trino_show_session_pattern(body: &str) -> Result<Option<String>, String> {
+    let statement = body.trim().trim_end_matches(';').trim();
+    if statement.eq_ignore_ascii_case("SHOW SESSION") {
+        return Ok(Some(String::new()));
+    }
+    let prefix = "SHOW SESSION LIKE ";
+    if !statement
+        .get(..prefix.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+    {
+        return Ok(None);
+    }
+    let pattern = statement[prefix.len()..].trim();
+    if pattern.len() < 2 || !pattern.starts_with('\'') || !pattern.ends_with('\'') {
+        return Err("SHOW SESSION LIKE requires a single-quoted pattern".to_owned());
+    }
+    let pattern = &pattern[1..pattern.len() - 1];
+    let mut unescaped = String::with_capacity(pattern.len());
+    let mut chars = pattern.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\'' {
+            if chars.next() != Some('\'') {
+                return Err("SHOW SESSION LIKE contains an invalid quoted pattern".to_owned());
+            }
+            unescaped.push('\'');
+        } else {
+            unescaped.push(ch);
+        }
+    }
+    Ok(Some(unescaped))
 }
 
 fn trino_is_show_functions(body: &str) -> bool {
@@ -3569,7 +3610,15 @@ fn trino_like(value: &str, pattern: &str) -> bool {
     pi == pattern.len()
 }
 
+#[cfg(test)]
 fn trino_session_response(config: &crate::config::ServerConfig) -> Response {
+    trino_session_response_pattern(config, None)
+}
+
+fn trino_session_response_pattern(
+    config: &crate::config::ServerConfig,
+    pattern: Option<&str>,
+) -> Response {
     let columns = ["Name", "Value", "Default", "Type", "Description"]
         .into_iter()
         .map(|name| {
@@ -3617,6 +3666,13 @@ fn trino_session_response(config: &crate::config::ServerConfig) -> Response {
             "Allow context and statistics answers"
         ]),
     ];
+    let rows = match pattern.filter(|pattern| !pattern.is_empty()) {
+        Some(pattern) => rows
+            .into_iter()
+            .filter(|row| row[0].as_str().is_some_and(|name| trino_like(name, pattern)))
+            .collect::<Vec<_>>(),
+        None => rows,
+    };
     let id = Uuid::new_v4().to_string();
     Json(serde_json::json!({
         "id": id,
@@ -20283,6 +20339,11 @@ mod streamed_root_tests {
         assert!(trino_is_show_session("SHOW SESSION;"));
         assert!(trino_is_show_session("show session"));
         assert!(!trino_is_show_session("SHOW SESSION foo"));
+        assert_eq!(
+            trino_show_session_pattern("SHOW SESSION LIKE 'result%'").unwrap(),
+            Some("result%".to_owned())
+        );
+        assert!(trino_show_session_pattern("SHOW SESSION LIKE result").is_err());
         let response = trino_session_response(&crate::config::ServerConfig::default());
         let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
             .await
@@ -20293,6 +20354,18 @@ mod streamed_root_tests {
         let rows = value["data"].as_array().unwrap();
         assert!(rows.iter().any(|row| row[0] == "result_cache"));
         assert!(rows.iter().any(|row| row[0] == "query_memory_limit_bytes"));
+
+        let response = trino_session_response_pattern(
+            &crate::config::ServerConfig::default(),
+            Some("result%"),
+        );
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let rows = value["data"].as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][0], "result_cache");
     }
 
     #[tokio::test]
