@@ -7734,6 +7734,29 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     }
                     Ok(Arc::new(result.finish()))
                 }
+                DataType::LargeUtf8 => {
+                    let mut result = LargeStringBuilder::new();
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            result.append_null();
+                            continue;
+                        }
+                        let values = list.value(row);
+                        let values = values.as_string::<i64>();
+                        let best = (0..values.len())
+                            .filter(|&index| values.is_valid(index))
+                            .map(|index| values.value(index))
+                            .reduce(|left, right| {
+                                if (take_max && right > left) || (!take_max && right < left) {
+                                    right
+                                } else {
+                                    left
+                                }
+                            });
+                        result.append_option(best);
+                    }
+                    Ok(Arc::new(result.finish()))
+                }
                 other => Err(KaveonError::Execution(format!(
                     "{name} does not support list element type {other}"
                 ))),
@@ -11468,6 +11491,31 @@ mod tests {
         let inner = result.value(0);
         let values = inner.as_string::<i32>();
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some("z"), None, Some("a")]);
+
+        let mut text_extrema_builder = ListBuilder::new(arrow::array::LargeStringBuilder::new());
+        text_extrema_builder.values().append_value("zulu");
+        text_extrema_builder.values().append_null();
+        text_extrema_builder.values().append_value("alpha");
+        text_extrema_builder.append(true);
+        let result = eval_scalar_function(
+            "ARRAY_MIN",
+            &[Arc::new(text_extrema_builder.finish()) as ArrayRef],
+            1,
+        )
+        .unwrap();
+        assert_eq!(result.as_string::<i64>().value(0), "alpha");
+        let mut text_max_builder = ListBuilder::new(arrow::array::LargeStringBuilder::new());
+        text_max_builder.values().append_value("zulu");
+        text_max_builder.values().append_null();
+        text_max_builder.values().append_value("alpha");
+        text_max_builder.append(true);
+        let result = eval_scalar_function(
+            "ARRAY_MAX",
+            &[Arc::new(text_max_builder.finish()) as ArrayRef],
+            1,
+        )
+        .unwrap();
+        assert_eq!(result.as_string::<i64>().value(0), "zulu");
 
         let mut large_cardinality_builder = LargeListBuilder::new(Int64Builder::new());
         large_cardinality_builder.values().append_value(1);
