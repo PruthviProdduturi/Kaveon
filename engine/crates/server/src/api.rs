@@ -4831,6 +4831,14 @@ async fn run_statement(
         match distributed {
             Ok((result, stages, planning_us, recovery)) => {
                 let mut result = result;
+                if matches!(explain_kind, Some(ExplainPlanKind::Analyze)) {
+                    render_explain_analyze_result(
+                        &mut result,
+                        &optimized_plan,
+                        analysis_us,
+                        planning_us,
+                    );
+                }
                 keep_result(&state, &cache_key, &result, start, &query_id, paged);
                 let next_uri = if paged {
                     match spool_rows(&state, &query_id, result_writer.take(), &mut result.data) {
@@ -4950,6 +4958,14 @@ async fn run_statement(
         match distributed {
             Ok((result, stage)) => {
                 let mut result = result;
+                if matches!(explain_kind, Some(ExplainPlanKind::Analyze)) {
+                    render_explain_analyze_result(
+                        &mut result,
+                        &optimized_plan,
+                        analysis_us,
+                        0,
+                    );
+                }
                 keep_result(&state, &cache_key, &result, start, &query_id, paged);
                 let next_uri = if paged {
                     match spool_rows(&state, &query_id, result_writer.take(), &mut result.data) {
@@ -5787,6 +5803,35 @@ fn explain_plan_lines(node: &kaveon_core::PlanNode, depth: usize, lines: &mut Ve
     for child in &node.children {
         explain_plan_lines(child, depth + 1, lines);
     }
+}
+
+/// Replace a distributed result with Trino's single `Query Plan` column for
+/// `EXPLAIN ANALYZE`. The distributed executor has already measured the
+/// runtime, so this keeps the actual worker timing instead of re-planning or
+/// issuing a second query.
+fn render_explain_analyze_result(
+    result: &mut TaskResponse,
+    optimized_plan: &kaveon_core::PlanNode,
+    analysis_us: u64,
+    planning_us: u64,
+) {
+    let mut lines = Vec::new();
+    explain_plan_lines(optimized_plan, 0, &mut lines);
+    lines.push(format!(
+        "Runtime: rows={}, analysis_us={}, planning_us={}, execution_us={}",
+        result.data.len(),
+        analysis_us,
+        planning_us,
+        result.elapsed_us
+    ));
+    result.columns = vec![ColumnInfo {
+        name: "Query Plan".to_owned(),
+        data_type: "VARCHAR".to_owned(),
+    }];
+    result.data = lines
+        .into_iter()
+        .map(|line| vec![serde_json::Value::String(line)])
+        .collect();
 }
 
 /// Which columns `ANALYZE` counts distinct values for: none (the metadata
