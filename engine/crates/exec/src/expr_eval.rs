@@ -4809,13 +4809,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     "GREATEST requires at least 2 arguments".into(),
                 ));
             }
-            let mut result = compute::cast(&args[0], &DataType::Float64)?;
-            for arg in &args[1..] {
-                let other = compute::cast(arg, &DataType::Float64)?;
-                let gt = comparison(&other, &result, CompareKind::Gt)?;
-                result = zip_arrays(&gt, &other, &result)?;
-            }
-            Ok(result)
+            fold_extreme(&args[1..], &args[0], CompareKind::Ge)
         }
         "LEAST" => {
             if args.len() < 2 {
@@ -4823,13 +4817,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     "LEAST requires at least 2 arguments".into(),
                 ));
             }
-            let mut result = compute::cast(&args[0], &DataType::Float64)?;
-            for arg in &args[1..] {
-                let other = compute::cast(arg, &DataType::Float64)?;
-                let lt = comparison(&other, &result, CompareKind::Lt)?;
-                result = zip_arrays(&lt, &other, &result)?;
-            }
-            Ok(result)
+            fold_extreme(&args[1..], &args[0], CompareKind::Le)
         }
 
         "NOW" | "CURRENT_TIMESTAMP" => {
@@ -7079,6 +7067,27 @@ fn make_null_array(dt: &DataType, len: usize) -> Result<ArrayRef> {
             "cannot make null array for type {dt}"
         ))),
     }
+}
+
+/// Fold GREATEST/LEAST over a common Arrow type while preserving nulls.
+///
+/// The old implementation cast every argument to Float64.  Besides losing
+/// integer, decimal, date, and text types, that made a NULL comparison choose
+/// the non-null branch.  Trino returns NULL when any argument in the row is
+/// NULL, so validity is applied after each pairwise comparison.
+fn fold_extreme(rest: &[ArrayRef], first: &ArrayRef, kind: CompareKind) -> Result<ArrayRef> {
+    let mut result = Arc::clone(first);
+    for arg in rest {
+        let (left, right) = coerce_numeric_pair(&result, arg)?;
+        let choose_left = comparison(&left, &right, kind)?;
+        let selected = zip_arrays(&choose_left, &left, &right)?;
+        let left_valid = compute::is_not_null(&left)?;
+        let right_valid = compute::is_not_null(&right)?;
+        let valid = compute::and_kleene(&left_valid, &right_valid)?;
+        let nulls = arrow::array::new_null_array(selected.data_type(), selected.len());
+        result = zip_arrays(&valid, &selected, &nulls)?;
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -10434,6 +10443,65 @@ mod tests {
         assert_eq!(arr.value(0), 10);
         assert_eq!(arr.value(1), 2);
         assert!(arr.is_null(2));
+    }
+
+    #[test]
+    fn greatest_and_least_preserve_type_and_nulls() {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int64, true),
+                Field::new("b", DataType::Int64, true),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(3), Some(2), None])),
+                Arc::new(Int64Array::from(vec![Some(1), None, Some(4)])),
+            ],
+        )
+        .unwrap();
+        let greatest = Expr::Function {
+            name: "GREATEST".into(),
+            args: vec![Expr::Column("a".into()), Expr::Column("b".into())],
+        };
+        let least = Expr::Function {
+            name: "LEAST".into(),
+            args: vec![Expr::Column("a".into()), Expr::Column("b".into())],
+        };
+        let greatest = evaluate(&greatest, &batch).unwrap();
+        let least = evaluate(&least, &batch).unwrap();
+        assert_eq!(greatest.data_type(), &DataType::Int64);
+        assert_eq!(least.data_type(), &DataType::Int64);
+        let greatest = greatest.as_primitive::<Int64Type>();
+        let least = least.as_primitive::<Int64Type>();
+        assert_eq!(greatest.value(0), 3);
+        assert!(greatest.is_null(1));
+        assert!(greatest.is_null(2));
+        assert_eq!(least.value(0), 1);
+        assert!(least.is_null(1));
+        assert!(least.is_null(2));
+
+        let text_batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("left_text", DataType::Utf8, true),
+                Field::new("right_text", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec![Some("z"), Some("a")])),
+                Arc::new(StringArray::from(vec![Some("b"), Some("c")])),
+            ],
+        )
+        .unwrap();
+        let text = Expr::Function {
+            name: "GREATEST".into(),
+            args: vec![
+                Expr::Column("left_text".into()),
+                Expr::Column("right_text".into()),
+            ],
+        };
+        let text = evaluate(&text, &text_batch).unwrap();
+        assert_eq!(text.data_type(), &DataType::Utf8);
+        let text = text.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(text.value(0), "z");
+        assert_eq!(text.value(1), "c");
     }
 
     #[test]
