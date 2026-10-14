@@ -178,7 +178,8 @@ also accepts owner-scoped SQL `PREPARE name FROM ...`, `EXECUTE name`, and
 and typed binder. `SHOW SESSION` on that route returns the Engine's supported
 session settings (`query_memory_limit_bytes`, `admission_wait_seconds`,
 `result_cache`, `approximate`, and `use_statistics`) in Trino's tabular
-metadata shape. `SHOW FUNCTIONS` and `SHOW FUNCTIONS LIKE 'pattern'` return
+metadata shape. `SHOW SESSION LIKE 'pattern'` applies the same wildcard
+filtering to session settings. `SHOW FUNCTIONS` and `SHOW FUNCTIONS LIKE 'pattern'` return
 the Engine's supported scalar and aggregate function metadata in Trino's
 standard six-column shape. Compound values beyond arrays,
 timestamps, intervals, and the complete prepare/describe/bind wire lifecycle

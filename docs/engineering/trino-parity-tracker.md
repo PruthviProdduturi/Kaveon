@@ -200,7 +200,8 @@ node-drain recovery, and sustained soak remain separate acceptance gates.
   arrays and null elements.
   SQL `DEALLOCATE PREPARE ALL` now clears every prepared statement owned by the
   requesting principal while preserving other principals' entries.
-  The raw Trino route also answers `SHOW SESSION` with the supported Engine
+  The raw Trino route answers `SHOW SESSION` and `SHOW SESSION LIKE 'pattern'`
+  with the supported Engine
   settings in Trino's metadata result shape, and answers `SHOW FUNCTIONS` with
   the supported scalar and aggregate registry in Trino's six-column metadata
   shape, including `LIKE` wildcard filtering; these metadata calls do not
@@ -1051,6 +1052,9 @@ for projection plans, returning Trino's seven-column metadata shape with
 explicit aliases and planner-inferred scalar/cast types; unbound column types
 remain `unknown`. The complete wire prepare/describe/bind lifecycle remains
 open, so these are compatibility slices rather than a full protocol claim.
+
+The same route supports `SHOW SESSION LIKE 'pattern'`, applying Trino wildcard
+semantics to the supported settings and rejecting malformed patterns explicitly.
 
 The current local validation baseline is green on the same checkout: the full
 `kaveon-server` suite passed **371 tests**, and the full CLI suite passed **211
