@@ -3403,6 +3403,105 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             false,
         )?));
     }
+    if upper == "MAP_FROM_ENTRIES" {
+        check_arity(name, args, 1)?;
+        let entries = args[0]
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .ok_or_else(|| {
+                KaveonError::Execution(
+                    "MAP_FROM_ENTRIES requires an ARRAY of ROW(key, value) entries".into(),
+                )
+            })?;
+        let entry_struct = entries
+            .values()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| {
+                KaveonError::Execution(
+                    "MAP_FROM_ENTRIES entries must be ROW(key, value) values".into(),
+                )
+            })?;
+        if entry_struct.num_columns() != 2 {
+            return Err(KaveonError::Execution(
+                "MAP_FROM_ENTRIES rows must contain exactly two fields".into(),
+            ));
+        }
+        let keys = Arc::clone(entry_struct.column(0));
+        let values = Arc::clone(entry_struct.column(1));
+        if keys.data_type() == &DataType::Null || keys.null_count() > 0 {
+            return Err(KaveonError::Execution(
+                "MAP_FROM_ENTRIES keys cannot contain NULL values".into(),
+            ));
+        }
+        let key_type = keys.data_type().clone();
+        if !matches!(
+            key_type,
+            DataType::Boolean | DataType::Int64 | DataType::Float64 | DataType::Utf8
+        ) {
+            return Err(KaveonError::Execution(format!(
+                "MAP_FROM_ENTRIES does not support key type {key_type}"
+            )));
+        }
+        let mut selected = Vec::<u32>::new();
+        let mut offsets = vec![0_i32];
+        let mut valid = Vec::with_capacity(entries.len());
+        for row in 0..entries.len() {
+            if entries.is_null(row) {
+                valid.push(false);
+                offsets.push(selected.len() as i32);
+                continue;
+            }
+            valid.push(true);
+            let start = entries.value_offsets()[row] as usize;
+            let end = entries.value_offsets()[row + 1] as usize;
+            let row_start = selected.len();
+            for entry in start..end {
+                let entry = u32::try_from(entry).map_err(|_| {
+                    KaveonError::Execution("MAP_FROM_ENTRIES has too many entries".into())
+                })?;
+                if selected[row_start..]
+                    .iter()
+                    .any(|candidate| map_keys_equal(&keys, *candidate as usize, entry as usize).unwrap_or(false))
+                {
+                    return Err(KaveonError::Execution(
+                        "MAP_FROM_ENTRIES does not allow duplicate keys".into(),
+                    ));
+                }
+                selected.push(entry);
+            }
+            offsets.push(selected.len() as i32);
+        }
+        let indices = UInt32Array::from(selected);
+        let selected_keys = compute::take(keys.as_ref(), &indices, None)?;
+        let selected_values = compute::take(values.as_ref(), &indices, None)?;
+        let entry_fields: arrow::datatypes::Fields = vec![
+            Arc::new(arrow::datatypes::Field::new("key", key_type, false)),
+            Arc::new(arrow::datatypes::Field::new(
+                "value",
+                selected_values.data_type().clone(),
+                true,
+            )),
+        ]
+        .into();
+        let entries = StructArray::new(
+            entry_fields.clone(),
+            vec![selected_keys, selected_values],
+            None,
+        );
+        let entry_field = Arc::new(arrow::datatypes::Field::new(
+            "entries",
+            DataType::Struct(entry_fields),
+            false,
+        ));
+        return Ok(Arc::new(MapArray::try_new(
+            entry_field,
+            OffsetBuffer::new(ScalarBuffer::from(offsets)),
+            entries,
+            Some(arrow::buffer::NullBuffer::from(valid)),
+            false,
+        )?));
+    }
     if upper == "SPLIT_TO_MAP" {
         check_arity(name, args, 3)?;
         let sources = as_string_array(&args[0])?;
@@ -10265,6 +10364,76 @@ mod tests {
         let values = values.as_list::<i32>();
         assert_eq!(values.value(0).as_primitive::<Float64Type>().value(0), 1.0);
         assert!(values.is_null(1));
+    }
+
+    #[test]
+    fn map_from_entries_builds_typed_maps_and_rejects_duplicate_keys() {
+        let fields: arrow::datatypes::Fields = vec![
+            Arc::new(arrow::datatypes::Field::new("key", DataType::Utf8, false)),
+            Arc::new(arrow::datatypes::Field::new("value", DataType::Int64, true)),
+        ]
+        .into();
+        let rows = StructArray::new(
+            fields.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["a", "b"])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![Some(1), Some(2)])) as ArrayRef,
+            ],
+            None,
+        );
+        let list = ListArray::new(
+            Arc::new(arrow::datatypes::Field::new(
+                "item",
+                DataType::Struct(fields.clone()),
+                true,
+            )),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 2, 2])),
+            Arc::new(rows),
+            Some(arrow::buffer::NullBuffer::from(vec![true, false])),
+        );
+        let input = RecordBatch::try_from_iter([("entries", Arc::new(list) as ArrayRef)]).unwrap();
+        let result = evaluate(
+            &Expr::Function {
+                name: "MAP_FROM_ENTRIES".into(),
+                args: vec![Expr::Column("entries".into())],
+            },
+            &input,
+        )
+        .unwrap();
+        let result = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(result.keys().as_string::<i32>().iter().collect::<Vec<_>>(), vec![Some("a"), Some("b")]);
+        assert_eq!(result.values().as_primitive::<Int64Type>().iter().collect::<Vec<_>>(), vec![Some(1), Some(2)]);
+        assert!(result.is_null(1));
+
+        let duplicate_rows = StructArray::new(
+            fields.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["a", "a"])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![Some(1), Some(2)])) as ArrayRef,
+            ],
+            None,
+        );
+        let duplicate_list = ListArray::new(
+            Arc::new(arrow::datatypes::Field::new(
+                "item",
+                DataType::Struct(fields),
+                true,
+            )),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 2])),
+            Arc::new(duplicate_rows),
+            None,
+        );
+        let duplicate_input =
+            RecordBatch::try_from_iter([("entries", Arc::new(duplicate_list) as ArrayRef)]).unwrap();
+        let error = evaluate(
+            &Expr::Function {
+                name: "MAP_FROM_ENTRIES".into(),
+                args: vec![Expr::Column("entries".into())],
+            },
+            &duplicate_input,
+        )
+        .expect_err("duplicate map keys must fail closed");
+        assert!(error.to_string().contains("duplicate keys"), "{error}");
     }
 
     #[test]

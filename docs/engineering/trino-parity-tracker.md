@@ -273,8 +273,9 @@ node-drain recovery, and sustained soak remain separate acceptance gates.
   positive/negative-stride slices, and `ELEMENT_AT` cover those list types;
   `ROW(...)` produces typed Arrow structs with field projection, equality, and
   lexicographic ordering; `MAP(...)` builds Arrow maps with key lookup,
-  order-independent equality, and typed key/value projections. Ordered map
-  comparison remains open.
+  order-independent equality, and typed key/value projections. `MAP_FROM_ENTRIES`
+  now builds typed maps from `ARRAY[ROW(key, value)]`, preserves NULL outer
+  rows, and rejects NULL or duplicate keys. Ordered map comparison remains open.
   Homogeneous integer array literals preserve `INT64` element types across
   `CONTAINS`, `ARRAY_POSITION`, `ARRAY_DISTINCT`, `ARRAY_SORT`,
   `ARRAY_REVERSE`, `ARRAY_SLICE`, and `ELEMENT_AT`; mixed integer/float arrays
@@ -781,8 +782,8 @@ invalidation, isolation, bounds, and restart evidence listed above.
 
 ### Current focused validation
 
-The latest focused validation passes 350 `kaveon-server` tests, 119
-`kaveon-sql` tests, and 288 `kaveon-exec` library tests (four executor
+The latest focused validation passes 371 `kaveon-server` tests, 137
+`kaveon-sql` tests, and 334 `kaveon-exec` library tests (four executor
 benchmarks are ignored). The repository differential gate
 (`differential_tests::the_differential_sweep_matches_across_parquet_encodings_and_execution_paths`)
 also passes, comparing the same corpus across alternate Parquet encodings and
