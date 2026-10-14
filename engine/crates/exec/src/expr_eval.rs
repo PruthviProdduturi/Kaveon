@@ -7497,6 +7497,45 @@ mod tests {
         assert_eq!(nested.len(), 2);
         assert_eq!(nested.value(0).as_primitive::<Int64Type>().value(0), 1);
         assert_eq!(nested.value(1).as_primitive::<Int64Type>().value(0), 2);
+
+        let row = |value: i64| Expr::Function {
+            name: "ROW".into(),
+            args: vec![Expr::Literal(ScalarValue::Int64(value))],
+        };
+        let rows = evaluate(
+            &Expr::Function {
+                name: "ARRAY_CONCAT".into(),
+                args: vec![array(vec![row(3)]), array(vec![row(4)])],
+            },
+            &batch,
+        )
+        .unwrap();
+        let rows = rows.as_any().downcast_ref::<ListArray>().unwrap();
+        let rows_value = rows.value(0);
+        let rows = rows_value.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.column(0).as_primitive::<Int64Type>().values(), &[3, 4]);
+
+        let map = |key: &str, value: i64| Expr::Function {
+            name: "MAP".into(),
+            args: vec![
+                array(vec![Expr::Literal(ScalarValue::Utf8(key.into()))]),
+                array(vec![Expr::Literal(ScalarValue::Int64(value))]),
+            ],
+        };
+        let maps = evaluate(
+            &Expr::Function {
+                name: "ARRAY_CONCAT".into(),
+                args: vec![array(vec![map("a", 5)]), array(vec![map("b", 6)])],
+            },
+            &batch,
+        )
+        .unwrap();
+        let maps = maps.as_any().downcast_ref::<ListArray>().unwrap();
+        let maps_value = maps.value(0);
+        let maps = maps_value.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(maps.len(), 2);
+        assert_eq!(maps.keys().as_string::<i32>().value(1), "b");
     }
 
     #[test]
