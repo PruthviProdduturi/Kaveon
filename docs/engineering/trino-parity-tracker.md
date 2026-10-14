@@ -657,6 +657,9 @@ invalidation, isolation, bounds, and restart evidence listed above.
   preserves NULL results for NULL inputs, non-matches, and missing captures.
 - `REGEXP_COUNT(string, pattern)` now counts non-overlapping matches through the
   shared bounded regex cache, preserving NULL inputs and invalid-pattern errors.
+- `REGEXP_EXTRACT_ALL(string, pattern)` now returns a typed array of
+  non-overlapping matches (or capture group 1 when present), preserving NULL
+  inputs and shared regex-cache error behavior.
 - `REGEXP_SPLIT` now uses the shared compiled-pattern cache, returns a typed
   text array, preserves trailing empty fields, and propagates NULL inputs.
 - `CONCAT_WS` now skips NULL value arguments, preserves empty strings, and

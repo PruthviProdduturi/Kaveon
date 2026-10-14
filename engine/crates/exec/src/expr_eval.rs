@@ -427,6 +427,7 @@ const NULL_PROPAGATING_FUNCTIONS: &[&str] = &[
     "REGEXP_REPLACE",
     "REGEXP_EXTRACT",
     "REGEXP_COUNT",
+    "REGEXP_EXTRACT_ALL",
     "UPPER",
     "LOWER",
     "TRIM",
@@ -3357,6 +3358,29 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .collect::<Result<Vec<_>>>()?
                 .into();
             Ok(Arc::new(result))
+        }
+        "REGEXP_EXTRACT_ALL" => {
+            check_arity(name, args, 2)?;
+            let values = as_string_array(&args[0])?;
+            let patterns = as_string_array(&args[1])?;
+            let mut builder = ListBuilder::new(StringBuilder::new());
+            for row in 0..num_rows {
+                if values.is_null(row) || patterns.is_null(row) {
+                    builder.append(false);
+                    continue;
+                }
+                let regex = compiled_regex_for("REGEXP_EXTRACT_ALL", patterns.value(row))?;
+                let has_capture = regex.captures_len() > 1;
+                for captures in regex.captures_iter(values.value(row)) {
+                    let matched = captures
+                        .get(if has_capture { 1 } else { 0 })
+                        .map(|match_| match_.as_str())
+                        .unwrap_or("");
+                    builder.values().append_value(matched);
+                }
+                builder.append(true);
+            }
+            Ok(Arc::new(builder.finish()))
         }
         "REGEXP_EXTRACT" => {
             if args.len() != 2 && args.len() != 3 {
@@ -12579,5 +12603,35 @@ mod tests {
         .unwrap();
         let error = evaluate(&expr, &invalid).unwrap_err();
         assert!(error.to_string().contains("REGEXP_COUNT") && error.to_string().contains("invalid"));
+    }
+
+    #[test]
+    fn evaluates_regexp_extract_all_with_capture_groups_and_nulls() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "value",
+                Arc::new(StringArray::from(vec![Some("id=12 id=34"), Some("abc"), None]))
+                    as ArrayRef,
+            ),
+            (
+                "pattern",
+                Arc::new(StringArray::from(vec![Some(r"id=(\d+)"), Some("."), Some("." )]))
+                    as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let expr = Expr::Function {
+            name: "REGEXP_EXTRACT_ALL".into(),
+            args: vec![Expr::Column("value".into()), Expr::Column("pattern".into())],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        let values = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let first_value = values.value(0);
+        let first = first_value.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(first.iter().collect::<Vec<_>>(), vec![Some("12"), Some("34")]);
+        let second_value = values.value(1);
+        let second = second_value.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(second.iter().collect::<Vec<_>>(), vec![Some("a"), Some("b"), Some("c")]);
+        assert!(values.is_null(2));
     }
 }
