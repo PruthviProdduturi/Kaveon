@@ -813,6 +813,9 @@ typed row/map values now materialize as typed container results. Equality-key
 outer joins now carry residual
 `ON` predicates through the distributed hash join and apply null extension only
 after the complete predicate is evaluated.
+Equality-correlated `IN` and `NOT IN` forms whose projected value is the
+correlation key are now included in the exact local/distributed differential
+corpus; residual and multi-correlation forms remain explicitly rejected.
 Multiset set operations are now implemented
 and covered end to end. Positional
  scalar parameters, including named placeholders, are supported through the
@@ -825,7 +828,7 @@ prepared-statement coverage, worker-loss, and exact-result differential runs
 are still required.
 
 The current local validation baseline is green on the same checkout: the full
-`kaveon-server` suite passed **350 tests**, and the full CLI suite passed **211
+`kaveon-server` suite passed **351 tests**, and the full CLI suite passed **211
 tests** (one ignored). The set-operation coverage includes `UNION ALL`, distinct and
 multiset `INTERSECT`/`EXCEPT`, dictionary-versus-plain values, duplicate
 counts, null handling, planner lowering, and exchange-input consumption. This
