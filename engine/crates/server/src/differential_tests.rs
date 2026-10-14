@@ -490,6 +490,11 @@ const CASES: &[(&str, &str, bool)] = &[
         "SELECT region, SUM(DISTINCT actions) AS total, AVG(DISTINCT actions) AS average FROM {T} GROUP BY region ORDER BY region",
         true,
     ),
+    (
+        "grouped_min_max_distinct",
+        "SELECT region, MIN(DISTINCT actions) AS minimum, MAX(DISTINCT actions) AS maximum FROM {T} GROUP BY region ORDER BY region",
+        true,
+    ),
     // A correlated EXISTS with a residual (Q21's shape): an event whose
     // user also has an event on the same day from another country, and
     // (NOT EXISTS) with no such event of more actions.

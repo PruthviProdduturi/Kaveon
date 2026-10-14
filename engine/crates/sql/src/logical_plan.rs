@@ -2738,7 +2738,7 @@ fn collect_aggregates_from_ast_expr(expr: &ast::Expr, out: &mut Vec<AggregateExp
                 if distinct && matches!(arg, Expr::Star) {
                     return Err(sql_err(format!("{name}(DISTINCT *) is not supported")));
                 }
-                if distinct && (matches!(name.as_str(), "MIN" | "MAX") || approximate) {
+                if distinct && approximate {
                     return Err(sql_err(format!("DISTINCT is not supported for {name}")));
                 }
                 let arg = if name == "COUNT_IF" {
@@ -4828,6 +4828,16 @@ mod tests {
             aggregates.as_slice(),
             [AggregateExpr::Avg { distinct: true, .. }]
         ));
+    }
+
+    #[test]
+    fn parses_distinct_extrema_as_regular_extrema() {
+        for sql in [
+            "SELECT MIN(DISTINCT amount) FROM t",
+            "SELECT MAX(DISTINCT amount) FROM t",
+        ] {
+            sql_to_logical_plan(sql).expect("DISTINCT extrema are Trino-compatible");
+        }
     }
 
     #[test]
