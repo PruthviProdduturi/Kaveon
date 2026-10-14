@@ -2735,7 +2735,9 @@ fn interval_arithmetic(
         }
         Some(ast::DateTimeField::Month) | Some(ast::DateTimeField::Year) => {
             let months = if matches!(interval.leading_field, Some(ast::DateTimeField::Year)) {
-                count * 12
+                count
+                    .checked_mul(12)
+                    .ok_or_else(|| sql_err("INTERVAL year offset overflows INT64"))?
             } else {
                 count
             };
@@ -4055,6 +4057,12 @@ mod tests {
         // The binder supplies the source type; logical planning preserves the
         // operation and the executor rejects a DATE column explicitly.
         assert!(sql_to_logical_plan("SELECT x FROM t WHERE d + INTERVAL '1' HOUR < e").is_ok());
+        let error = sql_to_logical_plan(
+            "SELECT x FROM t WHERE d < DATE '2000-01-01' + INTERVAL '9223372036854775807' YEAR",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("year offset overflows"), "{error}");
         assert!(sql_to_logical_plan("SELECT INTERVAL '1' DAY FROM t").is_err());
         assert!(
             sql_to_logical_plan("SELECT x FROM t WHERE d < DATE '1993-07-01' + INTERVAL '1' HOUR")
