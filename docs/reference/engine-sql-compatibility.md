@@ -22,7 +22,7 @@ by the selected database and Kaveon's API guardrails.
 | Residual outer joins | Alpha | LEFT/RIGHT/FULL joins evaluate additional `ON` predicates before null extension, preserving SQL TRUE/FALSE/UNKNOWN semantics; equality-key joins use distributed hash candidates, while residual-only joins use an explicit broadcast candidate path and are not claimed as repartitioned joins |
 | Cross joins | Alpha | Local Cartesian semantics and distributed broadcast-build path |
 | Semi/anti joins | Alpha | `IN`/`NOT IN`/`EXISTS`/`NOT EXISTS` subqueries, locally and distributed (broadcast of the subquery side); correlated `EXISTS`/`NOT EXISTS` on one equality decorrelated by the binder |
-| Scalar subqueries | Alpha | Uncorrelated scalar subqueries in WHERE/HAVING (an ungrouped aggregate, as a single-row cross join); correlated scalar aggregates on one or two equalities decorrelated into a join on the grouped aggregate |
+| Scalar subqueries | Alpha | Uncorrelated scalar subqueries in WHERE/HAVING (an ungrouped aggregate, as a single-row cross join); correlated scalar aggregates, including `COUNT`, on one or two equalities; `COUNT` uses a left join and zero-fills unmatched keys |
 | Prepared statements | Alpha | Principal-owned `POST /v1/prepare`, describe, execute, and close lifecycle; execution reuses typed positional/named parameter binding and the normal query path |
 | CTEs and derived tables | Alpha | Non-recursive CTEs; derived tables in FROM and joined with commas |
 | Arithmetic expressions | Alpha | Compatible numeric coercion for supported primitive numeric types |
@@ -100,7 +100,7 @@ unchanged; nothing is approximated unless the statement writes an
 ## Not currently executable
 
 - Correlated subqueries beyond one or two equalities: a correlated non-equality
-  (TPC-H Q21's `l2.l_suppkey <> l1.l_suppkey`), `COUNT` in a correlated scalar,
+  (TPC-H Q21's `l2.l_suppkey <> l1.l_suppkey`),
   `LIMIT`/set operations inside a correlated subquery, `EXISTS` correlated on
   more than one column, or multi-key correlated `IN`; each is refused by name.
 - Outer non-equality join conditions (residual join filters), recursive CTEs,

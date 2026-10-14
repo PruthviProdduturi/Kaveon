@@ -41,7 +41,7 @@ engine work from the parallel optimization lane, so these numbers are a local
 regression snapshot and are not a release-image claim:
 `cargo test -p kaveon-server --bin kaveon-server` passed **364/364** tests,
 `cargo test -p kaveon-sql --lib` passed **134/134** tests, and
-`cargo test -p kaveon-optim --lib` passed **47/47** tests,
+`cargo test -p kaveon-optim --lib` passed **48/48** tests,
 `cargo test -p kaveon-exec --lib` passed **293/293** non-ignored tests with four
 benchmark tests intentionally ignored. Documentation validation also passed for 146 Markdown
 files, 39 routes, and 9 SVGs. This is an in-process regression baseline; it
@@ -153,7 +153,9 @@ foundations, but several operators are still centralized or narrow:
   Uncorrelated aggregate scalar subqueries in `WHERE` are now supported with
   exact-result differential coverage; unsupported correlated and multi-row
   scalar forms remain explicitly rejected while bounded projection forms are
-  supported.
+  supported. Equality-correlated `COUNT` scalar aggregates now use a left
+  join and zero-fill unmatched keys, with local and distributed differential
+  coverage.
   Equality-correlated `IN`/`NOT IN` subqueries whose projected value is the
   correlation key now lower to keyed semi/anti joins with owner-side NULL
   handling. A single equality key plus residual predicate now uses the same

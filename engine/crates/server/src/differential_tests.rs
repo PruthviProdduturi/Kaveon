@@ -297,6 +297,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "correlated_scalar_count_filter",
+        "SELECT t.country, COUNT(*) AS n FROM {T} t WHERE (SELECT COUNT(*) FROM {T} o WHERE o.user_id = t.user_id) > 0 GROUP BY t.country ORDER BY country",
+        true,
+    ),
+    (
         "filtered_aggregates",
         "SELECT region, COUNT(*) FILTER (WHERE sessions > 0) AS active_n, SUM(actions) FILTER (WHERE actions > 0) AS positive_actions FROM {T} GROUP BY region ORDER BY region",
         true,

@@ -2223,27 +2223,7 @@ fn plan_query_with_predicate(
 
             let exprs: Vec<Expr> = columns
                 .iter()
-                .map(|e| match e {
-                    Expr::Function { name, args }
-                        if AGGREGATE_FUNCTIONS.contains(&name.as_str()) =>
-                    {
-                        let col = agg_output_name(name, args);
-                        Expr::Column(col)
-                    }
-                    Expr::Alias { expr, name } => match expr.as_ref() {
-                        Expr::Function { name: fname, args }
-                            if AGGREGATE_FUNCTIONS.contains(&fname.as_str()) =>
-                        {
-                            let col = agg_output_name(fname, args);
-                            Expr::Alias {
-                                expr: Box::new(Expr::Column(col)),
-                                name: name.clone(),
-                            }
-                        }
-                        _ => e.clone(),
-                    },
-                    _ => e.clone(),
-                })
+                .map(|expression| bind_aggregate_references_as(expression.clone(), agg_output_name))
                 .collect();
 
             let mut operator = ProjectOperator::new(planned.operator, exprs)?;
