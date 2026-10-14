@@ -2304,6 +2304,117 @@ fn array_extrema_generic<L: OffsetSizeTrait>(
     Ok(compute::concat(&chunks)?)
 }
 
+
+#[derive(Clone, Copy)]
+enum ArraySetOp {
+    Union,
+    Intersect,
+    Except,
+}
+
+fn array_set_operation<L: OffsetSizeTrait>(
+    left: &GenericListArray<L>,
+    right: &GenericListArray<L>,
+    operation: ArraySetOp,
+) -> Result<ArrayRef> {
+    if left.len() != right.len() || left.value_type() != right.value_type() {
+        return Err(KaveonError::Execution(
+            "array set operations require matching row counts and element types".into(),
+        ));
+    }
+    let mut selected = Vec::<ArrayRef>::new();
+    let mut offsets = vec![L::zero()];
+    let mut valid = Vec::with_capacity(left.len());
+    for row in 0..left.len() {
+        if left.is_null(row) || right.is_null(row) {
+            valid.push(false);
+            offsets.push(L::from_usize(selected.len()).ok_or_else(|| {
+                KaveonError::Execution("array set operation result offset overflow".into())
+            })?);
+            continue;
+        }
+        valid.push(true);
+        let left_inner = left.value(row);
+        let right_inner = right.value(row);
+        let row_start = selected.len();
+        let mut add_candidate = |candidate: ArrayRef| {
+            let duplicate = selected[row_start..].iter().any(|previous| {
+                if candidate.null_count() != 0 || previous.null_count() != 0 {
+                    candidate.null_count() != 0 && previous.null_count() != 0
+                } else {
+                    comparison(&candidate, previous, CompareKind::Eq)
+                        .map(|equal| !equal.is_null(0) && equal.value(0))
+                        .unwrap_or(false)
+                }
+            });
+            if !duplicate {
+                selected.push(candidate);
+            }
+        };
+        match operation {
+            ArraySetOp::Union => {
+                for source in [&left_inner, &right_inner] {
+                    for index in 0..source.len() {
+                        add_candidate(if source.is_null(index) {
+                            arrow::array::new_null_array(source.data_type(), 1)
+                        } else {
+                            source.slice(index, 1)
+                        });
+                    }
+                }
+            }
+            ArraySetOp::Intersect | ArraySetOp::Except => {
+                for index in 0..left_inner.len() {
+                    let candidate = if left_inner.is_null(index) {
+                        arrow::array::new_null_array(left_inner.data_type(), 1)
+                    } else {
+                        left_inner.slice(index, 1)
+                    };
+                    let in_right = (0..right_inner.len()).any(|right_index| {
+                        if candidate.null_count() != 0 || right_inner.is_null(right_index) {
+                            candidate.null_count() != 0 && right_inner.is_null(right_index)
+                        } else {
+                            comparison(
+                                &candidate,
+                                &right_inner.slice(right_index, 1),
+                                CompareKind::Eq,
+                            )
+                            .map(|equal| !equal.is_null(0) && equal.value(0))
+                            .unwrap_or(false)
+                        }
+                    });
+                    if matches!(operation, ArraySetOp::Intersect) == in_right {
+                        add_candidate(candidate);
+                    }
+                }
+            }
+        }
+        offsets.push(L::from_usize(selected.len()).ok_or_else(|| {
+            KaveonError::Execution("array set operation result offset overflow".into())
+        })?);
+    }
+    let values = if selected.is_empty() {
+        arrow::array::new_empty_array(&left.value_type())
+    } else {
+        let chunks = selected
+            .iter()
+            .map(|value| value.as_ref() as &dyn Array)
+            .collect::<Vec<_>>();
+        compute::concat(&chunks)?
+    };
+    let field = Arc::new(arrow::datatypes::Field::new(
+        "item",
+        values.data_type().clone(),
+        true,
+    ));
+    Ok(Arc::new(GenericListArray::<L>::try_new(
+        field,
+        OffsetBuffer::new(ScalarBuffer::from(offsets)),
+        values,
+        Some(arrow::buffer::NullBuffer::from(valid)),
+    )?))
+}
+
 fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
     let upper = name.to_uppercase();
     if upper.starts_with("ARRAY_ANY_") || upper.starts_with("ARRAY_ALL_") {
@@ -2356,6 +2467,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                                 "ARRAY elements must have one common type, found {other}"
                             )))
                         }
+
                     };
                     child_chunks.push(chunk);
                 }
@@ -2604,6 +2716,29 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 "ARRAY elements of type {data_type} are not supported"
             ))),
         };
+    }
+    if matches!(upper.as_str(), "ARRAY_UNION" | "ARRAY_INTERSECT" | "ARRAY_EXCEPT") {
+        check_arity(name, args, 2)?;
+        let operation = match upper.as_str() {
+            "ARRAY_UNION" => ArraySetOp::Union,
+            "ARRAY_INTERSECT" => ArraySetOp::Intersect,
+            _ => ArraySetOp::Except,
+        };
+        if let (Some(left), Some(right)) = (
+            args[0].as_any().downcast_ref::<ListArray>(),
+            args[1].as_any().downcast_ref::<ListArray>(),
+        ) {
+            return array_set_operation(left, right, operation);
+        }
+        if let (Some(left), Some(right)) = (
+            args[0].as_any().downcast_ref::<LargeListArray>(),
+            args[1].as_any().downcast_ref::<LargeListArray>(),
+        ) {
+            return array_set_operation(left, right, operation);
+        }
+        return Err(KaveonError::Execution(format!(
+            "{upper} requires matching ARRAY/List values"
+        )))
     }
     if upper == "ARRAY_REPEAT" {
         check_arity(name, args, 2)?;
@@ -8447,6 +8582,48 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("between 0 and 1000000"));
+    }
+
+    #[test]
+    fn array_set_operations_deduplicate_and_match_nulls() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        let left = Expr::Function {
+            name: "ARRAY".into(),
+            args: vec![
+                Expr::Literal(ScalarValue::Int64(1)),
+                Expr::Literal(ScalarValue::Int64(1)),
+                Expr::Literal(ScalarValue::Null),
+                Expr::Literal(ScalarValue::Int64(2)),
+            ],
+        };
+        let right = Expr::Function {
+            name: "ARRAY".into(),
+            args: vec![
+                Expr::Literal(ScalarValue::Int64(2)),
+                Expr::Literal(ScalarValue::Null),
+                Expr::Literal(ScalarValue::Int64(3)),
+            ],
+        };
+        for (name, expected) in [
+            ("ARRAY_UNION", vec![Some(1), None, Some(2), Some(3)]),
+            ("ARRAY_INTERSECT", vec![None, Some(2)]),
+            ("ARRAY_EXCEPT", vec![Some(1)]),
+        ] {
+            let value = evaluate(
+                &Expr::Function {
+                    name: name.into(),
+                    args: vec![left.clone(), right.clone()],
+                },
+                &batch,
+            )
+            .unwrap();
+            let arrays = value.as_any().downcast_ref::<ListArray>().unwrap();
+            assert_eq!(arrays.value(0).as_primitive::<Int64Type>().iter().collect::<Vec<_>>(), expected);
+        }
     }
 
     #[test]
