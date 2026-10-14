@@ -47,6 +47,8 @@ benchmark tests intentionally ignored. Documentation validation also passed for 
 files, 39 routes, and 9 SVGs. This is an in-process regression baseline; it
 does not replace the deployed three-worker qualification gates listed below.
 
+On October 14, the executor regression suite passed 330 non-ignored tests (four benchmark cases remain intentionally ignored). The compatibility slice also added nullable LargeUtf8 support for REVERSE, with a direct Arrow-type regression test; this closes the text-function gap for that input representation while broader LargeUtf8 function coverage remains scoped per the table below. The change is pushed in the current dev head (4ff1c56c and 96681e5f).
+
 The complete `cargo test --workspace` run also passed on this tree, including
 catalog, CLI, core, executor, optimizer, server, SQL, and storage crates plus
 all doctests. The executor result is **294 passed, 4 ignored**; the ignored
