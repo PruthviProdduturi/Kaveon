@@ -825,7 +825,9 @@ after the complete predicate is evaluated.
 Equality-correlated `IN` and `NOT IN` forms whose projected value is the
 correlation key are now included in the exact local/distributed differential
 corpus, including one equality key with a residual predicate; multi-key and
-deeper correlations remain explicitly rejected.
+deeper correlations remain explicitly rejected. A `DISTINCT` wrapper around
+the projected key is transparent to this keyed semi/anti lowering, matching
+Trino's duplicate-insensitive membership semantics.
 Grouped `SUM(DISTINCT ...)` and `AVG(DISTINCT ...)` now preserve their exact
 distinct-value state through the executable fragment wire contract, so the
 distributed final merge unions values before calculating the result. The
