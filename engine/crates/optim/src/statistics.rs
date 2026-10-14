@@ -314,6 +314,12 @@ fn relation(
         estimate.columns = projected;
         return Some(estimate);
     }
+    // Ordering is row-preserving and does not change the stored relation
+    // width. Retain exact source statistics through a sorted subquery; the
+    // physical sort still accounts for its own memory and spill budget.
+    if let LogicalPlan::Sort { input, .. } = plan {
+        return relation(input, stats);
+    }
 
     let (scan, predicate) = match plan {
         LogicalPlan::Filter { input, predicate } => (input.as_ref(), Some(predicate)),
@@ -647,6 +653,19 @@ mod tests {
     fn keeps_exact_stats_through_a_simple_projected_subquery() {
         let plan = sql_to_logical_plan(
             "SELECT * FROM big b JOIN (SELECT id, value FROM small) s ON b.id=s.id",
+        )
+        .unwrap();
+        let optimized = optimize_with_statistics(plan, &mut stats);
+        let LogicalPlan::Join { distribution, .. } = optimized else {
+            panic!("join missing")
+        };
+        assert_eq!(distribution, JoinDistribution::BroadcastRight);
+    }
+
+    #[test]
+    fn keeps_exact_stats_through_a_sorted_subquery() {
+        let plan = sql_to_logical_plan(
+            "SELECT * FROM big b JOIN (SELECT id, value FROM small ORDER BY id) s ON b.id=s.id",
         )
         .unwrap();
         let optimized = optimize_with_statistics(plan, &mut stats);

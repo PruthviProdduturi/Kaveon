@@ -115,9 +115,10 @@ descending steps or an explicit step, rejecting zero steps, overflow, and
 unbounded output.
 
 The statistics planner now preserves exact row and byte estimates through
-row-preserving projected subqueries. Simple column forwarding and aliases can
-therefore still qualify a small side for a broadcast join; computed
-projections remain conservative and use the existing partitioned fallback.
+row-preserving projected and sorted subqueries. Simple column forwarding,
+aliases, and ordering can therefore still qualify a small side for a
+broadcast join; computed projections and cardinality-changing operators
+remain conservative and use the existing partitioned fallback.
 
 The initial repository audit confirms that the Engine has real distributed
 foundations, but several operators are still centralized or narrow:
