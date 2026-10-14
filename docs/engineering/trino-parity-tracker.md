@@ -36,11 +36,11 @@ the same acceptance contract rather than separate informal benchmarks.
 ## Audit snapshot — October 13, 2026
 
 The local parity baseline was rerun on October 13 with focused qualification
-changes at commit `6060d5ed`. The checkout also contained separate, uncommitted
+changes through commit `485b63bf`. The checkout also contained separate, uncommitted
 engine work from the parallel optimization lane, so these numbers are a local
 regression snapshot and are not a release-image claim:
-`cargo test -p kaveon-server` passed **354/354** tests,
-`cargo test -p kaveon-sql` passed **120/120** tests, and
+`cargo test -p kaveon-server --bin kaveon-server` passed **355/355** tests,
+`cargo test -p kaveon-sql --lib` passed **121/121** tests, and
 `cargo test -p kaveon-optim --lib` passed **47/47** tests,
 `cargo test -p kaveon-exec --lib` passed **287/287** non-ignored tests with four
 benchmark tests intentionally ignored. Documentation validation also passed for 145 Markdown
@@ -817,8 +817,8 @@ waited through asynchronous catalog-snapshot publication instead of converting
 a transient worker-convergence window into an HTTP 500; that behavior is in
 `cf6615be` and covered by the server test suite (346 passed).
 Track 2 remains partial because prepared statements are now available through
-the Engine HTTP lifecycle and scalar `EXECUTE ... USING` is supported by the
-Trino adapter, but the adapter still lacks a wire-compatible full protocol;
+the Engine HTTP lifecycle and scalar/array `EXECUTE ... USING` is supported by
+the Trino adapter, but the adapter still lacks a wire-compatible full protocol;
 correlated non-aggregate and other unsupported scalar subqueries, ordered map
 comparisons, broader array element types, and broader typed DML are not yet
 implemented. Quantified array comparisons now cover all scalar comparison
@@ -853,7 +853,7 @@ prepared-statement coverage, worker-loss, and exact-result differential runs
 are still required.
 
 The current local validation baseline is green on the same checkout: the full
-`kaveon-server` suite passed **354 tests**, and the full CLI suite passed **211
+`kaveon-server` suite passed **355 tests**, and the full CLI suite passed **211
 tests** (one ignored). The set-operation coverage includes `UNION ALL`, distinct and
 multiset `INTERSECT`/`EXCEPT`, dictionary-versus-plain values, duplicate
 counts, null handling, planner lowering, and exchange-input consumption. This
