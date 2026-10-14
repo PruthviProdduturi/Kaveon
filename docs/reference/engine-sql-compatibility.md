@@ -22,7 +22,7 @@ by the selected database and Kaveon's API guardrails.
 | Equi joins | Alpha | INNER/LEFT/RIGHT/FULL locally and distributed (hash repartition or broadcast of the small side from exact statistics); comma joins with WHERE equalities become hash joins through the binder; ON conditions route like WHERE and an outer join filters its non-preserved side by single-side conjuncts |
 | Residual outer joins | Alpha | LEFT/RIGHT/FULL joins evaluate additional `ON` predicates before null extension, preserving SQL TRUE/FALSE/UNKNOWN semantics; equality-key joins use distributed hash candidates, while residual-only joins use an explicit broadcast candidate path and are not claimed as repartitioned joins |
 | Cross joins | Alpha | Local Cartesian semantics and distributed broadcast-build path |
-| Semi/anti joins | Alpha | `IN`/`NOT IN`/`EXISTS`/`NOT EXISTS` subqueries, locally and distributed (broadcast of the subquery side); correlated `EXISTS`/`NOT EXISTS` on one equality decorrelated by the binder |
+| Semi/anti joins | Alpha | `IN`/`NOT IN`/`EXISTS`/`NOT EXISTS` subqueries, locally and distributed; equality-key forms hash-partition both sides and emit only the matching (semi) or non-matching (anti) left rows, with a bounded broadcast fallback when a key cannot be resolved; correlated `EXISTS`/`NOT EXISTS` on one equality are decorrelated by the binder |
 | Scalar subqueries | Alpha | Uncorrelated scalar subqueries in WHERE/HAVING (an ungrouped aggregate, as a single-row cross join); correlated scalar aggregates, including `COUNT`, on one or two equalities; `COUNT` uses a left join and zero-fills unmatched keys |
 | Prepared statements | Alpha | Principal-owned `POST /v1/prepare`, describe, execute, and close lifecycle; execution reuses typed positional/named parameter binding and the normal query path |
 | CTEs and derived tables | Alpha | Non-recursive CTEs; derived tables in FROM and joined with commas |
@@ -162,7 +162,8 @@ typed positional (`$1`, `?`) and named (`:name`) scalar or JSON-array parameters
 through the HTTP API; values are bound before planning and are never
 interpolated into SQL. Missing or extra positional and named values fail before
 planning. Nested arrays and null array elements lower to typed
-`ARRAY[...]` expressions; object/map parameter values remain rejected.
+`ARRAY[...]` expressions; JSON objects with string keys lower to typed `MAP`
+values (duplicate keys and malformed values are rejected before planning).
 The Trino adapter also accepts scalar and `ARRAY[...]` `EXECUTE name USING`
 values carried by
 `X-Trino-Prepared-Statement`, including validated `DATE 'YYYY-MM-DD'` literals
