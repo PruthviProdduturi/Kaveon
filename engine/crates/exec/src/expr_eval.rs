@@ -6051,6 +6051,50 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     }
                     Ok(Arc::new(builder.finish()))
                 }
+                DataType::LargeUtf8 => {
+                    let mut builder = ListBuilder::new(LargeStringBuilder::new());
+                    for row in 0..num_rows {
+                        if list.is_null(row) {
+                            builder.append(false);
+                            continue;
+                        }
+                        let values = list.value(row);
+                        let values = values.as_string::<i64>();
+                        let length = values.len() as i64;
+                        let step = stride.is_valid(row).then(|| stride.value(row)).unwrap_or(1);
+                        let start = lower
+                            .is_valid(row)
+                            .then(|| lower.value(row))
+                            .unwrap_or(if step < 0 { length } else { 1 });
+                        let end = upper
+                            .is_valid(row)
+                            .then(|| upper.value(row))
+                            .unwrap_or(if step < 0 { 1 } else { length });
+                        if step == 0 {
+                            return Err(KaveonError::Execution("ARRAY_SLICE stride cannot be zero".into()));
+                        }
+                        let first = if step > 0 {
+                            start.max(1).min(length + 1)
+                        } else {
+                            start.max(1).min(length)
+                        };
+                        let last = if step > 0 {
+                            end.max(0).min(length)
+                        } else {
+                            end.max(1).min(length)
+                        };
+                        if (step > 0 && first <= last) || (step < 0 && first >= last) {
+                            let mut index = first;
+                            while (step > 0 && index <= last) || (step < 0 && index >= last) {
+                                let offset = (index - 1) as usize;
+                                builder.values().append_option(values.is_valid(offset).then(|| values.value(offset)));
+                                index += step;
+                            }
+                        }
+                        builder.append(true);
+                    }
+                    Ok(Arc::new(builder.finish()))
+                }
                 DataType::Boolean => {
                     let mut builder = ListBuilder::new(BooleanBuilder::new());
                     for row in 0..num_rows {
@@ -11485,6 +11529,27 @@ mod tests {
         let inner = result.value(0);
         let values = inner.as_string::<i64>();
         assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some("beta"), None, Some("alpha")]);
+
+        let mut large_text_slice_builder = LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
+        large_text_slice_builder.values().append_value("alpha");
+        large_text_slice_builder.values().append_null();
+        large_text_slice_builder.values().append_value("beta");
+        large_text_slice_builder.append(true);
+        let result = eval_scalar_function(
+            "ARRAY_SLICE",
+            &[
+                Arc::new(large_text_slice_builder.finish()) as ArrayRef,
+                Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![Some(2)])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        let result = result.as_any().downcast_ref::<LargeListArray>().unwrap();
+        let inner = result.value(0);
+        let values = inner.as_string::<i64>();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some("alpha"), None]);
 
         let mut reverse_builder = LargeListBuilder::new(ListBuilder::new(Int64Builder::new()));
         for value in [1_i64, 2, 3] {

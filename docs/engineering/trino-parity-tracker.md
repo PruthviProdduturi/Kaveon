@@ -1037,7 +1037,7 @@ Plan-only `EXPLAIN` now uses the normal binder and optimizer and returns
 logical, optimized, or physical/distributed plan rows without starting a scan,
 worker task, cache entry, or exchange. `GREATEST` and `LEAST` preserve their
 common input type and propagate NULL arguments; both behaviors have focused
-executor and statement-path coverage. `CARDINALITY`, `ARRAY_JOIN`, and `ARRAY_REVERSE` now accept both 32-bit and 64-bit list offsets.
+executor and statement-path coverage. `CARDINALITY`, `ARRAY_JOIN`, `ARRAY_REVERSE`, and `ARRAY_SLICE` now accept both 32-bit and 64-bit list offsets.
 `ARRAY_DISTINCT`, `ARRAY_POSITION`, `ARRAY_SORT`, `CONTAINS`, and `ARRAYS_OVERLAP` also accept bounded
 64-bit-offset primitive lists, including `LargeUtf8`, by normalizing them to
 the 32-bit execution representation. Distinct preserves element types, NULLs,
