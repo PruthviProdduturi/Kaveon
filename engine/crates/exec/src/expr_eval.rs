@@ -4376,77 +4376,129 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "LPAD" => {
             check_arity(name, args, 3)?;
-            let arr = as_string_array(&args[0])?;
             let lens = args[1].as_primitive::<Int64Type>();
-            let pads = as_string_array(&args[2])?;
             let bytes = (0..num_rows).try_fold(0_u64, |total, index| {
-                if arr.is_null(index) || lens.is_null(index) || pads.is_null(index) {
+                if lens.is_null(index) {
                     return Ok(total);
                 }
+                let (Some(value), Some(pad)) =
+                    (text_value(&args[0], index)?, text_value(&args[2], index)?)
+                else {
+                    return Ok(total);
+                };
                 (lens.value(index).max(0) as u64)
                     .checked_mul(4)
-                    .and_then(|bytes| bytes.checked_add(arr.value(index).len() as u64))
+                    .and_then(|bytes| bytes.checked_add(value.len() as u64 + pad.len() as u64))
                     .and_then(|bytes| total.checked_add(bytes))
                     .ok_or_else(|| KaveonError::Execution("padding output size overflow".into()))
             })?;
             reserve_string_expansion(bytes, num_rows)?;
-            let result: StringArray = (0..num_rows)
-                .map(|i| {
-                    if arr.is_null(i) || lens.is_null(i) || pads.is_null(i) {
-                        return None;
-                    }
-                    let s = arr.value(i);
-                    let target_len = lens.value(i).max(0) as usize;
-                    let pad = pads.value(i);
-                    if s.len() >= target_len {
-                        Some(s.chars().take(target_len).collect())
+            if args[0].data_type() == &DataType::LargeUtf8 {
+                let mut result = LargeStringBuilder::with_capacity(num_rows, bytes as usize);
+                for row in 0..num_rows {
+                    let (Some(value), Some(pad)) =
+                        (text_value(&args[0], row)?, text_value(&args[2], row)?)
+                    else {
+                        result.append_null();
+                        continue;
+                    };
+                    let target = lens.value(row).max(0) as usize;
+                    let current = value.chars().count();
+                    if current >= target {
+                        result.append_value(value.chars().take(target).collect::<String>());
                     } else if pad.is_empty() {
-                        Some(s.to_owned())
+                        result.append_value(value);
                     } else {
-                        let needed = target_len - s.len();
-                        let prefix: String = pad.chars().cycle().take(needed).collect();
-                        Some(format!("{prefix}{s}"))
+                        let prefix = pad.chars().cycle().take(target - current).collect::<String>();
+                        result.append_value(format!("{prefix}{value}"));
                     }
-                })
-                .collect();
-            Ok(Arc::new(result))
+                }
+                Ok(Arc::new(result.finish()))
+            } else {
+                let mut result = StringBuilder::with_capacity(num_rows, bytes as usize);
+                for row in 0..num_rows {
+                    let (Some(value), Some(pad)) =
+                        (text_value(&args[0], row)?, text_value(&args[2], row)?)
+                    else {
+                        result.append_null();
+                        continue;
+                    };
+                    let target = lens.value(row).max(0) as usize;
+                    let current = value.chars().count();
+                    if current >= target {
+                        result.append_value(value.chars().take(target).collect::<String>());
+                    } else if pad.is_empty() {
+                        result.append_value(value);
+                    } else {
+                        let prefix = pad.chars().cycle().take(target - current).collect::<String>();
+                        result.append_value(format!("{prefix}{value}"));
+                    }
+                }
+                Ok(Arc::new(result.finish()))
+            }
         }
         "RPAD" => {
             check_arity(name, args, 3)?;
-            let arr = as_string_array(&args[0])?;
             let lens = args[1].as_primitive::<Int64Type>();
-            let pads = as_string_array(&args[2])?;
             let bytes = (0..num_rows).try_fold(0_u64, |total, index| {
-                if arr.is_null(index) || lens.is_null(index) || pads.is_null(index) {
+                if lens.is_null(index) {
                     return Ok(total);
                 }
+                let (Some(value), Some(pad)) =
+                    (text_value(&args[0], index)?, text_value(&args[2], index)?)
+                else {
+                    return Ok(total);
+                };
                 (lens.value(index).max(0) as u64)
                     .checked_mul(4)
-                    .and_then(|bytes| bytes.checked_add(arr.value(index).len() as u64))
+                    .and_then(|bytes| bytes.checked_add(value.len() as u64 + pad.len() as u64))
                     .and_then(|bytes| total.checked_add(bytes))
                     .ok_or_else(|| KaveonError::Execution("padding output size overflow".into()))
             })?;
             reserve_string_expansion(bytes, num_rows)?;
-            let result: StringArray = (0..num_rows)
-                .map(|i| {
-                    if arr.is_null(i) || lens.is_null(i) || pads.is_null(i) {
-                        return None;
-                    }
-                    let s = arr.value(i);
-                    let target_len = lens.value(i).max(0) as usize;
-                    let pad = pads.value(i);
-                    if s.len() >= target_len {
-                        Some(s.chars().take(target_len).collect())
+            if args[0].data_type() == &DataType::LargeUtf8 {
+                let mut result = LargeStringBuilder::with_capacity(num_rows, bytes as usize);
+                for row in 0..num_rows {
+                    let (Some(value), Some(pad)) =
+                        (text_value(&args[0], row)?, text_value(&args[2], row)?)
+                    else {
+                        result.append_null();
+                        continue;
+                    };
+                    let target = lens.value(row).max(0) as usize;
+                    let current = value.chars().count();
+                    if current >= target {
+                        result.append_value(value.chars().take(target).collect::<String>());
                     } else if pad.is_empty() {
-                        Some(s.to_owned())
+                        result.append_value(value);
                     } else {
-                        let needed = target_len - s.len();
-                        let suffix: String = pad.chars().cycle().take(needed).collect();
-                        Some(format!("{s}{suffix}"))
+                        let suffix = pad.chars().cycle().take(target - current).collect::<String>();
+                        result.append_value(format!("{value}{suffix}"));
                     }
-                })
-                .collect();
-            Ok(Arc::new(result))
+                }
+                Ok(Arc::new(result.finish()))
+            } else {
+                let mut result = StringBuilder::with_capacity(num_rows, bytes as usize);
+                for row in 0..num_rows {
+                    let (Some(value), Some(pad)) =
+                        (text_value(&args[0], row)?, text_value(&args[2], row)?)
+                    else {
+                        result.append_null();
+                        continue;
+                    };
+                    let target = lens.value(row).max(0) as usize;
+                    let current = value.chars().count();
+                    if current >= target {
+                        result.append_value(value.chars().take(target).collect::<String>());
+                    } else if pad.is_empty() {
+                        result.append_value(value);
+                    } else {
+                        let suffix = pad.chars().cycle().take(target - current).collect::<String>();
+                        result.append_value(format!("{value}{suffix}"));
+                    }
+                }
+                Ok(Arc::new(result.finish()))
+            }
         }
         "STARTS_WITH" => {
             check_arity(name, args, 2)?;
@@ -13464,6 +13516,43 @@ mod tests {
             )
             .unwrap();
             let values = result.as_boolean();
+            assert_eq!(values.value(0), expected);
+            assert!(values.is_null(1));
+        }
+    }
+
+    #[test]
+    fn lpad_and_rpad_preserve_large_utf8_and_count_unicode_scalars() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "text",
+                Arc::new(LargeStringArray::from(vec![Some("界a"), None])) as ArrayRef,
+            ),
+            (
+                "length",
+                Arc::new(Int64Array::from(vec![Some(4), Some(4)])) as ArrayRef,
+            ),
+            (
+                "pad",
+                Arc::new(StringArray::from(vec![Some("xy"), Some("z")])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        for (name, expected) in [("LPAD", "xy界a"), ("RPAD", "界axy")] {
+            let result = evaluate(
+                &Expr::Function {
+                    name: name.into(),
+                    args: vec![
+                        Expr::Column("text".into()),
+                        Expr::Column("length".into()),
+                        Expr::Column("pad".into()),
+                    ],
+                },
+                &batch,
+            )
+            .unwrap();
+            assert_eq!(result.data_type(), &DataType::LargeUtf8);
+            let values = result.as_any().downcast_ref::<LargeStringArray>().unwrap();
             assert_eq!(values.value(0), expected);
             assert!(values.is_null(1));
         }
