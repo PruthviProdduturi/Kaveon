@@ -110,6 +110,10 @@ with NULL for empty or NULL arrays, for both list offset widths.
 `ZIP` now builds typed row arrays from two or more lists and pads shorter input
 arrays with NULL fields, preserving the outer list's offset width.
 
+`SEQUENCE` now builds bounded BIGINT arrays with inferred ascending or
+descending steps or an explicit step, rejecting zero steps, overflow, and
+unbounded output.
+
 The initial repository audit confirms that the Engine has real distributed
 foundations, but several operators are still centralized or narrow:
 

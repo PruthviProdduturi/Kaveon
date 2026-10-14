@@ -2711,6 +2711,72 @@ fn array_zip<L: OffsetSizeTrait>(arrays: &[&GenericListArray<L>]) -> Result<Arra
     )?))
 }
 
+fn array_sequence(args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
+    if !(2..=3).contains(&args.len()) {
+        return Err(KaveonError::Execution(
+            "SEQUENCE requires 2 or 3 arguments".into(),
+        ));
+    }
+    let starts = compute::cast(&args[0], &DataType::Int64)?;
+    let stops = compute::cast(&args[1], &DataType::Int64)?;
+    let steps = if args.len() == 3 {
+        Some(compute::cast(&args[2], &DataType::Int64)?)
+    } else {
+        None
+    };
+    let starts = starts.as_primitive::<Int64Type>();
+    let stops = stops.as_primitive::<Int64Type>();
+    let steps = steps.as_ref().map(|step| step.as_primitive::<Int64Type>());
+    let mut builder = ListBuilder::new(Int64Builder::new());
+    const MAX_SEQUENCE_ELEMENTS: usize = 1_000_000;
+    for row in 0..num_rows {
+        if starts.is_null(row)
+            || stops.is_null(row)
+            || steps.is_some_and(|step| step.is_null(row))
+        {
+            builder.append(false);
+            continue;
+        }
+        let start = starts.value(row);
+        let stop = stops.value(row);
+        let step = steps
+            .map(|step| step.value(row))
+            .unwrap_or(if start <= stop { 1 } else { -1 });
+        if step == 0 {
+            return Err(KaveonError::Execution(
+                "SEQUENCE step must not be zero".into(),
+            ));
+        }
+        let ascending = step > 0;
+        if (ascending && start > stop) || (!ascending && start < stop) {
+            builder.append(true);
+            continue;
+        }
+        let mut value = start;
+        let mut count = 0_usize;
+        loop {
+            if count == MAX_SEQUENCE_ELEMENTS {
+                return Err(KaveonError::Execution(
+                    "SEQUENCE result exceeds 1000000 elements".into(),
+                ));
+            }
+            builder.values().append_value(value);
+            count += 1;
+            if value == stop {
+                break;
+            }
+            value = value.checked_add(step).ok_or_else(|| {
+                KaveonError::Execution("SEQUENCE value overflows BIGINT".into())
+            })?;
+            if (ascending && value > stop) || (!ascending && value < stop) {
+                break;
+            }
+        }
+        builder.append(true);
+    }
+    Ok(Arc::new(builder.finish()))
+}
+
 fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
     let upper = name.to_uppercase();
     if upper.starts_with("ARRAY_ANY_") || upper.starts_with("ARRAY_ALL_") {
@@ -3012,6 +3078,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 "ARRAY elements of type {data_type} are not supported"
             ))),
         };
+    }
+    if upper == "SEQUENCE" {
+        return array_sequence(args, num_rows);
     }
     if upper == "ZIP" {
         if args.len() < 2 {
@@ -9170,6 +9239,46 @@ mod tests {
         assert_eq!(rows.column(0).as_primitive::<Int64Type>().iter().collect::<Vec<_>>(), vec![Some(1), Some(2)]);
         let text = rows.column(1).as_string::<i32>();
         assert_eq!(text.iter().collect::<Vec<_>>(), vec![Some("a"), None]);
+    }
+
+    #[test]
+    fn sequence_infers_direction_and_validates_steps() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        for (args, expected) in [
+            (
+                vec![Expr::Literal(ScalarValue::Int64(1)), Expr::Literal(ScalarValue::Int64(3))],
+                vec![1, 2, 3],
+            ),
+            (
+                vec![Expr::Literal(ScalarValue::Int64(3)), Expr::Literal(ScalarValue::Int64(1))],
+                vec![3, 2, 1],
+            ),
+            (
+                vec![Expr::Literal(ScalarValue::Int64(1)), Expr::Literal(ScalarValue::Int64(6)), Expr::Literal(ScalarValue::Int64(2))],
+                vec![1, 3, 5],
+            ),
+        ] {
+            let value = evaluate(&Expr::Function { name: "SEQUENCE".into(), args }, &batch).unwrap();
+            let list = value.as_any().downcast_ref::<ListArray>().unwrap();
+            assert_eq!(list.value(0).as_primitive::<Int64Type>().values(), expected.as_slice());
+        }
+        let error = evaluate(
+            &Expr::Function {
+                name: "SEQUENCE".into(),
+                args: vec![
+                    Expr::Literal(ScalarValue::Int64(1)),
+                    Expr::Literal(ScalarValue::Int64(2)),
+                    Expr::Literal(ScalarValue::Int64(0)),
+                ],
+            },
+            &batch,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("must not be zero"));
     }
 
     #[test]
