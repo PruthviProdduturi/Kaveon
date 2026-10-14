@@ -82,6 +82,13 @@ preserve temporal values and element types.
 `CONTAINS` and `ARRAYS_OVERLAP` now do as well. Other timestamp units and
 temporal array operations remain outside this slice.
 
+`ARRAY_REPEAT(element, count)` now returns a typed list for the common scalar
+types used by the Trino compatibility corpus. Counts are validated per row,
+NULL counts produce a NULL array, NULL elements remain NULL, and counts are
+bounded at one million elements to prevent an accidental query from consuming
+unbounded execution memory. This is a bounded function-compatibility slice;
+complex element types and the full Trino array-function surface remain open.
+
 The initial repository audit confirms that the Engine has real distributed
 foundations, but several operators are still centralized or narrow:
 
