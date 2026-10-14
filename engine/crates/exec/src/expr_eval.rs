@@ -6302,26 +6302,93 @@ fn ymd_to_days(y: i32, m: u32, d: u32) -> i64 {
 
 fn eval_date_trunc(unit_arr: &StringArray, ts: &ArrayRef, num_rows: usize) -> Result<ArrayRef> {
     match ts.data_type() {
-        DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, tz) => {
-            let ts_arr = ts.as_primitive::<arrow::datatypes::TimestampMicrosecondType>();
-            let result: Vec<Option<i64>> = (0..num_rows)
-                .map(|i| {
-                    if ts_arr.is_null(i) || unit_arr.is_null(i) {
-                        return None;
-                    }
-                    let us = ts_arr.value(i);
-                    let unit = unit_arr.value(i).to_uppercase();
-                    Some(truncate_micros(us, &unit))
-                })
-                .collect();
+        DataType::Timestamp(TimeUnit::Second, tz) => {
+            let values = ts.as_primitive::<TimestampSecondType>();
+            let result = truncate_timestamp_values(
+                unit_arr,
+                num_rows,
+                |i| values.value(i),
+                |i| values.is_null(i),
+                1_000_000,
+            );
             Ok(Arc::new(
-                arrow::array::TimestampMicrosecondArray::from(result).with_timezone_opt(tz.clone()),
+                TimestampSecondArray::from(result).with_timezone_opt(tz.clone()),
+            ))
+        }
+        DataType::Timestamp(TimeUnit::Millisecond, tz) => {
+            let values = ts.as_primitive::<TimestampMillisecondType>();
+            let result = truncate_timestamp_values(
+                unit_arr,
+                num_rows,
+                |i| values.value(i),
+                |i| values.is_null(i),
+                1_000,
+            );
+            Ok(Arc::new(
+                TimestampMillisecondArray::from(result).with_timezone_opt(tz.clone()),
+            ))
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, tz) => {
+            let values = ts.as_primitive::<TimestampMicrosecondType>();
+            let result = truncate_timestamp_values(
+                unit_arr,
+                num_rows,
+                |i| values.value(i),
+                |i| values.is_null(i),
+                1,
+            );
+            Ok(Arc::new(
+                TimestampMicrosecondArray::from(result).with_timezone_opt(tz.clone()),
+            ))
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+            let values = ts.as_primitive::<TimestampNanosecondType>();
+            let result = truncate_timestamp_values(
+                unit_arr,
+                num_rows,
+                |i| values.value(i),
+                |i| values.is_null(i),
+                -1_000,
+            );
+            Ok(Arc::new(
+                TimestampNanosecondArray::from(result).with_timezone_opt(tz.clone()),
             ))
         }
         _ => Err(KaveonError::Execution(
-            "DATE_TRUNC currently supports Timestamp(Microsecond) only".into(),
+            "DATE_TRUNC requires a timestamp value".into(),
         )),
     }
+}
+
+/// Truncate timestamps at microsecond precision, then convert the result back
+/// to the source unit. `scale` is the number of source units per microsecond;
+/// nanoseconds use its negative reciprocal to avoid an overflowing scale.
+fn truncate_timestamp_values(
+    unit_arr: &StringArray,
+    num_rows: usize,
+    value: impl Fn(usize) -> i64,
+    is_null: impl Fn(usize) -> bool,
+    scale: i64,
+) -> Vec<Option<i64>> {
+    (0..num_rows)
+        .map(|i| {
+            if unit_arr.is_null(i) || is_null(i) {
+                return None;
+            }
+            let raw = value(i);
+            let micros = if scale == -1_000 {
+                raw / 1_000
+            } else {
+                raw.saturating_mul(scale)
+            };
+            let truncated = truncate_micros(micros, &unit_arr.value(i).to_uppercase());
+            Some(if scale == -1_000 {
+                truncated.saturating_mul(1_000)
+            } else {
+                truncated / scale
+            })
+        })
+        .collect()
 }
 
 fn truncate_micros(us: i64, unit: &str) -> i64 {
@@ -6592,6 +6659,74 @@ mod tests {
                 .iter()
                 .collect::<Vec<_>>(),
             vec![Some(12), None, None, Some(-4)]
+        );
+    }
+
+    #[test]
+    fn date_trunc_preserves_timestamp_units_and_nulls() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new(
+                "ts",
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                true,
+            ),
+        ]));
+        let source_ms = 1_715_780_055_123_i64;
+        let input = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(
+                TimestampMillisecondArray::from(vec![Some(source_ms), None]),
+            )],
+        )
+        .unwrap();
+        let values = evaluate(
+            &Expr::Function {
+                name: "DATE_TRUNC".into(),
+                args: vec![
+                    Expr::Literal(ScalarValue::Utf8("DAY".into())),
+                    Expr::Column("ts".into()),
+                ],
+            },
+            &input,
+        )
+        .unwrap();
+        let result = values
+            .as_primitive::<TimestampMillisecondType>()
+            .iter()
+            .collect::<Vec<_>>();
+        assert_eq!(result[0], Some(1_715_731_200_000));
+        assert_eq!(result[1], None);
+
+        let nanosecond_schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new(
+                "ts",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                true,
+            ),
+        ]));
+        let nanos = RecordBatch::try_new(
+            nanosecond_schema,
+            vec![Arc::new(TimestampNanosecondArray::from(vec![Some(
+                source_ms * 1_000_000 + 999,
+            )]))],
+        )
+        .unwrap();
+        let values = evaluate(
+            &Expr::Function {
+                name: "DATE_TRUNC".into(),
+                args: vec![
+                    Expr::Literal(ScalarValue::Utf8("SECOND".into())),
+                    Expr::Column("ts".into()),
+                ],
+            },
+            &nanos,
+        )
+        .unwrap();
+        assert_eq!(
+            values
+                .as_primitive::<TimestampNanosecondType>()
+                .value(0),
+            (source_ms / 1_000) * 1_000_000_000
         );
     }
 
