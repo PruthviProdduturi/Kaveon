@@ -4910,6 +4910,16 @@ mod tests {
     }
 
     #[test]
+    fn studio_bracketed_identifier_lowers_to_a_column() {
+        let plan =
+            sql_to_logical_plan("SELECT DISTINCT [year] FROM climate_energy.energy_annual")
+                .unwrap();
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("Column(\"year\")"), "{debug}");
+        assert!(!debug.contains("name: \"ARRAY\""), "{debug}");
+    }
+
+    #[test]
     fn map_key_access_lowers_to_map_element_at() {
         let plan = sql_to_logical_plan("SELECT MAP(ARRAY['a'], ARRAY[1])['a'] FROM t").unwrap();
         let debug = format!("{plan:?}");
