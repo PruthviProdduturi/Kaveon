@@ -149,7 +149,8 @@ typed positional (`$1`, `?`) and named (`:name`) scalar or JSON-array parameters
 through the HTTP API; values are bound before planning and are never
 interpolated into SQL. Nested arrays and null array elements lower to typed
 `ARRAY[...]` expressions; object/map parameter values remain rejected.
-The Trino adapter also accepts scalar `EXECUTE name USING` values carried by
+The Trino adapter also accepts scalar and `ARRAY[...]` `EXECUTE name USING`
+values carried by
 `X-Trino-Prepared-Statement`, including validated `DATE 'YYYY-MM-DD'` literals
 that remain text until the target column's Date32 coercion. Compound values
 beyond arrays, timestamps, intervals, and the complete prepare/describe/bind

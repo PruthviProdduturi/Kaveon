@@ -3049,9 +3049,10 @@ fn trino_percent_decode(encoded: &str) -> Result<String, String> {
 /// Parse the scalar values from Trino's `EXECUTE name USING ...` request.
 /// The prepared SQL itself remains in the header; values are converted into
 /// typed request parameters and bound by the normal AST binder. This keeps
-/// values out of SQL text. Scalar typed literals whose value can be represented
-/// without losing information are normalized here; compound expressions remain
-/// rejected until the wire protocol supports them end to end.
+/// values out of SQL text. Scalar typed literals and `ARRAY[...]` values whose
+/// contents can be represented without losing information are normalized here;
+/// other compound expressions remain rejected until the wire protocol supports
+/// them end to end.
 fn trino_execute_parameters(body: &str) -> Result<Vec<serde_json::Value>, String> {
     let trimmed = body.trim().trim_end_matches(';').trim();
     let mut words = trimmed.split_whitespace();
@@ -3094,6 +3095,7 @@ fn split_trino_arguments(input: &str) -> Vec<&str> {
     let mut result = Vec::new();
     let mut start = 0;
     let mut quote = false;
+    let mut depth = 0usize;
     let mut index = 0;
     while index < bytes.len() {
         match bytes[index] {
@@ -3104,7 +3106,9 @@ fn split_trino_arguments(input: &str) -> Vec<&str> {
                     quote = !quote;
                 }
             }
-            b',' if !quote => {
+            b'[' | b'(' if !quote => depth += 1,
+            b']' | b')' if !quote => depth = depth.saturating_sub(1),
+            b',' if !quote && depth == 0 => {
                 result.push(&input[start..index]);
                 start = index + 1;
             }
@@ -3122,6 +3126,22 @@ fn trino_literal_to_json(value: &str) -> Result<serde_json::Value, String> {
     // target column. Preserve the ISO text rather than converting through a
     // host date type (which could silently change the day around a timezone).
     let trimmed = value.trim();
+    if trimmed.len() >= 7
+        && trimmed[..5].eq_ignore_ascii_case("array")
+        && trimmed[5..].trim_start().starts_with('[')
+        && trimmed.ends_with(']')
+    {
+        let opening = trimmed.find('[').expect("ARRAY has an opening bracket");
+        let inner = trimmed[opening + 1..trimmed.len() - 1].trim();
+        if inner.is_empty() {
+            return Ok(serde_json::Value::Array(Vec::new()));
+        }
+        let values = split_trino_arguments(inner)
+            .into_iter()
+            .map(trino_literal_to_json)
+            .collect::<Result<Vec<_>, _>>()?;
+        return Ok(serde_json::Value::Array(values));
+    }
     if trimmed.len() > 6
         && trimmed
             .get(..4)
@@ -3160,23 +3180,23 @@ fn trino_literal_to_json(value: &str) -> Result<serde_json::Value, String> {
             return Ok(serde_json::Value::String(text));
         }
     }
-    if value.eq_ignore_ascii_case("null") {
+    if trimmed.eq_ignore_ascii_case("null") {
         return Ok(serde_json::Value::Null);
     }
-    if value.eq_ignore_ascii_case("true") {
+    if trimmed.eq_ignore_ascii_case("true") {
         return Ok(serde_json::Value::Bool(true));
     }
-    if value.eq_ignore_ascii_case("false") {
+    if trimmed.eq_ignore_ascii_case("false") {
         return Ok(serde_json::Value::Bool(false));
     }
     if trimmed.len() >= 2 && trimmed.starts_with('\'') && trimmed.ends_with('\'') {
         let text = trimmed[1..trimmed.len() - 1].replace("''", "'");
         return Ok(serde_json::Value::String(text));
     }
-    if let Ok(integer) = value.parse::<i64>() {
+    if let Ok(integer) = trimmed.parse::<i64>() {
         return Ok(serde_json::json!(integer));
     }
-    if let Ok(float) = value.parse::<f64>() {
+    if let Ok(float) = trimmed.parse::<f64>() {
         if float.is_finite() {
             return Ok(serde_json::json!(float));
         }
@@ -19193,10 +19213,21 @@ mod streamed_root_tests {
     }
 
     #[test]
-    fn trino_execute_using_rejects_compound_literals() {
-        let error = trino_execute_parameters("EXECUTE statement USING ARRAY[1, 2]")
-            .expect_err("compound literals must not be interpolated");
-        assert!(error.contains("not a supported scalar literal"), "{error}");
+    fn trino_execute_using_binds_nested_array_literals() {
+        let values = trino_execute_parameters(
+            "EXECUTE statement USING ARRAY[1, 2, NULL], ARRAY['a', 'b'], ARRAY[]",
+        )
+        .unwrap();
+        assert_eq!(
+            values,
+            vec![
+                serde_json::json!([1, 2, null]),
+                serde_json::json!(["a", "b"]),
+                serde_json::json!([]),
+            ]
+        );
+        let typed = request_parameter_values(&values).unwrap();
+        assert!(matches!(typed[0], ParameterValue::Array(_)));
     }
 
     #[test]
