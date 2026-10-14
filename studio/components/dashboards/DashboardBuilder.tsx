@@ -8,7 +8,7 @@
 import React, { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useDashboard } from "./DashboardContext";
-import { BuilderContext, DASHBOARD_DRAG_MIME, type PalettePayload } from "./BuilderContext";
+import { BuilderContext, DASHBOARD_DRAG_MIME, type DashboardDragPayload } from "./BuilderContext";
 import DashboardCanvas from "./DashboardCanvas";
 import DashboardFilterBarEnhanced from "./DashboardFilterBarEnhanced";
 import styles from "./DashboardBuilder.module.css";
@@ -143,9 +143,11 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
   const [datasetFilter, setDatasetFilter] = useState("");
   // null = add to root canvas; string = add to this container id
   const [chartPickerTarget, setChartPickerTarget] = useState<string | null>(null);
-  // What the Items palette is dragging right now. A ref, not state: the canvas
-  // reads it synchronously on every dragover and must not re-render for it.
-  const pendingPaletteDrag = useRef<PalettePayload | null>(null);
+  // The one drag in flight anywhere in the builder — a palette entry on its way
+  // to becoming an item, or an existing item on its way somewhere else. A ref,
+  // not state: every drop target reads it synchronously on each dragover and
+  // must not re-render the canvas for it.
+  const pendingDrag = useRef<DashboardDragPayload | null>(null);
 
   // Enable edit mode
   useEffect(() => {
@@ -301,7 +303,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
   /**
    * Make a palette entry a drag source for the canvas.
    *
-   * The payload goes two ways on purpose. `pendingPaletteDrag` is what the
+   * The payload goes two ways on purpose. `pendingDrag` is what the
    * canvas reads while the pointer is still moving, because react-grid-layout
    * asks for the dropped item's size on every `dragover` and
    * `DataTransfer.getData` is unreadable until the drop itself. The
@@ -311,8 +313,12 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
   const paletteDragProps = (type: ComponentType, config?: Partial<DashboardLayoutItem>) => ({
     draggable: true,
     onDragStart: (e: React.DragEvent) => {
-      const payload = { type, config: { ...componentConfig(type), ...config } };
-      pendingPaletteDrag.current = payload;
+      const payload: DashboardDragPayload = {
+        kind: "new",
+        type,
+        config: { ...componentConfig(type), ...config },
+      };
+      pendingDrag.current = payload;
       try {
         e.dataTransfer.setData(DASHBOARD_DRAG_MIME, JSON.stringify(payload));
         e.dataTransfer.effectAllowed = "copy";
@@ -323,7 +329,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
     },
     // Fires whether the drag was dropped or abandoned, so a cancelled drag
     // cannot leave a payload armed for the next unrelated drop.
-    onDragEnd: () => { pendingPaletteDrag.current = null; },
+    onDragEnd: () => { pendingDrag.current = null; },
   });
 
   /**
@@ -581,7 +587,7 @@ const DashboardBuilder: React.FC<DashboardBuilderProps> = ({ dashboardId }) => {
   );
 
   const builderContextValue = React.useMemo(
-    () => ({ openChartPickerForContainer, pendingPaletteDrag }),
+    () => ({ openChartPickerForContainer, pendingDrag }),
     [openChartPickerForContainer]
   );
 

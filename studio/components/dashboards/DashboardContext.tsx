@@ -38,6 +38,50 @@ function distributeGridCols(n: number): number[] {
 }
 
 /**
+ * A row's children share the twelve columns evenly, so any add or remove has to
+ * re-split them. Factored out because three call sites need it and only one of
+ * them had it: moving a child OUT of a row left the remaining children holding
+ * the widths they had when the row was fuller, so a two-child row became one
+ * half-width child beside a permanent gap.
+ */
+function redistributeRowChildren(
+  container: DashboardLayoutItem,
+  children: DashboardLayoutItem[]
+): DashboardLayoutItem[] {
+  if (container.type !== 'row' || children.length === 0) return children;
+  const widths = distributeGridCols(children.length);
+  return children.map((child, idx) => ({ ...child, w: widths[idx] }));
+}
+
+/**
+ * The only two component types that hold children.
+ *
+ * There is no nesting-rule table in `types/dashboard.ts` — the rules were
+ * written twice, inline, in `addItemToContainer` and `moveItemToContainer`, and
+ * nothing in the UI could read them. They live here now, once, and both those
+ * functions and the drag-and-drop surfaces consult the same predicate so the
+ * highlight a user sees can never disagree with what the model will accept.
+ */
+export const isContainerType = (type?: ComponentType): boolean =>
+  type === 'row' || type === 'column';
+
+/**
+ * Whether `childType` may be placed inside `containerType`.
+ *
+ * A row holds columns and leaves. A column holds leaves only. Neither holds a
+ * row: a row is a full-width band, so nesting one inside a column (or inside
+ * another row) has no coherent geometry, and the model has always refused it.
+ * The one legal container-in-container move is therefore a COLUMN INTO A ROW,
+ * which is how a row of columns is built in the first place.
+ */
+export const canContain = (containerType?: ComponentType, childType?: ComponentType): boolean => {
+  if (!isContainerType(containerType) || !childType) return false;
+  if (childType === 'row') return false;
+  if (containerType === 'column' && childType === 'column') return false;
+  return true;
+};
+
+/**
  * Recursively collect all chart IDs from a layout tree (including nested children).
  */
 function collectChartIds(items: DashboardLayoutItem[]): ChartId[] {
@@ -123,8 +167,10 @@ interface DashboardContextState {
   getItemDepth: (itemId: string) => number;
   addItemToContainer: (containerId: string, type: ComponentType, config?: Partial<DashboardLayoutItem>) => void;
   removeItemFromContainer: (containerId: string, itemId: string) => void;
-  moveItemToContainer: (itemId: string, targetContainerId: string, position?: { x: number; y: number }) => void;
-  moveItemToRoot: (itemId: string) => void;
+  /** Whether a drop of `itemId` into `targetContainerId` would be accepted. */
+  canMoveItemToContainer: (itemId: string, targetContainerId: string) => boolean;
+  moveItemToContainer: (itemId: string, targetContainerId: string, index?: number) => void;
+  moveItemToRoot: (itemId: string, position?: { x: number; y: number }) => void;
 
   // Colour theme
   theme: string;
@@ -482,21 +528,10 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
         return;
       }
 
-      // Validate nesting rules
-      if (container.type === 'row') {
-        // Rows cannot contain other rows
-        if (type === 'row') {
-          console.error('Cannot add row to row');
-          return;
-        }
-      } else if (container.type === 'column') {
-        // Columns cannot contain rows or columns
-        if (type === 'row' || type === 'column') {
-          console.error('Cannot add row or column to column');
-          return;
-        }
-      } else {
-        console.error(`${container.type} is not a container`);
+      // One rule table, shared with moveItemToContainer and with the drag-and-drop
+      // surfaces, so what the UI offers is exactly what this will accept.
+      if (!canContain(container.type, type)) {
+        console.error(`Cannot add ${type} to ${container.type}`);
         return;
       }
 
@@ -532,18 +567,10 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
           return items.map((item) => {
             if (item.i === containerId) {
               const updatedChildren = [...(item.children || []), newItem];
-
-              // For rows: redistribute 12 grid columns evenly among all children
-              let finalChildren = updatedChildren;
-              if (item.type === 'row') {
-                const widths = distributeGridCols(updatedChildren.length);
-                finalChildren = updatedChildren.map((child, idx) => ({
-                  ...child,
-                  w: widths[idx],
-                }));
-              }
-
-              return { ...item, children: finalChildren };
+              return {
+                ...item,
+                children: redistributeRowChildren(item, updatedChildren),
+              };
             }
             if (item.children) {
               return {
@@ -575,15 +602,7 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
         return items.map((item) => {
           if (item.i === containerId) {
             const remaining = (item.children || []).filter((child) => child.i !== itemId);
-
-            // For rows: redistribute 12 grid columns evenly among remaining children
-            let finalChildren = remaining;
-            if (item.type === 'row' && remaining.length > 0) {
-              const widths = distributeGridCols(remaining.length);
-              finalChildren = remaining.map((child, idx) => ({ ...child, w: widths[idx] }));
-            }
-
-            return { ...item, children: finalChildren };
+            return { ...item, children: redistributeRowChildren(item, remaining) };
           }
           if (item.children) {
             return {
@@ -605,90 +624,112 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
   }, [selectedItemId]);
 
   /**
-   * Move an item from one location to a container
-   * @param itemId ID of the item to move
-   * @param targetContainerId ID of the target container
-   * @param position Optional position within the target container
+   * Whether `itemId` may be moved into `targetContainerId` right now.
+   *
+   * Exposed because the drag-and-drop surfaces have to decide whether to
+   * highlight a container BEFORE the drop, and a highlight that promises
+   * something `moveItemToContainer` then refuses is worse than no highlight.
+   * Both read this, so they cannot disagree.
    */
-  const moveItemToContainer = useCallback(
-    (itemId: string, targetContainerId: string, position?: { x: number; y: number }) => {
+  const canMoveItemToContainer = useCallback(
+    (itemId: string, targetContainerId: string): boolean => {
+      if (itemId === targetContainerId) return false;
       const item = findItem(itemId);
-      const targetContainer = findItem(targetContainerId);
-
-      if (!item || !targetContainer) {
-        console.error('Item or container not found');
-        return;
-      }
-
-      // Validate nesting rules
-      if (targetContainer.type === 'row' && item.type === 'row') {
-        console.error('Cannot move row into row');
-        return;
-      }
-      if (targetContainer.type === 'column' && (item.type === 'row' || item.type === 'column')) {
-        console.error('Cannot move row or column into column');
-        return;
-      }
-
-      // Check depth limit (max 2 levels)
-      const targetDepth = getItemDepth(targetContainerId);
-      if (targetDepth >= 2) {
-        console.error('Cannot nest deeper than 2 levels');
-        return;
-      }
-
-      setLayout((prev) => {
-        // Remove item from its current location
-        const removeItem = (items: DashboardLayoutItem[]): DashboardLayoutItem[] => {
-          const filtered = items.filter((i) => i.i !== itemId);
-          return filtered.map((i) => {
-            if (i.children) {
-              return { ...i, children: removeItem(i.children) };
-            }
-            return i;
-          });
-        };
-
-        // Add item to target container
-        const addToContainer = (items: DashboardLayoutItem[]): DashboardLayoutItem[] => {
-          return items.map((i) => {
-            if (i.i === targetContainerId) {
-              const updatedItem = {
-                ...item,
-                parentId: targetContainerId,
-                x: position?.x ?? 0,
-                y: position?.y ?? (i.children || []).length > 0
-                  ? Math.max(...(i.children || []).map((c) => c.y + c.h))
-                  : 0,
-              };
-              return {
-                ...i,
-                children: [...(i.children || []), updatedItem],
-              };
-            }
-            if (i.children) {
-              return { ...i, children: addToContainer(i.children) };
-            }
-            return i;
-          });
-        };
-
-        let updated = removeItem(prev);
-        updated = addToContainer(updated);
-        return updated;
-      });
-
-      setHasUnsavedChanges(true);
+      const target = findItem(targetContainerId);
+      if (!item || !target) return false;
+      if (!canContain(target.type, item.type)) return false;
+      // A container cannot be moved inside its own subtree.
+      const contains = (candidate: DashboardLayoutItem): boolean =>
+        (candidate.children || []).some((c) => c.i === targetContainerId || contains(c));
+      if (contains(item)) return false;
+      // Two levels of nesting is the limit: row > column > leaf.
+      return getItemDepth(targetContainerId) < 2;
     },
     [findItem, getItemDepth]
   );
 
   /**
-   * Move an item from a container back to the root canvas
+   * Move an existing item into a container, from the root canvas or from
+   * another container.
+   *
+   * @param itemId ID of the item to move
+   * @param targetContainerId ID of the target container
+   * @param index Optional insertion index among the container's children;
+   *              appended when omitted
+   */
+  const moveItemToContainer = useCallback(
+    (itemId: string, targetContainerId: string, index?: number) => {
+      const item = findItem(itemId);
+      if (!item || !canMoveItemToContainer(itemId, targetContainerId)) {
+        console.error(`Cannot move ${itemId} into ${targetContainerId}`);
+        return;
+      }
+
+      setLayout((prev) => {
+        // Lift the item out of wherever it is, re-splitting the widths of any
+        // row it leaves behind. Without that a row keeps the column widths it
+        // had while the item was still in it.
+        const removeItem = (items: DashboardLayoutItem[]): DashboardLayoutItem[] =>
+          items
+            .filter((i) => i.i !== itemId)
+            .map((i) => {
+              if (!i.children) return i;
+              const remaining = removeItem(i.children);
+              return { ...i, children: redistributeRowChildren(i, remaining) };
+            });
+
+        const addToContainer = (items: DashboardLayoutItem[]): DashboardLayoutItem[] =>
+          items.map((i) => {
+            if (i.i === targetContainerId) {
+              const existing = i.children || [];
+              // A child is positioned by its container, not by the canvas grid:
+              // a row reads `w` as its share of twelve columns and a column
+              // stacks by order, so `x` is always 0 and `y` follows the stack.
+              // This used to read
+              //   `y: position?.y ?? (children||[]).length > 0 ? max : 0`
+              // which parses as `(position?.y ?? (length > 0)) ? max : 0` — so a
+              // caller's position was discarded and `y: 0` collapsed to 0 by a
+              // different route. See OPEN-DEFECTS D-33. Replaced with an
+              // explicit insertion index, which is what the callers actually
+              // have and what a container actually honours.
+              const stackedY = existing.length
+                ? Math.max(...existing.map((c) => c.y + c.h))
+                : 0;
+              const moved: DashboardLayoutItem = {
+                ...item,
+                parentId: targetContainerId,
+                x: 0,
+                y: stackedY,
+              };
+              const at = index === undefined
+                ? existing.length
+                : Math.max(0, Math.min(existing.length, index));
+              const next = [...existing.slice(0, at), moved, ...existing.slice(at)];
+              return { ...i, children: redistributeRowChildren(i, next) };
+            }
+            if (i.children) return { ...i, children: addToContainer(i.children) };
+            return i;
+          });
+
+        return addToContainer(removeItem(prev));
+      });
+
+      setSelectedItemId(itemId);
+      setHasUnsavedChanges(true);
+    },
+    [findItem, canMoveItemToContainer]
+  );
+
+  /**
+   * Move an item from a container back to the root canvas.
+   *
    * @param itemId ID of the item to move to root
+   * @param position Optional grid cell to land on — the cell the pointer was
+   *                 over when a drag was released. Omitted for the "move to
+   *                 root" button, which appends below everything.
    */
   const moveItemToRoot = useCallback(
-    (itemId: string) => {
+    (itemId: string, position?: { x: number; y: number }) => {
       const item = findItem(itemId);
       if (!item || !item.parentId) {
         console.error('Item not found or already at root');
@@ -696,36 +737,31 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
       }
 
       setLayout((prev) => {
-        // Remove from container
-        const removeFromChildren = (items: DashboardLayoutItem[]): DashboardLayoutItem[] => {
-          return items.map((i) => {
-            if (i.children) {
-              return {
-                ...i,
-                children: i.children.filter((child) => child.i !== itemId),
-              };
-            }
-            return i;
-          }).map((i) => {
-            if (i.children) {
-              return { ...i, children: removeFromChildren(i.children) };
-            }
-            return i;
+        // Remove from whatever container holds it, re-splitting that row's
+        // widths. The previous version did not: taking one child out of a
+        // two-child row left the survivor at six of twelve columns beside a
+        // permanent gap.
+        const removeFromChildren = (items: DashboardLayoutItem[]): DashboardLayoutItem[] =>
+          items.map((i) => {
+            if (!i.children) return i;
+            const remaining = removeFromChildren(
+              i.children.filter((child) => child.i !== itemId)
+            );
+            return { ...i, children: redistributeRowChildren(i, remaining) };
           });
-        };
 
-        // Add to root
-        const position = findNextPosition(item.w, item.h);
-        const updatedItem = {
+        const landing = position ?? findNextPosition(item.w, item.h);
+        const updatedItem: DashboardLayoutItem = {
           ...item,
           parentId: undefined,
-          x: position.x,
-          y: position.y,
+          x: Math.max(0, Math.min(GRID_COLUMNS - (item.w || 1), landing.x)),
+          y: Math.max(0, landing.y),
         };
 
         return [...removeFromChildren(prev), updatedItem];
       });
 
+      setSelectedItemId(itemId);
       setHasUnsavedChanges(true);
     },
     [findItem, findNextPosition]
@@ -1219,6 +1255,7 @@ export const DashboardProvider: React.FC<DashboardProviderProps> = ({
     getItemDepth,
     addItemToContainer,
     removeItemFromContainer,
+    canMoveItemToContainer,
     moveItemToContainer,
     moveItemToRoot,
 

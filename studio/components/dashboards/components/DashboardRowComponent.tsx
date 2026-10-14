@@ -8,6 +8,11 @@
  *  - Hover toolbar: "Add Column", "Add Chart", "Delete Row"
  *  - Drag handles between children to resize column widths
  *  - Empty-row placeholder with call-to-action
+ *  - Accepts a drop: a palette entry, or an existing tile dragged in from the
+ *    canvas or out of another container
+ *  - Each child carries a grip, which is the only way a child can be dragged
+ *    out — the row itself is a grid tile whose whole body is a drag surface, so
+ *    a child cannot share that gesture
  */
 
 import React, { useRef, useState, useCallback } from 'react';
@@ -15,7 +20,7 @@ import dynamic from 'next/dynamic';
 import type { DashboardComponentProps } from '../../../types/dashboard';
 import { GRID_COLUMNS } from '../../../types/dashboard';
 import { useDashboard } from '../DashboardContext';
-import { useBuilderContext } from '../BuilderContext';
+import { useBuilderContext, moveDragProps, useContainerDropTarget } from '../BuilderContext';
 
 // Lazy-load DashboardItem to avoid circular-import issues
 const DashboardItem = dynamic(() => import('../DashboardItem'), { ssr: false });
@@ -36,6 +41,11 @@ const DashboardRowComponent: React.FC<DashboardComponentProps> = ({
   const children = item.children || [];
   const rowRef = useRef<HTMLDivElement>(null);
   const [isHovered, setIsHovered] = useState(false);
+  const { isDropTarget, dropProps } = useContainerDropTarget(
+    item.i,
+    'row',
+    !!isEditMode && !!builderCtx
+  );
 
   // ── Column resize (snaps to GRID_COLUMNS units) ───────────────────────────
 
@@ -104,9 +114,15 @@ const DashboardRowComponent: React.FC<DashboardComponentProps> = ({
       className="dashboard-row"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
+      {...dropProps}
       style={{
-        background: 'transparent',
-        border: isEditMode ? '1px solid var(--border)' : 'none',
+        // Only shown when the model will actually take the drop — the hook
+        // asks `canMoveItemToContainer` first, so a row that cannot hold what
+        // is being dragged (another row) stays exactly as it was.
+        background: isDropTarget ? 'rgba(var(--accent-rgb), 0.08)' : 'transparent',
+        border: isDropTarget
+          ? '2px dashed var(--accent)'
+          : isEditMode ? '1px solid var(--border)' : 'none',
         borderRadius: 8,
         position: 'relative',
         // A row is a grid tile now (D-31), so it fills the height the author
@@ -295,6 +311,25 @@ const DashboardRowComponent: React.FC<DashboardComponentProps> = ({
                 overflow: 'hidden',
               }}
             >
+              {isEditMode && builderCtx && (
+                <div
+                  {...moveDragProps(builderCtx.pendingDrag, { ...child, parentId: item.i })}
+                  title="Drag out to the canvas, or into another container"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 5,
+                    height: 14,
+                    cursor: 'grab',
+                    userSelect: 'none',
+                    color: 'var(--text-muted)',
+                    fontSize: 9,
+                  }}
+                >
+                  <i className="fas fa-grip-horizontal" />
+                </div>
+              )}
               <DashboardItem item={child} isEditMode={isEditMode} />
             </div>
 
