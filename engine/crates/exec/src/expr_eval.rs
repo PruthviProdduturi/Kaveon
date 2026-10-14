@@ -6917,7 +6917,8 @@ fn eval_date_diff(
             if unit_arr.is_null(row) {
                 return Ok(None);
             }
-            let divisor = match unit_arr.value(row).to_ascii_uppercase().as_str() {
+            let unit = unit_arr.value(row).to_ascii_uppercase();
+            let divisor = match unit.as_str() {
                 "NANOSECOND" => 1i128,
                 "MICROSECOND" => 1_000i128,
                 "MILLISECOND" => 1_000_000i128,
@@ -6926,15 +6927,28 @@ fn eval_date_diff(
                 "HOUR" => 3_600_000_000_000i128,
                 "DAY" => 86_400_000_000_000i128,
                 "WEEK" => 604_800_000_000_000i128,
-                "MONTH" | "QUARTER" | "YEAR" => {
-                    return Err(KaveonError::Execution(
-                        "DATE_DIFF month, quarter, and year units require calendar arithmetic and are not yet supported".into(),
-                    ))
-                }
                 unit => {
+                    if matches!(unit, "MONTH" | "QUARTER" | "YEAR") {
+                        let Some(start) = temporal_calendar_position(start, row)? else {
+                            return Ok(None);
+                        };
+                        let Some(end) = temporal_calendar_position(end, row)? else {
+                            return Ok(None);
+                        };
+                        let months = calendar_month_difference(start, end);
+                        let result = match unit {
+                            "MONTH" => months,
+                            "QUARTER" => months / 3,
+                            "YEAR" => months / 12,
+                            _ => unreachable!(),
+                        };
+                        return i64::try_from(result).map(Some).map_err(|_| {
+                            KaveonError::Execution("DATE_DIFF result overflows BIGINT".into())
+                        });
+                    }
                     return Err(KaveonError::Execution(format!(
                         "unsupported DATE_DIFF unit: {unit}"
-                    )))
+                    )));
                 }
             };
             let Some(start) = temporal_nanoseconds(start, row)? else {
@@ -6950,6 +6964,43 @@ fn eval_date_diff(
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(Arc::new(Int64Array::from(result)))
+}
+
+/// Calendar position used by DATE_DIFF's month-family units. The remainder
+/// makes timestamps on the same day obey the same full-boundary rule as
+/// dates: a boundary has not elapsed when the end's time is before the
+/// start's time.
+fn temporal_calendar_position(
+    source: &ArrayRef,
+    row: usize,
+) -> Result<Option<(i32, u32, u32, i128)>> {
+    let Some(nanoseconds) = temporal_nanoseconds(source, row)? else {
+        return Ok(None);
+    };
+    let day = nanoseconds.div_euclid(86_400_000_000_000i128);
+    let remainder = nanoseconds.rem_euclid(86_400_000_000_000i128);
+    let day = i64::try_from(day)
+        .map_err(|_| KaveonError::Execution("DATE_DIFF date is outside the supported range".into()))?;
+    let (year, month, date) = days_to_ymd(day);
+    Ok(Some((year, month, date, remainder)))
+}
+
+fn calendar_month_difference(
+    start: (i32, u32, u32, i128),
+    end: (i32, u32, u32, i128),
+) -> i64 {
+    let start_month = i64::from(start.0) * 12 + i64::from(start.1) - 1;
+    let end_month = i64::from(end.0) * 12 + i64::from(end.1) - 1;
+    let raw = end_month - start_month;
+    let start_position = (start.2, start.3);
+    let end_position = (end.2, end.3);
+    if raw > 0 && end_position < start_position {
+        raw - 1
+    } else if raw < 0 && end_position > start_position {
+        raw + 1
+    } else {
+        raw
+    }
 }
 
 fn eval_to_char(source: &ArrayRef, _fmt: &StringArray, num_rows: usize) -> Result<ArrayRef> {
@@ -7379,7 +7430,7 @@ mod tests {
             vec![Some(24), Some(1), None]
         );
 
-        let error = evaluate(
+        let values = evaluate(
             &Expr::Function {
                 name: "DATE_DIFF".into(),
                 args: vec![
@@ -7390,8 +7441,66 @@ mod tests {
             },
             &input,
         )
+        .unwrap();
+        assert_eq!(
+            values
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(0), None]
+        );
+
+        let calendar_schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("start", DataType::Date32, true),
+            arrow::datatypes::Field::new("end", DataType::Date32, true),
+        ]));
+        let calendar = RecordBatch::try_new(
+            calendar_schema,
+            vec![
+                Arc::new(Date32Array::from(vec![
+                    Some(ymd_to_days(2024, 1, 31) as i32),
+                    Some(ymd_to_days(2024, 1, 31) as i32),
+                ])),
+                Arc::new(Date32Array::from(vec![
+                    Some(ymd_to_days(2024, 2, 29) as i32),
+                    Some(ymd_to_days(2024, 3, 31) as i32),
+                ])),
+            ],
+        )
+        .unwrap();
+        let values = evaluate(
+            &Expr::Function {
+                name: "DATE_DIFF".into(),
+                args: vec![
+                    Expr::Literal(ScalarValue::Utf8("MONTH".into())),
+                    Expr::Column("start".into()),
+                    Expr::Column("end".into()),
+                ],
+            },
+            &calendar,
+        )
+        .unwrap();
+        assert_eq!(
+            values
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(2)]
+        );
+
+        let error = evaluate(
+            &Expr::Function {
+                name: "DATE_DIFF".into(),
+                args: vec![
+                    Expr::Literal(ScalarValue::Utf8("FORTNIGHT".into())),
+                    Expr::Column("start".into()),
+                    Expr::Column("end".into()),
+                ],
+            },
+            &input,
+        )
         .unwrap_err();
-        assert!(error.to_string().contains("calendar arithmetic"), "{error}");
+        assert!(error.to_string().contains("unsupported DATE_DIFF unit"), "{error}");
     }
 
     #[test]
