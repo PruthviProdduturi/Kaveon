@@ -645,6 +645,8 @@ fn aggregate(name: &str, col: &ArrayRef, rows: &[usize]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::{DictionaryArray, Int32Array, StringArray};
+    use arrow::datatypes::Int32Type;
     use kaveon_core::predicate::ScalarValue;
     fn batch(values: Vec<Option<i64>>) -> RecordBatch {
         RecordBatch::try_new(
@@ -829,6 +831,38 @@ mod tests {
             args.push(Expr::Literal(ScalarValue::Int64(-1)));
         }
         assert!(evaluate_window(&lag, &input).is_err());
+    }
+
+    #[test]
+    fn partitioned_window_compares_dictionary_values_not_local_codes() {
+        let key = DictionaryArray::<Int32Type>::try_new(
+            Int32Array::from(vec![0, 1, 0, 1]),
+            Arc::new(StringArray::from(vec!["east", "west"])),
+        )
+        .unwrap();
+        let input = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("region", key.data_type().clone(), false),
+                Field::new("amount", DataType::Int64, false),
+            ])),
+            vec![Arc::new(key), Arc::new(Int64Array::from(vec![1, 10, 2, 20]))],
+        )
+        .unwrap();
+        let expr = Expr::WindowFunction {
+            name: "SUM".into(),
+            args: vec![Expr::Column("amount".into())],
+            partition_by: vec![Expr::Column("region".into())],
+            order_by: vec![],
+            frame: None,
+        };
+        assert_eq!(
+            evaluate_window(&expr, &input)
+                .unwrap()
+                .as_primitive::<Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(3), Some(30), Some(3), Some(30)]
+        );
     }
     struct Source {
         schema: SchemaRef,
