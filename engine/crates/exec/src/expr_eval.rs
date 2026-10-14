@@ -4272,37 +4272,88 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "LEFT" => {
             check_arity(name, args, 2)?;
-            let arr = as_string_array(&args[0])?;
             let lens = args[1].as_primitive::<Int64Type>();
-            let result: StringArray = (0..num_rows)
-                .map(|i| {
-                    if arr.is_null(i) || lens.is_null(i) {
-                        None
-                    } else {
-                        let n = lens.value(i).max(0) as usize;
-                        Some(arr.value(i).chars().take(n).collect::<String>())
+            match args[0].data_type() {
+                DataType::Utf8 => {
+                    let arr = as_string_array(&args[0])?;
+                    let result: StringArray = (0..num_rows)
+                        .map(|i| {
+                            if arr.is_null(i) || lens.is_null(i) {
+                                None
+                            } else {
+                                let n = lens.value(i).max(0) as usize;
+                                Some(arr.value(i).chars().take(n).collect::<String>())
+                            }
+                        })
+                        .collect();
+                    Ok(Arc::new(result))
+                }
+                DataType::LargeUtf8 => {
+                    let arr = args[0]
+                        .as_any()
+                        .downcast_ref::<LargeStringArray>()
+                        .ok_or_else(|| KaveonError::Execution("expected large string array".into()))?;
+                    let mut result = LargeStringBuilder::with_capacity(num_rows, 0);
+                    for row in 0..num_rows {
+                        if arr.is_null(row) || lens.is_null(row) {
+                            result.append_null();
+                        } else {
+                            result.append_value(
+                                arr.value(row)
+                                    .chars()
+                                    .take(lens.value(row).max(0) as usize)
+                                    .collect::<String>(),
+                            );
+                        }
                     }
-                })
-                .collect();
-            Ok(Arc::new(result))
+                    Ok(Arc::new(result.finish()))
+                }
+                other => Err(KaveonError::Execution(format!(
+                    "LEFT expects VARCHAR, got {other}"
+                ))),
+            }
         }
         "RIGHT" => {
             check_arity(name, args, 2)?;
-            let arr = as_string_array(&args[0])?;
             let lens = args[1].as_primitive::<Int64Type>();
-            let result: StringArray = (0..num_rows)
-                .map(|i| {
-                    if arr.is_null(i) || lens.is_null(i) {
-                        None
-                    } else {
-                        let s = arr.value(i);
-                        let n = lens.value(i).max(0) as usize;
-                        let skip = s.len().saturating_sub(n);
-                        Some(s.chars().skip(skip).collect::<String>())
+            match args[0].data_type() {
+                DataType::Utf8 => {
+                    let arr = as_string_array(&args[0])?;
+                    let result: StringArray = (0..num_rows)
+                        .map(|i| {
+                            if arr.is_null(i) || lens.is_null(i) {
+                                None
+                            } else {
+                                let s = arr.value(i);
+                                let n = lens.value(i).max(0) as usize;
+                                let skip = s.chars().count().saturating_sub(n);
+                                Some(s.chars().skip(skip).collect::<String>())
+                            }
+                        })
+                        .collect();
+                    Ok(Arc::new(result))
+                }
+                DataType::LargeUtf8 => {
+                    let arr = args[0]
+                        .as_any()
+                        .downcast_ref::<LargeStringArray>()
+                        .ok_or_else(|| KaveonError::Execution("expected large string array".into()))?;
+                    let mut result = LargeStringBuilder::with_capacity(num_rows, 0);
+                    for row in 0..num_rows {
+                        if arr.is_null(row) || lens.is_null(row) {
+                            result.append_null();
+                        } else {
+                            let value = arr.value(row);
+                            let skip = value.chars().count().saturating_sub(lens.value(row).max(0) as usize);
+                            result.append_value(value.chars().skip(skip).collect::<String>());
+                        }
                     }
-                })
-                .collect();
-            Ok(Arc::new(result))
+                    Ok(Arc::new(result.finish()))
+                }
+                other => Err(KaveonError::Execution(format!(
+                    "RIGHT expects VARCHAR, got {other}"
+                ))),
+            }
         }
         "LPAD" => {
             check_arity(name, args, 3)?;
@@ -13348,6 +13399,35 @@ mod tests {
         assert_eq!(values.value(0), "abab");
         assert!(values.is_null(1));
         assert_eq!(values.value(2), "");
+    }
+
+    #[test]
+    fn left_and_right_preserve_large_utf8_and_count_unicode_scalars() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "text",
+                Arc::new(LargeStringArray::from(vec![Some("世界abc"), None])) as ArrayRef,
+            ),
+            (
+                "count",
+                Arc::new(Int64Array::from(vec![Some(2), Some(1)])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        for (name, expected) in [("LEFT", "世界"), ("RIGHT", "bc")] {
+            let result = evaluate(
+                &Expr::Function {
+                    name: name.into(),
+                    args: vec![Expr::Column("text".into()), Expr::Column("count".into())],
+                },
+                &batch,
+            )
+            .unwrap();
+            assert_eq!(result.data_type(), &DataType::LargeUtf8);
+            let values = result.as_any().downcast_ref::<LargeStringArray>().unwrap();
+            assert_eq!(values.value(0), expected);
+            assert!(values.is_null(1));
+        }
     }
 
     #[test]
