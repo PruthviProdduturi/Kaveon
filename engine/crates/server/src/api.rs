@@ -16,7 +16,7 @@ use kaveon_core::predicate::ScalarValue;
 use kaveon_core::{
     AdmittedQueryMemory, CatalogDefinition, CatalogId, CatalogLifecycle, CatalogRevision,
     ColumnDefinition, ExchangeId, ExecutableFragment, MemoryAdmissionController, SchemaDefinition,
-    SchemaId, StageId, TableDefinition, TableId, TaskId,
+    Expr, SchemaId, StageId, TableDefinition, TableId, TaskId,
 };
 use kaveon_exec::sort::SortExpr;
 use kaveon_exec::topn::merge_top_n;
@@ -2949,6 +2949,37 @@ async fn submit_trino_statement_parts(
             };
             return trino_describe_input_response(&prepared_parameter_names(&query));
         }
+        if let Some(name) = trino_describe_output(body) {
+            let query = TRINO_PREPARED_STATEMENTS
+                .read()
+                .await
+                .get(&(identity.principal.clone(), name.clone()))
+                .cloned();
+            let Some(query) = query else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!("prepared statement '{name}' was not found"),
+                        "errorName": "INVALID_PREPARED_STATEMENT"
+                    })),
+                )
+                    .into_response();
+            };
+            let metadata = match trino_output_metadata(&query) {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "error": error,
+                            "errorName": "NOT_SUPPORTED"
+                        })),
+                    )
+                        .into_response();
+                }
+            };
+            return trino_describe_output_response(&metadata);
+        }
     }
     let prepared_queries = match trino_prepared_queries(&headers) {
         Ok(queries) => queries,
@@ -3220,6 +3251,84 @@ fn trino_describe_input(body: &str) -> Option<String> {
     Some(name)
 }
 
+fn trino_describe_output(body: &str) -> Option<String> {
+    let trimmed = body.trim().trim_end_matches(';').trim();
+    let mut words = trimmed.split_whitespace();
+    if !words
+        .next()
+        .is_some_and(|word| word.eq_ignore_ascii_case("DESCRIBE"))
+        || !words
+            .next()
+            .is_some_and(|word| word.eq_ignore_ascii_case("OUTPUT"))
+    {
+        return None;
+    }
+    let name = words.next()?.to_owned();
+    if words.next().is_some() || !name.chars().all(|ch| ch == '_' || ch.is_ascii_alphanumeric()) {
+        return None;
+    }
+    Some(name)
+}
+
+fn trino_output_metadata(query: &str) -> Result<Vec<(String, String, bool)>, String> {
+    let plan = sql_to_logical_plan_for_binder(query).map_err(|error| error.to_string())?;
+    let LogicalPlan::Project { columns, .. } = plan else {
+        return Err("DESCRIBE OUTPUT requires a query with a projection".to_owned());
+    };
+    if columns.iter().any(|column| matches!(column, Expr::Star)) {
+        return Err("DESCRIBE OUTPUT cannot expand an unbound wildcard".to_owned());
+    }
+    Ok(columns
+        .iter()
+        .enumerate()
+        .map(|(index, expression)| {
+            let (expression, aliased, name) = match expression {
+                Expr::Alias { expr, name } => (expr.as_ref(), true, name.clone()),
+                Expr::Column(column) => (
+                    expression,
+                    false,
+                    column.rsplit('.').next().unwrap_or(column).to_owned(),
+                ),
+                Expr::Function { name, .. } => (expression, false, name.to_lowercase()),
+                _ => (expression, false, format!("_col{index}")),
+            };
+            (name, trino_expr_type(expression), aliased)
+        })
+        .collect())
+}
+
+fn trino_expr_type(expression: &Expr) -> String {
+    match expression {
+        Expr::Cast { data_type, .. } => match data_type {
+            kaveon_core::CastTarget::Boolean => "boolean",
+            kaveon_core::CastTarget::Int32 => "integer",
+            kaveon_core::CastTarget::Int64 => "bigint",
+            kaveon_core::CastTarget::Float64 => "double",
+            kaveon_core::CastTarget::Utf8 => "varchar",
+            kaveon_core::CastTarget::Date32 => "date",
+            kaveon_core::CastTarget::TimestampMicros { with_timezone: true } => "timestamp with time zone",
+            kaveon_core::CastTarget::TimestampMicros { with_timezone: false } => "timestamp",
+            kaveon_core::CastTarget::Decimal128 { precision, scale } => {
+                return format!("decimal({precision},{scale})");
+            }
+        }
+        .to_owned(),
+        Expr::Literal(value) => match value {
+            ScalarValue::Bool(_) => "boolean",
+            ScalarValue::Int64(_) => "bigint",
+            ScalarValue::Float64(_) => "double",
+            ScalarValue::Utf8(_) => "varchar",
+            ScalarValue::Decimal128 { precision, scale, .. } => {
+                return format!("decimal({precision},{scale})");
+            }
+            ScalarValue::Null => "unknown",
+        }
+        .to_owned(),
+        Expr::Function { name, .. } if name.eq_ignore_ascii_case("COUNT") => "bigint".to_owned(),
+        _ => "unknown".to_owned(),
+    }
+}
+
 fn trino_describe_input_response(parameters: &[String]) -> Response {
     let columns = [
         ("Position", "bigint"),
@@ -3242,6 +3351,43 @@ fn trino_describe_input_response(parameters: &[String]) -> Response {
         .map(|(position, parameter)| {
             let name = parameter.strip_prefix(':').map(ToOwned::to_owned);
             serde_json::json!([position as i64, name, "unknown", "unknown"])
+        })
+        .collect::<Vec<_>>();
+    let id = Uuid::new_v4().to_string();
+    Json(serde_json::json!({
+        "id": id,
+        "infoUri": format!("/v1/trino/query/{id}"),
+        "partialCancelUri": format!("/v1/trino/query/{id}"),
+        "stats": {"state": "FINISHED", "elapsedTimeMillis": 0},
+        "columns": columns,
+        "data": rows
+    }))
+    .into_response()
+}
+
+fn trino_describe_output_response(metadata: &[(String, String, bool)]) -> Response {
+    let columns = [
+        ("Column Name", "varchar"),
+        ("Catalog", "varchar"),
+        ("Schema", "varchar"),
+        ("Table", "varchar"),
+        ("Type", "varchar"),
+        ("Type Signature", "varchar"),
+        ("Aliased", "boolean"),
+    ]
+    .into_iter()
+    .map(|(name, data_type)| {
+        serde_json::json!({
+            "name": name,
+            "type": data_type,
+            "typeSignature": {"rawType": data_type}
+        })
+    })
+    .collect::<Vec<_>>();
+    let rows = metadata
+        .iter()
+        .map(|(name, data_type, aliased)| {
+            serde_json::json!([name, null, null, null, data_type, data_type, aliased])
         })
         .collect::<Vec<_>>();
     let id = Uuid::new_v4().to_string();
@@ -20071,6 +20217,47 @@ mod streamed_root_tests {
         assert_eq!(trino_describe_input("DESCRIBE OUTPUT recent"), None);
         assert_eq!(trino_describe_input("DESCRIBE INPUT recent extra"), None);
         assert_eq!(trino_describe_input("DESCRIBE INPUT recent-name"), None);
+    }
+
+    #[test]
+    fn trino_describe_output_parses_and_infers_projection_metadata() {
+        assert_eq!(
+            trino_describe_output("DESCRIBE OUTPUT recent;"),
+            Some("recent".to_owned())
+        );
+        assert_eq!(trino_describe_output("DESCRIBE INPUT recent"), None);
+        let metadata = trino_output_metadata(
+            "SELECT CAST(1 AS BIGINT) AS id, 'ready' AS state, COUNT(*) AS total FROM orders",
+        )
+        .expect("projection metadata");
+        assert_eq!(
+            metadata,
+            vec![
+                ("id".to_owned(), "bigint".to_owned(), true),
+                ("state".to_owned(), "varchar".to_owned(), true),
+                ("total".to_owned(), "bigint".to_owned(), true),
+            ]
+        );
+        assert!(trino_output_metadata("SELECT * FROM orders").is_err());
+    }
+
+    #[tokio::test]
+    async fn trino_describe_output_returns_standard_metadata_shape() {
+        let response = trino_describe_output_response(&[(
+            "id".to_owned(),
+            "bigint".to_owned(),
+            true,
+        )]);
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["stats"]["state"], "FINISHED");
+        assert_eq!(value["columns"].as_array().unwrap().len(), 7);
+        assert_eq!(
+            value["data"][0],
+            serde_json::json!(["id", null, null, null, "bigint", "bigint", true])
+        );
     }
 
     #[tokio::test]

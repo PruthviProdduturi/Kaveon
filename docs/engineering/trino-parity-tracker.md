@@ -1042,12 +1042,14 @@ are still required.
 The raw Trino route now also answers SQL-level `DESCRIBE INPUT name` for an
 owner-scoped prepared statement. It returns the discovered parameter positions
 and named parameters in Trino's four-column metadata shape; types are reported
-as `unknown` until a typed bind is supplied. `DESCRIBE OUTPUT` and the complete
-wire prepare/describe/bind lifecycle remain open, so this is a compatibility
-slice rather than a full protocol claim.
+as `unknown` until a typed bind is supplied. It also answers `DESCRIBE OUTPUT`
+for projection plans, returning Trino's seven-column metadata shape with
+explicit aliases and planner-inferred scalar/cast types; unbound column types
+remain `unknown`. The complete wire prepare/describe/bind lifecycle remains
+open, so these are compatibility slices rather than a full protocol claim.
 
 The current local validation baseline is green on the same checkout: the full
-`kaveon-server` suite passed **369 tests**, and the full CLI suite passed **211
+`kaveon-server` suite passed **371 tests**, and the full CLI suite passed **211
 tests** (one ignored). The set-operation coverage includes `UNION ALL`, distinct and
 multiset `INTERSECT`/`EXCEPT`, dictionary-versus-plain values, duplicate
 counts, null handling, planner lowering, and exchange-input consumption. This
