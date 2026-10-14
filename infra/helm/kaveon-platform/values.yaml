@@ -73,6 +73,19 @@ api:
   # statements. Off for a self-hosted install; pair it with the Engine chart's
   # resourceGroups block, which carries the per-principal live-read quota.
   demoMode: false
+  # Who the read warmer fills caches for before anybody has asked
+  # (KAVEON_WARM_PRINCIPALS, "email:Role, email:Role"; a bare email is taken as
+  # Viewer, the narrowest reading).
+  #
+  # Left empty, the warmer only warms principals this replica has already
+  # served — which means the first visit after every restart pays the full cold
+  # cost of every read the page makes, and with deploy-on-push that is every
+  # push. The warmer is otherwise on and working; this list is the only thing
+  # that lets it run before a reader arrives rather than after.
+  #
+  # Deliberately empty here: naming a reader puts their address in this
+  # repository, which is public. Set it per installation.
+  warmPrincipals: ""
   evidenceStorage:
     # Create a restricted, durable PVC shared by report/smoke Jobs and the
     # PostgreSQL-free API. Azure Files CSI supplies the required RWX topology.

@@ -337,7 +337,7 @@ four statements at a time. One scan feeding every grouping is the same work
 once.
 
 ### D-40 · A column deletes with no confirmation, unlike every other tile
-**open** · 2026-10-13
+**fixed** · 2026-10-14
 
 `DashboardColumnComponent`'s delete calls `removeItemFromContainer` /
 `removeLayoutItem` straight from `onClick`. Every other tile type routes
@@ -347,14 +347,37 @@ ask. Found while verifying that each tile type owns a remove control for the
 D-33 follow-up.
 
 ### D-41 · The column toolbar is hardcoded light
-**open** · 2026-10-13
+**fixed** · 2026-10-14
 
-Its buttons declare `background: '#fff'`, `border: '1px solid #e2e8f0'` and
-`color: '#64748b'` inline, so the column's own controls stay a white cluster on
-a dark canvas. Same shape as the Customize tab and the Add charts dialog: a
-surface written before the dark theme and never mapped to tokens.
+51 literal colours across inline style objects, hover handlers and `border`
+shorthand, so the column's own controls stayed a white cluster on a dark
+canvas. Mapped by role rather than by value — 49 replaced; the two that stay
+literal are the drag ghost, a deliberate dark chip that follows the cursor
+rather than sitting on the page, and a divider's own stored colour, which is a
+reader's setting rather than chrome. Both say so in place.
 
 
+
+### D-44 · The read warmer never runs before the first reader
+**partly fixed** · 2026-10-14
+
+`warm_reads` starts with the API and is on by default, but it only warms
+principals it has already served or ones named in `KAVEON_WARM_PRINCIPALS` —
+and that variable is empty in the pod and was declared in no chart. On a fresh
+replica the recently-seen ring is empty, so the warmer warms nothing until
+somebody takes the cold read. The person who would benefit is the person who
+pays for it.
+
+That matters more than it looks, because deploy-on-push is deliberate until
+the platform is stable: every push replaces the pod, so every push puts the
+next reader on the cold path. It is a large part of the intermittent
+"Engine is unavailable" and slow-first-load reports.
+
+`api.warmPrincipals` now exists in the platform chart and renders
+`KAVEON_WARM_PRINCIPALS` when set. It is deliberately empty: naming a reader
+puts their address in a public repository, so the value is an installation
+decision rather than a committed default. Until it is set, the behaviour is
+unchanged.
 
 ### D-42 · Every non-ASCII character in every SQL statement is corrupted
 **open** · 2026-10-13 · **Engine — @Codex** · data integrity

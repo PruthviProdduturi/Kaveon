@@ -66,6 +66,9 @@
 - {name: KAVEON_QUERY_HISTORY_OUTBOX_ENABLED, value: {{ .Values.api.cutover.outbox.queryHistory | quote }}}
 - {name: KAVEON_ACTIVITY_OUTBOX_ENABLED, value: {{ .Values.api.cutover.outbox.activity | quote }}}
 - {name: KAVEON_CHAT_HISTORY_OUTBOX_ENABLED, value: {{ .Values.api.cutover.outbox.chatHistory | quote }}}
+{{- with .Values.api.warmPrincipals }}
+- {name: KAVEON_WARM_PRINCIPALS, value: {{ . | quote }}}
+{{- end }}
 - {name: KAVEON_ENGINE_URL, value: "https://{{ .Values.engine.service }}:{{ .Values.engine.port }}"}
 - {name: KAVEON_ENGINE_CA_CERT, value: /var/run/kaveon/engine-ca/{{ .Values.engine.caKey }}}
 - {name: KAVEON_PROXY_SECRET, valueFrom: {secretKeyRef: {name: {{ .Values.secrets.portalAuth }}, key: KAVEON_PROXY_SECRET}}}
