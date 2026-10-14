@@ -491,6 +491,11 @@ const CASES: &[(&str, &str, bool)] = &[
         false,
     ),
     (
+        "correlated_in_distinct_projected_key",
+        "SELECT COUNT(*) AS n FROM {T} e WHERE e.user_id IN (SELECT DISTINCT i.user_id FROM {T} i WHERE i.user_id = e.user_id AND i.actions > 5)",
+        false,
+    ),
+    (
         "correlated_not_in_projected_key",
         "SELECT COUNT(*) AS n FROM {T} e WHERE e.user_id NOT IN (SELECT i.user_id FROM {T} i WHERE i.user_id = e.user_id AND i.actions > 5)",
         false,

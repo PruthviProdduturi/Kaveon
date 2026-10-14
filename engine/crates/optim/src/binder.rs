@@ -776,23 +776,7 @@ impl Binder<'_> {
                 .filter(|correlation| matches!(correlation, Correlation::Key { .. }))
                 .count()
                 == 1
-            && match (&right.plan, correlated_key) {
-                (LogicalPlan::Project { columns, .. }, Some(inner)) => {
-                    let first = columns.first().and_then(|column| match column {
-                        Expr::Column(name) => Some(name.as_str()),
-                        _ => None,
-                    });
-                    let source = columns.iter().find_map(|column| match column {
-                        Expr::Alias { expr, name } if name == inner => match expr.as_ref() {
-                            Expr::Column(source) => Some(source.as_str()),
-                            _ => None,
-                        },
-                        _ => None,
-                    });
-                    first.is_some() && first == source
-                }
-                _ => false,
-            };
+            && correlated_projection_matches(&right.plan, correlated_key);
         if lateral.is_empty() {
             let left_key = self.bind_expr(left_key, &left_scope, None)?;
             // The subquery side binds its key by position (`*`) or not at
@@ -1692,6 +1676,37 @@ fn uncorrelated(bound: &Bound, clause: &str) -> Result<()> {
     }
 }
 
+/// Whether a correlated `IN` subquery exposes its equality key as the first
+/// projected value. `DISTINCT` is transparent here: it changes multiplicity,
+/// which a semi/anti join already ignores, but it must not make an otherwise
+/// keyed subquery fall through to the unsupported-correlated diagnostic.
+fn correlated_projection_matches(plan: &LogicalPlan, inner: Option<&str>) -> bool {
+    let Some(inner) = inner else {
+        return false;
+    };
+    let plan = match plan {
+        LogicalPlan::Distinct { input } => input.as_ref(),
+        other => other,
+    };
+    let LogicalPlan::Project { columns, .. } = plan else {
+        return false;
+    };
+    let first = columns.first().and_then(|column| match column {
+        Expr::Column(name) => Some(name.as_str()),
+        _ => None,
+    });
+    let source = columns.iter().find_map(|column| match column {
+        Expr::Alias { expr, name } if name == inner => match expr.as_ref() {
+            Expr::Column(source) => Some(source.as_str()),
+            _ => None,
+        },
+        _ => None,
+    });
+    first.zip(source).is_some_and(|(first, source)| {
+        first.rsplit('.').next() == source.rsplit('.').next()
+    })
+}
+
 fn is_aggregate(name: &str) -> bool {
     kaveon_core::is_aggregate_function(name)
 }
@@ -2302,6 +2317,20 @@ mod tests {
         assert!(matches!(left_key, Expr::Column(name) if name == "o_orderkey"));
         assert!(matches!(right_key, Expr::Column(name) if name == "__kaveon_corr_0"));
         assert!(residual.is_none());
+    }
+
+    #[test]
+    fn a_correlated_in_with_distinct_key_is_a_keyed_semi_join() {
+        let plan = bound(
+            "SELECT o_orderkey FROM orders o WHERE o_orderkey IN (SELECT DISTINCT l_orderkey FROM lineitem l WHERE l.l_orderkey = o_orderkey)",
+        );
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("projection");
+        };
+        let LogicalPlan::SemiJoin { right_key, .. } = *input else {
+            panic!("DISTINCT correlated IN should lower to a semi join");
+        };
+        assert_eq!(right_key, Expr::Column("__kaveon_corr_0".into()));
     }
 
     #[test]
