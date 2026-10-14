@@ -6166,6 +6166,48 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             let fmt_arr = as_string_array(&args[1])?;
             eval_to_char(source, fmt_arr, num_rows)
         }
+        "FROM_UNIXTIME" => {
+            check_arity(name, args, 1)?;
+            let seconds = compute::cast(&args[0], &DataType::Float64)?;
+            let seconds = seconds.as_primitive::<Float64Type>();
+            let values = (0..num_rows)
+                .map(|row| {
+                    if seconds.is_null(row) {
+                        return Ok(None);
+                    }
+                    let micros = seconds.value(row) * 1_000_000.0;
+                    if !micros.is_finite()
+                        || micros < i64::MIN as f64
+                        || micros > i64::MAX as f64
+                    {
+                        return Err(KaveonError::Execution(
+                            "FROM_UNIXTIME value is outside the timestamp range".into(),
+                        ));
+                    }
+                    Ok(Some(micros.round() as i64))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(Arc::new(TimestampMicrosecondArray::from(values)))
+        }
+        "TO_UNIXTIME" => {
+            check_arity(name, args, 1)?;
+            let timestamp = compute::cast(
+                &args[0],
+                &DataType::Timestamp(TimeUnit::Microsecond, None),
+            )?;
+            let timestamp = timestamp
+                .as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .ok_or_else(|| {
+                    KaveonError::Execution("TO_UNIXTIME requires a timestamp value".into())
+                })?;
+            Ok(Arc::new(Float64Array::from(
+                timestamp
+                    .iter()
+                    .map(|value| value.map(|micros| micros as f64 / 1_000_000.0))
+                    .collect::<Vec<_>>(),
+            )))
+        }
         // ARRAY[...] is a typed list expression. Homogeneous integer
         // arguments retain Int64; mixed numeric arguments promote to
         // Float64. Boolean and string arguments retain their types.
@@ -8492,6 +8534,56 @@ mod tests {
                 .iter()
                 .collect::<Vec<_>>(),
             vec![Some(12), None, None, Some(-4)]
+        );
+    }
+
+    #[test]
+    fn unix_time_functions_round_trip_nullable_fractional_seconds() {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("seconds", DataType::Float64, true),
+        ]));
+        let input = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Float64Array::from(vec![
+                Some(0.0),
+                Some(1.234567),
+                None,
+                Some(-2.5),
+            ]))],
+        )
+        .unwrap();
+        let timestamp = evaluate(
+            &Expr::Function {
+                name: "FROM_UNIXTIME".into(),
+                args: vec![Expr::Column("seconds".into())],
+            },
+            &input,
+        )
+        .unwrap();
+        assert_eq!(
+            timestamp
+                .as_primitive::<TimestampMicrosecondType>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(1_234_567), None, Some(-2_500_000)]
+        );
+        let round_trip = evaluate(
+            &Expr::Function {
+                name: "TO_UNIXTIME".into(),
+                args: vec![Expr::Function {
+                    name: "FROM_UNIXTIME".into(),
+                    args: vec![Expr::Column("seconds".into())],
+                }],
+            },
+            &input,
+        )
+        .unwrap();
+        assert_eq!(
+            round_trip
+                .as_primitive::<Float64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(0.0), Some(1.234567), None, Some(-2.5)]
         );
     }
 

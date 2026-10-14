@@ -243,6 +243,9 @@ node-drain recovery, and sustained soak remain separate acceptance gates.
   timestamp units from nanoseconds through weeks and complete calendar
   month/quarter/year boundaries, preserving NULL inputs and reverse-range
   signs. Leap-year month ends are covered by executor and distributed tests.
+- `FROM_UNIXTIME` and `TO_UNIXTIME` now provide nullable, vectorized epoch
+  conversion through the Engine's canonical microsecond timestamp type, with
+  explicit overflow diagnostics and fractional-second regression coverage.
 - Background statistics and cube refresh deduplication now scopes its
   process-local registry by table and source location. Independent embedded
   catalog stores can no longer suppress one another's refresh, which removes a
