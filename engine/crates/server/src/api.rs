@@ -2920,10 +2920,15 @@ async fn submit_trino_statement_parts(
             }
         }
         if let Some(name) = trino_deallocate_statement(body) {
-            TRINO_PREPARED_STATEMENTS
-                .write()
-                .await
-                .remove(&(identity.principal.clone(), name));
+            let mut prepared = TRINO_PREPARED_STATEMENTS.write().await;
+            if name.eq_ignore_ascii_case("ALL") {
+                // Trino scopes prepared statements to the session/principal;
+                // bulk deallocation must never clear another principal's
+                // entries from the process-wide registry.
+                prepared.retain(|(principal, _), _| principal != &identity.principal);
+            } else {
+                prepared.remove(&(identity.principal.clone(), name));
+            }
             return trino_control_response();
         }
     }
@@ -19961,6 +19966,10 @@ mod streamed_root_tests {
         assert_eq!(
             trino_deallocate_statement("DEALLOCATE PREPARE recent;"),
             Some("recent".to_owned())
+        );
+        assert_eq!(
+            trino_deallocate_statement("DEALLOCATE PREPARE ALL;"),
+            Some("ALL".to_owned())
         );
         assert!(trino_prepare_statement("PREPARE recent SELECT 1").is_err());
         let mixed = trino_prepare_statement("PrEpArE recent FROM SELECT * FROM events WHERE id = ?")
