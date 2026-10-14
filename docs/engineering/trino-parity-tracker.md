@@ -524,6 +524,8 @@ invalidation, isolation, bounds, and restart evidence listed above.
   timestamp path.
 - `ARRAY[...]` now preserves unsigned `UInt32` and `UInt64` element columns,
   including nullable rows, instead of rejecting those Arrow integer types.
+- `ARRAY[...]` now preserves nullable `Float32` element columns and keeps the
+  list element type at `Float32` rather than rejecting or widening the source.
 - Equality-key `LEFT`, `RIGHT`, and `FULL` joins now carry residual `ON`
   predicates through local and distributed hash joins. Candidate pairs are
   evaluated in bounded batches with SQL TRUE-only matching; preserved rows and
