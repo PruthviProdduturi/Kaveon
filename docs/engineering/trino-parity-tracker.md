@@ -826,7 +826,11 @@ report is archived as `tmp/20261013-a15/report-a20.json` with its gate output in
 `tmp/20261013-a15/claim-gate-a20.json`. During this run the coordinator also
 waited through asynchronous catalog-snapshot publication instead of converting
 a transient worker-convergence window into an HTTP 500; that behavior is in
-`cf6615be` and covered by the server test suite (346 passed).
+`cf6615be` and covered by the server test suite (359 passed). The same suite
+also includes the bracketed-identifier regression (`SELECT DISTINCT [region]`)
+that prevents Studio's SQL Server-style completion from being interpreted as
+an `ARRAY` expression by workers; a deployed image must include commit
+`6818e65f` or later for that protection to be present.
 Track 2 remains partial because prepared statements are now available through
 the Engine HTTP lifecycle and scalar/array `EXECUTE ... USING` is supported by
 the Trino adapter. The raw Trino statement route also accepts owner-scoped SQL
