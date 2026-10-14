@@ -2915,10 +2915,18 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         {
             data_type = DataType::Float64;
         }
+        if data_type == DataType::Utf8
+            && args
+                .iter()
+                .any(|arg| arg.data_type() == &DataType::LargeUtf8)
+        {
+            data_type = DataType::LargeUtf8;
+        }
         if args.iter().any(|arg| {
             arg.data_type() != &data_type
                 && arg.data_type() != &DataType::Null
                 && !(data_type == DataType::Float64 && arg.data_type() == &DataType::Int64)
+                && !(data_type == DataType::LargeUtf8 && arg.data_type() == &DataType::Utf8)
         }) {
             return Err(KaveonError::Execution(
                 "ARRAY elements must have one common type".into(),
@@ -3156,14 +3164,19 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             builder.values().append_null();
                             continue;
                         }
-                        let values = arg
-                            .as_any()
-                            .downcast_ref::<LargeStringArray>()
-                            .ok_or_else(|| {
-                                KaveonError::Execution(
-                                    "ARRAY element type could not be decoded".into(),
-                                )
-                            })?;
+                        let casted;
+                        let values = if arg.data_type() == &DataType::LargeUtf8 {
+                            arg.as_any()
+                                .downcast_ref::<LargeStringArray>()
+                                .ok_or_else(|| {
+                                    KaveonError::Execution(
+                                        "ARRAY element type could not be decoded".into(),
+                                    )
+                                })?
+                        } else {
+                            casted = compute::cast(arg, &DataType::LargeUtf8)?;
+                            casted.as_string::<i64>()
+                        };
                         if values.is_null(row) {
                             builder.values().append_null();
                         } else {
@@ -10162,6 +10175,19 @@ mod tests {
         assert_eq!(
             arrays.value(1).as_string::<i64>().iter().collect::<Vec<_>>(),
             vec![None, Some("c")]
+        );
+    }
+
+    #[test]
+    fn array_constructor_promotes_mixed_utf8_widths() {
+        let narrow = Arc::new(StringArray::from(vec![Some("n")])) as ArrayRef;
+        let wide = Arc::new(LargeStringArray::from(vec![Some("w")])) as ArrayRef;
+        let result = eval_scalar_function("ARRAY", &[narrow, wide], 1).unwrap();
+        let arrays = result.as_any().downcast_ref::<LargeListArray>().unwrap();
+        assert_eq!(arrays.value_type(), DataType::LargeUtf8);
+        assert_eq!(
+            arrays.value(0).as_string::<i64>().iter().collect::<Vec<_>>(),
+            vec![Some("n"), Some("w")]
         );
     }
 
