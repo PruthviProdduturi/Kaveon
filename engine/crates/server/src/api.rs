@@ -2958,7 +2958,7 @@ async fn submit_trino_statement_parts(
                 )
                     .into_response();
             };
-            return trino_describe_input_response(&prepared_parameter_names(&query));
+            return trino_describe_input_query_response(&query);
         }
         if let Some(name) = trino_describe_output(body) {
             let query = TRINO_PREPARED_STATEMENTS
@@ -3340,7 +3340,26 @@ fn trino_expr_type(expression: &Expr) -> String {
     }
 }
 
+#[cfg(test)]
 fn trino_describe_input_response(parameters: &[String]) -> Response {
+    let metadata = parameters
+        .iter()
+        .cloned()
+        .map(|name| (name, "unknown".to_owned()))
+        .collect::<Vec<_>>();
+    trino_describe_input_metadata_response(&metadata)
+}
+
+fn trino_describe_input_query_response(query: &str) -> Response {
+    let parameters = prepared_parameter_names(query);
+    let metadata = parameters
+        .iter()
+        .map(|name| (name.clone(), trino_explicit_parameter_type(query, name)))
+        .collect::<Vec<_>>();
+    trino_describe_input_metadata_response(&metadata)
+}
+
+fn trino_describe_input_metadata_response(parameters: &[(String, String)]) -> Response {
     let columns = [
         ("Position", "bigint"),
         ("Name", "varchar"),
@@ -3359,9 +3378,9 @@ fn trino_describe_input_response(parameters: &[String]) -> Response {
     let rows = parameters
         .iter()
         .enumerate()
-        .map(|(position, parameter)| {
+        .map(|(position, (parameter, data_type))| {
             let name = parameter.strip_prefix(':').map(ToOwned::to_owned);
-            serde_json::json!([position as i64, name, "unknown", "unknown"])
+            serde_json::json!([position as i64, name, data_type, data_type])
         })
         .collect::<Vec<_>>();
     let id = Uuid::new_v4().to_string();
@@ -3374,6 +3393,40 @@ fn trino_describe_input_response(parameters: &[String]) -> Response {
         "data": rows
     }))
     .into_response()
+}
+
+fn trino_explicit_parameter_type(query: &str, parameter: &str) -> String {
+    let lower = query.to_ascii_lowercase();
+    let parameter = parameter.to_ascii_lowercase();
+    let cast_prefix = format!("cast({parameter} as ");
+    if let Some(start) = lower.find(&cast_prefix) {
+        let type_start = start + cast_prefix.len();
+        let bytes = lower.as_bytes();
+        let mut depth = 0usize;
+        for index in type_start..bytes.len() {
+            match bytes[index] {
+                b'(' => depth += 1,
+                b')' if depth == 0 => {
+                    return lower[type_start..index].trim().to_owned();
+                }
+                b')' => depth -= 1,
+                _ => {}
+            }
+        }
+    }
+    let cast_suffix = format!("{parameter}::");
+    if let Some(start) = lower.find(&cast_suffix) {
+        let type_start = start + cast_suffix.len();
+        let end = lower[type_start..]
+            .find(|character: char| {
+                character.is_whitespace()
+                    || matches!(character, ',' | ')' | ';' | '=' | '<' | '>' | '+')
+            })
+            .map(|offset| type_start + offset)
+            .unwrap_or(lower.len());
+        return lower[type_start..end].trim().to_owned();
+    }
+    "unknown".to_owned()
 }
 
 fn trino_describe_output_response(metadata: &[(String, String, bool)]) -> Response {
@@ -20333,6 +20386,17 @@ mod streamed_root_tests {
         assert_eq!(value["data"][0], serde_json::json!([0, null, "unknown", "unknown"]));
         assert_eq!(value["data"][1], serde_json::json!([1, "region", "unknown", "unknown"]));
         assert_eq!(value["data"][2], serde_json::json!([2, null, "unknown", "unknown"]));
+
+        let response = trino_describe_input_query_response(
+            "SELECT * FROM events WHERE id = CAST(? AS BIGINT) AND event_date = $2::date AND name = :name",
+        );
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["data"][0], serde_json::json!([0, null, "date", "date"]));
+        assert_eq!(value["data"][1], serde_json::json!([1, "name", "unknown", "unknown"]));
+        assert_eq!(value["data"][2], serde_json::json!([2, null, "bigint", "bigint"]));
     }
 
     #[tokio::test]

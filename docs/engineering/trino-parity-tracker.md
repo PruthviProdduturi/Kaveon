@@ -1046,8 +1046,9 @@ are still required.
 
 The raw Trino route now also answers SQL-level `DESCRIBE INPUT name` for an
 owner-scoped prepared statement. It returns the discovered parameter positions
-and named parameters in Trino's four-column metadata shape; types are reported
-as `unknown` until a typed bind is supplied. It also answers `DESCRIBE OUTPUT`
+and named parameters in Trino's four-column metadata shape; explicit `CAST`
+and PostgreSQL-style `::type` annotations are reported with their normalized
+types, while genuinely unresolved parameters remain `unknown`. It also answers `DESCRIBE OUTPUT`
 for projection plans, returning Trino's seven-column metadata shape with
 explicit aliases and planner-inferred scalar/cast types; unbound column types
 remain `unknown`. The complete wire prepare/describe/bind lifecycle remains
