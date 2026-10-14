@@ -2605,6 +2605,101 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             ))),
         };
     }
+    if upper == "ARRAY_REPEAT" {
+        check_arity(name, args, 2)?;
+        let counts = compute::cast(&args[1], &DataType::Int64)?;
+        let counts = counts.as_primitive::<Int64Type>();
+        const MAX_ARRAY_REPEAT: i64 = 1_000_000;
+        macro_rules! repeat_primitive {
+            ($array_ty:ty, $builder:expr, $value:expr) => {{
+                let elements = args[0].as_any().downcast_ref::<$array_ty>().ok_or_else(|| {
+                    KaveonError::Execution(format!(
+                        "ARRAY_REPEAT does not support element type {}",
+                        args[0].data_type()
+                    ))
+                })?;
+                let mut builder = ListBuilder::new($builder);
+                for row in 0..num_rows {
+                    if counts.is_null(row) {
+                        builder.append(false);
+                        continue;
+                    }
+                    let count = counts.value(row);
+                    if !(0..=MAX_ARRAY_REPEAT).contains(&count) {
+                        return Err(KaveonError::Execution(
+                            "ARRAY_REPEAT count must be between 0 and 1000000".into(),
+                        ));
+                    }
+                    if elements.is_null(row) {
+                        for _ in 0..count {
+                            builder.values().append_null();
+                        }
+                    } else {
+                        for _ in 0..count {
+                            builder.values().append_value($value(elements, row));
+                        }
+                    }
+                    builder.append(true);
+                }
+                Ok(Arc::new(builder.finish()) as ArrayRef)
+            }};
+        }
+        return match args[0].data_type() {
+            DataType::Boolean => repeat_primitive!(BooleanArray, BooleanBuilder::new(), |a: &BooleanArray, r| a.value(r)),
+            DataType::Int32 => repeat_primitive!(Int32Array, Int32Builder::new(), |a: &Int32Array, r| a.value(r)),
+            DataType::Int64 => repeat_primitive!(Int64Array, Int64Builder::new(), |a: &Int64Array, r| a.value(r)),
+            DataType::Float32 => repeat_primitive!(Float32Array, PrimitiveBuilder::<Float32Type>::new(), |a: &Float32Array, r| a.value(r)),
+            DataType::Float64 => repeat_primitive!(Float64Array, Float64Builder::new(), |a: &Float64Array, r| a.value(r)),
+            DataType::Utf8 => {
+                let elements = args[0].as_string::<i32>();
+                let mut builder = ListBuilder::new(StringBuilder::new());
+                for row in 0..num_rows {
+                    if counts.is_null(row) {
+                        builder.append(false);
+                        continue;
+                    }
+                    let count = counts.value(row);
+                    if !(0..=MAX_ARRAY_REPEAT).contains(&count) {
+                        return Err(KaveonError::Execution(
+                            "ARRAY_REPEAT count must be between 0 and 1000000".into(),
+                        ));
+                    }
+                    for _ in 0..count {
+                        if elements.is_null(row) {
+                            builder.values().append_null();
+                        } else {
+                            builder.values().append_value(elements.value(row));
+                        }
+                    }
+                    builder.append(true);
+                }
+                Ok(Arc::new(builder.finish()) as ArrayRef)
+            }
+            DataType::Null => {
+                let mut builder = ListBuilder::new(NullBuilder::new());
+                for row in 0..num_rows {
+                    if counts.is_null(row) {
+                        builder.append(false);
+                        continue;
+                    }
+                    let count = counts.value(row);
+                    if !(0..=MAX_ARRAY_REPEAT).contains(&count) {
+                        return Err(KaveonError::Execution(
+                            "ARRAY_REPEAT count must be between 0 and 1000000".into(),
+                        ));
+                    }
+                    for _ in 0..count {
+                        builder.values().append_null();
+                    }
+                    builder.append(true);
+                }
+                Ok(Arc::new(builder.finish()) as ArrayRef)
+            }
+            other => Err(KaveonError::Execution(format!(
+                "ARRAY_REPEAT does not support element type {other}"
+            ))),
+        };
+    }
     if upper == "ROW_FIELD" {
         check_arity(name, args, 2)?;
         let row = args[0]
@@ -8314,6 +8409,44 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![Some(2), Some(2)]
         );
+    }
+
+    #[test]
+    fn array_repeat_preserves_types_nulls_and_row_counts() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![Some(1), None, Some(3)])) as ArrayRef,
+        )])
+        .unwrap();
+        let value = evaluate(
+            &Expr::Function {
+                name: "ARRAY_REPEAT".into(),
+                args: vec![
+                    Expr::Column("id".into()),
+                    Expr::Literal(ScalarValue::Int64(2)),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        let arrays = value.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(arrays.value_type(), DataType::Int64);
+        assert_eq!(arrays.value(0).as_primitive::<Int64Type>().values(), &[1, 1]);
+        assert_eq!(arrays.value(1).null_count(), 2);
+        assert_eq!(arrays.value(2).as_primitive::<Int64Type>().values(), &[3, 3]);
+
+        let error = evaluate(
+            &Expr::Function {
+                name: "ARRAY_REPEAT".into(),
+                args: vec![
+                    Expr::Literal(ScalarValue::Int64(1)),
+                    Expr::Literal(ScalarValue::Int64(-1)),
+                ],
+            },
+            &batch,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("between 0 and 1000000"));
     }
 
     #[test]
