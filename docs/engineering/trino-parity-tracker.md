@@ -578,6 +578,7 @@ invalidation, isolation, bounds, and restart evidence listed above.
   projection aliases that reference window expressions; the planner no longer
   silently drops the clause. Broader QUALIFY shapes still require additional
   differential coverage.
+- The core planner now lowers `FETCH FIRST/NEXT … ROWS ONLY` directly to the bounded limit/offset path (`efaaffaf`), while rejecting `PERCENT`, `WITH TIES`, and conflicting `LIMIT`/`FETCH` forms explicitly.
 - Trino's `FETCH FIRST … ROWS ONLY` and `OFFSET … ROWS FETCH NEXT … ROWS
   ONLY` forms now share the existing bounded TopN/offset path and are covered
   in the multi-encoding distributed differential corpus.
