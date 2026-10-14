@@ -140,8 +140,9 @@ foundations, but several operators are still centralized or narrow:
   remain open. Trino `EXECUTE ... USING ARRAY[...]` literals now use the same
   recursive binding path, including nested arrays and null elements.
   The raw Trino route also answers `SHOW SESSION` with the supported Engine
-  settings in Trino's metadata result shape; it does not create a persistent
-  server-side session.
+  settings in Trino's metadata result shape, and answers `SHOW FUNCTIONS` with
+  the supported scalar and aggregate registry in Trino's six-column metadata
+  shape; these metadata calls do not create a persistent server-side session.
   Prepared-parameter discovery now also ignores PostgreSQL `::type` casts,
   so cast names cannot be mistaken for named bindings (`617b69f6`).
   Uncorrelated aggregate scalar subqueries in `WHERE` are now supported with
