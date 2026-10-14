@@ -425,7 +425,7 @@ invalidation, isolation, bounds, and restart evidence listed above.
   `LargeList` containers, preserving null results for null or empty arrays.
 - The differential corpus now exercises scalar `CARDINALITY`,
   `ARRAY_POSITION`, `ARRAY_JOIN`, and `ARRAYS_OVERLAP` results across alternate
-  Parquet encodings and local/two-worker execution paths. This extends the
+  Parquet encodings and local/three-worker execution paths. This extends the
   complex-type parity gate without claiming support for row-producing `UNNEST`
   or array/map-valued result comparison.
 - The same corpus now checks `MAP_ELEMENT_AT` and order-independent map
