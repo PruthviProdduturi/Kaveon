@@ -10207,6 +10207,9 @@ mod tests {
             result.data_type(),
             &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
         );
+        let utc_value = result
+            .as_primitive::<TimestampMicrosecondType>()
+            .value(0);
 
         // Offset-bearing input is accepted by the same timestamp parser and
         // retains the timezone-bearing output type.
@@ -10225,6 +10228,12 @@ mod tests {
         assert_eq!(
             result.data_type(),
             &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+        );
+        assert_eq!(
+            result
+                .as_primitive::<TimestampMicrosecondType>()
+                .value(0),
+            utc_value - 19_800_000_000
         );
     }
 
