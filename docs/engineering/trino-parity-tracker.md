@@ -931,6 +931,11 @@ and covered end to end. Positional
  scalar parameters, including named placeholders, are supported through the
 HTTP statement API; wire-compatible Trino prepare/describe semantics remain
 an explicit unsupported case.
+Plan-only `EXPLAIN` now uses the normal binder and optimizer and returns
+logical, optimized, or physical/distributed plan rows without starting a scan,
+worker task, cache entry, or exchange. `GREATEST` and `LEAST` preserve their
+common input type and propagate NULL arguments; both behaviors have focused
+executor and statement-path coverage.
 
 These slices do not close Tracks 1 and 2's qualification gates; the broader
 three-worker corpus, complex types, correlated/unsupported scalar shapes,
@@ -938,7 +943,7 @@ prepared-statement coverage, worker-loss, and exact-result differential runs
 are still required.
 
 The current local validation baseline is green on the same checkout: the full
-`kaveon-server` suite passed **364 tests**, and the full CLI suite passed **211
+`kaveon-server` suite passed **367 tests**, and the full CLI suite passed **211
 tests** (one ignored). The set-operation coverage includes `UNION ALL`, distinct and
 multiset `INTERSECT`/`EXCEPT`, dictionary-versus-plain values, duplicate
 counts, null handling, planner lowering, and exchange-input consumption. This
