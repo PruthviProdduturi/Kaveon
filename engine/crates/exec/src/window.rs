@@ -2,7 +2,7 @@ use std::{cmp::Ordering, sync::Arc};
 
 use arrow::{
     array::{Array, ArrayRef, AsArray, Float64Array, Int64Array, RecordBatch, UInt32Array},
-    compute::{SortColumn, SortOptions, concat_batches, lexsort_to_indices, take},
+    compute::{SortColumn, SortOptions, cast, concat_batches, lexsort_to_indices, take},
     datatypes::{
         DataType, Field, Float64Type, Int32Type, Int64Type, Schema, SchemaRef, UInt64Type,
     },
@@ -153,6 +153,20 @@ fn compare(col: &ArrayRef, left: usize, right: usize) -> Result<Ordering> {
     Ok(comparator(left, right))
 }
 
+fn normalize_dictionary_columns(columns: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
+    columns
+        .into_iter()
+        .map(|column| match column.data_type() {
+            // Dictionary codes are local to each batch/file.  Window peer
+            // detection must compare their logical values, and normalization
+            // happens once per evaluated column rather than once per row.
+            DataType::Dictionary(_, value_type) => cast(column.as_ref(), value_type.as_ref())
+                .map_err(|failure| error(failure.to_string())),
+            _ => Ok(column),
+        })
+        .collect()
+}
+
 fn peers(cols: &[ArrayRef], left: usize, right: usize) -> Result<bool> {
     for col in cols {
         if compare(col, left, right)? != Ordering::Equal {
@@ -174,14 +188,14 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
         return Err(error("window operator requires window expressions"));
     };
     let name = name.to_uppercase();
-    let partition_cols = columns(partition_by, batch)?;
-    let order_cols = columns(
+    let partition_cols = normalize_dictionary_columns(columns(partition_by, batch)?)?;
+    let order_cols = normalize_dictionary_columns(columns(
         &order_by
             .iter()
             .map(|(e, _, _)| e.clone())
             .collect::<Vec<_>>(),
         batch,
-    )?;
+    )?)?;
     let mut sorts = partition_cols
         .iter()
         .map(|c| SortColumn {

@@ -2523,9 +2523,13 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
     }
 
     if let Some(over) = &func.over {
-        if func.null_treatment.is_some() || func.filter.is_some() || !func.within_group.is_empty() {
+        // Aggregate FILTER has already been lowered above to a
+        // null-preserving CASE argument, so window execution can reuse the
+        // same implementation as grouped aggregates.  NULL treatment and
+        // ordered-set clauses still require separate semantics.
+        if func.null_treatment.is_some() || !func.within_group.is_empty() {
             return Err(sql_err(
-                "window NULL treatment, FILTER, and WITHIN GROUP are unsupported",
+                "window NULL treatment and WITHIN GROUP are unsupported",
             ));
         }
         if let ast::FunctionArguments::List(list) = &func.args
@@ -4824,6 +4828,18 @@ mod tests {
         )
         .unwrap();
         assert!(format!("{plan:?}").contains("Case {"));
+    }
+
+    #[test]
+    fn lowers_window_aggregate_filter_to_null_preserving_case() {
+        let plan = sql_to_logical_plan(
+            "SELECT SUM(amount) FILTER (WHERE amount > 0) OVER (PARTITION BY region) FROM events",
+        )
+        .unwrap();
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("WindowFunction"), "{debug}");
+        assert!(debug.contains("Case {"), "{debug}");
+        assert!(!debug.contains("FILTER is unsupported"), "{debug}");
     }
 
     #[test]
