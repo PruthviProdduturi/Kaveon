@@ -2645,6 +2645,69 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             false,
         )?));
     }
+    if upper == "SPLIT_TO_MAP" {
+        check_arity(name, args, 3)?;
+        let sources = as_string_array(&args[0])?;
+        let entry_delimiters = as_string_array(&args[1])?;
+        let key_delimiters = as_string_array(&args[2])?;
+        let mut offsets = Vec::with_capacity(num_rows + 1);
+        offsets.push(0_i32);
+        let mut valid = Vec::with_capacity(num_rows);
+        let mut keys = Vec::new();
+        let mut values = Vec::new();
+        for row in 0..num_rows {
+            if sources.is_null(row)
+                || entry_delimiters.is_null(row)
+                || key_delimiters.is_null(row)
+            {
+                valid.push(false);
+                offsets.push(keys.len() as i32);
+                continue;
+            }
+            let entry_delimiter = entry_delimiters.value(row);
+            let key_delimiter = key_delimiters.value(row);
+            if entry_delimiter.is_empty() || key_delimiter.is_empty() {
+                return Err(KaveonError::Execution(
+                    "SPLIT_TO_MAP delimiters must not be empty".into(),
+                ));
+            }
+            let mut seen = std::collections::HashSet::new();
+            for entry in sources.value(row).split(entry_delimiter) {
+                let mut pair = entry.splitn(2, key_delimiter);
+                let key = pair.next().unwrap_or_default();
+                let value = pair.next().unwrap_or_default();
+                if !seen.insert(key.to_owned()) {
+                    return Err(KaveonError::Execution(format!(
+                        "SPLIT_TO_MAP duplicate key {key:?}"
+                    )));
+                }
+                keys.push(key.to_owned());
+                values.push(value.to_owned());
+            }
+            valid.push(true);
+            offsets.push(keys.len() as i32);
+        }
+        let key_array = Arc::new(StringArray::from(keys)) as ArrayRef;
+        let value_array = Arc::new(StringArray::from(values)) as ArrayRef;
+        let entry_fields: arrow::datatypes::Fields = vec![
+            Arc::new(arrow::datatypes::Field::new("key", DataType::Utf8, false)),
+            Arc::new(arrow::datatypes::Field::new("value", DataType::Utf8, true)),
+        ]
+        .into();
+        let entries = StructArray::new(entry_fields.clone(), vec![key_array, value_array], None);
+        let entry_field = Arc::new(arrow::datatypes::Field::new(
+            "entries",
+            DataType::Struct(entry_fields),
+            false,
+        ));
+        return Ok(Arc::new(MapArray::try_new(
+            entry_field,
+            OffsetBuffer::new(ScalarBuffer::from(offsets)),
+            entries,
+            Some(arrow::buffer::NullBuffer::from(valid)),
+            false,
+        )?));
+    }
     if upper == "MAP_CONCAT" {
         if args.len() < 2 {
             return Err(KaveonError::Execution(
@@ -8562,6 +8625,40 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("MAP keys cannot contain NULL"));
+    }
+
+    #[test]
+    fn split_to_map_builds_typed_maps_and_rejects_duplicate_keys() {
+        let batch = RecordBatch::try_from_iter([(
+            "dummy",
+            Arc::new(StringArray::from(vec!["x", "y"])) as ArrayRef,
+        )])
+        .unwrap();
+        let expression = Expr::Function {
+            name: "SPLIT_TO_MAP".into(),
+            args: vec![
+                Expr::Literal(ScalarValue::Utf8("a:1,b:2".into())),
+                Expr::Literal(ScalarValue::Utf8(",".into())),
+                Expr::Literal(ScalarValue::Utf8(":".into())),
+            ],
+        };
+        let result = evaluate(&expression, &batch).unwrap();
+        let map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(map.keys().as_string::<i32>().iter().collect::<Vec<_>>(), vec![Some("a"), Some("b"), Some("a"), Some("b")]);
+        assert_eq!(map.values().as_string::<i32>().iter().collect::<Vec<_>>(), vec![Some("1"), Some("2"), Some("1"), Some("2")]);
+
+        let duplicate = Expr::Function {
+            name: "SPLIT_TO_MAP".into(),
+            args: vec![
+                Expr::Literal(ScalarValue::Utf8("a:1,a:2".into())),
+                Expr::Literal(ScalarValue::Utf8(",".into())),
+                Expr::Literal(ScalarValue::Utf8(":".into())),
+            ],
+        };
+        assert!(evaluate(&duplicate, &batch)
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate key"));
     }
 
     #[test]
