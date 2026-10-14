@@ -36,6 +36,94 @@
   overflow: visible;
 }
 
+/*
+ * Remove, on the tile itself.
+ *
+ * "Once I add a chart how can I remove that? I don't see the option." It was
+ * not covered — it was absent. `DashboardItem` returns for a chart tile BEFORE
+ * it reaches `.dashboard-component-header`, so the duplicate/remove pair that
+ * `aed9e6e8` made visible at `opacity: .75` is only ever rendered on the tabs
+ * branch. A chart's only removal was two clicks deep inside the ⋯ menu. Same
+ * early-return class of defect as the missing drag handle, and the same fix:
+ * put the control in the CANVAS, per grid child, where no tile type can return
+ * before reaching it.
+ *
+ * BOTTOM-LEFT because it is the one corner free on every tile type. All of them
+ * crowd the top: the chart's ⋯ at `top: 6; right: 6`, the text block's toolbar
+ * at `top: 4; right: 8`, the header's at `top: 0; right: 8`, the column's
+ * "Add ˅ ×" at `top: 4; right: 4`, the row's "ROW · Column · Chart ·" at
+ * `top: -14; left: 12`, the tabs header's actions at its right end. And the
+ * three resize handles are `se` (bottom-right), `e` (right) and `s`
+ * (bottom-centre), so the bottom-left corner is clear of those too. One
+ * position, not four special cases.
+ *
+ * z-index 30 puts it above both things that could cover it — the grab strip at
+ * 15 and the chart's actions overlay at 20.
+ */
+.tileTools {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+/* Revealed by hover, and by keyboard focus anywhere in the tile so the controls
+   are reachable without a pointer. */
+.tile:hover .tileTools,
+.tile:focus-within .tileTools {
+  opacity: 1;
+}
+
+.remove,
+.nest {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.remove {
+  cursor: pointer;
+}
+
+/* Matches `.dashboard-component-action-btn:hover .fa-trash` in dashboard.css:
+   the glyph reads as destructive only once it is the thing under the pointer. */
+.remove:hover {
+  color: var(--danger, #dc2626);
+  border-color: var(--danger, #dc2626);
+  background: rgba(220, 38, 38, 0.10);
+}
+
+/* "Drag into a row or column." A grip, not a button: it does nothing on click,
+   it is a drag source, and the cursor says so. */
+.nest {
+  cursor: grab;
+}
+
+.nest:active {
+  cursor: grabbing;
+}
+
+.nest:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.10);
+}
+
 /* Written as a descendant selector so it outranks the geometry `.grab` also
    inherits from the global `.dashboard-drag-handle` (padding, radius) without
    depending on which stylesheet the bundler emits first. The global class is

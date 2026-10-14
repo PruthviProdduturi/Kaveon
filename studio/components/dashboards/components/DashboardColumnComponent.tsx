@@ -10,7 +10,7 @@ import React, { useState, useCallback, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import type { DashboardComponentProps } from '../../../types/dashboard';
 import { useDashboard } from '../DashboardContext';
-import { useBuilderContext } from '../BuilderContext';
+import { useBuilderContext, moveDragProps, useContainerDropTarget } from '../BuilderContext';
 
 const DashboardItem = dynamic(() => import('../DashboardItem'), { ssr: false });
 
@@ -38,9 +38,21 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+  const { isDropTarget, dropProps } = useContainerDropTarget(
+    item.i,
+    'column',
+    !!isEditMode && !!builderCtx
+  );
 
   // ── Child drag-to-reorder ─────────────────────────────────────────────────────
 
+  /**
+   * The grip's drag means two things, and which one it is depends only on where
+   * it is released: dropped on a sibling slot in this column it reorders,
+   * dropped on the canvas or another container it moves the child out. The
+   * index below drives the reorder; `moveDragProps` arms the payload the other
+   * drop targets read. One gesture, so the user does not have to know.
+   */
   const handleChildDragStart = (e: React.DragEvent, index: number) => {
     e.dataTransfer.setData('text/plain', String(index));
     e.dataTransfer.effectAllowed = 'move';
@@ -54,16 +66,34 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
     requestAnimationFrame(() => document.body.removeChild(ghost));
   };
 
+  /**
+   * Is the drag in flight one of THIS column's own children?
+   *
+   * The reorder below reads an index out of `dataTransfer`, and an index is
+   * only meaningful within the column that issued it. Without this check,
+   * dragging a child of one column over another column's slot reordered the
+   * wrong column's children using a stranger's index.
+   */
+  const isOwnChildDrag = () => {
+    const payload = builderCtx?.pendingDrag.current;
+    return !!payload && payload.kind === 'move' && payload.fromParentId === item.i;
+  };
+
   const handleChildDragOver = (e: React.DragEvent, index: number) => {
+    if (!isOwnChildDrag()) return;
     e.preventDefault();
+    e.stopPropagation();
     e.dataTransfer.dropEffect = 'move';
     setDragOverIndex(index);
   };
 
   const handleChildDrop = (e: React.DragEvent, dropIndex: number) => {
-    e.preventDefault();
-    const fromIndex = parseInt(e.dataTransfer.getData('text/plain'), 10);
     setDragOverIndex(null);
+    if (!isOwnChildDrag()) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const fromIndex = parseInt(e.dataTransfer.getData('text/plain'), 10);
+    if (builderCtx) builderCtx.pendingDrag.current = null;
     if (isNaN(fromIndex) || fromIndex === dropIndex) return;
     const reordered = [...children];
     const [moved] = reordered.splice(fromIndex, 1);
@@ -138,12 +168,19 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
       className="dashboard-column"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => { setIsHovered(false); setMenuOpen(false); }}
+      {...dropProps}
       style={{
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
-        background: isEditMode ? '#f8fafc' : 'transparent',
-        border: isEditMode ? '1px dashed #e2e8f0' : 'none',
+        // Only shown when the model will take the drop. A column cannot hold a
+        // row or another column, so dragging one over it changes nothing.
+        background: isDropTarget
+          ? 'rgba(var(--accent-rgb), 0.08)'
+          : isEditMode ? 'var(--bg-primary)' : 'transparent',
+        border: isDropTarget
+          ? '2px dashed var(--accent)'
+          : isEditMode ? '1px dashed var(--border)' : 'none',
         borderRadius: 6,
         position: 'relative',
         boxSizing: 'border-box',
@@ -370,11 +407,14 @@ const DashboardColumnComponent: React.FC<DashboardComponentProps> = ({
                 }}
               >
                 {/* Drag handle — only in edit mode */}
-                {isEditMode && (
+                {isEditMode && builderCtx && (
                   <div
-                    draggable
-                    onDragStart={(e) => handleChildDragStart(e, idx)}
-                    title="Drag to reorder"
+                    {...moveDragProps(
+                      builderCtx.pendingDrag,
+                      { ...child, parentId: item.i },
+                      { onDragStart: (e) => handleChildDragStart(e, idx) }
+                    )}
+                    title="Drag to reorder, or out to the canvas"
                     style={{
                       display: 'flex',
                       alignItems: 'center',

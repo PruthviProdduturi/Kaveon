@@ -42,9 +42,10 @@
 import React from 'react';
 // react-grid-layout v2 API (installed 2.2.4). @types are v1, so treat as any.
 import * as RGL from 'react-grid-layout';
-import { useDashboard } from './DashboardContext';
-import { useBuilderContext } from './BuilderContext';
+import { useDashboard, isContainerType } from './DashboardContext';
+import { useBuilderContext, moveDragProps } from './BuilderContext';
 import DashboardItem from './DashboardItem';
+import { ConfirmModal } from '../../components/ConfirmModal';
 import styles from './DashboardCanvas.module.css';
 import {
   DEFAULT_COMPONENT_DIMENSIONS,
@@ -119,10 +120,30 @@ interface DashboardCanvasProps {
 const dimsFor = (type: ComponentType) =>
   DEFAULT_COMPONENT_DIMENSIONS[type] || DEFAULT_COMPONENT_DIMENSIONS.chart;
 
+/** What the remove button calls the thing it removes, so its tooltip is specific. */
+const REMOVE_LABELS: Partial<Record<ComponentType, string>> = {
+  chart: 'chart',
+  text: 'text block',
+  header: 'header',
+  divider: 'divider',
+  tabs: 'tabs block',
+  row: 'row and everything in it',
+  column: 'column and everything in it',
+};
+
 const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => {
-  const { layout, setLayout, adoptLayout, isEditMode, addLayoutItem } = useDashboard();
+  const {
+    layout,
+    setLayout,
+    adoptLayout,
+    isEditMode,
+    addLayoutItem,
+    moveItemToRoot,
+    removeLayoutItem,
+    removeItemFromContainer,
+  } = useDashboard();
   // Present inside the builder, null in view-only mode. The builder owns the
-  // chart picker and the palette drag; the canvas only asks for them.
+  // chart picker and the drag payload; the canvas only asks for them.
   const builder = useBuilderContext();
   // Measure before the first paint so tiles never land on a stale width.
   const { width, mounted, containerRef } = useContainerWidth({ measureBeforeMount: true });
@@ -131,9 +152,14 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
   // an edit, so it must not light the Unsaved badge; only coordinates that
   // follow a drag or a resize are the user's.
   const userMovedTilesRef = React.useRef(false);
+  // The tile whose remove button was pressed, awaiting confirmation.
+  const [pendingRemoveId, setPendingRemoveId] = React.useState<string | null>(null);
 
   const rootItems = layout.filter((item) => !item.parentId);
   const isEmpty = rootItems.length === 0;
+  // No containers on the dashboard means nothing a tile could be dragged into,
+  // so the "into a container" grip would be a control with no destination.
+  const hasContainerTarget = rootItems.some((it) => isContainerType(it.type));
 
   // ── Placements ───────────────────────────────────────────────────────────────
   // Authored coordinates, with per-type defaults for anything a legacy record
@@ -197,7 +223,24 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
     else addLayoutItem('chart');
   };
 
-  // ── Drop from the Items palette ──────────────────────────────────────────────
+  /**
+   * Remove the confirmed tile.
+   *
+   * One removal route, the same two functions every other remove control in
+   * the builder calls, picked by whether the item has a parent — a tile dragged
+   * into a row has to leave through `removeItemFromContainer` or it would be
+   * filtered off the root array where it no longer is.
+   */
+  const confirmRemove = () => {
+    const id = pendingRemoveId;
+    setPendingRemoveId(null);
+    if (!id) return;
+    const target = layout.find((it) => it.i === id);
+    if (target?.parentId) removeItemFromContainer(target.parentId, id);
+    else removeLayoutItem(id);
+  };
+
+  // ── HTML5 drops onto the grid ────────────────────────────────────────────────
   /**
    * The grid sizes the drop placeholder while the pointer is still moving, and
    * `dataTransfer.getData` is unreadable until the drop itself, so the payload
@@ -205,31 +248,43 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
    * dragover and must not re-render the canvas) and the MIME type travels on
    * the event for anything that only needs to recognise the drag.
    *
-   * Returning `false` rejects the drag: that happens for any drag the palette
-   * did not start, which includes the HTML5 drag the column's own reorder grip
-   * runs inside a tile. Without the rejection that gesture would leave a
-   * phantom placeholder on the grid.
+   * Returning `false` rejects the drag, which happens for any drag the builder
+   * did not start and for a nested child being reordered inside its own
+   * container. Without the rejection those gestures would leave a phantom
+   * placeholder on the grid.
    */
   const handleDropDragOver = () => {
-    const payload = builder?.pendingPaletteDrag.current;
+    const payload = builder?.pendingDrag.current;
     if (!isEditMode || !payload) return false;
+    if (payload.kind === 'move' && !payload.fromParentId) return false;
     return dimsFor(payload.type);
   };
 
   const handleDrop = (_current: any[], dropped: any) => {
-    const payload = builder?.pendingPaletteDrag.current || null;
-    if (builder) builder.pendingPaletteDrag.current = null;
+    const payload = builder?.pendingDrag.current || null;
+    if (builder) builder.pendingDrag.current = null;
     if (!isEditMode || !payload || !dropped) return;
     const def = dimsFor(payload.type);
+    const cell = {
+      x: Math.max(0, Math.min(DASHBOARD_GRID_COLS - def.w, dropped.x ?? 0)),
+      y: Math.max(0, dropped.y ?? 0),
+    };
+    markUserMove();
+
+    // An item already inside a container, dropped on open canvas: lift it out
+    // and land it where the pointer was, the same as a palette drop does.
+    if (payload.kind === 'move') {
+      if (payload.fromParentId) moveItemToRoot(payload.itemId, cell);
+      return;
+    }
+
     const min = MIN_COMPONENT_DIMENSIONS[payload.type] || MIN_COMPONENT_DIMENSIONS.chart;
     const max = MAX_COMPONENT_DIMENSIONS[payload.type] || {};
-    markUserMove();
     // The grid reports the cell the pointer released over; everything else
     // about the item comes from its type, the same as a click-to-add.
     addLayoutItem(payload.type, {
       ...(payload.config as Partial<DashboardLayoutItem>),
-      x: Math.max(0, Math.min(DASHBOARD_GRID_COLS - def.w, dropped.x ?? 0)),
-      y: Math.max(0, dropped.y ?? 0),
+      ...cell,
       w: def.w,
       h: def.h,
       minW: min.w,
@@ -246,17 +301,45 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
    * target and stops the event before it reaches here.
    */
   const hostDragOver = (e: React.DragEvent) => {
-    if (!isEditMode || !builder?.pendingPaletteDrag.current) return;
+    if (!isEditMode || !builder?.pendingDrag.current) return;
     e.preventDefault();
   };
   const hostDrop = (e: React.DragEvent) => {
-    const payload = builder?.pendingPaletteDrag.current || null;
+    const payload = builder?.pendingDrag.current || null;
     if (!isEditMode || !payload) return;
     e.preventDefault();
-    builder!.pendingPaletteDrag.current = null;
+    builder!.pendingDrag.current = null;
     markUserMove();
+    if (payload.kind === 'move') {
+      if (payload.fromParentId) moveItemToRoot(payload.itemId);
+      return;
+    }
     addLayoutItem(payload.type, payload.config as Partial<DashboardLayoutItem>);
   };
+
+  // ── Dragging a tile INTO a container ────────────────────────────────────────
+  /**
+   * A root tile gets its own HTML5 grip for this, rather than the canvas reading
+   * a second meaning out of the grid drag it already has.
+   *
+   * The obvious design was the latter: hit-test the pointer against the
+   * container tiles while a tile is being dragged, and nest on release. It
+   * cannot work, and the reason is measurable rather than arguable. The grid
+   * compacts vertically while a drag is in flight, so the moment you pick a
+   * tile up every container below it moves — by the full height of the tile you
+   * are holding. Measured in the harness: a row resting at y 404-734 was at
+   * y 804-1134 by the time the pointer reached y 569, a 400px displacement
+   * exactly equal to the dragged tile's height. The target runs away from the
+   * pointer faster than the pointer can follow, so no pointer-aimed drop onto a
+   * container is reachable while the grid is reflowing.
+   *
+   * So "into a container" is one mechanism for every tile, root or nested: an
+   * HTML5 drag off an explicit grip, landing on the container's own drop
+   * handler (`useContainerDropTarget`). The grid drag keeps exactly one
+   * meaning — reposition on the canvas — and the container, not the canvas,
+   * decides and shows whether it will accept the drop.
+   */
+  const handleTileDragStart = () => { markUserMove(); };
 
   return (
     <div
@@ -301,12 +384,13 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
             onDragOver: handleDropDragOver,
           }}
           onLayoutChange={handleLayoutChange}
-          onDragStart={markUserMove}
+          onDragStart={handleTileDragStart}
           onResizeStart={markUserMove}
           onDrop={handleDrop}
         >
           {rootItems.map((item) => {
-            const isContainer = item.type === 'row' || item.type === 'column';
+            const isContainer = isContainerType(item.type);
+            const label = REMOVE_LABELS[item.type] || 'component';
             return (
               // A tabs tile needs no overflow of its own: the grid it holds
               // lives inside `.dashboard-component-body`, which already
@@ -323,12 +407,59 @@ const DashboardCanvas: React.FC<DashboardCanvasProps> = ({ className = '' }) => 
                     <i className="fas fa-grip-lines" />
                   </div>
                 )}
+                {isEditMode && (
+                  <div className={styles.tileTools}>
+                    {/*
+                      A `button`, which is already in DRAG_CANCEL, so pressing
+                      it cannot begin a tile drag.
+                    */}
+                    <button
+                      type="button"
+                      className={styles.remove}
+                      onClick={() => setPendingRemoveId(item.i)}
+                      title={`Remove this ${label}`}
+                      aria-label={`Remove this ${label}`}
+                    >
+                      <i className="fas fa-trash" />
+                    </button>
+                    {/*
+                      "Into a container". `[draggable="true"]` is also in
+                      DRAG_CANCEL, so this grip never starts a grid drag either
+                      — the two gestures stay separate and each means one thing.
+                      Only rendered when there is somewhere it could go.
+                    */}
+                    {builder && hasContainerTarget && (
+                      <div
+                        {...moveDragProps(builder.pendingDrag, item)}
+                        className={styles.nest}
+                        title="Drag into a row or column"
+                        aria-label="Drag into a row or column"
+                      >
+                        <i className="fas fa-object-group" />
+                      </div>
+                    )}
+                  </div>
+                )}
                 <DashboardItem item={item} isEditMode={isEditMode} />
               </div>
             );
           })}
         </GridLayout>
       )}
+
+      {/*
+        One confirm for the whole canvas rather than one per tile: the same
+        ConfirmModal DashboardItem uses, with the same copy, so there is one
+        dialog and one removal route no matter which control opened it.
+      */}
+      <ConfirmModal
+        isOpen={pendingRemoveId !== null}
+        title="Remove component"
+        message="This component will be permanently removed from the dashboard."
+        confirmLabel="Remove"
+        onConfirm={confirmRemove}
+        onCancel={() => setPendingRemoveId(null)}
+      />
 
       {!isEmpty && isEditMode && (
         <div style={{ display: 'flex', justifyContent: 'center', padding: '12px 0 8px', gap: 10 }}>
