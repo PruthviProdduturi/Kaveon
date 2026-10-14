@@ -216,7 +216,12 @@ foundations, but several operators are still centralized or narrow:
   comparisons decode dictionary-backed text values once per evaluated column,
   so Parquet files with different local dictionary codes produce identical
   local and distributed results. The differential sweep includes this case
-  across plain, dictionary, clustered, and Hive-partitioned layouts.
+  across plain, dictionary, clustered, and Hive-partitioned layouts. Window
+  `COUNT/SUM/AVG/MIN/MAX(DISTINCT ...)` uses the canonical hash key path and
+  caches repeated frame bounds per partition; its exact result is now covered
+  by the same multi-encoding local/distributed differential sweep. Arbitrary
+  ordered frames can still have one distinct-set build per unique frame, so
+  this optimization does not change their semantics.
 - Hash and semi/anti joins now accept `DATE` (`Date32`) keys with the same
   exact day-number semantics as their integer representation. A correlated
   scalar aggregate whose correlation includes a date column now passes the
