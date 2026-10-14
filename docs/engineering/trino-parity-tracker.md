@@ -655,6 +655,8 @@ invalidation, isolation, bounds, and restart evidence listed above.
 - `REGEXP_EXTRACT` now compiles each pattern through the shared regex cache,
   returns capture group 0 by default or a requested zero-based group, and
   preserves NULL results for NULL inputs, non-matches, and missing captures.
+- `SPLIT` now returns typed text arrays, preserves NULL inputs, and follows
+  Trino's character splitting behavior for an empty delimiter.
 - `ROW(...)` constructors now produce typed Arrow `StructArray` values with
   null-preserving child fields. `MAP(...)` now produces Arrow `MapArray` values
   from matching list offsets and rejects NULL keys. `MAP_KEYS` and `MAP_VALUES`

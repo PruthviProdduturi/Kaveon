@@ -4720,6 +4720,31 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .collect();
             Ok(Arc::new(result))
         }
+        "SPLIT" => {
+            check_arity(name, args, 2)?;
+            let values = as_string_array(&args[0])?;
+            let delimiters = as_string_array(&args[1])?;
+            let mut builder = ListBuilder::new(StringBuilder::new());
+            for row in 0..num_rows {
+                if values.is_null(row) || delimiters.is_null(row) {
+                    builder.append(false);
+                    continue;
+                }
+                let value = values.value(row);
+                let delimiter = delimiters.value(row);
+                if delimiter.is_empty() {
+                    for character in value.chars() {
+                        builder.values().append_value(character.to_string());
+                    }
+                } else {
+                    for part in value.split(delimiter) {
+                        builder.values().append_value(part);
+                    }
+                }
+                builder.append(true);
+            }
+            Ok(Arc::new(builder.finish()))
+        }
         "REVERSE" => {
             check_arity(name, args, 1)?;
             let arr = as_string_array(&args[0])?;
@@ -10593,6 +10618,55 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("index must be greater than zero"));
+    }
+
+    #[test]
+    fn split_returns_typed_lists_and_preserves_null_inputs() {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("value", DataType::Utf8, true),
+                Field::new("delimiter", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec![
+                    Some("alpha,beta"),
+                    Some("abc"),
+                    None,
+                ])),
+                Arc::new(StringArray::from(vec![Some(","), Some(""), Some(",")])),
+            ],
+        )
+        .unwrap();
+        let expr = Expr::Function {
+            name: "SPLIT".into(),
+            args: vec![
+                Expr::Column("value".into()),
+                Expr::Column("delimiter".into()),
+            ],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        let values = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let first = values.value(0);
+        assert_eq!(
+            first
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some("alpha"), Some("beta")]
+        );
+        let second = values.value(1);
+        assert_eq!(
+            second
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some("a"), Some("b"), Some("c")]
+        );
+        assert!(values.is_null(2));
     }
 
     #[test]
