@@ -2679,7 +2679,13 @@ fn interval_arithmetic(
     let count: i64 = text
         .parse()
         .map_err(|_| sql_err(format!("invalid INTERVAL value: '{text}'")))?;
-    let count = if negate { -count } else { count };
+    let count = if negate {
+        count
+            .checked_neg()
+            .ok_or_else(|| sql_err("negative INTERVAL value overflows INT64"))?
+    } else {
+        count
+    };
     if interval.last_field.is_some() {
         return Err(sql_err(format!(
             "unsupported INTERVAL field range: {interval}"
