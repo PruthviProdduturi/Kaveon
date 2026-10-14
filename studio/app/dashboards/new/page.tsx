@@ -47,7 +47,14 @@ const DashboardNewPage: React.FC = () => {
       const savedDashboard = await response.json();
 
       // Navigate to the dashboard view page
-      router.push(`/dashboards/${savedDashboard.id}/view`);
+      // `replace`, not `push`: the creation step is finished and must not stay
+      // in history. With a push, Back from the saved dashboard returned INTO the
+      // creation flow -- "after a chart is saved, Back should go to the
+      // library" -- and on this page that flow would have created a second
+      // dashboard. Replacing it leaves [wherever they came from, the dashboard], so
+      // the page's own Back button, which returns where the reader came from,
+      // reaches the library it was opened from.
+      router.replace(`/dashboards/${savedDashboard.id}/view`);
     } catch (error) {
       console.error("Error saving dashboard:", error);
       throw error; // Re-throw to let the context handle the error state

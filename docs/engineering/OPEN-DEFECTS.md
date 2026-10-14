@@ -279,10 +279,13 @@ slow every listing for no reader. Noted so the gap is not rediscovered as a
 bug.
 
 ### D-6 · Seeded saved-query names contain emoji
-**open** · 2026-10-13
+**fixed** · 2026-10-13
 
-e.g. `🚕 NYC busiest pickup zones`. They render in the Library, against the
-no-emoji bar in CLAUDE.md. A seed-data fix.
+All six repaired in place and verified ASCII: `🚕 NYC busiest pickup zones`
+(stored as `ð NYC busiest pickup zones`, D-42) became
+`NYC busiest pickup zones`. Stripping the emoji removed both this and the
+mojibake in one pass, and leaves names the corrupting write path cannot damage
+again — which is why this repair is permanent while D-42 is still open.
 
 ### D-7 · Engine chart is outside CI/CD
 **open** · long-standing
@@ -390,11 +393,35 @@ measured at 158 s total against 28.7 s of server time — 130 s of it admission
 wait behind the build's own scans. D-38 fixed the build starving itself; it
 does not stop the build starving everything else.
 
-The Engine already supports the separation: `resource_groups` selectors match
-on `client_tag`, and `engine_bridge` already stamps a client tag on every
-statement. Maintenance work — `ANALYZE`, cube builds, the freshness sweep —
-should carry a reserved tag and be bound to a small group, so a build can
-never consume the interactive share.
+**The binding constraint is concurrency, not memory**, which is why bounding
+the build's memory does not help. The default group allows four concurrent
+statements and a cube build issues exactly that many groupings, so it takes
+every slot:
+
+```
+during build — admitted: 4294967296 of 8589934592
+  group default running 4 queued 0
+chart statement: 429 after the full 60 s admission wait
+```
+
+Half the memory pool was free and the chart was still refused. Bounding the
+parent to 2 GiB was worse — the children filled all 8 GiB — and at 1 GiB the
+chart is still rejected on slots alone. So a build cannot be run safely on this
+cluster at any memory setting, and the cube on
+`KaveonTelemetry.events.enriched` is deliberately NOT built: three attempts
+were cancelled rather than left to degrade the product.
+
+The separation the Engine already supports: `resource_groups` selectors match
+on `client_tag`, and `engine_bridge` now stamps `kaveon:maintenance` on every
+`ANALYZE` (`MAINTENANCE_CLIENT_TAG`, covered by
+`services/test_maintenance_tagging.py`). What is missing is the group itself —
+there is no `resource_groups` configuration anywhere in the repo, so the
+cluster runs the single built-in `default` group. A maintenance group with its
+own small `max_concurrent` and share, selected by that tag, is the remaining
+half and is Engine/deploy configuration.
+
+Note the interaction with D-7: the Engine chart is outside CI, so that
+configuration has to be applied by hand today.
 
 ---
 

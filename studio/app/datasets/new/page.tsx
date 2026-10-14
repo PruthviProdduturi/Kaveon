@@ -1212,7 +1212,14 @@ export default function NewDatasetPage() {
       // After creation, take user to the dataset detail page where
       // they can configure dimensions/metrics for semantic datasets.
       if (created && typeof created.id === "number") {
-        void router.push(`/datasets/${created.id}`);
+        // `replace`, not `push`: the creation step is finished and must not stay
+        // in history. With a push, Back from the saved dataset returned INTO the
+        // creation flow -- "after a chart is saved, Back should go to the
+        // library" -- and on this page that flow would have created a second
+        // dataset. Replacing it leaves [wherever they came from, the dataset], so
+        // the page's own Back button, which returns where the reader came from,
+        // reaches the library it was opened from.
+        void router.replace(`/datasets/${created.id}`);
       } else {
         void router.push("/datasets");
       }
