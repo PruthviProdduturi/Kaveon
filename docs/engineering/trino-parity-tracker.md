@@ -1038,7 +1038,8 @@ logical, optimized, or physical/distributed plan rows without starting a scan,
 worker task, cache entry, or exchange. `GREATEST` and `LEAST` preserve their
 common input type and propagate NULL arguments; both behaviors have focused
 executor and statement-path coverage. `CARDINALITY`, `ARRAY_JOIN`, `ARRAY_REVERSE`, `ARRAY_SLICE`, `ARRAY_MIN`,
-`ARRAY_MAX`, and `ARRAY_REMOVE` now accept both 32-bit and 64-bit list offsets.
+`ARRAY_MAX`, `ARRAY_REMOVE`, `ARRAY_APPEND`, and `ARRAY_PREPEND` now accept
+both 32-bit and 64-bit list offsets.
 `ARRAY_DISTINCT`, `ARRAY_POSITION`, `ARRAY_SORT`, `CONTAINS`, and `ARRAYS_OVERLAP` also accept bounded
 64-bit-offset primitive lists, including `LargeUtf8`, by normalizing them to
 the 32-bit execution representation. Distinct preserves element types, NULLs,
