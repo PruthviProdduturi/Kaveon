@@ -1121,13 +1121,22 @@ The same route supports `SHOW SESSION LIKE 'pattern'`, applying Trino wildcard
 semantics to the supported settings and rejecting malformed patterns explicitly.
 
 The current local validation baseline is green on the same checkout: the full
-`kaveon-server` suite passed **379 tests**, and the full CLI suite passed **211
+`kaveon-server` suite passed **380 tests**, and the full CLI suite passed **211
 tests** (one ignored). The set-operation coverage includes `UNION ALL`, distinct and
 multiset `INTERSECT`/`EXCEPT`, dictionary-versus-plain values, duplicate
 counts, null handling, planner lowering, and exchange-input consumption. This
 is implementation and regression evidence for the covered shapes; it does not
 replace the deployed differential corpus or the remaining complex-type and
 wire-protocol gates.
+
+The 2026-10-14 prepared-statement follow-up reran the full server suite after
+adding repeated positional-slot preservation and metadata planning through
+transparent `LIMIT`/`OFFSET`/`ORDER BY`/`DISTINCT` wrappers. The focused prepared
+slice passed **5/5** tests, and the complete server suite passed **380/380**;
+the route-level lifecycle test also covers owner isolation, result paging,
+typed array binding, and `X-Trino-Prepared-Statement` selection. This strengthens
+the implemented adapter boundary but does not close the explicitly documented
+full wire prepare/describe/bind lifecycle gate.
 
 On 2026-10-14 the server differential sweep was rerun from the current checkout
 with `cargo test -p kaveon-server --bin kaveon-server differential_tests --quiet`:
