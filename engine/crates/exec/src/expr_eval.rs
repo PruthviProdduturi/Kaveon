@@ -6392,8 +6392,11 @@ fn truncate_timestamp_values(
 }
 
 fn truncate_micros(us: i64, unit: &str) -> i64 {
-    let secs = us / 1_000_000;
-    let days = secs / 86400;
+    // Calendar truncation is a floor operation. Euclidean division keeps
+    // timestamps before 1970 in the preceding day/hour rather than rounding
+    // them toward the epoch.
+    let secs = us.div_euclid(1_000_000);
+    let days = secs.div_euclid(86400);
     let (year, month, _day) = days_to_ymd(days);
     match unit {
         "YEAR" => ymd_to_days(year, 1, 1) * 86_400_000_000,
@@ -6407,8 +6410,8 @@ fn truncate_micros(us: i64, unit: &str) -> i64 {
             (days - dow) * 86_400_000_000
         }
         "DAY" => days * 86_400_000_000,
-        "HOUR" => (secs / 3600) * 3_600_000_000,
-        "MINUTE" => (secs / 60) * 60_000_000,
+        "HOUR" => secs.div_euclid(3600) * 3_600_000_000,
+        "MINUTE" => secs.div_euclid(60) * 60_000_000,
         "SECOND" => secs * 1_000_000,
         _ => us,
     }
@@ -6675,7 +6678,7 @@ mod tests {
         let input = RecordBatch::try_new(
             schema,
             vec![Arc::new(
-                TimestampMillisecondArray::from(vec![Some(source_ms), None]),
+                TimestampMillisecondArray::from(vec![Some(source_ms), None, Some(-1)]),
             )],
         )
         .unwrap();
@@ -6696,6 +6699,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(result[0], Some(1_715_731_200_000));
         assert_eq!(result[1], None);
+        assert_eq!(result[2], Some(-86_400_000));
 
         let nanosecond_schema = Arc::new(arrow::datatypes::Schema::new(vec![
             arrow::datatypes::Field::new(
