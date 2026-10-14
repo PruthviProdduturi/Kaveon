@@ -302,6 +302,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "window_distinct_aggregate",
+        "SELECT user_id, COUNT(DISTINCT country) OVER (PARTITION BY region) AS countries FROM {T} ORDER BY user_id, countries LIMIT 20",
+        true,
+    ),
+    (
         "not_equal",
         "SELECT COUNT(*) AS n FROM {T} WHERE region <> 'Asia'",
         false,

@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, collections::HashSet, sync::Arc};
+use std::{cmp::Ordering, collections::{HashMap, HashSet}, sync::Arc};
 
 use arrow::{
     array::{Array, ArrayRef, AsArray, Float64Array, Int64Array, RecordBatch, UInt32Array},
@@ -279,6 +279,10 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
         return Err(error(format!("{name} requires a value argument")));
     }
     for rows in partitions {
+        // A partition without an ORDER BY gives every row the same frame.
+        // Cache distinct frame membership (and any repeated bounded frame)
+        // instead of rebuilding the hash set once per output row.
+        let mut distinct_frames: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
         let mut starts = vec![0];
         let mut group = vec![0; rows.len()];
         for i in 1..rows.len() {
@@ -318,7 +322,15 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
                     let (start, end) =
                         frame_bounds(frame, pos, &rows, &starts, &group, &order_cols, order_by)?;
                     let selected = if distinct {
-                        distinct_window_rows(col.as_ref(), &rows[start..end])?
+                        let key = (start, end);
+                        if !distinct_frames.contains_key(&key) {
+                            let unique = distinct_window_rows(col.as_ref(), &rows[start..end])?;
+                            distinct_frames.insert(key, unique);
+                        }
+                        distinct_frames
+                            .get(&key)
+                            .expect("distinct window frame was inserted")
+                            .clone()
                     } else {
                         rows[start..end].to_vec()
                     };
