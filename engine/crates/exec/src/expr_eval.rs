@@ -6958,6 +6958,36 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             }
         }
         "ARRAY_CONCAT" => {
+            if args
+                .iter()
+                .any(|arg| matches!(arg.data_type(), DataType::LargeList(_)))
+            {
+                let normalized = args
+                    .iter()
+                    .map(|arg| match arg.data_type() {
+                        DataType::LargeList(_) => Ok(Arc::clone(arg)),
+                        DataType::List(field) => compute::cast(
+                            arg,
+                            &DataType::LargeList(field.clone()),
+                        )
+                        .map_err(KaveonError::from),
+                        other => Err(KaveonError::Execution(format!(
+                            "ARRAY_CONCAT requires ARRAY/List values, got {other}"
+                        ))),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let lists = normalized
+                    .iter()
+                    .map(|arg| {
+                        arg.as_any().downcast_ref::<LargeListArray>().ok_or_else(|| {
+                            KaveonError::Execution(
+                                "ARRAY_CONCAT requires matching ARRAY/List values".into(),
+                            )
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                return array_concat_variadic(&lists, num_rows);
+            }
             if args.len() > 2 {
                 if let Some(lists) = args
                     .iter()
@@ -10103,6 +10133,30 @@ mod tests {
             arrays.value(0).as_primitive::<Int64Type>().values(),
             &[1, 2, 3, 4]
         );
+    }
+
+    #[test]
+    fn array_concat_accepts_mixed_list_offset_widths() {
+        use arrow::array::{Int64Builder, LargeListBuilder, ListBuilder};
+
+        let mut narrow = ListBuilder::new(Int64Builder::new());
+        narrow.values().append_value(1);
+        narrow.append(true);
+        let mut wide = LargeListBuilder::new(Int64Builder::new());
+        wide.values().append_value(2);
+        wide.append(true);
+
+        let result = eval_scalar_function(
+            "ARRAY_CONCAT",
+            &[
+                Arc::new(narrow.finish()) as ArrayRef,
+                Arc::new(wide.finish()) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        let arrays = result.as_any().downcast_ref::<LargeListArray>().unwrap();
+        assert_eq!(arrays.value(0).as_primitive::<Int64Type>().values(), &[1, 2]);
     }
 
     #[test]
