@@ -681,6 +681,10 @@ invalidation, isolation, bounds, and restart evidence listed above.
   `*` marker for correlated EXISTS projections. Truly unresolvable keys retain
   the explicit broadcast fallback; runtime build-key propagation and adaptive
   broadcast selection remain open.
+- The bounded runtime probe filter now uses typed batch masks for both INT64 and
+  UTF-8 build indexes; LargeUtf8 and composite keys retain the exact row-key
+  fallback. This reduces probe-side key construction without changing join
+  NULL or duplicate semantics.
 - Streamed-root task metrics now have a stabilized eventual-read test: the
   metrics endpoint may report `202 Accepted` briefly and is polled until the
   completed metrics record is available (`6cd66cb4`).
