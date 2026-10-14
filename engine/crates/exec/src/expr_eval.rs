@@ -2555,6 +2555,64 @@ fn array_flatten<L: OffsetSizeTrait>(list: &GenericListArray<L>) -> Result<Array
     )?))
 }
 
+fn array_trim<L: OffsetSizeTrait>(
+    list: &GenericListArray<L>,
+    counts: &Int64Array,
+) -> Result<ArrayRef> {
+    if list.len() != counts.len() {
+        return Err(KaveonError::Execution(
+            "TRIM_ARRAY requires one count per row".into(),
+        ));
+    }
+    let mut chunks = Vec::<ArrayRef>::new();
+    let mut offsets = vec![L::zero()];
+    let mut valid = Vec::with_capacity(list.len());
+    for row in 0..list.len() {
+        if list.is_null(row) || counts.is_null(row) {
+            valid.push(false);
+            offsets.push(L::from_usize(chunks.iter().map(|chunk| chunk.len()).sum()).ok_or_else(
+                || KaveonError::Execution("TRIM_ARRAY result offset overflow".into()),
+            )?);
+            continue;
+        }
+        let trim = counts.value(row);
+        if trim < 0 {
+            return Err(KaveonError::Execution(
+                "TRIM_ARRAY count must be non-negative".into(),
+            ));
+        }
+        let inner = list.value(row);
+        let keep = inner
+            .len()
+            .saturating_sub(usize::try_from(trim).unwrap_or(usize::MAX));
+        chunks.push(inner.slice(0, keep));
+        valid.push(true);
+        offsets.push(L::from_usize(chunks.iter().map(|chunk| chunk.len()).sum()).ok_or_else(
+            || KaveonError::Execution("TRIM_ARRAY result offset overflow".into()),
+        )?);
+    }
+    let values = if chunks.is_empty() {
+        arrow::array::new_empty_array(&list.value_type())
+    } else {
+        let chunks = chunks
+            .iter()
+            .map(|value| value.as_ref() as &dyn Array)
+            .collect::<Vec<_>>();
+        compute::concat(&chunks)?
+    };
+    let field = Arc::new(arrow::datatypes::Field::new(
+        "item",
+        values.data_type().clone(),
+        true,
+    ));
+    Ok(Arc::new(GenericListArray::<L>::try_new(
+        field,
+        OffsetBuffer::new(ScalarBuffer::from(offsets)),
+        values,
+        Some(arrow::buffer::NullBuffer::from(valid)),
+    )?))
+}
+
 fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
     let upper = name.to_uppercase();
     if upper.starts_with("ARRAY_ANY_") || upper.starts_with("ARRAY_ALL_") {
@@ -2856,6 +2914,20 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 "ARRAY elements of type {data_type} are not supported"
             ))),
         };
+    }
+    if upper == "TRIM_ARRAY" {
+        check_arity(name, args, 2)?;
+        let counts = compute::cast(&args[1], &DataType::Int64)?;
+        let counts = counts.as_primitive::<Int64Type>();
+        if let Some(list) = args[0].as_any().downcast_ref::<ListArray>() {
+            return array_trim(list, counts);
+        }
+        if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
+            return array_trim(list, counts);
+        }
+        return Err(KaveonError::Execution(
+            "TRIM_ARRAY requires an ARRAY/List value".into(),
+        ));
     }
     if upper == "FLATTEN" {
         check_arity(name, args, 1)?;
@@ -8872,6 +8944,42 @@ mod tests {
             arrays.value(0).as_primitive::<Int64Type>().values(),
             &[1, 2, 3]
         );
+    }
+
+    #[test]
+    fn trim_array_removes_requested_suffix_and_rejects_negative_counts() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        let array = Expr::Function {
+            name: "ARRAY".into(),
+            args: vec![
+                Expr::Literal(ScalarValue::Int64(1)),
+                Expr::Literal(ScalarValue::Int64(2)),
+                Expr::Literal(ScalarValue::Int64(3)),
+            ],
+        };
+        let value = evaluate(
+            &Expr::Function {
+                name: "TRIM_ARRAY".into(),
+                args: vec![array.clone(), Expr::Literal(ScalarValue::Int64(1))],
+            },
+            &batch,
+        )
+        .unwrap();
+        let arrays = value.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(arrays.value(0).as_primitive::<Int64Type>().values(), &[1, 2]);
+        let error = evaluate(
+            &Expr::Function {
+                name: "TRIM_ARRAY".into(),
+                args: vec![array, Expr::Literal(ScalarValue::Int64(-1))],
+            },
+            &batch,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("non-negative"));
     }
 
     #[test]
