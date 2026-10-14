@@ -446,6 +446,7 @@ const NULL_PROPAGATING_FUNCTIONS: &[&str] = &[
     "CONTAINS",
     "STRPOS",
     "POSITION",
+    "SPLIT_PART",
     "REVERSE",
     "REPEAT",
 ];
@@ -4644,6 +4645,34 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                                 .unwrap_or(0),
                         )
                     }
+                })
+                .collect();
+            Ok(Arc::new(result))
+        }
+        "SPLIT_PART" => {
+            check_arity(name, args, 3)?;
+            let values = as_string_array(&args[0])?;
+            let delimiters = as_string_array(&args[1])?;
+            let indices = compute::cast(&args[2], &DataType::Int64)?;
+            let indices = indices.as_primitive::<Int64Type>();
+            for row in 0..num_rows {
+                if !indices.is_null(row) && indices.value(row) <= 0 {
+                    return Err(KaveonError::Execution(
+                        "SPLIT_PART index must be greater than zero".into(),
+                    ));
+                }
+            }
+            let result: StringArray = (0..num_rows)
+                .map(|row| {
+                    if values.is_null(row) || delimiters.is_null(row) || indices.is_null(row) {
+                        return None;
+                    }
+                    let index = indices.value(row) as usize;
+                    let delimiter = delimiters.value(row);
+                    if delimiter.is_empty() {
+                        return (index == 1).then(|| values.value(row).to_owned());
+                    }
+                    values.value(row).split(delimiter).nth(index - 1).map(str::to_owned)
                 })
                 .collect();
             Ok(Arc::new(result))
@@ -10419,6 +10448,57 @@ mod tests {
         assert_eq!(arr.value(0), "HELLO");
         assert_eq!(arr.value(1), "WORLD");
         assert!(arr.is_null(2));
+    }
+
+    #[test]
+    fn split_part_uses_one_based_bounds_and_null_semantics() {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("name", DataType::Utf8, true)])),
+            vec![Arc::new(StringArray::from(vec![
+                Some("Hello world"),
+                Some("World"),
+                None,
+            ]))],
+        )
+        .unwrap();
+        let expr = Expr::Function {
+            name: "SPLIT_PART".into(),
+            args: vec![
+                Expr::Column("name".into()),
+                Expr::Literal(ScalarValue::Utf8(" ".into())),
+                Expr::Literal(ScalarValue::Int64(2)),
+            ],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        let values = as_string_array(&result).unwrap();
+        assert_eq!(values.value(0), "world");
+        assert!(values.is_null(1));
+        assert!(values.is_null(2));
+
+        let out_of_range = Expr::Function {
+            name: "SPLIT_PART".into(),
+            args: vec![
+                Expr::Column("name".into()),
+                Expr::Literal(ScalarValue::Utf8(" ".into())),
+                Expr::Literal(ScalarValue::Int64(3)),
+            ],
+        };
+        let out_of_range_result = evaluate(&out_of_range, &batch).unwrap();
+        let values = as_string_array(&out_of_range_result).unwrap();
+        assert!(values.is_null(0));
+
+        let invalid = Expr::Function {
+            name: "SPLIT_PART".into(),
+            args: vec![
+                Expr::Column("name".into()),
+                Expr::Literal(ScalarValue::Utf8(" ".into())),
+                Expr::Literal(ScalarValue::Int64(0)),
+            ],
+        };
+        assert!(evaluate(&invalid, &batch)
+            .unwrap_err()
+            .to_string()
+            .contains("index must be greater than zero"));
     }
 
     #[test]

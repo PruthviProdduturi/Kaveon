@@ -649,6 +649,9 @@ invalidation, isolation, bounds, and restart evidence listed above.
   dates, and other supported comparable values, and any NULL argument produces
   NULL for that row. Focused executor coverage protects both type preservation
   and null propagation.
+- `SPLIT_PART` now provides Trino's one-based string partitioning semantics,
+  including NULL propagation, NULL for an out-of-range index, and an explicit
+  error for non-positive indexes.
 - `ROW(...)` constructors now produce typed Arrow `StructArray` values with
   null-preserving child fields. `MAP(...)` now produces Arrow `MapArray` values
   from matching list offsets and rejects NULL keys. `MAP_KEYS` and `MAP_VALUES`
