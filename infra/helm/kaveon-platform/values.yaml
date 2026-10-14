@@ -195,6 +195,22 @@ api:
     # The principal the sweep reads and recompiles as. Naming one is what
     # turns the schedule on.
     actor: ""
+    # Whether the sweep also looks for tables that are in the lake but not in
+    # the catalog: `off`, `report` or `register`.
+    #
+    # Uploading a table publishes data; it does not make the product aware of
+    # it. The sweep recompiles the context of datasets that already exist, so a
+    # newly published table is not stale, it is absent — and registering it by
+    # hand is the step everyone forgets, which makes a large upload look as
+    # though it did nothing.
+    #
+    # Off by default. Discovery only ever looks under the root path of a
+    # registered, active catalog source, which is what keeps benchmark scratch
+    # out — but a scheduled job that writes to the product catalog unasked is
+    # the behaviour that swept such tables in once already, so turning it on is
+    # a decision. `report` is the honest middle: it says what it found and
+    # writes nothing.
+    discoverTables: "off"
     # Bounds the whole sweep, so a dataset that cannot finish compiling does
     # not hold the Forbid lock until the next schedule.
     timeoutSeconds: 3000

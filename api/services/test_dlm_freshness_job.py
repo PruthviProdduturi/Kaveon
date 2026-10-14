@@ -157,5 +157,60 @@ class ExitStatusSaysWhatHappened(unittest.TestCase):
             self.assertEqual(job.main(), 1)
 
 
+class DiscoveryIsOffUnlessAsked(unittest.TestCase):
+    """A scheduled job that registers tables into the product catalog on its
+    own is the behaviour that swept benchmark scratch in once already, so the
+    default is to look at nothing, and the middle setting looks without
+    writing."""
+
+    def test_the_default_does_not_look(self):
+        with patch.dict("os.environ", {}, clear=False):
+            import os
+            os.environ.pop("KAVEON_DLM_DISCOVER_TABLES", None)
+            self.assertEqual(job.discovery_mode(), "off")
+            self.assertIsNone(job.discover("a@b.c", "off"))
+
+    def test_report_looks_without_writing(self):
+        with patch.dict("os.environ", {"KAVEON_DLM_DISCOVER_TABLES": "report"}):
+            self.assertEqual(job.discovery_mode(), "report")
+        with patch("services.lake_discovery.discover", return_value={"found": []}) as found:
+            job.discover("a@b.c", "report")
+        self.assertFalse(found.call_args.kwargs["register"])
+
+    def test_register_writes(self):
+        for raw in ("register", "true", "1", "yes"):
+            with patch.dict("os.environ", {"KAVEON_DLM_DISCOVER_TABLES": raw}):
+                self.assertEqual(job.discovery_mode(), "register", raw)
+        with patch("services.lake_discovery.discover", return_value={"found": []}) as found:
+            job.discover("a@b.c", "register")
+        self.assertTrue(found.call_args.kwargs["register"])
+
+    def test_a_discovery_failure_does_not_stop_the_sweep(self):
+        """Discovery is an addition to this job; it must not be able to stop
+        the thing the job already did."""
+        with patch("services.lake_discovery.discover",
+                   side_effect=RuntimeError("listing refused")):
+            outcome = job.discover("a@b.c", "register")
+        self.assertIn("listing refused", outcome["failed"])
+
+        with patch.object(job, "sweep_identity", return_value="sweep@kaveon.io"),              patch.object(job, "discovery_mode", return_value="register"),              patch("services.lake_discovery.discover",
+                   side_effect=RuntimeError("listing refused")),              patch.object(job, "sweep", return_value={"checked": 1, "stale": [],
+                                                      "rebuilt": [], "failed": []}) as swept:
+            self.assertEqual(job.main(), 0)
+        swept.assert_called_once()
+
+    def test_discovery_runs_before_the_sweep(self):
+        """So a table registered now is compiled in this run rather than
+        waiting an hour for the next one."""
+        order = []
+        with patch.object(job, "sweep_identity", return_value="sweep@kaveon.io"),              patch.object(job, "discovery_mode", return_value="register"),              patch.object(job, "discover",
+                          side_effect=lambda *a, **k: order.append("discover") or
+                          {"registered": [], "found": [], "undecidable": [], "unreadable": []}),              patch.object(job, "sweep",
+                          side_effect=lambda *a, **k: order.append("sweep") or
+                          {"checked": 1, "stale": [], "rebuilt": [], "failed": []}):
+            job.main()
+        self.assertEqual(order, ["discover", "sweep"])
+
+
 if __name__ == "__main__":
     unittest.main()
