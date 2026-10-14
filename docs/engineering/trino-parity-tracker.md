@@ -177,9 +177,9 @@ foundations, but several operators are still centralized or narrow:
   month-end days to the target month while preserving timestamp units. Typed
   `TIMESTAMP` literals lower through the existing Arrow timestamp cast path.
 - `DATE_DIFF` now returns exact BIGINT differences for DATE and all supported
-  timestamp units from nanoseconds through weeks, preserving NULL inputs and
-  rejecting month, quarter, and year units until calendar-boundary semantics
-  are qualified.
+  timestamp units from nanoseconds through weeks and complete calendar
+  month/quarter/year boundaries, preserving NULL inputs and reverse-range
+  signs. Leap-year month ends are covered by executor and distributed tests.
 - Background statistics and cube refresh deduplication now scopes its
   process-local registry by table and source location. Independent embedded
   catalog stores can no longer suppress one another's refresh, which removes a
