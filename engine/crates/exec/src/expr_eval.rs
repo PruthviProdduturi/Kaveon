@@ -2613,6 +2613,34 @@ fn array_trim<L: OffsetSizeTrait>(
     )?))
 }
 
+fn array_first_last<L: OffsetSizeTrait>(
+    list: &GenericListArray<L>,
+    last: bool,
+) -> Result<ArrayRef> {
+    let mut selected = Vec::<ArrayRef>::with_capacity(list.len());
+    for row in 0..list.len() {
+        if list.is_null(row) {
+            selected.push(arrow::array::new_null_array(&list.value_type(), 1));
+            continue;
+        }
+        let inner = list.value(row);
+        if inner.is_empty() {
+            selected.push(arrow::array::new_null_array(&list.value_type(), 1));
+        } else {
+            let index = if last { inner.len() - 1 } else { 0 };
+            selected.push(inner.slice(index, 1));
+        }
+    }
+    if selected.is_empty() {
+        return Ok(arrow::array::new_empty_array(&list.value_type()));
+    }
+    let chunks = selected
+        .iter()
+        .map(|value| value.as_ref() as &dyn Array)
+        .collect::<Vec<_>>();
+    Ok(compute::concat(&chunks)?)
+}
+
 fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
     let upper = name.to_uppercase();
     if upper.starts_with("ARRAY_ANY_") || upper.starts_with("ARRAY_ALL_") {
@@ -2914,6 +2942,19 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 "ARRAY elements of type {data_type} are not supported"
             ))),
         };
+    }
+    if matches!(upper.as_str(), "ARRAY_FIRST" | "ARRAY_LAST") {
+        check_arity(name, args, 1)?;
+        let last = upper == "ARRAY_LAST";
+        if let Some(list) = args[0].as_any().downcast_ref::<ListArray>() {
+            return array_first_last(list, last);
+        }
+        if let Some(list) = args[0].as_any().downcast_ref::<LargeListArray>() {
+            return array_first_last(list, last);
+        }
+        return Err(KaveonError::Execution(format!(
+            "{upper} requires an ARRAY/List value"
+        )));
     }
     if upper == "TRIM_ARRAY" {
         check_arity(name, args, 2)?;
@@ -8980,6 +9021,28 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("non-negative"));
+    }
+
+    #[test]
+    fn array_first_and_last_return_typed_values_or_null_for_empty_rows() {
+        let mut builder = ListBuilder::new(Int64Builder::new());
+        for value in [1_i64, 2, 3] {
+            builder.values().append_value(value);
+        }
+        builder.append(true);
+        builder.append(true);
+        builder.append(false);
+        let list = Arc::new(builder.finish()) as ArrayRef;
+        let first = eval_scalar_function("ARRAY_FIRST", std::slice::from_ref(&list), 3).unwrap();
+        assert_eq!(
+            first.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+            vec![Some(1), None, None]
+        );
+        let last = eval_scalar_function("ARRAY_LAST", std::slice::from_ref(&list), 3).unwrap();
+        assert_eq!(
+            last.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+            vec![Some(3), None, None]
+        );
     }
 
     #[test]
