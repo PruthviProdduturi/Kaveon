@@ -1039,6 +1039,13 @@ three-worker corpus, complex types, correlated/unsupported scalar shapes,
 prepared-statement coverage, worker-loss, and exact-result differential runs
 are still required.
 
+The raw Trino route now also answers SQL-level `DESCRIBE INPUT name` for an
+owner-scoped prepared statement. It returns the discovered parameter positions
+and named parameters in Trino's four-column metadata shape; types are reported
+as `unknown` until a typed bind is supplied. `DESCRIBE OUTPUT` and the complete
+wire prepare/describe/bind lifecycle remain open, so this is a compatibility
+slice rather than a full protocol claim.
+
 The current local validation baseline is green on the same checkout: the full
 `kaveon-server` suite passed **367 tests**, and the full CLI suite passed **211
 tests** (one ignored). The set-operation coverage includes `UNION ALL`, distinct and

@@ -24,7 +24,7 @@ by the selected database and Kaveon's API guardrails.
 | Cross joins | Alpha | Local Cartesian semantics and distributed broadcast-build path |
 | Semi/anti joins | Alpha | `IN`/`NOT IN`/`EXISTS`/`NOT EXISTS` subqueries, locally and distributed; equality-key forms hash-partition both sides and emit only the matching (semi) or non-matching (anti) left rows, with a bounded broadcast fallback when a key cannot be resolved; correlated `EXISTS`/`NOT EXISTS` on one equality are decorrelated by the binder |
 | Scalar subqueries | Alpha | Uncorrelated scalar subqueries in WHERE/HAVING (an ungrouped aggregate, as a single-row cross join); correlated scalar aggregates, including `COUNT`, on one or two equalities; `COUNT` uses a left join and zero-fills unmatched keys |
-| Prepared statements | Alpha | Principal-owned `POST /v1/prepare`, describe, execute, and close lifecycle; execution reuses typed positional/named parameter binding and the normal query path |
+| Prepared statements | Alpha | Principal-owned `POST /v1/prepare`, describe, execute, and close lifecycle; execution reuses typed positional/named parameter binding and the normal query path. The Trino route also supports SQL-level `PREPARE`, `EXECUTE`, `DEALLOCATE`, and `DESCRIBE INPUT`; input metadata reports discovered positions/names while unresolved types remain `unknown` until binding |
 | CTEs and derived tables | Alpha | Non-recursive CTEs; derived tables in FROM and joined with commas |
 | Arithmetic expressions | Alpha | Compatible numeric coercion for supported primitive numeric types |
 | `HAVING` | Alpha | Post-aggregation filter |
