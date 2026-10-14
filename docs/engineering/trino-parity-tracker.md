@@ -115,9 +115,10 @@ descending steps or an explicit step, rejecting zero steps, overflow, and
 unbounded output.
 
 The statistics planner now preserves exact row and byte estimates through
-row-preserving projected and sorted subqueries. Simple column forwarding,
-aliases, and ordering can therefore still qualify a small side for a
-broadcast join; computed projections and cardinality-changing operators
+row-preserving projected and sorted subqueries, plus bounded `LIMIT` and
+`OFFSET` cardinality changes. Simple column forwarding, aliases, ordering,
+and bounded pagination can therefore still qualify a small side for a
+broadcast join; computed projections and other cardinality-changing operators
 remain conservative and use the existing partitioned fallback.
 
 The initial repository audit confirms that the Engine has real distributed
