@@ -5131,7 +5131,11 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 ) {
                     return array_distinct_nested(list);
                 }
-                let field = Field::new("item", list.value_type().clone(), true);
+                let element_type = match list.value_type() {
+                    DataType::LargeUtf8 => DataType::Utf8,
+                    other => other.clone(),
+                };
+                let field = Field::new("item", element_type, true);
                 Some(compute::cast(
                     &args[0],
                     &DataType::List(Arc::new(field)),
@@ -11182,6 +11186,23 @@ mod tests {
         .unwrap();
         let result = result.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(result.value(0).as_primitive::<Int64Type>().values(), &[3, 1]);
+
+        let mut large_text_builder = LargeListBuilder::new(arrow::array::LargeStringBuilder::new());
+        large_text_builder.values().append_value("z");
+        large_text_builder.values().append_null();
+        large_text_builder.values().append_value("z");
+        large_text_builder.values().append_value("a");
+        large_text_builder.append(true);
+        let result = eval_scalar_function(
+            "ARRAY_DISTINCT",
+            &[Arc::new(large_text_builder.finish()) as ArrayRef],
+            1,
+        )
+        .unwrap();
+        let result = result.as_any().downcast_ref::<ListArray>().unwrap();
+        let inner = result.value(0);
+        let values = inner.as_string::<i32>();
+        assert_eq!(values.iter().collect::<Vec<_>>(), vec![Some("z"), None, Some("a")]);
 
         let mut reverse_builder = LargeListBuilder::new(ListBuilder::new(Int64Builder::new()));
         for value in [1_i64, 2, 3] {
