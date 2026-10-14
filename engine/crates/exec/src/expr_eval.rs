@@ -3202,6 +3202,34 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 "ZIP requires at least 2 arrays".into(),
             ));
         }
+        if args
+            .iter()
+            .any(|arg| matches!(arg.data_type(), DataType::LargeList(_)))
+        {
+            let normalized = args
+                .iter()
+                .map(|arg| match arg.data_type() {
+                    DataType::LargeList(_) => Ok(Arc::clone(arg)),
+                    DataType::List(field) => compute::cast(
+                        arg,
+                        &DataType::LargeList(field.clone()),
+                    )
+                    .map_err(KaveonError::from),
+                    other => Err(KaveonError::Execution(format!(
+                        "ZIP requires ARRAY/List values, got {other}"
+                    ))),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let lists = normalized
+                .iter()
+                .map(|arg| {
+                    arg.as_any().downcast_ref::<LargeListArray>().ok_or_else(|| {
+                        KaveonError::Execution("ZIP requires matching ARRAY/List values".into())
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            return array_zip(&lists);
+        }
         if let Some(lists) = args
             .iter()
             .map(|arg| arg.as_any().downcast_ref::<ListArray>())
@@ -10358,6 +10386,32 @@ mod tests {
         assert_eq!(rows.column(0).as_primitive::<Int64Type>().iter().collect::<Vec<_>>(), vec![Some(1), Some(2)]);
         let text = rows.column(1).as_string::<i32>();
         assert_eq!(text.iter().collect::<Vec<_>>(), vec![Some("a"), None]);
+    }
+
+    #[test]
+    fn zip_accepts_mixed_list_offset_widths() {
+        use arrow::array::{Int64Builder, LargeListBuilder, ListBuilder};
+
+        let mut narrow = ListBuilder::new(Int64Builder::new());
+        narrow.values().append_value(1);
+        narrow.append(true);
+        let mut wide = LargeListBuilder::new(Int64Builder::new());
+        wide.values().append_value(2);
+        wide.append(true);
+
+        let result = eval_scalar_function(
+            "ZIP",
+            &[
+                Arc::new(narrow.finish()) as ArrayRef,
+                Arc::new(wide.finish()) as ArrayRef,
+            ],
+            1,
+        )
+        .unwrap();
+        let rows = result.as_any().downcast_ref::<LargeListArray>().unwrap().value(0);
+        let rows = rows.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(rows.column(0).as_primitive::<Int64Type>().values().as_ref(), &[1]);
+        assert_eq!(rows.column(1).as_primitive::<Int64Type>().values().as_ref(), &[2]);
     }
 
     #[test]
