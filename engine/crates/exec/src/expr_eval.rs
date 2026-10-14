@@ -1281,6 +1281,25 @@ fn as_string_array(arr: &ArrayRef) -> Result<&StringArray> {
         .ok_or_else(|| KaveonError::Execution("expected string array".into()))
 }
 
+fn text_value<'a>(arr: &'a ArrayRef, row: usize) -> Result<Option<&'a str>> {
+    match arr.data_type() {
+        DataType::Utf8 => {
+            let values = as_string_array(arr)?;
+            Ok((!values.is_null(row)).then(|| values.value(row)))
+        }
+        DataType::LargeUtf8 => {
+            let values = arr
+                .as_any()
+                .downcast_ref::<LargeStringArray>()
+                .ok_or_else(|| KaveonError::Execution("expected large string array".into()))?;
+            Ok((!values.is_null(row)).then(|| values.value(row)))
+        }
+        other => Err(KaveonError::Execution(format!(
+            "expected VARCHAR, got {other}"
+        ))),
+    }
+}
+
 // ── CASE WHEN ───────────────────────────────────────────────────────────────
 
 fn eval_case(
@@ -4431,75 +4450,25 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         "STARTS_WITH" => {
             check_arity(name, args, 2)?;
-            match (args[0].data_type(), args[1].data_type()) {
-                (DataType::Utf8, DataType::Utf8) => {
-                    let arr = as_string_array(&args[0])?;
-                    let prefix = as_string_array(&args[1])?;
-                    let result: BooleanArray = (0..num_rows)
-                        .map(|i| {
-                            if arr.is_null(i) || prefix.is_null(i) {
-                                None
-                            } else {
-                                Some(arr.value(i).starts_with(prefix.value(i)))
-                            }
-                        })
-                        .collect();
-                    Ok(Arc::new(result))
-                }
-                (DataType::LargeUtf8, DataType::LargeUtf8) => {
-                    let arr = args[0].as_any().downcast_ref::<LargeStringArray>().unwrap();
-                    let prefix = args[1].as_any().downcast_ref::<LargeStringArray>().unwrap();
-                    let result: BooleanArray = (0..num_rows)
-                        .map(|i| {
-                            if arr.is_null(i) || prefix.is_null(i) {
-                                None
-                            } else {
-                                Some(arr.value(i).starts_with(prefix.value(i)))
-                            }
-                        })
-                        .collect();
-                    Ok(Arc::new(result))
-                }
-                (left, right) => Err(KaveonError::Execution(format!(
-                    "STARTS_WITH expects matching VARCHAR arrays, got {left} and {right}"
-                ))),
+            let mut result = Vec::with_capacity(num_rows);
+            for row in 0..num_rows {
+                result.push(match (text_value(&args[0], row)?, text_value(&args[1], row)?) {
+                    (Some(value), Some(prefix)) => Some(value.starts_with(prefix)),
+                    _ => None,
+                });
             }
+            Ok(Arc::new(BooleanArray::from(result)))
         }
         "ENDS_WITH" => {
             check_arity(name, args, 2)?;
-            match (args[0].data_type(), args[1].data_type()) {
-                (DataType::Utf8, DataType::Utf8) => {
-                    let arr = as_string_array(&args[0])?;
-                    let suffix = as_string_array(&args[1])?;
-                    let result: BooleanArray = (0..num_rows)
-                        .map(|i| {
-                            if arr.is_null(i) || suffix.is_null(i) {
-                                None
-                            } else {
-                                Some(arr.value(i).ends_with(suffix.value(i)))
-                            }
-                        })
-                        .collect();
-                    Ok(Arc::new(result))
-                }
-                (DataType::LargeUtf8, DataType::LargeUtf8) => {
-                    let arr = args[0].as_any().downcast_ref::<LargeStringArray>().unwrap();
-                    let suffix = args[1].as_any().downcast_ref::<LargeStringArray>().unwrap();
-                    let result: BooleanArray = (0..num_rows)
-                        .map(|i| {
-                            if arr.is_null(i) || suffix.is_null(i) {
-                                None
-                            } else {
-                                Some(arr.value(i).ends_with(suffix.value(i)))
-                            }
-                        })
-                        .collect();
-                    Ok(Arc::new(result))
-                }
-                (left, right) => Err(KaveonError::Execution(format!(
-                    "ENDS_WITH expects matching VARCHAR arrays, got {left} and {right}"
-                ))),
+            let mut result = Vec::with_capacity(num_rows);
+            for row in 0..num_rows {
+                result.push(match (text_value(&args[0], row)?, text_value(&args[1], row)?) {
+                    (Some(value), Some(suffix)) => Some(value.ends_with(suffix)),
+                    _ => None,
+                });
             }
+            Ok(Arc::new(BooleanArray::from(result)))
         }
         "CONTAINS" => {
             check_arity(name, args, 2)?;
@@ -13481,7 +13450,7 @@ mod tests {
             ),
             (
                 "needle",
-                Arc::new(LargeStringArray::from(vec![Some("世界"), Some("abc")])) as ArrayRef,
+                Arc::new(StringArray::from(vec![Some("世界"), Some("abc")])) as ArrayRef,
             ),
         ])
         .unwrap();
