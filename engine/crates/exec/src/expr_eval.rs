@@ -3266,6 +3266,38 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             "ARRAY_INTERSECT" => ArraySetOp::Intersect,
             _ => ArraySetOp::Except,
         };
+        if args
+            .iter()
+            .any(|arg| matches!(arg.data_type(), DataType::LargeList(_)))
+        {
+            let normalized = args
+                .iter()
+                .map(|arg| match arg.data_type() {
+                    DataType::LargeList(_) => Ok(Arc::clone(arg)),
+                    DataType::List(field) => compute::cast(
+                        arg,
+                        &DataType::LargeList(field.clone()),
+                    )
+                    .map_err(KaveonError::from),
+                    other => Err(KaveonError::Execution(format!(
+                        "{upper} requires ARRAY/List values, got {other}"
+                    ))),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let left = normalized[0]
+                .as_any()
+                .downcast_ref::<LargeListArray>()
+                .ok_or_else(|| {
+                    KaveonError::Execution(format!("{upper} requires matching ARRAY/List values"))
+                })?;
+            let right = normalized[1]
+                .as_any()
+                .downcast_ref::<LargeListArray>()
+                .ok_or_else(|| {
+                    KaveonError::Execution(format!("{upper} requires matching ARRAY/List values"))
+                })?;
+            return array_set_operation(left, right, operation);
+        }
         if let (Some(left), Some(right)) = (
             args[0].as_any().downcast_ref::<ListArray>(),
             args[1].as_any().downcast_ref::<ListArray>(),
@@ -10101,6 +10133,50 @@ mod tests {
             .unwrap();
             let arrays = value.as_any().downcast_ref::<ListArray>().unwrap();
             assert_eq!(arrays.value(0).as_primitive::<Int64Type>().iter().collect::<Vec<_>>(), expected);
+        }
+    }
+
+    #[test]
+    fn array_set_operations_accept_mixed_list_offset_widths() {
+        use arrow::array::{Int64Builder, LargeListBuilder, ListBuilder};
+
+        let mut narrow = ListBuilder::new(Int64Builder::new());
+        narrow.values().append_value(1);
+        narrow.values().append_value(2);
+        narrow.append(true);
+        let mut wide = LargeListBuilder::new(Int64Builder::new());
+        wide.values().append_value(2);
+        wide.values().append_value(3);
+        wide.append(true);
+
+        for (name, expected) in [
+            ("ARRAY_UNION", vec![1, 2, 3]),
+            ("ARRAY_INTERSECT", vec![2]),
+            ("ARRAY_EXCEPT", vec![1]),
+        ] {
+            let result = eval_scalar_function(
+                name,
+                &[
+                    Arc::new(narrow.finish()) as ArrayRef,
+                    Arc::new(wide.finish()) as ArrayRef,
+                ],
+                1,
+            )
+            .unwrap();
+            let arrays = result.as_any().downcast_ref::<LargeListArray>().unwrap();
+            assert_eq!(arrays.value(0).as_primitive::<Int64Type>().values().as_ref(), expected);
+
+            // Rebuild the inputs for the next operation.
+            let mut next_narrow = ListBuilder::new(Int64Builder::new());
+            next_narrow.values().append_value(1);
+            next_narrow.values().append_value(2);
+            next_narrow.append(true);
+            narrow = next_narrow;
+            let mut next_wide = LargeListBuilder::new(Int64Builder::new());
+            next_wide.values().append_value(2);
+            next_wide.values().append_value(3);
+            next_wide.append(true);
+            wide = next_wide;
         }
     }
 
