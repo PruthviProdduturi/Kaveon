@@ -1,6 +1,6 @@
 # Distributed Execution Status
 
-This file is the durable handoff for Kaveon's path from the current alpha executor to a fault-tolerant distributed analytical engine. It records verified behavior, incomplete work, and the next safe continuation point. Update it with every distributed-execution commit.
+This file is a reviewed capability snapshot for Kaveon's distributed analytical engine. It records verified behavior and release gates at meaningful qualification boundaries. It is not an activity log and must not be appended for every commit; use the code commit, its tests, and the parity tracker for day-to-day evidence.
 
 ## Current baseline
 

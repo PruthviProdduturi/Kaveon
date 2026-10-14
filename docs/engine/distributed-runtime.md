@@ -4,7 +4,7 @@ The coordinator builds validated post-order stage DAGs. Exchanges use
 deterministic multi-column hash, broadcast, or round-robin partitioning.
 Executable fragments carry immutable resolved source format, location and
 pinned Delta version so workers do not reinterpret mutable catalog state.
-`engine/DISTRIBUTED_EXECUTION_STATUS.md` is the commit-by-commit record.
+`engine/DISTRIBUTED_EXECUTION_STATUS.md` is a reviewed capability snapshot. Implementation evidence belongs in the relevant code commit and test results; the parity tracker records only meaningful qualification changes.
 
 ## Shapes
 
