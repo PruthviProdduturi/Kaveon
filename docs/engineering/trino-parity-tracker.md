@@ -210,6 +210,12 @@ foundations, but several operators are still centralized or narrow:
   preserved through planning and execution, including a nullable partitioned
   ordering case, while other window modifiers remain subject to the broader
   corpus.
+- Window aggregate `FILTER` clauses now lower to the same null-preserving
+  `CASE` representation used by grouped aggregates. Window peer and partition
+  comparisons decode dictionary-backed text values once per evaluated column,
+  so Parquet files with different local dictionary codes produce identical
+  local and distributed results. The differential sweep includes this case
+  across plain, dictionary, clustered, and Hive-partitioned layouts.
 - Hash and semi/anti joins now accept `DATE` (`Date32`) keys with the same
   exact day-number semantics as their integer representation. A correlated
   scalar aggregate whose correlation includes a date column now passes the
