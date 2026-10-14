@@ -36,11 +36,11 @@ the same acceptance contract rather than separate informal benchmarks.
 ## Audit snapshot — October 13, 2026
 
 The local parity baseline was rerun on October 13 with focused qualification
-changes at commit `938386f4`. The checkout also contained separate, uncommitted
+changes at commit `3cc7f970`. The checkout also contained separate, uncommitted
 engine work from the parallel optimization lane, so these numbers are a local
 regression snapshot and are not a release-image claim:
-`cargo test -p kaveon-server` passed **349/349** tests,
-`cargo test -p kaveon-sql` passed **119/119** tests, and
+`cargo test -p kaveon-server` passed **351/351** tests,
+`cargo test -p kaveon-sql` passed **120/120** tests, and
 `cargo test -p kaveon-exec --lib` passed **287/287** non-ignored tests with four
 benchmark tests intentionally ignored. Documentation validation also passed for 145 Markdown
 files, 39 routes, and 9 SVGs. This is an in-process regression baseline; it
