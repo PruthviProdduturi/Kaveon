@@ -5894,8 +5894,6 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     "STRPOS requires 2 or 3 arguments".into(),
                 ));
             }
-            let arr = as_string_array(&args[0])?;
-            let needle = as_string_array(&args[1])?;
             let instances = if args.len() == 3 {
                 Some(compute::cast(&args[2], &DataType::Int64)?)
             } else {
@@ -5913,51 +5911,52 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     }
                 }
             }
-            let result: Int64Array = (0..num_rows)
-                .map(|i| {
-                    if arr.is_null(i)
-                        || needle.is_null(i)
-                        || instances.is_some_and(|instances| instances.is_null(i))
-                    {
-                        return None;
-                    }
-                    let instance = instances.map_or(1, |instances| instances.value(i));
-                    let positions = arr.value(i)
-                        .match_indices(needle.value(i))
-                        .map(|(byte, _)| arr.value(i)[..byte].chars().count() as i64 + 1)
-                        .collect::<Vec<_>>();
-                    let position = if instance > 0 {
-                        positions.get(instance as usize - 1).copied()
-                    } else {
-                        let offset = instance.unsigned_abs() as usize;
-                        (offset <= positions.len())
-                            .then(|| positions[positions.len() - offset])
-                    };
-                    Some(position.unwrap_or(0))
-                })
-                .collect();
-            Ok(Arc::new(result))
+            let mut result = Vec::with_capacity(num_rows);
+            for row in 0..num_rows {
+                if instances.is_some_and(|instances| instances.is_null(row)) {
+                    result.push(None);
+                    continue;
+                }
+                let (Some(value), Some(needle)) =
+                    (text_value(&args[0], row)?, text_value(&args[1], row)?)
+                else {
+                    result.push(None);
+                    continue;
+                };
+                let instance = instances.map_or(1, |instances| instances.value(row));
+                let positions = value
+                    .match_indices(needle)
+                    .map(|(byte, _)| value[..byte].chars().count() as i64 + 1)
+                    .collect::<Vec<_>>();
+                let position = if instance > 0 {
+                    positions.get(instance as usize - 1).copied()
+                } else {
+                    let offset = instance.unsigned_abs() as usize;
+                    (offset <= positions.len()).then(|| positions[positions.len() - offset])
+                };
+                result.push(Some(position.unwrap_or(0)));
+            }
+            Ok(Arc::new(Int64Array::from(result)))
         }
         "POSITION" => {
             check_arity(name, args, 2)?;
-            let arr = as_string_array(&args[0])?;
-            let needle = as_string_array(&args[1])?;
-            let result: Int64Array = (0..num_rows)
-                .map(|i| {
-                    if arr.is_null(i) || needle.is_null(i) {
-                        None
-                    } else {
-                        Some(
-                            arr.value(i)
-                                .match_indices(needle.value(i))
-                                .next()
-                                .map(|(byte, _)| arr.value(i)[..byte].chars().count() as i64 + 1)
-                                .unwrap_or(0),
-                        )
-                    }
-                })
-                .collect();
-            Ok(Arc::new(result))
+            let mut result = Vec::with_capacity(num_rows);
+            for row in 0..num_rows {
+                let (Some(value), Some(needle)) =
+                    (text_value(&args[0], row)?, text_value(&args[1], row)?)
+                else {
+                    result.push(None);
+                    continue;
+                };
+                result.push(Some(
+                    value
+                        .match_indices(needle)
+                        .next()
+                        .map(|(byte, _)| value[..byte].chars().count() as i64 + 1)
+                        .unwrap_or(0),
+                ));
+            }
+            Ok(Arc::new(Int64Array::from(result)))
         }
         "SPLIT_PART" => {
             check_arity(name, args, 3)?;
@@ -12632,6 +12631,41 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("instance must not be zero"));
+    }
+
+    #[test]
+    fn strpos_and_position_accept_large_utf8_columns() {
+        let batch = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(LargeStringArray::from(vec![Some("é-é-é"), None])) as ArrayRef,
+        )])
+        .unwrap();
+        let strpos = evaluate(
+            &Expr::Function {
+                name: "STRPOS".into(),
+                args: vec![
+                    Expr::Column("value".into()),
+                    Expr::Literal(ScalarValue::Utf8("é".into())),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(strpos.as_primitive::<Int64Type>().value(0), 1);
+        assert!(strpos.as_primitive::<Int64Type>().is_null(1));
+        let position = evaluate(
+            &Expr::Function {
+                name: "POSITION".into(),
+                args: vec![
+                    Expr::Column("value".into()),
+                    Expr::Literal(ScalarValue::Utf8("é".into())),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        assert_eq!(position.as_primitive::<Int64Type>().value(0), 1);
+        assert!(position.as_primitive::<Int64Type>().is_null(1));
     }
 
     #[test]
