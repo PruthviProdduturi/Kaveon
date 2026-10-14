@@ -294,6 +294,22 @@ fn relation(
         });
         return Some(estimate);
     }
+    if let LogicalPlan::Offset { input, count } = plan {
+        let mut estimate = relation(input, stats)?;
+        let source_rows = estimate.rows;
+        estimate.rows = source_rows.saturating_sub(*count as u64);
+        estimate.bytes = estimate.bytes.map(|bytes| {
+            if source_rows == 0 {
+                0
+            } else {
+                bytes
+                    .saturating_mul(estimate.rows)
+                    .checked_div(source_rows)
+                    .unwrap_or(0)
+            }
+        });
+        return Some(estimate);
+    }
     // A projection that only forwards or renames columns preserves the
     // relation's cardinality and storage footprint. Keep the exact source
     // estimate visible through that wrapper so a subquery does not disable a
@@ -666,6 +682,19 @@ mod tests {
     fn keeps_exact_stats_through_a_sorted_subquery() {
         let plan = sql_to_logical_plan(
             "SELECT * FROM big b JOIN (SELECT id, value FROM small ORDER BY id) s ON b.id=s.id",
+        )
+        .unwrap();
+        let optimized = optimize_with_statistics(plan, &mut stats);
+        let LogicalPlan::Join { distribution, .. } = optimized else {
+            panic!("join missing")
+        };
+        assert_eq!(distribution, JoinDistribution::BroadcastRight);
+    }
+
+    #[test]
+    fn bounds_exact_stats_through_an_offset_subquery() {
+        let plan = sql_to_logical_plan(
+            "SELECT * FROM big b JOIN (SELECT id, value FROM small OFFSET 5) s ON b.id=s.id",
         )
         .unwrap();
         let optimized = optimize_with_statistics(plan, &mut stats);
