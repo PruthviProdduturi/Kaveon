@@ -297,6 +297,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "window_filtered_aggregate",
+        "SELECT user_id, SUM(actions) FILTER (WHERE actions > 5) OVER (PARTITION BY region) AS active_actions FROM {T} ORDER BY user_id, active_actions LIMIT 20",
+        true,
+    ),
+    (
         "not_equal",
         "SELECT COUNT(*) AS n FROM {T} WHERE region <> 'Asia'",
         false,

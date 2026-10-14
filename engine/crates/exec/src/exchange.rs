@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 use arrow::array::{ArrayRef, AsArray, Float32Array, Float64Array, UInt32Builder};
-use arrow::compute::take;
+use arrow::compute::{cast, take};
 use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, SortField};
 use kaveon_core::{KaveonError, Result};
@@ -87,12 +87,22 @@ impl HashPartitioner {
         let key_columns = self
             .key_indices
             .iter()
-            .map(|index| {
+            .map(|index| -> Result<ArrayRef> {
                 let column = batch.column(*index);
+                let column = match column.data_type() {
+                    arrow::datatypes::DataType::Dictionary(_, value_type) => {
+                        cast(column.as_ref(), value_type.as_ref())?
+                    }
+                    _ => column.clone(),
+                };
                 // SQL hash equality treats signed zero and NaN payloads as the
                 // same key. Canonicalize before row encoding so partitions agree
                 // with hash aggregate/join key equality on every worker.
-                match column.data_type() {
+                let normalized = match column.data_type() {
+                    // Parquet row groups may assign different dictionary
+                    // indexes to the same text value.  Hash the decoded value
+                    // rather than the local dictionary code so every exchange
+                    // sends an equal SQL key to the same worker.
                     arrow::datatypes::DataType::Float64 => {
                         std::sync::Arc::new(Float64Array::from_iter(
                             column
@@ -130,9 +140,10 @@ impl HashPartitioner {
                         )) as ArrayRef
                     }
                     _ => column.clone(),
-                }
+                };
+                Ok(normalized)
             })
-            .collect::<Vec<ArrayRef>>();
+            .collect::<Result<Vec<ArrayRef>>>()?;
         let fields = key_columns
             .iter()
             .map(|column| SortField::new(column.data_type().clone()))
@@ -270,8 +281,8 @@ mod tests {
     use super::{
         BoundedExchangeBuffer, HashPartitioner, SPILL_PARTITION_SALT, THREAD_PARTITION_SALT,
     };
-    use arrow::array::{Int64Array, StringArray};
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::array::{DictionaryArray, Int32Array, Int64Array, StringArray};
+    use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use arrow::record_batch::RecordBatch;
     use std::sync::Arc;
 
@@ -458,6 +469,57 @@ mod tests {
             .downcast_ref::<StringArray>()
             .unwrap();
         assert_eq!(null_keys.iter().filter(Option::is_none).count(), 2);
+    }
+
+    #[test]
+    fn dictionary_values_with_different_local_codes_share_a_partition() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "key",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        )]));
+        let first = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(
+                DictionaryArray::<Int32Type>::try_new(
+                    Int32Array::from(vec![0, 1]),
+                    Arc::new(StringArray::from(vec!["east", "west"])),
+                )
+                .unwrap(),
+            )],
+        )
+        .unwrap();
+        let second = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(
+                DictionaryArray::<Int32Type>::try_new(
+                    Int32Array::from(vec![0, 1]),
+                    Arc::new(StringArray::from(vec!["west", "east"])),
+                )
+                .unwrap(),
+            )],
+        )
+        .unwrap();
+        let partitioner = HashPartitioner::try_new(&schema, &["key".into()], 5).unwrap();
+        let partition = |batch: &RecordBatch, value: &str| {
+            partitioner
+                .partition(batch)
+                .unwrap()
+                .iter()
+                .position(|part| {
+                    let values = arrow::compute::cast(part.column(0), &DataType::Utf8).unwrap();
+                    values
+                        .as_any()
+                        .downcast_ref::<StringArray>()
+                        .unwrap()
+                        .iter()
+                        .any(|candidate| candidate == Some(value))
+                })
+                .unwrap()
+        };
+        // The first row in each batch is a different dictionary index but the
+        // same SQL value (`east`).
+        assert_eq!(partition(&first, "east"), partition(&second, "east"));
     }
 
     #[test]
