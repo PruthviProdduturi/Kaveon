@@ -319,7 +319,7 @@ node-drain recovery, and sustained soak remain separate acceptance gates.
   malformed JSON, and returning false for valid non-array JSON values.
   `REGEXP_LIKE` now reuses the bounded compiled-regex cache and
   preserves nullable boolean results. `MAP_CONCAT` now merges supported typed
-  maps with later values winning duplicate keys, and `MAP_ENTRIES` exposes the
+  maps, including LargeUtf8 keys, with later values winning duplicate keys, and `MAP_ENTRIES` exposes the
   typed key/value rows as an array.
   HTTP and embedded-CLI result materialization now preserves supported nested
   Arrow lists, structs, and UTF-8-keyed maps as JSON arrays/objects rather than

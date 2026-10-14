@@ -3515,7 +3515,11 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         let key_type = keys.data_type().clone();
         if !matches!(
             key_type,
-            DataType::Boolean | DataType::Int64 | DataType::Float64 | DataType::Utf8
+            DataType::Boolean
+                | DataType::Int64
+                | DataType::Float64
+                | DataType::Utf8
+                | DataType::LargeUtf8
         ) {
             return Err(KaveonError::Execution(format!(
                 "MAP_FROM_ENTRIES does not support key type {key_type}"
@@ -8397,6 +8401,10 @@ fn map_keys_equal(left: &ArrayRef, left_index: usize, right_index: usize) -> Res
             let values = left.as_any().downcast_ref::<StringArray>().unwrap();
             values.value(left_index) == values.value(right_index)
         }
+        DataType::LargeUtf8 => {
+            let values = left.as_any().downcast_ref::<LargeStringArray>().unwrap();
+            values.value(left_index) == values.value(right_index)
+        }
         other => {
             return Err(KaveonError::Execution(format!(
                 "MAP_CONCAT does not support key type {other}"
@@ -10798,6 +10806,13 @@ mod tests {
             vec![Some("a"), Some("b"), Some("c")]);
         assert_eq!(result.values().as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
             vec![Some(1), Some(20), Some(3)]);
+    }
+
+    #[test]
+    fn map_concat_compares_large_utf8_keys() {
+        let keys = Arc::new(LargeStringArray::from(vec![Some("alpha"), Some("beta")])) as ArrayRef;
+        assert!(map_keys_equal(&keys, 0, 0).unwrap());
+        assert!(!map_keys_equal(&keys, 0, 1).unwrap());
     }
 
     #[test]
