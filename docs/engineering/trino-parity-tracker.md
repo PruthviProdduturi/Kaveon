@@ -47,7 +47,7 @@ benchmark tests intentionally ignored. Documentation validation also passed for 
 files, 39 routes, and 9 SVGs. This is an in-process regression baseline; it
 does not replace the deployed three-worker qualification gates listed below.
 
-On October 14, the executor regression suite passed 332 non-ignored tests (four benchmark cases remain intentionally ignored). The compatibility slice also added nullable LargeUtf8 support for LEFT, RIGHT, LPAD, RPAD, REVERSE, REPEAT, STARTS_WITH, ENDS_WITH, SPLIT, and SPLIT_PART, with direct Arrow-type regression tests; this closes those text-function gaps for that input representation while broader LargeUtf8 function coverage remains scoped per the table below. The change is pushed in the current dev head (4ff1c56c, 96681e5f, 27e605a9, 853047b2, c2010dd4, 9afde3ac, d3f68fa6, d39c169b, and da90e8c3).
+On October 14, the executor regression suite passed 333 non-ignored tests (four benchmark cases remain intentionally ignored). The compatibility slice also added nullable LargeUtf8 support for LEFT, RIGHT, LPAD, RPAD, REVERSE, REPEAT, STARTS_WITH, ENDS_WITH, SPLIT, and SPLIT_PART, with direct Arrow-type regression tests; this closes those text-function gaps for that input representation while broader LargeUtf8 function coverage remains scoped per the table below. The change is pushed in the current dev head (4ff1c56c, 96681e5f, 27e605a9, 853047b2, c2010dd4, 9afde3ac, d3f68fa6, d39c169b, da90e8c3, and 3e0a0f3b).
 
 The complete `cargo test --workspace` run also passed on this tree, including
 catalog, CLI, core, executor, optimizer, server, SQL, and storage crates plus
