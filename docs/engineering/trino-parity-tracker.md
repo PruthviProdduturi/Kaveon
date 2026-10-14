@@ -526,6 +526,8 @@ invalidation, isolation, bounds, and restart evidence listed above.
   including nullable rows, instead of rejecting those Arrow integer types.
 - `ARRAY[...]` now preserves nullable `Float32` element columns and keeps the
   list element type at `Float32` rather than rejecting or widening the source.
+- `ARRAY[...]` now preserves nullable signed and unsigned `Int8`, `Int16`,
+  `UInt8`, and `UInt16` element columns with their native list types.
 - Equality-key `LEFT`, `RIGHT`, and `FULL` joins now carry residual `ON`
   predicates through local and distributed hash joins. Candidate pairs are
   evaluated in bounded batches with SQL TRUE-only matching; preserved rows and
