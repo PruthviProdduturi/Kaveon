@@ -191,6 +191,8 @@ node-drain recovery, and sustained soak remain separate acceptance gates.
   prepare/describe/bind wire protocol remains open. Trino `EXECUTE ... USING
   ARRAY[...]` literals now use the same recursive binding path, including nested
   arrays and null elements.
+  SQL `DEALLOCATE PREPARE ALL` now clears every prepared statement owned by the
+  requesting principal while preserving other principals' entries.
   The raw Trino route also answers `SHOW SESSION` with the supported Engine
   settings in Trino's metadata result shape, and answers `SHOW FUNCTIONS` with
   the supported scalar and aggregate registry in Trino's six-column metadata
