@@ -20542,9 +20542,11 @@ mod streamed_root_tests {
 
     #[tokio::test]
     async fn trino_sql_prepare_lifecycle_is_owner_scoped() {
-        let state = std::sync::Arc::new(catalog_test_state());
+        let directory = std::env::temp_dir().join(format!("kaveon-trino-prepare-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let state = state_over(table(&directory), true, "coordinator");
         let name = format!("lifecycle_{}", Uuid::new_v4().simple());
-        let query = "SELECT CAST(? AS BIGINT) AS value";
+        let query = "SELECT CAST(? AS BIGINT) AS value FROM numbers LIMIT 1";
         let owner = alice();
         let other = Identity {
             principal: "other".into(),
@@ -20583,6 +20585,41 @@ mod streamed_root_tests {
         assert_eq!(described_json["data"][0][0], serde_json::json!(0));
         assert_eq!(described_json["data"][0][2], serde_json::json!("bigint"));
 
+        let executed = submit_trino_statement_parts(
+            std::sync::Arc::clone(&state),
+            owner.clone(),
+            HeaderMap::new(),
+            Bytes::from(format!("EXECUTE {name} USING 42")),
+        )
+        .await;
+        let executed_status = executed.status();
+        let executed_body = axum::body::to_bytes(executed.into_body(), usize::MAX)
+            .await
+            .expect("execute body");
+        assert_eq!(
+            executed_status,
+            StatusCode::OK,
+            "{}",
+            String::from_utf8_lossy(&executed_body)
+        );
+        let executed_json: serde_json::Value =
+            serde_json::from_slice(&executed_body).expect("execute JSON");
+        assert!(executed_json["id"].as_str().is_some());
+        let query_id = executed_json["id"].as_str().unwrap().to_owned();
+        let page = get_trino_result_page(
+            State(std::sync::Arc::clone(&state)),
+            axum::extract::Path((query_id, 0)),
+            axum::Extension(owner.clone()),
+        )
+        .await;
+        assert_eq!(page.status(), StatusCode::OK);
+        let page_body = axum::body::to_bytes(page.into_body(), usize::MAX)
+            .await
+            .expect("execute result page body");
+        let page_json: serde_json::Value =
+            serde_json::from_slice(&page_body).expect("execute result page JSON");
+        assert_eq!(page_json["data"], serde_json::json!([[42]]));
+
         let denied = submit_trino_statement_parts(
             std::sync::Arc::clone(&state),
             other,
@@ -20616,6 +20653,7 @@ mod streamed_root_tests {
         )
         .await;
         assert_eq!(missing.status(), StatusCode::BAD_REQUEST);
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]
