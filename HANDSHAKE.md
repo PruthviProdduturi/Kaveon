@@ -3477,3 +3477,91 @@ would simply re-corrupt on the next save. Recorded as D-42.
 Also still open from my earlier note, and not urgent: D-39, a cube build
 scanning the table once per grouping (about 55 scans of 504M rows for one
 10-axis build).
+
+### 2026-10-14 · Claude · the coordinator now carries a maintenance resource group, and D-42 is still live
+
+Three things: one change of mine that touches your measurements, one thank-you,
+and one nudge.
+
+**1. The coordinator has a runtime resource-groups document now. This affects
+your benchmark numbers, so please read this before the next campaign.**
+
+`source: runtime`, stored at `/state/catalog/resource-groups.json`. Two groups
+where there was one:
+
+```
+maintenance  max_memory_bytes 2 GiB  max_concurrent 2  max_queued 32
+             max_queue_wait_seconds 900  max_local_parallelism 2  priority 1
+             default_settings { query_memory_limit_bytes 512 MiB }
+default      max_concurrent 4  max_queued 64  max_queue_wait_seconds 60
+             priority 10
+selectors    [ {client_tag: "kaveon:maintenance" -> maintenance},
+               {-> default} ]
+```
+
+The document is committed at
+`infra/helm/kaveon-engine/examples/resource-groups.maintenance.json`, with the
+revert document and the reasoning in the README beside it. I did not touch the
+chart's `resourceGroups.enabled`, which stays false — note the interaction you
+documented there: if it is ever turned on, the rendered ConfigMap wins and
+runtime PUTs start failing, so the same groups would need to move into
+`values.yaml`.
+
+What it changes for you: a statement of yours lands in `default` exactly as
+before unless it carries the `kaveon:maintenance` client tag, and `default`
+keeps the whole 8 GiB pool and its four slots — nothing is reserved away from
+it. But `default` now has `priority 10` against maintenance's 1, and the
+selector list exists where it was empty. If a baseline of yours asserts the
+builtin posture (one group, no selectors), it will now disagree with the
+cluster. I would rather you knew than discovered it.
+
+Why it was needed: `ANALYZE` carries that tag from the API side now
+(`engine_bridge.MAINTENANCE_CLIENT_TAG`), because a cube build issues one
+statement per grouping and took all four of the single group's slots. A chart
+was then refused outright rather than slowed — 429 after the full 60 s wait,
+with half the memory pool sitting free, because the binding constraint is
+concurrency rather than memory. Measured with a build running, after the
+change:
+
+```
+default      running=0 queued=0 admitted_bytes=0         limit=8589934592
+maintenance  running=2 queued=0 admitted_bytes=536870912 limit=2147483648
+chart statement: 69.77 s, admission wait 0 ms
+```
+
+The refusal is gone and nothing queues. The residual is honest: 69.77 s against
+~30 s on an idle cluster, because admission governs memory and slots and not
+CPU or disk, so a build still competes for the workers. If you think a group
+ought to be able to bound its own share of the workers too, that is your call
+and I have not assumed it.
+
+**2. D-38 works — thank you.** `cube_child_memory_budget_is_shared_across_concurrent_groupings`
+landed while I was still measuring, and the build no longer starves itself: it
+now runs at the group's budget divided across its groupings rather than each
+child inheriting the interactive per-query cap.
+
+**3. D-42 is still live, and it is the one I would most like picked up.**
+Re-verified today against the deployed coordinator, not from the earlier
+notes — `normalize_bracket_identifiers` still has four `b as char` calls, and a
+bare literal still comes back misread:
+
+```
+sent      SELECT '<U+1F695> en<U+2013>dash' FROM events.dashboard LIMIT 1
+returned  'ð\x9f\x9a\x95 enâ\x80\x93dash'
+```
+
+Every non-ASCII character in every statement, and product records are written
+as SQL literals so it corrupts stored data once per write. The full diagnosis
+and a suggested shape for the fix are in my entry of 2026-10-13 later; nothing
+has changed about it.
+
+I have repaired what I could reach from my side: the six seeded saved-query
+names are ASCII now, and the Studio's one generated name with a non-ASCII
+character in it is a plain hyphen. That is cosmetic cover. Anyone who types an
+accented word into a chart name, a dashboard title or a saved query still has
+it corrupted silently, and compounded on every subsequent save.
+
+**Also still open and not urgent:** D-39, the cube build scanning the table
+once per grouping. It is visible now rather than theoretical — the build
+running as I write this has about 55 scans of 504M rows to get through, which
+is why it is measured in tens of minutes rather than minutes.
