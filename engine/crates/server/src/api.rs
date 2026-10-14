@@ -23,8 +23,8 @@ use kaveon_exec::topn::merge_top_n;
 use kaveon_sql::logical_plan::{AggregateExpr, LogicalPlan};
 use kaveon_sql::logical_plan::{
     sql_to_logical_plan_for_binder,
-    sql_to_logical_plan_for_binder_approximate_with_parameter_bindings,
-    sql_to_logical_plan_for_binder_with_parameter_bindings,
+    sql_to_logical_plan_for_binder_approximate_with_parameter_values,
+    sql_to_logical_plan_for_binder_with_parameter_values, ParameterValue,
 };
 use kaveon_sql::parser::{
     NativeTransactionalStatement, adapt_product_dml, parse_native_transactional,
@@ -841,6 +841,46 @@ fn request_parameters(values: &[serde_json::Value]) -> Result<Vec<ScalarValue>, 
         .collect()
 }
 
+fn request_parameter_values(
+    values: &[serde_json::Value],
+) -> Result<Vec<ParameterValue>, String> {
+    values
+        .iter()
+        .enumerate()
+        .map(|(position, value)| request_parameter_value(value, &format!("${}", position + 1)))
+        .collect()
+}
+
+fn request_parameter_value(
+    value: &serde_json::Value,
+    label: &str,
+) -> Result<ParameterValue, String> {
+    match value {
+        serde_json::Value::Null => Ok(ParameterValue::Scalar(ScalarValue::Null)),
+        serde_json::Value::Bool(value) => Ok(ParameterValue::Scalar(ScalarValue::Bool(*value))),
+        serde_json::Value::Number(value) => value
+            .as_i64()
+            .map(|value| ParameterValue::Scalar(ScalarValue::Int64(value)))
+            .or_else(|| {
+                value
+                    .as_f64()
+                    .map(|value| ParameterValue::Scalar(ScalarValue::Float64(value)))
+            })
+            .ok_or_else(|| format!("parameter {label} is not a supported number")),
+        serde_json::Value::String(value) => Ok(ParameterValue::Scalar(ScalarValue::Utf8(
+            value.clone(),
+        ))),
+        serde_json::Value::Array(values) => values
+            .iter()
+            .map(|value| request_parameter_value(value, label))
+            .collect::<Result<Vec<_>, _>>()
+            .map(ParameterValue::Array),
+        serde_json::Value::Object(_) => Err(format!(
+            "parameter {label} must be null, boolean, number, string, or array"
+        )),
+    }
+}
+
 fn request_named_parameters(
     values: &HashMap<String, serde_json::Value>,
 ) -> Result<HashMap<String, ScalarValue>, String> {
@@ -873,6 +913,24 @@ fn request_named_parameters(
             }
         };
         parsed.insert(name.clone(), scalar);
+    }
+    Ok(parsed)
+}
+
+fn request_named_parameter_values(
+    values: &HashMap<String, serde_json::Value>,
+) -> Result<HashMap<String, ParameterValue>, String> {
+    let mut parsed = HashMap::with_capacity(values.len());
+    for (name, value) in values {
+        if name.is_empty() || name.starts_with(':') {
+            return Err(format!(
+                "named parameter keys must be non-empty identifiers without ':' (got '{name}')"
+            ));
+        }
+        parsed.insert(
+            name.clone(),
+            request_parameter_value(value, &format!("'{name}'"))?,
+        );
     }
     Ok(parsed)
 }
@@ -3907,14 +3965,14 @@ async fn run_statement(
     }
 
     let analysis_start = Instant::now();
-    let parameters = match request_parameters(&req.parameters) {
+    let parameters = match request_parameter_values(&req.parameters) {
         Ok(parameters) => parameters,
         Err(error) => {
             let message = error.to_string();
             return task_failure_response(StatusCode::BAD_REQUEST, &message);
         }
     };
-    let named_parameters = match request_named_parameters(&req.named_parameters) {
+    let named_parameters = match request_named_parameter_values(&req.named_parameters) {
         Ok(parameters) => parameters,
         Err(error) => {
             return task_failure_response(StatusCode::BAD_REQUEST, &error.to_string());
@@ -3923,13 +3981,13 @@ async fn run_statement(
     // `settings.approximate`: every plain COUNT(DISTINCT) lowers as a
     // sketch, as APPROX_COUNT_DISTINCT would; the record says so.
     let lowered = if settings.approximate() {
-        sql_to_logical_plan_for_binder_approximate_with_parameter_bindings(
+        sql_to_logical_plan_for_binder_approximate_with_parameter_values(
             &sql,
             &parameters,
             &named_parameters,
         )
     } else {
-        sql_to_logical_plan_for_binder_with_parameter_bindings(&sql, &parameters, &named_parameters)
+        sql_to_logical_plan_for_binder_with_parameter_values(&sql, &parameters, &named_parameters)
     };
     let mut plan = match lowered {
         Ok(p) => p,
@@ -12320,6 +12378,27 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(request.parameters, vec![serde_json::json!(7)]);
+    }
+
+    #[test]
+    fn request_parameter_values_accept_typed_arrays_for_sql_binding() {
+        let parsed = super::request_parameter_values(&[
+            serde_json::json!([1, 2, null]),
+            serde_json::json!("Europe"),
+        ])
+        .unwrap();
+        assert_eq!(
+            parsed[0],
+            super::ParameterValue::Array(vec![
+                super::ParameterValue::Scalar(super::ScalarValue::Int64(1)),
+                super::ParameterValue::Scalar(super::ScalarValue::Int64(2)),
+                super::ParameterValue::Scalar(super::ScalarValue::Null),
+            ])
+        );
+        assert_eq!(
+            parsed[1],
+            super::ParameterValue::Scalar(super::ScalarValue::Utf8("Europe".into()))
+        );
     }
 
     #[test]

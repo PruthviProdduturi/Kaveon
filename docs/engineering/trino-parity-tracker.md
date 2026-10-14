@@ -134,8 +134,10 @@ foundations, but several operators are still centralized or narrow:
   responses, including standard `infoUri` and `partialCancelUri` links for
   query inspection and cancellation. Malformed prepared headers now fail closed with a structured
   `INVALID_PREPARED_STATEMENT` response rather than silently falling back to
-  the request body. Compound prepared literals and the full
-  prepare/describe/bind wire protocol remain open.
+  the request body. JSON array parameters through the HTTP statement API now
+  lower to typed `ARRAY[...]` expressions, including nested arrays and null
+  elements; object/map values and the full prepare/describe/bind wire protocol
+  remain open.
   Prepared-parameter discovery now also ignores PostgreSQL `::type` casts,
   so cast names cannot be mistaken for named bindings (`617b69f6`).
   Uncorrelated aggregate scalar subqueries in `WHERE` are now supported with
