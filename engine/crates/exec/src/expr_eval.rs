@@ -9986,6 +9986,31 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.as_boolean().iter().collect::<Vec<_>>(), vec![Some(true), Some(true), Some(true)]);
+
+        let null_key = evaluate(
+            &Expr::Function {
+                name: "CONTAINS_KEY".into(),
+                args: vec![
+                    Expr::Function {
+                        name: "MAP".into(),
+                        args: vec![
+                            Expr::Function {
+                                name: "ARRAY".into(),
+                                args: vec![Expr::Literal(ScalarValue::Utf8("a".into()))],
+                            },
+                            Expr::Function {
+                                name: "ARRAY".into(),
+                                args: vec![Expr::Literal(ScalarValue::Int64(1))],
+                            },
+                        ],
+                    },
+                    Expr::Literal(ScalarValue::Null),
+                ],
+            },
+            &input,
+        )
+        .unwrap();
+        assert!(null_key.as_boolean().iter().all(|value| value.is_none()));
     }
 
     #[test]
