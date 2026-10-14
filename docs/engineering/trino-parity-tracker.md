@@ -286,7 +286,8 @@ node-drain recovery, and sustained soak remain separate acceptance gates.
   types remain explicit boundaries. `ARRAY_DISTINCT` now deduplicates nested
   list, row, and map elements by typed equality while preserving order and one
   NULL element. `ARRAY_CONCAT` also preserves nested list, row, and map
-  elements through a generic Arrow child-array path; other combinations remain
+  elements through a generic Arrow child-array path; `CONTAINS_KEY` now checks
+  typed map keys with Trino-compatible NULL propagation; other combinations remain
   explicit boundaries.
   Scalar, DATE, timestamp, and DECIMAL casts are supported; complex cast
   targets fail with typed planner diagnostics. `value IN UNNEST(array)` and

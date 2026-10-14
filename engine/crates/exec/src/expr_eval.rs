@@ -3645,6 +3645,48 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             map.nulls().cloned(),
         )?));
     }
+    if upper == "CONTAINS_KEY" {
+        check_arity(name, args, 2)?;
+        let map = args[0]
+            .as_any()
+            .downcast_ref::<MapArray>()
+            .ok_or_else(|| KaveonError::Execution("CONTAINS_KEY requires a MAP value".into()))?;
+        let map_keys = map.keys();
+        let requested = compute::cast(&args[1], map_keys.data_type())?;
+        let mut result = BooleanBuilder::with_capacity(num_rows);
+        for row in 0..num_rows {
+            if map.is_null(row) || requested.is_null(row) {
+                result.append_null();
+                continue;
+            }
+            let start = map.value_offsets()[row] as usize;
+            let end = map.value_offsets()[row + 1] as usize;
+            let found = match map_keys.data_type() {
+                DataType::Float64 => {
+                    let keys = map_keys.as_primitive::<Float64Type>();
+                    let needle = requested.as_primitive::<Float64Type>().value(row);
+                    (start..end).any(|index| !keys.is_null(index) && keys.value(index) == needle)
+                }
+                DataType::Int64 => {
+                    let keys = map_keys.as_primitive::<Int64Type>();
+                    let needle = requested.as_primitive::<Int64Type>().value(row);
+                    (start..end).any(|index| !keys.is_null(index) && keys.value(index) == needle)
+                }
+                DataType::Utf8 => {
+                    let keys = map_keys.as_string::<i32>();
+                    let needle = requested.as_string::<i32>().value(row);
+                    (start..end).any(|index| !keys.is_null(index) && keys.value(index) == needle)
+                }
+                other => {
+                    return Err(KaveonError::Execution(format!(
+                        "CONTAINS_KEY does not support key type {other}"
+                    )));
+                }
+            };
+            result.append_value(found);
+        }
+        return Ok(Arc::new(result.finish()));
+    }
     if upper == "MAP_ELEMENT_AT" {
         check_arity(name, args, 2)?;
         let map = args[0]
@@ -9907,6 +9949,43 @@ mod tests {
         let values = values.as_list::<i32>();
         assert_eq!(values.value(0).as_primitive::<Float64Type>().value(0), 1.0);
         assert!(values.is_null(1));
+    }
+
+    #[test]
+    fn contains_key_is_null_aware_and_checks_typed_map_keys() {
+        let input = RecordBatch::try_from_iter([(
+            "dummy",
+            Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef,
+        )])
+        .unwrap();
+        let map = Expr::Function {
+            name: "MAP".into(),
+            args: vec![
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![
+                        Expr::Literal(ScalarValue::Utf8("a".into())),
+                        Expr::Literal(ScalarValue::Utf8("b".into())),
+                    ],
+                },
+                Expr::Function {
+                    name: "ARRAY".into(),
+                    args: vec![
+                        Expr::Literal(ScalarValue::Int64(1)),
+                        Expr::Literal(ScalarValue::Int64(2)),
+                    ],
+                },
+            ],
+        };
+        let result = evaluate(
+            &Expr::Function {
+                name: "CONTAINS_KEY".into(),
+                args: vec![map, Expr::Literal(ScalarValue::Utf8("b".into()))],
+            },
+            &input,
+        )
+        .unwrap();
+        assert_eq!(result.as_boolean().iter().collect::<Vec<_>>(), vec![Some(true), Some(true), Some(true)]);
     }
 
     #[test]
