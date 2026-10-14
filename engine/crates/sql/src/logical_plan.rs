@@ -393,7 +393,22 @@ pub fn sql_to_logical_plan_for_binder_with_parameters(
     sql: &str,
     parameters: &[ScalarValue],
 ) -> Result<LogicalPlan> {
-    sql_to_logical_plan_for_binder_with_parameter_bindings(sql, parameters, &HashMap::new())
+    let parameters = parameters
+        .iter()
+        .cloned()
+        .map(ParameterValue::Scalar)
+        .collect::<Vec<_>>();
+    sql_to_logical_plan_for_binder_with_parameter_values(sql, &parameters, &HashMap::new())
+}
+
+/// A parameter value accepted by the statement binder. Arrays are lowered to
+/// the same typed `ARRAY[...]` expression used by SQL literals; nested arrays
+/// remain representable without adding container variants to execution
+/// `ScalarValue`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParameterValue {
+    Scalar(ScalarValue),
+    Array(Vec<ParameterValue>),
 }
 
 /// Lower SQL after binding both positional (`$1`, `?`) and named (`:name`)
@@ -403,6 +418,25 @@ pub fn sql_to_logical_plan_for_binder_with_parameter_bindings(
     sql: &str,
     parameters: &[ScalarValue],
     named_parameters: &HashMap<String, ScalarValue>,
+) -> Result<LogicalPlan> {
+    let parameters = parameters
+        .iter()
+        .cloned()
+        .map(ParameterValue::Scalar)
+        .collect::<Vec<_>>();
+    let named_parameters = named_parameters
+        .iter()
+        .map(|(name, value)| (name.clone(), ParameterValue::Scalar(value.clone())))
+        .collect::<HashMap<_, _>>();
+    sql_to_logical_plan_for_binder_with_parameter_values(sql, &parameters, &named_parameters)
+}
+
+/// Lower SQL after binding scalar or array parameter values to typed AST
+/// literals. Array parameters are recursively converted to `ARRAY[...]`.
+pub fn sql_to_logical_plan_for_binder_with_parameter_values(
+    sql: &str,
+    parameters: &[ParameterValue],
+    named_parameters: &HashMap<String, ParameterValue>,
 ) -> Result<LogicalPlan> {
     let mut statements = parse_sql(sql)?;
     bind_parameters(&mut statements, parameters, named_parameters)?;
@@ -427,6 +461,29 @@ pub fn sql_to_logical_plan_for_binder_approximate_with_parameter_bindings(
     sql: &str,
     parameters: &[ScalarValue],
     named_parameters: &HashMap<String, ScalarValue>,
+) -> Result<LogicalPlan> {
+    let parameters = parameters
+        .iter()
+        .cloned()
+        .map(ParameterValue::Scalar)
+        .collect::<Vec<_>>();
+    let named_parameters = named_parameters
+        .iter()
+        .map(|(name, value)| (name.clone(), ParameterValue::Scalar(value.clone())))
+        .collect::<HashMap<_, _>>();
+    sql_to_logical_plan_for_binder_approximate_with_parameter_values(
+        sql,
+        &parameters,
+        &named_parameters,
+    )
+}
+
+/// Approximate-count variant of
+/// [`sql_to_logical_plan_for_binder_with_parameter_values`].
+pub fn sql_to_logical_plan_for_binder_approximate_with_parameter_values(
+    sql: &str,
+    parameters: &[ParameterValue],
+    named_parameters: &HashMap<String, ParameterValue>,
 ) -> Result<LogicalPlan> {
     let mut statements = parse_sql(sql)?;
     bind_parameters(&mut statements, parameters, named_parameters)?;
@@ -472,8 +529,8 @@ fn lower_statements(
 
 fn bind_parameters(
     statements: &mut Vec<ast::Statement>,
-    parameters: &[ScalarValue],
-    named_parameters: &HashMap<String, ScalarValue>,
+    parameters: &[ParameterValue],
+    named_parameters: &HashMap<String, ParameterValue>,
 ) -> Result<()> {
     let mut error = None;
     let mut question_index = 0usize;
@@ -488,7 +545,13 @@ fn bind_parameters(
             index
         } else if let Some(key) = name.strip_prefix(':') {
             if let Some(value) = named_parameters.get(key) {
-                *expr = ast::Expr::Value(scalar_to_ast_value(value));
+                match parameter_to_ast_expr(value) {
+                    Ok(value) => *expr = value,
+                    Err(error_value) => {
+                        error = Some(error_value);
+                        return ControlFlow::Break(());
+                    }
+                }
                 return ControlFlow::Continue(());
             }
             if named_parameters.is_empty() {
@@ -515,11 +578,30 @@ fn bind_parameters(
             )));
             return ControlFlow::Break(());
         }
-        *expr = ast::Expr::Value(scalar_to_ast_value(&parameters[index - 1]));
+        match parameter_to_ast_expr(&parameters[index - 1]) {
+            Ok(value) => *expr = value,
+            Err(error_value) => {
+                error = Some(error_value);
+                return ControlFlow::Break(());
+            }
+        }
         ControlFlow::Continue(())
     };
     let _ = visit_expressions_mut(statements, &mut bind);
     error.map_or(Ok(()), Err)
+}
+
+fn parameter_to_ast_expr(value: &ParameterValue) -> Result<ast::Expr> {
+    match value {
+        ParameterValue::Scalar(value) => Ok(ast::Expr::Value(scalar_to_ast_value(value))),
+        ParameterValue::Array(values) => Ok(ast::Expr::Array(ast::Array {
+            elem: values
+                .iter()
+                .map(parameter_to_ast_expr)
+                .collect::<Result<Vec<_>>>()?,
+            named: false,
+        })),
+    }
 }
 
 fn scalar_to_ast_value(value: &ScalarValue) -> ast::Value {
@@ -4126,6 +4208,22 @@ mod tests {
             text.contains("Bool(true)"),
             "boolean parameter was not bound"
         );
+    }
+
+    #[test]
+    fn binds_array_parameters_as_typed_array_expressions() {
+        let plan = sql_to_logical_plan_for_binder_with_parameter_values(
+            "SELECT 2 IN UNNEST(?) FROM t",
+            &[ParameterValue::Array(vec![
+                ParameterValue::Scalar(ScalarValue::Int64(1)),
+                ParameterValue::Scalar(ScalarValue::Int64(2)),
+            ])],
+            &HashMap::new(),
+        )
+        .unwrap();
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("name: \"CONTAINS\""), "{debug}");
+        assert!(debug.contains("name: \"ARRAY\""), "{debug}");
     }
 
     #[test]
