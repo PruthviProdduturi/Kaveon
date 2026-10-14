@@ -31,7 +31,10 @@ tested, most are cluster-verified, none is production-qualified.
 - [SQL compatibility](../reference/engine-sql-compatibility.md)
 - [Operations and roadmap](operations-and-roadmap.md)
 
-`HANDSHAKE.md` is the live coordination record, `STATUS.md` is the product
-ledger, `engine/DISTRIBUTED_EXECUTION_STATUS.md` records distributed
-verification commit by commit, and `docs/qualification/` holds the measured
-records.
+Evidence is kept with the change that produced it: the commit and its tests
+are the day-to-day record, while `docs/qualification/` contains repeatable
+benchmark and deployment reports. `STATUS.md` and
+`engine/DISTRIBUTED_EXECUTION_STATUS.md` are reviewed snapshots only; they are
+updated at qualification or release boundaries and must not become activity
+logs. Coordination happens in the issue or pull request for the change rather
+than by appending a running diary to a Markdown file.
