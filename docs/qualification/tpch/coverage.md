@@ -76,6 +76,8 @@ Each is one commit with tests in the crate that owns it; the gate's
 |---|---|---|
 | `ec6cebb` | the gate itself (`tpch_coverage.rs`) | 1 / 22 (baseline) |
 | `24482d9` | **sql** — `date ± INTERVAL 'n' DAY` is day-number arithmetic; `MONTH`/`YEAR` intervals shift the calendar of a DATE literal at lowering time (day clamped to the target month's end, as Trino does) | 3 / 22 |
+| `79084691`–`768ddd20` | **sql, exec** — typed DATE/timestamp day, month/year, and sub-day interval arithmetic; calendar shifts clamp month ends and timestamp units/timezones are preserved | — |
+| `925954c6`–`a920a872` | **sql, exec** — typed `TIMESTAMP` literals and timezone-bearing casts | — |
 | `9f60ce2` | **core** — an integer or decimal literal against a Float64 column reads as a double in storage predicates (`l_quantity < 24`, `c_acctbal > 0.00`) | — |
 | `8f885a8` | **exec** — arithmetic between two decimals stays decimal (`0.06 - 0.01`) | 4 / 22 |
 | `147f151` | **exec, server** — one column resolver (exact, else the unique bare-name match) for the projection operator, the planner's aggregate column resolution and the hash partitioner; join keys keep their qualifiers | 7 / 22 |
@@ -166,7 +168,5 @@ cell against an independent computation on both paths.
   scalar subquery's join, over a HAVING, or referencing two enclosing
   queries; correlated `IN`.
 - A scalar subquery that is not an ungrouped aggregate.
-- `INTERVAL MONTH`/`YEAR` added to a column (only DATE literals shift at
-  lowering time; a runtime calendar function would be needed).
 - A bare column that names two relations of a self-join (`n_name` beside
   `nation n1, nation n2`) is refused as ambiguous, as SQL requires.
