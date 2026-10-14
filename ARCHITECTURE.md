@@ -11,7 +11,11 @@ This is the architectural contract for the repository. It separates verified run
 | **Target** | Approved direction, not a current runtime capability |
 | **Legacy** | A migration path intended for retirement |
 
-See [STATUS.md](STATUS.md) and [HANDSHAKE.md](HANDSHAKE.md) for volatile delivery status and interface ownership.
+Current capability is defined by the implementation and its tests. Release
+and qualification snapshots are captured in [STATUS.md](STATUS.md) and the
+relevant qualification reports; neither file is an activity log. Interface
+ownership and design decisions belong in the pull request or issue that
+introduced them.
 
 For the connected system view, including analytical query stages, transactional
 record flow, storage boundaries, and recovery evidence, see
