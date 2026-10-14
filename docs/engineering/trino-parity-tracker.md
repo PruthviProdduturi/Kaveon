@@ -94,6 +94,9 @@ typed lists, preserve first-seen order, remove duplicates, and treat NULL as a
 single comparable element. Both 32-bit and 64-bit list offsets are accepted;
 mixed offset widths and complex nested values remain explicit boundaries.
 
+`ARRAY_CONCAT` now accepts two or more matching typed lists, including the
+64-bit-offset representation, while retaining explicit null-array semantics.
+
 The initial repository audit confirms that the Engine has real distributed
 foundations, but several operators are still centralized or narrow:
 

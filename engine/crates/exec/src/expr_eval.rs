@@ -2415,6 +2415,62 @@ fn array_set_operation<L: OffsetSizeTrait>(
     )?))
 }
 
+fn array_concat_variadic<L: OffsetSizeTrait>(
+    arrays: &[&GenericListArray<L>],
+    num_rows: usize,
+) -> Result<ArrayRef> {
+    let first = arrays
+        .first()
+        .ok_or_else(|| KaveonError::Execution("ARRAY_CONCAT requires at least 2 arrays".into()))?;
+    for array in arrays.iter().skip(1) {
+        if array.len() != first.len() || array.value_type() != first.value_type() {
+            return Err(KaveonError::Execution(
+                "ARRAY_CONCAT requires matching row counts and element types".into(),
+            ));
+        }
+    }
+    let mut chunks = Vec::<ArrayRef>::new();
+    let mut offsets = vec![L::zero()];
+    let mut valid = Vec::with_capacity(num_rows);
+    for row in 0..num_rows {
+        if arrays.iter().any(|array| array.is_null(row)) {
+            valid.push(false);
+            offsets.push(L::from_usize(chunks.iter().map(|chunk| chunk.len()).sum()).ok_or_else(
+                || KaveonError::Execution("ARRAY_CONCAT result offset overflow".into()),
+            )?);
+            continue;
+        }
+        valid.push(true);
+        for array in arrays {
+            chunks.push(array.value(row));
+        }
+        let length = chunks.iter().map(|chunk| chunk.len()).sum::<usize>();
+        offsets.push(L::from_usize(length).ok_or_else(|| {
+            KaveonError::Execution("ARRAY_CONCAT result offset overflow".into())
+        })?);
+    }
+    let values = if chunks.is_empty() {
+        arrow::array::new_empty_array(&first.value_type())
+    } else {
+        let chunks = chunks
+            .iter()
+            .map(|value| value.as_ref() as &dyn Array)
+            .collect::<Vec<_>>();
+        compute::concat(&chunks)?
+    };
+    let field = Arc::new(arrow::datatypes::Field::new(
+        "item",
+        values.data_type().clone(),
+        true,
+    ));
+    Ok(Arc::new(GenericListArray::<L>::try_new(
+        field,
+        OffsetBuffer::new(ScalarBuffer::from(offsets)),
+        values,
+        Some(arrow::buffer::NullBuffer::from(valid)),
+    )?))
+}
+
 fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
     let upper = name.to_uppercase();
     if upper.starts_with("ARRAY_ANY_") || upper.starts_with("ARRAY_ALL_") {
@@ -5874,6 +5930,25 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             }
         }
         "ARRAY_CONCAT" => {
+            if args.len() > 2 {
+                if let Some(lists) = args
+                    .iter()
+                    .map(|arg| arg.as_any().downcast_ref::<ListArray>())
+                    .collect::<Option<Vec<_>>>()
+                {
+                    return array_concat_variadic(&lists, num_rows);
+                }
+                if let Some(lists) = args
+                    .iter()
+                    .map(|arg| arg.as_any().downcast_ref::<LargeListArray>())
+                    .collect::<Option<Vec<_>>>()
+                {
+                    return array_concat_variadic(&lists, num_rows);
+                }
+                return Err(KaveonError::Execution(
+                    "ARRAY_CONCAT requires matching ARRAY/List values".into(),
+                ));
+            }
             check_arity(name, args, 2)?;
             let left = args[0]
                 .as_any()
@@ -8636,6 +8711,37 @@ mod tests {
             let arrays = value.as_any().downcast_ref::<ListArray>().unwrap();
             assert_eq!(arrays.value(0).as_primitive::<Int64Type>().iter().collect::<Vec<_>>(), expected);
         }
+    }
+
+    #[test]
+    fn array_concat_accepts_variadic_typed_lists() {
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+        )])
+        .unwrap();
+        let array = |values: &[i64]| Expr::Function {
+            name: "ARRAY".into(),
+            args: values
+                .iter()
+                .copied()
+                .map(ScalarValue::Int64)
+                .map(Expr::Literal)
+                .collect(),
+        };
+        let value = evaluate(
+            &Expr::Function {
+                name: "ARRAY_CONCAT".into(),
+                args: vec![array(&[1]), array(&[2, 3]), array(&[4])],
+            },
+            &batch,
+        )
+        .unwrap();
+        let arrays = value.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(
+            arrays.value(0).as_primitive::<Int64Type>().values(),
+            &[1, 2, 3, 4]
+        );
     }
 
     #[test]
