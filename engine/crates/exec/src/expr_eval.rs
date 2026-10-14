@@ -2781,10 +2781,22 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
         }
         return match args[0].data_type() {
             DataType::Boolean => repeat_primitive!(BooleanArray, BooleanBuilder::new(), |a: &BooleanArray, r| a.value(r)),
+            DataType::Int8 => repeat_primitive!(Int8Array, PrimitiveBuilder::<Int8Type>::new(), |a: &Int8Array, r| a.value(r)),
+            DataType::Int16 => repeat_primitive!(Int16Array, PrimitiveBuilder::<Int16Type>::new(), |a: &Int16Array, r| a.value(r)),
             DataType::Int32 => repeat_primitive!(Int32Array, Int32Builder::new(), |a: &Int32Array, r| a.value(r)),
             DataType::Int64 => repeat_primitive!(Int64Array, Int64Builder::new(), |a: &Int64Array, r| a.value(r)),
+            DataType::UInt8 => repeat_primitive!(UInt8Array, PrimitiveBuilder::<UInt8Type>::new(), |a: &UInt8Array, r| a.value(r)),
+            DataType::UInt16 => repeat_primitive!(UInt16Array, PrimitiveBuilder::<UInt16Type>::new(), |a: &UInt16Array, r| a.value(r)),
+            DataType::UInt32 => repeat_primitive!(UInt32Array, PrimitiveBuilder::<UInt32Type>::new(), |a: &UInt32Array, r| a.value(r)),
+            DataType::UInt64 => repeat_primitive!(UInt64Array, PrimitiveBuilder::<UInt64Type>::new(), |a: &UInt64Array, r| a.value(r)),
             DataType::Float32 => repeat_primitive!(Float32Array, PrimitiveBuilder::<Float32Type>::new(), |a: &Float32Array, r| a.value(r)),
             DataType::Float64 => repeat_primitive!(Float64Array, Float64Builder::new(), |a: &Float64Array, r| a.value(r)),
+            DataType::Date32 => repeat_primitive!(Date32Array, PrimitiveBuilder::<Date32Type>::new(), |a: &Date32Array, r| a.value(r)),
+            DataType::Date64 => repeat_primitive!(Date64Array, PrimitiveBuilder::<Date64Type>::new(), |a: &Date64Array, r| a.value(r)),
+            DataType::Time32(TimeUnit::Second) => repeat_primitive!(Time32SecondArray, PrimitiveBuilder::<Time32SecondType>::new(), |a: &Time32SecondArray, r| a.value(r)),
+            DataType::Time32(TimeUnit::Millisecond) => repeat_primitive!(Time32MillisecondArray, PrimitiveBuilder::<Time32MillisecondType>::new(), |a: &Time32MillisecondArray, r| a.value(r)),
+            DataType::Time64(TimeUnit::Microsecond) => repeat_primitive!(Time64MicrosecondArray, PrimitiveBuilder::<Time64MicrosecondType>::new(), |a: &Time64MicrosecondArray, r| a.value(r)),
+            DataType::Time64(TimeUnit::Nanosecond) => repeat_primitive!(Time64NanosecondArray, PrimitiveBuilder::<Time64NanosecondType>::new(), |a: &Time64NanosecondArray, r| a.value(r)),
             DataType::Utf8 => {
                 let elements = args[0].as_string::<i32>();
                 let mut builder = ListBuilder::new(StringBuilder::new());
