@@ -154,11 +154,16 @@ loads the default export and passes `draggableHandle`, top-level `cols` and
 therefore runs with library defaults and no drag handle.
 
 ### D-29 · Inventory ignores the catalog unless a schema is also given
-**open** · 2026-10-13 · pre-existing, found while fixing D-24
+**fixed** · 2026-10-14 · pre-existing, found while fixing D-24
 
-`/catalog/OpenSource` lists every registered catalog's schemas rather than
-that catalog's. Confined to registered catalogs by the D-24 fix, so it is no
-longer showing benchmark scratch, but it still shows the wrong scope.
+`/catalog/OpenSource` listed every registered catalog's schemas rather than
+that catalog's. The scope lived in the schema filter, which only narrowed when
+a SCHEMA was also given — with a catalog and no schema, `!schemaName` was true
+and everything passed. The catalogs are narrowed before their schemas are
+listed instead, which also stops the page listing schemas for every catalog in
+order to show one; at ~0.5 s per listing (D-3) that was most of its wait.
+Matched case-insensitively, to agree with the check that decided the catalog
+exists.
 
 ### D-30 · The availability guard was hand-applied and broke every deploy
 **fixed** · 2026-10-13 · my own doing, recorded because the lesson generalises
@@ -408,7 +413,7 @@ and must wait until the write path is fixed or it will simply be re-corrupted.
 A helper already exists at `api/services/dlm_run_backfill.py:61`.
 
 ### D-43 · A maintenance build takes capacity from interactive queries
-**open** · 2026-10-13
+**fixed, with a residual** · 2026-10-14
 
 A cube build and a chart compete in the same resource group, so while a build
 runs the product degrades: a chart that takes 33 s on an idle cluster was
@@ -445,6 +450,24 @@ half and is Engine/deploy configuration.
 
 Note the interaction with D-7: the Engine chart is outside CI, so that
 configuration has to be applied by hand today.
+
+**Applied and measured.** The document in
+`infra/helm/kaveon-engine/examples/resource-groups.maintenance.json` is live as
+the coordinator's runtime copy. With a cube build running:
+
+```
+   default      running=0 queued=0 admitted_bytes=0          limit=8589934592
+   maintenance  running=2 queued=0 admitted_bytes=536870912  limit=2147483648
+chart statement: 69.77 s, admission wait 0 ms
+```
+
+The refusal is gone and the chart no longer queues at all, where before it took
+429 after the full 60 s wait. **The residual**: 69.77 s against ~30 s on an
+idle cluster. Admission governs memory and slots, not CPU and disk, so a build
+still competes for the workers themselves. Tightening maintenance to one slot
+and parallelism one would narrow that further at the cost of a much longer
+build; left as it is, because the cube is a one-off and makes these
+aggregations answerable without a scan afterwards.
 
 ---
 

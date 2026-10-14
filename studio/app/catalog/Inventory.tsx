@@ -247,11 +247,31 @@ export function Inventory({ catalogName, schemaName, action }: {
       // this page came to report a catalog as having nothing in it while the
       // coordinator was simply not running.
       const unread: string[] = [];
-      const listed = await Promise.all(definitions.map(async catalog => {
+      // Only the catalog being viewed, when one is named.
+      //
+      // The schema filter below used to carry this, and it only narrowed when
+      // a SCHEMA was also given: with a catalog and no schema, `!schemaName`
+      // was true and every schema of every registered catalog passed, so
+      // /catalog/OpenSource listed the whole lake (defect D-29). Narrowing the
+      // catalogs here instead also stops the page listing schemas for every
+      // catalog in order to show one, which at ~0.5 s per listing (D-3) is
+      // most of what that page waits for.
+      //
+      // Matched case-insensitively, because the page that decided this catalog
+      // exists compared that way too — a reader arriving at /catalog/opensource
+      // would otherwise pass that check and then be shown nothing.
+      //
+      // `catalogs` deliberately keeps the full registered list: it is what
+      // tells a reader "no data catalogs registered", which is a different
+      // statement from this catalog having no schemas.
+      const wanted = catalogName
+        ? definitions.filter(entry => entry.name.toLowerCase() === catalogName.toLowerCase())
+        : definitions;
+      const listed = await Promise.all(wanted.map(async catalog => {
         const schemas = await fetchSchemaDefinitions(catalog.id).catch(() => null);
         if (schemas === null) { unread.push(catalog.name); return [] as Group[]; }
         return schemas
-          .filter(schema => !schemaName || (catalog.name === catalogName && schema.name === schemaName))
+          .filter(schema => !schemaName || schema.name === schemaName)
           .map<Group>(schema => ({
             catalogId: catalog.id, catalog: catalog.name,
             schemaId: schema.id, schema: schema.name, revision: schema.revision, tables: null,
