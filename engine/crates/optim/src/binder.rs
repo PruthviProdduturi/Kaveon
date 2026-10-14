@@ -766,6 +766,26 @@ impl Binder<'_> {
                 "a correlation reaching past an IN or EXISTS subquery is not supported".into(),
             ));
         }
+        let correlated_projection_matches = match lateral.as_slice() {
+            [Correlation::Key { inner, .. }] => match &right.plan {
+                LogicalPlan::Project { columns, .. } => {
+                    let first = columns.first().and_then(|column| match column {
+                        Expr::Column(name) => Some(name.as_str()),
+                        _ => None,
+                    });
+                    let source = columns.iter().find_map(|column| match column {
+                        Expr::Alias { expr, name } if name == inner => match expr.as_ref() {
+                            Expr::Column(source) => Some(source.as_str()),
+                            _ => None,
+                        },
+                        _ => None,
+                    });
+                    first.is_some() && first == source
+                }
+                _ => false,
+            },
+            _ => false,
+        };
         if lateral.is_empty() {
             let left_key = self.bind_expr(left_key, &left_scope, None)?;
             // The subquery side binds its key by position (`*`) or not at
@@ -782,6 +802,32 @@ impl Binder<'_> {
                 left_key,
                 right_key,
                 residual,
+                correlations: left.correlations,
+            });
+        }
+        // A correlated IN can be reduced to a keyed semi/anti join when its
+        // subquery has exactly one equality correlation and no residual. The
+        // projected subquery column is the right-side key; additional
+        // correlations remain rejected because they need a residual-aware
+        // multi-key rewrite to preserve SQL NULL semantics.
+        if matches!(&right_key, Expr::Column(name) if name == "*")
+            && residual.is_none()
+            && lateral.len() == 1
+            && let [Correlation::Key { inner, .. }] = lateral.as_slice()
+            && correlated_projection_matches
+        {
+            let left_key = self.bind_expr(left_key, &left_scope, None)?;
+            let right_key = self.bind_expr(
+                Expr::Column(inner.clone()),
+                &self.scope_of(&right.plan),
+                None,
+            )?;
+            return Ok(BoundSemiJoin {
+                left: Box::new(left.plan),
+                right: Box::new(right.plan),
+                left_key,
+                right_key,
+                residual: None,
                 correlations: left.correlations,
             });
         }
@@ -2225,6 +2271,28 @@ mod tests {
             let error = bind(plan, &catalog()).unwrap_err().to_string();
             assert!(error.contains(reason), "{sql}: {error}");
         }
+    }
+
+    #[test]
+    fn a_correlated_in_with_the_projected_key_is_a_keyed_semi_join() {
+        let plan = bound(
+            "SELECT o_orderkey FROM orders o WHERE o_orderkey IN (SELECT l_orderkey FROM lineitem l WHERE l_orderkey = o_orderkey)",
+        );
+        let LogicalPlan::Project { input, .. } = plan else {
+            panic!("projection");
+        };
+        let LogicalPlan::SemiJoin {
+            left_key,
+            right_key,
+            residual,
+            ..
+        } = *input
+        else {
+            panic!("correlated IN should lower to a semi join");
+        };
+        assert!(matches!(left_key, Expr::Column(name) if name == "o_orderkey"));
+        assert!(matches!(right_key, Expr::Column(name) if name == "__kaveon_corr_0"));
+        assert!(residual.is_none());
     }
 
     /// Q21's EXISTS: one equality is the key, the non-equality the
