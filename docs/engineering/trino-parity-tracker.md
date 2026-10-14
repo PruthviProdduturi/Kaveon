@@ -608,8 +608,8 @@ invalidation, isolation, bounds, and restart evidence listed above.
 
 ### Current focused validation
 
-The latest focused validation passes 349 `kaveon-server` tests, 119
-`kaveon-sql` tests, and 287 `kaveon-exec` library tests (four executor
+The latest focused validation passes 350 `kaveon-server` tests, 119
+`kaveon-sql` tests, and 288 `kaveon-exec` library tests (four executor
 benchmarks are ignored). The repository differential gate
 (`differential_tests::the_differential_sweep_matches_across_parquet_encodings_and_execution_paths`)
 also passes, comparing the same corpus across alternate Parquet encodings and
@@ -821,7 +821,7 @@ prepared-statement coverage, worker-loss, and exact-result differential runs
 are still required.
 
 The current local validation baseline is green on the same checkout: the full
-`kaveon-server` suite passed **349 tests**, and the full CLI suite passed **211
+`kaveon-server` suite passed **350 tests**, and the full CLI suite passed **211
 tests** (one ignored). The set-operation coverage includes `UNION ALL`, distinct and
 multiset `INTERSECT`/`EXCEPT`, dictionary-versus-plain values, duplicate
 counts, null handling, planner lowering, and exchange-input consumption. This
