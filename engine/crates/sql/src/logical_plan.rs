@@ -754,7 +754,7 @@ fn query_to_plan(query: &ast::Query, parent: &Lowering) -> Result<LogicalPlan> {
         Some(ob) => build_order_by(plan, &ob.exprs, &bindings)?,
         None => (plan, None),
     };
-    let plan = build_limit_offset(plan, &query.limit, &query.offset)?;
+    let plan = build_limit_offset(plan, &query.limit, &query.offset, query.fetch.as_ref())?;
     // ORDER BY on a column the query does not select: the column rode
     // along through the sort and limit and is dropped here.
     let plan = match visible {
@@ -2175,6 +2175,7 @@ fn build_limit_offset(
     plan: LogicalPlan,
     limit: &Option<ast::Expr>,
     offset: &Option<ast::Offset>,
+    fetch: Option<&ast::Fetch>,
 ) -> Result<LogicalPlan> {
     let plan = match offset {
         Some(ast::Offset { value, .. }) => {
@@ -2190,11 +2191,35 @@ fn build_limit_offset(
         }
         None => plan,
     };
-    match limit {
-        None => Ok(plan),
-        Some(ast::Expr::Identifier(identifier))
-            if identifier.value.eq_ignore_ascii_case("ALL") => Ok(plan),
-        Some(expr) => {
+    let fetch_limit = match fetch {
+        None => None,
+        Some(fetch) if fetch.percent => {
+            return Err(sql_err("FETCH PERCENT is unsupported; use FETCH ... ROWS ONLY"));
+        }
+        Some(fetch) if fetch.with_ties => {
+            return Err(sql_err("FETCH WITH TIES is unsupported; use FETCH ... ROWS ONLY"));
+        }
+        Some(fetch) => Some(
+            fetch
+                .quantity
+                .as_ref()
+                .ok_or_else(|| sql_err("FETCH requires a row count"))?,
+        ),
+    };
+    match (limit, fetch_limit) {
+        (Some(_), Some(_)) => Err(sql_err("LIMIT and FETCH cannot both be specified")),
+        (None, None) => Ok(plan),
+        (Some(expr), None) => {
+            if matches!(expr, ast::Expr::Identifier(identifier) if identifier.value.eq_ignore_ascii_case("ALL")) {
+                return Ok(plan);
+            }
+            let count = ast_expr_to_usize(expr)?;
+            Ok(LogicalPlan::Limit {
+                input: Box::new(plan),
+                count,
+            })
+        }
+        (None, Some(expr)) => {
             let count = ast_expr_to_usize(expr)?;
             Ok(LogicalPlan::Limit {
                 input: Box::new(plan),
@@ -4982,6 +5007,27 @@ mod tests {
                 _ => panic!("expected Offset under Limit"),
             },
             _ => panic!("expected Limit"),
+        }
+    }
+
+    #[test]
+    fn fetch_first_rows_lowers_to_limit() {
+        let plan = sql_to_logical_plan("SELECT * FROM t ORDER BY id FETCH FIRST 10 ROWS ONLY")
+            .expect("FETCH FIRST should lower to a bounded plan");
+        let LogicalPlan::Limit { input, count: 10 } = plan else {
+            panic!("expected Limit");
+        };
+        assert!(matches!(*input, LogicalPlan::Sort { .. }));
+    }
+
+    #[test]
+    fn fetch_rejects_percent_and_with_ties_explicitly() {
+        for sql in [
+            "SELECT * FROM t FETCH FIRST 10 PERCENT ROWS ONLY",
+            "SELECT * FROM t ORDER BY id FETCH FIRST 10 ROWS WITH TIES",
+        ] {
+            let error = sql_to_logical_plan(sql).expect_err("unsupported FETCH form");
+            assert!(error.to_string().contains("FETCH"), "{error}");
         }
     }
 
