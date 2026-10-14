@@ -674,6 +674,8 @@ invalidation, isolation, bounds, and restart evidence listed above.
   from matching list offsets and rejects NULL keys. `MAP_KEYS` and `MAP_VALUES`
   now expose the corresponding list views while preserving map offsets and null
   rows; dereference and keyed lookup remain explicit complex-type gaps.
+- `SPLIT_TO_MAP` now parses delimited text into typed text maps, preserves NULL
+  rows, and rejects empty delimiters and duplicate keys.
 - `ARRAY_POSITION(array, value)` now returns Trino-compatible one-based positions
   for numeric and text lists, returns `0` when absent, preserves NULL list and
   element semantics, and fails explicitly for unsupported element types
