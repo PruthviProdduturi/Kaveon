@@ -19340,6 +19340,11 @@ mod streamed_root_tests {
             Some("recent".to_owned())
         );
         assert!(trino_prepare_statement("PREPARE recent SELECT 1").is_err());
+        let mixed = trino_prepare_statement("PrEpArE recent FROM SELECT * FROM events WHERE id = ?")
+            .unwrap()
+            .expect("mixed-case PREPARE should be recognized");
+        assert_eq!(mixed.0, "recent");
+        assert!(kaveon_sql::parser::parse_sql(&mixed.1).is_ok());
     }
 
     #[test]
