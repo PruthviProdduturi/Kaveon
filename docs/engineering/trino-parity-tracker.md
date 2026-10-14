@@ -865,8 +865,8 @@ multi-encoding differential corpus covers these grouped forms; older fragments
 without the field remain compatible as non-distinct aggregates.
 Column-key `GROUPING SETS ((a), (b), ...)`, `CUBE`, and `ROLLUP` now lower to
 typed `UNION ALL` aggregate branches and are covered by SQL and physical-
-planner tests. `GROUPING(column)` and `GROUPING_ID(...)` are materialized for
-expanded column-key branches. CUBE expansions with 16 or more keys remain
+planner tests and a local execution regression. `GROUPING(column)` and
+`GROUPING_ID(...)` are materialized for expanded column-key branches. CUBE expansions with 16 or more keys remain
 explicitly unsupported. The compatibility claim is intentionally limited to
 column-key grouping expressions, including ordinary keys carried alongside a
 grouping specification.
