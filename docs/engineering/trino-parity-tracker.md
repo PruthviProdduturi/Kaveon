@@ -1072,10 +1072,12 @@ and first-occurrence order; position preserves one-based indexes and NULL
 semantics; sort keeps NULL elements at the end.
 
 The product transaction adapter now expands multi-row `VALUES` inserts into
-bounded typed commands and stages them under one commit boundary. The
-capabilities endpoint advertises `multi_row_insert: true`; `INSERT ... SELECT`,
-`RETURNING`, conflict clauses, and arbitrary row-store DML remain explicitly
-unsupported.
+bounded typed commands and stages them under one commit boundary. Positional
+(`$1`, `?`) and named (`:name`) parameters are bound before the native parser,
+with missing, extra, mixed, object, and oversized values rejected explicitly.
+The capabilities endpoint advertises `multi_row_insert: true` and parameter
+binding; `INSERT ... SELECT`, `RETURNING`, conflict clauses, and arbitrary
+row-store DML remain explicitly unsupported.
 
 These slices do not close Tracks 1 and 2's qualification gates; the broader
 three-worker corpus, complex types, correlated/unsupported scalar shapes,
@@ -1096,7 +1098,7 @@ The same route supports `SHOW SESSION LIKE 'pattern'`, applying Trino wildcard
 semantics to the supported settings and rejecting malformed patterns explicitly.
 
 The current local validation baseline is green on the same checkout: the full
-`kaveon-server` suite passed **371 tests**, and the full CLI suite passed **211
+`kaveon-server` suite passed **378 tests**, and the full CLI suite passed **211
 tests** (one ignored). The set-operation coverage includes `UNION ALL`, distinct and
 multiset `INTERSECT`/`EXCEPT`, dictionary-versus-plain values, duplicate
 counts, null handling, planner lowering, and exchange-input consumption. This
