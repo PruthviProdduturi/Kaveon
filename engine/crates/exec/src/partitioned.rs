@@ -3327,6 +3327,49 @@ mod tests {
     }
 
     #[test]
+    fn partitioned_join_applies_typed_int32_runtime_filter_before_probe() {
+        use arrow::array::Int32Array;
+
+        fn input_int32(values: &[Option<i32>], chunk: usize) -> Box<dyn BatchOperator> {
+            let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, true)]));
+            let batches = values
+                .chunks(chunk)
+                .map(|rows| {
+                    RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![Arc::new(Int32Array::from(rows.to_vec()))],
+                    )
+                    .unwrap()
+                })
+                .collect();
+            Box::new(Input { schema, batches })
+        }
+
+        let pool = QueryMemoryPool::new("partitioned-int32-runtime-filter", 4 * 1024 * 1024)
+            .unwrap();
+        let mut join = PartitionedHashJoin::new(
+            input_int32(&[Some(1), Some(2), Some(3), None], 2),
+            input_int32(&[Some(2), Some(4), Some(4)], 3),
+            JoinType::Inner,
+            vec![("id".into(), "id".into())],
+            None,
+            None,
+            pool.operator("join").unwrap(),
+            spill(),
+            4,
+        )
+        .unwrap();
+        let mut rows = Vec::new();
+        while let Some(batch) = join.next_batch().unwrap() {
+            let left = batch.column(0).as_any().downcast_ref::<Int32Array>().unwrap();
+            let right = batch.column(1).as_any().downcast_ref::<Int32Array>().unwrap();
+            rows.extend((0..batch.num_rows()).map(|row| (left.value(row), right.value(row))));
+        }
+        assert_eq!(rows, vec![(2, 2)]);
+        assert_eq!(pool.snapshot().current_bytes, 0);
+    }
+
+    #[test]
     fn runtime_join_filter_uses_typed_unsigned_and_date_indexes() {
         use arrow::array::{Date32Array, UInt64Array};
 

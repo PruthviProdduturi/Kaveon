@@ -622,7 +622,9 @@ invalidation, isolation, bounds, and restart evidence listed above.
 - Build-side runtime filters now use typed `Int32`, `UInt64`, and `Date32` hash
   indexes for single-key probe batches, alongside the existing `Int64`, `Utf8`,
   and `LargeUtf8` paths. This removes per-row composite-key allocation for
-  common integer and date dimensions;
+  common integer and date dimensions; the partitioned-join regression also
+  proves the typed mask is applied in the distributed operator, not only in
+  the standalone filter helper;
   composite keys and scan-level dynamic filtering remain separate open gates.
 - A distributed self-join with grouped output now has exact worker-loss
   recovery coverage, including retries and moved exchange spools
