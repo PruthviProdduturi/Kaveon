@@ -425,6 +425,7 @@ fn compare_column_with_literal(
 /// per-row result.
 const NULL_PROPAGATING_FUNCTIONS: &[&str] = &[
     "REGEXP_REPLACE",
+    "REGEXP_EXTRACT",
     "UPPER",
     "LOWER",
     "TRIM",
@@ -3104,6 +3105,48 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                         compiled_regex_for("REGEXP_LIKE", patterns.value(row))?
                             .is_match(values.value(row)),
                     ))
+                })
+                .collect::<Result<Vec<_>>>()?
+                .into();
+            Ok(Arc::new(result))
+        }
+        "REGEXP_EXTRACT" => {
+            if args.len() != 2 && args.len() != 3 {
+                return Err(KaveonError::Execution(
+                    "REGEXP_EXTRACT requires 2 or 3 arguments".into(),
+                ));
+            }
+            let values = as_string_array(&args[0])?;
+            let patterns = as_string_array(&args[1])?;
+            let groups = if args.len() == 3 {
+                Some(compute::cast(&args[2], &DataType::Int64)?)
+            } else {
+                None
+            };
+            let groups = groups.as_ref().map(|array| array.as_primitive::<Int64Type>());
+            let result: StringArray = (0..num_rows)
+                .map(|row| {
+                    if values.is_null(row) || patterns.is_null(row) {
+                        return Ok(None);
+                    }
+                    let group = match groups {
+                        Some(groups) if groups.is_null(row) => return Ok(None),
+                        Some(groups) => {
+                            let group = groups.value(row);
+                            if group < 0 {
+                                return Err(KaveonError::Execution(
+                                    "REGEXP_EXTRACT group must be non-negative".into(),
+                                ));
+                            }
+                            group as usize
+                        }
+                        None => 0,
+                    };
+                    let regex = compiled_regex_for("REGEXP_EXTRACT", patterns.value(row))?;
+                    let captures = regex.captures(values.value(row));
+                    Ok(captures.and_then(|captures| {
+                        captures.get(group).map(|matched| matched.as_str().to_owned())
+                    }))
                 })
                 .collect::<Result<Vec<_>>>()?
                 .into();
@@ -9717,6 +9760,57 @@ mod tests {
                 "{error}"
             );
         }
+    }
+
+    #[test]
+    fn regexp_extract_returns_capture_groups_and_nulls_on_no_match() {
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, true)]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(StringArray::from(vec![
+                Some("id=42 kind=book"),
+                Some("no id here"),
+                None,
+            ]))],
+        )
+        .unwrap();
+        let expr = Expr::Function {
+            name: "REGEXP_EXTRACT".into(),
+            args: vec![
+                Expr::Column("s".into()),
+                Expr::Literal(ScalarValue::Utf8(r"id=(\d+) kind=(\w+)".into())),
+                Expr::Literal(ScalarValue::Int64(1)),
+            ],
+        };
+        let result = evaluate(&expr, &batch).unwrap();
+        let values = as_string_array(&result).unwrap();
+        assert_eq!(values.value(0), "42");
+        assert!(values.is_null(1));
+        assert!(values.is_null(2));
+
+        let second_group = Expr::Function {
+            name: "REGEXP_EXTRACT".into(),
+            args: vec![
+                Expr::Column("s".into()),
+                Expr::Literal(ScalarValue::Utf8(r"id=(\d+) kind=(\w+)".into())),
+                Expr::Literal(ScalarValue::Int64(2)),
+            ],
+        };
+        let result = evaluate(&second_group, &batch).unwrap();
+        assert_eq!(as_string_array(&result).unwrap().value(0), "book");
+
+        let invalid_group = Expr::Function {
+            name: "REGEXP_EXTRACT".into(),
+            args: vec![
+                Expr::Column("s".into()),
+                Expr::Literal(ScalarValue::Utf8("id=(\\d+)".into())),
+                Expr::Literal(ScalarValue::Int64(-1)),
+            ],
+        };
+        assert!(evaluate(&invalid_group, &batch)
+            .unwrap_err()
+            .to_string()
+            .contains("group must be non-negative"));
     }
 
     #[test]
