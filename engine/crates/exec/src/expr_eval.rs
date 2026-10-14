@@ -5464,6 +5464,65 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             if args[1].len() != num_rows {
                 return Err(KaveonError::Execution("ARRAY_REMOVE requires one value per row".into()));
             }
+            if matches!(
+                list.value_type(),
+                DataType::List(_)
+                    | DataType::LargeList(_)
+                    | DataType::Struct(_)
+                    | DataType::Map(_, _)
+            ) {
+                let mut selected = Vec::<ArrayRef>::new();
+                let mut offsets = vec![0_i32];
+                let mut valid = Vec::with_capacity(num_rows);
+                for row in 0..num_rows {
+                    if list.is_null(row) {
+                        valid.push(false);
+                        offsets.push(*offsets.last().unwrap());
+                        continue;
+                    }
+                    valid.push(true);
+                    let inner = list.value(row);
+                    let target_null = args[1].is_null(row);
+                    let target = args[1].slice(row, 1);
+                    for index in 0..inner.len() {
+                        let keep = if inner.is_null(index) {
+                            !target_null
+                        } else if target_null {
+                            true
+                        } else {
+                            let candidate = inner.slice(index, 1);
+                            let equal = comparison(&candidate, &target, CompareKind::Eq)?;
+                            equal.is_null(0) || !equal.value(0)
+                        };
+                        if keep {
+                            selected.push(inner.slice(index, 1));
+                        }
+                    }
+                    offsets.push(i32::try_from(selected.len()).map_err(|_| {
+                        KaveonError::Execution("ARRAY_REMOVE result offset overflow".into())
+                    })?);
+                }
+                let values = if selected.is_empty() {
+                    arrow::array::new_empty_array(&list.value_type())
+                } else {
+                    let chunks = selected
+                        .iter()
+                        .map(|chunk| chunk.as_ref() as &dyn Array)
+                        .collect::<Vec<_>>();
+                    compute::concat(&chunks)?
+                };
+                let field = Arc::new(arrow::datatypes::Field::new(
+                    "item",
+                    values.data_type().clone(),
+                    true,
+                ));
+                return Ok(Arc::new(ListArray::try_new(
+                    field,
+                    OffsetBuffer::new(ScalarBuffer::from(offsets)),
+                    values,
+                    Some(arrow::buffer::NullBuffer::from(valid)),
+                )?));
+            }
             macro_rules! remove_primitive {
                 ($ty:ty, $builder:expr) => {{
                     let target = compute::cast(&args[1], &list.value_type())?;
@@ -7617,6 +7676,26 @@ mod tests {
         let appended = appended_value.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(appended.len(), 2);
         assert_eq!(appended.value(1).as_primitive::<Int64Type>().value(0), 8);
+
+        let removed = evaluate(
+            &Expr::Function {
+                name: "ARRAY_REMOVE".into(),
+                args: vec![
+                    array(vec![
+                        array(vec![Expr::Literal(ScalarValue::Int64(9))]),
+                        array(vec![Expr::Literal(ScalarValue::Int64(10))]),
+                    ]),
+                    array(vec![Expr::Literal(ScalarValue::Int64(9))]),
+                ],
+            },
+            &batch,
+        )
+        .unwrap();
+        let removed = removed.as_any().downcast_ref::<ListArray>().unwrap();
+        let removed_value = removed.value(0);
+        let removed = removed_value.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed.value(0).as_primitive::<Int64Type>().value(0), 10);
     }
 
     #[test]
