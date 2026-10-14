@@ -1882,6 +1882,41 @@ fn replace_bound_expression(expr: Expr, bindings: &ExpressionBindings) -> Expr {
             Box::new(replace_bound_expression(*a, bindings)),
             Box::new(replace_bound_expression(*b, bindings)),
         ),
+        Expr::Function { name, args } if name == "GROUPING_ID" => {
+            let resolved = args
+                .into_iter()
+                .map(|e| replace_bound_expression(e, bindings))
+                .collect::<Vec<_>>();
+            let grouping = resolved
+                .iter()
+                .all(|expr| matches!(expr, Expr::Column(_)));
+            if grouping {
+                let argument_count = resolved.len();
+                let mut value = Expr::Literal(ScalarValue::Int64(0));
+                for (index, column) in resolved.into_iter().enumerate() {
+                    let bit = replace_bound_expression(Expr::Function {
+                        name: "GROUPING".to_owned(),
+                        args: vec![column],
+                    }, bindings);
+                    let weight = 1_i64 << (argument_count - index - 1);
+                    value = Expr::BinaryOp {
+                        left: Box::new(value),
+                        op: BinaryOp::Plus,
+                        right: Box::new(Expr::BinaryOp {
+                            left: Box::new(bit),
+                            op: BinaryOp::Multiply,
+                            right: Box::new(Expr::Literal(ScalarValue::Int64(weight))),
+                        }),
+                    };
+                }
+                replace_bound_expression(value, bindings)
+            } else {
+                Expr::Function {
+                    name,
+                    args: resolved,
+                }
+            }
+        }
         Expr::Function { name, args } => Expr::Function {
             name,
             args: args
@@ -2998,20 +3033,29 @@ fn collect_grouping_columns_from_ast_expr(
 ) -> Result<()> {
     match expr {
         ast::Expr::Function(func) => {
-            if canonical_function_name(func) == "GROUPING" {
+            let name = canonical_function_name(func);
+            if name == "GROUPING" || name == "GROUPING_ID" {
                 let ast::FunctionArguments::List(args) = &func.args else {
-                    return Err(sql_err("GROUPING requires one grouping column"));
+                    return Err(sql_err(format!("{name} requires grouping columns")));
                 };
-                let [ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(column))] =
-                    args.args.as_slice()
-                else {
-                    return Err(sql_err("GROUPING requires one grouping column"));
-                };
-                let Expr::Column(column) = ast_expr_to_expr(column)? else {
-                    return Err(sql_err("GROUPING currently requires a column argument"));
-                };
-                if !out.contains(&column) {
-                    out.push(column);
+                if args.args.is_empty() || (name == "GROUPING" && args.args.len() != 1) {
+                    return Err(sql_err(format!("{name} requires grouping columns")));
+                }
+                for argument in &args.args {
+                    let ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(column)) = argument
+                    else {
+                        return Err(sql_err(format!(
+                            "{name} currently requires column arguments"
+                        )));
+                    };
+                    let Expr::Column(column) = ast_expr_to_expr(column)? else {
+                        return Err(sql_err(format!(
+                            "{name} currently requires column arguments"
+                        )));
+                    };
+                    if !out.contains(&column) {
+                        out.push(column);
+                    }
                 }
                 return Ok(());
             }
@@ -4828,6 +4872,18 @@ mod tests {
         let debug = format!("{plan:?}");
         assert!(debug.contains("__kaveon_grouping_region"), "{debug}");
         assert!(!debug.contains("name: \"GROUPING\""), "{debug}");
+    }
+
+    #[test]
+    fn grouping_id_combines_branch_flags_in_trino_bit_order() {
+        let plan = sql_to_logical_plan(
+            "SELECT GROUPING_ID(region, platform), COUNT(*) FROM events GROUP BY CUBE (region, platform)",
+        )
+        .unwrap();
+        let debug = format!("{plan:?}");
+        assert!(debug.contains("__kaveon_grouping_region"), "{debug}");
+        assert!(debug.contains("__kaveon_grouping_platform"), "{debug}");
+        assert!(!debug.contains("name: \"GROUPING_ID\""), "{debug}");
     }
 
     #[test]

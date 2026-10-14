@@ -3234,6 +3234,7 @@ mod tests {
             "SELECT id, COUNT(*) FROM items GROUP BY CUBE (id)",
             "SELECT id, COUNT(*) FROM items GROUP BY ROLLUP (id)",
             "SELECT id, GROUPING(id), COUNT(*) FROM items GROUP BY GROUPING SETS ((id), ())",
+            "SELECT GROUPING_ID(id), COUNT(*) FROM items GROUP BY CUBE (id)",
         ] {
             let fragments = executable_fragments(sql);
             assert!(

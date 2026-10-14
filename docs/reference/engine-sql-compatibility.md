@@ -106,9 +106,9 @@ unchanged; nothing is approximated unless the statement writes an
 - Outer non-equality join conditions (residual join filters), recursive CTEs,
   ordered map and JSON comparison. Column-key `GROUPING SETS`, `CUBE`, and
   `ROLLUP` lower to typed `UNION ALL` aggregate branches; grouping metadata
-  `GROUPING(column)` is materialized for those expanded branches. `GROUPING_ID`
-  and CUBE expansions with 16 or more keys remain unsupported and are rejected
-  explicitly rather than silently treated as a plain `GROUP BY`;
+  `GROUPING(column)` and `GROUPING_ID(...)` are materialized for those
+  expanded branches. CUBE expansions with 16 or more keys remain unsupported
+  and are rejected explicitly rather than silently treated as a plain `GROUP BY`;
   typed numeric, text, and boolean `ARRAY[...]` literals support `CARDINALITY`,
   `CONTAINS`, `ARRAY_POSITION`, `ARRAY_DISTINCT`, `ARRAY_SORT`,
   `ARRAY_REVERSE`, `ELEMENT_AT`, and positive or negative-stride slices;
