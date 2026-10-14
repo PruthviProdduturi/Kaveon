@@ -294,6 +294,27 @@ fn relation(
         });
         return Some(estimate);
     }
+    // A projection that only forwards or renames columns preserves the
+    // relation's cardinality and storage footprint. Keep the exact source
+    // estimate visible through that wrapper so a subquery does not disable a
+    // safe broadcast decision. Computed expressions are deliberately left
+    // opaque: their selectivity and width are not known here.
+    if let LogicalPlan::Project { input, columns } = plan {
+        let mut estimate = relation(input, stats)?;
+        let mut projected = Vec::with_capacity(columns.len());
+        for expression in columns {
+            match expression {
+                Expr::Column(name) => projected.push(name.clone()),
+                Expr::Alias { expr, name } if matches!(expr.as_ref(), Expr::Column(_)) => {
+                    projected.push(name.clone())
+                }
+                _ => return None,
+            }
+        }
+        estimate.columns = projected;
+        return Some(estimate);
+    }
+
     let (scan, predicate) = match plan {
         LogicalPlan::Filter { input, predicate } => (input.as_ref(), Some(predicate)),
         other => (other, None),
@@ -619,6 +640,19 @@ mod tests {
         };
         assert!(matches!(*right,LogicalPlan::Scan {table,..} if table=="small"));
         assert!(format!("{condition:?}").contains("left: Column(\"b.id\")"));
+        assert_eq!(distribution, JoinDistribution::BroadcastRight);
+    }
+
+    #[test]
+    fn keeps_exact_stats_through_a_simple_projected_subquery() {
+        let plan = sql_to_logical_plan(
+            "SELECT * FROM big b JOIN (SELECT id, value FROM small) s ON b.id=s.id",
+        )
+        .unwrap();
+        let optimized = optimize_with_statistics(plan, &mut stats);
+        let LogicalPlan::Join { distribution, .. } = optimized else {
+            panic!("join missing")
+        };
         assert_eq!(distribution, JoinDistribution::BroadcastRight);
     }
 
