@@ -1047,7 +1047,7 @@ wire prepare/describe/bind lifecycle remain open, so this is a compatibility
 slice rather than a full protocol claim.
 
 The current local validation baseline is green on the same checkout: the full
-`kaveon-server` suite passed **367 tests**, and the full CLI suite passed **211
+`kaveon-server` suite passed **369 tests**, and the full CLI suite passed **211
 tests** (one ignored). The set-operation coverage includes `UNION ALL`, distinct and
 multiset `INTERSECT`/`EXCEPT`, dictionary-versus-plain values, duplicate
 counts, null handling, planner lowering, and exchange-input consumption. This
