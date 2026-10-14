@@ -102,7 +102,7 @@ unchanged; nothing is approximated unless the statement writes an
 - Correlated subqueries beyond one or two equalities: a correlated non-equality
   (TPC-H Q21's `l2.l_suppkey <> l1.l_suppkey`), `COUNT` in a correlated scalar,
   `LIMIT`/set operations inside a correlated subquery, `EXISTS` correlated on
-  more than one column, correlated `IN`; each is refused by name.
+  more than one column, or multi-key correlated `IN`; each is refused by name.
 - Outer non-equality join conditions (residual join filters) and `GROUPING SETS`/
   `CUBE`/`ROLLUP`, recursive CTEs, ordered map and JSON comparison;
   typed numeric, text, and boolean `ARRAY[...]` literals support `CARDINALITY`,
