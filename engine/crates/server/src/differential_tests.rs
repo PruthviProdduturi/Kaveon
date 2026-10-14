@@ -217,6 +217,11 @@ const CASES: &[(&str, &str, bool)] = &[
         true,
     ),
     (
+        "fetch_with_ties",
+        "SELECT country, actions FROM {T} ORDER BY actions DESC, country ASC FETCH FIRST 1 ROW WITH TIES",
+        true,
+    ),
+    (
         "in_list",
         "SELECT country, SUM(actions) AS a FROM {T} WHERE country IN ('Japan', 'Brazil', 'Kenya') GROUP BY country ORDER BY country",
         true,
