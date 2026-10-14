@@ -57,7 +57,7 @@ correlated scalar subquery, `LIMIT`/`OFFSET` or set operations inside a
 correlated subquery, `EXISTS` correlated on more than one column, correlated
 `IN`, a scalar subquery that is not an ungrouped aggregate, `INTERVAL
 MONTH`/`YEAR` added to a column, recursive CTEs, `GROUPING SETS`/`CUBE`/
-`ROLLUP`, `INTERSECT ALL`/`EXCEPT ALL`, named windows, window `FILTER`/
+`ROLLUP`, named windows, window `FILTER`/
 `WITHIN GROUP`/`DISTINCT`, approximate aggregates, array/map/JSON types,
 general DDL and row DML (the product transaction API is a bounded
 product-record protocol, see the [SQL compatibility

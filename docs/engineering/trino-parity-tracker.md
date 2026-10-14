@@ -94,8 +94,9 @@ foundations, but several operators are still centralized or narrow:
   backpressure is covered by a bounded-lane regression test (`8fe8fafb`), but
   pressure qualification and sustained federated-exchange evidence remain
   open.
-- Windows gather to one task. Set operations and final sort/TopN also have
-  centralized merge stages. Compatible windows with a shared non-empty
+- Windows gather to one task. Final sort/TopN still have centralized merge
+  stages. Set operations with matching projected keys now use hash exchange;
+  identity-ambiguous inputs retain a centralized merge. Compatible windows with a shared non-empty
   `PARTITION BY` are now hash-partitioned across workers; unpartitioned and
   mixed-key windows remain centralized for correctness. These are not yet
   Trino-class parallel plans across the full window corpus.

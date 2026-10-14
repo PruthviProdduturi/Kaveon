@@ -1610,9 +1610,27 @@ impl StageGraphBuilder {
                 } else {
                     "Except"
                 };
-                let target = self.add_exchange_stage(operator, physical.attributes, 1, 2);
-                self.add_exchange(left_stage, target, Partitioning::Single);
-                self.add_exchange(right_stage, target, Partitioning::Single);
+                // Set operations can run independently per partition when
+                // both sides expose the same named projected columns.  A
+                // shared hash exchange keeps equal rows together, so this
+                // preserves DISTINCT and ALL semantics while avoiding a
+                // coordinator-only set operation.  Expressions, mismatched
+                // aliases, and SELECT * keep the conservative single-task
+                // path because their output identity is not safely known.
+                let partitioning = set_operation_partitioning(
+                    left,
+                    right,
+                    self.exchange_partition_count,
+                )
+                .unwrap_or(Partitioning::Single);
+                let task_count = match partitioning {
+                    Partitioning::Single => 1,
+                    _ => self.exchange_partition_count,
+                };
+                let target =
+                    self.add_exchange_stage(operator, physical.attributes, task_count, 2);
+                self.add_exchange(left_stage, target, partitioning.clone());
+                self.add_exchange(right_stage, target, partitioning);
                 Ok(target)
             }
             LogicalPlan::Filter { input, .. } | LogicalPlan::Project { input, .. } => {
@@ -2629,6 +2647,22 @@ fn distinct_partition_columns(input: &LogicalPlan) -> Option<Vec<String>> {
     )
 }
 
+fn set_operation_partitioning(
+    left: &LogicalPlan,
+    right: &LogicalPlan,
+    partition_count: usize,
+) -> Option<Partitioning> {
+    let left_columns = distinct_partition_columns(left)?;
+    let right_columns = distinct_partition_columns(right)?;
+    if left_columns.is_empty() || left_columns != right_columns {
+        return None;
+    }
+    Some(Partitioning::Hash {
+        columns: left_columns,
+        partition_count,
+    })
+}
+
 fn unqualify(column: &str) -> String {
     column.rsplit('.').next().unwrap_or(column).to_owned()
 }
@@ -3446,6 +3480,33 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(operator.inputs, exchange_inputs, "{sql}");
             assert_eq!(exchange_inputs.len(), 2, "{sql}");
+        }
+    }
+
+    #[test]
+    fn set_operations_hash_partition_matching_projected_keys() {
+        for sql in [
+            "SELECT id FROM items INTERSECT SELECT id FROM customers",
+            "SELECT id FROM items EXCEPT ALL SELECT id FROM customers",
+        ] {
+            let graph = graph(sql);
+            let target = graph
+                .stages
+                .iter()
+                .find(|stage| stage.plan.operator == "Intersect" || stage.plan.operator == "Except")
+                .expect("set operation stage");
+            assert_eq!(target.task_count, 4, "{sql}");
+            let exchanges = graph
+                .exchanges
+                .iter()
+                .filter(|exchange| exchange.target_stage == target.id)
+                .collect::<Vec<_>>();
+            assert_eq!(exchanges.len(), 2, "{sql}");
+            assert!(exchanges.iter().all(|exchange| matches!(
+                &exchange.partitioning,
+                Partitioning::Hash { columns, partition_count: 4 }
+                    if columns == &["id".to_owned()]
+            )));
         }
     }
 
