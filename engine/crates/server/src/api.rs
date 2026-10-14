@@ -20696,6 +20696,43 @@ mod streamed_root_tests {
         let array_page_json: serde_json::Value =
             serde_json::from_slice(&array_page_body).expect("array result page JSON");
         assert_eq!(array_page_json["data"], serde_json::json!([[3]]));
+
+        let wire_query = "SELECT CAST(? AS BIGINT) AS value FROM numbers LIMIT 1";
+        let mut wire_headers = HeaderMap::new();
+        wire_headers.insert(
+            "x-trino-prepared-statement",
+            axum::http::HeaderValue::from_str(&format!(
+                "wire={}",
+                trino_percent_encode(wire_query)
+            ))
+            .unwrap(),
+        );
+        let wire_executed = submit_trino_statement_parts(
+            std::sync::Arc::clone(&state),
+            alice(),
+            wire_headers,
+            Bytes::from("EXECUTE wire USING 7"),
+        )
+        .await;
+        assert_eq!(wire_executed.status(), StatusCode::OK);
+        let wire_body = axum::body::to_bytes(wire_executed.into_body(), usize::MAX)
+            .await
+            .expect("wire execute body");
+        let wire_json: serde_json::Value =
+            serde_json::from_slice(&wire_body).expect("wire execute JSON");
+        let wire_id = wire_json["id"].as_str().expect("wire query id").to_owned();
+        let wire_page = get_trino_result_page(
+            State(std::sync::Arc::clone(&state)),
+            axum::extract::Path((wire_id, 0)),
+            axum::Extension(alice()),
+        )
+        .await;
+        let wire_page_body = axum::body::to_bytes(wire_page.into_body(), usize::MAX)
+            .await
+            .expect("wire result page body");
+        let wire_page_json: serde_json::Value =
+            serde_json::from_slice(&wire_page_body).expect("wire result page JSON");
+        assert_eq!(wire_page_json["data"], serde_json::json!([[7]]));
         let _ = std::fs::remove_dir_all(directory);
     }
 

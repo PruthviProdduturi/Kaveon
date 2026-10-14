@@ -1107,7 +1107,9 @@ returns the Trino prepare header, `DESCRIBE INPUT` reports the bound type,
 owner `EXECUTE ... USING` returns its exact result through the Trino result
 page, and a second prepared statement binds a nullable typed array through
 `CARDINALITY` with the exact result preserved. Another principal cannot
-execute the first statement, and the owner can deallocate it. This proves the
+execute the first statement, and the owner can deallocate it. The same test
+also executes a statement supplied through `X-Trino-Prepared-Statement`, so
+header-based selection and result paging are covered. This proves the
 supported lifecycle boundary without overstating it as full Trino wire
 protocol compatibility.
 
