@@ -1560,9 +1560,6 @@ fn build_aggregate(
                 }
             }
         }
-        if full_group_by.is_empty() {
-            return Err(sql_err("GROUPING SETS must contain a grouping key"));
-        }
         let mut grouping_columns = Vec::new();
         for item in &select.projection {
             if let ast::SelectItem::UnnamedExpr(expr)
@@ -4910,6 +4907,16 @@ mod tests {
         assert_eq!(debug.matches("Aggregate").count(), 2, "{debug}");
         assert!(debug.contains("region"), "{debug}");
         assert!(debug.contains("platform"), "{debug}");
+    }
+
+    #[test]
+    fn grouping_sets_supports_the_grand_total_form() {
+        let plan = sql_to_logical_plan(
+            "SELECT COUNT(*) FROM events GROUP BY GROUPING SETS (())",
+        )
+        .unwrap();
+        let debug = format!("{plan:?}");
+        assert_eq!(debug.matches("Aggregate").count(), 1, "{debug}");
     }
 
     #[test]
