@@ -137,7 +137,8 @@ foundations, but several operators are still centralized or narrow:
   the request body. JSON array parameters through the HTTP statement API now
   lower to typed `ARRAY[...]` expressions, including nested arrays and null
   elements; object/map values and the full prepare/describe/bind wire protocol
-  remain open.
+  remain open. Trino `EXECUTE ... USING ARRAY[...]` literals now use the same
+  recursive binding path, including nested arrays and null elements.
   Prepared-parameter discovery now also ignores PostgreSQL `::type` casts,
   so cast names cannot be mistaken for named bindings (`617b69f6`).
   Uncorrelated aggregate scalar subqueries in `WHERE` are now supported with
