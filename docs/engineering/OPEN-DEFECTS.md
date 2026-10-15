@@ -521,7 +521,7 @@ Set on `Global Energy`, and the question now answers: United States, China,
 Russia, Japan, India, Germany, Canada, France, United Kingdom, Brazil.
 
 ### D-47 · A presentation word routes the question to another dataset
-**open** · 2026-10-14 · the worst of the three
+**fixed** · 2026-10-14 · the worst of the three
 
 After two COVID questions, "can you make a world map chart" answered with
 `SELECT SUM(charts_created) FROM events.daily_user_activity LIMIT 1` — the
@@ -540,8 +540,15 @@ route to it. The real defect is that a FOLLOW-UP asking for a different
 presentation of the same answer re-routes at all. A follow-up that introduces
 no new subject should keep the conversation's dataset.
 
+Fixed by what separates the two readings: the REQUEST FORM. A request to
+produce a picture — an imperative plus the name of a presentation — is a
+follow-up even with none of the connectives or pronouns `_FOLLOW_UP_RE` looks
+for, so it keeps the conversation's dataset and the router's opinion about its
+wording is ignored. "how many charts were created last week" matches neither
+half and still routes on its own merits, which a noise-list fix would have
+broken.
 ### D-48 · "Total across the world" answers with a breakdown
-**open** · 2026-10-14
+**fixed** · 2026-10-14
 
 "total number of covid deaths across the world" returned 50 rows, one per
 country, titled "Deaths by country", with "...and 45 more. Ask for top 10 to
@@ -549,8 +556,12 @@ narrow down". The question asks for one number. `across the world` reads as a
 grouping cue where it is a scope cue, and `total` is in `_ROUTE_NOISE` so it
 carries no weight at all.
 
+Fixed: a whole-population phrase cancels the grouping cue. "across the world",
+"worldwide", "globally", "overall", "in total" scope the question to
+everything; "across countries" and "across all countries" still group, which
+is the distinction the pattern has to keep.
 ### D-49 · The thinking line loops instead of reporting work
-**open** · 2026-10-14
+**fixed** · 2026-10-14
 
 "Analyzing the data model / Building the query / Finding the right approach"
 cycle while a question runs, repeating rather than tracking the stages the
@@ -558,6 +569,14 @@ question actually goes through — routing, context lookup, statement assembly,
 execution. The DLM knows which of those it is in; the line does not say.
 
 
+Fixed as far as honesty allows. The phases advanced on a second interval with
+`% length`, so a ten-second question went "Understanding your question" twice
+and claimed to be analysing a data model it had finished with eight seconds
+earlier. There is no stage signal on the ask endpoint — it is one POST — so
+this cannot report true progress and no longer pretends to: the label is
+derived from elapsed time off a single timer, advances once in order, and holds
+on "Running the query", which is where a long wait is actually spent. Real
+stage reporting needs the endpoint to stream them.
 ---
 
 ## Verified fixed

@@ -190,29 +190,54 @@ function LiveTimer({ since }: { since: number }) {
   return <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{s.toFixed(1)}s</span>;
 }
 
-const THINKING_PHASES = [
-  "Understanding your question",
-  "Analyzing the data model",
-  "Finding the right approach",
-  "Building the query",
+/**
+ * What the question is actually going through, in order, with how long each
+ * stage plausibly lasts before the next is true.
+ *
+ * This used to cycle four phrases every 2.4s with `% length`, so a ten-second
+ * question went "Understanding your question" twice and claimed to be
+ * analysing a data model it had finished with eight seconds earlier. The
+ * phases are not a progress bar if they repeat.
+ *
+ * There is no stage signal on the ask endpoint — it is one POST — so this
+ * cannot report true progress and does not pretend to. What it can do is stop
+ * going backwards: routing and the context lookup really are the first thing
+ * and really are fast, and everything after that is the statement running,
+ * which is where a long wait is actually spent. So it advances once, in order,
+ * and holds on the stage that stays true however long the wait lasts.
+ */
+const THINKING_PHASES: ReadonlyArray<{ after: number; label: string }> = [
+  { after: 0, label: "Reading your question" },
+  { after: 600, label: "Choosing the dataset" },
+  { after: 1400, label: "Building the query" },
+  { after: 2600, label: "Running the query" },
 ];
 
 function ThinkingBubble() {
-  const [phase, setPhase] = useState(0);
-  const [elapsed, setElapsed] = useState(0);
+  const [elapsedMs, setElapsedMs] = useState(0);
   const startRef = useRef(Date.now());
 
   useEffect(() => {
-    const timer = setInterval(() => setElapsed(Math.floor((Date.now() - startRef.current) / 1000)), 1000);
-    const phaser = setInterval(() => setPhase(p => (p + 1) % THINKING_PHASES.length), 2400);
-    return () => { clearInterval(timer); clearInterval(phaser); };
+    // One timer. The phase is derived from elapsed time rather than advanced
+    // by a second interval, so the label and the counter can never disagree
+    // about how long this has been going.
+    const timer = setInterval(() => setElapsedMs(Date.now() - startRef.current), 200);
+    return () => clearInterval(timer);
   }, []);
+
+  const elapsed = Math.floor(elapsedMs / 1000);
+  // The last stage whose time has come: monotonic by construction, and it
+  // stops at the final one instead of wrapping to the beginning.
+  const label = THINKING_PHASES.reduce(
+    (chosen, stage) => (elapsedMs >= stage.after ? stage.label : chosen),
+    THINKING_PHASES[0].label,
+  );
 
   return (
     <div style={{ padding: "10px 14px", fontSize: 12.5 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
         <span style={{ color: "var(--text-secondary)", fontWeight: 500, animation: "thinkFade 2.4s ease-in-out infinite" }}>
-          {THINKING_PHASES[phase]}
+          {label}
         </span>
         {elapsed > 0 && (
           <span style={{ color: "var(--text-faint)", fontSize: 11, fontVariantNumeric: "tabular-nums", marginLeft: "auto" }}>
