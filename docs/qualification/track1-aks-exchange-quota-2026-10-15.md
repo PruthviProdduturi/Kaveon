@@ -37,5 +37,6 @@ failure.
 ## Boundary
 
 This qualifies live exchange quota rejection and cleanup on the current AKS
-image. A storage-service outage or object-store network fault injection and a
-longer endurance run remain open.
+image. Object-store network fault injection and orphan-spool recovery are
+qualified separately in `track1-aks-storage-fault-2026-10-15.md`. Longer
+mixed-workload endurance remains open.
