@@ -1116,6 +1116,26 @@ def _distinct_col(expr: str) -> Optional[str]:
     return col if re.match(r"^[A-Za-z_][A-Za-z0-9_ ]*$", col) else None
 
 
+def _row_filters(ds: dict) -> List[Dict[str, Any]]:
+    """The dataset's own row predicates, validated.
+
+    Stored on the dataset as structured clauses rather than SQL, and read back
+    the same way: a clause naming no column, or carrying anything but a string
+    column name, is dropped rather than rendered. The operator is whitelisted
+    by the dialect, so an unknown one degrades to equality instead of reaching
+    the statement.
+    """
+    out: List[Dict[str, Any]] = []
+    for clause in (ds.get("row_filters") or []):
+        if not isinstance(clause, dict):
+            continue
+        column = clause.get("column")
+        if not isinstance(column, str) or not column.strip():
+            continue
+        out.append(clause)
+    return out
+
+
 def _pg_register_sql(tbl: str, dims: List[str], dcol: str) -> str:
     """Postgres SQL that extracts per-cell HLL registers in ONE scan: hash each
     row's distinct-column value, take the top P bits as the register index and the
@@ -2560,7 +2580,13 @@ def ask(question: str, limit: int = 50, choices: Optional[Dict[str, str]] = None
             year=s["year"] or (int(str(window[0])[:4]) if window else None),
             month_window=month_window, relative_time=s["relative_time"],
             relative_window=relative_window, limit_n=s["limit_n"], sort_asc=s["sort_asc"],
-            ranked=ranked)
+            ranked=ranked,
+            # The dataset's own predicates. They say which rows belong to this
+            # dataset at all -- a published dimension usually mixes members
+            # with totals, and the aggregates are only separable by a column
+            # that is null for them -- so they hold for every question and for
+            # the cube shape alike.
+            row_filters=_row_filters(ds))
 
     def _finish(served: Dict[str, Any]) -> Dict[str, Any]:
         """Every answer leaves through here: the ranking title, the notes the

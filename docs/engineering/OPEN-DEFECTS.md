@@ -487,7 +487,7 @@ ranking keeps its clean statement instead of carrying a clause that is always
 true. The unranked shape the cube answers is untouched.
 
 ### D-46 · The energy dataset's country dimension contains aggregates
-**open** · 2026-10-14
+**fixed** · 2026-10-14
 
 With D-45 fixed, the same question answers `World`, `Non-OPEC (EIA)`,
 `High-income countries`, `OECD (EI)` — real figures, but not countries. The
@@ -498,12 +498,64 @@ organisational aggregates alongside countries, as the upstream data does.
 has a code, and filtering on it gives the right answer — United States,
 China, Russia, Japan, India, Germany, Canada, France, United Kingdom, Brazil.
 
-What is missing is anywhere to put that rule. A dataset's `filters` are
-equality pairs, so `iso_code IS NOT NULL` cannot be expressed, and dropping
-the aggregate rows is wrong because `World` is a legitimate answer to a
-question about the world. This needs a dataset-level predicate the ask path
-applies — the same mechanism would serve any dataset whose dimension mixes
-members with totals, which is most published statistics.
+There was nowhere to put that rule: a dataset's `filters` were equality pairs,
+so `iso_code IS NOT NULL` was inexpressible, and dropping the aggregate rows
+would be wrong because `World` is a legitimate answer to a question about the
+world.
+
+Datasets now carry `row_filters` — structured clauses, not SQL, with a
+whitelisted operator set extended with `IS NULL`/`IS NOT NULL`. They render
+through the dialect, so an unknown operator degrades to equality rather than
+being interpolated, and a malformed clause is dropped rather than raised:
+these come off a stored document, and a renderer that threw would take down
+every question asked of that dataset.
+
+Applied by BOTH assemblers. The ask path and the chart path build statements
+separately, and a predicate honoured by only one would make a chart and an
+answer disagree about which rows the dataset contains. The chart route puts
+them ahead of the chart's own filters so clearing a filter cannot drop them.
+They also apply to the unranked shape the cube answers, so a cube-answered
+question and a scanned one agree.
+
+Set on `Global Energy`, and the question now answers: United States, China,
+Russia, Japan, India, Germany, Canada, France, United Kingdom, Brazil.
+
+### D-47 · A presentation word routes the question to another dataset
+**open** · 2026-10-14 · the worst of the three
+
+After two COVID questions, "can you make a world map chart" answered with
+`SELECT SUM(charts_created) FROM events.daily_user_activity LIMIT 1` — the
+telemetry dataset — and timed out at 504 against the billion-row table.
+
+`_ROUTE_NOISE` holds aggregate words and stopwords only: `sum avg count total
+max min the of by`. Nothing about presentation. The telemetry dataset's metrics
+are `charts_created`, `queries_run`, `dashboards` — so "chart", the single most
+common word in a request for a visualisation, scores against it at the x3
+metric weight. "give me a chart" survived; adding "world map" pushed it over
+the floor.
+
+The fix is not simply to add `chart` to the noise list: that dataset's subject
+genuinely IS charts, so "how many charts were created last week" must still
+route to it. The real defect is that a FOLLOW-UP asking for a different
+presentation of the same answer re-routes at all. A follow-up that introduces
+no new subject should keep the conversation's dataset.
+
+### D-48 · "Total across the world" answers with a breakdown
+**open** · 2026-10-14
+
+"total number of covid deaths across the world" returned 50 rows, one per
+country, titled "Deaths by country", with "...and 45 more. Ask for top 10 to
+narrow down". The question asks for one number. `across the world` reads as a
+grouping cue where it is a scope cue, and `total` is in `_ROUTE_NOISE` so it
+carries no weight at all.
+
+### D-49 · The thinking line loops instead of reporting work
+**open** · 2026-10-14
+
+"Analyzing the data model / Building the query / Finding the right approach"
+cycle while a question runs, repeating rather than tracking the stages the
+question actually goes through — routing, context lookup, statement assembly,
+execution. The DLM knows which of those it is in; the line does not say.
 
 
 ---

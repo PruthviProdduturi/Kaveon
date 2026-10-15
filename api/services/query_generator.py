@@ -382,6 +382,14 @@ def _qualified_column(alias: str, column: str) -> str:
 # ─── Filter clause ────────────────────────────────────────────────────────────
 
 _SAFE_OPS = {"=", "!=", "<>", "<", ">", "<=", ">=", "LIKE", "NOT LIKE"}
+# Null tests take no value, so they are kept apart from the operators above --
+# rendering one with a value would emit `col IS NOT NULL 'x'`.
+#
+# They are what makes a dataset's own predicates expressible. A published
+# dimension usually mixes members with totals, and the aggregates are only
+# separable by a column that is null for them, which an equality pair cannot
+# say.
+_NULL_OPS = {"IS NULL", "IS NOT NULL"}
 
 
 def _build_optimized_filter_clause(
@@ -400,7 +408,8 @@ def _build_optimized_filter_clause(
         return None
 
     raw_op = (filter_.get("op") or filter_.get("operator") or "=").upper().strip()
-    op = raw_op if raw_op in _SAFE_OPS else "="
+    is_null_test = raw_op in _NULL_OPS
+    op = raw_op if (raw_op in _SAFE_OPS or is_null_test) else "="
 
     # Tier 1/2: use fact table key column
     if key_column and value_key not in (None, ""):
@@ -427,6 +436,11 @@ def _build_optimized_filter_clause(
     # Tier 3: dimension display column
     alias, col_name = _resolve_column_alias(col, fact_alias, alias_map, column_table_map)
     quoted_col = _qualified_column(alias, col_name)
+
+    # A null test is complete once the column is resolved: it takes no value,
+    # and everything below exists to render one.
+    if is_null_test:
+        return f"{quoted_col} {op}"
 
     def _is_num(v):
         try:

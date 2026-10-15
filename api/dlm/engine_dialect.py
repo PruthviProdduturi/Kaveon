@@ -160,6 +160,44 @@ POSTGRESQL = Dialect()
 ENGINE = EngineDialect()
 
 
+# Predicates a dataset or a question may state. Whitelisted, and rendered
+# here rather than stored as SQL: a dataset-level predicate is author-supplied
+# and must never reach the statement as text.
+#
+# The null tests are the reason this exists. A published dimension usually
+# mixes members with totals -- `climate_energy.energy` holds `World`, `OECD
+# (EI)` and `High-income countries` in the same `country` column as the
+# countries -- and the only thing separating them is a column that is null for
+# the aggregates. There was no way to say that: filters were equality pairs,
+# so "every row with an ISO code" was inexpressible.
+_NULL_OPS = {"IS NULL", "IS NOT NULL"}
+_VALUE_OPS = {"=", "!=", "<>", "<", ">", "<=", ">="}
+
+
+def predicate(dialect: Dialect, clause: Dict[str, Any]) -> Optional[str]:
+    """One WHERE term from a structured clause, or None if it says nothing.
+
+    Defensive about its input rather than trusting its callers: these clauses
+    come off a stored dataset document, so a hand-edited or partially migrated
+    one can be any shape, and a renderer that raises would take down every
+    question asked of that dataset rather than ignoring one bad clause.
+    """
+    if not isinstance(clause, dict):
+        return None
+    column = clause.get("column")
+    if not isinstance(column, str) or not column.strip():
+        return None
+    rendered = dialect.ident(column)
+    op = str(clause.get("op") or clause.get("operator") or "=").upper().strip()
+    if op in _NULL_OPS:
+        return f"{rendered} {op}"
+    # An unrecognised operator falls back to equality rather than being
+    # interpolated, which is what keeps this path injection-safe.
+    if op not in _VALUE_OPS:
+        op = "="
+    return f"{rendered} {op} {dialect.literal(clause.get('value'))}"
+
+
 # A whole-expression COUNT is the one aggregate that cannot return NULL.
 # Anything else -- SUM, AVG, MIN, MAX, or an expression combining them, where a
 # division by a null count is itself null -- can.
@@ -175,7 +213,8 @@ def assemble(dialect: Dialect, *, schema: Optional[str], fact: str, metric_expr:
              columns: Sequence[dict], date_column: Optional[str] = None, year: Optional[int] = None,
              month_window: Optional[tuple] = None, relative_time: Optional[str] = None,
              relative_window: Optional[tuple] = None, limit_n: Optional[int] = None,
-             sort_asc: bool = False, ranked: bool = True) -> str:
+             sort_asc: bool = False, ranked: bool = True,
+             row_filters: Sequence[Dict[str, Any]] = ()) -> str:
     """The statement for one resolved question. `ranked=False` writes a grouped
     statement without `ORDER BY`/`LIMIT` — the shape the Engine's cube answers —
     and leaves the ordering to the caller."""
@@ -186,8 +225,16 @@ def assemble(dialect: Dialect, *, schema: Optional[str], fact: str, metric_expr:
     select_parts.append(f"{dialect.expression(metric_expr)} AS {dialect.ident(metric_name)}")
 
     where: List[str] = []
+    # The dataset's own predicates first: they say which rows are part of this
+    # dataset at all, so they hold for every question asked of it.
+    for clause in row_filters or ():
+        term = predicate(dialect, clause)
+        if term:
+            where.append(term)
     for f in filters:
-        where.append(f"{dialect.ident(f['column'])} = {dialect.literal(f['value'])}")
+        term = predicate(dialect, f)
+        if term:
+            where.append(term)
     if year and month_window and date_column:
         where.append(dialect.window_predicate(date_column, month_window[0], month_window[1], columns))
     elif year and date_column:
