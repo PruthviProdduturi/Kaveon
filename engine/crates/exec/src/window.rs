@@ -188,6 +188,11 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
         return Err(error("window operator requires window expressions"));
     };
     let name = name.to_uppercase();
+    let ignore_nulls = name.ends_with("_IGNORE_NULLS");
+    let name = name
+        .strip_suffix("_IGNORE_NULLS")
+        .unwrap_or(&name)
+        .to_owned();
     let partition_cols = normalize_dictionary_columns(columns(partition_by, batch)?)?;
     let order_cols = normalize_dictionary_columns(columns(
         &order_by
@@ -366,6 +371,17 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
                             .clone()
                     } else {
                         rows[start..end].to_vec()
+                    };
+                    let selected = if ignore_nulls {
+                        let column = col
+                            .as_ref()
+                            .ok_or_else(|| error(format!("{name} requires a value argument")))?;
+                        selected
+                            .into_iter()
+                            .filter(|&row| !column.is_null(row))
+                            .collect::<Vec<_>>()
+                    } else {
+                        selected
                     };
                     match aggregate_name {
                         "COUNT" => {
