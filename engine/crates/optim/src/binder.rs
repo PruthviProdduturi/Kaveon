@@ -1294,31 +1294,24 @@ impl Binder<'_> {
                 }
             }
             LogicalPlan::Unnest {
-                column,
+                columns,
                 with_ordinality,
                 ordinality_column,
                 ..
             } => Scope {
-                columns: if *with_ordinality {
-                    vec![
-                        Column {
-                            qualifier: None,
-                            name: column.clone(),
-                            physical: column.clone(),
-                        },
-                        Column {
-                            qualifier: None,
-                            name: ordinality_column.clone(),
-                            physical: ordinality_column.clone(),
-                        },
-                    ]
-                } else {
-                    vec![Column {
+                columns: columns
+                    .iter()
+                    .map(|column| Column {
                         qualifier: None,
                         name: column.clone(),
                         physical: column.clone(),
-                    }]
-                },
+                    })
+                    .chain((*with_ordinality).then(|| Column {
+                        qualifier: None,
+                        name: ordinality_column.clone(),
+                        physical: ordinality_column.clone(),
+                    }))
+                    .collect(),
                 joined: false,
             },
             LogicalPlan::Join { left, right, .. } => self.join_scope(left, right),

@@ -36,13 +36,13 @@ fn plan_with_predicate(
 ) -> Result<Box<dyn BatchOperator>> {
     match plan {
         LogicalPlan::Unnest {
-            expression,
-            column,
+            expressions,
+            columns,
             with_ordinality,
             ordinality_column,
         } => Ok(Box::new(UnnestOperator::new(
-            expression,
-            column.clone(),
+            expressions,
+            columns.clone(),
             *with_ordinality,
             ordinality_column.clone(),
         )?)),

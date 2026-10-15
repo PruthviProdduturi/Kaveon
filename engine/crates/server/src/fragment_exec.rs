@@ -483,13 +483,13 @@ fn compile_node(
             Ok(Box::new(ScanOperator::new(source, None)?))
         }
         FragmentOperator::Unnest {
-            expression,
-            column,
+            expressions,
+            columns,
             with_ordinality,
             ordinality_column,
         } => Ok(Box::new(kaveon_exec::unnest::UnnestOperator::new(
-            expression,
-            column.clone(),
+            expressions,
+            columns.clone(),
             *with_ordinality,
             ordinality_column.clone(),
         )?)),

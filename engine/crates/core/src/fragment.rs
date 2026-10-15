@@ -43,8 +43,8 @@ pub struct FragmentNode {
 pub enum FragmentOperator {
     Scan(ScanSpec),
     Unnest {
-        expression: Expr,
-        column: String,
+        expressions: Vec<Expr>,
+        columns: Vec<String>,
         with_ordinality: bool,
         ordinality_column: String,
     },
