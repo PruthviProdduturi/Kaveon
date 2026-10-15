@@ -260,6 +260,7 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
         .and_then(|mut columns| columns.pop());
     let mut indices = vec![None; batch.num_rows()];
     let mut ints = vec![0i64; batch.num_rows()];
+    let mut floats = vec![0.0f64; batch.num_rows()];
     let mut aggregate_results: Vec<(usize, ArrayRef)> = Vec::new();
     let offset = if name == "LAG" || name == "LEAD" {
         literal_offset(args.get(1), 1, false)?
@@ -300,6 +301,17 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
                 "ROW_NUMBER" => ints[row] = pos as i64 + 1,
                 "RANK" => ints[row] = starts[group[pos]] as i64 + 1,
                 "DENSE_RANK" => ints[row] = group[pos] as i64 + 1,
+                "PERCENT_RANK" => {
+                    floats[row] = if rows.len() <= 1 {
+                        0.0
+                    } else {
+                        starts[group[pos]] as f64 / (rows.len() - 1) as f64
+                    };
+                }
+                "CUME_DIST" => {
+                    let peer_end = starts[group[pos] + 1];
+                    floats[row] = peer_end as f64 / rows.len() as f64;
+                }
                 "NTILE" => {
                     let large = rows.len() % tiles;
                     let size = rows.len() / tiles;
@@ -357,6 +369,7 @@ fn evaluate_window(expr: &Expr, batch: &RecordBatch) -> Result<ArrayRef> {
         "ROW_NUMBER" | "RANK" | "DENSE_RANK" | "NTILE" | "COUNT" => {
             Ok(Arc::new(Int64Array::from(ints)))
         }
+        "PERCENT_RANK" | "CUME_DIST" => Ok(Arc::new(Float64Array::from(floats))),
         "LAG" | "LEAD" | "FIRST_VALUE" | "LAST_VALUE" => {
             let col = col.as_ref().unwrap();
             let output = take(col.as_ref(), &UInt32Array::from(indices.clone()), None)?;
@@ -862,6 +875,25 @@ mod tests {
                 &input
             ),
             vec![Some(1), Some(1), Some(2), Some(3), Some(4), Some(5)]
+        );
+        let percent_rank = evaluate_window(&expression("PERCENT_RANK", None), &input)
+            .unwrap()
+            .as_primitive::<Float64Type>()
+            .iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            percent_rank,
+            vec![Some(0.0), Some(0.0), Some(0.4), Some(0.6), Some(0.8), Some(1.0)]
+        );
+        let cume_dist = evaluate_window(&expression("CUME_DIST", None), &input)
+            .unwrap()
+            .as_primitive::<Float64Type>()
+            .iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            cume_dist,
+            vec![Some(2.0 / 6.0), Some(2.0 / 6.0), Some(3.0 / 6.0), Some(4.0 / 6.0),
+                Some(5.0 / 6.0), Some(1.0)]
         );
         let mut lag = expression("LAG", None);
         if let Expr::WindowFunction { args, .. } = &mut lag {
