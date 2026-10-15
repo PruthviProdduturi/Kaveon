@@ -68,3 +68,11 @@ day numbers. The projection path now preserves the `Date32` type while keeping
 the existing day-number lowering for date predicates and storage pruning. The
 SQL suite passes 149 tests, and rebuilt Docker returned `Date32` plus the ISO
 value `2026-01-01` for `SELECT DATE '2026-01-01' AS d`.
+
+The decimal probe then found that exact decimal literals failed only after
+distributed fragment serialization because JSON cannot represent Rust `i128`
+values directly. Commit `c227f91b` serializes the unscaled decimal value as an
+exact string on the internal wire and restores it losslessly. Core and SQL
+regressions pass, and Docker now completes `SELECT DECIMAL '1.20' AS n`,
+`SELECT 1.20 AS n`, and `SELECT DECIMAL '-0.005' AS n` with Decimal128 results
+and exact formatted values.
