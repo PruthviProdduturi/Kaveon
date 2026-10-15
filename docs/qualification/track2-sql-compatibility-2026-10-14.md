@@ -236,6 +236,10 @@ The same path now covers `Int32` map keys, with an exact typed lookup
 regression. The focused expression suite passed `143/144` tests with one
 pre-existing ignored case.
 
+Unsigned 64-bit map keys are covered as well, including values above the
+signed 64-bit range. The focused expression suite passed `144/145` tests with
+one pre-existing ignored case.
+
 ## Large-list element access qualification
 
 `ELEMENT_AT(array, index)` now accepts both regular and `LargeListArray`
