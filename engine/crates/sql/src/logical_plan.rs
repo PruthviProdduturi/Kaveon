@@ -3477,14 +3477,26 @@ fn ast_function_to_expr(func: &ast::Function) -> Result<Expr> {
             Expr::Function {
                 name: inner_name,
                 args: inner_args,
-            } if inner_name.eq_ignore_ascii_case("JSON_PARSE") && inner_args.len() == 1 => {
+            } if inner_args.len() == 1
+                && ["JSON_PARSE", "JSON_FORMAT"]
+                    .iter()
+                    .any(|supported| inner_name.eq_ignore_ascii_case(supported)) =>
+            {
                 Ok(Expr::Function {
-                    name: "TRY_JSON_PARSE".into(),
+                    name: format!("TRY_{inner_name}"),
+                    args: inner_args,
+                })
+            }
+            } if inner_args.len() == 2
+                && inner_name.eq_ignore_ascii_case("JSON_ARRAY_GET") =>
+            {
+                Ok(Expr::Function {
+                    name: "TRY_JSON_ARRAY_GET".into(),
                     args: inner_args,
                 })
             }
             _ => Err(sql_err(
-                "TRY currently supports CAST and JSON_PARSE expressions",
+                "TRY currently supports CAST, JSON_PARSE, JSON_FORMAT, and JSON_ARRAY_GET expressions",
             )),
         };
     }
@@ -5551,12 +5563,20 @@ mod tests {
     }
 
     #[test]
+    fn try_lowers_json_format_and_array_get() {
+        let format = sql_to_logical_plan("SELECT TRY(JSON_FORMAT(payload)) FROM t").unwrap();
+        assert!(format!("{format:?}").contains("TRY_JSON_FORMAT"));
+        let array = sql_to_logical_plan("SELECT TRY(JSON_ARRAY_GET(payload, 0)) FROM t").unwrap();
+        assert!(format!("{array:?}").contains("TRY_JSON_ARRAY_GET"));
+    }
+
+    #[test]
     fn try_rejects_unsupported_expression_with_actionable_error() {
         let error = sql_to_logical_plan("SELECT TRY(value / divisor) FROM t").unwrap_err();
         assert!(
             error
                 .to_string()
-                .contains("TRY currently supports CAST and JSON_PARSE")
+                .contains("TRY currently supports CAST, JSON_PARSE, JSON_FORMAT, and JSON_ARRAY_GET")
         );
     }
 

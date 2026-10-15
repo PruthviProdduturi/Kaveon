@@ -50,7 +50,7 @@ evidence passes against exact-result references.
 | Parameters | Implemented (declared surface) | Positional, repeated positional, named, nested arrays and string-keyed maps bind without SQL interpolation. | Differential coverage from external Trino clients. |
 | Native DML | Partial | Typed multi-row product-record DML and transaction visibility are supported on the declared product tables. | General typed lake-table DML, constraints, and broader transactional SQL. |
 | Metadata protocol | Implemented | SHOW SESSION, SHOW FUNCTIONS, catalog/schema/table metadata, EXPLAIN, response paging, cancellation links, and session update headers. | External-client compatibility sweep. |
-| Explicit unsupported behavior | Qualified | Unsupported syntax fails closed with actionable SQL error names and no silent coordinator fallback. | Keep rejection corpus in every release gate. |
+| Explicit unsupported behavior | Qualified | Unsupported syntax fails closed with actionable SQL error names and no silent coordinator fallback; `TRY` now lowers JSON parse/format/array-get failures to NULL. | Keep rejection corpus in every release gate. |
 
 ## Qualification commands
 

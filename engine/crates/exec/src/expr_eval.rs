@@ -4257,8 +4257,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .collect();
             Ok(Arc::new(result))
         }
-        "JSON_ARRAY_GET" => {
+        "JSON_ARRAY_GET" | "TRY_JSON_ARRAY_GET" => {
             check_arity(name, args, 2)?;
+            let try_get = upper == "TRY_JSON_ARRAY_GET";
             let documents = &args[0];
             let indices = compute::cast(&args[1], &DataType::Int64)?;
             let indices = indices.as_primitive::<Int64Type>();
@@ -4270,10 +4271,15 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     if indices.is_null(row) {
                         return Ok(None);
                     }
-                    let document = serde_json::from_str::<serde_json::Value>(document)
-                        .map_err(|_| {
-                            KaveonError::Execution(format!("invalid JSON value at row {row}"))
-                        })?;
+                    let document = match serde_json::from_str::<serde_json::Value>(document) {
+                        Ok(document) => document,
+                        Err(_) if try_get => return Ok(None),
+                        Err(_) => {
+                            return Err(KaveonError::Execution(format!(
+                                "invalid JSON value at row {row}"
+                            )))
+                        }
+                    };
                     let serde_json::Value::Array(values) = document else {
                         return Ok(None);
                     };
@@ -4397,8 +4403,9 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
             }
             Ok(Arc::new(result.finish()))
         }
-        "JSON_FORMAT" => {
+        "JSON_FORMAT" | "TRY_JSON_FORMAT" => {
             check_arity(name, args, 1)?;
+            let try_format = upper == "TRY_JSON_FORMAT";
             let documents = &args[0];
             let mut result = StringBuilder::new();
             for row in 0..num_rows {
@@ -4406,9 +4413,18 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     result.append_null();
                     continue;
                 };
-                let value = serde_json::from_str::<serde_json::Value>(document).map_err(|_| {
-                    KaveonError::Execution(format!("invalid JSON value at row {row}"))
-                })?;
+                let value = match serde_json::from_str::<serde_json::Value>(document) {
+                    Ok(value) => value,
+                    Err(_) if try_format => {
+                        result.append_null();
+                        continue;
+                    }
+                    Err(_) => {
+                        return Err(KaveonError::Execution(format!(
+                            "invalid JSON value at row {row}"
+                        )))
+                    }
+                };
                 result.append_value(value.to_string());
             }
             Ok(Arc::new(result.finish()))
@@ -16053,6 +16069,20 @@ mod tests {
         let large_values = large_result.as_string::<i32>();
         assert_eq!(large_values.value(0), r#"{"n":7}"#);
         assert!(large_values.is_null(1));
+
+        let invalid_batch = RecordBatch::try_from_iter([(
+            "document",
+            Arc::new(StringArray::from(vec![Some("not-json"), None])) as ArrayRef,
+        )])
+        .unwrap();
+        let try_format = Expr::Function {
+            name: "TRY_JSON_FORMAT".into(),
+            args: vec![Expr::Column("document".into())],
+        };
+        let try_result = evaluate(&try_format, &invalid_batch).unwrap();
+        let try_values = try_result.as_string::<i32>();
+        assert!(try_values.is_null(0));
+        assert!(try_values.is_null(1));
     }
 
     #[test]
@@ -16116,6 +16146,23 @@ mod tests {
         assert_eq!(values.value(0), r#"{"x":1}"#);
         assert_eq!(values.value(1), "2");
         assert!(values.is_null(2));
+
+        let invalid_batch = RecordBatch::try_from_iter([
+            (
+                "document",
+                Arc::new(StringArray::from(vec![Some("not-json")])) as ArrayRef,
+            ),
+            ("index", Arc::new(Int64Array::from(vec![0])) as ArrayRef),
+        ])
+        .unwrap();
+        let try_get = Expr::Function {
+            name: "TRY_JSON_ARRAY_GET".into(),
+            args: vec![Expr::Column("document".into()), Expr::Column("index".into())],
+        };
+        assert!(evaluate(&try_get, &invalid_batch)
+            .unwrap()
+            .as_string::<i32>()
+            .is_null(0));
     }
 
     #[test]
