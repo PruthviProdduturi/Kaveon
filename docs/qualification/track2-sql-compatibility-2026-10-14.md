@@ -25,6 +25,17 @@ node scripts/validate-docs.mjs
 
 Documentation validation passed: 159 Markdown files, 39 routes, and 9 SVGs.
 
+## Clean workspace gate after exchange backpressure fix — 2026-10-15
+
+Commit `5b6bda22` passed from a fresh clean checkout. The gate recorded 74
+core tests, 211 SQL tests (one ignored), 85 planner/runtime tests, 368
+execution tests (four ignored), 57 CLI tests, 394 server tests, 159 additional
+SQL tests, and 121 storage tests (one ignored), with zero failures. The server
+backpressure regression is deterministic when the bounded exchange sender
+closes at the same time as the producer completion signal. This validates the
+current pushed commit; it does not close the remaining cloud and broader
+Trino-compatibility boundaries below.
+
 ## Workspace gate rerun — 2026-10-15
 
 After the JSON path and scalar-array compatibility changes, the complete
