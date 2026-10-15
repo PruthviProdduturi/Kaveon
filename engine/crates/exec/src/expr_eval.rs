@@ -6296,6 +6296,12 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                             (start..end)
                                 .find(|&index| !keys.is_null(index) && keys.value(index) == needle)
                         }
+                        DataType::Int32 => {
+                            let keys = map_keys.as_primitive::<Int32Type>();
+                            let needle = requested.as_primitive::<Int32Type>().value(row);
+                            (start..end)
+                                .find(|&index| !keys.is_null(index) && keys.value(index) == needle)
+                        }
                         DataType::Utf8 => {
                             let keys = map_keys.as_string::<i32>();
                             let needle = requested.as_string::<i32>().value(row);
@@ -11162,6 +11168,39 @@ mod tests {
         assert_eq!(
             value.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
             vec![Some(7)]
+        );
+    }
+
+    #[test]
+    fn element_at_accepts_int32_map_keys() {
+        let fields: arrow::datatypes::Fields = vec![
+            Arc::new(Field::new("key", DataType::Int32, false)),
+            Arc::new(Field::new("value", DataType::Int64, true)),
+        ]
+        .into();
+        let entries = StructArray::new(
+            fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(7)])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![Some(11)])) as ArrayRef,
+            ],
+            None,
+        );
+        let map = Arc::new(
+            MapArray::try_new(
+                Arc::new(Field::new("entries", DataType::Struct(fields), false)),
+                OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 1_i32])),
+                entries,
+                None,
+                false,
+            )
+            .unwrap(),
+        ) as ArrayRef;
+        let needle = Arc::new(Int32Array::from(vec![Some(7)])) as ArrayRef;
+        let value = eval_scalar_function("ELEMENT_AT", &[map, needle], 1).unwrap();
+        assert_eq!(
+            value.as_primitive::<Int64Type>().iter().collect::<Vec<_>>(),
+            vec![Some(11)]
         );
     }
 
