@@ -12909,6 +12909,7 @@ pub(crate) fn batches_to_json(
                     continue;
                 }
                 let val = match arr.data_type() {
+                    DataType::Null => serde_json::Value::Null,
                     DataType::Boolean => {
                         let v = arr
                             .as_any()
@@ -13077,6 +13078,7 @@ fn array_value_to_json(array: arrow::array::ArrayRef) -> serde_json::Value {
             .into();
     }
     match array.data_type() {
+        DataType::Null => serde_json::Value::Null,
         DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _) => {
             let values = match array.data_type() {
                 DataType::List(_) => array.as_list::<i32>().value(0),
@@ -21397,6 +21399,20 @@ mod streamed_root_tests {
         ]));
         let batch = RecordBatch::try_new(schema, vec![list, Arc::new(row), map]).unwrap();
         assert_eq!(batches_to_json(&[batch]), vec![vec![serde_json::json!([1, 2]), serde_json::json!({"name": "east", "count": 7}), serde_json::json!({"a": 3})]]);
+    }
+
+    #[test]
+    fn result_rows_encode_arrow_null_as_json_null() {
+        use arrow::array::{new_null_array, ArrayRef};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        let nulls: ArrayRef = new_null_array(&DataType::Null, 1);
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("value", DataType::Null, true)])),
+            vec![nulls],
+        )
+        .unwrap();
+        assert_eq!(batches_to_json(&[batch]), vec![vec![serde_json::Value::Null]]);
     }
 
     #[test]
