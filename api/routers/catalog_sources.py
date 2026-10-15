@@ -112,15 +112,35 @@ def _validate_storage_config(storage_type: str, config: dict):
 
 
 @router.get("/catalog-sources")
-def list_catalog_sources(ctx: UserContext = Depends(require_min_role("Viewer"))):
+def list_catalog_sources(ctx: UserContext = Depends(require_min_role("Viewer")),
+                         include_deleted: bool = False):
+    """Every catalog source, with the deleted ones hidden unless asked for.
+
+    `DELETE /catalog-sources/{id}` accepts a source whose lifecycle is
+    `draft` or `deleted`, but a `deleted` source appeared in no listing at
+    all -- so the row the route will erase was one an Admin had no way to
+    find, and its `catalog_identity` stayed reserved against every new
+    source for as long as the record existed. A soft delete that cannot be
+    enumerated is not a soft delete; it is a leak with a tombstone.
+
+    Hidden by default, because everyone else's reading of this list is "the
+    catalogs I can use", and restricted to an Admin, because that is who the
+    permanent delete is restricted to.
+    """
+    if include_deleted and ctx.role != "Admin":
+        raise HTTPException(403, {"code": "FORBIDDEN",
+                                  "message": "Only an Admin can list deleted catalog sources."})
     if product_read_authority.enabled("sources"):
         rows = [_catalog_cutover_row(document) for document in
                 product_read_authority.list_documents("sources", ctx.email, ctx.role)
-                if document.get("source_kind") == "catalog" and document.get("lifecycle") != "deleted"]
+                if document.get("source_kind") == "catalog"
+                and (include_deleted or document.get("lifecycle") != "deleted")]
         rows.sort(key=lambda row: (str(row.get("created_at") or ""), str(row["id"])), reverse=True)
         return {"success": True, "catalogSources": rows}
     result = db.query(
-        f"SELECT {_FIELDS} FROM catalog_sources WHERE lifecycle != 'deleted' ORDER BY created_at DESC"
+        f"SELECT {_FIELDS} FROM catalog_sources"
+        + ("" if include_deleted else " WHERE lifecycle != 'deleted'")
+        + " ORDER BY created_at DESC"
     )
     try:
         report = product_shadow_read.observe_source_list(result["rows"], "catalog", ctx.email, ctx.role)
