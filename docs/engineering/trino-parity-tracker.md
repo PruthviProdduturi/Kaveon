@@ -49,7 +49,7 @@ evidence passes against exact-result references.
 | Prepared statements | Qualified (bounded) | SQL PREPARE/EXECUTE/DEALLOCATE, Trino prepared headers, typed scalar/array/map binding, DESCRIBE INPUT/OUTPUT, ownership isolation; the current immutable AKS image passes the external wire lifecycle and exact distributed result gate. | Broader external-client and complex-type qualification remains open. |
 | Parameters | Implemented (declared surface) | Positional, repeated positional, named, nested arrays and string-keyed maps bind without SQL interpolation. | Differential coverage from external Trino clients. |
 | Native DML | Partial | Typed multi-row product-record DML and transaction visibility are supported on the declared product tables. | General typed lake-table DML, constraints, and broader transactional SQL. |
-| Metadata protocol | Implemented | SHOW SESSION, SHOW FUNCTIONS, catalog/schema/table metadata, EXPLAIN, response paging, cancellation links, and session update headers. | External-client compatibility sweep. |
+| Metadata protocol | Qualified (bounded) | SHOW SESSION, SHOW FUNCTIONS, catalog/schema/table metadata, EXPLAIN, response paging, cancellation links, and session update headers. The current AKS image passes an authenticated Trino-wire sweep for these controls with exact rows and drained pages. | Broader external-client compatibility and release-corpus coverage. |
 | Explicit unsupported behavior | Qualified | Unsupported syntax fails closed with actionable SQL error names and no silent coordinator fallback; `TRY` now lowers JSON parse/format/array-get failures to NULL. | Keep rejection corpus in every release gate. |
 
 ## Qualification commands
