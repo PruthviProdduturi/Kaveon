@@ -85,7 +85,7 @@ Read `docs/engineering/postgresql-retirement.md` before any cloud write or
 scale operation. The local verifier is fail-closed and does not authorize
 cloud retirement.
 
-This is the durable Engineer 2 continuation record. Read `HANDSHAKE.md` first on every machine, then this file; the HANDSHAKE Log rows of 2026-09-15 to 2026-09-17 and `engine/DISTRIBUTED_EXECUTION_STATUS.md` describe what landed on the Engine while Codex was away. Never store credentials, tokens, connection strings, or user data here.
+This is the durable Engineer 2 continuation record. Read `HANDSHAKE.md` first on every machine, then this file. `HANDSHAKE.md` is now a short contract: it carries the source-of-truth map, the collaboration rules, and an `Open requests` worklist of live cross-owner asks. It is **not** a log, and appending a session note or a status row to it is the one thing it asks you not to do -- qualification evidence goes under `docs/qualification/` and into the relevant tracker, durable decisions into `docs/engineering/decision-log.md`. The append-only coordination history that this document's older sections call the "HANDSHAKE Log" was archived to `docs/archive/handshake-history.md` by `485567a0` and is frozen; where those sections cite a HANDSHAKE Log row as evidence, read it there. `engine/DISTRIBUTED_EXECUTION_STATUS.md` remains the reviewed distributed-engine capability snapshot. Never store credentials, tokens, connection strings, or user data here.
 
 ## Product boundary
 
