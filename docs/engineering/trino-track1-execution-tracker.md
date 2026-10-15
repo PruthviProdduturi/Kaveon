@@ -57,7 +57,14 @@ The bounded ADLS-backed soak
 exact requests over 300 seconds with four-way concurrency, zero unexpected
 restarts, and zero retained exchange/spill files. Explicit cloud-storage fault
 injection, orphan-spool recovery, and longer endurance remain open for item 2.
-The live quota probe
+The current-image fault/pressure qualification
+`docs/qualification/track1-aks-current-image-fault-pressure-2026-10-15.md`
+passed concurrent exact results, active-query cancellation, forced worker-loss
+retry, exact recovery, bounded grouped pressure, memory limits, and zero
+retained exchange/spill growth on the deployed immutable image. A graceful
+node-drain attempt restored the worker and exact result but did not expose a
+retry attempt, so it is retained as negative evidence rather than counted as a
+retry gate. The live quota probe
 `docs/qualification/track1-aks-exchange-quota-2026-10-15.md` rejected a
 high-cardinality exchange with HTTP 507 and retained zero exchange files after
 restoration of the production limits.
