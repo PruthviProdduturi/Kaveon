@@ -1,5 +1,5 @@
 use ahash::AHashMap;
-use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, UInt64Array};
+use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, Int32DictionaryArray, UInt64Array};
 use arrow::compute::{concat_batches, take};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
@@ -1371,6 +1371,23 @@ fn row_key(
                 }
                 DataType::Utf8 => Key::Utf8(column.as_string::<i32>().value(row).to_owned()),
                 DataType::LargeUtf8 => Key::Utf8(column.as_string::<i64>().value(row).to_owned()),
+                DataType::Dictionary(key_type, value_type)
+                    if key_type.as_ref() == &DataType::Int32
+                        && matches!(value_type.as_ref(), DataType::Utf8 | DataType::LargeUtf8) =>
+                {
+                    let dictionary = column
+                        .as_any()
+                        .downcast_ref::<Int32DictionaryArray>()
+                        .expect("dictionary key type must match schema");
+                    let dictionary_index = dictionary.keys().value(row) as usize;
+                    let values = dictionary.values();
+                    let value = match values.data_type() {
+                        DataType::Utf8 => values.as_string::<i32>().value(dictionary_index),
+                        DataType::LargeUtf8 => values.as_string::<i64>().value(dictionary_index),
+                        _ => unreachable!("dictionary value type was checked above"),
+                    };
+                    Key::Utf8(value.to_owned())
+                }
                 data_type => {
                     return Err(exec_err(format!("unsupported join key type {data_type}")));
                 }
