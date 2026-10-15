@@ -60,6 +60,13 @@ respectively. Missing paths and JSON nulls preserve the existing NULL
 contract. The focused expression suite covers both aliases; richer SQL
 standard returning/error clauses remain outside the current surface.
 
+## JSON_EXISTS qualification — 2026-10-15
+
+`JSON_EXISTS(document, path)` now returns true for a present path, including
+an explicit JSON null, false for a missing path, and SQL NULL for NULL inputs.
+The focused executor regression covers all four cases. Invalid or unsupported
+paths remain conservative NULL results under the existing JSON path contract.
+
 ## Explicit remaining boundaries
 
 The full Track 2 claim remains open. The compatibility reference still records
