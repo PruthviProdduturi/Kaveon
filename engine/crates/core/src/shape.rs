@@ -537,6 +537,44 @@ impl TableShape {
         groupings
     }
 
+    /// The pairs of axes a build holds once it knows what each axis
+    /// actually holds: every pair whose observed cells — the product of
+    /// the two counts, the exact bound on their combinations — is at most
+    /// [`CUBE_PAIR_MAX_CELLS`], each with that bound, the cheapest first
+    /// and then in axis order. `None` is an axis whose count is not known
+    /// or that was left out of the cube; it pairs with nothing.
+    ///
+    /// [`TableShape::groupings`] can plan only from the declared caps,
+    /// and a cap is an upper bound a declaration rarely sharpens: at the
+    /// default cap of 10,000 no two dimensions pair at all, so a
+    /// three-value column and a four-value column were planned at
+    /// 100,000,000 cells and their twelve-cell cuboid was never built.
+    /// Every pair that rule admits this one admits too — an observed
+    /// count never exceeds its cap — so this only ever widens the cube.
+    pub fn observed_pairs(&self, observed: &[Option<u64>]) -> Vec<(Vec<usize>, u64)> {
+        let axes = self.axes();
+        let mut pairs = Vec::new();
+        for left in 0..axes.len() {
+            for right in left + 1..axes.len() {
+                let (Some(left_cells), Some(right_cells)) = (
+                    observed.get(left).copied().flatten(),
+                    observed.get(right).copied().flatten(),
+                ) else {
+                    continue;
+                };
+                let cells = left_cells.saturating_mul(right_cells);
+                // Nothing to hold when either axis holds nothing, and no
+                // pair beyond the pair limit.
+                if cells == 0 || cells > CUBE_PAIR_MAX_CELLS {
+                    continue;
+                }
+                pairs.push((vec![left, right], cells));
+            }
+        }
+        pairs.sort_by_key(|(axes, cells)| (*cells, axes[0], axes[1]));
+        pairs
+    }
+
     /// The cells the cube is planned at: the caps' products over every
     /// grouping. What the declaration is held to the cell limit by.
     pub fn planned_cells(&self) -> u64 {
@@ -721,6 +759,75 @@ mod tests {
                 .to_string()
                 .contains("KAVEON_CUBE_MAX_CELLS")
         );
+    }
+
+    /// What a build plans its pairs from once the single axes have been
+    /// read: the counts observed, not the caps declared. The default cap
+    /// pairs nothing; the same axes observed small pair freely, cheapest
+    /// first, and every pair the caps admit the counts admit too.
+    #[test]
+    fn pairs_are_planned_from_the_counts_observed_not_the_caps_declared() {
+        let shape = TableShape::parse(
+            &["a".into(), "b".into(), "c".into()],
+            &["total:sum".into()],
+            None,
+        )
+        .unwrap();
+        // Three dimensions at the default cap: every pair is planned at
+        // 100,000,000 cells, so the declaration holds no pair at all.
+        assert_eq!(
+            shape.groupings(),
+            vec![vec![], vec![0], vec![1], vec![2]],
+            "the default cap pairs nothing"
+        );
+        // The same three axes, observed: 3, 4 and 2 distinct values.
+        let observed = [Some(3), Some(4), Some(2)];
+        assert_eq!(
+            shape.observed_pairs(&observed),
+            vec![(vec![0, 2], 6), (vec![1, 2], 8), (vec![0, 1], 12)]
+        );
+        // An axis left out of the cube pairs with nothing, and an axis
+        // holding nothing contributes no cell to pair over.
+        assert_eq!(
+            shape.observed_pairs(&[Some(3), None, Some(2)]),
+            vec![(vec![0, 2], 6)]
+        );
+        assert!(
+            shape
+                .observed_pairs(&[Some(3), Some(0), Some(0)])
+                .is_empty()
+        );
+        assert!(shape.observed_pairs(&[]).is_empty());
+        // Beyond the pair limit, nothing — the limit itself is kept.
+        assert!(
+            shape
+                .observed_pairs(&[Some(CUBE_PAIR_MAX_CELLS), Some(2), None])
+                .is_empty()
+        );
+        assert_eq!(
+            shape.observed_pairs(&[Some(CUBE_PAIR_MAX_CELLS), Some(1), None]),
+            vec![(vec![0, 1], CUBE_PAIR_MAX_CELLS)]
+        );
+        // Every pair the caps admit, the counts admit: observed counts
+        // never exceed their caps.
+        let declared = TableShape::parse(
+            &["a:10".into(), "b:100".into(), "c:20000".into()],
+            &["total:sum".into()],
+            None,
+        )
+        .unwrap();
+        let caps: Vec<Vec<usize>> = declared
+            .groupings()
+            .into_iter()
+            .filter(|grouping| grouping.len() == 2)
+            .collect();
+        let counts = declared.observed_pairs(&[Some(10), Some(100), Some(20_000)]);
+        for pair in &caps {
+            assert!(
+                counts.iter().any(|(axes, _)| axes == pair),
+                "the caps admit {pair:?} and the counts do not"
+            );
+        }
     }
 
     #[test]

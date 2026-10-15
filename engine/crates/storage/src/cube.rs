@@ -21,6 +21,10 @@
 //!   rebuild.
 //! - **Caps**: an axis over its cap in any one file is over it in the
 //!   table; its groupings are dropped as soon as one file shows it.
+//! - **Groupings**: the declaration's own, and any the cube being
+//!   refreshed already held — a distributed build plans its pairs from
+//!   the counts it observes rather than from the declared caps, and a
+//!   rebuild must not answer fewer statements than the cube it replaces.
 
 use crate::table_statistics::{DataFile, SourceFiles, enumerate_source};
 use arrow::{
@@ -92,7 +96,33 @@ pub fn build_cube(
     options: &CubeBuildOptions,
 ) -> Result<CubeBuild> {
     let source = enumerate_source(location, format)?;
-    build_from_source(&source, location, format, table_id, shape, options)
+    build_from_source(&source, location, format, table_id, shape, &[], options)
+}
+
+/// The groupings a build reads: the ones the declaration plans, and any
+/// the cube being rebuilt already held. A distributed build plans its
+/// pairs from the counts it observes rather than from the declared caps
+/// (see `TableShape::observed_pairs`), so a rebuild that planned from the
+/// declaration alone would silently drop every pair the cube answers.
+fn planned_groupings(shape: &TableShape, keep: &[Vec<usize>]) -> Vec<Vec<usize>> {
+    let mut groupings = shape.groupings();
+    let axes = shape.axes().len();
+    for held in keep {
+        let mut held: Vec<usize> = held.clone();
+        held.sort_unstable();
+        held.dedup();
+        if held.len() > 2 || held.iter().any(|axis| *axis >= axes) {
+            continue;
+        }
+        if !groupings.iter().any(|grouping| {
+            let mut grouping = grouping.clone();
+            grouping.sort_unstable();
+            grouping == held
+        }) {
+            groupings.push(held);
+        }
+    }
+    groupings
 }
 
 fn build_from_source(
@@ -101,6 +131,7 @@ fn build_from_source(
     format: DataFormat,
     table_id: TableId,
     shape: &TableShape,
+    keep: &[Vec<usize>],
     options: &CubeBuildOptions,
 ) -> Result<CubeBuild> {
     if shape.is_empty() {
@@ -108,8 +139,9 @@ fn build_from_source(
             "the table declares no shape; ALTER TABLE … SET SHAPE (…) first".into(),
         ));
     }
-    let scans = scan_files(&source.files, shape, options)?;
-    let mut cube = empty_cube(table_id, shape, source);
+    let groupings = planned_groupings(shape, keep);
+    let scans = scan_files(&source.files, shape, &groupings, options)?;
+    let mut cube = empty_cube(table_id, shape, source, &groupings);
     let mut partials = Vec::with_capacity(scans.len());
     for scan in scans {
         fold_scan(&mut cube, &scan)?;
@@ -144,8 +176,26 @@ pub fn refresh_cube(
         return Ok(None);
     }
     let table_id = previous.table_id.clone();
+    // A rebuild keeps whatever groupings the previous cube held: a
+    // distributed build's pairs are planned from the counts it observed,
+    // which no declaration states, so planning from the declaration alone
+    // would answer fewer statements after a refresh than before it.
+    let held: Vec<Vec<usize>> = previous
+        .groupings
+        .iter()
+        .map(|grouping| grouping.axes.clone())
+        .collect();
     let rebuild = |source: &SourceFiles| {
-        build_from_source(source, location, format, table_id.clone(), shape, options).map(Some)
+        build_from_source(
+            source,
+            location,
+            format,
+            table_id.clone(),
+            shape,
+            &held,
+            options,
+        )
+        .map(Some)
     };
     let known: BTreeSet<&str> = previous.files.iter().map(String::as_str).collect();
     let on_record: BTreeSet<&str> = partials.iter().map(|p| p.path.as_str()).collect();
@@ -168,7 +218,8 @@ pub fn refresh_cube(
         .filter(|file| !known.contains(file.label.as_str()))
         .cloned()
         .collect();
-    let scans = scan_files(&added, shape, options)?;
+    let groupings = planned_groupings(shape, &held);
+    let scans = scan_files(&added, shape, &groupings, options)?;
     let mut cube = if removed.is_empty() {
         // The added files fold into the cube as it stands.
         let mut cube = previous.clone();
@@ -176,7 +227,7 @@ pub fn refresh_cube(
         cube
     } else {
         // Every cell from the remaining partials, then the added files.
-        let mut cube = empty_cube(table_id, shape, &source);
+        let mut cube = empty_cube(table_id, shape, &source, &groupings);
         for partial in partials
             .iter()
             .filter(|partial| !removed.contains(&partial.path))
@@ -238,7 +289,12 @@ pub fn refresh_cube(
     }))
 }
 
-fn empty_cube(table_id: TableId, shape: &TableShape, source: &SourceFiles) -> TableCube {
+fn empty_cube(
+    table_id: TableId,
+    shape: &TableShape,
+    source: &SourceFiles,
+    groupings: &[Vec<usize>],
+) -> TableCube {
     TableCube {
         version: TABLE_CUBE_VERSION,
         table_id,
@@ -246,11 +302,10 @@ fn empty_cube(table_id: TableId, shape: &TableShape, source: &SourceFiles) -> Ta
         computed_at_ms: 0,
         slots: shape.measure_slots(),
         shape: shape.clone(),
-        groupings: shape
-            .groupings()
-            .into_iter()
+        groupings: groupings
+            .iter()
             .map(|axes| CubeGrouping {
-                axes,
+                axes: axes.clone(),
                 cells: Vec::new(),
             })
             .collect(),
@@ -396,6 +451,7 @@ impl FileScan {
 fn scan_files(
     files: &[DataFile],
     shape: &TableShape,
+    groupings: &[Vec<usize>],
     options: &CubeBuildOptions,
 ) -> Result<Vec<FileScan>> {
     if files.is_empty() {
@@ -417,7 +473,7 @@ fn scan_files(
                     let Some(file) = files.get(index) else {
                         return;
                     };
-                    let result = scan_file(file, shape, options.memory.as_ref());
+                    let result = scan_file(file, shape, groupings, options.memory.as_ref());
                     if result.is_err() {
                         failed.store(true, AtomicOrdering::Relaxed);
                     }
@@ -467,6 +523,7 @@ struct GroupingScan {
 fn scan_file(
     file: &DataFile,
     shape: &TableShape,
+    groupings: &[Vec<usize>],
     memory: Option<&OperatorMemoryAccount>,
 ) -> Result<FileScan> {
     let axes = shape.axes();
@@ -486,11 +543,10 @@ fn scan_file(
             values: Vec::new(),
         })
         .collect();
-    let mut groupings: Vec<GroupingScan> = shape
-        .groupings()
-        .into_iter()
+    let mut grouping_scans: Vec<GroupingScan> = groupings
+        .iter()
         .map(|axes| GroupingScan {
-            axes,
+            axes: axes.clone(),
             cells: HashMap::new(),
             dropped: false,
         })
@@ -525,7 +581,10 @@ fn scan_file(
                 let value = axis_value(axis, reader.at(row))?;
                 row_codes[index] = axis_values[index].code(value);
             }
-            for grouping in groupings.iter_mut().filter(|grouping| !grouping.dropped) {
+            for grouping in grouping_scans
+                .iter_mut()
+                .filter(|grouping| !grouping.dropped)
+            {
                 key.clear();
                 key.extend(grouping.axes.iter().map(|axis| row_codes[*axis]));
                 let cell = match grouping.cells.get_mut(&key) {
@@ -559,7 +618,7 @@ fn scan_file(
                 let distinct = axis_values[index].values.len() as u64;
                 if distinct > axis.cap {
                     over_cap.push((index, distinct));
-                    for grouping in &mut groupings {
+                    for grouping in &mut grouping_scans {
                         if grouping.axes.contains(&index) {
                             grouping.dropped = true;
                             grouping.cells = HashMap::new();
@@ -573,7 +632,7 @@ fn scan_file(
             }
         }
         if let Some(memory) = memory {
-            let cells: u64 = groupings.iter().map(|g| g.cells.len() as u64).sum();
+            let cells: u64 = grouping_scans.iter().map(|g| g.cells.len() as u64).sum();
             if cells > cells_reserved {
                 cell_reservations
                     .push(memory.reserve((cells - cells_reserved) * CELL_MEMORY_ESTIMATE)?);
@@ -582,7 +641,7 @@ fn scan_file(
         }
         drop(batch_reservation);
     }
-    let groupings = groupings
+    let groupings = grouping_scans
         .into_iter()
         .filter(|grouping| !grouping.dropped)
         .map(|grouping| {
@@ -940,6 +999,79 @@ mod tests {
         assert_eq!(built.partials[0].rows, 100);
         // The document round-trips.
         assert_eq!(&TableCube::from_json_bytes(&built.document).unwrap(), cube);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// A rebuild keeps the groupings the cube it replaces held, not only
+    /// the ones the declaration plans. A distributed build's pairs come
+    /// from the counts it observed — which no declaration states — so a
+    /// refresh planning from the declaration alone would answer fewer
+    /// statements after it than before it.
+    #[test]
+    fn a_rebuild_keeps_the_groupings_the_previous_cube_held() {
+        // Two dimensions at the default cap: every pair is planned at
+        // 100,000,000 cells, so the declaration holds none.
+        let declared = TableShape::parse(
+            &["region".into(), "status".into()],
+            &["total:sum,count".into()],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            planned_groupings(&declared, &[]),
+            vec![vec![], vec![0], vec![1]]
+        );
+        assert_eq!(
+            planned_groupings(&declared, &[vec![1, 0], vec![0], vec![0, 7], vec![0, 1, 0]]),
+            vec![vec![], vec![0], vec![1], vec![0, 1]],
+            "a held pair is planned once; an unknown axis and a wider grouping are not planned"
+        );
+
+        let directory = directory("rebuild-keeps");
+        let location = directory.join("events");
+        std::fs::create_dir_all(&location).unwrap();
+        write_file(&location.join("a.parquet"), 0, 300);
+        let path = location.to_str().unwrap().to_owned();
+        let build = |shape: &TableShape| {
+            build_cube(&path, DataFormat::Parquet, table_id(), shape, &options()).unwrap()
+        };
+        let built = build(&declared);
+        assert!(built.cube.grouping(&[0, 1]).is_none());
+
+        // The cube a distributed build leaves behind: the declaration's
+        // groupings, the pair its observed counts admitted, and no
+        // per-file partials — a scan has no file column.
+        let capped = TableShape::parse(
+            &["region:10".into(), "status:10".into()],
+            &["total:sum,count".into()],
+            None,
+        )
+        .unwrap();
+        let mut previous = built.cube.clone();
+        previous
+            .groupings
+            .push(build(&capped).cube.grouping(&[0, 1]).unwrap().clone());
+        previous.per_file_complete = false;
+
+        // A second file changes the source, and incomplete partials
+        // rebuild rather than fold.
+        write_file(&location.join("b.parquet"), 300, 300);
+        let refreshed = refresh_cube(
+            &previous,
+            &[],
+            &path,
+            DataFormat::Parquet,
+            &declared,
+            &options(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            refreshed.cube.grouping(&[0, 1]),
+            build(&capped).cube.grouping(&[0, 1]),
+            "the held pair survives the rebuild and holds what a scan computes"
+        );
+        assert!(refreshed.cube.grouping(&[0]).is_some());
         std::fs::remove_dir_all(directory).unwrap();
     }
 
