@@ -79,3 +79,15 @@ and exact formatted values.
 
 The full workspace gate was rerun after the decimal wire change: all targets
 passed, including 389 server tests, 150 SQL tests, and the differential sweep.
+
+Typed `TIME` literals are now lowered to a runtime time expression and
+evaluated on workers as Arrow `Time64(Microsecond)` values. The rebuilt Docker
+endpoint qualifies both whole-second and fractional values:
+
+```sql
+SELECT TIME '12:34:56' AS t;       -- 12:34:56.000000
+SELECT TIME '12:34:56.789' AS t;   -- 12:34:56.789000
+```
+
+Invalid hours, minutes, seconds, and malformed fractional values fail during
+expression evaluation rather than being silently coerced.

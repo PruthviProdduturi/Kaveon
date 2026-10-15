@@ -15797,3 +15797,44 @@ mod tests {
         assert!(values.is_null(2));
     }
 }
+        "TIME_LITERAL" => {
+            check_arity(name, args, 1)?;
+            let values = as_string_array(&args[0])?;
+            let result = (0..num_rows)
+                .map(|row| {
+                    values
+                        .is_null(row)
+                        .then_some(None)
+                        .unwrap_or_else(|| parse_time_literal(values.value(row)).map(Some))
+                        .ok_or_else(|| {
+                            KaveonError::Execution(format!(
+                                "invalid TIME literal: '{}'",
+                                values.value(row)
+                            ))
+                        })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(Arc::new(Time64MicrosecondArray::from(result)))
+        }
+fn parse_time_literal(text: &str) -> Option<i64> {
+    let (clock, fraction) = text.trim().split_once('.').unwrap_or((text.trim(), ""));
+    let mut parts = clock.split(':');
+    let hour = parts.next()?.parse::<i64>().ok()?;
+    let minute = parts.next()?.parse::<i64>().ok()?;
+    let second = parts.next()?.parse::<i64>().ok()?;
+    if parts.next().is_some() || hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    if !fraction.is_empty() && !fraction.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let micros = fraction
+        .chars()
+        .take(6)
+        .collect::<String>()
+        .parse::<i64>()
+        .unwrap_or(0)
+        * 10_i64.pow(6u32.saturating_sub(fraction.len().min(6) as u32));
+    Some(((hour * 3600 + minute * 60 + second) * 1_000_000) + micros)
+}
+

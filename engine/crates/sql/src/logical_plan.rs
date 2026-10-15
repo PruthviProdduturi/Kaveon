@@ -2904,6 +2904,14 @@ fn ast_expr_to_expr(expr: &ast::Expr) -> Result<Expr> {
             value,
         } => Ok(Expr::Literal(parse_decimal_literal(value)?)),
 
+        ast::Expr::TypedString {
+            data_type: ast::DataType::Time(_, _),
+            value,
+        } => Ok(Expr::Function {
+            name: "TIME_LITERAL".into(),
+            args: vec![Expr::Literal(ScalarValue::Utf8(value.clone()))],
+        }),
+
         // A DATE literal is its day number: the Engine's date columns are
         // days since the epoch, so `EventDate >= DATE '2013-07-01'` compares
         // integers with integers.
@@ -4432,6 +4440,20 @@ mod tests {
             Expr::Alias { expr, name }
                 if name == "amount"
                     && matches!(expr.as_ref(), Expr::Literal(ScalarValue::Decimal128 { value: 120, scale: 2, .. }))
+        ));
+    }
+
+    #[test]
+    fn time_typed_literals_lower_to_runtime_time_values() {
+        let plan = sql_to_logical_plan("SELECT TIME '12:34:56.789' AS t").unwrap();
+        let LogicalPlan::Project { columns, .. } = plan else {
+            panic!("projection");
+        };
+        assert!(matches!(
+            &columns[0],
+            Expr::Alias { expr, name }
+                if name == "t"
+                    && matches!(expr.as_ref(), Expr::Function { name, .. } if name == "TIME_LITERAL")
         ));
     }
 
