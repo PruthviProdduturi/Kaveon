@@ -91,6 +91,12 @@ tests, 394 server tests, 159 additional SQL tests, and 121 storage tests (one
 ignored). The long server differential sweep completed successfully in that
 same run.
 
+The focused clean-checkout regressions also passed for grouping metadata and
+tie-aware fetch: `executes_grouping_sets_grand_total`,
+`executes_grouping_id_with_branch_specific_flags`, and
+`fetch_percent_rejects_and_with_ties_preserves_rank_semantics` each passed
+with zero failures.
+
 ## JSON_FORMAT qualification — 2026-10-15
 
 `JSON_FORMAT(json)` now canonicalizes the Engine's validated UTF-8 JSON
