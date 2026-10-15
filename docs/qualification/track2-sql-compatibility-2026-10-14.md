@@ -225,6 +225,14 @@ validation, and bounded spill behavior. It does not close the Track 1 global
 ORDER BY gate: final ordered results still merge at one coordinator, so a
 fully parallel ordered stream and its deployment qualification remain open.
 
+## Large-list element access qualification
+
+`ELEMENT_AT(array, index)` now accepts both regular and `LargeListArray`
+representations. Positive indexes are one-based, negative indexes address from
+the end, and null or out-of-range indexes produce null through the normal
+Arrow take path. The focused expression suite passed `142/143` tests with one
+pre-existing ignored case, and the server regression suite passed `394/394`.
+
 The merge path now detects worker batches that are already ordered on a single
 integer key and performs a bounded k-way head merge, while retaining the full
 sort fallback for unsorted or non-integer inputs. The new executor regression
