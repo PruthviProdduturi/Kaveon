@@ -18,7 +18,7 @@ snapshot, not a session diary.
 | # | Capability | Status | What is already true | Completion gate |
 |---:|---|---|---|---|
 | 1 | Worker discovery and scheduling | **Complete (bounded)** | Deterministic split enumeration, task assignment, leases, retry/steal, stale-attempt protection, and resource-group admission exist. | Reopen for additional topologies or endurance evidence; the declared three-worker topology is qualified. |
-| 2 | Hash exchange and repartition | **Active** | Authenticated Arrow exchange, checksums, streamed output, bounded replayable spools, cleanup, and deterministic multi-column partitioning exist. | Sustained network and cloud-storage pressure, cancellation, quota, and orphan-spool evidence on the release image. |
+| 2 | Hash exchange and repartition | **Active** | Authenticated Arrow exchange, checksums, streamed output, bounded replayable spools, cleanup, deterministic multi-column partitioning, and AKS object-store fault recovery exist. | Sustained network and cloud-storage pressure under the release workload, plus the remaining item-2 pressure and endurance evidence. |
 | 3 | Distributed joins | Open | Partitioned and broadcast hash joins, residuals, outer joins, semi/anti joins, dictionary-text keys, composite `USING` keys, and bounded spill exist. | Distributed outer-join equivalence, skew, disk exhaustion, and measured join-spill qualification. |
 | 4 | Distributed aggregates | Open | Partial/final aggregation, exact distinct, AVG, grouped spill, adaptive partials, and hybrid final merge exist. | Larger-scale cluster run with p95 latency, skew behavior, and final-merge spill evidence. |
 | 5 | Windows | Open | Distributed row-number and compatible partitioned windows are covered; several ranking and value-window functions are implemented. | Qualify mixed-key, unpartitioned, frame, modifier, and remaining parallel window shapes. |
@@ -60,8 +60,7 @@ also passed a 900-second ADLS-backed soak with two-way concurrency: 1,180/1,180
 exact requests, zero failures, zero unexpected restarts, and zero retained
 exchange/spill files. Evidence is retained in
 `docs/qualification/track1-aks-current-image-soak-900-2026-10-15.md` and its
-raw JSON report. Explicit cloud-storage fault injection and orphan-spool
-recovery remain open for item 2; the soak does not close those gates.
+raw JSON report. The soak does not close the separate fault and pressure gates.
 The current-image fault/pressure qualification
 `docs/qualification/track1-aks-current-image-fault-pressure-2026-10-15.md`
 passed concurrent exact results, active-query cancellation, forced worker-loss
@@ -77,8 +76,15 @@ restoration of the production limits.
 The complete workspace suite is recorded in
 `docs/qualification/track1-track2-workspace-suite-2026-10-15.md`: 1,457 tests
 passed with zero failures on the release source. This strengthens the local
-implementation evidence but does not substitute for the still-open
-object-store fault and orphan-spool gates on AKS.
+implementation evidence but does not substitute for the remaining distributed
+pressure and endurance gates on AKS.
+
+The explicit object-store fault and orphan-spool qualification is recorded in
+`docs/qualification/track1-aks-storage-fault-2026-10-15.md` and its raw JSON
+report. A temporary policy blocked public object-store traffic for one worker;
+the baseline and fault runs returned the same exact result, a retry attempt was
+observed, and no exchange or spill files remained afterward. The policy was
+removed before the qualification completed.
 
 The positive graceful node-drain result is retained in
 `docs/qualification/track1-aks-node-drain-skew-2026-10-15.md`; repeated pod-loss
