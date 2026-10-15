@@ -66,7 +66,7 @@ server tests, 148 SQL tests, and the differential sweep.
 The next probe found that direct typed date literals were exposed as internal
 day numbers. The projection path now preserves the `Date32` type while keeping
 the existing day-number lowering for date predicates and storage pruning. The
-SQL suite passes 149 tests, and rebuilt Docker returned `Date32` plus the ISO
+SQL suite passes 151 tests, and rebuilt Docker returned `Date32` plus the ISO
 value `2026-01-01` for `SELECT DATE '2026-01-01' AS d`.
 
 The decimal probe then found that exact decimal literals failed only after
@@ -78,7 +78,7 @@ regressions pass, and Docker now completes `SELECT DECIMAL '1.20' AS n`,
 and exact formatted values.
 
 The full workspace gate was rerun after the decimal wire change: all targets
-passed, including 389 server tests, 150 SQL tests, and the differential sweep.
+passed, including 389 server tests, 151 SQL tests, and the differential sweep.
 
 Typed `TIME` literals are now lowered to a runtime time expression and
 evaluated on workers as Arrow `Time64(Microsecond)` values. The rebuilt Docker
