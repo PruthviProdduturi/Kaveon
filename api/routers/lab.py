@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import threading
 from fastapi import APIRouter, BackgroundTasks, Request, Response, HTTPException, Query, Depends
 from middleware.auth import require_auth
@@ -21,6 +22,11 @@ from config import settings
 import time
 
 router = APIRouter()
+# What this module could not finish is reported through the application log,
+# never to stdout: a print in a request path does not reach the deployed log
+# pipeline, and a store or driver message can quote a DSN, so only the
+# exception type is recorded.
+logger = logging.getLogger(__name__)
 
 
 # The product catalog answers to more than one name, and the three places that
@@ -62,6 +68,10 @@ def _granted(catalog: object, granted) -> bool:
     return _is_product_catalog(name) and bool(names & _PRODUCT_CATALOG_ALIASES)
 
 MAX_SQL_BYTES = 65_536
+# The most query-history rows one read may return. The store keeps a bounded
+# retention per owner and the Studio's history panel renders far fewer; a
+# request is clamped to it rather than being allowed to name its own size.
+MAX_HISTORY_LIMIT = 500
 NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
 
 # Catalog authorization is stable for a short interval, while the Engine
@@ -118,9 +128,18 @@ def list_databases(response: Response, user: str = Depends(require_auth)):
             "SELECT database_name as [database], name as display_name, 0 as table_count "
             "FROM data_sources WHERE is_active = 1 ORDER BY name"
         )
-        return {"success": True, "databases": result.get("rows") or []}
-    except Exception:
-        return {"success": True, "databases": []}
+    except Exception as error:
+        # A listing that could not be read is not a deployment with no data
+        # sources. Answering `success: true` with an empty list told the
+        # source picker there was nothing registered, so the reader went
+        # looking for a missing source instead of a control plane that was
+        # not answering.
+        logger.warning("lab_databases_unavailable type=%s", type(error).__name__)
+        raise HTTPException(
+            status_code=502,
+            detail="The data source registry could not be read; retry in a moment.",
+        ) from None
+    return {"success": True, "databases": result.get("rows") or []}
 
 
 @router.get("/lab/saved-queries")
@@ -152,6 +171,21 @@ def update_saved_query(query_id: str, data: SavedQueryUpdate, user: str = Depend
 
 @router.delete("/lab/saved-queries/{query_id}", status_code=204)
 def delete_saved_query(query_id: str, user: str = Depends(require_auth)):
+    # References first, then the record — as the chart and dashboard deletes
+    # do. A favorite names its saved query as a reference in the product
+    # catalog, the Library reads and writes saved-query favorites, and the
+    # catalog refuses to delete a record another record still points at: so a
+    # saved query anyone had favorited could not be deleted, and the caller
+    # was handed the Engine's own words. The favorite belongs to whoever made
+    # it, and no route lets anybody else remove it, so the delete clears it.
+    from services import favorites as favorites_svc
+    try:
+        favorites_svc.remove_favorite_all_users("saved_query", query_id)
+    except Exception as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not clear this query's references, so it was not deleted: {error}",
+        ) from error
     deleted = saved_q_svc.delete_saved_query(query_id, user)
     if not deleted:
         raise HTTPException(status_code=404, detail="Saved query not found")
@@ -471,7 +505,7 @@ def _write_history(row: dict, user: str, label: str) -> None:
     try:
         history_svc.create_history(row, user)
     except Exception as error:
-        print(f"[History] Failed to record {label}: {error}")
+        logger.warning("query_history_write_failed label=%s type=%s", label, type(error).__name__)
 
 
 def _record_history_after_response(background: BackgroundTasks | None, row: dict,
@@ -513,7 +547,8 @@ def _streamed_history(summary: dict, scoped_sql: str, catalog: str, dataset_id, 
             **({"engine_details": record} if record else {}),
         }, user)
     except Exception as error:
-        print(f"[History] Failed to record streamed Engine lab query: {error}")
+        logger.warning("query_history_write_failed label=%s type=%s",
+                       "streamed Engine lab query", type(error).__name__)
 
 
 async def _submit_streamed(data: LabQueryBody, source: dict, scoped_sql: str, user: str, role: str,
@@ -730,7 +765,8 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
                 "started_at": start_time,
             }, user_id)
         except Exception as he:
-            print(f"[History] Failed to record lab query: {he}")
+            logger.warning("query_history_write_failed label=%s type=%s",
+                           "lab query", type(he).__name__)
 
         return {
             "success": True,
@@ -754,7 +790,8 @@ async def run_query(request: Request, data: LabQueryBody, ctx=Depends(require_mi
                 "started_at": start_time,
             }, user_id)
         except Exception as he:
-            print(f"[History] Failed to record lab error: {he}")
+            logger.warning("query_history_write_failed label=%s type=%s",
+                           "lab error", type(he).__name__)
         raise HTTPException(status_code=500, detail="Query execution failed")
 
 
@@ -776,8 +813,18 @@ def create_table_as_select(data: CtasBody, ctx=Depends(require_min_role("Analyst
     try:
         pool.execute_query(ctas_sql, data.database)
         return {"success": True, "table": f"{data.schema}.{data.table_name}"}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as error:
+        # The driver's message was returned verbatim as a 400, so a connection
+        # or permission failure was reported to the caller as a bad request and
+        # carried the server's own text — which for pyodbc and psycopg names
+        # the host, the database and the user — into the response body.
+        logger.warning("lab_ctas_failed table=%s type=%s",
+                       f"{data.schema}.{data.table_name}", type(error).__name__)
+        raise HTTPException(
+            status_code=422,
+            detail="The table could not be created from this statement. "
+                   "Check that the target name is free and that the statement runs on its own.",
+        ) from None
 
 
 @router.post("/lab/switch-database")
@@ -789,6 +836,11 @@ def switch_database(data: SwitchDatabaseBody, user: str = Depends(require_auth))
 @router.get("/lab/query-history")
 def get_query_history(response: Response, limit: int = Query(default=50), user: str = Depends(require_auth)):
     response.headers.update(NO_CACHE)
+    # The limit reached the store unchecked: a large one asked the control
+    # plane for everything it holds, and a negative one was applied as a
+    # Python slice — `rows[:-5]` — which quietly returned all but the last
+    # five records instead of being refused.
+    limit = min(max(1, limit), MAX_HISTORY_LIMIT)
     # Scope to the requesting user — never leak other users' SQL history.
     return history_svc.list_history(user, limit)
 
@@ -859,7 +911,8 @@ def get_distinct_values(
                 "started_at": start_time,
             }, user_id)
         except Exception as he:
-            print(f"[History] Failed to record distinct values query: {he}")
+            logger.warning("query_history_write_failed label=%s type=%s",
+                           "distinct values query", type(he).__name__)
 
         return {"success": True, "values": values}
 
@@ -876,5 +929,6 @@ def get_distinct_values(
                 "started_at": start_time,
             }, user_id)
         except Exception as he:
-            print(f"[History] Failed to record distinct values error: {he}")
+            logger.warning("query_history_write_failed label=%s type=%s",
+                           "distinct values error", type(he).__name__)
         raise HTTPException(status_code=500, detail="Query execution failed")

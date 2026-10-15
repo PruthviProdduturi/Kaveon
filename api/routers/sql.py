@@ -1,6 +1,7 @@
 """SQL router — /api/v1/sql."""
 
 import hashlib
+import logging
 import re
 import json
 import threading
@@ -23,6 +24,12 @@ import database.metadata as meta_db
 from services import postgresql_retirement_runtime, product_read_authority
 
 router = APIRouter()
+# A lost history row, and a failed statement, are reported through the
+# application log rather than to stdout: a print in a request path does not
+# reach the deployed log pipeline, and these lines carried the caller's SQL,
+# the database name and the driver's raw message — which can quote a DSN —
+# into container output.
+logger = logging.getLogger(__name__)
 
 MAX_RESULT_ROWS = 5000   # the most any Studio surface renders from one statement
 NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
@@ -86,7 +93,7 @@ def _async_job_run(job_id: str, data: SqlExecuteBody, user_id: str) -> None:
                 "started_at": start_time,
             }, user_id)
         except Exception as history_error:
-            print(f"[History] Failed to save history: {history_error}")
+            logger.warning("query_history_write_failed type=%s", type(history_error).__name__)
         finish({
             "status": "success",
             "columns": result.get("columns") or [],
@@ -551,7 +558,7 @@ def distinct_filter_values(
                 "started_at": start_time,
             }, user_id)
         except Exception as history_error:
-            print(f"[History] Failed to save history: {history_error}")
+            logger.warning("query_history_write_failed type=%s", type(history_error).__name__)
         raise HTTPException(status_code=500, detail="Query execution failed")
 
     duration_ms = int(time.time() * 1000) - start_time
@@ -567,7 +574,7 @@ def distinct_filter_values(
             **(engine_history if engine_source else {}),
         }, user_id)
     except Exception as history_error:
-        print(f"[History] Failed to save history: {history_error}")
+        logger.warning("query_history_write_failed type=%s", type(history_error).__name__)
 
     rows = result.get("rows_objects") or result.get("rows") or []
     values = []
@@ -671,7 +678,7 @@ def execute_sql(data: SqlExecuteBody, response: Response, ctx: UserContext = Dep
         result = pool.execute_query(sql_text, database, max_rows=hard_limit)
     except Exception as e:
         duration_ms = int(time.time() * 1000) - start_time
-        print(f"[SQL EXEC FAILED] {type(e).__name__}: {e}\n  DB: {database}\n  SQL: {sql_text[:500]}")
+        logger.warning("sql_execute_failed database=%s type=%s", database, type(e).__name__)
         try:
             history_svc.create_history({
                 "sql_text": sql_text, "duration_ms": duration_ms,
@@ -682,7 +689,7 @@ def execute_sql(data: SqlExecuteBody, response: Response, ctx: UserContext = Dep
                 "started_at": start_time,
             }, user_id)
         except Exception as he:
-            print(f"[History] Failed to save error history: {he}")
+            logger.warning("query_history_write_failed type=%s", type(he).__name__)
         raise HTTPException(status_code=500, detail="Query execution failed")
 
     duration_ms = int(time.time() * 1000) - start_time
@@ -700,7 +707,7 @@ def execute_sql(data: SqlExecuteBody, response: Response, ctx: UserContext = Dep
             "started_at": start_time,
         }, user_id)
     except Exception as e:
-        print(f"[History] Failed to save execute history: {e}")
+        logger.warning("query_history_write_failed type=%s", type(e).__name__)
 
     row_count = result.get("row_count") or 0
     truncated = bool(result.get("truncated"))
@@ -830,6 +837,7 @@ def execute_engine_sql(data: SqlExecuteBody, response: Response, ctx: UserContex
                 "duration_ms": 0,
                 "from_cache": True,
                 "approx": bool(cached.get("approx")),
+                "truncated": bool(cached.get("truncated")),
             }
     started_at = int(time.time() * 1000)
     try:
@@ -854,7 +862,7 @@ def execute_engine_sql(data: SqlExecuteBody, response: Response, ctx: UserContex
                    if isinstance(failure.get("engine_details"), dict) else {}),
             }, ctx.email)
         except Exception as history_error:
-            print(f"[History] Failed to save history: {history_error}")
+            logger.warning("query_history_write_failed type=%s", type(history_error).__name__)
         if failure:
             raise HTTPException(
                 status_code=error.status_code,
@@ -865,12 +873,22 @@ def execute_engine_sql(data: SqlExecuteBody, response: Response, ctx: UserContex
     columns, rows = _engine_result_rows(result)
     if finished is not None:
         columns, rows = finished
-    if data.row_limit:
-        rows = rows[:data.row_limit]
+    # The same ceiling the legacy path applies at the source: 5,000 rows is the
+    # most any Studio surface renders, and an unbounded SELECT over a large
+    # table must never be materialised in the API. This path had no ceiling at
+    # all unless the caller sent one, so the two execution routes disagreed
+    # about the size of a result for the same chart — and a statement over a
+    # 500M-row table could return every row it matched through the API process
+    # and the response cache behind it.
+    hard_limit = (min(max(1, int(data.row_limit)), MAX_RESULT_ROWS)
+                  if data.row_limit else MAX_RESULT_ROWS)
+    truncated = len(rows) > hard_limit
+    rows = rows[:hard_limit]
     approximate = _engine_approximate(result)
     if data.use_cache:
         _cache_set(cache_key, {"columns": columns, "rows": rows,
-                               "row_count": len(rows), "approx": approximate})
+                               "row_count": len(rows), "approx": approximate,
+                               "truncated": truncated})
     try:
         history_svc.create_history({
             "sql_text": data.sql_text,
@@ -884,10 +902,10 @@ def execute_engine_sql(data: SqlExecuteBody, response: Response, ctx: UserContex
             **_engine_history_fields(result),
         }, ctx.email)
     except Exception as history_error:
-        print(f"[History] Failed to save history: {history_error}")
+        logger.warning("query_history_write_failed type=%s", type(history_error).__name__)
     # `approx` is the Engine's own report that an output came from a sketch.
     # The chart reads it to label the number as an estimate, so it is always
     # present rather than only when it is true.
     return {"columns": columns, "rows": rows,
             "query_id": result.get("id"), "duration_ms": result.get("elapsed_ms", 0),
-            "approx": approximate}
+            "approx": approximate, "truncated": truncated}

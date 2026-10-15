@@ -7,6 +7,8 @@ from middleware.demo import allowed_in_demo
 from models.datasets import DatasetCreate, DatasetUpdate
 import services.datasets as svc
 import services.favorites as fav_svc
+import services.user_recents as recents_svc
+from routers import reference_guard
 from services import engine_datasets
 
 router = APIRouter()
@@ -161,6 +163,34 @@ def delete_dataset(dataset_id: str, ctx: UserContext = Depends(require_user_cont
         raise HTTPException(status_code=404, detail="Dataset not found")
     if not can_write(existing["created_by"], ctx):
         raise HTTPException(status_code=403, detail="You don't have permission to delete this dataset")
+    # A chart names its dataset as a reference in the product catalog, and the
+    # catalog refuses to delete a record another record still points at. So a
+    # dataset with charts over it was answered with the Engine's own refusal —
+    # a 502 quoting `product record 'chart/<id>' references missing
+    # 'dataset/<id>'` — where the legacy PostgreSQL path had always answered
+    # 409 and said which charts to deal with first. Same verdict here, and the
+    # dependents are counted at system scope so a chart the caller cannot see
+    # blocks the delete instead of becoming that 502 one line later.
+    total, names = reference_guard.dependents(
+        "charts", lambda document: str(document.get("dataset_id")) == str(dataset_id),
+        actor=ctx.email, role=ctx.role)
+    if total:
+        raise HTTPException(status_code=409, detail=reference_guard.message(
+            total, names, "chart", "Delete those charts before deleting this dataset."))
+    # References first, then the record — as charts and dashboards do. A
+    # recents entry and a favorite each NAME this dataset, they belong to
+    # whoever opened or favorited it rather than to the caller, and nobody
+    # else can clear them: so the delete clears them. A failure to clear is
+    # raised rather than swallowed, because proceeding would only produce the
+    # catalog's rejection one line later.
+    try:
+        recents_svc.remove_recent_all_users(f"dataset-{dataset_id}", "dataset")
+        fav_svc.remove_favorite_all_users("dataset", dataset_id)
+    except Exception as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not clear this dataset's references, so it was not deleted: {error}",
+        ) from error
     svc.delete_dataset(dataset_id, ctx.email)
 
 

@@ -469,6 +469,19 @@ def delete_catalog_source(cs_id: str, ctx: UserContext = Depends(require_min_rol
         dependents = [item for item in product_read_authority.list_documents("sources",ctx.email,"Admin")
                       if item.get("source_kind")=="data" and item.get("database_name")==current.get("catalog_identity")]
         if dependents: raise HTTPException(409,"Catalog source is referenced by a data source")
+        # A favorite names its source as a reference in the product catalog,
+        # and the catalog refuses to delete a record another record still
+        # points at. A favorite belongs to whoever made it and no route lets
+        # anybody else remove it, so the delete clears it — the same bounded
+        # cross-owner fanout the chart, dashboard and data-source deletes use.
+        from services import favorites as favorites_svc
+        try:
+            favorites_svc.remove_favorite_all_users("source", f"catalog-{cs_id}")
+        except Exception as error:
+            raise HTTPException(
+                502,
+                f"Could not clear this catalog source's favorites, so it was not deleted: {error}",
+            ) from error
         source_cutover_mutations.delete(f"catalog-{cs_id}",ctx.email)
         return {"success":True,"message":"Catalog source deleted"}
     existing = db.query_one("SELECT id, name, lifecycle FROM catalog_sources WHERE id = @param0", [cs_id])
