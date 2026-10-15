@@ -1296,6 +1296,7 @@ impl Binder<'_> {
             LogicalPlan::Unnest {
                 column,
                 with_ordinality,
+                ordinality_column,
                 ..
             } => Scope {
                 columns: if *with_ordinality {
@@ -1307,8 +1308,8 @@ impl Binder<'_> {
                         },
                         Column {
                             qualifier: None,
-                            name: "ordinality".to_owned(),
-                            physical: "ordinality".to_owned(),
+                            name: ordinality_column.clone(),
+                            physical: ordinality_column.clone(),
                         },
                     ]
                 } else {

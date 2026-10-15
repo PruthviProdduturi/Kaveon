@@ -205,6 +205,7 @@ pub enum LogicalPlan {
         expression: Expr,
         column: String,
         with_ordinality: bool,
+        ordinality_column: String,
     },
     Join {
         left: Box<LogicalPlan>,
@@ -1111,10 +1112,16 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                     .and_then(|alias| alias.columns.first())
                     .map(|column| column.name.value.clone())
                     .unwrap_or_else(|| "unnest".to_owned());
+                let ordinality_column = alias
+                    .as_ref()
+                    .and_then(|alias| alias.columns.get(1))
+                    .map(|column| column.name.value.clone())
+                    .unwrap_or_else(|| "ordinality".to_owned());
                 return Ok(LogicalPlan::Unnest {
                     expression,
                     column,
                     with_ordinality: *with_ordinality,
+                    ordinality_column,
                 });
             }
             // DuckDB's sqlparser dialect tokenizes row-producing UNNEST in
@@ -1188,10 +1195,16 @@ fn table_factor_to_plan(factor: &ast::TableFactor, ctes: &Lowering) -> Result<Lo
                 .and_then(|alias| alias.columns.first())
                 .map(|column| column.name.value.clone())
                 .unwrap_or_else(|| "unnest".to_owned());
+            let ordinality_column = alias
+                .as_ref()
+                .and_then(|alias| alias.columns.get(1))
+                .map(|column| column.name.value.clone())
+                .unwrap_or_else(|| "ordinality".to_owned());
             Ok(LogicalPlan::Unnest {
                 expression,
                 column,
                 with_ordinality: *with_ordinality,
+                ordinality_column,
             })
         }
         _ => Err(sql_err(
@@ -4446,8 +4459,9 @@ mod tests {
             LogicalPlan::Unnest {
                 column,
                 with_ordinality: true,
+                ordinality_column,
                 ..
-            } if column == "value"
+            } if column == "value" && ordinality_column == "n"
         ));
     }
 

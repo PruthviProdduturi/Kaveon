@@ -486,10 +486,12 @@ fn compile_node(
             expression,
             column,
             with_ordinality,
+            ordinality_column,
         } => Ok(Box::new(kaveon_exec::unnest::UnnestOperator::new(
             expression,
             column.clone(),
             *with_ordinality,
+            ordinality_column.clone(),
         )?)),
         FragmentOperator::ExchangeInput(input) => exchanges.open(&input.exchange_id),
         FragmentOperator::Filter { predicate } => {
