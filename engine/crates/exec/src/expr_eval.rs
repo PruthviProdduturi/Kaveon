@@ -4298,7 +4298,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                 .collect();
             Ok(Arc::new(result))
         }
-        "JSON_EXTRACT" | "JSON_EXTRACT_SCALAR" => {
+        "JSON_EXTRACT" | "JSON_EXTRACT_SCALAR" | "JSON_QUERY" | "JSON_VALUE" => {
             check_arity(name, args, 2)?;
             let documents = as_string_array(&args[0])?;
             let paths = as_string_array(&args[1])?;
@@ -4307,7 +4307,7 @@ fn eval_scalar_function(name: &str, args: &[ArrayRef], num_rows: usize) -> Resul
                     if documents.is_null(row) || paths.is_null(row) {
                         return None;
                     }
-                    if upper == "JSON_EXTRACT" {
+                    if upper == "JSON_EXTRACT" || upper == "JSON_QUERY" {
                         json_extract(documents.value(row), paths.value(row))
                     } else {
                         json_extract_scalar(documents.value(row), paths.value(row))
@@ -15677,6 +15677,44 @@ mod tests {
                 .to_string()
                 .contains("CARDINALITY currently supports ARRAY/List values only")
         );
+    }
+
+    #[test]
+    fn evaluates_json_query_and_value_aliases() {
+        let batch = RecordBatch::try_from_iter([
+            (
+                "document",
+                Arc::new(StringArray::from(vec![
+                    Some(r#"{"customer":{"id":42,"tags":["a","b"]}}"#),
+                    Some(r#"{"customer":{"id":null}}"#),
+                ])) as ArrayRef,
+            ),
+            (
+                "path",
+                Arc::new(StringArray::from(vec![
+                    Some("$.customer"),
+                    Some("$.customer.id"),
+                ])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let query = Expr::Function {
+            name: "JSON_QUERY".into(),
+            args: vec![Expr::Column("document".into()), Expr::Column("path".into())],
+        };
+        let query_result = evaluate(&query, &batch).unwrap();
+        let query_values = query_result.as_string::<i32>();
+        assert_eq!(query_values.value(0), r#"{"id":42,"tags":["a","b"]}"#);
+        assert!(query_values.is_null(1));
+
+        let value = Expr::Function {
+            name: "JSON_VALUE".into(),
+            args: vec![Expr::Column("document".into()), Expr::Column("path".into())],
+        };
+        let value_result = evaluate(&value, &batch).unwrap();
+        let value_values = value_result.as_string::<i32>();
+        assert!(value_values.is_null(0));
+        assert!(value_values.is_null(1));
     }
 
     #[test]

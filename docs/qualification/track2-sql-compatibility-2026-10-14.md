@@ -52,6 +52,14 @@ objects, arrays, and JSON null values retain canonical JSON text. The focused
 expression regression covers object, scalar, negative-index, out-of-range, and
 NULL behavior. Full JSON coercion and path semantics remain open.
 
+## JSON_QUERY and JSON_VALUE qualification — 2026-10-15
+
+`JSON_QUERY(document, path)` and `JSON_VALUE(document, path)` now use the
+qualified JSON path implementation for object/array and scalar extraction,
+respectively. Missing paths and JSON nulls preserve the existing NULL
+contract. The focused expression suite covers both aliases; richer SQL
+standard returning/error clauses remain outside the current surface.
+
 ## Explicit remaining boundaries
 
 The full Track 2 claim remains open. The compatibility reference still records
